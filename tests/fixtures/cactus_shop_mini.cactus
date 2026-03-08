@@ -1,0 +1,41 @@
+module mini_shop
+
+const:
+    SHOP_NAME = "Mini Shop"
+    START_COINS = 50
+
+enum Rarity:
+    Common
+    Rare
+
+struct Item:
+    price: int
+    rarity: Rarity
+
+trait Wallet:
+    persist sync var coins: int = 50
+
+trait Inventory:
+    persist var items: list[Item]
+
+event ItemBought:
+    var item: Item
+    var buyer: int
+
+pub unit Player:
+    apply:
+        Wallet
+        Inventory
+    config:
+        coins = START_COINS
+
+func can_afford(coins: int, price: int) -> bool:
+    return coins >= price
+
+system ShopSystem:
+    filter: [Wallet, Inventory]
+
+    on ItemBought(item: Item, buyer: int):
+        if can_afford(coins, item.price):
+            coins = coins - item.price
+            emit ItemBought(item, buyer)

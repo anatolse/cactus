@@ -41,13 +41,13 @@
 
 ## 7. Parser
 
-- [ ] 7.1 Implement `src/frontend/parser.h/.cpp` — recursive descent parser: parse_program, parse_module, parse_use, parse_const_block, parse_struct, parse_enum
-- [ ] 7.2 Implement parser: parse_trait (with field modifiers persist/sync/pub/let/var and event handlers)
-- [ ] 7.3 Implement parser: parse_unit (apply, config, child blocks), parse_system (filter, target, event handlers)
-- [ ] 7.4 Implement parser: parse_func, parse_event, parse_view, parse_interface
-- [ ] 7.5 Implement parser: parse_expression (precedence climbing), parse_lambda, parse_pipeline, parse_match, parse_if
-- [ ] 7.6 Write `tests/test_parser.cpp` — tests for each construct, expression precedence, pipeline chains, error recovery
-- [ ] 7.7 Create `tests/fixtures/simple_system.cactus` and `tests/fixtures/cactus_shop_mini.cactus` test fixtures
+- [x] 7.1 Implement `src/frontend/parser.h/.cpp` — recursive descent parser: parse_program, parse_module, parse_use, parse_const_block, parse_struct, parse_enum
+- [x] 7.2 Implement parser: parse_trait (with field modifiers persist/sync/pub/let/var and event handlers)
+- [x] 7.3 Implement parser: parse_unit (apply, config, child blocks), parse_system (filter, target, event handlers)
+- [x] 7.4 Implement parser: parse_func, parse_event, parse_view, parse_interface
+- [x] 7.5 Implement parser: parse_expression (precedence climbing), parse_lambda, parse_pipeline, parse_match, parse_if
+- [x] 7.6 Write `tests/test_parser.cpp` — tests for each construct, expression precedence, pipeline chains, error recovery
+- [x] 7.7 Create `tests/fixtures/simple_system.cactus` and `tests/fixtures/cactus_shop_mini.cactus` test fixtures
 
 ## 8. Semantic Analyzer
 

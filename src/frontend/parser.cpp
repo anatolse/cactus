@@ -1,2 +1,1165 @@
-// Placeholder — will be implemented in task 7.1
 #include "frontend/parser.h"
+
+#include <stdexcept>
+
+namespace cactus {
+
+Parser::Parser(std::vector<Token> tokens, ErrorReporter& errors)
+    : tokens_(std::move(tokens)), errors_(errors) {}
+
+// ── Token Navigation ────────────────────────────────────────────────────────
+
+const Token& Parser::peek() const {
+    return tokens_[current_];
+}
+
+const Token& Parser::peek_next() const {
+    if (current_ + 1 < tokens_.size()) return tokens_[current_ + 1];
+    return tokens_.back();
+}
+
+Token Parser::advance() {
+    auto tok = tokens_[current_];
+    if (current_ < tokens_.size() - 1) ++current_;
+    return tok;
+}
+
+Token Parser::consume(TokenType type, const std::string& msg) {
+    if (check(type)) return advance();
+    errors_.error(peek().location, msg + ", got " + token_type_to_string(peek().type));
+    return peek();
+}
+
+bool Parser::check(TokenType type) const {
+    return peek().type == type;
+}
+
+bool Parser::match(TokenType type) {
+    if (check(type)) { advance(); return true; }
+    return false;
+}
+
+void Parser::skip_newlines() {
+    while (check(TokenType::NEWLINE)) advance();
+}
+
+void Parser::expect_newline() {
+    if (!match(TokenType::NEWLINE)) {
+        // Allow EOF as implicit newline
+        if (!check(TokenType::EOF_TOKEN) && !check(TokenType::DEDENT)) {
+            errors_.error(peek().location, "expected newline");
+        }
+    }
+}
+
+void Parser::expect_indent() {
+    skip_newlines();
+    consume(TokenType::INDENT, "expected indented block");
+}
+
+void Parser::expect_dedent() {
+    skip_newlines();
+    if (!match(TokenType::DEDENT)) {
+        if (!check(TokenType::EOF_TOKEN)) {
+            errors_.error(peek().location, "expected dedent");
+        }
+    }
+}
+
+// ── Program ─────────────────────────────────────────────────────────────────
+
+ProgramNode Parser::parse_program() {
+    ProgramNode program;
+    program.location = peek().location;
+    skip_newlines();
+    while (!check(TokenType::EOF_TOKEN)) {
+        program.declarations.push_back(parse_declaration());
+        skip_newlines();
+    }
+    return program;
+}
+
+Declaration Parser::parse_declaration() {
+    skip_newlines();
+    auto& tok = peek();
+
+    if (tok.type == TokenType::MODULE) return parse_module();
+    if (tok.type == TokenType::USE) return parse_use();
+    if (tok.type == TokenType::CONST) return parse_const_block();
+    if (tok.type == TokenType::STRUCT) return parse_struct();
+    if (tok.type == TokenType::ENUM) return parse_enum();
+    if (tok.type == TokenType::TRAIT) return parse_trait();
+    if (tok.type == TokenType::SYSTEM) return parse_system();
+    if (tok.type == TokenType::VIEW) return parse_view();
+    if (tok.type == TokenType::EVENT) return parse_event();
+    if (tok.type == TokenType::INTERFACE) return parse_interface();
+
+    if (tok.type == TokenType::PUB) {
+        advance();
+        skip_newlines();
+        if (check(TokenType::TRAIT)) {
+            auto t = parse_trait();
+            t.is_pub = true;
+            return t;
+        }
+        if (check(TokenType::UNIT)) return parse_unit(true);
+        if (check(TokenType::FUNC)) return parse_func(true);
+        errors_.error(peek().location, "expected trait, unit, or func after 'pub'");
+    }
+
+    if (tok.type == TokenType::UNIT) return parse_unit(false);
+    if (tok.type == TokenType::FUNC) return parse_func(false);
+
+    errors_.error(tok.location, "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, interface)");
+    advance();  // skip bad token
+    return ModuleNode{"<error>", tok.location};
+}
+
+// ── Module & Use ────────────────────────────────────────────────────────────
+
+ModuleNode Parser::parse_module() {
+    auto loc = peek().location;
+    consume(TokenType::MODULE, "expected 'module'");
+    auto name = consume(TokenType::IDENTIFIER, "expected module name").value;
+    expect_newline();
+    return {name, loc};
+}
+
+UseNode Parser::parse_use() {
+    auto loc = peek().location;
+    consume(TokenType::USE, "expected 'use'");
+    auto name = consume(TokenType::IDENTIFIER, "expected module name").value;
+    std::optional<std::string> alias;
+    if (match(TokenType::AS)) {
+        alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
+    }
+    expect_newline();
+    return {name, alias, loc};
+}
+
+// ── Const Block ─────────────────────────────────────────────────────────────
+
+ConstBlockNode Parser::parse_const_block() {
+    auto loc = peek().location;
+    consume(TokenType::CONST, "expected 'const'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ConstBlockNode node;
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        auto assign_loc = peek().location;
+        auto name = consume(TokenType::IDENTIFIER, "expected constant name").value;
+        consume(TokenType::ASSIGN, "expected '='");
+        auto value = parse_expression();
+        expect_newline();
+        ConstAssignment assign;
+        assign.name = name;
+        assign.value = std::move(value);
+        assign.location = assign_loc;
+        node.assignments.push_back(std::move(assign));
+    }
+
+    expect_dedent();
+    return node;
+}
+
+// ── Struct ──────────────────────────────────────────────────────────────────
+
+StructNode Parser::parse_struct() {
+    auto loc = peek().location;
+    consume(TokenType::STRUCT, "expected 'struct'");
+    auto name = consume(TokenType::IDENTIFIER, "expected struct name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    StructNode node;
+    node.name = name;
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        // Struct fields: name: type (no let/var modifiers)
+        auto field_loc = peek().location;
+        auto field_name = consume(TokenType::IDENTIFIER, "expected field name").value;
+        consume(TokenType::COLON, "expected ':'");
+        auto type = parse_type_ref();
+        expect_newline();
+        FieldNode field;
+        field.name = field_name;
+        field.type = std::move(type);
+        field.location = field_loc;
+        node.fields.push_back(std::move(field));
+    }
+
+    expect_dedent();
+    return node;
+}
+
+// ── Enum ────────────────────────────────────────────────────────────────────
+
+EnumNode Parser::parse_enum() {
+    auto loc = peek().location;
+    consume(TokenType::ENUM, "expected 'enum'");
+    auto name = consume(TokenType::IDENTIFIER, "expected enum name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    EnumNode node;
+    node.name = name;
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        auto var_loc = peek().location;
+        auto var_name = consume(TokenType::IDENTIFIER, "expected variant name").value;
+        std::optional<int> val;
+        if (match(TokenType::ASSIGN)) {
+            val = std::stoi(consume(TokenType::INT_LITERAL, "expected integer value").value);
+        }
+        expect_newline();
+        node.variants.push_back({var_name, val, var_loc});
+    }
+
+    expect_dedent();
+    return node;
+}
+
+// ── Trait ────────────────────────────────────────────────────────────────────
+
+TraitNode Parser::parse_trait() {
+    auto loc = peek().location;
+    consume(TokenType::TRAIT, "expected 'trait'");
+    auto name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    TraitNode node;
+    node.name = name;
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::ON)) {
+            node.handlers.push_back(parse_event_handler());
+        } else {
+            node.fields.push_back(parse_field());
+        }
+    }
+
+    expect_dedent();
+    return node;
+}
+
+// ── Field ───────────────────────────────────────────────────────────────────
+
+FieldModifiers Parser::parse_field_modifiers() {
+    FieldModifiers mods;
+    while (true) {
+        if (check(TokenType::PERSIST)) { advance(); mods.is_persist = true; }
+        else if (check(TokenType::SYNC)) { advance(); mods.is_sync = true; }
+        else if (check(TokenType::PUB)) { advance(); mods.is_pub = true; }
+        else break;
+    }
+    return mods;
+}
+
+FieldNode Parser::parse_field() {
+    auto loc = peek().location;
+    auto mods = parse_field_modifiers();
+
+    if (check(TokenType::LET)) { advance(); mods.is_let = true; }
+    else if (check(TokenType::VAR)) { advance(); mods.is_var = true; }
+    else { errors_.error(peek().location, "expected 'let' or 'var'"); }
+
+    auto name = consume(TokenType::IDENTIFIER, "expected field name").value;
+    consume(TokenType::COLON, "expected ':'");
+    auto type = parse_type_ref();
+
+    std::optional<std::unique_ptr<ExprNode>> default_val;
+    if (match(TokenType::ASSIGN)) {
+        default_val = parse_expression();
+    }
+    expect_newline();
+
+    FieldNode field;
+    field.modifiers = mods;
+    field.name = name;
+    field.type = std::move(type);
+    field.default_value = std::move(default_val);
+    field.location = loc;
+    return field;
+}
+
+// ── Event Handler ───────────────────────────────────────────────────────────
+
+EventHandlerNode Parser::parse_event_handler() {
+    auto loc = peek().location;
+    consume(TokenType::ON, "expected 'on'");
+    auto event_name = consume(TokenType::IDENTIFIER, "expected event name").value;
+    consume(TokenType::LPAREN, "expected '('");
+    auto params = parse_param_list();
+    consume(TokenType::RPAREN, "expected ')'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+
+    auto body = parse_block();
+
+    EventHandlerNode handler;
+    handler.event_name = event_name;
+    handler.params = std::move(params);
+    handler.body = std::move(body);
+    handler.location = loc;
+    return handler;
+}
+
+// ── Type Reference ──────────────────────────────────────────────────────────
+
+TypeRef Parser::parse_type_ref() {
+    auto loc = peek().location;
+    auto name = consume(TokenType::IDENTIFIER, "expected type name").value;
+    TypeRef ref;
+    ref.name = name;
+    ref.location = loc;
+    if (match(TokenType::LBRACKET)) {
+        ref.param = std::make_unique<TypeRef>(parse_type_ref());
+        consume(TokenType::RBRACKET, "expected ']'");
+    }
+    return ref;
+}
+
+// ── Parameters ──────────────────────────────────────────────────────────────
+
+FuncParam Parser::parse_param() {
+    auto loc = peek().location;
+    auto name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
+    consume(TokenType::COLON, "expected ':'");
+    auto type = parse_type_ref();
+    return {name, std::move(type), loc};
+}
+
+std::vector<FuncParam> Parser::parse_param_list() {
+    std::vector<FuncParam> params;
+    if (!check(TokenType::RPAREN)) {
+        params.push_back(parse_param());
+        while (match(TokenType::COMMA)) {
+            params.push_back(parse_param());
+        }
+    }
+    return params;
+}
+
+// ── Unit ────────────────────────────────────────────────────────────────────
+
+UnitNode Parser::parse_unit(bool is_pub) {
+    auto loc = peek().location;
+    consume(TokenType::UNIT, "expected 'unit'");
+    auto name = consume(TokenType::IDENTIFIER, "expected unit name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    UnitNode node;
+    node.name = name;
+    node.is_pub = is_pub;
+    node.location = loc;
+
+    skip_newlines();
+    if (check(TokenType::APPLY)) {
+        node.apply = parse_apply_block();
+    }
+
+    skip_newlines();
+    if (check(TokenType::CONFIG)) {
+        node.config = parse_config_block();
+    }
+
+    skip_newlines();
+    if (check(TokenType::CHILD)) {
+        node.child = parse_child_block();
+    }
+
+    skip_newlines();
+    expect_dedent();
+    return node;
+}
+
+ApplyBlock Parser::parse_apply_block() {
+    auto loc = peek().location;
+    consume(TokenType::APPLY, "expected 'apply'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ApplyBlock block;
+    block.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        block.trait_names.push_back(consume(TokenType::IDENTIFIER, "expected trait name").value);
+        expect_newline();
+    }
+
+    expect_dedent();
+    return block;
+}
+
+ConfigBlock Parser::parse_config_block() {
+    auto loc = peek().location;
+    consume(TokenType::CONFIG, "expected 'config'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ConfigBlock block;
+    block.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        auto assign_loc = peek().location;
+        auto name = consume(TokenType::IDENTIFIER, "expected config field name").value;
+        consume(TokenType::ASSIGN, "expected '='");
+        auto value = parse_expression();
+        expect_newline();
+        ConfigAssignment assign;
+        assign.name = name;
+        assign.value = std::move(value);
+        assign.location = assign_loc;
+        block.assignments.push_back(std::move(assign));
+    }
+
+    expect_dedent();
+    return block;
+}
+
+ChildBlock Parser::parse_child_block() {
+    auto loc = peek().location;
+    consume(TokenType::CHILD, "expected 'child'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ChildBlock block;
+    block.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        auto entry_loc = peek().location;
+        auto type_name = consume(TokenType::IDENTIFIER, "expected child type").value;
+        auto inst_name = consume(TokenType::IDENTIFIER, "expected child instance name").value;
+        expect_newline();
+        block.children.push_back({type_name, inst_name, entry_loc});
+    }
+
+    expect_dedent();
+    return block;
+}
+
+// ── System ──────────────────────────────────────────────────────────────────
+
+SystemNode Parser::parse_system() {
+    auto loc = peek().location;
+    consume(TokenType::SYSTEM, "expected 'system'");
+    auto name = consume(TokenType::IDENTIFIER, "expected system name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    SystemNode node;
+    node.name = name;
+    node.location = loc;
+
+    skip_newlines();
+    if (check(TokenType::FILTER)) {
+        node.filter = parse_filter_clause();
+    }
+
+    skip_newlines();
+    if (check(TokenType::TARGET)) {
+        advance();
+        consume(TokenType::COLON, "expected ':'");
+        node.target = consume(TokenType::IDENTIFIER, "expected 'cpu' or 'gpu'").value;
+        expect_newline();
+    }
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        node.handlers.push_back(parse_event_handler());
+    }
+
+    expect_dedent();
+    return node;
+}
+
+FilterClause Parser::parse_filter_clause() {
+    auto loc = peek().location;
+    consume(TokenType::FILTER, "expected 'filter'");
+    consume(TokenType::COLON, "expected ':'");
+    consume(TokenType::LBRACKET, "expected '['");
+
+    FilterClause clause;
+    clause.location = loc;
+    clause.trait_names.push_back(consume(TokenType::IDENTIFIER, "expected trait name").value);
+    while (match(TokenType::COMMA)) {
+        clause.trait_names.push_back(consume(TokenType::IDENTIFIER, "expected trait name").value);
+    }
+    consume(TokenType::RBRACKET, "expected ']'");
+    expect_newline();
+    return clause;
+}
+
+// ── View ────────────────────────────────────────────────────────────────────
+
+ViewNode Parser::parse_view() {
+    auto loc = peek().location;
+    consume(TokenType::VIEW, "expected 'view'");
+    auto name = consume(TokenType::IDENTIFIER, "expected view name").value;
+    consume(TokenType::LPAREN, "expected '('");
+    auto params = parse_param_list();
+    consume(TokenType::RPAREN, "expected ')'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ViewNode node;
+    node.name = name;
+    node.params = std::move(params);
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        node.elements.push_back(parse_view_element());
+    }
+
+    expect_dedent();
+    return node;
+}
+
+ViewElement Parser::parse_view_element() {
+    auto loc = peek().location;
+    auto tag = consume(TokenType::IDENTIFIER, "expected element tag").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ViewElement elem;
+    elem.tag_name = tag;
+    elem.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+
+        // Check if this is a nested element (identifier followed by colon then newline)
+        // or a property (identifier = expression)
+        if (check(TokenType::IDENTIFIER) && peek_next().type == TokenType::COLON) {
+            // Could be nested element or property with type — peek further
+            // If after COLON there's NEWLINE, it's a nested element
+            // Save position and check
+            auto saved = current_;
+            advance();  // skip identifier
+            advance();  // skip colon
+            if (check(TokenType::NEWLINE) || check(TokenType::INDENT)) {
+                current_ = saved;
+                elem.children.push_back(parse_view_element());
+            } else {
+                current_ = saved;
+                // It's a property: name = expr
+                auto prop_loc = peek().location;
+                auto prop_name = advance().value;
+                consume(TokenType::ASSIGN, "expected '='");
+                auto value = parse_expression();
+                expect_newline();
+                ConfigAssignment prop;
+                prop.name = prop_name;
+                prop.value = std::move(value);
+                prop.location = prop_loc;
+                elem.props.push_back(std::move(prop));
+            }
+        } else if (check(TokenType::IDENTIFIER) && peek_next().type == TokenType::ASSIGN) {
+            auto prop_loc = peek().location;
+            auto prop_name = advance().value;
+            consume(TokenType::ASSIGN, "expected '='");
+            auto value = parse_expression();
+            expect_newline();
+            ConfigAssignment prop;
+            prop.name = prop_name;
+            prop.value = std::move(value);
+            prop.location = prop_loc;
+            elem.props.push_back(std::move(prop));
+        } else {
+            errors_.error(peek().location, "expected property or nested element in view");
+            advance();
+        }
+    }
+
+    expect_dedent();
+    return elem;
+}
+
+// ── Event Declaration ───────────────────────────────────────────────────────
+
+EventNode Parser::parse_event() {
+    auto loc = peek().location;
+    consume(TokenType::EVENT, "expected 'event'");
+    auto name = consume(TokenType::IDENTIFIER, "expected event name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    EventNode node;
+    node.name = name;
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        node.fields.push_back(parse_field());
+    }
+
+    expect_dedent();
+    return node;
+}
+
+// ── Func ────────────────────────────────────────────────────────────────────
+
+FuncNode Parser::parse_func(bool is_pub) {
+    auto loc = peek().location;
+    consume(TokenType::FUNC, "expected 'func'");
+    auto name = consume(TokenType::IDENTIFIER, "expected function name").value;
+    consume(TokenType::LPAREN, "expected '('");
+    auto params = parse_param_list();
+    consume(TokenType::RPAREN, "expected ')'");
+
+    std::optional<TypeRef> return_type;
+    if (match(TokenType::ARROW)) {
+        return_type = parse_type_ref();
+    }
+
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+
+    auto body = parse_block();
+
+    FuncNode node;
+    node.name = name;
+    node.is_pub = is_pub;
+    node.params = std::move(params);
+    node.return_type = std::move(return_type);
+    node.body = std::move(body);
+    node.location = loc;
+    return node;
+}
+
+// ── Interface ───────────────────────────────────────────────────────────────
+
+InterfaceNode Parser::parse_interface() {
+    auto loc = peek().location;
+    consume(TokenType::INTERFACE, "expected 'interface'");
+    auto name = consume(TokenType::IDENTIFIER, "expected interface name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    InterfaceNode node;
+    node.name = name;
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        auto sig_loc = peek().location;
+        consume(TokenType::FUNC, "expected 'func'");
+        auto sig_name = consume(TokenType::IDENTIFIER, "expected method name").value;
+        consume(TokenType::LPAREN, "expected '('");
+        auto sig_params = parse_param_list();
+        consume(TokenType::RPAREN, "expected ')'");
+        std::optional<TypeRef> ret;
+        if (match(TokenType::ARROW)) {
+            ret = parse_type_ref();
+        }
+        expect_newline();
+        node.methods.push_back({sig_name, std::move(sig_params), std::move(ret), sig_loc});
+    }
+
+    expect_dedent();
+    return node;
+}
+
+// ── Statements ──────────────────────────────────────────────────────────────
+
+std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
+    expect_indent();
+    std::vector<std::unique_ptr<StmtNode>> stmts;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        stmts.push_back(parse_statement());
+    }
+    expect_dedent();
+    return stmts;
+}
+
+std::unique_ptr<StmtNode> Parser::parse_statement() {
+    auto loc = peek().location;
+
+    // emit statement
+    if (check(TokenType::EMIT)) {
+        advance();
+        auto event_name = consume(TokenType::IDENTIFIER, "expected event name").value;
+        consume(TokenType::LPAREN, "expected '('");
+        std::vector<std::unique_ptr<ExprNode>> args;
+        if (!check(TokenType::RPAREN)) {
+            args.push_back(parse_expression());
+            while (match(TokenType::COMMA)) {
+                args.push_back(parse_expression());
+            }
+        }
+        consume(TokenType::RPAREN, "expected ')'");
+        expect_newline();
+        EmitStmt emit;
+        emit.event_name = event_name;
+        emit.args = std::move(args);
+        emit.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(emit)}, loc);
+    }
+
+    // return statement
+    if (check(TokenType::RETURN)) {
+        advance();
+        std::optional<std::unique_ptr<ExprNode>> value;
+        if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+            value = parse_expression();
+        }
+        expect_newline();
+        ReturnStmt ret;
+        ret.value = std::move(value);
+        ret.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(ret)}, loc);
+    }
+
+    // if statement
+    if (check(TokenType::IF)) {
+        advance();
+        auto condition = parse_expression();
+        consume(TokenType::COLON, "expected ':'");
+
+        // Check if inline (expression follows on same line) or block (newline + indent)
+        if (check(TokenType::NEWLINE) || check(TokenType::INDENT)) {
+            expect_newline();
+            auto then_body = parse_block();
+            std::vector<std::unique_ptr<StmtNode>> else_body;
+            skip_newlines();
+            if (match(TokenType::ELSE)) {
+                consume(TokenType::COLON, "expected ':'");
+                expect_newline();
+                else_body = parse_block();
+            }
+            IfStmt if_stmt;
+            if_stmt.condition = std::move(condition);
+            if_stmt.then_body = std::move(then_body);
+            if_stmt.else_body = std::move(else_body);
+            if_stmt.location = loc;
+            return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
+        } else {
+            // Inline if: if cond: stmt
+            auto inner = parse_statement();
+            std::vector<std::unique_ptr<StmtNode>> then_body;
+            then_body.push_back(std::move(inner));
+            IfStmt if_stmt;
+            if_stmt.condition = std::move(condition);
+            if_stmt.then_body = std::move(then_body);
+            if_stmt.location = loc;
+            return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
+        }
+    }
+
+    // Assignment or expression statement
+    // Check for: IDENTIFIER (= | += | -=) expression
+    if (check(TokenType::IDENTIFIER) &&
+        (peek_next().type == TokenType::ASSIGN || peek_next().type == TokenType::PLUS_ASSIGN ||
+         peek_next().type == TokenType::MINUS_ASSIGN)) {
+        auto name = advance().value;
+        auto op = advance().value;
+        auto value = parse_expression();
+        expect_newline();
+        VarAssign assign;
+        assign.name = name;
+        assign.op = op;
+        assign.value = std::move(value);
+        assign.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(assign)}, loc);
+    }
+
+    // Expression statement
+    auto expr = parse_expression();
+    expect_newline();
+    ExprStmt expr_stmt;
+    expr_stmt.expr = std::move(expr);
+    expr_stmt.location = loc;
+    return std::make_unique<StmtNode>(StmtNode::Variant{std::move(expr_stmt)}, loc);
+}
+
+// ── Expressions ─────────────────────────────────────────────────────────────
+
+std::unique_ptr<ExprNode> Parser::parse_expression() {
+    return parse_or_expr();
+}
+
+std::unique_ptr<ExprNode> Parser::parse_or_expr() {
+    auto left = parse_and_expr();
+    while (check(TokenType::OR)) {
+        auto loc = peek().location;
+        advance();
+        auto right = parse_and_expr();
+        BinaryExpr bin;
+        bin.op = "or";
+        bin.left = std::move(left);
+        bin.right = std::move(right);
+        bin.location = loc;
+        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+    }
+    return left;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_and_expr() {
+    auto left = parse_equality_expr();
+    while (check(TokenType::AND)) {
+        auto loc = peek().location;
+        advance();
+        auto right = parse_equality_expr();
+        BinaryExpr bin;
+        bin.op = "and";
+        bin.left = std::move(left);
+        bin.right = std::move(right);
+        bin.location = loc;
+        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+    }
+    return left;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_equality_expr() {
+    auto left = parse_comparison_expr();
+    while (check(TokenType::EQUALS) || check(TokenType::NOT_EQUALS)) {
+        auto loc = peek().location;
+        auto op = advance().value;
+        auto right = parse_comparison_expr();
+        BinaryExpr bin;
+        bin.op = op;
+        bin.left = std::move(left);
+        bin.right = std::move(right);
+        bin.location = loc;
+        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+    }
+    return left;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_comparison_expr() {
+    auto left = parse_additive_expr();
+    while (check(TokenType::LESS) || check(TokenType::GREATER) || check(TokenType::LESS_EQ) ||
+           check(TokenType::GREATER_EQ)) {
+        auto loc = peek().location;
+        auto op = advance().value;
+        auto right = parse_additive_expr();
+        BinaryExpr bin;
+        bin.op = op;
+        bin.left = std::move(left);
+        bin.right = std::move(right);
+        bin.location = loc;
+        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+    }
+    return left;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_additive_expr() {
+    auto left = parse_multiplicative_expr();
+    while (check(TokenType::PLUS) || check(TokenType::MINUS)) {
+        auto loc = peek().location;
+        auto op = advance().value;
+        auto right = parse_multiplicative_expr();
+        BinaryExpr bin;
+        bin.op = op;
+        bin.left = std::move(left);
+        bin.right = std::move(right);
+        bin.location = loc;
+        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+    }
+    return left;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_multiplicative_expr() {
+    auto left = parse_unary_expr();
+    while (check(TokenType::STAR) || check(TokenType::SLASH) || check(TokenType::PERCENT)) {
+        auto loc = peek().location;
+        auto op = advance().value;
+        auto right = parse_unary_expr();
+        BinaryExpr bin;
+        bin.op = op;
+        bin.left = std::move(left);
+        bin.right = std::move(right);
+        bin.location = loc;
+        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+    }
+    return left;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_unary_expr() {
+    if (check(TokenType::NOT)) {
+        auto loc = peek().location;
+        advance();
+        auto operand = parse_unary_expr();
+        UnaryExpr un;
+        un.op = "not";
+        un.operand = std::move(operand);
+        un.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(un)}, loc);
+    }
+    if (check(TokenType::MINUS)) {
+        auto loc = peek().location;
+        advance();
+        auto operand = parse_unary_expr();
+        UnaryExpr un;
+        un.op = "-";
+        un.operand = std::move(operand);
+        un.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(un)}, loc);
+    }
+    return parse_postfix_expr();
+}
+
+std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
+    auto expr = parse_primary_expr();
+
+    while (true) {
+        if (check(TokenType::DOT)) {
+            auto loc = peek().location;
+            advance();
+            auto member = consume(TokenType::IDENTIFIER, "expected member name").value;
+
+            // Check for method call: .member(args)
+            if (check(TokenType::LPAREN)) {
+                advance();
+                std::vector<std::unique_ptr<ExprNode>> args;
+                if (!check(TokenType::RPAREN)) {
+                    args.push_back(parse_expression());
+                    while (match(TokenType::COMMA)) {
+                        args.push_back(parse_expression());
+                    }
+                }
+                consume(TokenType::RPAREN, "expected ')'");
+                CallExpr call;
+                MemberExpr mem;
+                mem.object = std::move(expr);
+                mem.member = member;
+                mem.location = loc;
+                call.callee = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
+                call.args = std::move(args);
+                call.location = loc;
+                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
+            } else {
+                MemberExpr mem;
+                mem.object = std::move(expr);
+                mem.member = member;
+                mem.location = loc;
+                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
+            }
+        } else if (check(TokenType::LPAREN)) {
+            auto loc = peek().location;
+            advance();
+            std::vector<std::unique_ptr<ExprNode>> args;
+            if (!check(TokenType::RPAREN)) {
+                args.push_back(parse_expression());
+                while (match(TokenType::COMMA)) {
+                    args.push_back(parse_expression());
+                }
+            }
+            consume(TokenType::RPAREN, "expected ')'");
+            CallExpr call;
+            call.callee = std::move(expr);
+            call.args = std::move(args);
+            call.location = loc;
+            expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
+        } else {
+            break;
+        }
+    }
+
+    return expr;
+}
+
+std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
+    auto loc = peek().location;
+
+    // Integer literal
+    if (check(TokenType::INT_LITERAL)) {
+        auto val = advance().value;
+        LiteralExpr lit;
+        lit.kind = LiteralExpr::Kind::Int;
+        lit.value = val;
+        lit.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
+    }
+
+    // Float literal
+    if (check(TokenType::FLOAT_LITERAL)) {
+        auto val = advance().value;
+        LiteralExpr lit;
+        lit.kind = LiteralExpr::Kind::Float;
+        lit.value = val;
+        lit.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
+    }
+
+    // String literal
+    if (check(TokenType::STRING_LITERAL)) {
+        auto val = advance().value;
+        LiteralExpr lit;
+        lit.kind = LiteralExpr::Kind::String;
+        lit.value = val;
+        lit.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
+    }
+
+    // Hex color
+    if (check(TokenType::HEX_COLOR)) {
+        auto val = advance().value;
+        LiteralExpr lit;
+        lit.kind = LiteralExpr::Kind::HexColor;
+        lit.value = val;
+        lit.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
+    }
+
+    // Boolean literals
+    if (check(TokenType::TRUE_LIT)) {
+        advance();
+        LiteralExpr lit;
+        lit.kind = LiteralExpr::Kind::Bool;
+        lit.value = "true";
+        lit.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
+    }
+    if (check(TokenType::FALSE_LIT)) {
+        advance();
+        LiteralExpr lit;
+        lit.kind = LiteralExpr::Kind::Bool;
+        lit.value = "false";
+        lit.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
+    }
+
+    // Parenthesized expression
+    if (check(TokenType::LPAREN)) {
+        advance();
+        auto expr = parse_expression();
+        consume(TokenType::RPAREN, "expected ')'");
+        return expr;
+    }
+
+    // List literal
+    if (check(TokenType::LBRACKET)) {
+        advance();
+        ListExpr list;
+        list.location = loc;
+        if (!check(TokenType::RBRACKET)) {
+            list.elements.push_back(parse_expression());
+            while (match(TokenType::COMMA)) {
+                list.elements.push_back(parse_expression());
+            }
+        }
+        consume(TokenType::RBRACKET, "expected ']'");
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(list)}, loc);
+    }
+
+    // Identifier — possibly lambda (ident => expr)
+    if (check(TokenType::IDENTIFIER)) {
+        auto name = advance().value;
+
+        // Lambda: ident => expr
+        if (check(TokenType::FAT_ARROW)) {
+            advance();
+            auto body = parse_expression();
+            LambdaExpr lambda;
+            lambda.params = {name};
+            lambda.body = std::move(body);
+            lambda.location = loc;
+            return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lambda)}, loc);
+        }
+
+        IdentExpr ident;
+        ident.name = name;
+        ident.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(ident)}, loc);
+    }
+
+    // Match expression
+    if (check(TokenType::MATCH)) {
+        advance();
+        auto subject = parse_expression();
+        consume(TokenType::COLON, "expected ':'");
+        expect_newline();
+        expect_indent();
+
+        MatchExpr match_expr;
+        match_expr.subject = std::move(subject);
+        match_expr.location = loc;
+
+        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+            skip_newlines();
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+            auto arm_loc = peek().location;
+            auto pattern = parse_expression();
+            consume(TokenType::FAT_ARROW, "expected '=>'");
+            auto body = parse_expression();
+            expect_newline();
+            MatchArm arm;
+            arm.pattern = std::move(pattern);
+            arm.body = std::move(body);
+            arm.location = arm_loc;
+            match_expr.arms.push_back(std::move(arm));
+        }
+
+        expect_dedent();
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(match_expr)}, loc);
+    }
+
+    // If expression (inline): if cond: expr else: expr
+    if (check(TokenType::IF)) {
+        advance();
+        auto condition = parse_expression();
+        consume(TokenType::COLON, "expected ':'");
+        auto then_expr = parse_expression();
+        consume(TokenType::ELSE, "expected 'else'");
+        consume(TokenType::COLON, "expected ':'");
+        auto else_expr = parse_expression();
+        IfExpr if_expr;
+        if_expr.condition = std::move(condition);
+        if_expr.then_expr = std::move(then_expr);
+        if_expr.else_expr = std::move(else_expr);
+        if_expr.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(if_expr)}, loc);
+    }
+
+    errors_.error(loc, "expected expression");
+    IdentExpr err;
+    err.name = "<error>";
+    err.location = loc;
+    return std::make_unique<ExprNode>(ExprNode::Variant{std::move(err)}, loc);
+}
+
+}  // namespace cactus

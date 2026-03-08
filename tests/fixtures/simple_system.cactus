@@ -1,0 +1,14 @@
+trait Position:
+    var x: float = 0.0
+    var y: float = 0.0
+
+trait Velocity:
+    var vx: float = 0.0
+    var vy: float = 0.0
+
+system MoveSystem:
+    filter: [Position, Velocity]
+
+    on tick(dt: float):
+        x = x + vx * dt
+        y = y + vy * dt

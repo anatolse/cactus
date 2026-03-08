@@ -5,7 +5,7 @@
 - [x] 1.3 Create `tests/CMakeLists.txt` with Catch2 test targets
 - [x] 1.4 Create `.clang-tidy` config with modern C++ checks (modernize-*, readability-*, bugprone-*, performance-*)
 - [x] 1.5 Create `.clang-format` config with consistent style (BasedOnStyle: LLVM or Google, IndentWidth: 4, ColumnLimit: 120)
-- [ ] 1.6 Verify empty project builds with CMake
+- [x] 1.6 Verify empty project builds with CMake
 
 ## 2. Language Specification
 

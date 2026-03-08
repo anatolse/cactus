@@ -30,10 +30,10 @@
 
 ## 5. Lexer
 
-- [ ] 5.1 Define `src/frontend/token.h` — TokenType enum (all keywords, operators, literals, INDENT/DEDENT/NEWLINE/EOF) and Token struct
-- [ ] 5.2 Implement `src/frontend/lexer.h/.cpp` — indentation-sensitive tokenizer with indent stack, keyword recognition, numeric/string/hex-color literals, comment skipping, operator tokenization
-- [ ] 5.3 Write `tests/test_lexer.cpp` — tests for INDENT/DEDENT, keywords vs identifiers, int/float literals, string literals, hex colors, comments, operators, tab rejection, error cases
-- [ ] 5.4 Create `tests/fixtures/minimal_trait.cactus` — single trait with one var field for lexer/parser testing
+- [x] 5.1 Define `src/frontend/token.h` — TokenType enum (all keywords, operators, literals, INDENT/DEDENT/NEWLINE/EOF) and Token struct
+- [x] 5.2 Implement `src/frontend/lexer.h/.cpp` — indentation-sensitive tokenizer with indent stack, keyword recognition, numeric/string/hex-color literals, comment skipping, operator tokenization
+- [x] 5.3 Write `tests/test_lexer.cpp` — tests for INDENT/DEDENT, keywords vs identifiers, int/float literals, string literals, hex colors, comments, operators, tab rejection, error cases
+- [x] 5.4 Create `tests/fixtures/minimal_trait.cactus` — single trait with one var field for lexer/parser testing
 
 ## 6. AST Node Types
 

@@ -1,0 +1,25 @@
+# Build output
+build/
+out/
+
+# IDE
+.vs/
+.vscode/settings.json
+*.user
+
+# CMake
+CMakeUserPresets.json
+
+# Compiled objects
+*.obj
+*.o
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.dylib
+
+# OS
+.DS_Store
+Thumbs.db

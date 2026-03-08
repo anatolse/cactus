@@ -1,0 +1,103 @@
+cmake_minimum_required(VERSION 3.20)
+project(cactus-compiler
+    VERSION 0.1.0
+    LANGUAGES CXX
+    DESCRIPTION "Cactus DSL Compiler — kid-friendly game language"
+)
+
+# ── C++20 Standard ──────────────────────────────────────────────────────────────
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# ── Compiler Warnings ───────────────────────────────────────────────────────────
+if(MSVC)
+    add_compile_options(/W4 /WX /permissive-)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+endif()
+
+# ── FetchContent Dependencies ───────────────────────────────────────────────────
+include(FetchContent)
+
+# Catch2 — Testing framework
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.5.2
+    GIT_SHALLOW    TRUE
+)
+
+# EnTT — ECS library (header-only, for EnTT backend)
+FetchContent_Declare(
+    EnTT
+    GIT_REPOSITORY https://github.com/skypjack/entt.git
+    GIT_TAG        v3.13.1
+    GIT_SHALLOW    TRUE
+)
+
+# Raylib — Presentation API (for generated code validation)
+FetchContent_Declare(
+    raylib
+    GIT_REPOSITORY https://github.com/raysan5/raylib.git
+    GIT_TAG        5.0
+    GIT_SHALLOW    TRUE
+)
+
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version" FORCE)
+FetchContent_MakeAvailable(Catch2 EnTT raylib)
+
+# ── Common Library ──────────────────────────────────────────────────────────────
+add_library(cactus_common STATIC
+    src/common/error_reporter.cpp
+    src/common/string_pool.cpp
+)
+target_include_directories(cactus_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# ── Frontend Library ────────────────────────────────────────────────────────────
+add_library(cactus_frontend STATIC
+    src/frontend/lexer.cpp
+    src/frontend/parser.cpp
+    src/frontend/semantic_analyzer.cpp
+)
+target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(cactus_frontend PUBLIC cactus_common)
+
+# ── Backend: C++ Manual SoA ─────────────────────────────────────────────────────
+add_library(cactus_backend_cpp_manual STATIC
+    src/backends/cpp-manual/soa_emitter.cpp
+    src/backends/cpp-manual/system_emitter.cpp
+    src/backends/cpp-manual/event_emitter.cpp
+    src/backends/cpp-manual/cpp_manual_codegen.cpp
+)
+target_include_directories(cactus_backend_cpp_manual PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/cpp-manual
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(cactus_backend_cpp_manual PUBLIC cactus_frontend)
+
+# ── Backend: C++ EnTT ───────────────────────────────────────────────────────────
+add_library(cactus_backend_cpp_entt STATIC
+    src/backends/cpp-entt/component_emitter.cpp
+    src/backends/cpp-entt/system_emitter.cpp
+    src/backends/cpp-entt/event_emitter.cpp
+    src/backends/cpp-entt/cpp_entt_codegen.cpp
+)
+target_include_directories(cactus_backend_cpp_entt PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/cpp-entt
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(cactus_backend_cpp_entt PUBLIC cactus_frontend EnTT::EnTT)
+
+# ── CLI Executable ──────────────────────────────────────────────────────────────
+add_executable(cactus src/main.cpp)
+target_link_libraries(cactus PRIVATE
+    cactus_frontend
+    cactus_backend_cpp_manual
+    cactus_backend_cpp_entt
+)
+
+# ── Tests ───────────────────────────────────────────────────────────────────────
+enable_testing()
+add_subdirectory(tests)

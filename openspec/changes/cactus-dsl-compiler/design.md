@@ -8,8 +8,8 @@ Key constraints: the language uses indentation-based syntax (like Python/YAML), 
 
 **Goals:**
 - Build a complete compiler frontend (lexer, parser, semantic analyzer) that produces a decorated AST
-- Build two C++ code generator backends in dedicated directories (`backends/cpp-manual/`, `backends/cpp-entt/`)
-- Reserve `backends/rust/` for future Rust backend
+- Build two C++ code generator backends in dedicated directories (`src/backends/cpp-manual/`, `src/backends/cpp-entt/`)
+- Reserve `src/backends/rust/` for future Rust backend
 - Use Raylib as the default presentation API in generated code, with architecture allowing alternative libraries (SDL, etc.)
 - Enforce all language safety constraints at compile time (const-string rule, func purity, no recursion, no imperative loops)
 - Support `persist` and `sync` field modifiers with proper semantic validation
@@ -44,11 +44,11 @@ Key constraints: the language uses indentation-based syntax (like Python/YAML), 
 
 ### 3. Backends in dedicated directories
 
-**Decision**: Each backend lives in its own top-level directory: `backends/cpp-manual/`, `backends/cpp-entt/`, `backends/rust/` (reserved).
+**Decision**: Each backend lives in its own directory under `src/backends/`: `src/backends/cpp-manual/`, `src/backends/cpp-entt/`, `src/backends/rust/` (reserved).
 
-**Rationale**: Clean separation of concerns. Each backend can have its own build configuration, dependencies, and test suite. Adding new backends (Rust, WASM, etc.) doesn't touch existing code. The frontend produces a `DecoratedProgram` that serves as the stable interface between frontend and all backends.
+**Rationale**: Clean separation of concerns. Each backend can have its own build configuration, dependencies, and test suite. Adding new backends (Rust, WASM, etc.) doesn't touch existing code. The frontend produces a `DecoratedProgram` that serves as the stable interface between frontend and all backends. Keeping backends under `src/` keeps all source code in one tree.
 
-**Alternative considered**: All backends in `src/backend_*/` subdirectories — rejected per user preference for top-level `backends/` organization, which also makes it clearer that backends are independent compilation targets.
+**Alternative considered**: Top-level `backends/` directory — rejected in favor of keeping all compilable source under `src/` for a cleaner project root.
 
 ### 4. Raylib as default presentation API
 

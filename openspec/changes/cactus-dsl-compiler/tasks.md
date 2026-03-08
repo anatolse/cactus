@@ -1,10 +1,10 @@
 ## 1. Project Scaffolding
 
-- [ ] 1.1 Create top-level CMakeLists.txt with C++20 standard, FetchContent for Catch2, EnTT, and Raylib
-- [ ] 1.2 Create directory structure: `src/common/`, `src/frontend/`, `backends/cpp-manual/`, `backends/cpp-entt/`, `backends/rust/` (placeholder README), `tests/`, `tests/fixtures/`, `examples/cactus_shop/`, `spec/`
-- [ ] 1.3 Create `tests/CMakeLists.txt` with Catch2 test targets
-- [ ] 1.4 Create `.clang-tidy` config with modern C++ checks (modernize-*, readability-*, bugprone-*, performance-*)
-- [ ] 1.5 Create `.clang-format` config with consistent style (BasedOnStyle: LLVM or Google, IndentWidth: 4, ColumnLimit: 120)
+- [x] 1.1 Create top-level CMakeLists.txt with C++20 standard, FetchContent for Catch2, EnTT, and Raylib
+- [x] 1.2 Create directory structure: `src/common/`, `src/frontend/`, `src/backends/cpp-manual/`, `src/backends/cpp-entt/`, `src/backends/rust/` (placeholder README), `tests/`, `tests/fixtures/`, `examples/cactus_shop/`, `spec/`
+- [x] 1.3 Create `tests/CMakeLists.txt` with Catch2 test targets
+- [x] 1.4 Create `.clang-tidy` config with modern C++ checks (modernize-*, readability-*, bugprone-*, performance-*)
+- [x] 1.5 Create `.clang-format` config with consistent style (BasedOnStyle: LLVM or Google, IndentWidth: 4, ColumnLimit: 120)
 - [ ] 1.6 Verify empty project builds with CMake
 
 ## 2. Language Specification
@@ -63,18 +63,18 @@
 
 ## 9. C++ Manual SoA Backend
 
-- [ ] 9.1 Implement `backends/cpp-manual/soa_emitter.h/.cpp` — SoA storage class generation from traits, POD struct generation
-- [ ] 9.2 Implement `backends/cpp-manual/system_emitter.h/.cpp` — system update functions with map/filter/reduce loop generation
-- [ ] 9.3 Implement `backends/cpp-manual/event_emitter.h/.cpp` — event struct, buffer, and dispatch generation
-- [ ] 9.4 Implement `backends/cpp-manual/cpp_manual_codegen.h/.cpp` — main codegen orchestrator with persist serialization hooks, sync replication hooks, and Raylib main loop generation
+- [ ] 9.1 Implement `src/backends/cpp-manual/soa_emitter.h/.cpp` — SoA storage class generation from traits, POD struct generation
+- [ ] 9.2 Implement `src/backends/cpp-manual/system_emitter.h/.cpp` — system update functions with map/filter/reduce loop generation
+- [ ] 9.3 Implement `src/backends/cpp-manual/event_emitter.h/.cpp` — event struct, buffer, and dispatch generation
+- [ ] 9.4 Implement `src/backends/cpp-manual/cpp_manual_codegen.h/.cpp` — main codegen orchestrator with persist serialization hooks, sync replication hooks, and Raylib main loop generation
 - [ ] 9.5 Write `tests/test_codegen_manual.cpp` — tests for SoA struct output, system loops, event buffers, persist/sync hooks, compilable output verification
 
 ## 10. C++ EnTT Backend
 
-- [ ] 10.1 Implement `backends/cpp-entt/component_emitter.h/.cpp` — EnTT component struct and tag generation from traits
-- [ ] 10.2 Implement `backends/cpp-entt/system_emitter.h/.cpp` — system functions using registry.view<>().each() with map/filter/reduce
-- [ ] 10.3 Implement `backends/cpp-entt/event_emitter.h/.cpp` — EnTT dispatcher event structs and sink connections
-- [ ] 10.4 Implement `backends/cpp-entt/cpp_entt_codegen.h/.cpp` — main codegen orchestrator with entity creation from units, persist/sync hooks, and Raylib+EnTT main loop generation
+- [ ] 10.1 Implement `src/backends/cpp-entt/component_emitter.h/.cpp` — EnTT component struct and tag generation from traits
+- [ ] 10.2 Implement `src/backends/cpp-entt/system_emitter.h/.cpp` — system functions using registry.view<>().each() with map/filter/reduce
+- [ ] 10.3 Implement `src/backends/cpp-entt/event_emitter.h/.cpp` — EnTT dispatcher event structs and sink connections
+- [ ] 10.4 Implement `src/backends/cpp-entt/cpp_entt_codegen.h/.cpp` — main codegen orchestrator with entity creation from units, persist/sync hooks, and Raylib+EnTT main loop generation
 - [ ] 10.5 Write `tests/test_codegen_entt.cpp` — tests for component structs, registry views, dispatcher setup, entity creation, compilable output verification
 
 ## 11. CLI Entry Point

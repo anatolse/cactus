@@ -51,15 +51,15 @@
 
 ## 8. Semantic Analyzer
 
-- [ ] 8.1 Implement `src/frontend/semantic_analyzer.h/.cpp` — resolve_modules, resolve_types (struct/trait/enum/list[T] resolution)
-- [ ] 8.2 Implement semantic analyzer: check_const_strings (reject string literals outside const blocks)
-- [ ] 8.3 Implement semantic analyzer: check_func_purity (no emit, no world access, no mutation) and check_no_recursion (direct + indirect)
-- [ ] 8.4 Implement semantic analyzer: resolve_scopes (scope tree, variable resolution)
-- [ ] 8.5 Implement semantic analyzer: infer_types (expression type inference, lambda parameter inference)
-- [ ] 8.6 Implement semantic analyzer: validate persist/sync modifiers (only on var fields), validate_system_filters, validate_event_usage
-- [ ] 8.7 Implement semantic analyzer: build_dependency_graph (system read/write analysis for parallelism)
-- [ ] 8.8 Define `src/frontend/decorated_ast.h` — DecoratedProgram with resolved types, scopes, dependency graph, string pool snapshot
-- [ ] 8.9 Write `tests/test_semantic.cpp` — tests for type resolution, const-string enforcement, func purity, no recursion, scope resolution, persist/sync validation, filter validation, event validation
+- [x] 8.1 Implement `src/frontend/semantic_analyzer.h/.cpp` — resolve_modules, resolve_types (struct/trait/enum/list[T] resolution)
+- [x] 8.2 Implement semantic analyzer: check_const_strings (reject string literals outside const blocks)
+- [x] 8.3 Implement semantic analyzer: check_func_purity (no emit, no world access, no mutation) and check_no_recursion (direct + indirect)
+- [x] 8.4 Implement semantic analyzer: resolve_scopes (scope tree, variable resolution)
+- [x] 8.5 Implement semantic analyzer: infer_types (expression type inference, lambda parameter inference)
+- [x] 8.6 Implement semantic analyzer: validate persist/sync modifiers (only on var fields), validate_system_filters, validate_event_usage
+- [x] 8.7 Implement semantic analyzer: build_dependency_graph (system read/write analysis for parallelism)
+- [x] 8.8 Define `src/frontend/decorated_ast.h` — DecoratedProgram with resolved types, scopes, dependency graph, string pool snapshot
+- [x] 8.9 Write `tests/test_semantic.cpp` — tests for type resolution, const-string enforcement, func purity, no recursion, scope resolution, persist/sync validation, filter validation, event validation
 
 ## 9. C++ Manual SoA Backend
 

@@ -88,7 +88,7 @@ target_include_directories(cactus_backend_cpp_entt PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/cpp-entt
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(cactus_backend_cpp_entt PUBLIC cactus_frontend EnTT::EnTT)
+target_link_libraries(cactus_backend_cpp_entt PUBLIC cactus_frontend cactus_backend_cpp_manual EnTT::EnTT)
 
 # ── CLI Executable ──────────────────────────────────────────────────────────────
 add_executable(cactus src/main.cpp)

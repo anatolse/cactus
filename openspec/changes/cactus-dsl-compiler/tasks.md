@@ -63,27 +63,27 @@
 
 ## 9. C++ Manual SoA Backend
 
-- [ ] 9.1 Implement `src/backends/cpp-manual/soa_emitter.h/.cpp` — SoA storage class generation from traits, POD struct generation
-- [ ] 9.2 Implement `src/backends/cpp-manual/system_emitter.h/.cpp` — system update functions with map/filter/reduce loop generation
-- [ ] 9.3 Implement `src/backends/cpp-manual/event_emitter.h/.cpp` — event struct, buffer, and dispatch generation
-- [ ] 9.4 Implement `src/backends/cpp-manual/cpp_manual_codegen.h/.cpp` — main codegen orchestrator with persist serialization hooks, sync replication hooks, and Raylib main loop generation
-- [ ] 9.5 Write `tests/test_codegen_manual.cpp` — tests for SoA struct output, system loops, event buffers, persist/sync hooks, compilable output verification
+- [x] 9.1 Implement `src/backends/cpp-manual/soa_emitter.h/.cpp` — SoA storage class generation from traits, POD struct generation
+- [x] 9.2 Implement `src/backends/cpp-manual/system_emitter.h/.cpp` — system update functions with map/filter/reduce loop generation
+- [x] 9.3 Implement `src/backends/cpp-manual/event_emitter.h/.cpp` — event struct, buffer, and dispatch generation
+- [x] 9.4 Implement `src/backends/cpp-manual/cpp_manual_codegen.h/.cpp` — main codegen orchestrator with persist serialization hooks, sync replication hooks, and Raylib main loop generation
+- [x] 9.5 Write `tests/test_codegen_manual.cpp` — tests for SoA struct output, system loops, event buffers, persist/sync hooks, compilable output verification
 
 ## 10. C++ EnTT Backend
 
-- [ ] 10.1 Implement `src/backends/cpp-entt/component_emitter.h/.cpp` — EnTT component struct and tag generation from traits
-- [ ] 10.2 Implement `src/backends/cpp-entt/system_emitter.h/.cpp` — system functions using registry.view<>().each() with map/filter/reduce
-- [ ] 10.3 Implement `src/backends/cpp-entt/event_emitter.h/.cpp` — EnTT dispatcher event structs and sink connections
-- [ ] 10.4 Implement `src/backends/cpp-entt/cpp_entt_codegen.h/.cpp` — main codegen orchestrator with entity creation from units, persist/sync hooks, and Raylib+EnTT main loop generation
-- [ ] 10.5 Write `tests/test_codegen_entt.cpp` — tests for component structs, registry views, dispatcher setup, entity creation, compilable output verification
+- [x] 10.1 Implement `src/backends/cpp-entt/component_emitter.h/.cpp` — EnTT component struct and tag generation from traits
+- [x] 10.2 Implement `src/backends/cpp-entt/system_emitter.h/.cpp` — system functions using registry.view<>().each() with map/filter/reduce
+- [x] 10.3 Implement `src/backends/cpp-entt/event_emitter.h/.cpp` — EnTT dispatcher event structs and sink connections
+- [x] 10.4 Implement `src/backends/cpp-entt/cpp_entt_codegen.h/.cpp` — main codegen orchestrator with entity creation from units, persist/sync hooks, and Raylib+EnTT main loop generation
+- [x] 10.5 Write `tests/test_codegen_entt.cpp` — tests for component structs, registry views, dispatcher setup, entity creation, compilable output verification
 
 ## 11. CLI Entry Point
 
-- [ ] 11.1 Implement `src/main.cpp` — argument parsing (input file, --backend cpp-manual|cpp-entt, --output), full pipeline execution (lex → parse → analyze → generate), error reporting with source locations, exit codes
-- [ ] 11.2 Test CLI with example cactus shop files end-to-end
+- [x] 11.1 Implement `src/main.cpp` — argument parsing (input file, --backend cpp-manual|cpp-entt, --output), full pipeline execution (lex → parse → analyze → generate), error reporting with source locations, exit codes
+- [x] 11.2 Test CLI with example cactus shop files end-to-end
 
 ## 12. Integration Testing
 
-- [ ] 12.1 Compile cactus shop example through full pipeline with cpp-manual backend and verify generated C++ compiles
-- [ ] 12.2 Compile cactus shop example through full pipeline with cpp-entt backend and verify generated C++ compiles
-- [ ] 12.3 Verify persist/sync fields produce correct serialization and replication code in both backends
+- [x] 12.1 Compile cactus shop example through full pipeline with cpp-manual backend and verify generated C++ compiles
+- [x] 12.2 Compile cactus shop example through full pipeline with cpp-entt backend and verify generated C++ compiles
+- [x] 12.3 Verify persist/sync fields produce correct serialization and replication code in both backends

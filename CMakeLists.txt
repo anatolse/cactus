@@ -11,13 +11,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# ── Compiler Warnings ───────────────────────────────────────────────────────────
-if(MSVC)
-    add_compile_options(/W4 /WX /permissive-)
-else()
-    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
-endif()
-
 # ── FetchContent Dependencies ───────────────────────────────────────────────────
 include(FetchContent)
 
@@ -47,6 +40,13 @@ FetchContent_Declare(
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version" FORCE)
 FetchContent_MakeAvailable(Catch2 EnTT raylib)
+
+# ── Compiler Warnings (after FetchContent so they don't apply to deps) ──────────
+if(MSVC)
+    add_compile_options(/W4 /WX /permissive-)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+endif()
 
 # ── Common Library ──────────────────────────────────────────────────────────────
 add_library(cactus_common STATIC

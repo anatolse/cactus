@@ -1,0 +1,93 @@
+module ui
+
+use player
+use shop
+
+const:
+    HUD_PADDING = 10
+    HUD_FONT_SIZE = 20
+    HEALTH_BAR_WIDTH = 200
+    HEALTH_BAR_HEIGHT = 20
+    HEALTH_COLOR = #00FF00
+    HEALTH_BG_COLOR = #333333
+    COIN_COLOR = #FFD700
+    SHOP_BG_COLOR = #00000080
+    SHOP_TITLE_SIZE = 32
+    SHOP_ITEM_SIZE = 18
+    BUTTON_COLOR = #4CAF50
+    BUTTON_HOVER_COLOR = #66BB6A
+
+view HUD(health: int, max_health: int, coins: int):
+    panel:
+        x = HUD_PADDING
+        y = HUD_PADDING
+        width = HEALTH_BAR_WIDTH
+        height = HEALTH_BAR_HEIGHT
+
+        rect:
+            width = HEALTH_BAR_WIDTH
+            height = HEALTH_BAR_HEIGHT
+            color = HEALTH_BG_COLOR
+
+        rect:
+            width = HEALTH_BAR_WIDTH * health / max_health
+            height = HEALTH_BAR_HEIGHT
+            color = HEALTH_COLOR
+
+    text:
+        x = HUD_PADDING
+        y = HUD_PADDING + HEALTH_BAR_HEIGHT + 5
+        size = HUD_FONT_SIZE
+        color = COIN_COLOR
+        content = coins
+
+view ShopPanel(items: list[ShopItem], player_coins: int):
+    panel:
+        x = 200
+        y = 100
+        width = 400
+        height = 500
+        color = SHOP_BG_COLOR
+
+        text:
+            x = 20
+            y = 20
+            size = SHOP_TITLE_SIZE
+            content = SHOP_NAME
+
+        list_view:
+            x = 20
+            y = 70
+            items = items
+            item_height = 60
+
+            item_template:
+                text:
+                    size = SHOP_ITEM_SIZE
+                    content = item.name_id
+
+                text:
+                    size = SHOP_ITEM_SIZE
+                    color = COIN_COLOR
+                    content = item.price
+
+                button:
+                    label_id = BUY_LABEL
+                    color = if can_afford(player_coins, item.price): BUTTON_COLOR else: BUTTON_HOVER_COLOR
+                    on_click = purchase(item)
+
+system HUDSystem:
+    filter: [Health, Wallet]
+
+    on tick(dt: float):
+        render_view HUD(health, max_health, coins)
+
+system ShopUISystem:
+    filter: [Inventory, Wallet]
+
+    on ShopOpened(shop_entity: entity_id):
+        shop_items = get_shop_items(shop_entity)
+        render_view ShopPanel(shop_items, coins)
+
+    on ShopClosed(shop_entity: entity_id):
+        hide_view ShopPanel

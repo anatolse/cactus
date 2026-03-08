@@ -1,0 +1,113 @@
+module shop
+
+use player
+
+const:
+    SHOP_NAME = "Desert Oasis Cactus Shop"
+    INTERACT_DISTANCE = 3.0
+    CACTUS_SMALL_NAME = "Small Cactus"
+    CACTUS_SMALL_PRICE = 10
+    CACTUS_MEDIUM_NAME = "Medium Cactus"
+    CACTUS_MEDIUM_PRICE = 25
+    CACTUS_LARGE_NAME = "Large Cactus"
+    CACTUS_LARGE_PRICE = 50
+    GOLDEN_CACTUS_NAME = "Golden Cactus"
+    GOLDEN_CACTUS_PRICE = 100
+
+enum ItemRarity:
+    Common
+    Uncommon
+    Rare
+    Legendary
+
+struct ShopItem:
+    name_id: int
+    price: int
+    rarity: ItemRarity
+    model_scale: float
+
+trait ShopKeeper:
+    let shop_name_id: int
+    var is_open: bool
+    var interact_distance: float
+
+trait Inventory:
+    persist var items: list[ShopItem]
+    persist var total_spent: int
+
+trait Purchasable:
+    let item: ShopItem
+
+event ShopOpened:
+    var shop_entity: entity_id
+
+event ShopClosed:
+    var shop_entity: entity_id
+
+event ItemPurchased:
+    var item: ShopItem
+    var buyer: entity_id
+
+pub unit CactusShop:
+    apply:
+        Position
+        ShopKeeper
+    config:
+        position = vec3(10.0, 0.0, 5.0)
+        is_open = true
+        interact_distance = INTERACT_DISTANCE
+
+pub unit SmallCactus:
+    apply:
+        Position
+        Purchasable
+    config:
+        item = ShopItem(CACTUS_SMALL_PRICE, CACTUS_SMALL_PRICE, ItemRarity.Common, 0.5)
+
+pub unit MediumCactus:
+    apply:
+        Position
+        Purchasable
+    config:
+        item = ShopItem(CACTUS_MEDIUM_PRICE, CACTUS_MEDIUM_PRICE, ItemRarity.Uncommon, 1.0)
+
+pub unit LargeCactus:
+    apply:
+        Position
+        Purchasable
+    config:
+        item = ShopItem(CACTUS_LARGE_PRICE, CACTUS_LARGE_PRICE, ItemRarity.Rare, 1.5)
+
+pub unit GoldenCactus:
+    apply:
+        Position
+        Purchasable
+    config:
+        item = ShopItem(GOLDEN_CACTUS_PRICE, GOLDEN_CACTUS_PRICE, ItemRarity.Legendary, 2.0)
+
+func can_afford(coins: int, price: int) -> bool:
+    return coins >= price
+
+func calculate_total(items: list[ShopItem]) -> int:
+    return items.map(i => i.price).reduce(0, acc, p => acc + p)
+
+system ShopInteraction:
+    filter: [Position, ShopKeeper]
+
+    on tick(dt: float):
+        player_pos = get_player_position()
+        dist = distance_2d(position, player_pos)
+
+        if dist < interact_distance and is_open:
+            if is_interact_pressed():
+                emit ShopOpened(get_self_entity())
+
+system PurchaseSystem:
+    filter: [Wallet, Inventory]
+
+    on ItemPurchased(item: ShopItem, buyer: entity_id):
+        if can_afford(coins, item.price):
+            coins = coins - item.price
+            items = items + [item]
+            total_spent = total_spent + item.price
+            emit CoinSpent(item.price, coins)

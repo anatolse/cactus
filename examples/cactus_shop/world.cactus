@@ -1,0 +1,49 @@
+module world
+
+const:
+    GROUND_SIZE = 100.0
+    GROUND_COLOR = #8B7355
+    SKY_COLOR = #87CEEB
+    SUN_DIR_X = 0.5
+    SUN_DIR_Y = -1.0
+    SUN_DIR_Z = 0.3
+
+struct WorldConfig:
+    ground_size: float
+    ground_color: color
+    sky_color: color
+
+trait Terrain:
+    let ground_size: float = 100.0
+    let ground_color: color = #8B7355
+
+trait SunLight:
+    var direction: vec3
+    var intensity: float
+
+pub unit Ground:
+    apply:
+        Terrain
+    config:
+        ground_size = GROUND_SIZE
+        ground_color = GROUND_COLOR
+
+pub unit Sun:
+    apply:
+        SunLight
+    config:
+        direction = vec3(SUN_DIR_X, SUN_DIR_Y, SUN_DIR_Z)
+        intensity = 1.0
+
+system WorldRenderer:
+    filter: [Terrain]
+
+    on tick(dt: float):
+        draw_plane(vec3(0.0, 0.0, 0.0), vec2(ground_size, ground_size), ground_color)
+
+system LightSystem:
+    filter: [SunLight]
+
+    on tick(dt: float):
+        set_light_direction(direction)
+        set_light_intensity(intensity)

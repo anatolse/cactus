@@ -1,0 +1,93 @@
+module player
+
+const:
+    MOVE_SPEED = 5.0
+    TURN_SPEED = 2.0
+    CAMERA_DISTANCE = 8.0
+    CAMERA_HEIGHT = 4.0
+    START_HEALTH = 100
+    START_COINS = 50
+
+enum PlayerState:
+    Idle
+    Walking
+    Shopping
+
+trait Position:
+    persist sync var position: vec3
+    persist sync var rotation: quat
+
+trait Health:
+    persist sync var health: int = 100
+    let max_health: int = 100
+
+trait Wallet:
+    persist sync var coins: int = 50
+
+trait PlayerController:
+    var state: PlayerState
+    var move_speed: float
+    var turn_speed: float
+
+trait ThirdPersonCamera:
+    var distance: float
+    var height: float
+    var target_offset: vec3
+
+event PlayerMoved:
+    var position: vec3
+    var direction: vec3
+
+event CoinSpent:
+    var amount: int
+    var remaining: int
+
+pub unit Player:
+    apply:
+        Position
+        Health
+        Wallet
+        PlayerController
+        ThirdPersonCamera
+    config:
+        position = vec3(0.0, 0.0, 0.0)
+        rotation = quat(0.0, 0.0, 0.0, 1.0)
+        health = START_HEALTH
+        coins = START_COINS
+        state = PlayerState.Idle
+        move_speed = MOVE_SPEED
+        turn_speed = TURN_SPEED
+        distance = CAMERA_DISTANCE
+        height = CAMERA_HEIGHT
+        target_offset = vec3(0.0, 1.5, 0.0)
+
+func clamp_int(value: int, min_val: int, max_val: int) -> int:
+    if value < min_val: return min_val
+    if value > max_val: return max_val
+    return value
+
+system MovementSystem:
+    filter: [Position, PlayerController]
+
+    on tick(dt: float):
+        if state == PlayerState.Shopping:
+            return
+
+        input_x = get_input_axis_x()
+        input_z = get_input_axis_z()
+
+        if input_x != 0.0 or input_z != 0.0:
+            direction = vec3(input_x, 0.0, input_z)
+            position = position + direction * move_speed * dt
+            state = PlayerState.Walking
+            emit PlayerMoved(position, direction)
+        else:
+            state = PlayerState.Idle
+
+system CameraSystem:
+    filter: [Position, ThirdPersonCamera]
+
+    on tick(dt: float):
+        cam_pos = position + vec3(0.0, height, distance * -1.0)
+        cam_target = position + target_offset
+        set_camera(cam_pos, cam_target)

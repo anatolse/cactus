@@ -9,17 +9,17 @@
 
 ## 2. Language Specification
 
-- [ ] 2.1 Write `spec/cactus_dsl_spec.md` with formal EBNF grammar covering all constructs (module, use, const, struct, enum, trait, unit, system, view, event, func, interface)
-- [ ] 2.2 Document keyword table, operator precedence, and type system rules in the spec
-- [ ] 2.3 Document semantic constraints (const-string rule, func purity, no recursion, persist/sync validation)
+- [x] 2.1 Write `spec/cactus_dsl_spec.md` with formal EBNF grammar covering all constructs (module, use, const, struct, enum, trait, unit, system, view, event, func, interface)
+- [x] 2.2 Document keyword table, operator precedence, and type system rules in the spec
+- [x] 2.3 Document semantic constraints (const-string rule, func purity, no recursion, persist/sync validation)
 
 ## 3. Example Game Files
 
-- [ ] 3.1 Write `examples/cactus_shop/main.cactus` — entry point module
-- [ ] 3.2 Write `examples/cactus_shop/world.cactus` — world configuration and terrain
-- [ ] 3.3 Write `examples/cactus_shop/player.cactus` — player controller with persist/sync fields
-- [ ] 3.4 Write `examples/cactus_shop/shop.cactus` — shop items, inventory, purchase logic
-- [ ] 3.5 Write `examples/cactus_shop/ui.cactus` — HUD and shop UI views
+- [x] 3.1 Write `examples/cactus_shop/main.cactus` — entry point module
+- [x] 3.2 Write `examples/cactus_shop/world.cactus` — world configuration and terrain
+- [x] 3.3 Write `examples/cactus_shop/player.cactus` — player controller with persist/sync fields
+- [x] 3.4 Write `examples/cactus_shop/shop.cactus` — shop items, inventory, purchase logic
+- [x] 3.5 Write `examples/cactus_shop/ui.cactus` — HUD and shop UI views
 
 ## 4. Common Utilities
 

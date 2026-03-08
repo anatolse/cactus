@@ -1,0 +1,12 @@
+module cactus_shop
+
+use world
+use player
+use shop
+use ui
+
+const:
+    WINDOW_TITLE = "Cactus Shop"
+    WINDOW_WIDTH = 1280
+    WINDOW_HEIGHT = 720
+    TARGET_FPS = 60

@@ -37,7 +37,7 @@
 
 ## 6. AST Node Types
 
-- [ ] 6.1 Define `src/frontend/ast.h` — all AST node types: ProgramNode, ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode, FieldNode, EventHandlerNode, ExprNode variants, StmtNode variants
+- [x] 6.1 Define `src/frontend/ast.h` — all AST node types: ProgramNode, ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode, FieldNode, EventHandlerNode, ExprNode variants, StmtNode variants
 
 ## 7. Parser
 

@@ -23,10 +23,10 @@
 
 ## 4. Common Utilities
 
-- [ ] 4.1 Implement `src/common/source_location.h` — SourceLocation struct (filename, line, column)
-- [ ] 4.2 Implement `src/common/error_reporter.h/.cpp` — error/warning reporting with source locations
-- [ ] 4.3 Implement `src/common/string_pool.h/.cpp` — interned string table (intern, lookup, contains)
-- [ ] 4.4 Implement `src/common/types.h` — TypeKind enum, TypeInfo struct, built-in type definitions
+- [x] 4.1 Implement `src/common/source_location.h` — SourceLocation struct (filename, line, column)
+- [x] 4.2 Implement `src/common/error_reporter.h/.cpp` — error/warning reporting with source locations
+- [x] 4.3 Implement `src/common/string_pool.h/.cpp` — interned string table (intern, lookup, contains)
+- [x] 4.4 Implement `src/common/types.h` — TypeKind enum, TypeInfo struct, built-in type definitions
 
 ## 5. Lexer
 

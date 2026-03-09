@@ -1,0 +1,116 @@
+module enemies
+
+use player
+use level
+
+const:
+    PATROL_SPEED = 2.0
+    ENEMY_WIDTH = 32.0
+    ENEMY_HEIGHT = 32.0
+    ENEMY_COLOR = #CC3333
+    DAMAGE_AMOUNT = 1
+
+enum EnemyType:
+    Walker
+    Flyer
+
+trait EnemyAI:
+    var patrol_min_x: float
+    var patrol_max_x: float
+    var patrol_speed: float
+    var direction: float
+    var enemy_type: EnemyType
+    let enemy_color: color
+    let enemy_width: float
+    let enemy_height: float
+
+event PlayerDamaged:
+    var amount: int
+
+event EnemyDefeated:
+    var position: vec2
+
+pub unit WalkerEnemy1:
+    apply:
+        Position
+        EnemyAI
+    config:
+        pos = vec2(400.0, 568.0)
+        velocity = vec2(0.0, 0.0)
+        patrol_min_x = 350.0
+        patrol_max_x = 550.0
+        patrol_speed = PATROL_SPEED
+        direction = 1.0
+        enemy_type = EnemyType.Walker
+        enemy_color = ENEMY_COLOR
+        enemy_width = ENEMY_WIDTH
+        enemy_height = ENEMY_HEIGHT
+
+pub unit WalkerEnemy2:
+    apply:
+        Position
+        EnemyAI
+    config:
+        pos = vec2(800.0, 568.0)
+        velocity = vec2(0.0, 0.0)
+        patrol_min_x = 700.0
+        patrol_max_x = 1000.0
+        patrol_speed = PATROL_SPEED
+        direction = 1.0
+        enemy_type = EnemyType.Walker
+        enemy_color = ENEMY_COLOR
+        enemy_width = ENEMY_WIDTH
+        enemy_height = ENEMY_HEIGHT
+
+pub unit FlyerEnemy1:
+    apply:
+        Position
+        EnemyAI
+    config:
+        pos = vec2(1100.0, 250.0)
+        velocity = vec2(0.0, 0.0)
+        patrol_min_x = 1000.0
+        patrol_max_x = 1250.0
+        patrol_speed = PATROL_SPEED
+        direction = 1.0
+        enemy_type = EnemyType.Flyer
+        enemy_color = ENEMY_COLOR
+        enemy_width = ENEMY_WIDTH
+        enemy_height = ENEMY_HEIGHT
+
+system PatrolSystem:
+    filter: [Position, EnemyAI]
+
+    on tick(dt: float):
+        pos = pos + vec2(patrol_speed * direction * dt, 0.0)
+
+        if pos.x >= patrol_max_x:
+            direction = -1.0
+            pos = vec2(patrol_max_x, pos.y)
+
+        if pos.x <= patrol_min_x:
+            direction = 1.0
+            pos = vec2(patrol_min_x, pos.y)
+
+system EnemyCollisionSystem:
+    filter: [Position, EnemyAI]
+
+    on tick(dt: float):
+        player_pos = get_player_position()
+        player_w = get_player_width()
+        player_h = get_player_height()
+
+        ox = aabb_overlap_x(player_pos.x, player_w, pos.x, enemy_width)
+        oy = aabb_overlap_y(player_pos.y, player_h, pos.y, enemy_height)
+
+        if ox > 0.0 and oy > 0.0:
+            if player_pos.y + player_h < pos.y + enemy_height * 0.5:
+                emit EnemyDefeated(pos)
+            else:
+                emit PlayerDamaged(DAMAGE_AMOUNT)
+
+system EnemyRenderer:
+    filter: [Position, EnemyAI]
+
+    on tick(dt: float):
+        draw_rect(pos, vec2(enemy_width, enemy_height), enemy_color)

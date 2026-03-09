@@ -8,8 +8,8 @@ std::string SoaEmitter::type_to_cpp(const TypeInfo& type) {
         case TypeKind::Float: return "float";
         case TypeKind::Bool: return "bool";
         case TypeKind::String: return "std::string";
-        case TypeKind::Vec2: return "Vec2";
-        case TypeKind::Vec3: return "Vec3";
+        case TypeKind::Vec2: return "Vector2";
+        case TypeKind::Vec3: return "Vector3";
         case TypeKind::Quat: return "Quat";
         case TypeKind::Color: return "Color";
         case TypeKind::EntityId: return "uint32_t";

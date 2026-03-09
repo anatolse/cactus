@@ -1,0 +1,129 @@
+module collectibles
+
+use player
+use level
+
+const:
+    GEM_SIZE = 16.0
+    GEM_COLOR_BLUE = #4488FF
+    GEM_COLOR_RED = #FF4444
+    GEM_COLOR_GOLD = #FFD700
+    BLUE_GEM_POINTS = 10
+    RED_GEM_POINTS = 25
+    GOLD_GEM_POINTS = 100
+
+enum GemType:
+    Blue
+    Red
+    Gold
+
+trait Collectible:
+    let point_value: int
+    let gem_type: GemType
+    let gem_color: color
+    let gem_size: float
+    var collected: bool
+
+trait Score:
+    persist var score: int
+    persist var gems_collected: int
+
+event GemCollected:
+    var point_value: int
+    var gem_type: GemType
+    var position: vec2
+
+pub unit BlueGem1:
+    apply:
+        Position
+        Collectible
+    config:
+        pos = vec2(250.0, 560.0)
+        velocity = vec2(0.0, 0.0)
+        point_value = BLUE_GEM_POINTS
+        gem_type = GemType.Blue
+        gem_color = GEM_COLOR_BLUE
+        gem_size = GEM_SIZE
+        collected = false
+
+pub unit BlueGem2:
+    apply:
+        Position
+        Collectible
+    config:
+        pos = vec2(350.0, 410.0)
+        velocity = vec2(0.0, 0.0)
+        point_value = BLUE_GEM_POINTS
+        gem_type = GemType.Blue
+        gem_color = GEM_COLOR_BLUE
+        gem_size = GEM_SIZE
+        collected = false
+
+pub unit BlueGem3:
+    apply:
+        Position
+        Collectible
+    config:
+        pos = vec2(650.0, 310.0)
+        velocity = vec2(0.0, 0.0)
+        point_value = BLUE_GEM_POINTS
+        gem_type = GemType.Blue
+        gem_color = GEM_COLOR_BLUE
+        gem_size = GEM_SIZE
+        collected = false
+
+pub unit RedGem1:
+    apply:
+        Position
+        Collectible
+    config:
+        pos = vec2(1000.0, 240.0)
+        velocity = vec2(0.0, 0.0)
+        point_value = RED_GEM_POINTS
+        gem_type = GemType.Red
+        gem_color = GEM_COLOR_RED
+        gem_size = GEM_SIZE
+        collected = false
+
+pub unit GoldGem1:
+    apply:
+        Position
+        Collectible
+    config:
+        pos = vec2(1750.0, 260.0)
+        velocity = vec2(0.0, 0.0)
+        point_value = GOLD_GEM_POINTS
+        gem_type = GemType.Gold
+        gem_color = GEM_COLOR_GOLD
+        gem_size = GEM_SIZE
+        collected = false
+
+system CollectionSystem:
+    filter: [Position, Collectible]
+
+    on tick(dt: float):
+        if collected == false:
+            player_pos = get_player_position()
+            player_w = get_player_width()
+            player_h = get_player_height()
+
+            ox = aabb_overlap_x(player_pos.x, player_w, pos.x, gem_size)
+            oy = aabb_overlap_y(player_pos.y, player_h, pos.y, gem_size)
+
+            if ox > 0.0 and oy > 0.0:
+                collected = true
+                emit GemCollected(point_value, gem_type, pos)
+
+system ScoreSystem:
+    filter: [Score]
+
+    on GemCollected(point_value: int, gem_type: GemType, position: vec2):
+        score = score + point_value
+        gems_collected = gems_collected + 1
+
+system CollectibleRenderer:
+    filter: [Position, Collectible]
+
+    on tick(dt: float):
+        if collected == false:
+            draw_rect(pos, vec2(gem_size, gem_size), gem_color)

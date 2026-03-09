@@ -1,0 +1,14 @@
+module main
+
+use player
+use level
+use enemies
+use collectibles
+use camera
+use ui
+
+const:
+    WINDOW_TITLE = "Cactus Platformer"
+    WINDOW_WIDTH = 1280
+    WINDOW_HEIGHT = 720
+    TARGET_FPS = 60

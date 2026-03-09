@@ -1,0 +1,73 @@
+module camera
+
+use player
+
+const:
+    CAMERA_OFFSET_X = 640.0
+    CAMERA_OFFSET_Y = 360.0
+    CAMERA_SMOOTHING = 5.0
+    CAMERA_MIN_X = 0.0
+    CAMERA_MAX_X = 3720.0
+    PARALLAX_FAR = 0.2
+    PARALLAX_MID = 0.5
+
+trait SideScrollCamera:
+    var cam_x: float
+    var cam_y: float
+    var offset_x: float
+    var offset_y: float
+    var smoothing: float
+    var min_x: float
+    var max_x: float
+    var parallax_far: float
+    var parallax_mid: float
+
+pub unit CameraUnit:
+    apply:
+        SideScrollCamera
+    config:
+        cam_x = 0.0
+        cam_y = 0.0
+        offset_x = CAMERA_OFFSET_X
+        offset_y = CAMERA_OFFSET_Y
+        smoothing = CAMERA_SMOOTHING
+        min_x = CAMERA_MIN_X
+        max_x = CAMERA_MAX_X
+        parallax_far = PARALLAX_FAR
+        parallax_mid = PARALLAX_MID
+
+func lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+func clamp_cam(value: float, min_val: float, max_val: float) -> float:
+    if value < min_val: return min_val
+    if value > max_val: return max_val
+    return value
+
+system CameraFollowSystem:
+    filter: [SideScrollCamera]
+
+    on tick(dt: float):
+        player_pos = get_player_position()
+        target_x = player_pos.x - offset_x
+        target_y = player_pos.y - offset_y
+
+        t = smoothing * dt
+        if t > 1.0:
+            t = 1.0
+
+        cam_x = lerp(cam_x, target_x, t)
+        cam_x = clamp_cam(cam_x, min_x, max_x)
+        cam_y = lerp(cam_y, target_y, t)
+
+        set_camera_2d(cam_x, cam_y)
+
+system ParallaxRenderer:
+    filter: [SideScrollCamera]
+
+    on tick(dt: float):
+        far_x = cam_x * parallax_far
+        mid_x = cam_x * parallax_mid
+
+        draw_background_layer(0, far_x, 0.0)
+        draw_background_layer(1, mid_x, 0.0)

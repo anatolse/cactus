@@ -21,6 +21,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <entt/entt.hpp>\n";
     out << "#include \"raylib.h\"\n\n";
 
+    // Helper: vec2() constructor mapped to Vector2
+    out << "inline Vector2 vec2(float x, float y) { return {x, y}; }\n\n";
+
     // Enums
     for (auto& [name, e] : program.enums) {
         out << EnttComponentEmitter::emit_enum(e) << "\n";
@@ -126,13 +129,40 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "}\n\n";
     }
 
-    // Main game loop
+    // Main game loop — extract window constants from const block if available
+    std::string win_width = "800";
+    std::string win_height = "600";
+    std::string win_title = "\"Cactus Game\"";
+    std::string win_fps = "60";
+    if (program.ast) {
+        for (auto& decl : program.ast->declarations) {
+            if (auto* cb = std::get_if<ConstBlockNode>(&decl)) {
+                for (auto& ca : cb->assignments) {
+                    if (ca.name == "WINDOW_WIDTH") win_width = ManualSystemEmitter::emit_expr(*ca.value);
+                    else if (ca.name == "WINDOW_HEIGHT") win_height = ManualSystemEmitter::emit_expr(*ca.value);
+                    else if (ca.name == "WINDOW_TITLE") win_title = ManualSystemEmitter::emit_expr(*ca.value);
+                    else if (ca.name == "TARGET_FPS") win_fps = ManualSystemEmitter::emit_expr(*ca.value);
+                }
+            }
+        }
+    }
+
     out << "// ── Main ────────────────────────────────────────────────────────────\n\n";
     out << "int main() {\n";
-    out << "    InitWindow(800, 600, \"Cactus Game\");\n";
-    out << "    SetTargetFPS(60);\n\n";
+    out << "    InitWindow(" << win_width << ", " << win_height << ", " << win_title << ");\n";
+    out << "    SetTargetFPS(" << win_fps << ");\n\n";
     out << "    entt::registry registry;\n";
     out << "    entt::dispatcher dispatcher;\n\n";
+
+    // Create entities from units
+    if (program.ast) {
+        for (auto& decl : program.ast->declarations) {
+            if (auto* unit = std::get_if<UnitNode>(&decl)) {
+                out << "    create_" << unit->name << "(registry);\n";
+            }
+        }
+        out << "\n";
+    }
 
     out << "    while (!WindowShouldClose()) {\n";
     out << "        float dt = GetFrameTime();\n\n";

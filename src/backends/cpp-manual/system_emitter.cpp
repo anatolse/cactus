@@ -35,6 +35,12 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) {
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                // Check if object looks like an enum name (starts with uppercase)
+                if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
+                    if (!ident->name.empty() && std::isupper(ident->name[0])) {
+                        return ident->name + "::" + e.member;
+                    }
+                }
                 return emit_expr(*e.object) + "." + e.member;
             } else {
                 return "/* unsupported expr */";

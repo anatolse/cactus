@@ -1,0 +1,152 @@
+module player
+
+const:
+    MOVE_SPEED = 6.0
+    JUMP_FORCE = 12.0
+    GRAVITY = 30.0
+    MAX_JUMPS = 2
+    START_HEALTH = 3
+    START_LIVES = 3
+    WALL_SLIDE_SPEED = 2.0
+    PLAYER_WIDTH = 32.0
+    PLAYER_HEIGHT = 48.0
+
+enum FacingDirection:
+    Left
+    Right
+
+enum JumpState:
+    Grounded
+    Jumping
+    Falling
+    WallSliding
+
+trait Position:
+    persist sync var pos: vec2
+    var velocity: vec2
+
+trait PlayerPhysics:
+    var gravity: float
+    var jump_force: float
+    var is_grounded: bool
+    var jumps_remaining: int
+    var max_jumps: int
+    var wall_slide_speed: float
+
+trait PlayerController:
+    var move_speed: float
+    var facing: FacingDirection
+    var jump_state: JumpState
+    var width: float
+    var height: float
+
+trait Health:
+    persist sync var health: int
+    persist var lives: int
+    let max_health: int = 3
+    var invincible_timer: float
+
+event PlayerJumped:
+    var position: vec2
+    var jumps_remaining: int
+
+event PlayerLanded:
+    var position: vec2
+
+event PlayerDamaged:
+    var amount: int
+
+event PlayerDied:
+    var lives_remaining: int
+
+pub unit Player:
+    apply:
+        Position
+        PlayerPhysics
+        PlayerController
+        Health
+    config:
+        pos = vec2(100.0, 300.0)
+        velocity = vec2(0.0, 0.0)
+        gravity = GRAVITY
+        jump_force = JUMP_FORCE
+        is_grounded = false
+        jumps_remaining = MAX_JUMPS
+        max_jumps = MAX_JUMPS
+        wall_slide_speed = WALL_SLIDE_SPEED
+        move_speed = MOVE_SPEED
+        facing = FacingDirection.Right
+        jump_state = JumpState.Falling
+        width = PLAYER_WIDTH
+        height = PLAYER_HEIGHT
+        health = START_HEALTH
+        lives = START_LIVES
+        invincible_timer = 0.0
+
+func clamp_float(value: float, min_val: float, max_val: float) -> float:
+    if value < min_val: return min_val
+    if value > max_val: return max_val
+    return value
+
+system MovementSystem:
+    filter: [Position, PlayerController]
+
+    on tick(dt: float):
+        input_x = get_input_axis_x()
+
+        if input_x > 0.0:
+            facing = FacingDirection.Right
+        if input_x < 0.0:
+            facing = FacingDirection.Left
+
+        velocity = vec2(input_x * move_speed, velocity.y)
+        pos = pos + vec2(velocity.x * dt, 0.0)
+
+system GravitySystem:
+    filter: [Position, PlayerPhysics]
+
+    on tick(dt: float):
+        if is_grounded == false:
+            if jump_state == JumpState.WallSliding:
+                velocity = vec2(velocity.x, wall_slide_speed)
+            else:
+                velocity = vec2(velocity.x, velocity.y + gravity * dt)
+
+        pos = pos + vec2(0.0, velocity.y * dt)
+
+system JumpSystem:
+    filter: [Position, PlayerPhysics, PlayerController]
+
+    on tick(dt: float):
+        if is_jump_pressed():
+            if jumps_remaining > 0:
+                velocity = vec2(velocity.x, jump_force * -1.0)
+                jumps_remaining = jumps_remaining - 1
+                is_grounded = false
+                jump_state = JumpState.Jumping
+                emit PlayerJumped(pos, jumps_remaining)
+
+        if velocity.y > 0.0 and jump_state == JumpState.Jumping:
+            jump_state = JumpState.Falling
+
+    on PlayerLanded(position: vec2):
+        is_grounded = true
+        jumps_remaining = max_jumps
+        jump_state = JumpState.Grounded
+        velocity = vec2(velocity.x, 0.0)
+
+system InvincibilitySystem:
+    filter: [Health]
+
+    on tick(dt: float):
+        if invincible_timer > 0.0:
+            invincible_timer = invincible_timer - dt
+
+    on PlayerDamaged(amount: int):
+        if invincible_timer <= 0.0:
+            health = health - amount
+            invincible_timer = 1.5
+            if health <= 0:
+                lives = lives - 1
+                health = max_health
+                emit PlayerDied(lives)

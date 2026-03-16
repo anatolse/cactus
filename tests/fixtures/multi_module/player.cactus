@@ -1,0 +1,5 @@
+module player
+
+pub trait Position:
+    persist sync var x: float = 0.0
+    persist sync var y: float = 0.0

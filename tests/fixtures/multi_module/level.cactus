@@ -1,0 +1,6 @@
+module level
+use player
+
+pub trait LevelData:
+    var width: int = 100
+    var height: int = 100

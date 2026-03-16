@@ -1,0 +1,2 @@
+trait Standalone:
+    var x: int = 0

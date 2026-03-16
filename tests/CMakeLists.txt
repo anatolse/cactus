@@ -27,3 +27,13 @@ add_test(NAME CodegenManualTests COMMAND test_codegen_manual)
 add_executable(test_codegen_entt test_codegen_entt.cpp)
 target_link_libraries(test_codegen_entt PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME CodegenEnttTests COMMAND test_codegen_entt)
+
+# Module resolver tests
+add_executable(test_module_resolver test_module_resolver.cpp)
+target_link_libraries(test_module_resolver PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME ModuleResolverTests COMMAND test_module_resolver)
+
+# Module artifact tests
+add_executable(test_module_artifact test_module_artifact.cpp)
+target_link_libraries(test_module_artifact PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME ModuleArtifactTests COMMAND test_module_artifact)

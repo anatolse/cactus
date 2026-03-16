@@ -12,23 +12,23 @@
 
 ## 2. Module Resolver
 
-- [ ] 2.1 Define `src/frontend/module_resolver.h` — `ModuleResolver` class with `ModuleInfo` (qualified name, path, ProgramNode, DecoratedProgram), `resolve(root_path, search_paths)` returning compilation order
-- [ ] 2.2 Implement dependency discovery — scan `ProgramNode` for `UseNode` declarations, extract module names (ignore aliases for file lookup)
-- [ ] 2.3 Implement file locator — convert dotted module names to filesystem paths (dots → directory separators), search in root dir then --module-path dirs, report error with source location when not found
-- [ ] 2.4 Implement DAG construction — recursively resolve transitive dependencies, handle diamond deps (deduplicate by canonical path)
-- [ ] 2.5 Implement topological sort — Kahn's algorithm, producing compilation order (leaves first)
-- [ ] 2.6 Implement circular dependency detection — report error with full cycle path
-- [ ] 2.7 Implement module name validation — verify `module X.Y` matches folder/filename, infer qualified name when no declaration present
-- [ ] 2.8 Write `tests/test_module_resolver.cpp` — dependency extraction, dotted-name file location, DAG with diamond deps, topological ordering, circular dep detection, module name mismatch, same-name files in different folders
+- [x] 2.1 Define `src/frontend/module_resolver.h` — `ModuleResolver` class with `ModuleInfo` (qualified name, path, ProgramNode, DecoratedProgram), `resolve(root_path, search_paths)` returning compilation order
+- [x] 2.2 Implement dependency discovery — scan `ProgramNode` for `UseNode` declarations, extract module names (ignore aliases for file lookup)
+- [x] 2.3 Implement file locator — convert dotted module names to filesystem paths (dots → directory separators), search in root dir then --module-path dirs, report error with source location when not found
+- [x] 2.4 Implement DAG construction — recursively resolve transitive dependencies, handle diamond deps (deduplicate by canonical path)
+- [x] 2.5 Implement topological sort — Kahn's algorithm, producing compilation order (leaves first)
+- [x] 2.6 Implement circular dependency detection — report error with full cycle path
+- [x] 2.7 Implement module name validation — verify `module X.Y` matches folder/filename, infer qualified name when no declaration present
+- [x] 2.8 Write `tests/test_module_resolver.cpp` — dependency extraction, dotted-name file location, DAG with diamond deps, topological ordering, circular dep detection, module name mismatch, same-name files in different folders
 
 ## 3. Module Artifact Serialization
 
-- [ ] 3.1 Define `src/frontend/module_artifact.h` — `ModuleArtifact` with `save()`, `load()`, and `extract_pub_symbols()` (returns `ImportedSymbols` keyed by symbol name with module source info)
-- [ ] 3.2 Implement binary format — magic number (`CMOD`), version byte, serialized DecoratedProgram with pub/non-pub visibility flags
-- [ ] 3.3 Implement `save()` — write to `build/<qualified_name>.cmod`, create `build/` if needed
-- [ ] 3.4 Implement `load()` — deserialize with version validation
-- [ ] 3.5 Implement `extract_pub_symbols()` — extract pub-only symbols into `ImportedSymbols` struct
-- [ ] 3.6 Write `tests/test_module_artifact.cpp` — round-trip, pub extraction, version mismatch, build dir creation
+- [x] 3.1 Define `src/frontend/module_artifact.h` — `ModuleArtifact` with `save()`, `load()`, and `extract_pub_symbols()` (returns `ImportedSymbols` keyed by symbol name with module source info)
+- [x] 3.2 Implement binary format — magic number (`CMOD`), version byte, serialized DecoratedProgram with pub/non-pub visibility flags
+- [x] 3.3 Implement `save()` — write to `build/<qualified_name>.cmod`, create `build/` if needed
+- [x] 3.4 Implement `load()` — deserialize with version validation
+- [x] 3.5 Implement `extract_pub_symbols()` — extract pub-only symbols into `ImportedSymbols` struct
+- [x] 3.6 Write `tests/test_module_artifact.cpp` — round-trip, pub extraction, version mismatch, build dir creation
 
 ## 4. Semantic Analyzer Extension
 

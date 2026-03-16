@@ -115,12 +115,24 @@ Declaration Parser::parse_declaration() {
     return ModuleNode{"<error>", tok.location};
 }
 
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+std::string Parser::parse_dotted_name() {
+    auto name = consume(TokenType::IDENTIFIER, "expected name").value;
+    while (check(TokenType::DOT)) {
+        advance();
+        name += ".";
+        name += consume(TokenType::IDENTIFIER, "expected name after '.'").value;
+    }
+    return name;
+}
+
 // ── Module & Use ────────────────────────────────────────────────────────────
 
 ModuleNode Parser::parse_module() {
     auto loc = peek().location;
     consume(TokenType::MODULE, "expected 'module'");
-    auto name = consume(TokenType::IDENTIFIER, "expected module name").value;
+    auto name = parse_dotted_name();
     expect_newline();
     return {name, loc};
 }
@@ -128,7 +140,7 @@ ModuleNode Parser::parse_module() {
 UseNode Parser::parse_use() {
     auto loc = peek().location;
     consume(TokenType::USE, "expected 'use'");
-    auto name = consume(TokenType::IDENTIFIER, "expected module name").value;
+    auto name = parse_dotted_name();
     std::optional<std::string> alias;
     if (match(TokenType::AS)) {
         alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
@@ -513,9 +525,19 @@ FilterClause Parser::parse_filter_clause() {
 
     FilterClause clause;
     clause.location = loc;
-    clause.trait_names.push_back(consume(TokenType::IDENTIFIER, "expected trait name").value);
-    while (match(TokenType::COMMA)) {
-        clause.trait_names.push_back(consume(TokenType::IDENTIFIER, "expected trait name").value);
+
+    while (true) {
+        auto entry_loc = peek().location;
+        auto qname = parse_dotted_name();
+        std::optional<std::string> alias;
+        if (match(TokenType::AS)) {
+            alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
+        }
+        clause.entries.push_back({qname, alias, entry_loc});
+        // Extract simple trait name (last component after last dot) for backward compat
+        auto dot_pos = qname.rfind('.');
+        clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
+        if (!match(TokenType::COMMA)) break;
     }
     consume(TokenType::RBRACKET, "expected ']'");
     expect_newline();

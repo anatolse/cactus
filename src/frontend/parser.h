@@ -42,6 +42,9 @@ private:
     FuncNode parse_func(bool is_pub);
     InterfaceNode parse_interface();
 
+    // Helpers
+    std::string parse_dotted_name();
+
     // Sub-parsers
     FieldNode parse_field();
     FieldModifiers parse_field_modifiers();

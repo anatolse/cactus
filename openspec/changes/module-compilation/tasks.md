@@ -4,11 +4,11 @@
 
 ## 1. Parser Extension
 
-- [ ] 1.1 Extend `parse_module()` and `parse_use()` to accept dotted identifiers — `module enemies.walker` and `use enemies.walker` parse as dot-separated module path string
-- [ ] 1.2 Support `as` alias in `use` declarations — `use phys.body as b` stores `module_name = "phys.body"`, `alias = "b"` in `UseNode`
-- [ ] 1.3 Support qualified type references — `player.Position`, `b.RigidBody` parse as a `QualifiedName` AST node (prefix + name)
-- [ ] 1.4 Support `as` aliases in system `filter:` clauses — `filter: [phys.Body as b, render.Sprite as s]` stores each filter entry with optional alias; aliases are local to the system body
-- [ ] 1.5 Add parser tests — dotted modules, use-as aliases, qualified type references, filter-as aliases, mixed qualified/unqualified in filter lists
+- [x] 1.1 Extend `parse_module()` and `parse_use()` to accept dotted identifiers — `module enemies.walker` and `use enemies.walker` parse as dot-separated module path string
+- [x] 1.2 Support `as` alias in `use` declarations — `use phys.body as b` stores `module_name = "phys.body"`, `alias = "b"` in `UseNode`
+- [x] 1.3 Support qualified type references — `player.Position`, `b.RigidBody` parse as a `QualifiedName` AST node (prefix + name)
+- [x] 1.4 Support `as` aliases in system `filter:` clauses — `filter: [phys.Body as b, render.Sprite as s]` stores each filter entry with optional alias; aliases are local to the system body
+- [x] 1.5 Add parser tests — dotted modules, use-as aliases, qualified type references, filter-as aliases, mixed qualified/unqualified in filter lists
 
 ## 2. Module Resolver
 

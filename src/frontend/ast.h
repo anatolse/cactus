@@ -276,8 +276,15 @@ struct UnitNode {
     SourceLocation location;
 };
 
+struct FilterEntry {
+    std::string qualified_name;                 // "phys.Body" or "Body" — full dotted path as parsed
+    std::optional<std::string> alias;           // "b" from "as b"
+    SourceLocation location;
+};
+
 struct FilterClause {
-    std::vector<std::string> trait_names;
+    std::vector<FilterEntry> entries;           // full parsed info (qualified names + aliases)
+    std::vector<std::string> trait_names;       // simple trait names (last component) — backward compat
     SourceLocation location;
 };
 

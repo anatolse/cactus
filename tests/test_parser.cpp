@@ -258,3 +258,98 @@ TEST_CASE("Parser: multiple declarations", "[parser]") {
         "    price: int\n");
     CHECK(prog.declarations.size() == 4);
 }
+
+// ── Module System Tests ─────────────────────────────────────────────────────
+
+TEST_CASE("Parser: dotted module declaration", "[parser][modules]") {
+    auto prog = parse("module enemies.walker\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<ModuleNode>(prog.declarations[0]);
+    CHECK(decl.name == "enemies.walker");
+}
+
+TEST_CASE("Parser: deeply dotted module declaration", "[parser][modules]") {
+    auto prog = parse("module lib.physics.rigid\n");
+    auto& decl = std::get<ModuleNode>(prog.declarations[0]);
+    CHECK(decl.name == "lib.physics.rigid");
+}
+
+TEST_CASE("Parser: use with dotted path", "[parser][modules]") {
+    auto prog = parse("use enemies.walker\n");
+    auto& decl = std::get<UseNode>(prog.declarations[0]);
+    CHECK(decl.module_name == "enemies.walker");
+    CHECK_FALSE(decl.alias.has_value());
+}
+
+TEST_CASE("Parser: use with dotted path and alias", "[parser][modules]") {
+    auto prog = parse("use phys.body as b\n");
+    auto& decl = std::get<UseNode>(prog.declarations[0]);
+    CHECK(decl.module_name == "phys.body");
+    REQUIRE(decl.alias.has_value());
+    CHECK(*decl.alias == "b");
+}
+
+TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
+    auto prog = parse(
+        "system Render:\n"
+        "    filter: [phys.Body, render.Sprite]\n"
+        "    on tick(dt: float):\n"
+        "        x = 1\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.filter.entries.size() == 2);
+    CHECK(sys.filter.entries[0].qualified_name == "phys.Body");
+    CHECK_FALSE(sys.filter.entries[0].alias.has_value());
+    CHECK(sys.filter.entries[1].qualified_name == "render.Sprite");
+    // Backward compat: trait_names has simple names
+    REQUIRE(sys.filter.trait_names.size() == 2);
+    CHECK(sys.filter.trait_names[0] == "Body");
+    CHECK(sys.filter.trait_names[1] == "Sprite");
+}
+
+TEST_CASE("Parser: filter with aliases", "[parser][modules]") {
+    auto prog = parse(
+        "system Render:\n"
+        "    filter: [phys.Body as b, render.Sprite as s]\n"
+        "    on tick(dt: float):\n"
+        "        x = 1\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.filter.entries.size() == 2);
+    CHECK(sys.filter.entries[0].qualified_name == "phys.Body");
+    REQUIRE(sys.filter.entries[0].alias.has_value());
+    CHECK(*sys.filter.entries[0].alias == "b");
+    CHECK(sys.filter.entries[1].qualified_name == "render.Sprite");
+    REQUIRE(sys.filter.entries[1].alias.has_value());
+    CHECK(*sys.filter.entries[1].alias == "s");
+}
+
+TEST_CASE("Parser: filter mixed qualified and unqualified", "[parser][modules]") {
+    auto prog = parse(
+        "system Mixed:\n"
+        "    filter: [Position, phys.Body as b]\n"
+        "    on tick(dt: float):\n"
+        "        x = 1\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.filter.entries.size() == 2);
+    CHECK(sys.filter.entries[0].qualified_name == "Position");
+    CHECK_FALSE(sys.filter.entries[0].alias.has_value());
+    CHECK(sys.filter.entries[1].qualified_name == "phys.Body");
+    REQUIRE(sys.filter.entries[1].alias.has_value());
+    CHECK(*sys.filter.entries[1].alias == "b");
+    // Backward compat
+    CHECK(sys.filter.trait_names[0] == "Position");
+    CHECK(sys.filter.trait_names[1] == "Body");
+}
+
+TEST_CASE("Parser: filter with unqualified aliases", "[parser][modules]") {
+    auto prog = parse(
+        "system Simple:\n"
+        "    filter: [Position as pos, Velocity as vel]\n"
+        "    on tick(dt: float):\n"
+        "        x = 1\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.filter.entries.size() == 2);
+    CHECK(sys.filter.entries[0].qualified_name == "Position");
+    CHECK(*sys.filter.entries[0].alias == "pos");
+    CHECK(sys.filter.entries[1].qualified_name == "Velocity");
+    CHECK(*sys.filter.entries[1].alias == "vel");
+}

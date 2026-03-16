@@ -13,6 +13,7 @@ Checks: >
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
   -cppcoreguidelines-owning-memory
+  readability-braces-around-statements
 
 WarningsAsErrors: ''
 
@@ -43,3 +44,5 @@ CheckOptions:
     value: lower_case
   - key: modernize-use-nullptr.NullMacros
     value: 'NULL'
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: 0

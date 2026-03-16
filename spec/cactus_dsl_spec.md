@@ -93,8 +93,18 @@ declaration     = module_decl | use_decl | const_block | struct_decl
 ### 3.2 Module and Imports
 
 ```ebnf
-module_decl     = "module" IDENTIFIER NEWLINE ;
-use_decl        = "use" IDENTIFIER [ "as" IDENTIFIER ] NEWLINE ;
+module_decl     = "module" dotted_name NEWLINE ;
+use_decl        = "use" dotted_name [ "as" IDENTIFIER ] NEWLINE ;
+dotted_name     = IDENTIFIER { "." IDENTIFIER } ;
+```
+
+Module names use dot notation mapping to folder structure:
+
+```
+module enemies.walker        # file must be enemies/walker.cactus
+use phys.body                # imports all pub symbols from phys/body.cactus
+use phys.body as b           # alias: access as b.RigidBody instead of phys.body.RigidBody
+use player                   # simple (single file): player.cactus
 ```
 
 ### 3.3 Const Block
@@ -169,7 +179,9 @@ system_decl     = "system" IDENTIFIER ":" NEWLINE INDENT
                   [ target_clause ]
                   { event_handler }
                   DEDENT ;
-filter_clause   = "filter" ":" "[" IDENTIFIER { "," IDENTIFIER } "]" NEWLINE ;
+filter_clause   = "filter" ":" "[" filter_entry { "," filter_entry } "]" NEWLINE ;
+filter_entry    = qualified_name [ "as" IDENTIFIER ] ;
+qualified_name  = IDENTIFIER { "." IDENTIFIER } ;
 target_clause   = "target" ":" ( "cpu" | "gpu" ) NEWLINE ;
 ```
 
@@ -420,3 +432,141 @@ Systems execute their event handlers each frame. The `on tick(dt: float)` handle
 ### 7.3 Presentation
 
 Raylib is the default rendering/presentation API. Generated code uses Raylib for window management, rendering, input, and audio. Alternative libraries (SDL, etc.) can be supported via backend configuration.
+
+## 8. Module System
+
+### 8.1 One Module = One File
+
+Each `.cactus` source file is exactly one module. The module's identity is derived from its filesystem path relative to the project root, using dot notation:
+
+| File path | Module name |
+|-----------|-------------|
+| `player.cactus` | `player` |
+| `enemies/walker.cactus` | `enemies.walker` |
+| `lib/physics.cactus` | `lib.physics` |
+
+The optional `module` declaration, if present, must match the filesystem-derived name. Files in different folders with the same filename are distinct modules (e.g., `enemies/physics.cactus` ≠ `lib/physics.cactus`).
+
+### 8.2 Pub Visibility
+
+Top-level declarations can be marked `pub` to make them accessible from other modules. Without `pub`, declarations are module-private.
+
+```cactus
+pub trait Position:          # visible to other modules
+    var x: float = 0.0
+    var y: float = 0.0
+
+trait PlayerPhysics:         # private to this module
+    var velocity: vec2
+```
+
+The `pub` modifier is valid on: `trait`, `struct`, `enum`, `event`, `unit`, `func`, and individual fields.
+
+### 8.3 Importing Modules
+
+```cactus
+use player                   # import player.cactus
+use enemies.walker           # import enemies/walker.cactus
+use phys.body as b           # import with alias
+```
+
+All `pub` symbols from the imported module become available via qualified access.
+
+### 8.4 Qualified Access
+
+Imported symbols are accessed through their module name or alias:
+
+```cactus
+use player
+use phys.body as b
+
+system Movement:
+    filter: [player.Position, b.RigidBody]
+    on tick(dt: float):
+        player.Position.x += b.RigidBody.velocity_x * dt
+```
+
+### 8.5 Unqualified Shortcut
+
+If a pub symbol name is **unique** across all imported modules and local declarations, it can be used without qualification:
+
+```cactus
+use player       # has pub trait Position (unique name)
+use enemies      # has pub trait EnemyAI (unique name)
+
+system Movement:
+    filter: [Position, EnemyAI]    # unqualified — no ambiguity
+    on tick(dt: float):
+        Position.x += 1.0
+```
+
+If two modules export the same name, the compiler requires qualification:
+
+```cactus
+use module_a     # has pub trait Config
+use module_b     # has pub trait Config
+
+# ERROR: ambiguous reference 'Config': defined in module_a and module_b
+# FIX: use module_a.Config or module_b.Config
+```
+
+### 8.6 Filter Clause Aliases
+
+System `filter:` clauses support `as` aliases for trait references. Aliases are scoped to the system body and provide short names for field access:
+
+```cactus
+system Render:
+    filter: [phys.Body as b, render.Sprite as s]
+    on tick(dt: float):
+        draw(b.x, b.y, s.width, s.height)
+```
+
+Aliases work with both qualified and unqualified trait names:
+
+```cactus
+system Simple:
+    filter: [Position as pos, Velocity as vel]
+    on tick(dt: float):
+        pos.x += vel.dx * dt
+```
+
+### 8.7 Trait Field Disambiguation
+
+When multiple filtered traits have fields with the **same name**, access must be qualified by trait name or alias. When field names are unique across all filtered traits, unqualified access is allowed:
+
+```cactus
+# Body has field x, Sprite has field x — conflict!
+system Render:
+    filter: [Body as b, Sprite as s]
+    on tick(dt: float):
+        draw(b.x, b.y, s.x, s.y)     # qualified via alias — OK
+        # draw(x, y, ...)             # ERROR: ambiguous field 'x'
+
+# Position has x,y — Velocity has dx,dy — no conflict
+system Move:
+    filter: [Position, Velocity]
+    on tick(dt: float):
+        x += dx * dt                   # unqualified — OK, no ambiguity
+        y += dy * dt
+```
+
+### 8.8 Module Resolution Order
+
+When resolving `use` declarations, the compiler searches for `.cactus` files in this order:
+
+1. Root file's directory
+2. Directories from `--module-path` flags (left to right)
+
+Dotted module names map to folder paths: `use enemies.walker` → searches for `enemies/walker.cactus`.
+
+### 8.9 Circular Dependencies
+
+Circular module dependencies are forbidden. The compiler detects cycles and reports the full path:
+
+```
+ERROR: circular dependency: A → B → C → A
+```
+
+### 8.10 Compilation Model
+
+Modules are compiled in topological order (dependencies first). Each compiled module produces a binary `.cmod` artifact in the `build/` folder containing its `DecoratedProgram` and public symbol table. Dependent modules load only the public symbols from `.cmod` files — not the full AST — keeping memory usage bounded. After all modules compile, the linker merges all artifacts into a single `DecoratedProgram` for code generation.

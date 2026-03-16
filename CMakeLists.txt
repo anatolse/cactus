@@ -62,6 +62,7 @@ add_library(cactus_frontend STATIC
     src/frontend/semantic_analyzer.cpp
     src/frontend/module_resolver.cpp
     src/frontend/module_artifact.cpp
+    src/frontend/program_linker.cpp
 )
 target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_frontend PUBLIC cactus_common)

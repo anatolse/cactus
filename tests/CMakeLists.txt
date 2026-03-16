@@ -37,3 +37,18 @@ add_test(NAME ModuleResolverTests COMMAND test_module_resolver)
 add_executable(test_module_artifact test_module_artifact.cpp)
 target_link_libraries(test_module_artifact PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME ModuleArtifactTests COMMAND test_module_artifact)
+
+# Semantic analyzer multi-module tests
+add_executable(test_semantic_modules test_semantic_modules.cpp)
+target_link_libraries(test_semantic_modules PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticModulesTests COMMAND test_semantic_modules)
+
+# Program linker tests
+add_executable(test_program_linker test_program_linker.cpp)
+target_link_libraries(test_program_linker PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME ProgramLinkerTests COMMAND test_program_linker)
+
+# Multi-module integration tests
+add_executable(test_multi_module_integration test_multi_module_integration.cpp)
+target_link_libraries(test_multi_module_integration PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME MultiModuleIntegrationTests COMMAND test_multi_module_integration)

@@ -1,6 +1,7 @@
 #include "frontend/semantic_analyzer.h"
 
 #include <algorithm>
+#include <sstream>
 
 namespace cactus {
 
@@ -29,9 +30,35 @@ TypeKind type_kind_from_name(const std::string& name) {
 
 }  // namespace
 
+// ── ModuleImports::add ──────────────────────────────────────────────────────
+
+void ModuleImports::add(const std::string& qualifier, ImportedSymbols pub_syms,
+                        std::unordered_set<std::string> non_pub) {
+    // Build global uniqueness providers index
+    for (auto& [name, _] : pub_syms.traits) {
+        trait_providers[name].push_back(qualifier);
+    }
+    for (auto& [name, _] : pub_syms.structs) {
+        struct_providers[name].push_back(qualifier);
+    }
+    for (auto& [name, _] : pub_syms.enums) {
+        enum_providers[name].push_back(qualifier);
+    }
+    // Store non-pub trait names for error diagnostics
+    if (!non_pub.empty()) {
+        non_pub_trait_names[qualifier] = std::move(non_pub);
+    }
+    // Store the module
+    modules[qualifier] = std::move(pub_syms);
+}
+
+// ── SemanticAnalyzer ────────────────────────────────────────────────────────
+
 SemanticAnalyzer::SemanticAnalyzer(ErrorReporter& errors) : errors_(errors) {}
 
-DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program) {
+DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
+                                            const ModuleImports& imports) {
+    imports_ = imports;
     result_.ast = &program;
 
     // Phase 1: Collect all type declarations
@@ -136,7 +163,15 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
 }
 
 TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
-    // Check built-in types
+    // ── Qualified name: "module.Symbol" or "alias.Symbol" ──────────────────
+    auto dot = ref.name.find('.');
+    if (dot != std::string::npos) {
+        auto qualifier = ref.name.substr(0, dot);
+        auto sym_name  = ref.name.substr(dot + 1);
+        return resolve_qualified_type(qualifier, sym_name, ref.location);
+    }
+
+    // ── Built-in list type ──────────────────────────────────────────────────
     if (ref.name == "list") {
         if (ref.param) {
             auto elem = resolve_type_ref(**ref.param);
@@ -146,6 +181,7 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
         return make_unknown_type();
     }
 
+    // ── Built-in primitive ──────────────────────────────────────────────────
     auto kind = type_kind_from_name(ref.name);
     if (kind != TypeKind::Unknown) {
         TypeInfo ti;
@@ -154,7 +190,7 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
         return ti;
     }
 
-    // Check user-defined types
+    // ── Local user-defined types ────────────────────────────────────────────
     if (struct_names_.count(ref.name)) {
         TypeInfo ti;
         ti.kind = TypeKind::Struct;
@@ -168,8 +204,100 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
         return ti;
     }
 
+    // ── Unqualified import lookup (4.3) ─────────────────────────────────────
+    if (!imports_.empty()) {
+        return resolve_imported_type(ref.name, ref.location);
+    }
+
     errors_.error(ref.location, "unknown type '" + ref.name + "'");
     return make_unknown_type();
+}
+
+// ── Task 4.2: Qualified type resolution ────────────────────────────────────
+
+TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
+                                                   const std::string& sym_name,
+                                                   const SourceLocation& loc) {
+    auto it = imports_.modules.find(qualifier);
+    if (it == imports_.modules.end()) {
+        errors_.error(loc, "unknown module qualifier '" + qualifier + "'");
+        return make_unknown_type();
+    }
+
+    const auto& syms = it->second;
+
+    // Check imported structs
+    if (syms.structs.count(sym_name)) {
+        TypeInfo ti;
+        ti.kind = TypeKind::Struct;
+        ti.name = qualifier + "." + sym_name;
+        return ti;
+    }
+    // Check imported enums
+    if (syms.enums.count(sym_name)) {
+        TypeInfo ti;
+        ti.kind = TypeKind::Enum;
+        ti.name = qualifier + "." + sym_name;
+        return ti;
+    }
+
+    // ── Task 4.6: Non-pub helpful error ─────────────────────────────────────
+    auto np_it = imports_.non_pub_trait_names.find(qualifier);
+    if (np_it != imports_.non_pub_trait_names.end() && np_it->second.count(sym_name)) {
+        errors_.error(loc, "trait '" + sym_name + "' is not public in module '" + qualifier +
+                               "'; did you mean to mark it as 'pub'?");
+        return make_unknown_type();
+    }
+
+    errors_.error(loc, "unknown symbol '" + sym_name + "' in module '" + qualifier + "'");
+    return make_unknown_type();
+}
+
+// ── Task 4.3: Unqualified import lookup ────────────────────────────────────
+
+TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name,
+                                                   const SourceLocation& loc) {
+    auto struct_it = imports_.struct_providers.find(name);
+    auto enum_it   = imports_.enum_providers.find(name);
+
+    size_t struct_count = (struct_it != imports_.struct_providers.end()) ? struct_it->second.size() : 0;
+    size_t enum_count   = (enum_it   != imports_.enum_providers.end())   ? enum_it->second.size()   : 0;
+    size_t total        = struct_count + enum_count;
+
+    if (total == 0) {
+        errors_.error(loc, "unknown type '" + name + "'");
+        return make_unknown_type();
+    }
+
+    if (total > 1) {
+        // Build a helpful ambiguity message (task 4.3 requirement)
+        std::ostringstream msg;
+        msg << "ambiguous reference '" << name << "': defined in";
+        bool first = true;
+        auto append = [&](const std::vector<std::string>& quals) {
+            for (auto& q : quals) {
+                msg << (first ? " module '" : " and module '") << q << "'";
+                first = false;
+            }
+        };
+        if (struct_it != imports_.struct_providers.end()) append(struct_it->second);
+        if (enum_it   != imports_.enum_providers.end())   append(enum_it->second);
+        msg << "; use qualified access to disambiguate";
+        errors_.error(loc, msg.str());
+        return make_unknown_type();
+    }
+
+    // Unique — resolve
+    if (struct_count == 1) {
+        TypeInfo ti;
+        ti.kind = TypeKind::Struct;
+        ti.name = name;
+        return ti;
+    }
+    TypeInfo ti;
+    ti.kind = TypeKind::Enum;
+    ti.name = name;
+    return ti;
 }
 
 bool SemanticAnalyzer::is_known_type(const std::string& name) const {
@@ -238,10 +366,8 @@ void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_co
 // ── Phase 3b: Func Purity ───────────────────────────────────────────────────
 
 void SemanticAnalyzer::check_func_purity(ProgramNode& program) {
-    // Build call graph first
     for (auto& decl : program.declarations) {
         if (auto* fn = std::get_if<FuncNode>(&decl)) {
-            std::unordered_set<std::string> callees;
             for (auto& stmt : fn->body) {
                 check_func_purity_stmt(*stmt, fn->name);
             }
@@ -277,7 +403,6 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
             if constexpr (std::is_same_v<E, CallExpr>) {
                 check_func_purity_expr(*e.callee, func_name);
                 for (auto& arg : e.args) check_func_purity_expr(*arg, func_name);
-                // Record call for recursion detection
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                     call_graph_[func_name].insert(ident->name);
                 }
@@ -296,7 +421,6 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
 // ── Phase 3c: No Recursion ──────────────────────────────────────────────────
 
 void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {
-    // DFS cycle detection on call graph
     for (auto& [func, callees] : call_graph_) {
         std::unordered_set<std::string> visited;
         std::vector<std::string> stack = {func};
@@ -311,7 +435,6 @@ void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {
 
             for (auto& callee : it->second) {
                 if (callee == func) {
-                    // Find location
                     for (auto& decl : program.declarations) {
                         if (auto* fn = std::get_if<FuncNode>(&decl)) {
                             if (fn->name == func) {
@@ -348,14 +471,98 @@ void SemanticAnalyzer::check_persist_sync(ProgramNode& program) {
     }
 }
 
-// ── Phase 3e: System Filter Validation ──────────────────────────────────────
+// ── Phase 3e: System Filter Validation (tasks 4.2, 4.4, 4.5, 4.6) ──────────
+
+bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
+                                              std::string& out_simple_name) {
+    const auto& qname = entry.qualified_name;
+    auto dot = qname.find('.');
+
+    if (dot != std::string::npos) {
+        // ── Qualified: "module.Trait" or "alias.Trait" ──────────────────────
+        auto qualifier  = qname.substr(0, dot);
+        auto trait_name = qname.substr(dot + 1);
+
+        auto it = imports_.modules.find(qualifier);
+        if (it == imports_.modules.end()) {
+            errors_.error(entry.location,
+                          "unknown module qualifier '" + qualifier + "' in filter");
+            return false;
+        }
+        if (!it->second.traits.count(trait_name)) {
+            // ── Task 4.6: Non-pub helpful error ──────────────────────────────
+            auto np_it = imports_.non_pub_trait_names.find(qualifier);
+            if (np_it != imports_.non_pub_trait_names.end() &&
+                np_it->second.count(trait_name)) {
+                errors_.error(entry.location,
+                              "trait '" + trait_name + "' is not public in module '" +
+                                  qualifier + "'; did you mean to mark it as 'pub'?");
+            } else {
+                errors_.error(entry.location,
+                              "system filter references unknown trait '" + trait_name +
+                                  "' in module '" + qualifier + "'");
+            }
+            return false;
+        }
+        out_simple_name = trait_name;
+        return true;
+    }
+
+    // ── Unqualified ──────────────────────────────────────────────────────────
+    // Check local traits first
+    if (trait_names_.count(qname)) {
+        out_simple_name = qname;
+        return true;
+    }
+    // Check imports (task 4.3 uniqueness)
+    if (!imports_.empty()) {
+        auto it = imports_.trait_providers.find(qname);
+        if (it != imports_.trait_providers.end()) {
+            if (it->second.size() > 1) {
+                std::ostringstream msg;
+                msg << "ambiguous trait '" << qname << "' in filter: found in module '"
+                    << it->second[0] << "' and module '" << it->second[1] << "'";
+                if (it->second.size() > 2) msg << " (and others)";
+                msg << "; use qualified access to disambiguate";
+                errors_.error(entry.location, msg.str());
+                return false;
+            }
+            out_simple_name = qname;
+            return true;
+        }
+    }
+
+    errors_.error(entry.location, "unknown trait '" + qname + "' in filter");
+    return false;
+}
 
 void SemanticAnalyzer::validate_system_filters(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            for (auto& trait_name : sys->filter.trait_names) {
-                if (!trait_names_.count(trait_name)) {
-                    errors_.error(sys->filter.location, "system '" + sys->name + "' filters on unknown trait '" + trait_name + "'");
+            if (!sys->filter.entries.empty()) {
+                // Rich filter entries (multi-module parser path)
+                for (auto& entry : sys->filter.entries) {
+                    std::string simple_name;
+                    resolve_filter_entry(entry, simple_name);
+                }
+            } else {
+                // Backward-compat: simple trait_names list
+                for (auto& trait_name : sys->filter.trait_names) {
+                    if (!trait_names_.count(trait_name)) {
+                        // Check imports too
+                        bool found = false;
+                        if (!imports_.empty()) {
+                            auto it = imports_.trait_providers.find(trait_name);
+                            if (it != imports_.trait_providers.end() && !it->second.empty()) {
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            errors_.error(sys->filter.location,
+                                          "system '" + sys->name + "' filters on unknown trait '" +
+                                              trait_name + "'");
+                        }
+                    }
                 }
             }
         }
@@ -384,9 +591,19 @@ void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) {
             SystemDependency dep;
             dep.system_name = sys->name;
 
-            // Filter traits are reads
-            for (auto& t : sys->filter.trait_names) {
-                dep.reads.insert(t);
+            // Filter traits are reads — use simple (unqualified) names
+            if (!sys->filter.entries.empty()) {
+                for (auto& entry : sys->filter.entries) {
+                    auto dot = entry.qualified_name.find('.');
+                    auto simple = (dot != std::string::npos)
+                                      ? entry.qualified_name.substr(dot + 1)
+                                      : entry.qualified_name;
+                    dep.reads.insert(simple);
+                }
+            } else {
+                for (auto& t : sys->filter.trait_names) {
+                    dep.reads.insert(t);
+                }
             }
 
             // Analyze handler bodies
@@ -399,7 +616,8 @@ void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) {
     }
 }
 
-void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep) {
+void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                            SystemDependency& dep) {
     for (auto& stmt : stmts) {
         std::visit(
             [this, &dep](auto& s) {

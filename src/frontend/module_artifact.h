@@ -11,15 +11,7 @@
 
 namespace cactus {
 
-/// Public symbols extracted from a compiled module artifact.
-/// Only `pub`-marked symbols are included.
-struct ImportedSymbols {
-    std::string module_name;  // qualified name of the source module
-
-    std::unordered_map<std::string, ResolvedTrait>  traits;   // pub traits
-    std::unordered_map<std::string, ResolvedStruct> structs;  // pub structs
-    std::unordered_map<std::string, ResolvedEnum>   enums;    // pub enums
-};
+// Note: ImportedSymbols is defined in semantic_analyzer.h (included above).
 
 /// Serializes and deserializes a compiled module's `DecoratedProgram` to/from
 /// a `.cmod` binary artifact file.

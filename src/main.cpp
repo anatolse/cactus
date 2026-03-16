@@ -2,22 +2,90 @@
 #include "backends/cpp-manual/cpp_manual_codegen.h"
 #include "common/error_reporter.h"
 #include "frontend/lexer.h"
+#include "frontend/module_artifact.h"
+#include "frontend/module_resolver.h"
 #include "frontend/parser.h"
+#include "frontend/program_linker.h"
 #include "frontend/semantic_analyzer.h"
 
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 static void print_usage(const char* program) {
     std::cerr << "Usage: " << program << " <input.cactus> [options]\n"
               << "\nOptions:\n"
-              << "  --backend <cpp-manual|cpp-entt>  Code generation backend (default: cpp-manual)\n"
-              << "  --output <file>                  Output file (default: stdout)\n"
-              << "  --help                           Show this help message\n";
+              << "  --backend <cpp-manual|cpp-entt>     Code generation backend (default: cpp-manual)\n"
+              << "  --output <file>                      Output file (default: stdout)\n"
+              << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
+              << "  --help                               Show this help message\n";
 }
+
+static void print_errors(const cactus::ErrorReporter& errors) {
+    for (auto& d : errors.diagnostics()) {
+        std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column
+                  << ": " << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning")
+                  << ": " << d.message << "\n";
+    }
+}
+
+/// Read, lex, and parse a source file. Returns nullptr on error.
+static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& path,
+                                                            cactus::ErrorReporter& errors) {
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        errors.error({}, "cannot open file '" + path + "'");
+        return nullptr;
+    }
+    std::ostringstream ss;
+    ss << ifs.rdbuf();
+    std::string source = ss.str();
+
+    cactus::Lexer lexer(source, path, errors);
+    auto tokens = lexer.tokenize();
+    if (errors.has_errors()) return nullptr;
+
+    cactus::Parser parser(std::move(tokens), errors);
+    auto prog = std::make_unique<cactus::ProgramNode>(parser.parse_program());
+    if (errors.has_errors()) return nullptr;
+    return prog;
+}
+
+/// Returns true if program has any `use` declarations.
+static bool has_use_declarations(const cactus::ProgramNode& prog) {
+    for (auto& decl : prog.declarations) {
+        if (std::holds_alternative<cactus::UseNode>(decl)) return true;
+    }
+    return false;
+}
+
+/// Build ImportedSymbols (pub only) from a compiled DecoratedProgram.
+static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_name,
+                                                     const cactus::DecoratedProgram& prog) {
+    cactus::ImportedSymbols syms;
+    syms.module_name = module_name;
+    for (auto& [name, trait] : prog.traits) {
+        if (trait.is_pub) syms.traits[name] = trait;
+    }
+    for (auto& [name, strct] : prog.structs) {
+        syms.structs[name] = strct;
+    }
+    for (auto& [name, enm] : prog.enums) {
+        syms.enums[name] = enm;
+    }
+    return syms;
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -28,6 +96,7 @@ int main(int argc, char* argv[]) {
     std::string input_file;
     std::string backend = "cpp-manual";
     std::string output_file;
+    std::vector<fs::path> module_paths;  // 6.1: --module-path flag
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -50,6 +119,13 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             output_file = argv[++i];
+        } else if (std::strcmp(argv[i], "--module-path") == 0) {
+            // 6.1: collect repeatable --module-path directories
+            if (i + 1 >= argc) {
+                std::cerr << "error: --module-path requires an argument\n";
+                return 1;
+            }
+            module_paths.emplace_back(argv[++i]);
         } else if (argv[i][0] == '-') {
             std::cerr << "error: unknown option '" << argv[i] << "'\n";
             return 1;
@@ -63,54 +139,102 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Read input file
-    std::ifstream ifs(input_file);
-    if (!ifs.is_open()) {
-        std::cerr << "error: cannot open file '" << input_file << "'\n";
-        return 1;
-    }
-    std::ostringstream ss;
-    ss << ifs.rdbuf();
-    std::string source = ss.str();
-
-    // Lex
+    // ── Lex + parse root file ─────────────────────────────────────────────────
     cactus::ErrorReporter errors;
-    cactus::Lexer lexer(source, input_file, errors);
-    auto tokens = lexer.tokenize();
-    if (errors.has_errors()) {
-        for (auto& d : errors.diagnostics()) {
-            std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column << ": "
-                      << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning") << ": " << d.message
-                      << "\n";
-        }
+    auto root_prog = lex_and_parse(input_file, errors);
+    if (!root_prog || errors.has_errors()) {
+        print_errors(errors);
         return 1;
     }
 
-    // Parse
-    cactus::Parser parser(std::move(tokens), errors);
-    auto program = parser.parse_program();
-    if (errors.has_errors()) {
-        for (auto& d : errors.diagnostics()) {
-            std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column << ": "
-                      << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning") << ": " << d.message
-                      << "\n";
+    cactus::DecoratedProgram decorated;
+
+    // ── 6.2: Multi-module pipeline ───────────────────────────────────────────
+    if (has_use_declarations(*root_prog)) {
+        // Build directory: sibling of input file, named "build"
+        fs::path build_dir = fs::path(input_file).parent_path() / "build";
+        {
+            std::error_code ec;
+            fs::create_directories(build_dir, ec);
+            if (ec) {
+                std::cerr << "error: cannot create build directory '" << build_dir.string() << "': " << ec.message() << "\n";
+                return 1;
+            }
         }
-        return 1;
+
+        // Resolve modules in dependency order (leaves first)
+        cactus::ErrorReporter resolve_errors;
+        cactus::ModuleResolver resolver(resolve_errors);
+        auto modules = resolver.resolve(input_file, module_paths);
+        if (resolve_errors.has_errors()) {
+            print_errors(resolve_errors);
+            return 1;
+        }
+
+        // Compile each module in topo order
+        std::unordered_map<std::string, cactus::DecoratedProgram> compiled;
+        std::vector<fs::path> artifact_paths;
+
+        for (auto& mod : modules) {
+            // Build ModuleImports from already-compiled dependencies
+            cactus::ModuleImports imports;
+            for (auto& dep_name : mod.dependencies) {
+                auto it = compiled.find(dep_name);
+                if (it != compiled.end()) {
+                    auto syms = extract_pub_symbols(dep_name, it->second);
+                    imports.add(dep_name, std::move(syms));
+                }
+            }
+
+            // Lex + parse module file
+            cactus::ErrorReporter mod_errors;
+            auto mod_prog = lex_and_parse(mod.file_path.string(), mod_errors);
+            if (!mod_prog || mod_errors.has_errors()) {
+                print_errors(mod_errors);
+                return 1;
+            }
+
+            // Semantic analyze
+            cactus::SemanticAnalyzer analyzer(mod_errors);
+            auto dec = analyzer.analyze(*mod_prog, imports);
+            if (mod_errors.has_errors()) {
+                print_errors(mod_errors);
+                return 1;
+            }
+
+            // Save artifact
+            cactus::ErrorReporter art_errors;
+            cactus::ModuleArtifact artifact(art_errors);
+            if (!artifact.save(dec, mod.qualified_name, build_dir)) {
+                print_errors(art_errors);
+                return 1;
+            }
+            artifact_paths.push_back(build_dir / (mod.qualified_name + ".cmod"));
+
+            compiled[mod.qualified_name] = std::move(dec);
+        }
+
+        // Link all compiled modules
+        cactus::ErrorReporter link_errors;
+        cactus::ProgramLinker linker(link_errors);
+        auto merged = linker.link(artifact_paths);
+        if (!merged || link_errors.has_errors()) {
+            print_errors(link_errors);
+            return 1;
+        }
+        decorated = std::move(*merged);
+
+    } else {
+        // ── 6.3: Single-file backward-compatible pipeline ─────────────────────
+        cactus::SemanticAnalyzer analyzer(errors);
+        decorated = analyzer.analyze(*root_prog);
+        if (errors.has_errors()) {
+            print_errors(errors);
+            return 1;
+        }
     }
 
-    // Semantic analysis
-    cactus::SemanticAnalyzer analyzer(errors);
-    auto decorated = analyzer.analyze(program);
-    if (errors.has_errors()) {
-        for (auto& d : errors.diagnostics()) {
-            std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column << ": "
-                      << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning") << ": " << d.message
-                      << "\n";
-        }
-        return 1;
-    }
-
-    // Code generation
+    // ── Code generation ───────────────────────────────────────────────────────
     std::string generated;
     if (backend == "cpp-manual") {
         generated = cactus::CppManualCodegen::generate(decorated);
@@ -118,7 +242,7 @@ int main(int argc, char* argv[]) {
         generated = cactus::CppEnttCodegen::generate(decorated);
     }
 
-    // Output
+    // ── Output ────────────────────────────────────────────────────────────────
     if (output_file.empty()) {
         std::cout << generated;
     } else {

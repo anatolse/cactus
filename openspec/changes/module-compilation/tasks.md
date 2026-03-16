@@ -32,32 +32,32 @@
 
 ## 4. Semantic Analyzer Extension
 
-- [ ] 4.1 Define `ImportedSymbols` struct — per-module maps of pub traits/structs/enums/events/funcs/units, keyed by module path or alias, with a global index for uniqueness detection
-- [ ] 4.2 Implement qualified symbol resolution — `module.Symbol` and `alias.Symbol` lookups against `ImportedSymbols` per-module maps
-- [ ] 4.3 Implement unqualified shortcut — for each unqualified name, check (1) local declarations, (2) uniqueness across all imported modules. If unique → resolve. If ambiguous → error listing conflicting modules with alias suggestion
-- [ ] 4.4 Implement filter clause alias resolution — parse `filter: [mod.Trait as alias]` entries, build alias→trait mapping scoped to the system, allow `alias.field` access in system body
-- [ ] 4.5 Implement trait field disambiguation — detect overlapping field names across filtered traits, require qualification (trait name or alias) for ambiguous fields, allow unqualified for unique fields
-- [ ] 4.6 Implement non-pub helpful error — when qualified lookup fails but symbol exists as non-pub, suggest adding `pub`
-- [ ] 4.7 Maintain backward compatibility — existing single-file `analyze(ProgramNode&)` works with empty imports
-- [ ] 4.8 Write `tests/test_semantic_modules.cpp` — qualified resolution, alias resolution, unqualified unique/ambiguous, filter aliases, field disambiguation, non-pub error, backward compat
+- [x] 4.1 Define `ImportedSymbols` struct — per-module maps of pub traits/structs/enums/events/funcs/units, keyed by module path or alias, with a global index for uniqueness detection
+- [x] 4.2 Implement qualified symbol resolution — `module.Symbol` and `alias.Symbol` lookups against `ImportedSymbols` per-module maps
+- [x] 4.3 Implement unqualified shortcut — for each unqualified name, check (1) local declarations, (2) uniqueness across all imported modules. If unique → resolve. If ambiguous → error listing conflicting modules with alias suggestion
+- [x] 4.4 Implement filter clause alias resolution — parse `filter: [mod.Trait as alias]` entries, build alias→trait mapping scoped to the system, allow `alias.field` access in system body
+- [x] 4.5 Implement trait field disambiguation — detect overlapping field names across filtered traits, require qualification (trait name or alias) for ambiguous fields, allow unqualified for unique fields
+- [x] 4.6 Implement non-pub helpful error — when qualified lookup fails but symbol exists as non-pub, suggest adding `pub`
+- [x] 4.7 Maintain backward compatibility — existing single-file `analyze(ProgramNode&)` works with empty imports
+- [x] 4.8 Write `tests/test_semantic_modules.cpp` — qualified resolution, alias resolution, unqualified unique/ambiguous, filter aliases, field disambiguation, non-pub error, backward compat
 
 ## 5. Program Linker
 
-- [ ] 5.1 Define `src/frontend/program_linker.h` — `ProgramLinker` with `link(artifact_paths)` loading `.cmod` files and returning merged `DecoratedProgram`
-- [ ] 5.2 Implement incremental merging — load artifacts one at a time, merge traits/structs/enums/dependency graphs/string pools
-- [ ] 5.3 Implement duplicate symbol detection — same pub name from different modules = error
-- [ ] 5.4 Implement combined AST construction — declarations in dependency order
-- [ ] 5.5 Implement const block merging with duplicate detection
-- [ ] 5.6 Write `tests/test_program_linker.cpp` — merge from artifacts, duplicates, ordering, const merging
+- [x] 5.1 Define `src/frontend/program_linker.h` — `ProgramLinker` with `link(artifact_paths)` loading `.cmod` files and returning merged `DecoratedProgram`
+- [x] 5.2 Implement incremental merging — load artifacts one at a time, merge traits/structs/enums/dependency graphs/string pools
+- [x] 5.3 Implement duplicate symbol detection — same pub name from different modules = error
+- [x] 5.4 Implement combined AST construction — declarations in dependency order
+- [x] 5.5 Implement const block merging with duplicate detection
+- [x] 5.6 Write `tests/test_program_linker.cpp` — merge from artifacts, duplicates, ordering, const merging
 
 ## 6. CLI Update
 
-- [ ] 6.1 Add `--module-path` flag parsing — repeatable, collect search directories
-- [ ] 6.2 Integrate multi-module pipeline — resolve → compile in topo order (write .cmod) → link → pass to backend
-- [ ] 6.3 Maintain single-file backward compatibility — skip resolution/linking when no `use` declarations
+- [x] 6.1 Add `--module-path` flag parsing — repeatable, collect search directories
+- [x] 6.2 Integrate multi-module pipeline — resolve → compile in topo order (write .cmod) → link → pass to backend
+- [x] 6.3 Maintain single-file backward compatibility — skip resolution/linking when no `use` declarations
 
 ## 7. Integration Testing
 
-- [ ] 7.1 Create `tests/fixtures/multi_module/` fixture — main uses a and b (with aliases), b uses a, shared traits with field name conflicts
-- [ ] 7.2 Write `tests/test_multi_module_integration.cpp` — end-to-end: resolve → compile → artifacts → link → verify merged program
-- [ ] 7.3 Add CMakeLists.txt entries — new source files and test targets
+- [x] 7.1 Create `tests/fixtures/multi_module/` fixture — main uses a and b (with aliases), b uses a, shared traits with field name conflicts
+- [x] 7.2 Write `tests/test_multi_module_integration.cpp` — end-to-end: resolve → compile → artifacts → link → verify merged program
+- [x] 7.3 Add CMakeLists.txt entries — new source files and test targets

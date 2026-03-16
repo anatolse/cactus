@@ -1,0 +1,49 @@
+#pragma once
+
+#include "common/error_reporter.h"
+#include "frontend/semantic_analyzer.h"
+
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace cactus {
+
+/// Merges multiple compiled `.cmod` module artifacts into a single
+/// `DecoratedProgram` suitable for code generation.
+///
+/// The linker:
+///   - Loads artifacts one at a time (incremental)
+///   - Merges traits, structs, enums, dependency graphs, and string pools
+///   - Detects duplicate pub symbol names across modules
+///   - Preserves declaration ordering (dependency modules first)
+///
+/// Note: The `ProgramNode* ast` field of the merged result is left null
+/// because artifact deserialization does not preserve the original AST.
+/// Backends that only use `DecoratedProgram` (the common case) are unaffected.
+class ProgramLinker {
+public:
+    explicit ProgramLinker(ErrorReporter& errors);
+
+    /// Load and merge the given .cmod artifact files in order.
+    /// Returns the merged DecoratedProgram on success, or nullopt on error.
+    /// artifact_paths should be in dependency order (leaves first).
+    std::optional<DecoratedProgram> link(
+        const std::vector<std::filesystem::path>& artifact_paths);
+
+    /// Merge src into target.
+    /// src_module_name is used in error messages for duplicate symbols.
+    /// Returns false if a duplicate symbol was detected.
+    bool merge_into(DecoratedProgram& target, const DecoratedProgram& src,
+                    const std::string& src_module_name);
+
+private:
+    ErrorReporter& errors_;
+
+    /// Symbol origin tracking: symbol name → module that first defined it.
+    std::unordered_map<std::string, std::string> symbol_origins_;
+};
+
+}  // namespace cactus

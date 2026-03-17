@@ -114,7 +114,8 @@ func abs_float(v: float) -> float:
     return v
 
 system CollisionSystem:
-    filter: [Platform]
+    filter:
+        Platform
 
     on tick(dt: float):
         player_pos = get_player_position()
@@ -128,7 +129,10 @@ system CollisionSystem:
             emit PlatformCollision(get_player_entity(), pos, size, ox, oy)
 
 system CollisionResolver:
-    filter: [Position, PlayerPhysics, PlayerController]
+    filter:
+        Position
+        PlayerPhysics
+        PlayerController
 
     on PlatformCollision(entity: entity_id, platform_pos: vec2, platform_size: vec2, overlap_x: float, overlap_y: float):
         if overlap_y < overlap_x:
@@ -145,7 +149,8 @@ system CollisionResolver:
                 pos = vec2(platform_pos.x + platform_size.x, pos.y)
 
 system PlatformRenderer:
-    filter: [Platform]
+    filter:
+        Platform
 
     on tick(dt: float):
         draw_rect(pos, size, color)

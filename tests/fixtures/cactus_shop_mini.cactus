@@ -33,7 +33,9 @@ func can_afford(coins: int, price: int) -> bool:
     return coins >= price
 
 system ShopSystem:
-    filter: [Wallet, Inventory]
+    filter:
+        Wallet
+        Inventory
 
     on ItemBought(item: Item, buyer: int):
         if can_afford(coins, item.price):

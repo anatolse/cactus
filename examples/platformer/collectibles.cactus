@@ -99,7 +99,9 @@ pub unit GoldGem1:
         collected = false
 
 system CollectionSystem:
-    filter: [Position, Collectible]
+    filter:
+        Position
+        Collectible
 
     on tick(dt: float):
         if collected == false:
@@ -115,14 +117,17 @@ system CollectionSystem:
                 emit GemCollected(point_value, gem_type, pos)
 
 system ScoreSystem:
-    filter: [Score]
+    filter:
+        Score
 
     on GemCollected(point_value: int, gem_type: GemType, position: vec2):
         score = score + point_value
         gems_collected = gems_collected + 1
 
 system CollectibleRenderer:
-    filter: [Position, Collectible]
+    filter:
+        Position
+        Collectible
 
     on tick(dt: float):
         if collected == false:

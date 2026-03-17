@@ -7,7 +7,9 @@ trait Velocity:
     var vy: float = 0.0
 
 system MoveSystem:
-    filter: [Position, Velocity]
+    filter:
+        Position
+        Velocity
 
     on tick(dt: float):
         x = x + vx * dt

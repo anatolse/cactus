@@ -38,8 +38,10 @@ module  use     const   struct  enum    trait   unit    system
 view    event   func    interface
 let     var     persist sync    pub
 on      emit    if      else    match   return
-apply   config  child   filter  target
+apply   config  child   filter  exclude target
 map     reduce  true    false   as      and     or      not
+template  spawn   destroy load    unload
+enable  disable  disabled
 ```
 
 ### 2.5 Operators and Punctuation
@@ -86,7 +88,7 @@ Double-quoted UTF-8 strings: `"Hello World"`. Only valid inside `const` blocks.
 ```ebnf
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
-                | enum_decl | trait_decl | unit_decl | system_decl
+                | enum_decl | trait_decl | unit_decl | template_decl | system_decl
                 | view_decl | event_decl | func_decl | interface_decl ;
 ```
 
@@ -136,10 +138,27 @@ enum_variant    = IDENTIFIER [ "=" INT_LITERAL ] NEWLINE ;
 
 ### 3.6 Trait
 
+Traits may have a body (data traits) or no body (marker traits). Marker traits are zero-cost tag components used purely for filtering.
+
 ```ebnf
-trait_decl      = [ "pub" ] "trait" IDENTIFIER ":" NEWLINE INDENT
-                  { field_decl | event_handler | func_decl }
-                  DEDENT ;
+trait_decl      = [ "pub" ] "trait" IDENTIFIER
+                  [ ":" NEWLINE INDENT
+                    { field_decl | event_handler | func_decl }
+                    DEDENT ] ;
+```
+
+**Marker traits** (no colon, no body):
+```cactus
+trait Persistent        # no fields — zero-cost marker
+trait Frozen
+pub trait Dead
+```
+
+**Data traits** (colon + body):
+```cactus
+trait Health:
+    var health: int = 100
+    let max_health: int = 100
 ```
 
 ### 3.7 Fields
@@ -152,6 +171,8 @@ field_modifiers = { "persist" | "sync" | "pub" } ;
 
 ### 3.8 Unit
 
+A `unit` declares a singleton entity archetype — exactly one instance, instantiated at program start (root module) or when the module is `load`ed. Each trait in `apply:` may carry a `: disabled` annotation to start inactive.
+
 ```ebnf
 unit_decl       = [ "pub" ] "unit" IDENTIFIER ":" NEWLINE INDENT
                   apply_block
@@ -159,8 +180,9 @@ unit_decl       = [ "pub" ] "unit" IDENTIFIER ":" NEWLINE INDENT
                   [ child_block ]
                   DEDENT ;
 apply_block     = "apply" ":" NEWLINE INDENT
-                  { IDENTIFIER NEWLINE }
+                  { apply_entry }
                   DEDENT ;
+apply_entry     = IDENTIFIER [ ":" "disabled" ] NEWLINE ;
 config_block    = "config" ":" NEWLINE INDENT
                   { config_assign }
                   DEDENT ;
@@ -171,29 +193,91 @@ child_block     = "child" ":" NEWLINE INDENT
 child_entry     = IDENTIFIER IDENTIFIER NEWLINE ;
 ```
 
+### 3.8a Template
+
+A `template` is a reusable multi-instance entity blueprint — **not** auto-instantiated. Instances are created at runtime with the `spawn` statement. Template syntax is identical to `unit` except it uses the `template` keyword.
+
+```ebnf
+template_decl   = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
+                  apply_block
+                  [ config_block ]
+                  [ child_block ]
+                  DEDENT ;
+```
+
+```cactus
+template WalkerEnemy:
+    apply:
+        Position
+        EnemyAI
+        Frozen: disabled     # present but starts inactive
+    config:
+        patrol_speed = PATROL_SPEED
+        direction = 1.0
+```
+
 ### 3.9 System
+
+Both `filter:` and `exclude:` are optional. A system with no `filter:` matches **all entities** (filter_mask = 0). Trait field access in handler bodies is only valid for traits declared in `filter:`.
 
 ```ebnf
 system_decl     = "system" IDENTIFIER ":" NEWLINE INDENT
-                  filter_clause
+                  [ filter_clause ]
+                  [ exclude_clause ]
                   [ target_clause ]
                   { event_handler }
                   DEDENT ;
-filter_clause   = "filter" ":" "[" filter_entry { "," filter_entry } "]" NEWLINE ;
-filter_entry    = qualified_name [ "as" IDENTIFIER ] ;
-qualified_name  = IDENTIFIER { "." IDENTIFIER } ;
+filter_clause   = "filter" ":" NEWLINE INDENT
+                  { IDENTIFIER NEWLINE }
+                  DEDENT ;
+exclude_clause  = "exclude" ":" NEWLINE INDENT
+                  { IDENTIFIER NEWLINE }
+                  DEDENT ;
 target_clause   = "target" ":" ( "cpu" | "gpu" ) NEWLINE ;
 ```
 
+```cactus
+# System with filter and exclude
+system PatrolSystem:
+    filter:
+        Position
+        EnemyAI
+    exclude:
+        Frozen
+        Dead
+
+    on tick(dt: float):
+        pos = pos + vec2(patrol_speed * direction * dt, 0.0)
+
+# System with no filter (matches all entities, no field access)
+system SceneCleanup:
+    exclude:
+        Persistent
+
+    on unload():
+        destroy
+```
+
+**Note**: The old bracket-list syntax `filter: [A, B, C]` is no longer valid.
+
 ### 3.10 Event Handler
 
+Event handlers respond to named events or one of the four built-in lifecycle events. Lifecycle handlers have empty parameter lists.
+
 ```ebnf
-event_handler   = "on" IDENTIFIER "(" [ param_list ] ")" ":" NEWLINE INDENT
+event_handler   = "on" event_name "(" [ param_list ] ")" ":" NEWLINE INDENT
                   { statement }
                   DEDENT ;
+event_name      = IDENTIFIER | "spawn" | "destroy" | "load" | "unload" ;
 param_list      = param { "," param } ;
 param           = IDENTIFIER ":" type_ref ;
 ```
+
+Lifecycle handlers:
+- `on spawn()` — fires after a new entity matching the filter is created
+- `on destroy()` — fires before a matching entity is removed
+- `on unload()` — fires **before** new entities are created during a `load` transition (Phase 1)
+- `on load()` — fires **after** all new entities are created during a `load` transition (Phase 3)
 
 ### 3.11 Event Declaration
 
@@ -272,9 +356,17 @@ arg_list        = expression { "," expression } ;
 ### 3.17 Statements
 
 ```ebnf
-statement       = var_assign | emit_stmt | return_stmt | expr_stmt | if_stmt ;
+statement       = var_assign | emit_stmt | spawn_stmt | destroy_stmt | load_stmt
+                | enable_stmt | disable_stmt | return_stmt | expr_stmt | if_stmt ;
 var_assign      = IDENTIFIER ( "=" | "+=" | "-=" ) expression NEWLINE ;
 emit_stmt       = "emit" IDENTIFIER "(" [ arg_list ] ")" NEWLINE ;
+spawn_stmt      = "spawn" IDENTIFIER "(" [ spawn_arg_list ] ")" NEWLINE ;
+spawn_arg_list  = spawn_arg { "," spawn_arg } ;
+spawn_arg       = IDENTIFIER "=" expression ;
+destroy_stmt    = "destroy" NEWLINE ;
+load_stmt       = "load" dotted_name NEWLINE ;
+enable_stmt     = "enable" IDENTIFIER NEWLINE ;
+disable_stmt    = "disable" IDENTIFIER NEWLINE ;
 return_stmt     = "return" [ expression ] NEWLINE ;
 expr_stmt       = expression NEWLINE ;
 if_stmt         = "if" expression ":" NEWLINE INDENT
@@ -283,6 +375,28 @@ if_stmt         = "if" expression ":" NEWLINE INDENT
                   [ "else" ":" NEWLINE INDENT
                     { statement }
                     DEDENT ] ;
+```
+
+**`spawn`** creates a new entity from a template, optionally overriding any config fields:
+```cactus
+spawn WalkerEnemy(pos = vec2(400.0, 568.0), patrol_min_x = 350.0)
+```
+
+**`destroy`** removes the current entity (queued for removal at end of handler):
+```cactus
+if health <= 0:
+    destroy
+```
+
+**`load`** transitions to a new module-as-scene (deferred to end of frame):
+```cactus
+load levels.level2
+```
+
+**`enable`** / **`disable`** toggle a trait's active state on the current entity:
+```cactus
+enable Frozen
+disable EnemyAI
 ```
 
 ## 4. Operator Precedence
@@ -570,3 +684,176 @@ ERROR: circular dependency: A → B → C → A
 ### 8.10 Compilation Model
 
 Modules are compiled in topological order (dependencies first). Each compiled module produces a binary `.cmod` artifact in the `build/` folder containing its `DecoratedProgram` and public symbol table. Dependent modules load only the public symbols from `.cmod` files — not the full AST — keeping memory usage bounded. After all modules compile, the linker merges all artifacts into a single `DecoratedProgram` for code generation.
+
+### 8.11 Module Data File (`_data.bin`)
+
+Each compiled module also produces a `<module_name>_data.bin` flat binary file alongside the generated `.cpp`. This file contains all `unit` instance configurations — field values and initial trait active states — serialized for fast runtime loading.
+
+**Format:**
+```
+[magic: 4 bytes "CDAT"] [version: uint16] [entity_count: uint32]
+[entity_0: name_len(uint16) + name_bytes + field_values(packed) + trait_mask(uint64)]
+[entity_1: ...]
+...
+```
+
+- Field values are packed in declaration order with no padding between fields
+- `trait_mask` is a `uint64` bitmask where each bit corresponds to a trait's compile-time index (1 = active, 0 = inactive/disabled)
+- No offset table — the file is loaded as a single sequential read
+- `template` declarations produce **no** entries in `_data.bin`
+- At runtime, `load module.name` reads `module_name_data.bin` to instantiate the module's entities
+
+**Version mismatch**: if the file's version header does not match the compiler's current format version, the runtime rejects the file with an error.
+
+## 9. Dynamic ECS
+
+### 9.1 Templates and Spawn
+
+`template` is symmetric with `unit` but defines a **multi-instance blueprint**. Instances are created at runtime with `spawn`, which is symmetric with `emit`:
+
+| Declaration | Instantiation |
+|-------------|---------------|
+| `event Foo:` | `emit Foo(...)` |
+| `template Foo:` | `spawn Foo(...)` |
+| `unit Foo:` | (auto-instantiated on load) |
+
+```cactus
+template Enemy:
+    apply:
+        Position
+        EnemyAI
+        Frozen: disabled
+    config:
+        patrol_speed = PATROL_SPEED
+
+# In a system handler:
+spawn Enemy(pos = vec2(400.0, 568.0), patrol_min_x = 350.0, patrol_max_x = 550.0)
+```
+
+**`spawn` field rules:**
+- Any field from the template's applied traits can be overridden
+- Fields not provided use the template's `config:` default
+- Fields with no default and not provided at spawn → compile error
+
+**`destroy` removes the current entity:**
+```cactus
+system DeathSystem:
+    filter:
+        Health
+
+    on tick(dt: float):
+        if health <= 0:
+            destroy
+```
+
+`destroy` uses **swap-and-delete**: the last entity in the SoA arrays fills the deleted slot, keeping arrays packed. Entity ordering is not preserved.
+
+### 9.2 Trait Enable/Disable
+
+Each entity has a `uint64` **trait active bitmask**. Every trait is assigned a unique bit at compile time. `enable` and `disable` flip bits without changing field data:
+
+```cactus
+# Freeze an enemy (stop patrol, start frozen visual)
+system FreezeSystem:
+    filter:
+        Position
+        EnemyAI
+
+    on FreezeEvent():
+        disable EnemyAI    # PatrolSystem won't process this entity
+        enable Frozen      # FrozenSystem will now process it
+```
+
+System filters are compiled to bitmask predicates:
+- `filter:` → `filter_mask` — entity must have all these bits set
+- `exclude:` → `exclude_mask` — entity must have none of these bits set
+- Loop condition: `(trait_mask & filter_mask) == filter_mask && (trait_mask & exclude_mask) == 0`
+- **No filter** (`filter_mask = 0`): condition is always true — matches all entities
+
+### 9.3 Scene Loading
+
+A **module is a scene**. The `load` statement transitions to a new module-as-scene, deferred to end-of-frame. The runtime performs three phases:
+
+```
+Phase 1 — UNLOAD:  emit on unload()  → teardown systems run (e.g., SceneCleanup destroys entities)
+Phase 2 — INSTANTIATE: read _data.bin → spawn unit entities → emit on spawn() per entity
+Phase 3 — LOAD:    emit on load()    → setup systems run (e.g., spawn template instances)
+```
+
+**Key rules:**
+- Only one `load` call per frame; a second `load` in the same frame is a runtime error
+- `load` is valid in any system event handler
+- Root module `unit` declarations are always present (never unloaded)
+- Non-root module entities are created by `load` and torn down by the next `load` or shutdown
+
+**Complete scene transition example:**
+```cactus
+use std.core         # provides Persistent + SceneCleanup
+use levels.level1
+use levels.level2
+
+system GameManager:
+    filter:
+        GameState
+
+    on LevelComplete():
+        load levels.level2    # deferred to end of frame
+
+    on PlayerDied(lives: int):
+        if lives <= 0:
+            load ui.game_over
+        else:
+            load levels.level1
+
+# In levels/level1.cactus:
+system LevelSetup:
+    filter:
+        LevelState
+
+    on load():
+        spawn Enemy(pos = vec2(400.0, 568.0), patrol_min_x = 350.0, patrol_max_x = 550.0)
+        spawn Enemy(pos = vec2(800.0, 568.0), patrol_min_x = 700.0, patrol_max_x = 1000.0)
+```
+
+### 9.4 Standard Library (`std.core`)
+
+The `std.core` module ships with the compiler and must be explicitly imported:
+
+```cactus
+use std.core
+```
+
+It provides:
+
+**`pub trait Persistent`** — marker trait; entity survives `load` transitions when `std.SceneCleanup` is active.
+
+**`pub system SceneCleanup`** — no-filter system that destroys all non-persistent entities on scene unload:
+```cactus
+# std/core.cactus (conceptual — ships with compiler)
+module std.core
+
+pub trait Persistent
+
+pub system SceneCleanup:
+    exclude:
+        Persistent
+
+    on unload():
+        destroy
+```
+
+**Usage:**
+```cactus
+use std.core
+
+pub unit Player:
+    apply:
+        std.Persistent    # or just Persistent if unambiguous
+        Position
+        Health
+    config:
+        pos = vec2(100.0, 300.0)
+        health = 100
+```
+
+Without `use std.core`, no automatic cleanup occurs on `load` — the developer is responsible for custom teardown.

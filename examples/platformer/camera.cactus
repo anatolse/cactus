@@ -45,7 +45,8 @@ func clamp_cam(value: float, min_val: float, max_val: float) -> float:
     return value
 
 system CameraFollowSystem:
-    filter: [SideScrollCamera]
+    filter:
+        SideScrollCamera
 
     on tick(dt: float):
         player_pos = get_player_position()
@@ -63,7 +64,8 @@ system CameraFollowSystem:
         set_camera_2d(cam_x, cam_y)
 
 system ParallaxRenderer:
-    filter: [SideScrollCamera]
+    filter:
+        SideScrollCamera
 
     on tick(dt: float):
         far_x = cam_x * parallax_far

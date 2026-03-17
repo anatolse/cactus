@@ -51,7 +51,9 @@ view HUD(health: int, max_health: int, lives: int, score: int):
             content = score
 
 system HUDSystem:
-    filter: [Health, Score]
+    filter:
+        Health
+        Score
 
     on tick(dt: float):
         render_view HUD(health, max_health, lives, score)

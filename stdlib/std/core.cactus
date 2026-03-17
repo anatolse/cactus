@@ -1,0 +1,17 @@
+module std.core
+
+# ── Standard Traits ───────────────────────────────────────────────────────────
+
+# Marker trait: entities with Persistent survive scene transitions.
+# Apply this to units/templates that should NOT be destroyed on `load`.
+pub trait Persistent
+
+# ── Standard Systems ──────────────────────────────────────────────────────────
+
+# SceneCleanup destroys all non-persistent entities on scene unload.
+# Entities that have `Persistent` in their apply: block are excluded.
+pub system SceneCleanup:
+    exclude:
+        Persistent
+    on unload():
+        destroy

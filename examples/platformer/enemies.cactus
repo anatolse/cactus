@@ -79,7 +79,9 @@ pub unit FlyerEnemy1:
         enemy_height = ENEMY_HEIGHT
 
 system PatrolSystem:
-    filter: [Position, EnemyAI]
+    filter:
+        Position
+        EnemyAI
 
     on tick(dt: float):
         pos = pos + vec2(patrol_speed * direction * dt, 0.0)
@@ -93,7 +95,9 @@ system PatrolSystem:
             pos = vec2(patrol_min_x, pos.y)
 
 system EnemyCollisionSystem:
-    filter: [Position, EnemyAI]
+    filter:
+        Position
+        EnemyAI
 
     on tick(dt: float):
         player_pos = get_player_position()
@@ -110,7 +114,9 @@ system EnemyCollisionSystem:
                 emit PlayerDamaged(DAMAGE_AMOUNT)
 
 system EnemyRenderer:
-    filter: [Position, EnemyAI]
+    filter:
+        Position
+        EnemyAI
 
     on tick(dt: float):
         draw_rect(pos, vec2(enemy_width, enemy_height), enemy_color)

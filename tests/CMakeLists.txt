@@ -52,3 +52,13 @@ add_test(NAME ProgramLinkerTests COMMAND test_program_linker)
 add_executable(test_multi_module_integration test_multi_module_integration.cpp)
 target_link_libraries(test_multi_module_integration PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME MultiModuleIntegrationTests COMMAND test_multi_module_integration)
+
+# Dynamic ECS semantic tests (dynamic-ecs-language change)
+add_executable(test_semantic_dynamic test_semantic_dynamic.cpp)
+target_link_libraries(test_semantic_dynamic PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SemanticDynamicTests COMMAND test_semantic_dynamic)
+
+# Data file writer/reader tests (dynamic-ecs-language change)
+add_executable(test_data_file test_data_file.cpp)
+target_link_libraries(test_data_file PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME DataFileTests COMMAND test_data_file)

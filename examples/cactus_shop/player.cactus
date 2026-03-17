@@ -67,7 +67,9 @@ func clamp_int(value: int, min_val: int, max_val: int) -> int:
     return value
 
 system MovementSystem:
-    filter: [Position, PlayerController]
+    filter:
+        Position
+        PlayerController
 
     on tick(dt: float):
         if state == PlayerState.Shopping:
@@ -85,7 +87,9 @@ system MovementSystem:
             state = PlayerState.Idle
 
 system CameraSystem:
-    filter: [Position, ThirdPersonCamera]
+    filter:
+        Position
+        ThirdPersonCamera
 
     on tick(dt: float):
         cam_pos = position + vec3(0.0, height, distance * -1.0)

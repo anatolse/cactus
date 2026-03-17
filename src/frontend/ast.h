@@ -172,8 +172,39 @@ struct IfStmt {
     SourceLocation location;
 };
 
+// spawn TemplateName(field = expr, ...)
+struct SpawnStmt {
+    std::string template_name;
+    std::vector<std::pair<std::string, std::unique_ptr<ExprNode>>> overrides;
+    SourceLocation location;
+};
+
+// destroy — removes current entity
+struct DestroyStmt {
+    SourceLocation location;
+};
+
+// load module.name — deferred scene transition
+struct LoadStmt {
+    std::string module_name;
+    SourceLocation location;
+};
+
+// enable TraitName — activate trait on current entity
+struct EnableStmt {
+    std::string trait_name;
+    SourceLocation location;
+};
+
+// disable TraitName — deactivate trait on current entity
+struct DisableStmt {
+    std::string trait_name;
+    SourceLocation location;
+};
+
 struct StmtNode {
-    using Variant = std::variant<VarAssign, EmitStmt, ReturnStmt, ExprStmt, IfStmt>;
+    using Variant = std::variant<VarAssign, EmitStmt, SpawnStmt, DestroyStmt, LoadStmt,
+                                 EnableStmt, DisableStmt, ReturnStmt, ExprStmt, IfStmt>;
     Variant stmt;
     SourceLocation location;
 
@@ -240,9 +271,24 @@ struct TraitNode {
     SourceLocation location;
 };
 
-struct ApplyBlock {
-    std::vector<std::string> trait_names;
+// Entry in an apply: block — trait name + optional : disabled annotation
+struct ApplyEntry {
+    std::string trait_name;
+    bool initially_active = true;  // false when annotated ': disabled'
     SourceLocation location;
+};
+
+struct ApplyBlock {
+    std::vector<ApplyEntry> entries;
+    SourceLocation location;
+
+    // Helper: collect just the trait names (ignoring active state)
+    std::vector<std::string> trait_names() const {
+        std::vector<std::string> names;
+        names.reserve(entries.size());
+        for (const auto& e : entries) names.push_back(e.trait_name);
+        return names;
+    }
 };
 
 struct ConfigAssignment {
@@ -276,6 +322,17 @@ struct UnitNode {
     SourceLocation location;
 };
 
+// Template declaration — multi-instance blueprint, not auto-instantiated.
+// Identical structure to UnitNode; instantiated at runtime via `spawn`.
+struct TemplateNode {
+    std::string name;
+    bool is_pub = false;
+    ApplyBlock apply;
+    std::optional<ConfigBlock> config;
+    std::optional<ChildBlock> child;
+    SourceLocation location;
+};
+
 struct FilterEntry {
     std::string qualified_name;                 // "phys.Body" or "Body" — full dotted path as parsed
     std::optional<std::string> alias;           // "b" from "as b"
@@ -290,7 +347,8 @@ struct FilterClause {
 
 struct SystemNode {
     std::string name;
-    FilterClause filter;
+    FilterClause filter;    // empty entries = no filter (match all)
+    FilterClause exclude;   // empty entries = no exclude
     std::optional<std::string> target;  // "cpu" or "gpu"
     std::vector<EventHandlerNode> handlers;
     SourceLocation location;
@@ -341,7 +399,7 @@ struct InterfaceNode {
 // ── Program (AST Root) ─────────────────────────────────────────────────────
 
 using Declaration = std::variant<ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode,
-                                 SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode>;
+                                 TemplateNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode>;
 
 struct ProgramNode {
     std::vector<Declaration> declarations;

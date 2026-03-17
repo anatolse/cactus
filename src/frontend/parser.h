@@ -36,6 +36,7 @@ private:
     EnumNode parse_enum();
     TraitNode parse_trait();
     UnitNode parse_unit(bool is_pub);
+    TemplateNode parse_template(bool is_pub);
     SystemNode parse_system();
     ViewNode parse_view();
     EventNode parse_event();
@@ -56,6 +57,8 @@ private:
     ConfigBlock parse_config_block();
     ChildBlock parse_child_block();
     FilterClause parse_filter_clause();
+    FilterClause parse_exclude_clause();
+    std::string parse_lifecycle_event_name();  // handles spawn/destroy/load/unload as names
     ViewElement parse_view_element();
 
     // Statements

@@ -22,6 +22,7 @@ struct ResolvedField {
     bool is_persist = false;
     bool is_sync = false;
     bool is_pub = false;
+    bool has_default = false;  // true if field has a default value in trait definition
 };
 
 struct ResolvedTrait {
@@ -130,6 +131,25 @@ private:
     void validate_system_filters(ProgramNode& program);
     void validate_event_usage(ProgramNode& program);
 
+    // Phase 3: Dynamic ECS validations (dynamic-ecs-language change)
+    void validate_template_unit_declarations(ProgramNode& program);
+    void validate_spawn_sites(ProgramNode& program);
+    void validate_stmt_contexts(ProgramNode& program);
+    void validate_lifecycle_handler_signatures(ProgramNode& program);
+    void validate_disabled_annotations(ProgramNode& program);
+
+    // Dynamic ECS helpers
+    bool is_trait_declared(const std::string& name) const;
+    std::unordered_set<std::string> get_archetype_fields(
+        const std::vector<ApplyEntry>& apply) const;
+    void validate_spawn_stmts(
+        const std::vector<std::unique_ptr<StmtNode>>& stmts,
+        const std::string& context_name);
+    void validate_context_stmts(
+        const std::vector<std::unique_ptr<StmtNode>>& stmts,
+        const std::string& context_name,
+        bool in_system_handler);
+
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);
     void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts,
@@ -155,6 +175,24 @@ private:
 
     // For recursion detection
     std::unordered_map<std::string, std::unordered_set<std::string>> call_graph_;
+
+    // ── Dynamic ECS tracking (dynamic-ecs-language change) ──────────────────
+    // Separate sets for templates vs units (spawn only works on templates)
+    std::unordered_set<std::string> template_names_;
+    std::unordered_set<std::string> unit_names_;
+
+    // Module names/aliases declared via `use` (for `load` reachability check)
+    std::unordered_set<std::string> use_names_;
+
+    // Archetype apply entries: archetype_name → apply entries list
+    std::unordered_map<std::string, std::vector<ApplyEntry>> archetype_apply_;
+
+    // Archetype config fields: archetype_name → set of field names with config assignments
+    std::unordered_map<std::string, std::unordered_set<std::string>> archetype_configured_fields_;
+
+    // Template required fields (var with no default and not in config):
+    // template_name → set of field names that must be provided at spawn site
+    std::unordered_map<std::string, std::unordered_set<std::string>> template_required_fields_;
 };
 
 }  // namespace cactus

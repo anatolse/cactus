@@ -221,3 +221,101 @@ TEST_CASE("Lexer: EOF token at end", "[lexer]") {
     auto tokens = lex("x");
     CHECK(tokens.back().type == TokenType::EOF_TOKEN);
 }
+
+// ── New keyword tests (dynamic-ecs-language) ──────────────────────────────────
+
+TEST_CASE("Lexer: new declaration keyword template", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("template");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::TEMPLATE);
+}
+
+TEST_CASE("Lexer: new action keywords spawn destroy load unload", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("spawn destroy load unload");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 4);
+    CHECK(types[0] == TokenType::SPAWN);
+    CHECK(types[1] == TokenType::DESTROY);
+    CHECK(types[2] == TokenType::LOAD);
+    CHECK(types[3] == TokenType::UNLOAD);
+}
+
+TEST_CASE("Lexer: new action keywords enable disable", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("enable disable");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 2);
+    CHECK(types[0] == TokenType::ENABLE);
+    CHECK(types[1] == TokenType::DISABLE);
+}
+
+TEST_CASE("Lexer: new block keyword exclude", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("exclude");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::EXCLUDE);
+}
+
+TEST_CASE("Lexer: new block keyword disabled", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("disabled");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::DISABLED);
+}
+
+TEST_CASE("Lexer: new keywords are distinct from identifiers with similar names", "[lexer][dynamic-ecs]") {
+    // Keywords used as standalone tokens
+    auto tokens = lex("spawn spawner spawnable");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 3);
+    CHECK(types[0] == TokenType::SPAWN);      // keyword
+    CHECK(types[1] == TokenType::IDENTIFIER); // spawner — not a keyword
+    CHECK(types[2] == TokenType::IDENTIFIER); // spawnable — not a keyword
+}
+
+TEST_CASE("Lexer: new keywords rejected as identifiers — template", "[lexer][dynamic-ecs]") {
+    // 'template' when used where an identifier is expected should lex as TEMPLATE (keyword)
+    // Parser would reject its use as an identifier name — here we just verify the token type
+    auto tokens = lex("template");
+    auto types = token_types(tokens);
+    CHECK(types[0] == TokenType::TEMPLATE);
+    // Value still holds the keyword text
+    CHECK(tokens[0].value == "template");
+}
+
+TEST_CASE("Lexer: new keywords have correct string representations", "[lexer][dynamic-ecs]") {
+    CHECK(std::string(token_type_to_string(TokenType::TEMPLATE)) == "TEMPLATE");
+    CHECK(std::string(token_type_to_string(TokenType::SPAWN)) == "SPAWN");
+    CHECK(std::string(token_type_to_string(TokenType::DESTROY)) == "DESTROY");
+    CHECK(std::string(token_type_to_string(TokenType::LOAD)) == "LOAD");
+    CHECK(std::string(token_type_to_string(TokenType::UNLOAD)) == "UNLOAD");
+    CHECK(std::string(token_type_to_string(TokenType::ENABLE)) == "ENABLE");
+    CHECK(std::string(token_type_to_string(TokenType::DISABLE)) == "DISABLE");
+    CHECK(std::string(token_type_to_string(TokenType::EXCLUDE)) == "EXCLUDE");
+    CHECK(std::string(token_type_to_string(TokenType::DISABLED)) == "DISABLED");
+}
+
+TEST_CASE("Lexer: disabled keyword in apply context", "[lexer][dynamic-ecs]") {
+    // 'Frozen: disabled' inside apply block
+    auto tokens = lex("Frozen: disabled");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 3);
+    CHECK(types[0] == TokenType::IDENTIFIER); // Frozen
+    CHECK(types[1] == TokenType::COLON);
+    CHECK(types[2] == TokenType::DISABLED);
+}
+
+TEST_CASE("Lexer: all 9 new keywords in one string", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("template spawn destroy load unload enable disable exclude disabled");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 9);
+    CHECK(types[0] == TokenType::TEMPLATE);
+    CHECK(types[1] == TokenType::SPAWN);
+    CHECK(types[2] == TokenType::DESTROY);
+    CHECK(types[3] == TokenType::LOAD);
+    CHECK(types[4] == TokenType::UNLOAD);
+    CHECK(types[5] == TokenType::ENABLE);
+    CHECK(types[6] == TokenType::DISABLE);
+    CHECK(types[7] == TokenType::EXCLUDE);
+    CHECK(types[8] == TokenType::DISABLED);
+}

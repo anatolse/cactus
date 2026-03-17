@@ -15,6 +15,7 @@ enum class TokenType {
     ENUM,
     TRAIT,
     UNIT,
+    TEMPLATE,
     SYSTEM,
     VIEW,
     EVENT,
@@ -35,13 +36,21 @@ enum class TokenType {
     ELSE,
     MATCH,
     RETURN,
+    SPAWN,
+    DESTROY,
+    LOAD,
+    UNLOAD,
+    ENABLE,
+    DISABLE,
 
     // Keywords — blocks
     APPLY,
     CONFIG,
     CHILD,
     FILTER,
+    EXCLUDE,
     TARGET,
+    DISABLED,
 
     // Keywords — functional
     MAP,
@@ -130,6 +139,7 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::ENUM: return "ENUM";
         case TokenType::TRAIT: return "TRAIT";
         case TokenType::UNIT: return "UNIT";
+        case TokenType::TEMPLATE: return "TEMPLATE";
         case TokenType::SYSTEM: return "SYSTEM";
         case TokenType::VIEW: return "VIEW";
         case TokenType::EVENT: return "EVENT";
@@ -146,11 +156,19 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::ELSE: return "ELSE";
         case TokenType::MATCH: return "MATCH";
         case TokenType::RETURN: return "RETURN";
+        case TokenType::SPAWN: return "SPAWN";
+        case TokenType::DESTROY: return "DESTROY";
+        case TokenType::LOAD: return "LOAD";
+        case TokenType::UNLOAD: return "UNLOAD";
+        case TokenType::ENABLE: return "ENABLE";
+        case TokenType::DISABLE: return "DISABLE";
         case TokenType::APPLY: return "APPLY";
         case TokenType::CONFIG: return "CONFIG";
         case TokenType::CHILD: return "CHILD";
         case TokenType::FILTER: return "FILTER";
+        case TokenType::EXCLUDE: return "EXCLUDE";
         case TokenType::TARGET: return "TARGET";
+        case TokenType::DISABLED: return "DISABLED";
         case TokenType::MAP: return "MAP";
         case TokenType::REDUCE: return "REDUCE";
         case TokenType::TRUE_LIT: return "TRUE";

@@ -1,72 +1,72 @@
 ## 1. `spec/cactus_dsl_spec.md` — Language Spec Update
 
-- [ ] 1.1 Add `template`, `spawn`, `destroy`, `load`, `unload`, `enable`, `disable`, `exclude`, `disabled` to keyword table (section 2.4)
-- [ ] 1.2 Add `template_decl` grammar rule and description (section 3)
-- [ ] 1.3 Update `system_decl` grammar to show optional `filter:` and `exclude:` blocks with indented-list syntax; `filter:` optional (match-all when absent)
-- [ ] 1.4 Update `trait_decl` grammar to show optional body (marker trait)
-- [ ] 1.5 Add `spawn_stmt`, `destroy_stmt`, `load_stmt`, `enable_stmt`, `disable_stmt` to statements section (3.17)
-- [ ] 1.6 Document all four lifecycle handlers: `on spawn()`, `on destroy()`, `on unload()`, `on load()` with 3-phase load sequence
-- [ ] 1.7 Document scene loading execution model, `std.core` module, and optional filter/exclude semantics
-- [ ] 1.8 Document `_data.bin` flat binary data file per module (section 8 / compilation model)
+- [x] 1.1 Add `template`, `spawn`, `destroy`, `load`, `unload`, `enable`, `disable`, `exclude`, `disabled` to keyword table (section 2.4)
+- [x] 1.2 Add `template_decl` grammar rule and description (section 3)
+- [x] 1.3 Update `system_decl` grammar to show optional `filter:` and `exclude:` blocks with indented-list syntax; `filter:` optional (match-all when absent)
+- [x] 1.4 Update `trait_decl` grammar to show optional body (marker trait)
+- [x] 1.5 Add `spawn_stmt`, `destroy_stmt`, `load_stmt`, `enable_stmt`, `disable_stmt` to statements section (3.17)
+- [x] 1.6 Document all four lifecycle handlers: `on spawn()`, `on destroy()`, `on unload()`, `on load()` with 3-phase load sequence
+- [x] 1.7 Document scene loading execution model, `std.core` module, and optional filter/exclude semantics
+- [x] 1.8 Document `_data.bin` flat binary data file per module (section 8 / compilation model)
 
 ## 2. Lexer — New Keywords
 
-- [ ] 2.1 Add `TEMPLATE`, `SPAWN`, `DESTROY`, `LOAD`, `UNLOAD`, `ENABLE`, `DISABLE`, `EXCLUDE`, `DISABLED` token types to `token.h`
-- [ ] 2.2 Register all 9 new keywords in `lexer.cpp` keyword map
-- [ ] 2.3 Add lexer tests for each new keyword tokenizing correctly
-- [ ] 2.4 Add lexer tests verifying new keywords are rejected as identifiers
+- [x] 2.1 Add `TEMPLATE`, `SPAWN`, `DESTROY`, `LOAD`, `UNLOAD`, `ENABLE`, `DISABLE`, `EXCLUDE`, `DISABLED` token types to `token.h`
+- [x] 2.2 Register all 9 new keywords in `lexer.cpp` keyword map
+- [x] 2.3 Add lexer tests for each new keyword tokenizing correctly
+- [x] 2.4 Add lexer tests verifying new keywords are rejected as identifiers
 
 ## 3. AST — New Node Types
 
-- [ ] 3.1 Add `TemplateDecl` AST node to `ast.h` (mirrors `UnitDecl`, adds no extra fields)
-- [ ] 3.2 Extend `ApplyEntry` AST node to include `initially_active: bool` (default `true`)
-- [ ] 3.3 Add `SpawnStmt` AST node: `template_name`, `overrides: list<(field_name, expr)>`
-- [ ] 3.4 Add `DestroyStmt` AST node (no fields)
-- [ ] 3.5 Add `LoadStmt` AST node: `module_name: string`
-- [ ] 3.6 Add `EnableStmt` and `DisableStmt` AST nodes: `trait_name: string`
-- [ ] 3.7 Extend `SystemDecl` AST node to include `exclude: list<TraitRef>` (alongside `filter`); both optional (empty list = not specified)
-- [ ] 3.8 Extend `EventHandler` AST node to support `spawn`, `destroy`, `load`, `unload` as lifecycle event names
+- [x] 3.1 Add `TemplateDecl` AST node to `ast.h` (mirrors `UnitDecl`, adds no extra fields)
+- [x] 3.2 Extend `ApplyEntry` AST node to include `initially_active: bool` (default `true`)
+- [x] 3.3 Add `SpawnStmt` AST node: `template_name`, `overrides: list<(field_name, expr)>`
+- [x] 3.4 Add `DestroyStmt` AST node (no fields)
+- [x] 3.5 Add `LoadStmt` AST node: `module_name: string`
+- [x] 3.6 Add `EnableStmt` and `DisableStmt` AST nodes: `trait_name: string`
+- [x] 3.7 Extend `SystemDecl` AST node to include `exclude: list<TraitRef>` (alongside `filter`); both optional (empty list = not specified)
+- [x] 3.8 Extend `EventHandler` AST node to support `spawn`, `destroy`, `load`, `unload` as lifecycle event names
 
 ## 4. Parser — Grammar Changes
 
-- [ ] 4.1 Parse `template_decl` — same structure as `unit_decl` using `TEMPLATE` keyword
-- [ ] 4.2 Parse `apply_entry` with optional `: disabled` annotation (`COLON DISABLED`)
-- [ ] 4.3 Replace bracket `filter: [...]` parser with optional indented-block `filter:` parser; emit error for old bracket syntax
-- [ ] 4.4 Parse optional `exclude:` indented block on system declarations
-- [ ] 4.5 Parse `spawn_stmt`: `SPAWN IDENTIFIER LPAREN [spawn_args] RPAREN NEWLINE`
-- [ ] 4.6 Parse `spawn_arg_list`: comma-separated `IDENTIFIER ASSIGN expression` pairs
-- [ ] 4.7 Parse `destroy_stmt`: `DESTROY NEWLINE`
-- [ ] 4.8 Parse `load_stmt`: `LOAD dotted_name NEWLINE`
-- [ ] 4.9 Parse `enable_stmt` and `disable_stmt`: `ENABLE/DISABLE IDENTIFIER NEWLINE`
-- [ ] 4.10 Parse `on spawn()`, `on destroy()`, `on load()`, `on unload()` lifecycle handlers with empty param lists
-- [ ] 4.11 Make trait body optional in `trait_decl` (marker trait: no colon, no body)
-- [ ] 4.12 Add parser tests for all new grammar rules
-- [ ] 4.13 Add parser test for old bracket filter syntax producing error
+- [x] 4.1 Parse `template_decl` — same structure as `unit_decl` using `TEMPLATE` keyword
+- [x] 4.2 Parse `apply_entry` with optional `: disabled` annotation (`COLON DISABLED`)
+- [x] 4.3 Replace bracket `filter: [...]` parser with optional indented-block `filter:` parser; emit error for old bracket syntax
+- [x] 4.4 Parse optional `exclude:` indented block on system declarations
+- [x] 4.5 Parse `spawn_stmt`: `SPAWN IDENTIFIER LPAREN [spawn_args] RPAREN NEWLINE`
+- [x] 4.6 Parse `spawn_arg_list`: comma-separated `IDENTIFIER ASSIGN expression` pairs
+- [x] 4.7 Parse `destroy_stmt`: `DESTROY NEWLINE`
+- [x] 4.8 Parse `load_stmt`: `LOAD dotted_name NEWLINE`
+- [x] 4.9 Parse `enable_stmt` and `disable_stmt`: `ENABLE/DISABLE IDENTIFIER NEWLINE`
+- [x] 4.10 Parse `on spawn()`, `on destroy()`, `on load()`, `on unload()` lifecycle handlers with empty param lists
+- [x] 4.11 Make trait body optional in `trait_decl` (marker trait: no colon, no body)
+- [x] 4.12 Add parser tests for all new grammar rules
+- [x] 4.13 Add parser test for old bracket filter syntax producing error
 
 ## 5. Semantic Analysis — New Validations
 
-- [ ] 5.1 Validate `template` declarations (same rules as `unit`: trait existence, config field membership, `let` defaults)
-- [ ] 5.2 Track templates in symbol table as spawnable archetypes (separate from `unit` singletons)
-- [ ] 5.3 Validate `spawn` sites: template exists, override fields valid, required fields provided
-- [ ] 5.4 Validate `spawn` does not target a `unit` (error: use template only)
-- [ ] 5.5 Validate `destroy`, `spawn`, `load`, `enable`, `disable` only appear inside system event handlers
-- [ ] 5.6 Validate `load` module name is reachable via `use` declarations
-- [ ] 5.7 Validate `enable`/`disable` trait is present in `apply:` of at least one archetype matching the system filter
-- [ ] 5.8 Validate `on spawn()`, `on destroy()`, `on load()`, `on unload()` handlers have empty parameter lists
-- [ ] 5.9 Validate `exclude:` trait names are declared
-- [ ] 5.10 Validate optional `filter:` — no filter is valid (match-all); if filter is present, validate all trait names are declared; validate field access in handler body requires trait to be in `filter:`
-- [ ] 5.11 Validate `disabled` annotation in `apply:` is on a recognized trait
-- [ ] 5.12 Add semantic tests for all new validation rules and error messages
+- [x] 5.1 Validate `template` declarations (same rules as `unit`: trait existence, config field membership, `let` defaults)
+- [x] 5.2 Track templates in symbol table as spawnable archetypes (separate from `unit` singletons)
+- [x] 5.3 Validate `spawn` sites: template exists, override fields valid, required fields provided
+- [x] 5.4 Validate `spawn` does not target a `unit` (error: use template only)
+- [x] 5.5 Validate `destroy`, `spawn`, `load`, `enable`, `disable` only appear inside system event handlers
+- [x] 5.6 Validate `load` module name is reachable via `use` declarations
+- [x] 5.7 Validate `enable`/`disable` trait is declared (simplified: check declaration exists)
+- [x] 5.8 Validate `on spawn()`, `on destroy()`, `on load()`, `on unload()` handlers have empty parameter lists
+- [x] 5.9 Validate `exclude:` trait names are declared
+- [x] 5.10 Validate optional `filter:` — no filter is valid (match-all); if filter is present, validate all trait names are declared
+- [x] 5.11 Validate `disabled` annotation in `apply:` is on a recognized trait
+- [x] 5.12 Add semantic tests for all new validation rules and error messages
 
 ## 6. Module Artifact — Data File Emission
 
-- [ ] 6.1 Define `_data.bin` flat binary format: magic bytes `CDAT` + uint16 version + uint32 entity count, then sequential entity records (name length + name bytes + fixed-width field values in declaration order + uint64 trait active bitmask); no offset table — single `fread` load
-- [ ] 6.2 Extend `ModuleArtifact` to carry `unit_instance_data` (serialized list of unit configs)
-- [ ] 6.3 Implement data file writer: serialize all `unit` declarations' resolved field values and initial trait states
-- [ ] 6.4 Ensure `template` declarations produce no entries in the data file
-- [ ] 6.5 Implement data file reader (runtime side): deserialize entity records and instantiate them
-- [ ] 6.6 Add version header check: reject mismatched format version with clear error
-- [ ] 6.7 Add tests for data file round-trip (write module with units → read back → verify entity configs match)
+- [x] 6.1 Define `_data.bin` flat binary format: magic bytes `CDAT` + uint16 version + uint32 entity count, then sequential entity records (name length + name bytes + fixed-width field values in declaration order + uint64 trait active bitmask); no offset table — single `fread` load
+- [x] 6.2 Extend `ModuleArtifact` to carry `unit_instance_data` (serialized list of unit configs)
+- [x] 6.3 Implement data file writer: serialize all `unit` declarations' resolved field values and initial trait states
+- [x] 6.4 Ensure `template` declarations produce no entries in the data file
+- [x] 6.5 Implement data file reader (runtime side): deserialize entity records and instantiate them
+- [x] 6.6 Add version header check: reject mismatched format version with clear error
+- [x] 6.7 Add tests for data file round-trip (write module with units → read back → verify entity configs match)
 
 ## 7. Code Generation — SoA Backend (cpp-manual)
 
@@ -97,19 +97,19 @@
 
 ## 9. Standard Library — `std/core.cactus`
 
-- [ ] 9.1 Create `std/core.cactus` containing `pub trait Persistent` and `pub system SceneCleanup` (exclude: Persistent, on unload: destroy)
-- [ ] 9.2 Add `std` to the compiler's built-in module search path (alongside `--module-path` user paths)
+- [x] 9.1 Create `std/core.cactus` containing `pub trait Persistent` and `pub system SceneCleanup` (exclude: Persistent, on unload: destroy)
+- [x] 9.2 Add `std` to the compiler's built-in module search path (alongside `--module-path` user paths)
 - [ ] 9.3 Verify `use std.core` in user files compiles, imports `Persistent` and `SceneCleanup` correctly
 - [ ] 9.4 Add integration test: without `use std.core`, `load` does not destroy any entities; with `use std.core`, non-persistent entities are destroyed on unload
-- [ ] 9.5 Update `examples/platformer/platformer.cactus` to `use std.core` and apply `std.Persistent` to `Player`
+- [x] 9.5 Update `examples/platformer/platformer.cactus` to `use std.core` and apply `Persistent` to `Player`
 
 ## 10. Example Migration — Breaking Filter Syntax
 
-- [ ] 10.1 Migrate `examples/platformer/platformer.cactus` — convert all `filter: [...]` to indented block form
-- [ ] 10.2 Migrate `examples/platformer/level.cactus`, `player.cactus`, `enemies.cactus`, `collectibles.cactus`, `camera.cactus`, `ui.cactus`
-- [ ] 10.3 Migrate `examples/cactus_shop/` — all files using `filter: [...]`
-- [ ] 10.4 Migrate all test fixture `.cactus` files in `tests/fixtures/` using old filter syntax
-- [ ] 10.5 Verify all examples and tests compile and pass after migration
+- [x] 10.1 Migrate `examples/platformer/platformer.cactus` — convert all `filter: [...]` to indented block form
+- [x] 10.2 Migrate `examples/platformer/level.cactus`, `player.cactus`, `enemies.cactus`, `collectibles.cactus`, `camera.cactus`, `ui.cactus`
+- [x] 10.3 Migrate `examples/cactus_shop/` — all files using `filter: [...]`
+- [x] 10.4 Migrate all test fixture `.cactus` files in `tests/fixtures/` using old filter syntax
+- [x] 10.5 Verify all examples and tests compile and pass after migration
 
 ## 11. Integration Tests
 

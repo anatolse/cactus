@@ -94,6 +94,8 @@ Declaration Parser::parse_declaration() {
     if (tok.type == TokenType::EVENT) return parse_event();
     if (tok.type == TokenType::INTERFACE) return parse_interface();
 
+    if (tok.type == TokenType::TEMPLATE) return parse_template(false);
+
     if (tok.type == TokenType::PUB) {
         advance();
         skip_newlines();
@@ -103,8 +105,9 @@ Declaration Parser::parse_declaration() {
             return t;
         }
         if (check(TokenType::UNIT)) return parse_unit(true);
+        if (check(TokenType::TEMPLATE)) return parse_template(true);
         if (check(TokenType::FUNC)) return parse_func(true);
-        errors_.error(peek().location, "expected trait, unit, or func after 'pub'");
+        errors_.error(peek().location, "expected trait, unit, template, or func after 'pub'");
     }
 
     if (tok.type == TokenType::UNIT) return parse_unit(false);
@@ -251,13 +254,20 @@ TraitNode Parser::parse_trait() {
     auto loc = peek().location;
     consume(TokenType::TRAIT, "expected 'trait'");
     auto name = consume(TokenType::IDENTIFIER, "expected trait name").value;
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
 
     TraitNode node;
     node.name = name;
     node.location = loc;
+
+    // Marker trait: no colon, no body (e.g., `trait Persistent`)
+    if (!check(TokenType::COLON)) {
+        expect_newline();
+        return node;
+    }
+
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
@@ -313,12 +323,30 @@ FieldNode Parser::parse_field() {
     return field;
 }
 
+// ── Lifecycle Event Name Helper ─────────────────────────────────────────────
+
+// Task 4.10: Accept keyword tokens as lifecycle event names
+// (spawn/destroy/load/unload are keywords, not identifiers)
+std::string Parser::parse_lifecycle_event_name() {
+    switch (peek().type) {
+        case TokenType::SPAWN:   { auto v = advance().value; return v; }
+        case TokenType::DESTROY: { auto v = advance().value; return v; }
+        case TokenType::LOAD:    { auto v = advance().value; return v; }
+        case TokenType::UNLOAD:  { auto v = advance().value; return v; }
+        case TokenType::IDENTIFIER: return advance().value;
+        default:
+            errors_.error(peek().location, "expected event name");
+            return "<error>";
+    }
+}
+
 // ── Event Handler ───────────────────────────────────────────────────────────
 
 EventHandlerNode Parser::parse_event_handler() {
     auto loc = peek().location;
     consume(TokenType::ON, "expected 'on'");
-    auto event_name = consume(TokenType::IDENTIFIER, "expected event name").value;
+    // Task 4.10: Accept lifecycle keywords (spawn/destroy/load/unload) as event names
+    auto event_name = parse_lifecycle_event_name();
     consume(TokenType::LPAREN, "expected '('");
     auto params = parse_param_list();
     consume(TokenType::RPAREN, "expected ')'");
@@ -406,6 +434,40 @@ UnitNode Parser::parse_unit(bool is_pub) {
     return node;
 }
 
+// Task 4.1: Template declaration parser
+TemplateNode Parser::parse_template(bool is_pub) {
+    auto loc = peek().location;
+    consume(TokenType::TEMPLATE, "expected 'template'");
+    auto name = consume(TokenType::IDENTIFIER, "expected template name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    TemplateNode node;
+    node.name = name;
+    node.is_pub = is_pub;
+    node.location = loc;
+
+    skip_newlines();
+    if (check(TokenType::APPLY)) {
+        node.apply = parse_apply_block();
+    }
+
+    skip_newlines();
+    if (check(TokenType::CONFIG)) {
+        node.config = parse_config_block();
+    }
+
+    skip_newlines();
+    if (check(TokenType::CHILD)) {
+        node.child = parse_child_block();
+    }
+
+    skip_newlines();
+    expect_dedent();
+    return node;
+}
+
 ApplyBlock Parser::parse_apply_block() {
     auto loc = peek().location;
     consume(TokenType::APPLY, "expected 'apply'");
@@ -419,7 +481,22 @@ ApplyBlock Parser::parse_apply_block() {
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
-        block.trait_names.push_back(consume(TokenType::IDENTIFIER, "expected trait name").value);
+        auto entry_loc = peek().location;
+        auto entry_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+
+        // Task 4.2: Handle ': disabled' annotation
+        bool initially_active = true;
+        if (check(TokenType::COLON)) {
+            advance();  // consume ':'
+            consume(TokenType::DISABLED, "expected 'disabled' after ':'");
+            initially_active = false;
+        }
+
+        ApplyEntry entry;
+        entry.trait_name = entry_name;
+        entry.initially_active = initially_active;
+        entry.location = entry_loc;
+        block.entries.push_back(std::move(entry));
         expect_newline();
     }
 
@@ -497,6 +574,12 @@ SystemNode Parser::parse_system() {
     skip_newlines();
     if (check(TokenType::FILTER)) {
         node.filter = parse_filter_clause();
+    }
+
+    // Task 4.4: Parse optional exclude: clause
+    skip_newlines();
+    if (check(TokenType::EXCLUDE)) {
+        node.exclude = parse_exclude_clause();
     }
 
     skip_newlines();
@@ -809,6 +892,68 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
             if_stmt.location = loc;
             return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
         }
+    }
+
+    // Task 4.5-4.6: spawn statement — spawn TemplateName(field = expr, ...)
+    if (check(TokenType::SPAWN)) {
+        advance();
+        auto template_name = consume(TokenType::IDENTIFIER, "expected template name").value;
+        consume(TokenType::LPAREN, "expected '('");
+        SpawnStmt spawn_stmt;
+        spawn_stmt.template_name = template_name;
+        spawn_stmt.location = loc;
+        while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
+            auto field_name = consume(TokenType::IDENTIFIER, "expected field name").value;
+            consume(TokenType::ASSIGN, "expected '='");
+            auto value = parse_expression();
+            spawn_stmt.overrides.push_back({field_name, std::move(value)});
+            if (!match(TokenType::COMMA)) break;
+        }
+        consume(TokenType::RPAREN, "expected ')'");
+        expect_newline();
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(spawn_stmt)}, loc);
+    }
+
+    // Task 4.7: destroy statement
+    if (check(TokenType::DESTROY)) {
+        advance();
+        expect_newline();
+        DestroyStmt destroy;
+        destroy.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(destroy)}, loc);
+    }
+
+    // Task 4.8: load statement — load module.name
+    if (check(TokenType::LOAD)) {
+        advance();
+        auto module_name = parse_dotted_name();
+        expect_newline();
+        LoadStmt load;
+        load.module_name = module_name;
+        load.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(load)}, loc);
+    }
+
+    // Task 4.9: enable statement
+    if (check(TokenType::ENABLE)) {
+        advance();
+        auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+        expect_newline();
+        EnableStmt enable;
+        enable.trait_name = trait_name;
+        enable.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(enable)}, loc);
+    }
+
+    // Task 4.9: disable statement
+    if (check(TokenType::DISABLE)) {
+        advance();
+        auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+        expect_newline();
+        DisableStmt disable;
+        disable.trait_name = trait_name;
+        disable.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(disable)}, loc);
     }
 
     // Assignment or expression statement
@@ -1182,6 +1327,33 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
     err.name = "<error>";
     err.location = loc;
     return std::make_unique<ExprNode>(ExprNode::Variant{std::move(err)}, loc);
+}
+
+// ── Exclude Clause ───────────────────────────────────────────────────────────
+
+// Task 4.4: Parse optional exclude: indented block
+FilterClause Parser::parse_exclude_clause() {
+    auto loc = peek().location;
+    consume(TokenType::EXCLUDE, "expected 'exclude'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    FilterClause clause;
+    clause.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        auto entry_loc = peek().location;
+        auto name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+        clause.trait_names.push_back(name);
+        clause.entries.push_back({name, std::nullopt, entry_loc});
+        expect_newline();
+    }
+
+    expect_dedent();
+    return clause;
 }
 
 }  // namespace cactus

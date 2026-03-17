@@ -162,10 +162,17 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Prepend stdlib to module search paths (task 9.2)
+        std::vector<fs::path> all_search_paths;
+#ifdef CACTUS_STDLIB_DIR
+        all_search_paths.emplace_back(CACTUS_STDLIB_DIR);
+#endif
+        all_search_paths.insert(all_search_paths.end(), module_paths.begin(), module_paths.end());
+
         // Resolve modules in dependency order (leaves first)
         cactus::ErrorReporter resolve_errors;
         cactus::ModuleResolver resolver(resolve_errors);
-        auto modules = resolver.resolve(input_file, module_paths);
+        auto modules = resolver.resolve(input_file, all_search_paths);
         if (resolve_errors.has_errors()) {
             print_errors(resolve_errors);
             return 1;

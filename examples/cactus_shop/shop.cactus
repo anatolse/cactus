@@ -92,7 +92,9 @@ func calculate_total(items: list[ShopItem]) -> int:
     return items.map(i => i.price).reduce(0, acc, p => acc + p)
 
 system ShopInteraction:
-    filter: [Position, ShopKeeper]
+    filter:
+        Position
+        ShopKeeper
 
     on tick(dt: float):
         player_pos = get_player_position()
@@ -103,7 +105,9 @@ system ShopInteraction:
                 emit ShopOpened(get_self_entity())
 
 system PurchaseSystem:
-    filter: [Wallet, Inventory]
+    filter:
+        Wallet
+        Inventory
 
     on ItemPurchased(item: ShopItem, buyer: entity_id):
         if can_afford(coins, item.price):

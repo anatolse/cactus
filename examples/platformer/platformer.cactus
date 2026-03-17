@@ -1,5 +1,7 @@
 module platformer
 
+use std.core
+
 const:
     WINDOW_TITLE = "Cactus Platformer"
     WINDOW_WIDTH = 1280
@@ -175,6 +177,7 @@ pub unit Player:
         PlayerController
         Health
         Score
+        Persistent
     config:
         pos = vec2(100.0, 300.0)
         velocity = vec2(0.0, 0.0)
@@ -333,7 +336,9 @@ func abs_f(v: float) -> float:
 # ── Systems ──────────────────────────────────────────────────────────────────────
 
 system MovementSystem:
-    filter: [Position, PlayerController]
+    filter:
+        Position
+        PlayerController
 
     on tick(dt: float):
         input_x = get_input_axis_x()
@@ -347,7 +352,9 @@ system MovementSystem:
         pos = pos + vec2(velocity.x * dt, 0.0)
 
 system GravitySystem:
-    filter: [Position, PlayerPhysics]
+    filter:
+        Position
+        PlayerPhysics
 
     on tick(dt: float):
         if is_grounded == false:
@@ -359,7 +366,10 @@ system GravitySystem:
         pos = pos + vec2(0.0, velocity.y * dt)
 
 system JumpSystem:
-    filter: [Position, PlayerPhysics, PlayerController]
+    filter:
+        Position
+        PlayerPhysics
+        PlayerController
 
     on tick(dt: float):
         if is_jump_pressed():
@@ -380,7 +390,8 @@ system JumpSystem:
         velocity = vec2(velocity.x, 0.0)
 
 system InvincibilitySystem:
-    filter: [Health]
+    filter:
+        Health
 
     on tick(dt: float):
         if invincible_timer > 0.0:
@@ -396,7 +407,9 @@ system InvincibilitySystem:
                 emit PlayerDied(lives)
 
 system PatrolSystem:
-    filter: [Position, EnemyAI]
+    filter:
+        Position
+        EnemyAI
 
     on tick(dt: float):
         pos = pos + vec2(patrol_speed * direction * dt, 0.0)
@@ -410,7 +423,9 @@ system PatrolSystem:
             pos = vec2(patrol_min_x, pos.y)
 
 system CollectionSystem:
-    filter: [Position, Collectible]
+    filter:
+        Position
+        Collectible
 
     on tick(dt: float):
         if collected == false:
@@ -424,14 +439,16 @@ system CollectionSystem:
                     emit GemCollected(point_value, gem_type, pos)
 
 system ScoreSystem:
-    filter: [Score]
+    filter:
+        Score
 
     on GemCollected(point_value: int, gem_type: GemType, position: vec2):
         score = score + point_value
         gems_collected = gems_collected + 1
 
 system CameraFollowSystem:
-    filter: [SideScrollCamera]
+    filter:
+        SideScrollCamera
 
     on tick(dt: float):
         player_pos = get_player_position()
@@ -447,19 +464,24 @@ system CameraFollowSystem:
         set_camera_2d(cam_x, cam_y)
 
 system PlatformRenderer:
-    filter: [Platform]
+    filter:
+        Platform
 
     on tick(dt: float):
         draw_rect(plat_pos, plat_size, plat_color)
 
 system EnemyRenderer:
-    filter: [Position, EnemyAI]
+    filter:
+        Position
+        EnemyAI
 
     on tick(dt: float):
         draw_rect(pos, vec2(enemy_width, enemy_height), enemy_color)
 
 system CollectibleRenderer:
-    filter: [Position, Collectible]
+    filter:
+        Position
+        Collectible
 
     on tick(dt: float):
         if collected == false:

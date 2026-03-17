@@ -77,13 +77,17 @@ view ShopPanel(items: list[ShopItem], player_coins: int):
                     on_click = purchase(item)
 
 system HUDSystem:
-    filter: [Health, Wallet]
+    filter:
+        Health
+        Wallet
 
     on tick(dt: float):
         render_view HUD(health, max_health, coins)
 
 system ShopUISystem:
-    filter: [Inventory, Wallet]
+    filter:
+        Inventory
+        Wallet
 
     on ShopOpened(shop_entity: entity_id):
         shop_items = get_shop_items(shop_entity)

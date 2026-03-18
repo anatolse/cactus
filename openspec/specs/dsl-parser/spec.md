@@ -1,11 +1,27 @@
 ## Requirements
 
 ### Requirement: Top-level declaration parsing
-The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. Supported declarations: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `view`, `event`, `func`, `interface`, `template`.
+The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. Supported declarations: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `event`, `func`, `template`, `asset`, `input`.
+
+Note: `view` and `interface` are not supported top-level declarations in v0.2.
+
+```ebnf
+declaration = module_decl | use_decl | const_block | struct_decl
+            | enum_decl | trait_decl | unit_decl | template_decl | system_decl
+            | event_decl | func_decl | asset_decl | input_decl ;
+```
 
 #### Scenario: Module and trait declarations
 - **WHEN** the source contains a `module` declaration followed by a `trait` declaration
 - **THEN** the parser produces a ProgramNode containing a ModuleNode and a TraitNode
+
+#### Scenario: Asset declaration in program
+- **WHEN** the source contains `asset PlayerMesh: mesh = "player.glb"` at the top level
+- **THEN** the parser produces a ProgramNode containing an `AssetDecl` node
+
+#### Scenario: Input declaration in program
+- **WHEN** the source contains an `input Jump: button` declaration at the top level
+- **THEN** the parser produces a ProgramNode containing an `InputDecl` node
 
 #### Scenario: Unknown top-level keyword
 - **WHEN** the source contains an unrecognized keyword at the top level
@@ -44,8 +60,8 @@ The parser SHALL parse `trait Name:` blocks containing fields with modifiers (`l
 - **WHEN** the source contains `trait Damageable:` with `on damage(amount: int):` block
 - **THEN** the parser produces a TraitNode containing an EventHandlerNode with event_name "damage"
 
-### Requirement: Unit parsing with apply, config, and child blocks
-The parser SHALL parse `[pub] unit Name:` blocks containing `apply:` (list of traits), optional `config:` (field overrides), and optional `child:` (nested unit references).
+### Requirement: Unit parsing with apply and config blocks
+The parser SHALL parse `[pub] unit Name:` blocks containing `apply:` (list of traits) and optional `config:` (field overrides). The `child:` block is not supported.
 
 #### Scenario: Unit with apply and config
 - **WHEN** the source contains `unit Cactus:` with `apply:` listing traits and `config:` with field assignments
@@ -70,13 +86,12 @@ apply_block = "apply" ":" NEWLINE INDENT
 - **THEN** the parser produces an apply entry with `trait_name = "Position"` and `initially_active = true`
 
 ### Requirement: `template` declaration grammar
-The parser SHALL accept `template_decl` as a new top-level declaration, structurally identical to `unit_decl` except using the `TEMPLATE` keyword. The EBNF is:
+The parser SHALL accept `template_decl` as a new top-level declaration, structurally identical to `unit_decl` except using the `TEMPLATE` keyword. The `child:` block is not supported.
 
 ```ebnf
 template_decl = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
                 apply_block
-                [ config_block_with_trait_state ]
-                [ child_block ]
+                [ config_block ]
                 DEDENT ;
 ```
 
@@ -88,20 +103,23 @@ template_decl = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
 - **WHEN** `pub template Foo:` appears in source
 - **THEN** the parser produces a `TemplateDecl` node with `is_pub = true`
 
-### Requirement: `filter:` and `exclude:` both optional in system grammar (BREAKING for old bracket syntax)
-Both `filter:` and `exclude:` are optional on system declarations. The parser SHALL accept systems with `filter:` only, `exclude:` only, both, or neither. The old bracket-list syntax `filter: [A, B, C]` is rejected. Updated EBNF:
+### Requirement: `filter:` and `exclude:` both optional in system grammar
+Both `filter:` and `exclude:` are optional on system declarations. The parser SHALL accept systems with `filter:` only, `exclude:` only, both, or neither. The old bracket-list syntax `filter: [A, B, C]` is rejected.
+
+Each `filter:` entry supports an optional `as IDENTIFIER` alias for field access. Updated EBNF:
 
 ```ebnf
 system_decl    = "system" IDENTIFIER ":" NEWLINE INDENT
                  [ filter_clause ]
                  [ exclude_clause ]
-                 [ target_clause ]
                  { event_handler }
                  DEDENT ;
 
 filter_clause  = "filter" ":" NEWLINE INDENT
-                 { IDENTIFIER NEWLINE }
+                 { filter_entry }
                  DEDENT ;
+
+filter_entry   = dotted_name [ "as" IDENTIFIER ] NEWLINE ;
 
 exclude_clause = "exclude" ":" NEWLINE INDENT
                  { IDENTIFIER NEWLINE }
@@ -124,36 +142,86 @@ exclude_clause = "exclude" ":" NEWLINE INDENT
 - **WHEN** source contains `filter: [Position, EnemyAI]`
 - **THEN** the parser SHALL report an error: "unexpected '['; use indented block syntax for filter"
 
-### Requirement: `spawn` statement grammar
-The parser SHALL accept `spawn` as a statement inside event handler bodies:
+#### Scenario: Filter entry with as alias parsed
+- **WHEN** a system has a filter entry `Position as pos`
+- **THEN** the parser produces a `FilterEntry` with `trait_name = "Position"` and `alias = "pos"`
+
+#### Scenario: Filter entry without alias parsed
+- **WHEN** a system has a filter entry `Position` with no `as` clause
+- **THEN** the parser produces a `FilterEntry` with `trait_name = "Position"` and `alias = nil`
+
+#### Scenario: Filter entry with qualified name and alias
+- **WHEN** a system has a filter entry `phys.Body as body`
+- **THEN** the parser produces a `FilterEntry` with `trait_name = "phys.Body"` and `alias = "body"`
+
+### Requirement: `let` and `var` local variable declaration statements
+The parser SHALL accept `let` and `var` as statement forms inside event handler bodies and `func` bodies. Type annotation is optional.
 
 ```ebnf
-spawn_stmt = "spawn" IDENTIFIER "(" [ spawn_arg_list ] ")" NEWLINE ;
-spawn_arg_list = spawn_arg { "," spawn_arg } ;
-spawn_arg = IDENTIFIER "=" expression ;
+let_decl = "let" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
+var_decl = "var" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 ```
 
-#### Scenario: Spawn statement with overrides parsed
-- **WHEN** `spawn Enemy(pos = vec2(400.0, 568.0), patrol_min_x = 350.0)` appears in a handler
-- **THEN** the parser produces a `SpawnStmt` with template name `"Enemy"` and two field overrides
+#### Scenario: Let declaration without type annotation parsed
+- **WHEN** `let speed = 5.0` appears in a handler body
+- **THEN** the parser produces a `LetDecl` node with `name = "speed"`, no explicit type, and a float literal initializer
 
-#### Scenario: Spawn with no overrides parsed
-- **WHEN** `spawn Foo()` appears in a handler (template has all defaults in config)
-- **THEN** the parser produces a `SpawnStmt` with template name `"Foo"` and empty override list
+#### Scenario: Var declaration with type annotation parsed
+- **WHEN** `var count: int = 0` appears in a handler body
+- **THEN** the parser produces a `VarDecl` node with `name = "count"`, `type = int`, and integer literal initializer `0`
+
+#### Scenario: Let declaration with expression initializer parsed
+- **WHEN** `let dir = math.forward(Transform.rotation)` appears in a handler body
+- **THEN** the parser produces a `LetDecl` node with a method call expression as the initializer
+
+### Requirement: `spawn` as primary expression returning `entity_id`
+The parser SHALL accept `spawn` as a primary expression in addition to the statement form.
+
+```ebnf
+spawn_expr   = "spawn" IDENTIFIER "(" [ spawn_arg_list ] ")" ;
+primary_expr = ... | spawn_expr ;
+```
+
+#### Scenario: Spawn expression assigned to let binding
+- **WHEN** `let enemy = spawn Enemy(pos = vec2(400.0, 200.0))` appears in a handler body
+- **THEN** the parser produces a `LetDecl` with a `SpawnExpr` initializer
+
+#### Scenario: Spawn statement (discard result) still valid
+- **WHEN** `spawn Enemy(pos = vec2(400.0, 200.0))` appears as a standalone statement
+- **THEN** the parser produces an `ExprStmt` wrapping a `SpawnExpr`
 
 ### Requirement: `destroy` statement grammar
-The parser SHALL accept `destroy` as a zero-argument statement inside event handler bodies:
+The parser SHALL accept `destroy` as a statement inside event handler bodies. Without an expression, it destroys the current entity. With an expression, it destroys the specified entity.
 
 ```ebnf
-destroy_stmt = "destroy" NEWLINE ;
+destroy_stmt = "destroy" [ expression ] NEWLINE ;
 ```
 
-#### Scenario: Destroy statement parsed
+#### Scenario: Destroy current entity (no argument) parsed
 - **WHEN** `destroy` appears on its own line inside a handler
-- **THEN** the parser produces a `DestroyStmt` node
+- **THEN** the parser produces a `DestroyStmt` with no target expression
+
+#### Scenario: Destroy specific entity by ID parsed
+- **WHEN** `destroy PlayerComposition.gun` appears in a handler
+- **THEN** the parser produces a `DestroyStmt` with a member access expression as the target
+
+### Requirement: `emit` statement grammar
+The parser SHALL accept `emit` as a statement with an optional `to expression` suffix for targeted dispatch.
+
+```ebnf
+emit_stmt = "emit" IDENTIFIER "(" [ arg_list ] ")" [ "to" expression ] NEWLINE ;
+```
+
+#### Scenario: Broadcast emit (no target) parsed
+- **WHEN** `emit PlayerDamaged(amount = 5)` appears in a handler
+- **THEN** the parser produces an `EmitStmt` with `event_name = "PlayerDamaged"` and `target = nil`
+
+#### Scenario: Targeted emit parsed
+- **WHEN** `emit Damage(amount = 10) to EnemyAI.target` appears in a handler
+- **THEN** the parser produces an `EmitStmt` with a target expression
 
 ### Requirement: `load` statement grammar
-The parser SHALL accept `load` as a statement inside event handler bodies, followed by a dotted module name:
+The parser SHALL accept `load` as a statement inside event handler bodies, followed by a dotted module name.
 
 ```ebnf
 load_stmt = "load" dotted_name NEWLINE ;
@@ -168,7 +236,7 @@ load_stmt = "load" dotted_name NEWLINE ;
 - **THEN** the parser produces a `LoadStmt` with `module_name = "ui"`
 
 ### Requirement: `enable` and `disable` statement grammar
-The parser SHALL accept `enable` and `disable` as statements inside event handler bodies:
+The parser SHALL accept `enable` and `disable` as statements inside event handler bodies.
 
 ```ebnf
 enable_stmt  = "enable"  IDENTIFIER NEWLINE ;
@@ -183,15 +251,31 @@ disable_stmt = "disable" IDENTIFIER NEWLINE ;
 - **WHEN** `disable EnemyAI` appears in a handler
 - **THEN** the parser produces a `DisableStmt` with `trait_name = "EnemyAI"`
 
-### Requirement: `on spawn()`, `on destroy()`, `on load()`, `on unload()` lifecycle handler grammar
-The parser SHALL accept `on spawn()`, `on destroy()`, `on load()`, and `on unload()` as event handler forms with empty parameter lists:
+### Requirement: Lifecycle event handler grammar
+The parser SHALL accept `on` handlers for all built-in lifecycle event names:
 
 ```ebnf
-event_handler = "on" lifecycle_name "(" ")" ":" NEWLINE INDENT
+event_handler = "on" event_name "(" [ param_list ] ")" ":" NEWLINE INDENT
                 { statement }
                 DEDENT ;
-lifecycle_name = "spawn" | "destroy" | "load" | "unload" | IDENTIFIER ;
+
+event_name = "tick" | "fixed_tick" | "late_tick"
+           | "spawn" | "destroy" | "load" | "unload"
+           | "input" | IDENTIFIER ;
 ```
+
+Built-in lifecycle handlers and their required signatures:
+
+| Handler | Parameters | Phase |
+|---|---|---|
+| `on input()` | none | Input |
+| `on fixed_tick(dt: float)` | `dt: float` | Physics |
+| `on tick(dt: float)` | `dt: float` | General |
+| `on late_tick(dt: float)` | `dt: float` | Post |
+| `on spawn()` | none | Entity |
+| `on destroy()` | none | Entity |
+| `on load()` | none | Scene |
+| `on unload()` | none | Scene |
 
 #### Scenario: on spawn handler parsed
 - **WHEN** `on spawn():` appears in a system body
@@ -209,8 +293,58 @@ lifecycle_name = "spawn" | "destroy" | "load" | "unload" | IDENTIFIER ;
 - **WHEN** `on unload():` appears in a system body
 - **THEN** the parser produces an `EventHandler` with `event_name = "unload"` and empty param list
 
+#### Scenario: on input() handler parsed (no parameters)
+- **WHEN** `on input():` appears in a system body
+- **THEN** the parser produces an `EventHandler` with `event_name = "input"` and empty param list
+
+#### Scenario: on fixed_tick handler parsed
+- **WHEN** `on fixed_tick(dt: float):` appears in a system body
+- **THEN** the parser produces an `EventHandler` with `event_name = "fixed_tick"` and one typed parameter `dt: float`
+
+#### Scenario: on late_tick handler parsed
+- **WHEN** `on late_tick(dt: float):` appears in a system body
+- **THEN** the parser produces an `EventHandler` with `event_name = "late_tick"` and one typed parameter `dt: float`
+
+### Requirement: `asset_decl` grammar production
+The parser SHALL parse `asset` declarations as top-level declarations.
+
+```ebnf
+asset_decl = [ "pub" ] "asset" IDENTIFIER ":" asset_type "=" STRING_LITERAL NEWLINE ;
+asset_type = "mesh" | "texture" | "sound" | "music" | "font" | "material" ;
+```
+
+#### Scenario: Asset declaration at top level parsed
+- **WHEN** `asset ShotSound: sound = "audio/shot.wav"` appears at the top level
+- **THEN** the parser produces an `AssetDecl` node with `name = "ShotSound"`, `asset_type = sound`, `path = "audio/shot.wav"`
+
+#### Scenario: Pub asset declaration parsed
+- **WHEN** `pub asset SharedMesh: mesh = "models/shared.glb"` appears at the top level
+- **THEN** the parser produces an `AssetDecl` with `is_pub = true`
+
+#### Scenario: All six asset types accepted
+- **WHEN** asset declarations use each of `mesh`, `texture`, `sound`, `music`, `font`, `material`
+- **THEN** the parser accepts each and produces an `AssetDecl` with the corresponding asset type
+
+### Requirement: `input_decl` grammar production
+The parser SHALL parse `input` declarations as top-level declarations.
+
+```ebnf
+input_decl = [ "pub" ] "input" IDENTIFIER ":" ( "button" | "axis" ) NEWLINE INDENT
+             { input_prop }
+             DEDENT ;
+input_prop = IDENTIFIER "=" expression NEWLINE ;
+```
+
+#### Scenario: Button input declaration parsed
+- **WHEN** `input Jump: button` with body `key = Key.Space` and `gamepad = GamepadButton.South` appears
+- **THEN** the parser produces an `InputDecl` with `name = "Jump"`, `kind = button`, and two `InputProp` children
+
+#### Scenario: Axis input declaration with invert parsed
+- **WHEN** an axis input includes `invert = true`
+- **THEN** the parser produces an `InputProp` with `key = "invert"` and a `BoolLiteral(true)` value expression
+
 ### Requirement: Expression parsing with precedence
-The parser SHALL parse expressions using precedence climbing, supporting binary operators (`+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `and`, `or`), unary operators (`not`, `-`), member access (`.`), function calls, and lambda expressions (`param => body`).
+The parser SHALL parse expressions using precedence climbing, supporting binary operators, unary operators, member access, function calls, lambda expressions, and spawn expressions.
 
 #### Scenario: Binary expression with correct precedence
 - **WHEN** the source contains `a + b * c`
@@ -220,15 +354,8 @@ The parser SHALL parse expressions using precedence climbing, supporting binary 
 - **WHEN** the source contains `x => x * 2`
 - **THEN** the parser produces a LambdaExpr with parameter "x" and a BinaryExpr body
 
-### Requirement: Pipeline expression parsing
-The parser SHALL parse functional pipeline chains: `collection.map(f).filter(g).reduce(init, h)`.
-
-#### Scenario: Map-filter-reduce chain
-- **WHEN** the source contains `items.map(i => i.price).filter(p => p > 0).reduce(0, acc, p => acc + p)`
-- **THEN** the parser produces a PipelineExpr with three chained operations
-
 ### Requirement: Func parsing with purity contract
-The parser SHALL parse `[pub] func name(params) [-> type]:` blocks with a body of statements. The parser SHALL record that these are `func` declarations (purity enforcement is done by the semantic analyzer).
+The parser SHALL parse `[pub] func name(params) [-> type]:` blocks with a body of statements.
 
 #### Scenario: Pure function with return type
 - **WHEN** the source contains `func distance(a: vec3, b: vec3) -> float:`
@@ -241,13 +368,6 @@ The parser SHALL parse `const:` blocks containing name-value assignments where v
 - **WHEN** the source contains `const:` with `SHOP_TITLE = "Cactus Shop"` and `MAX_ITEMS = 50`
 - **THEN** the parser produces a ConstBlockNode with two ConstAssignment entries
 
-### Requirement: View parsing with UI element tree
-The parser SHALL parse `view Name(params):` blocks containing nested UI element declarations.
-
-#### Scenario: View with nested elements
-- **WHEN** the source contains `view ShopUI(inventory: list[Item]):` with nested `panel:` and `text:` elements
-- **THEN** the parser produces a ViewNode with nested ViewElement children
-
 ### Requirement: Match expression parsing
 The parser SHALL parse `match expr:` blocks with pattern arms.
 
@@ -256,7 +376,7 @@ The parser SHALL parse `match expr:` blocks with pattern arms.
 - **THEN** the parser produces a MatchExpr with the matched expression and a list of arms
 
 ### Requirement: Module path support in `module` and `use` declarations
-The parser SHALL accept dotted identifiers in `module` and `use` declarations. The parser SHALL also support `as` aliases in `use` declarations and `as` aliases in filter clause entries.
+The parser SHALL accept dotted identifiers in `module` and `use` declarations. The parser SHALL also support `as` aliases in `use` declarations.
 
 #### Scenario: Dotted module declaration
 - **WHEN** `module enemies.walker` appears at the top level
@@ -265,7 +385,3 @@ The parser SHALL accept dotted identifiers in `module` and `use` declarations. T
 #### Scenario: Use with alias
 - **WHEN** `use phys.body as b` appears
 - **THEN** the parser produces a `UseNode` with `module_name = "phys.body"` and `alias = "b"`
-
-#### Scenario: Filter with as alias
-- **WHEN** a system has `filter: [phys.Body as b, render.Sprite as s]`
-- **THEN** the parser stores each filter entry with its optional alias

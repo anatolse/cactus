@@ -1,0 +1,48 @@
+## Requirements
+
+### Requirement: Serialize DecoratedProgram to binary .cmod file
+The module artifact system SHALL serialize a module's `DecoratedProgram` (resolved traits, structs, enums, dependency graph, string pool, and AST) to a binary `.cmod` file in the `build/` folder. The file path SHALL mirror the module's qualified name: module `enemies.walker` → `build/enemies.walker.cmod`.
+
+#### Scenario: Single module serialized
+- **WHEN** module `player` is compiled successfully
+- **THEN** the system writes `build/player.cmod` containing the full `DecoratedProgram`
+
+#### Scenario: Dotted module name maps to artifact path
+- **WHEN** module `enemies.walker` is compiled successfully
+- **THEN** the system writes `build/enemies.walker.cmod`
+
+### Requirement: Deserialize .cmod file back to DecoratedProgram
+The module artifact system SHALL load a `.cmod` file and reconstruct the `DecoratedProgram` with all resolved types, dependency graph, string pool, and AST intact. The deserialized program SHALL be identical to the original.
+
+#### Scenario: Round-trip serialization
+- **WHEN** a `DecoratedProgram` with 2 traits, 1 enum, and 3 system dependencies is serialized then deserialized
+- **THEN** the deserialized program contains the same 2 traits, 1 enum, and 3 system dependencies with identical field data
+
+### Requirement: Extract public symbols from .cmod artifact
+The module artifact system SHALL provide a function to extract only the `pub`-marked symbols from a `.cmod` artifact into an `ImportedSymbols` struct, without loading the full AST into memory.
+
+#### Scenario: Extract pub symbols only
+- **WHEN** module `player` has `pub trait Position:` and non-pub `trait PlayerPhysics:`
+- **THEN** extracting public symbols returns only `Position` in the `ImportedSymbols.traits` map
+
+#### Scenario: All pub symbol kinds extracted
+- **WHEN** a module has pub traits, pub structs, pub enums, pub events, pub funcs, and pub units
+- **THEN** all pub symbol kinds are present in the extracted `ImportedSymbols`
+
+### Requirement: Build directory management
+The module artifact system SHALL create the `build/` directory if it does not exist. Existing `.cmod` files SHALL be overwritten on recompilation.
+
+#### Scenario: Build directory created
+- **WHEN** the `build/` directory does not exist and a module is compiled
+- **THEN** the system creates `build/` and writes the `.cmod` file
+
+#### Scenario: Stale artifact overwritten
+- **WHEN** `build/player.cmod` already exists from a previous compilation
+- **THEN** the system overwrites it with the new compilation result
+
+### Requirement: Binary format includes version header
+The `.cmod` binary format SHALL include a magic number and version byte at the start of the file. Loading a `.cmod` with an incompatible version SHALL produce a clear error.
+
+#### Scenario: Version mismatch detected
+- **WHEN** a `.cmod` file was produced by an older compiler version with a different format version
+- **THEN** the system reports an error "incompatible module artifact version in 'player.cmod'; please recompile"

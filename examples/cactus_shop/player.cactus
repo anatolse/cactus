@@ -62,36 +62,38 @@ pub unit Player:
         target_offset = vec3(0.0, 1.5, 0.0)
 
 func clamp_int(value: int, min_val: int, max_val: int) -> int:
-    if value < min_val: return min_val
-    if value > max_val: return max_val
+    if value < min_val:
+        return min_val
+    if value > max_val:
+        return max_val
     return value
 
 system MovementSystem:
     filter:
-        Position
-        PlayerController
+        Position as p
+        PlayerController as ctrl
 
     on tick(dt: float):
-        if state == PlayerState.Shopping:
+        if ctrl.state == PlayerState.Shopping:
             return
 
-        input_x = get_input_axis_x()
-        input_z = get_input_axis_z()
+        let input_x = get_input_axis_x()   # TODO: replace with input.axis once std.input is available
+        let input_z = get_input_axis_z()
 
         if input_x != 0.0 or input_z != 0.0:
-            direction = vec3(input_x, 0.0, input_z)
-            position = position + direction * move_speed * dt
-            state = PlayerState.Walking
-            emit PlayerMoved(position, direction)
+            let direction = vec3(input_x, 0.0, input_z)
+            p.position = p.position + direction * ctrl.move_speed * dt
+            ctrl.state = PlayerState.Walking
+            emit PlayerMoved(p.position, direction)
         else:
-            state = PlayerState.Idle
+            ctrl.state = PlayerState.Idle
 
 system CameraSystem:
     filter:
-        Position
-        ThirdPersonCamera
+        Position as p
+        ThirdPersonCamera as cam
 
     on tick(dt: float):
-        cam_pos = position + vec3(0.0, height, distance * -1.0)
-        cam_target = position + target_offset
+        let cam_pos = p.position + vec3(0.0, cam.height, cam.distance * -1.0)
+        let cam_target = p.position + cam.target_offset
         set_camera(cam_pos, cam_target)

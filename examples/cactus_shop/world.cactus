@@ -37,15 +37,15 @@ pub unit Sun:
 
 system WorldRenderer:
     filter:
-        Terrain
+        Terrain as t
 
     on tick(dt: float):
-        draw_plane(vec3(0.0, 0.0, 0.0), vec2(ground_size, ground_size), ground_color)
+        draw_plane(vec3(0.0, 0.0, 0.0), vec2(t.ground_size, t.ground_size), t.ground_color)
 
 system LightSystem:
     filter:
-        SunLight
+        SunLight as sun
 
     on tick(dt: float):
-        set_light_direction(direction)
-        set_light_intensity(intensity)
+        set_light_direction(sun.direction)
+        set_light_intensity(sun.intensity)

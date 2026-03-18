@@ -93,25 +93,25 @@ func calculate_total(items: list[ShopItem]) -> int:
 
 system ShopInteraction:
     filter:
-        Position
-        ShopKeeper
+        Position as p
+        ShopKeeper as shop
 
     on tick(dt: float):
-        player_pos = get_player_position()
-        dist = distance_2d(position, player_pos)
+        let player_pos = get_player_position()
+        let dist = distance_2d(p.position, player_pos)
 
-        if dist < interact_distance and is_open:
-            if is_interact_pressed():
+        if dist < shop.interact_distance and shop.is_open:
+            if is_interact_pressed():   # TODO: replace with input.pressed once std.input is available
                 emit ShopOpened(get_self_entity())
 
 system PurchaseSystem:
     filter:
-        Wallet
-        Inventory
+        Wallet as w
+        Inventory as inv
 
-    on ItemPurchased(item: ShopItem, buyer: entity_id):
-        if can_afford(coins, item.price):
-            coins = coins - item.price
-            items = items + [item]
-            total_spent = total_spent + item.price
-            emit CoinSpent(item.price, coins)
+    on ItemPurchased():
+        if can_afford(w.coins, event.item.price):
+            w.coins = w.coins - event.item.price
+            inv.items = inv.items + [event.item]
+            inv.total_spent = inv.total_spent + event.item.price
+            emit CoinSpent(event.item.price, w.coins)

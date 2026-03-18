@@ -94,63 +94,66 @@ pub unit WallBlock1:
         color = WALL_COLOR
 
 func aabb_overlap_x(ax: float, aw: float, bx: float, bw: float) -> float:
-    half_a = aw * 0.5
-    half_b = bw * 0.5
-    dx = (ax + half_a) - (bx + half_b)
-    overlap = half_a + half_b - abs_float(dx)
-    if overlap < 0.0: return 0.0
+    let half_a = aw * 0.5
+    let half_b = bw * 0.5
+    let dx = (ax + half_a) - (bx + half_b)
+    let overlap = half_a + half_b - abs_float(dx)
+    if overlap < 0.0:
+        return 0.0
     return overlap
 
 func aabb_overlap_y(ay: float, ah: float, by: float, bh: float) -> float:
-    half_a = ah * 0.5
-    half_b = bh * 0.5
-    dy = (ay + half_a) - (by + half_b)
-    overlap = half_a + half_b - abs_float(dy)
-    if overlap < 0.0: return 0.0
+    let half_a = ah * 0.5
+    let half_b = bh * 0.5
+    let dy = (ay + half_a) - (by + half_b)
+    let overlap = half_a + half_b - abs_float(dy)
+    if overlap < 0.0:
+        return 0.0
     return overlap
 
 func abs_float(v: float) -> float:
-    if v < 0.0: return v * -1.0
+    if v < 0.0:
+        return v * -1.0
     return v
 
 system CollisionSystem:
     filter:
-        Platform
+        Platform as plat
 
     on tick(dt: float):
-        player_pos = get_player_position()
-        player_w = get_player_width()
-        player_h = get_player_height()
+        let player_pos = get_player_position()
+        let player_w = get_player_width()
+        let player_h = get_player_height()
 
-        ox = aabb_overlap_x(player_pos.x, player_w, pos.x, size.x)
-        oy = aabb_overlap_y(player_pos.y, player_h, pos.y, size.y)
+        let ox = aabb_overlap_x(player_pos.x, player_w, plat.pos.x, plat.size.x)
+        let oy = aabb_overlap_y(player_pos.y, player_h, plat.pos.y, plat.size.y)
 
         if ox > 0.0 and oy > 0.0:
-            emit PlatformCollision(get_player_entity(), pos, size, ox, oy)
+            emit PlatformCollision(get_player_entity(), plat.pos, plat.size, ox, oy)
 
 system CollisionResolver:
     filter:
-        Position
-        PlayerPhysics
-        PlayerController
+        Position as pos
+        PlayerPhysics as phys
+        PlayerController as ctrl
 
-    on PlatformCollision(entity: entity_id, platform_pos: vec2, platform_size: vec2, overlap_x: float, overlap_y: float):
-        if overlap_y < overlap_x:
-            if pos.y < platform_pos.y:
-                pos = vec2(pos.x, platform_pos.y - height)
-                emit PlayerLanded(pos)
+    on PlatformCollision():
+        if event.overlap_y < event.overlap_x:
+            if pos.pos.y < event.platform_pos.y:
+                pos.pos = vec2(pos.pos.x, event.platform_pos.y - ctrl.height)
+                emit PlayerLanded(pos.pos)
             else:
-                pos = vec2(pos.x, platform_pos.y + platform_size.y)
-                velocity = vec2(velocity.x, 0.0)
+                pos.pos = vec2(pos.pos.x, event.platform_pos.y + event.platform_size.y)
+                pos.velocity = vec2(pos.velocity.x, 0.0)
         else:
-            if pos.x < platform_pos.x:
-                pos = vec2(platform_pos.x - width, pos.y)
+            if pos.pos.x < event.platform_pos.x:
+                pos.pos = vec2(event.platform_pos.x - ctrl.width, pos.pos.y)
             else:
-                pos = vec2(platform_pos.x + platform_size.x, pos.y)
+                pos.pos = vec2(event.platform_pos.x + event.platform_size.x, pos.pos.y)
 
 system PlatformRenderer:
     filter:
-        Platform
+        Platform as plat
 
     on tick(dt: float):
-        draw_rect(pos, size, color)
+        draw_rect(plat.pos, plat.size, plat.color)

@@ -100,35 +100,35 @@ pub unit GoldGem1:
 
 system CollectionSystem:
     filter:
-        Position
-        Collectible
+        Position as p
+        Collectible as col
 
     on tick(dt: float):
-        if collected == false:
-            player_pos = get_player_position()
-            player_w = get_player_width()
-            player_h = get_player_height()
+        if col.collected == false:
+            let player_pos = get_player_position()
+            let player_w = get_player_width()
+            let player_h = get_player_height()
 
-            ox = aabb_overlap_x(player_pos.x, player_w, pos.x, gem_size)
-            oy = aabb_overlap_y(player_pos.y, player_h, pos.y, gem_size)
+            let ox = aabb_overlap_x(player_pos.x, player_w, p.pos.x, col.gem_size)
+            let oy = aabb_overlap_y(player_pos.y, player_h, p.pos.y, col.gem_size)
 
             if ox > 0.0 and oy > 0.0:
-                collected = true
-                emit GemCollected(point_value, gem_type, pos)
+                col.collected = true
+                emit GemCollected(col.point_value, col.gem_type, p.pos)
 
 system ScoreSystem:
     filter:
-        Score
+        Score as s
 
-    on GemCollected(point_value: int, gem_type: GemType, position: vec2):
-        score = score + point_value
-        gems_collected = gems_collected + 1
+    on GemCollected():
+        s.score = s.score + event.point_value
+        s.gems_collected = s.gems_collected + 1
 
 system CollectibleRenderer:
     filter:
-        Position
-        Collectible
+        Position as p
+        Collectible as col
 
     on tick(dt: float):
-        if collected == false:
-            draw_rect(pos, vec2(gem_size, gem_size), gem_color)
+        if col.collected == false:
+            draw_rect(p.pos, vec2(col.gem_size, col.gem_size), col.gem_color)

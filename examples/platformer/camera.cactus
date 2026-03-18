@@ -40,36 +40,38 @@ func lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 func clamp_cam(value: float, min_val: float, max_val: float) -> float:
-    if value < min_val: return min_val
-    if value > max_val: return max_val
+    if value < min_val:
+        return min_val
+    if value > max_val:
+        return max_val
     return value
 
 system CameraFollowSystem:
     filter:
-        SideScrollCamera
+        SideScrollCamera as cam
 
     on tick(dt: float):
-        player_pos = get_player_position()
-        target_x = player_pos.x - offset_x
-        target_y = player_pos.y - offset_y
+        let player_pos = get_player_position()
+        let target_x = player_pos.x - cam.offset_x
+        let target_y = player_pos.y - cam.offset_y
 
-        t = smoothing * dt
+        var t = cam.smoothing * dt
         if t > 1.0:
             t = 1.0
 
-        cam_x = lerp(cam_x, target_x, t)
-        cam_x = clamp_cam(cam_x, min_x, max_x)
-        cam_y = lerp(cam_y, target_y, t)
+        cam.cam_x = lerp(cam.cam_x, target_x, t)
+        cam.cam_x = clamp_cam(cam.cam_x, cam.min_x, cam.max_x)
+        cam.cam_y = lerp(cam.cam_y, target_y, t)
 
-        set_camera_2d(cam_x, cam_y)
+        set_camera_2d(cam.cam_x, cam.cam_y)
 
 system ParallaxRenderer:
     filter:
-        SideScrollCamera
+        SideScrollCamera as cam
 
     on tick(dt: float):
-        far_x = cam_x * parallax_far
-        mid_x = cam_x * parallax_mid
+        let far_x = cam.cam_x * cam.parallax_far
+        let mid_x = cam.cam_x * cam.parallax_mid
 
         draw_background_layer(0, far_x, 0.0)
         draw_background_layer(1, mid_x, 0.0)

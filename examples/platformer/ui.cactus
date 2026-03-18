@@ -3,6 +3,11 @@ module ui
 use player
 use collectibles
 
+# Note: 'view' declarations are deferred from v0.2.
+# HUD rendering is backend-driven: the backend reads Health and Score traits
+# directly each frame and draws the health bar, score counter, and lives display.
+# HUDSystem below notifies the backend to refresh the display.
+
 const:
     HUD_PADDING = 10
     HUD_FONT_SIZE = 20
@@ -12,48 +17,13 @@ const:
     HEALTH_BG_COLOR = #333333
     SCORE_COLOR = #FFD700
     LIVES_COLOR = #FF6666
-    HUD_BG_COLOR = #00000080
-
-view HUD(health: int, max_health: int, lives: int, score: int):
-    panel:
-        x = HUD_PADDING
-        y = HUD_PADDING
-        width = 300
-        height = 80
-        color = HUD_BG_COLOR
-
-        rect:
-            x = 10
-            y = 10
-            width = HEALTH_BAR_WIDTH
-            height = HEALTH_BAR_HEIGHT
-            color = HEALTH_BG_COLOR
-
-        rect:
-            x = 10
-            y = 10
-            width = HEALTH_BAR_WIDTH * health / max_health
-            height = HEALTH_BAR_HEIGHT
-            color = HEALTH_COLOR
-
-        text:
-            x = 10
-            y = 35
-            size = HUD_FONT_SIZE
-            color = LIVES_COLOR
-            content = lives
-
-        text:
-            x = 100
-            y = 35
-            size = HUD_FONT_SIZE
-            color = SCORE_COLOR
-            content = score
 
 system HUDSystem:
     filter:
-        Health
-        Score
+        Health as h
+        Score as s
 
     on tick(dt: float):
-        render_view HUD(health, max_health, lives, score)
+        # Backend reads h.health, h.max_health, h.lives, s.score to render HUD.
+        # These trait fields are the source of truth for the display layer.
+        draw_hud(h.health, h.max_health, h.lives, s.score)

@@ -84,77 +84,79 @@ pub unit Player:
         invincible_timer = 0.0
 
 func clamp_float(value: float, min_val: float, max_val: float) -> float:
-    if value < min_val: return min_val
-    if value > max_val: return max_val
+    if value < min_val:
+        return min_val
+    if value > max_val:
+        return max_val
     return value
 
 system MovementSystem:
     filter:
-        Position
-        PlayerController
+        Position as p
+        PlayerController as ctrl
 
     on tick(dt: float):
-        input_x = get_input_axis_x()
+        let input_x = get_input_axis_x()   # TODO: replace with input.axis(MoveX) once std.input is available
 
         if input_x > 0.0:
-            facing = FacingDirection.Right
+            ctrl.facing = FacingDirection.Right
         if input_x < 0.0:
-            facing = FacingDirection.Left
+            ctrl.facing = FacingDirection.Left
 
-        velocity = vec2(input_x * move_speed, velocity.y)
-        pos = pos + vec2(velocity.x * dt, 0.0)
+        p.velocity = vec2(input_x * ctrl.move_speed, p.velocity.y)
+        p.pos = p.pos + vec2(p.velocity.x * dt, 0.0)
 
 system GravitySystem:
     filter:
-        Position
-        PlayerPhysics
+        Position as p
+        PlayerPhysics as phys
 
     on tick(dt: float):
-        if is_grounded == false:
-            if jump_state == JumpState.WallSliding:
-                velocity = vec2(velocity.x, wall_slide_speed)
+        if phys.is_grounded == false:
+            if phys.jump_state == JumpState.WallSliding:
+                p.velocity = vec2(p.velocity.x, phys.wall_slide_speed)
             else:
-                velocity = vec2(velocity.x, velocity.y + gravity * dt)
+                p.velocity = vec2(p.velocity.x, p.velocity.y + phys.gravity * dt)
 
-        pos = pos + vec2(0.0, velocity.y * dt)
+        p.pos = p.pos + vec2(0.0, p.velocity.y * dt)
 
 system JumpSystem:
     filter:
-        Position
-        PlayerPhysics
-        PlayerController
+        Position as p
+        PlayerPhysics as phys
+        PlayerController as ctrl
 
     on tick(dt: float):
-        if is_jump_pressed():
-            if jumps_remaining > 0:
-                velocity = vec2(velocity.x, jump_force * -1.0)
-                jumps_remaining = jumps_remaining - 1
-                is_grounded = false
-                jump_state = JumpState.Jumping
-                emit PlayerJumped(pos, jumps_remaining)
+        if is_jump_pressed():   # TODO: replace with input.pressed(Jump) once std.input is available
+            if phys.jumps_remaining > 0:
+                p.velocity = vec2(p.velocity.x, phys.jump_force * -1.0)
+                phys.jumps_remaining = phys.jumps_remaining - 1
+                phys.is_grounded = false
+                phys.jump_state = JumpState.Jumping
+                emit PlayerJumped(p.pos, phys.jumps_remaining)
 
-        if velocity.y > 0.0 and jump_state == JumpState.Jumping:
-            jump_state = JumpState.Falling
+        if p.velocity.y > 0.0 and phys.jump_state == JumpState.Jumping:
+            phys.jump_state = JumpState.Falling
 
-    on PlayerLanded(position: vec2):
-        is_grounded = true
-        jumps_remaining = max_jumps
-        jump_state = JumpState.Grounded
-        velocity = vec2(velocity.x, 0.0)
+    on PlayerLanded():
+        phys.is_grounded = true
+        phys.jumps_remaining = phys.max_jumps
+        phys.jump_state = JumpState.Grounded
+        p.velocity = vec2(p.velocity.x, 0.0)
 
 system InvincibilitySystem:
     filter:
-        Health
+        Health as h
 
     on tick(dt: float):
-        if invincible_timer > 0.0:
-            invincible_timer = invincible_timer - dt
+        if h.invincible_timer > 0.0:
+            h.invincible_timer = h.invincible_timer - dt
 
-    on PlayerDamaged(amount: int):
-        if invincible_timer <= 0.0:
-            health = health - amount
-            invincible_timer = 1.5
-            if health <= 0:
-                lives = lives - 1
-                health = max_health
-                emit PlayerDied(lives)
+    on PlayerDamaged():
+        if h.invincible_timer <= 0.0:
+            h.health = h.health - event.amount
+            h.invincible_timer = 1.5
+            if h.health <= 0:
+                h.lives = h.lives - 1
+                h.health = h.max_health
+                emit PlayerDied(h.lives)

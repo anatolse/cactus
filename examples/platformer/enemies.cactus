@@ -80,43 +80,43 @@ pub unit FlyerEnemy1:
 
 system PatrolSystem:
     filter:
-        Position
-        EnemyAI
+        Position as p
+        EnemyAI as ai
 
     on tick(dt: float):
-        pos = pos + vec2(patrol_speed * direction * dt, 0.0)
+        p.pos = p.pos + vec2(ai.patrol_speed * ai.direction * dt, 0.0)
 
-        if pos.x >= patrol_max_x:
-            direction = -1.0
-            pos = vec2(patrol_max_x, pos.y)
+        if p.pos.x >= ai.patrol_max_x:
+            ai.direction = -1.0
+            p.pos = vec2(ai.patrol_max_x, p.pos.y)
 
-        if pos.x <= patrol_min_x:
-            direction = 1.0
-            pos = vec2(patrol_min_x, pos.y)
+        if p.pos.x <= ai.patrol_min_x:
+            ai.direction = 1.0
+            p.pos = vec2(ai.patrol_min_x, p.pos.y)
 
 system EnemyCollisionSystem:
     filter:
-        Position
-        EnemyAI
+        Position as p
+        EnemyAI as ai
 
     on tick(dt: float):
-        player_pos = get_player_position()
-        player_w = get_player_width()
-        player_h = get_player_height()
+        let player_pos = get_player_position()
+        let player_w = get_player_width()
+        let player_h = get_player_height()
 
-        ox = aabb_overlap_x(player_pos.x, player_w, pos.x, enemy_width)
-        oy = aabb_overlap_y(player_pos.y, player_h, pos.y, enemy_height)
+        let ox = aabb_overlap_x(player_pos.x, player_w, p.pos.x, ai.enemy_width)
+        let oy = aabb_overlap_y(player_pos.y, player_h, p.pos.y, ai.enemy_height)
 
         if ox > 0.0 and oy > 0.0:
-            if player_pos.y + player_h < pos.y + enemy_height * 0.5:
-                emit EnemyDefeated(pos)
+            if player_pos.y + player_h < p.pos.y + ai.enemy_height * 0.5:
+                emit EnemyDefeated(p.pos)
             else:
                 emit PlayerDamaged(DAMAGE_AMOUNT)
 
 system EnemyRenderer:
     filter:
-        Position
-        EnemyAI
+        Position as p
+        EnemyAI as ai
 
     on tick(dt: float):
-        draw_rect(pos, vec2(enemy_width, enemy_height), enemy_color)
+        draw_rect(p.pos, vec2(ai.enemy_width, ai.enemy_height), ai.enemy_color)

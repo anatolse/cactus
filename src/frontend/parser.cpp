@@ -96,6 +96,9 @@ Declaration Parser::parse_declaration() {
 
     if (tok.type == TokenType::TEMPLATE) return parse_template(false);
 
+    if (tok.type == TokenType::ASSET) return parse_asset_decl(false);
+    if (tok.type == TokenType::INPUT) return parse_input_decl(false);
+
     if (tok.type == TokenType::PUB) {
         advance();
         skip_newlines();
@@ -107,13 +110,15 @@ Declaration Parser::parse_declaration() {
         if (check(TokenType::UNIT)) return parse_unit(true);
         if (check(TokenType::TEMPLATE)) return parse_template(true);
         if (check(TokenType::FUNC)) return parse_func(true);
-        errors_.error(peek().location, "expected trait, unit, template, or func after 'pub'");
+        if (check(TokenType::ASSET)) return parse_asset_decl(true);
+        if (check(TokenType::INPUT)) return parse_input_decl(true);
+        errors_.error(peek().location, "expected trait, unit, template, func, asset, or input after 'pub'");
     }
 
     if (tok.type == TokenType::UNIT) return parse_unit(false);
     if (tok.type == TokenType::FUNC) return parse_func(false);
 
-    errors_.error(tok.location, "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, interface)");
+    errors_.error(tok.location, "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{"<error>", tok.location};
 }
@@ -326,13 +331,16 @@ FieldNode Parser::parse_field() {
 // ── Lifecycle Event Name Helper ─────────────────────────────────────────────
 
 // Task 4.10: Accept keyword tokens as lifecycle event names
-// (spawn/destroy/load/unload are keywords, not identifiers)
+// (spawn/destroy/load/unload/fixed_tick/late_tick/input are keywords, not identifiers)
 std::string Parser::parse_lifecycle_event_name() {
     switch (peek().type) {
-        case TokenType::SPAWN:   { auto v = advance().value; return v; }
-        case TokenType::DESTROY: { auto v = advance().value; return v; }
-        case TokenType::LOAD:    { auto v = advance().value; return v; }
-        case TokenType::UNLOAD:  { auto v = advance().value; return v; }
+        case TokenType::SPAWN:      { auto v = advance().value; return v; }
+        case TokenType::DESTROY:    { auto v = advance().value; return v; }
+        case TokenType::LOAD:       { auto v = advance().value; return v; }
+        case TokenType::UNLOAD:     { auto v = advance().value; return v; }
+        case TokenType::FIXED_TICK: { auto v = advance().value; return v; }
+        case TokenType::LATE_TICK:  { auto v = advance().value; return v; }
+        case TokenType::INPUT:      { auto v = advance().value; return v; }
         case TokenType::IDENTIFIER: return advance().value;
         default:
             errors_.error(peek().location, "expected event name");
@@ -1354,6 +1362,103 @@ FilterClause Parser::parse_exclude_clause() {
 
     expect_dedent();
     return clause;
+}
+
+// ── Asset Declaration ────────────────────────────────────────────────────────
+
+AssetDeclNode Parser::parse_asset_decl(bool is_pub) {
+    auto loc = peek().location;
+    consume(TokenType::ASSET, "expected 'asset'");
+    auto name = consume(TokenType::IDENTIFIER, "expected asset name").value;
+    consume(TokenType::COLON, "expected ':'");
+
+    // Parse asset type: mesh | texture | sound | music | font | material
+    AssetKind kind = AssetKind::Mesh;
+    if (check(TokenType::IDENTIFIER)) {
+        auto type_val = peek().value;
+        if      (type_val == "mesh")     { advance(); kind = AssetKind::Mesh; }
+        else if (type_val == "texture")  { advance(); kind = AssetKind::Texture; }
+        else if (type_val == "sound")    { advance(); kind = AssetKind::Sound; }
+        else if (type_val == "music")    { advance(); kind = AssetKind::Music; }
+        else if (type_val == "font")     { advance(); kind = AssetKind::Font; }
+        else if (type_val == "material") { advance(); kind = AssetKind::Material; }
+        else {
+            errors_.error(peek().location,
+                "expected asset type (mesh, texture, sound, music, font, material), got '" + type_val + "'");
+            advance();
+        }
+    } else {
+        errors_.error(peek().location, "expected asset type after ':'");
+    }
+
+    consume(TokenType::ASSIGN, "expected '='");
+    auto path_tok = consume(TokenType::STRING_LITERAL, "expected resource path string literal");
+
+    expect_newline();
+
+    AssetDeclNode node;
+    node.name = name;
+    node.is_pub = is_pub;
+    node.asset_kind = kind;
+    node.path = path_tok.value;
+    node.location = loc;
+    return node;
+}
+
+// ── Input Declaration ────────────────────────────────────────────────────────
+
+InputDeclNode Parser::parse_input_decl(bool is_pub) {
+    auto loc = peek().location;
+    consume(TokenType::INPUT, "expected 'input'");
+    auto name = consume(TokenType::IDENTIFIER, "expected input action name").value;
+    consume(TokenType::COLON, "expected ':'");
+
+    // Parse input kind: button | axis
+    InputKind kind = InputKind::Button;
+    if (check(TokenType::IDENTIFIER)) {
+        auto kind_val = peek().value;
+        if (kind_val == "button")     { advance(); kind = InputKind::Button; }
+        else if (kind_val == "axis")  { advance(); kind = InputKind::Axis; }
+        else {
+            errors_.error(peek().location,
+                "expected 'button' or 'axis' after ':', got '" + kind_val + "'");
+            advance();
+        }
+    } else {
+        errors_.error(peek().location, "expected 'button' or 'axis' after ':'");
+    }
+
+    expect_newline();
+
+    // Parse indented property block (optional — may be empty)
+    InputDeclNode node;
+    node.name = name;
+    node.is_pub = is_pub;
+    node.input_kind = kind;
+    node.location = loc;
+
+    // Check if there's an indented body
+    skip_newlines();
+    if (check(TokenType::INDENT)) {
+        advance();  // consume INDENT
+        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+            skip_newlines();
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+            auto prop_loc = peek().location;
+            auto key = consume(TokenType::IDENTIFIER, "expected property key").value;
+            consume(TokenType::ASSIGN, "expected '='");
+            auto value = parse_expression();
+            expect_newline();
+            InputPropNode prop;
+            prop.key = key;
+            prop.value = std::move(value);
+            prop.location = prop_loc;
+            node.props.push_back(std::move(prop));
+        }
+        expect_dedent();
+    }
+
+    return node;
 }
 
 }  // namespace cactus

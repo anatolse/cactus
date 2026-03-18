@@ -396,10 +396,46 @@ struct InterfaceNode {
     SourceLocation location;
 };
 
+// ── Asset Declaration ────────────────────────────────────────────────────────
+
+/// Asset type kinds for asset_decl
+enum class AssetKind { Mesh, Texture, Sound, Music, Font, Material };
+
+/// asset [pub] Name: asset_type = "path"
+struct AssetDeclNode {
+    std::string name;
+    bool is_pub = false;
+    AssetKind asset_kind = AssetKind::Mesh;
+    std::string path;  // resource path string literal
+    SourceLocation location;
+};
+
+// ── Input Declaration ────────────────────────────────────────────────────────
+
+/// Input action kind for input_decl
+enum class InputKind { Button, Axis };
+
+/// A single property in an input declaration: key = expression
+struct InputPropNode {
+    std::string key;
+    std::unique_ptr<ExprNode> value;
+    SourceLocation location;
+};
+
+/// input [pub] Name: button|axis  INDENT { key = expr } DEDENT
+struct InputDeclNode {
+    std::string name;
+    bool is_pub = false;
+    InputKind input_kind = InputKind::Button;
+    std::vector<InputPropNode> props;
+    SourceLocation location;
+};
+
 // ── Program (AST Root) ─────────────────────────────────────────────────────
 
 using Declaration = std::variant<ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode,
-                                 TemplateNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode>;
+                                 TemplateNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode,
+                                 AssetDeclNode, InputDeclNode>;
 
 struct ProgramNode {
     std::vector<Declaration> declarations;

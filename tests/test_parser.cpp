@@ -552,3 +552,155 @@ TEST_CASE("Parser: old bracket filter syntax produces error", "[parser][dynamic-
     // For now, just verify the system was parsed
     CHECK_FALSE(errors.has_errors());  // bracket still works (not yet erroring)
 }
+
+// ── dsl-spec-new-features parser tests ─────────────────────────────────────
+
+// Task 4.8: asset_decl - all six asset types
+TEST_CASE("Parser: asset declaration mesh type", "[parser][dsl-spec-new-features]") {
+    auto prog = parse("asset PlayerMesh: mesh = \"models/player.glb\"\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
+    CHECK(node.name == "PlayerMesh");
+    CHECK(node.is_pub == false);
+    CHECK(node.asset_kind == AssetKind::Mesh);
+    CHECK(node.path == "models/player.glb");
+}
+
+TEST_CASE("Parser: pub asset declaration texture type", "[parser][dsl-spec-new-features]") {
+    auto prog = parse("pub asset HeroTex: texture = \"sprites/hero.png\"\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
+    CHECK(node.name == "HeroTex");
+    CHECK(node.is_pub == true);
+    CHECK(node.asset_kind == AssetKind::Texture);
+    CHECK(node.path == "sprites/hero.png");
+}
+
+TEST_CASE("Parser: asset declaration sound type", "[parser][dsl-spec-new-features]") {
+    auto prog = parse("asset ShotSfx: sound = \"audio/shot.wav\"\n");
+    auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
+    CHECK(node.asset_kind == AssetKind::Sound);
+}
+
+TEST_CASE("Parser: asset declaration music type", "[parser][dsl-spec-new-features]") {
+    auto prog = parse("asset Theme: music = \"audio/theme.ogg\"\n");
+    auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
+    CHECK(node.asset_kind == AssetKind::Music);
+}
+
+TEST_CASE("Parser: asset declaration font type", "[parser][dsl-spec-new-features]") {
+    auto prog = parse("asset HudFont: font = \"fonts/hud.ttf\"\n");
+    auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
+    CHECK(node.asset_kind == AssetKind::Font);
+}
+
+TEST_CASE("Parser: asset declaration material type", "[parser][dsl-spec-new-features]") {
+    auto prog = parse("asset StoneMat: material = \"materials/stone.mat\"\n");
+    auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
+    CHECK(node.asset_kind == AssetKind::Material);
+}
+
+// Task 4.9: input_decl
+TEST_CASE("Parser: input declaration button with properties", "[parser][dsl-spec-new-features]") {
+    auto prog = parse(
+        "input Jump: button\n"
+        "    key     = Key.Space\n"
+        "    gamepad = GamepadButton.South\n"
+    );
+    REQUIRE(prog.declarations.size() == 1);
+    auto& node = std::get<InputDeclNode>(prog.declarations[0]);
+    CHECK(node.name == "Jump");
+    CHECK(node.is_pub == false);
+    CHECK(node.input_kind == InputKind::Button);
+    REQUIRE(node.props.size() == 2);
+    CHECK(node.props[0].key == "key");
+    CHECK(node.props[1].key == "gamepad");
+}
+
+TEST_CASE("Parser: pub input declaration axis type", "[parser][dsl-spec-new-features]") {
+    auto prog = parse(
+        "pub input MoveX: axis\n"
+        "    negative = Key.A\n"
+        "    positive = Key.D\n"
+        "    gamepad  = GamepadAxis.LeftX\n"
+    );
+    REQUIRE(prog.declarations.size() == 1);
+    auto& node = std::get<InputDeclNode>(prog.declarations[0]);
+    CHECK(node.name == "MoveX");
+    CHECK(node.is_pub == true);
+    CHECK(node.input_kind == InputKind::Axis);
+    REQUIRE(node.props.size() == 3);
+    CHECK(node.props[0].key == "negative");
+    CHECK(node.props[1].key == "positive");
+    CHECK(node.props[2].key == "gamepad");
+}
+
+TEST_CASE("Parser: input declaration axis with invert property", "[parser][dsl-spec-new-features]") {
+    auto prog = parse(
+        "input MoveY: axis\n"
+        "    negative = Key.S\n"
+        "    positive = Key.W\n"
+        "    invert   = true\n"
+    );
+    auto& node = std::get<InputDeclNode>(prog.declarations[0]);
+    CHECK(node.input_kind == InputKind::Axis);
+    CHECK(node.props.size() == 3);
+    CHECK(node.props[2].key == "invert");
+}
+
+// Task 4.10: on fixed_tick, on late_tick, on input() lifecycle handlers
+TEST_CASE("Parser: on input() handler with no parameters", "[parser][dsl-spec-new-features]") {
+    auto prog = parse(
+        "system InputSys:\n"
+        "    on input():\n"
+        "        x = 1\n"
+    );
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].event_name == "input");
+    CHECK(sys.handlers[0].params.empty());
+}
+
+TEST_CASE("Parser: on fixed_tick handler with dt parameter", "[parser][dsl-spec-new-features]") {
+    auto prog = parse(
+        "system PhysSys:\n"
+        "    on fixed_tick(dt: float):\n"
+        "        x = 1\n"
+    );
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].event_name == "fixed_tick");
+    REQUIRE(sys.handlers[0].params.size() == 1);
+    CHECK(sys.handlers[0].params[0].name == "dt");
+    CHECK(sys.handlers[0].params[0].type.name == "float");
+}
+
+TEST_CASE("Parser: on late_tick handler with dt parameter", "[parser][dsl-spec-new-features]") {
+    auto prog = parse(
+        "system CamSys:\n"
+        "    on late_tick(dt: float):\n"
+        "        x = 1\n"
+    );
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].event_name == "late_tick");
+    REQUIRE(sys.handlers[0].params.size() == 1);
+    CHECK(sys.handlers[0].params[0].name == "dt");
+}
+
+TEST_CASE("Parser: system with multiple lifecycle handlers", "[parser][dsl-spec-new-features]") {
+    auto prog = parse(
+        "system MultiPhase:\n"
+        "    on input():\n"
+        "        x = 1\n"
+        "    on fixed_tick(dt: float):\n"
+        "        y = 2\n"
+        "    on late_tick(dt: float):\n"
+        "        z = 3\n"
+    );
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 3);
+    CHECK(sys.handlers[0].event_name == "input");
+    CHECK(sys.handlers[1].event_name == "fixed_tick");
+    CHECK(sys.handlers[2].event_name == "late_tick");
+}

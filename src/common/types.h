@@ -16,6 +16,16 @@ enum class TypeKind {
     Quat,
     Color,
     EntityId,
+    // Asset opaque ID types (§5.1)
+    MeshId,
+    TextureId,
+    SoundId,
+    MusicId,
+    FontId,
+    MaterialId,
+    // Input handle types (§5.1)
+    InputButton,
+    InputAxis,
     Struct,
     Enum,
     List,
@@ -52,6 +62,14 @@ inline TypeInfo make_vec3_type() { return {TypeKind::Vec3, "vec3"}; }
 inline TypeInfo make_quat_type() { return {TypeKind::Quat, "quat"}; }
 inline TypeInfo make_color_type() { return {TypeKind::Color, "color"}; }
 inline TypeInfo make_entity_id_type() { return {TypeKind::EntityId, "entity_id"}; }
+inline TypeInfo make_mesh_id_type() { return {TypeKind::MeshId, "mesh_id"}; }
+inline TypeInfo make_texture_id_type() { return {TypeKind::TextureId, "texture_id"}; }
+inline TypeInfo make_sound_id_type() { return {TypeKind::SoundId, "sound_id"}; }
+inline TypeInfo make_music_id_type() { return {TypeKind::MusicId, "music_id"}; }
+inline TypeInfo make_font_id_type() { return {TypeKind::FontId, "font_id"}; }
+inline TypeInfo make_material_id_type() { return {TypeKind::MaterialId, "material_id"}; }
+inline TypeInfo make_input_button_type() { return {TypeKind::InputButton, "InputButton"}; }
+inline TypeInfo make_input_axis_type() { return {TypeKind::InputAxis, "InputAxis"}; }
 inline TypeInfo make_void_type() { return {TypeKind::Void, "void"}; }
 inline TypeInfo make_unknown_type() { return {TypeKind::Unknown, "unknown"}; }
 

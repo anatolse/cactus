@@ -1,6 +1,34 @@
 module platformer
 
 use std.core
+use std.input
+
+# ── Input Action Declarations ─────────────────────────────────────────────────
+
+input MoveX: axis
+    negative = Key.A
+    positive = Key.D
+    gamepad  = GamepadAxis.LeftX
+
+input MoveY: axis
+    negative = Key.S
+    positive = Key.W
+    invert   = true
+    gamepad  = GamepadAxis.LeftY
+
+input Jump: button
+    key     = Key.Space
+    gamepad = GamepadButton.South
+
+input Fire: button
+    mouse   = MouseButton.Left
+    gamepad = GamepadButton.R1
+
+# ── Asset Declarations ────────────────────────────────────────────────────────
+
+asset PlayerSprite:  texture = "assets/sprites/player.png"
+asset EnemySprite:   texture = "assets/sprites/enemy.png"
+asset GemSprite:     texture = "assets/sprites/gem.png"
 
 const:
     WINDOW_TITLE = "Cactus Platformer"

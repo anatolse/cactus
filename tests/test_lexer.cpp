@@ -319,3 +319,68 @@ TEST_CASE("Lexer: all 9 new keywords in one string", "[lexer][dynamic-ecs]") {
     CHECK(types[7] == TokenType::EXCLUDE);
     CHECK(types[8] == TokenType::DISABLED);
 }
+
+// ── New keyword tests (dsl-spec-new-features) ─────────────────────────────────
+
+TEST_CASE("Lexer: new keyword asset", "[lexer][dsl-spec-new-features]") {
+    auto tokens = lex("asset");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::ASSET);
+    CHECK(tokens[0].value == "asset");
+}
+
+TEST_CASE("Lexer: new keyword input", "[lexer][dsl-spec-new-features]") {
+    auto tokens = lex("input");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::INPUT);
+    CHECK(tokens[0].value == "input");
+}
+
+TEST_CASE("Lexer: new keyword fixed_tick", "[lexer][dsl-spec-new-features]") {
+    auto tokens = lex("fixed_tick");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::FIXED_TICK);
+    CHECK(tokens[0].value == "fixed_tick");
+}
+
+TEST_CASE("Lexer: new keyword late_tick", "[lexer][dsl-spec-new-features]") {
+    auto tokens = lex("late_tick");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::LATE_TICK);
+    CHECK(tokens[0].value == "late_tick");
+}
+
+TEST_CASE("Lexer: all 4 new dsl-spec-new-features keywords", "[lexer][dsl-spec-new-features]") {
+    auto tokens = lex("asset input fixed_tick late_tick");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 4);
+    CHECK(types[0] == TokenType::ASSET);
+    CHECK(types[1] == TokenType::INPUT);
+    CHECK(types[2] == TokenType::FIXED_TICK);
+    CHECK(types[3] == TokenType::LATE_TICK);
+}
+
+TEST_CASE("Lexer: new keywords distinct from identifier prefixes", "[lexer][dsl-spec-new-features]") {
+    auto tokens = lex("asset assets input inputs fixed_tick fixed_ticks late_tick late_ticks");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 8);
+    CHECK(types[0] == TokenType::ASSET);
+    CHECK(types[1] == TokenType::IDENTIFIER);  // "assets" not a keyword
+    CHECK(types[2] == TokenType::INPUT);
+    CHECK(types[3] == TokenType::IDENTIFIER);  // "inputs" not a keyword
+    CHECK(types[4] == TokenType::FIXED_TICK);
+    CHECK(types[5] == TokenType::IDENTIFIER);  // "fixed_ticks" not a keyword
+    CHECK(types[6] == TokenType::LATE_TICK);
+    CHECK(types[7] == TokenType::IDENTIFIER);  // "late_ticks" not a keyword
+}
+
+TEST_CASE("Lexer: new keyword string representations", "[lexer][dsl-spec-new-features]") {
+    CHECK(std::string(token_type_to_string(TokenType::ASSET)) == "ASSET");
+    CHECK(std::string(token_type_to_string(TokenType::INPUT)) == "INPUT");
+    CHECK(std::string(token_type_to_string(TokenType::FIXED_TICK)) == "FIXED_TICK");
+    CHECK(std::string(token_type_to_string(TokenType::LATE_TICK)) == "LATE_TICK");
+}

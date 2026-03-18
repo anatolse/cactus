@@ -42,7 +42,7 @@ apply   config  filter  exclude
 map     reduce  true    false   as      and     or      not
 template  spawn   destroy load    unload
 enable  disable  disabled
-input   fixed_tick  late_tick
+asset   input   fixed_tick  late_tick
 ```
 
 ### 2.5 Operators and Punctuation
@@ -90,7 +90,7 @@ Double-quoted UTF-8 strings: `"Hello World"`. Only valid inside `const` blocks (
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
                 | enum_decl | trait_decl | unit_decl | template_decl | system_decl
-                | event_decl | func_decl ;
+                | event_decl | func_decl | asset_decl | input_decl ;
 ```
 
 ### 3.2 Module and Imports
@@ -415,6 +415,106 @@ enable Frozen
 disable EnemyAI
 ```
 
+### 3.16 Asset Declarations
+
+Asset declarations bind a compile-time identifier to a typed external resource file path. They are only valid at module top level. The declared name resolves to a built-in opaque ID type (see §5.1).
+
+```ebnf
+asset_decl  = [ "pub" ] "asset" IDENTIFIER ":" asset_type "=" STRING_LITERAL NEWLINE ;
+asset_type  = "mesh" | "texture" | "sound" | "music" | "font" | "material" ;
+```
+
+Each asset type maps to a built-in opaque handle:
+
+| Declaration type | Resolved type |
+|-----------------|---------------|
+| `mesh`          | `mesh_id`     |
+| `texture`       | `texture_id`  |
+| `sound`         | `sound_id`    |
+| `music`         | `music_id`    |
+| `font`          | `font_id`     |
+| `material`      | `material_id` |
+
+String literals in `asset` declarations are the **only** exception to the const-string rule (see §6.1).
+
+```cactus
+asset PlayerMesh:  mesh    = "models/player.glb"
+asset ShotSound:   sound   = "audio/shot.wav"
+asset MainTheme:   music   = "audio/theme.ogg"
+asset HudFont:     font    = "fonts/hud.ttf"
+
+pub asset SharedTex: texture = "sprites/shared.png"   # visible to importers
+
+trait MeshRenderer:
+    let mesh: mesh_id
+    var visible: bool = true
+
+unit Player:
+    apply:
+        Transform
+        MeshRenderer
+    config:
+        mesh = PlayerMesh
+```
+
+### 3.17 Input Declarations
+
+Input declarations bind a compile-time identifier to a logical input action of kind `button` or `axis`. They are only valid at module top level. Properties reference enum constants from `std.input`.
+
+```ebnf
+input_decl = [ "pub" ] "input" IDENTIFIER ":" ( "button" | "axis" ) NEWLINE INDENT
+             { input_prop }
+             DEDENT ;
+input_prop = IDENTIFIER "=" expression NEWLINE ;
+```
+
+**Valid property keys:**
+
+| Kind | Valid keys |
+|------|-----------|
+| `button` | `key`, `mouse`, `gamepad` |
+| `axis` | `negative`, `positive`, `gamepad`, `mouse_delta_x`, `mouse_delta_y`, `invert` |
+
+Property values reference `std.input` enum constants: `Key.A`, `Key.Space`, `MouseButton.Left`, `GamepadButton.South`, `GamepadAxis.LeftX`, etc.
+
+A `button` input declaration name resolves to type `InputButton`. An `axis` declaration name resolves to type `InputAxis`.
+
+Query functions defined in `std.input` (must `use std.input`):
+
+```cactus
+pub func pressed(b: InputButton) -> bool    # true on first press frame
+pub func down(b: InputButton) -> bool       # true while held
+pub func released(b: InputButton) -> bool   # true on first release frame
+pub func axis(a: InputAxis) -> float        # -1.0 to 1.0
+pub func axis2(x: InputAxis, y: InputAxis) -> vec2
+```
+
+```cactus
+use std.input
+
+input MoveX: axis
+    negative = Key.A
+    positive = Key.D
+    gamepad  = GamepadAxis.LeftX
+
+input Jump: button
+    key     = Key.Space
+    gamepad = GamepadButton.South
+
+trait MoveIntent:
+    var axis: vec2 = vec2(0.0, 0.0)
+    var jump_pressed: bool = false
+
+system ReadPlayerInput:
+    filter:
+        MoveIntent as move
+        PlayerTag
+
+    on input():
+        move.axis         = input.axis2(MoveX, MoveY)
+        move.jump_pressed = input.pressed(Jump)
+```
+
 ## 4. Operator Precedence
 
 From lowest to highest:
@@ -445,6 +545,14 @@ From lowest to highest:
 | `quat` | `{ x: float, y: float, z: float, w: float }` | 32 bytes |
 | `color` | RGBA color from hex literal | 4 bytes |
 | `entity_id` | Opaque handle to a live entity. Always valid when held in an active trait field — there is no null sentinel. The "no relationship" state is modeled via trait presence/absence (enable/disable). Stale handles (referencing destroyed entities) are runtime-invalid; the EnTT backend's generation IDs detect them transparently. | 8 bytes |
+| `mesh_id` | Opaque handle to a loaded mesh resource. Only obtained from an `asset ... : mesh` declaration. | opaque |
+| `texture_id` | Opaque handle to a loaded texture resource. Only obtained from an `asset ... : texture` declaration. | opaque |
+| `sound_id` | Opaque handle to a loaded sound (short, one-shot) resource. Only obtained from an `asset ... : sound` declaration. | opaque |
+| `music_id` | Opaque handle to a loaded music (streaming) resource. Only obtained from an `asset ... : music` declaration. | opaque |
+| `font_id` | Opaque handle to a loaded font resource. Only obtained from an `asset ... : font` declaration. | opaque |
+| `material_id` | Opaque handle to a loaded material resource. Only obtained from an `asset ... : material` declaration. | opaque |
+| `InputButton` | Named button action handle. Only obtained from an `input ... : button` declaration. | opaque |
+| `InputAxis` | Named axis action handle. Only obtained from an `input ... : axis` declaration. | opaque |
 
 ### 5.2 Composite Types
 
@@ -476,15 +584,19 @@ From lowest to highest:
 
 String literals (`"..."`) are **forbidden** outside `const` blocks. All string references in logic must go through `const` identifiers. This ensures compile-time string interning and prevents accidental allocations in hot loops.
 
+**Exception:** String literals are permitted as the resource path value inside `asset` declarations (see §3.16). They are not permitted in any other position outside `const` blocks.
+
 ```
 # VALID
 const:
     SHOP_TITLE = "Cactus Shop"
 
+asset PlayerMesh: mesh = "models/player.glb"   # VALID — asset path exception
+
 # INVALID — string literal in system body
 system UI:
     on tick(dt: float):
-        set_title("Bad")  # ERROR: string literal outside const block
+        set_title("Bad")  # ERROR: string literal outside const block or asset declaration
 ```
 
 ### 6.2 Func Purity

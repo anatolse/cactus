@@ -178,6 +178,12 @@ private:
     std::unordered_set<std::string> event_names_;
     std::unordered_set<std::string> func_names_;
 
+    // Asset and input declaration tracking (dsl-spec-new-features)
+    // Maps identifier name → resolved TypeKind (e.g., "PlayerMesh" → MeshId)
+    std::unordered_map<std::string, TypeKind> asset_decl_types_;
+    // Maps identifier name → InputButton or InputAxis
+    std::unordered_map<std::string, TypeKind> input_decl_types_;
+
     // For recursion detection
     std::unordered_map<std::string, std::unordered_set<std::string>> call_graph_;
 

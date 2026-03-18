@@ -2,6 +2,9 @@ module camera
 
 use player
 
+asset SkyBackground:     texture = "assets/backgrounds/sky.png"
+asset MountainBackground: texture = "assets/backgrounds/mountains.png"
+
 const:
     CAMERA_OFFSET_X = 640.0
     CAMERA_OFFSET_Y = 360.0
@@ -50,7 +53,7 @@ system CameraFollowSystem:
     filter:
         SideScrollCamera as cam
 
-    on tick(dt: float):
+    on late_tick(dt: float):
         let player_pos = get_player_position()
         let target_x = player_pos.x - cam.offset_x
         let target_y = player_pos.y - cam.offset_y

@@ -8,9 +8,14 @@ namespace cactus {
 namespace {
 
 const std::unordered_set<std::string>& builtin_types() {
-    static const std::unordered_set<std::string> types = {"int",  "float",     "bool",   "string", "vec2",
-                                                           "vec3", "quat",      "color",  "entity_id",
-                                                           "void", "list"};
+    static const std::unordered_set<std::string> types = {
+        "int", "float", "bool", "string", "vec2", "vec3", "quat", "color", "entity_id",
+        "void", "list",
+        // Asset opaque ID types (spec 5.1 - dsl-spec-new-features)
+        "mesh_id", "texture_id", "sound_id", "music_id", "font_id", "material_id",
+        // Input handle types (spec 5.1 - dsl-spec-new-features)
+        "InputButton", "InputAxis"
+    };
     return types;
 }
 
@@ -25,6 +30,29 @@ TypeKind type_kind_from_name(const std::string& name) {
     if (name == "color") return TypeKind::Color;
     if (name == "entity_id") return TypeKind::EntityId;
     if (name == "void") return TypeKind::Void;
+    // Asset opaque ID types
+    if (name == "mesh_id") return TypeKind::MeshId;
+    if (name == "texture_id") return TypeKind::TextureId;
+    if (name == "sound_id") return TypeKind::SoundId;
+    if (name == "music_id") return TypeKind::MusicId;
+    if (name == "font_id") return TypeKind::FontId;
+    if (name == "material_id") return TypeKind::MaterialId;
+    // Input handle types
+    if (name == "InputButton") return TypeKind::InputButton;
+    if (name == "InputAxis") return TypeKind::InputAxis;
+    return TypeKind::Unknown;
+}
+
+/// Map AssetKind → TypeKind for the resulting opaque ID
+TypeKind asset_kind_to_type_kind(AssetKind ak) {
+    switch (ak) {
+        case AssetKind::Mesh:     return TypeKind::MeshId;
+        case AssetKind::Texture:  return TypeKind::TextureId;
+        case AssetKind::Sound:    return TypeKind::SoundId;
+        case AssetKind::Music:    return TypeKind::MusicId;
+        case AssetKind::Font:     return TypeKind::FontId;
+        case AssetKind::Material: return TypeKind::MaterialId;
+    }
     return TypeKind::Unknown;
 }
 
@@ -156,6 +184,16 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                     if (node.alias.has_value()) {
                         use_names_.insert(*node.alias);
                     }
+                } else if constexpr (std::is_same_v<T, AssetDeclNode>) {
+                    // Register asset name → opaque ID TypeKind (task 6.1)
+                    TypeKind tk = asset_kind_to_type_kind(node.asset_kind);
+                    asset_decl_types_[node.name] = tk;
+                } else if constexpr (std::is_same_v<T, InputDeclNode>) {
+                    // Register input name → InputButton or InputAxis (task 6.4)
+                    TypeKind tk = (node.input_kind == InputKind::Button)
+                                       ? TypeKind::InputButton
+                                       : TypeKind::InputAxis;
+                    input_decl_types_[node.name] = tk;
                 }
             },
             decl);
@@ -625,12 +663,18 @@ static bool is_lifecycle_event(const std::string& name) {
     return name == "spawn" || name == "destroy" || name == "load" || name == "unload";
 }
 
+// All built-in handler names (includes new dsl-spec-new-features handlers)
+static bool is_builtin_handler(const std::string& name) {
+    return is_lifecycle_event(name) ||
+           name == "tick" || name == "fixed_tick" || name == "late_tick" || name == "input";
+}
+
 void SemanticAnalyzer::validate_event_usage(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             for (auto& handler : sys->handlers) {
-                // "tick" and lifecycle events (spawn/destroy/load/unload) are always valid
-                if (handler.event_name == "tick" || is_lifecycle_event(handler.event_name)) {
+                // Built-in lifecycle and phase handlers are always valid
+                if (is_builtin_handler(handler.event_name)) {
                     continue;
                 }
                 if (!event_names_.count(handler.event_name)) {
@@ -963,12 +1007,28 @@ void SemanticAnalyzer::validate_lifecycle_handler_signatures(ProgramNode& progra
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             for (auto& handler : sys->handlers) {
-                if (is_lifecycle_event(handler.event_name)) {
+                const auto& ename = handler.event_name;
+                // spawn/destroy/load/unload/input: must have no parameters
+                if (is_lifecycle_event(ename) || ename == "input") {
                     if (!handler.params.empty()) {
                         errors_.error(
                             handler.location,
-                            "lifecycle handler '" + handler.event_name +
-                                "' does not accept parameters");
+                            "lifecycle handler '" + ename + "' does not accept parameters");
+                    }
+                }
+                // fixed_tick / late_tick: must have exactly one parameter of type float
+                if (ename == "fixed_tick" || ename == "late_tick") {
+                    if (handler.params.size() != 1) {
+                        errors_.error(
+                            handler.location,
+                            "lifecycle handler '" + ename +
+                                "' requires exactly one parameter 'dt: float'");
+                    } else if (handler.params[0].type.name != "float") {
+                        errors_.error(
+                            handler.params[0].location,
+                            "lifecycle handler '" + ename +
+                                "' parameter must be of type 'float', got '" +
+                                handler.params[0].type.name + "'");
                     }
                 }
             }

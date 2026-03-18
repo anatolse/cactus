@@ -21,6 +21,8 @@ enum class TokenType {
     EVENT,
     FUNC,
     INTERFACE,
+    ASSET,
+    INPUT,
 
     // Keywords — field modifiers
     LET,
@@ -42,6 +44,8 @@ enum class TokenType {
     UNLOAD,
     ENABLE,
     DISABLE,
+    FIXED_TICK,
+    LATE_TICK,
 
     // Keywords — blocks
     APPLY,
@@ -145,6 +149,8 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::EVENT: return "EVENT";
         case TokenType::FUNC: return "FUNC";
         case TokenType::INTERFACE: return "INTERFACE";
+        case TokenType::ASSET: return "ASSET";
+        case TokenType::INPUT: return "INPUT";
         case TokenType::LET: return "LET";
         case TokenType::VAR: return "VAR";
         case TokenType::PERSIST: return "PERSIST";
@@ -162,6 +168,8 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::UNLOAD: return "UNLOAD";
         case TokenType::ENABLE: return "ENABLE";
         case TokenType::DISABLE: return "DISABLE";
+        case TokenType::FIXED_TICK: return "FIXED_TICK";
+        case TokenType::LATE_TICK: return "LATE_TICK";
         case TokenType::APPLY: return "APPLY";
         case TokenType::CONFIG: return "CONFIG";
         case TokenType::CHILD: return "CHILD";

@@ -138,6 +138,11 @@ private:
     void validate_lifecycle_handler_signatures(ProgramNode& program);
     void validate_disabled_annotations(ProgramNode& program);
 
+    // task 11.12: field access not allowed in systems with no filter clause
+    void check_no_field_access(
+        const std::vector<std::unique_ptr<StmtNode>>& stmts,
+        const std::string& sys_name);
+
     // Dynamic ECS helpers
     bool is_trait_declared(const std::string& name) const;
     std::unordered_set<std::string> get_archetype_fields(

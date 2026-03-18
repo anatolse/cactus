@@ -70,4 +70,58 @@ std::string SoaEmitter::emit_enum(const ResolvedEnum& e) {
     return out.str();
 }
 
+// ── Dynamic ECS model ──────────────────────────────────────────────────────
+
+std::string SoaEmitter::emit_trait_bits(const std::vector<std::string>& trait_names_ordered) {
+    std::ostringstream out;
+    out << "// ── TraitBits ────────────────────────────────────────────────────────\n";
+    out << "namespace TraitBits {\n";
+    for (size_t i = 0; i < trait_names_ordered.size(); ++i) {
+        out << "    constexpr uint64_t " << trait_names_ordered[i]
+            << " = 1ULL << " << i << ";\n";
+    }
+    out << "}\n";
+    return out.str();
+}
+
+std::string SoaEmitter::emit_global_entity_pool() {
+    std::ostringstream out;
+    out << "// ── Global Entity Pool ───────────────────────────────────────────────\n";
+    out << "constexpr size_t MAX_ENTITIES = 4096;\n";
+    out << "static size_t entity_count = 0;\n";
+    out << "static uint64_t g_trait_mask[MAX_ENTITIES];\n";
+    return out.str();
+}
+
+std::string SoaEmitter::emit_global_field_arrays(
+    const std::unordered_map<std::string, ResolvedTrait>& traits,
+    const std::vector<std::string>& trait_names_ordered) {
+    std::ostringstream out;
+    out << "// ── Field Arrays (SoA) ───────────────────────────────────────────────\n";
+    for (const auto& name : trait_names_ordered) {
+        auto it = traits.find(name);
+        if (it == traits.end()) continue;
+        for (const auto& field : it->second.fields) {
+            out << "static " << type_to_cpp(field.type) << " g_" << name << "_"
+                << field.name << "[MAX_ENTITIES];\n";
+        }
+    }
+    return out.str();
+}
+
+std::string SoaEmitter::default_cpp_value(const TypeInfo& type) {
+    switch (type.kind) {
+        case TypeKind::Int: return "0";
+        case TypeKind::Float: return "0.0f";
+        case TypeKind::Bool: return "false";
+        case TypeKind::String: return "\"\"";
+        case TypeKind::Vec2: return "{0.0f, 0.0f}";
+        case TypeKind::Vec3: return "{0.0f, 0.0f, 0.0f}";
+        case TypeKind::Quat: return "{0.0f, 0.0f, 0.0f, 1.0f}";
+        case TypeKind::Color: return "{0, 0, 0, 255}";
+        case TypeKind::EntityId: return "0u";
+        default: return "{}";
+    }
+}
+
 }  // namespace cactus

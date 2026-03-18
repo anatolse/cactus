@@ -605,6 +605,15 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) {
                     }
                 }
             }
+
+            // task 11.12: if system has no filter traits, handler bodies cannot
+            // access trait fields (VarAssign is always a trait-field mutation)
+            bool has_filter = !sys->filter.entries.empty() || !sys->filter.trait_names.empty();
+            if (!has_filter) {
+                for (auto& handler : sys->handlers) {
+                    check_no_field_access(handler.body, sys->name);
+                }
+            }
         }
     }
 }
@@ -970,6 +979,31 @@ void SemanticAnalyzer::validate_lifecycle_handler_signatures(ProgramNode& progra
 // ── Task 5.9: Validate exclude clause trait names ────────────────────────────
 // (called as part of validate_system_filters — integrated inline above)
 // Note: exclude clause validation is done here as a separate pass for clarity.
+
+// ── Task 11.12: Check no field access in no-filter system bodies ─────────────
+
+void SemanticAnalyzer::check_no_field_access(
+    const std::vector<std::unique_ptr<StmtNode>>& stmts,
+    const std::string& sys_name) {
+    for (const auto& stmt : stmts) {
+        std::visit(
+            [this, &sys_name](const auto& s) {
+                using S = std::decay_t<decltype(s)>;
+                if constexpr (std::is_same_v<S, VarAssign>) {
+                    // All VarAssign statements in system handlers are trait-field accesses
+                    errors_.error(s.location,
+                                  "trait field '" + s.name +
+                                      "' is not accessible in system '" + sys_name +
+                                      "': no filter clause declares this trait");
+                } else if constexpr (std::is_same_v<S, IfStmt>) {
+                    check_no_field_access(s.then_body, sys_name);
+                    check_no_field_access(s.else_body, sys_name);
+                }
+                // emit, spawn, destroy, load, enable, disable, return, expr: all allowed
+            },
+            stmt->stmt);
+    }
+}
 
 // ── Task 5.11: Validate 'disabled' annotations in apply: blocks ─────────────
 

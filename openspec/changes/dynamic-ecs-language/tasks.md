@@ -70,37 +70,37 @@
 
 ## 7. Code Generation — SoA Backend (cpp-manual)
 
-- [ ] 7.1 Assign each declared trait a unique compile-time bit index; emit a `TraitBits` enum/constexpr table in generated code
-- [ ] 7.2 Add `uint64_t trait_mask` field to the SoA entity storage; initialize from `apply:` block (active = bit set, `disabled` = bit clear)
-- [ ] 7.3 Compile `filter:` to `filter_mask` (0 if no `filter:` clause); emit loop condition as: `(trait_mask & filter_mask) == filter_mask` — when filter_mask=0 this is always true (match all)
-- [ ] 7.4 Compile `exclude:` to `exclude_mask` (0 if no `exclude:` clause); extend loop condition: `&& (trait_mask & exclude_mask) == 0`
-- [ ] 7.5 Emit `enable TraitName` as `trait_mask |= TraitBits::TraitName`
-- [ ] 7.6 Emit `disable TraitName` as `trait_mask &= ~TraitBits::TraitName`
-- [ ] 7.7 Emit `template` declarations as C++ factory functions that fill a new entity slot with default field values + spawn overrides + initial `trait_mask`
-- [ ] 7.8 Emit `spawn TemplateName(overrides)` as a call to the template factory function, appending at `entity_count` and incrementing count
-- [ ] 7.9 Emit `destroy` using swap-and-delete: copy last-entity data into current slot, decrement `entity_count` (do not iterate forward after destroy in same loop)
-- [ ] 7.10 Emit `load` as: store pending module name in a deferred-load slot; emit no immediate code (executed at frame end by runtime)
-- [ ] 7.11 Emit `on spawn()` dispatch: after factory function fills slot, call all system handlers whose `filter_mask` matches the new entity's `trait_mask`
-- [ ] 7.12 Emit `on destroy()` dispatch: before swap-and-delete, call all system handlers whose filter matches the entity being removed
-- [ ] 7.13 Emit `on unload()` dispatch: at start of scene transition, iterate all systems and call `on_unload()` handler (running filtered/excluded entity loop for each)
-- [ ] 7.14 Emit `on load()` dispatch: after scene transition completes, iterate all systems and call their `on_load()` handler if present
-- [ ] 7.15 Add codegen tests verifying bitmask constants are correct, loop condition handles optional filter/exclude, spawn appends entity, destroy uses swap-and-delete, on unload/load dispatch order
+- [x] 7.1 Assign each declared trait a unique compile-time bit index; emit a `TraitBits` enum/constexpr table in generated code
+- [x] 7.2 Add `uint64_t trait_mask` field to the SoA entity storage; initialize from `apply:` block (active = bit set, `disabled` = bit clear)
+- [x] 7.3 Compile `filter:` to `filter_mask` (0 if no `filter:` clause); emit loop condition as: `(trait_mask & filter_mask) == filter_mask` — when filter_mask=0 this is always true (match all)
+- [x] 7.4 Compile `exclude:` to `exclude_mask` (0 if no `exclude:` clause); extend loop condition: `&& (trait_mask & exclude_mask) == 0`
+- [x] 7.5 Emit `enable TraitName` as `trait_mask |= TraitBits::TraitName`
+- [x] 7.6 Emit `disable TraitName` as `trait_mask &= ~TraitBits::TraitName`
+- [x] 7.7 Emit `template` declarations as C++ factory functions that fill a new entity slot with default field values + spawn overrides + initial `trait_mask`
+- [x] 7.8 Emit `spawn TemplateName(overrides)` as a call to the template factory function, appending at `entity_count` and incrementing count
+- [x] 7.9 Emit `destroy` using swap-and-delete: copy last-entity data into current slot, decrement `entity_count` (do not iterate forward after destroy in same loop)
+- [x] 7.10 Emit `load` as: store pending module name in a deferred-load slot; emit no immediate code (executed at frame end by runtime)
+- [x] 7.11 Emit `on spawn()` dispatch: after factory function fills slot, call all system handlers whose `filter_mask` matches the new entity's `trait_mask`
+- [x] 7.12 Emit `on destroy()` dispatch: before swap-and-delete, call all system handlers whose filter matches the entity being removed
+- [x] 7.13 Emit `on unload()` dispatch: at start of scene transition, iterate all systems and call `on_unload()` handler (running filtered/excluded entity loop for each)
+- [x] 7.14 Emit `on load()` dispatch: after scene transition completes, iterate all systems and call their `on_load()` handler if present
+- [x] 7.15 Add codegen tests verifying bitmask constants are correct, loop condition handles optional filter/exclude, spawn appends entity, destroy uses swap-and-delete, on unload/load dispatch order
 
 ## 8. Scene Loading Runtime
 
-- [ ] 8.1 Implement end-of-frame deferred load mechanism: buffer at most one `load` call per frame; if a second `load` is registered in the same frame, report a runtime error: "multiple `load` calls in a single frame"
-- [ ] 8.2 **Phase 1 — Unload**: emit `on unload()` to all active systems (in declaration order); systems like `std.SceneCleanup` destroy entities here via swap-and-delete
-- [ ] 8.3 **Phase 2 — Instantiate**: read target module's `_data.bin`; instantiate entities with field values and initial trait bitmask; emit `on spawn()` per entity
-- [ ] 8.4 **Phase 3 — Load**: emit `on load()` to all active systems; level-setup systems spawn templates and configure state
-- [ ] 8.5 Verify `on unload()` runs before any new entities are created (no interaction between old teardown and new entities)
-- [ ] 8.6 Add integration tests: 3-phase ordering correct, std.SceneCleanup destroys non-persistent on unload, new entities exist during on load
+- [x] 8.1 Implement end-of-frame deferred load mechanism: buffer at most one `load` call per frame; if a second `load` is registered in the same frame, report a runtime error: "multiple `load` calls in a single frame"
+- [x] 8.2 **Phase 1 — Unload**: emit `on unload()` to all active systems (in declaration order); systems like `std.SceneCleanup` destroy entities here via swap-and-delete
+- [x] 8.3 **Phase 2 — Instantiate**: read target module's `_data.bin`; instantiate entities with field values and initial trait bitmask; emit `on spawn()` per entity
+- [x] 8.4 **Phase 3 — Load**: emit `on load()` to all active systems; level-setup systems spawn templates and configure state
+- [x] 8.5 Verify `on unload()` runs before any new entities are created (no interaction between old teardown and new entities)
+- [x] 8.6 Add integration tests: 3-phase ordering correct, std.SceneCleanup destroys non-persistent on unload, new entities exist during on load
 
 ## 9. Standard Library — `std/core.cactus`
 
 - [x] 9.1 Create `std/core.cactus` containing `pub trait Persistent` and `pub system SceneCleanup` (exclude: Persistent, on unload: destroy)
 - [x] 9.2 Add `std` to the compiler's built-in module search path (alongside `--module-path` user paths)
-- [ ] 9.3 Verify `use std.core` in user files compiles, imports `Persistent` and `SceneCleanup` correctly
-- [ ] 9.4 Add integration test: without `use std.core`, `load` does not destroy any entities; with `use std.core`, non-persistent entities are destroyed on unload
+- [x] 9.3 Verify `use std.core` in user files compiles, imports `Persistent` and `SceneCleanup` correctly
+- [x] 9.4 Add integration test: without `use std.core`, `load` does not destroy any entities; with `use std.core`, non-persistent entities are destroyed on unload
 - [x] 9.5 Update `examples/platformer/platformer.cactus` to `use std.core` and apply `Persistent` to `Player`
 
 ## 10. Example Migration — Breaking Filter Syntax
@@ -113,16 +113,16 @@
 
 ## 11. Integration Tests
 
-- [ ] 11.1 Add test: `template` declared, not auto-instantiated
-- [ ] 11.2 Add test: `spawn` creates entity, `on spawn()` fires, fields initialized
-- [ ] 11.3 Add test: `destroy` removes entity, `on destroy()` fires with fields still readable
-- [ ] 11.4 Add test: `load` transition — 3-phase: on unload fires, non-persistent removed, new entities spawned, on load fires
-- [ ] 11.5 Add test: `on unload()` fires before new entities are created (3-phase ordering)
-- [ ] 11.6 Add test: `on load()` fires after all entities instantiated
-- [ ] 11.7 Add test: `enable`/`disable` toggles filter visibility; field data preserved
-- [ ] 11.8 Add test: `exclude:` skips entities with active excluded trait
-- [ ] 11.9 Add test: `exclude:` with disabled trait — entity still processed
-- [ ] 11.10 Add test: marker trait (no body) accepted in `apply:`, `filter:`, `exclude:`
-- [ ] 11.11 Add test: system with no `filter:` + `exclude: Persistent` processes all non-persistent entities
-- [ ] 11.12 Add test: field access in no-filter system body is a compile error
-- [ ] 11.13 Add test: `Persistent` entity survives `load`; entity without `Persistent` is removed (via std.SceneCleanup)
+- [x] 11.1 Add test: `template` declared, not auto-instantiated
+- [x] 11.2 Add test: `spawn` creates entity, `on spawn()` fires, fields initialized
+- [x] 11.3 Add test: `destroy` removes entity, `on destroy()` fires with fields still readable
+- [x] 11.4 Add test: `load` transition — 3-phase: on unload fires, non-persistent removed, new entities spawned, on load fires
+- [x] 11.5 Add test: `on unload()` fires before new entities are created (3-phase ordering)
+- [x] 11.6 Add test: `on load()` fires after all entities instantiated
+- [x] 11.7 Add test: `enable`/`disable` toggles filter visibility; field data preserved
+- [x] 11.8 Add test: `exclude:` skips entities with active excluded trait
+- [x] 11.9 Add test: `exclude:` with disabled trait — entity still processed
+- [x] 11.10 Add test: marker trait (no body) accepted in `apply:`, `filter:`, `exclude:`
+- [x] 11.11 Add test: system with no `filter:` + `exclude: Persistent` processes all non-persistent entities
+- [x] 11.12 Add test: field access in no-filter system body is a compile error
+- [x] 11.13 Add test: `Persistent` entity survives `load`; entity without `Persistent` is removed (via std.SceneCleanup)

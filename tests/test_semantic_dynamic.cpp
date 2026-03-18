@@ -193,7 +193,8 @@ TEST_CASE("Semantic: load reachable via use — ok", "[semantic][dynamic-ecs]") 
         "use levels\n"
         "trait GameState:\n    var active: bool = true\n"
         "system GameMgr:\n"
-        "    filter: [GameState]\n"
+        "    filter:\n"
+        "        GameState\n"
         "    on tick(dt: float):\n"
         "        load levels.main\n"));
 }
@@ -202,7 +203,8 @@ TEST_CASE("Semantic: load unreachable module — error", "[semantic][dynamic-ecs
     CHECK(analyze_errors(
         "trait GameState:\n    var active: bool = true\n"
         "system GameMgr:\n"
-        "    filter: [GameState]\n"
+        "    filter:\n"
+        "        GameState\n"
         "    on tick(dt: float):\n"
         "        load unknown.scene\n"));
 }
@@ -214,7 +216,8 @@ TEST_CASE("Semantic: enable declared trait — ok", "[semantic][dynamic-ecs]") {
         "trait Frozen\n"
         "trait Position:\n    var x: float = 0.0\n"
         "system FreezeSystem:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on tick(dt: float):\n"
         "        enable Frozen\n"));
 }
@@ -223,7 +226,8 @@ TEST_CASE("Semantic: enable undeclared trait — error", "[semantic][dynamic-ecs
     CHECK(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
         "system FreezeSystem:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on tick(dt: float):\n"
         "        enable NonExistentTrait\n"));
 }
@@ -233,7 +237,8 @@ TEST_CASE("Semantic: disable declared trait — ok", "[semantic][dynamic-ecs]") 
         "trait Frozen\n"
         "trait Position:\n    var x: float = 0.0\n"
         "system FreezeSystem:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on tick(dt: float):\n"
         "        disable Frozen\n"));
 }
@@ -242,7 +247,8 @@ TEST_CASE("Semantic: disable undeclared trait — error", "[semantic][dynamic-ec
     CHECK(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
         "system FreezeSystem:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on tick(dt: float):\n"
         "        disable BadTrait\n"));
 }
@@ -253,7 +259,8 @@ TEST_CASE("Semantic: on spawn no params — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
         "system Init:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on spawn():\n"
         "        x = 0.0\n"));
 }
@@ -262,7 +269,8 @@ TEST_CASE("Semantic: on spawn with params — error", "[semantic][dynamic-ecs]")
     CHECK(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
         "system Init:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on spawn(v: float):\n"
         "        x = v\n"));
 }
@@ -271,7 +279,8 @@ TEST_CASE("Semantic: on destroy no params — valid", "[semantic][dynamic-ecs]")
     CHECK_FALSE(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
         "system Cleanup:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on destroy():\n"
         "        x = 0.0\n"));
 }
@@ -280,7 +289,8 @@ TEST_CASE("Semantic: on load with params — error", "[semantic][dynamic-ecs]") 
     CHECK(analyze_errors(
         "trait GameState:\n    var active: bool = true\n"
         "system GameMgr:\n"
-        "    filter: [GameState]\n"
+        "    filter:\n"
+        "        GameState\n"
         "    on load(name: float):\n"
         "        active = true\n"));
 }
@@ -289,7 +299,8 @@ TEST_CASE("Semantic: on unload with params — error", "[semantic][dynamic-ecs]"
     CHECK(analyze_errors(
         "trait GameState:\n    var active: bool = true\n"
         "system GameMgr:\n"
-        "    filter: [GameState]\n"
+        "    filter:\n"
+        "        GameState\n"
         "    on unload(dt: float):\n"
         "        active = false\n"));
 }
@@ -360,7 +371,8 @@ TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic
     CHECK_FALSE(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
         "system Sys:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on spawn():\n        x = 0.0\n"
         "    on destroy():\n        x = 0.0\n"
         "    on load():\n        x = 1.0\n"
@@ -394,7 +406,8 @@ TEST_CASE("Semantic: destroy in system handler — valid", "[semantic][dynamic-e
     CHECK_FALSE(analyze_errors(
         "trait Health:\n    var hp: int = 100\n"
         "system DeathSystem:\n"
-        "    filter: [Health]\n"
+        "    filter:\n"
+        "        Health\n"
         "    on tick(dt: float):\n"
         "        destroy\n"));
 }
@@ -406,7 +419,76 @@ TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ec
         "trait Position:\n    var x: float = 0.0\n"
         "template Enemy:\n    apply:\n        Position\n"
         "system Spawner:\n"
-        "    filter: [Position]\n"
+        "    filter:\n"
+        "        Position\n"
         "    on tick(dt: float):\n"
         "        spawn Enemy(x = 0.0)\n"));
+}
+
+// ── Task 11.10: Marker trait in apply/filter/exclude ────────────────────────
+
+TEST_CASE("Semantic: marker trait in filter is valid (task 11.10)", "[semantic][dynamic-ecs]") {
+    CHECK_FALSE(analyze_errors(
+        "trait Persistent\n"
+        "system Sys:\n"
+        "    filter:\n"
+        "        Persistent\n"
+        "    on tick(dt: float):\n"
+        "        destroy\n"));
+}
+
+TEST_CASE("Semantic: marker trait filter + exclude combination (task 11.10)", "[semantic][dynamic-ecs]") {
+    CHECK_FALSE(analyze_errors(
+        "trait Persistent\n"
+        "trait Active\n"
+        "system Sys:\n"
+        "    filter:\n"
+        "        Active\n"
+        "    exclude:\n"
+        "        Persistent\n"
+        "    on tick(dt: float):\n"
+        "        destroy\n"));
+}
+
+// ── Task 11.12: Field access in no-filter system body is an error ────────────
+
+TEST_CASE("Semantic: field access in no-filter system body — error (task 11.12)",
+          "[semantic][dynamic-ecs]") {
+    auto err = first_error(
+        "trait Position:\n    var x: float = 0.0\n"
+        "system GlobalSystem:\n"
+        "    on tick(dt: float):\n"
+        "        x = x + dt\n");  // 'x' is a trait field, system has no filter
+    CHECK(err.find("not accessible") != std::string::npos);
+}
+
+TEST_CASE("Semantic: non-field stmts allowed in no-filter system — ok (task 11.12)",
+          "[semantic][dynamic-ecs]") {
+    // destroy, emit, spawn etc. are allowed even without filter
+    CHECK_FALSE(analyze_errors(
+        "system GlobalCleanup:\n"
+        "    on unload():\n"
+        "        destroy\n"));
+}
+
+TEST_CASE("Semantic: field access in filter system body — ok (task 11.12)",
+          "[semantic][dynamic-ecs]") {
+    // With filter, field access is fine
+    CHECK_FALSE(analyze_errors(
+        "trait Position:\n    var x: float = 0.0\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick(dt: float):\n"
+        "        x = x + dt\n"));
+}
+
+TEST_CASE("Semantic: field access in no-filter if-branch — error (task 11.12)",
+          "[semantic][dynamic-ecs]") {
+    CHECK(analyze_errors(
+        "trait Health:\n    var hp: int = 100\n"
+        "system GlobalSys:\n"
+        "    on tick(dt: float):\n"
+        "        if hp <= 0:\n"
+        "            hp = 100\n"));
 }

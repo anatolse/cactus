@@ -182,7 +182,7 @@ unit_decl       = [ "pub" ] "unit" IDENTIFIER ":" NEWLINE INDENT
 apply_block     = "apply" ":" NEWLINE INDENT
                   { apply_entry }
                   DEDENT ;
-apply_entry     = IDENTIFIER [ ":" "disabled" ] NEWLINE ;
+apply_entry     = dotted_name [ ":" "disabled" ] NEWLINE ;
 config_block    = "config" ":" NEWLINE INDENT
                   { config_assign }
                   DEDENT ;
@@ -228,7 +228,7 @@ filter_clause   = "filter" ":" NEWLINE INDENT
                   DEDENT ;
 filter_entry    = dotted_name [ "as" IDENTIFIER ] NEWLINE ;
 exclude_clause  = "exclude" ":" NEWLINE INDENT
-                  { IDENTIFIER NEWLINE }
+                  { dotted_name NEWLINE }
                   DEDENT ;
 ```
 
@@ -365,8 +365,8 @@ spawn_arg_list  = spawn_arg { "," spawn_arg } ;
 spawn_arg       = IDENTIFIER "=" expression ;
 destroy_stmt    = "destroy" [ expression ] NEWLINE ;
 load_stmt       = "load" dotted_name NEWLINE ;
-enable_stmt     = "enable" IDENTIFIER NEWLINE ;
-disable_stmt    = "disable" IDENTIFIER NEWLINE ;
+enable_stmt     = "enable" dotted_name NEWLINE ;
+disable_stmt    = "disable" dotted_name NEWLINE ;
 return_stmt     = "return" [ expression ] NEWLINE ;
 expr_stmt       = expression NEWLINE ;
 if_stmt         = "if" expression ":" NEWLINE INDENT

@@ -1,0 +1,74 @@
+module std.camera.volume
+
+# ── 3D Camera Traits & Systems ────────────────────────────────────────────────
+
+# 3D perspective camera configuration.
+# fov_y:  vertical field of view in degrees
+# near:   near clipping plane distance
+# far:    far clipping plane distance
+# active: only the active camera is used for rendering
+pub trait Camera:
+    var fov_y: float = 60.0
+    var near: float = 0.1
+    var far: float = 1000.0
+    var active: bool = true
+
+# Smooth-follow camera that tracks a target entity's position in 3D.
+# target:    entity_id of the entity to follow
+# offset:    positional offset from the target (in world space)
+# smoothing: lerp speed (higher = snappier; 0 = instant)
+pub trait FollowCamera:
+    var target: entity_id
+    var offset: vec3 = vec3(0.0, 2.0, -6.0)
+    var smoothing: float = 8.0
+
+# First-person camera driven by yaw/pitch angles.
+# pitch:       vertical look angle in radians (clamped to avoid gimbal)
+# yaw:         horizontal look angle in radians
+# sensitivity: mouse/stick radians-per-input-unit
+pub trait FirstPersonCamera:
+    var pitch: float = 0.0
+    var yaw: float = 0.0
+    var sensitivity: float = 0.002
+
+# Third-person camera that orbits around a target entity.
+# target:    entity_id of the entity to orbit
+# distance:  orbit radius in world units
+# height:    vertical offset above the target
+# smoothing: lerp speed (higher = snappier; 0 = instant)
+pub trait ThirdPersonCamera:
+    var target: entity_id
+    var distance: float = 6.0
+    var height: float = 2.0
+    var smoothing: float = 8.0
+
+# Updates Transform to position the camera behind and above the target entity.
+# TODO: requires entity query mechanism to read target entity's Transform.
+# Stubbed until entity-by-id field access is added to the language.
+pub system FollowCameraSystem:
+    filter:
+        Camera as cam
+        FollowCamera as follow
+    on late_tick(dt: float):
+        # TODO: query target entity Transform and lerp camera position toward offset
+        pass
+
+# Applies pitch/yaw from FirstPersonCamera to the entity's Transform rotation.
+# TODO: requires entity query mechanism for Transform update.
+pub system FirstPersonCameraSystem:
+    filter:
+        Camera as cam
+        FirstPersonCamera as fps
+    on late_tick(dt: float):
+        # TODO: apply pitch and yaw to Transform.rotation as a quaternion
+        pass
+
+# Orbits the camera around the target entity using ThirdPersonCamera parameters.
+# TODO: requires entity query mechanism to read target entity's Transform.
+pub system ThirdPersonCameraSystem:
+    filter:
+        Camera as cam
+        ThirdPersonCamera as tps
+    on late_tick(dt: float):
+        # TODO: compute orbit position from target Transform, distance, height
+        pass

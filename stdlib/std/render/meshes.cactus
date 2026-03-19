@@ -1,0 +1,49 @@
+module std.render.meshes
+
+# ── 3D Mesh Rendering Traits ──────────────────────────────────────────────────
+# Passive traits — the backend reads these and renders automatically.
+# No user system is needed. An entity with Transform + Renderer is drawn.
+
+# Renders a 3D mesh at the entity's transform position.
+# mesh:        asset handle for the mesh geometry (immutable after spawn)
+# material:    asset handle for the surface material (immutable after spawn)
+# visible:     set false to skip rendering without removing the trait
+# cast_shadow: whether this mesh contributes to shadow maps
+pub trait Renderer:
+    let mesh: mesh_id
+    let material: material_id
+    var visible: bool = true
+    var cast_shadow: bool = true
+
+# Renders a textured billboard (always faces the camera) in 3D space.
+# texture: asset handle for the billboard texture (immutable after spawn)
+# size:    world-space size of the billboard quad
+# color:   tint color (RGBA hex; #FFFFFFFF = no tint)
+# visible: set false to skip rendering
+pub trait BillboardRenderer:
+    let texture: texture_id
+    var size: vec2 = vec2(1.0, 1.0)
+    var color: color = #FFFFFFFF
+    var visible: bool = true
+
+# Emits a point light at the entity's transform position.
+# color:     light color
+# intensity: brightness multiplier
+# range:     falloff radius in world units
+# enabled:   set false to turn off the light without removing the trait
+pub trait PointLight:
+    var color: color = #FFFFFFFF
+    var intensity: float = 1.0
+    var range: float = 10.0
+    var enabled: bool = true
+
+# Emits a directional (sun-like) light from a fixed direction.
+# direction: normalized world-space direction the light travels
+# color:     light color
+# intensity: brightness multiplier
+# enabled:   set false to turn off the light without removing the trait
+pub trait DirectionalLight:
+    var direction: vec3 = vec3(0.0, -1.0, 0.0)
+    var color: color = #FFFFFFFF
+    var intensity: float = 1.0
+    var enabled: bool = true

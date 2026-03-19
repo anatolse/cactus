@@ -1,0 +1,23 @@
+module std.math.vec2
+
+# ── 2D Vector Pure Functions ──────────────────────────────────────────────────
+# Implementations provided by the backend. These declarations are symbol
+# references only — game code calls them; the backend resolves the bodies.
+
+# Length (magnitude) of a 2D vector
+pub func length(v: vec2) -> float
+
+# Normalize a 2D vector to unit length
+pub func normalize(v: vec2) -> vec2
+
+# Dot product of two 2D vectors
+pub func dot(a, b: vec2) -> float
+
+# Linear interpolation between two 2D vectors by factor t (0..1)
+pub func lerp(a, b: vec2, t: float) -> vec2
+
+# Euclidean distance between two 2D points
+pub func distance(a, b: vec2) -> float
+
+# Angle of a 2D vector from the positive X axis (radians)
+pub func angle(v: vec2) -> float

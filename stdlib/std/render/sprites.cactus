@@ -1,0 +1,38 @@
+module std.render.sprites
+
+# ── 2D Sprite Rendering Traits ────────────────────────────────────────────────
+# Passive traits — the backend reads these and renders automatically.
+# No user system is needed. An entity with Transform + Renderer is drawn.
+
+# Renders a static texture at the entity's transform position.
+# texture:  asset handle for the texture to draw (immutable after spawn)
+# size:     draw size in world units
+# color:    tint color (RGBA hex; #FFFFFFFF = no tint)
+# visible:  set false to skip rendering without removing the trait
+# layer:    draw order (lower values drawn first / behind)
+pub trait Renderer:
+    let texture: texture_id
+    var size: vec2 = vec2(1.0, 1.0)
+    var color: color = #FFFFFFFF
+    var visible: bool = true
+    var layer: int = 0
+
+# Renders a single row sprite-sheet animation.
+# texture:     asset handle for the sprite sheet
+# frame:       current frame index (0-based)
+# frame_count: total number of frames in the sheet
+# fps:         playback speed in frames per second
+# playing:     set false to pause animation
+pub trait AnimatedSprite:
+    let texture: texture_id
+    var frame: int = 0
+    var frame_count: int = 1
+    var fps: float = 12.0
+    var playing: bool = true
+
+# Fills the screen / canvas with a solid color (UI background).
+# color:   fill color (RGBA hex)
+# visible: set false to skip rendering
+pub trait Canvas2D:
+    var color: color = #FFFFFFFF
+    var visible: bool = true

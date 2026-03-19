@@ -16,7 +16,6 @@ All new modules are data definitions and pure function declarations — no compi
 
 **Non-Goals:**
 - Backend changes to make passive traits actually render/simulate (separate change)
-- `std.debug` semantic analyzer enforcement (string literal exception, effectful restriction) — separate compiler change
 - `std.collider_shape` built-in type — needed by `std.physics.volume.Collider` but is a type system addition (separate change); the volume Collider is stubbed until then
 - `std.camera` active systems (FollowCamera, FirstPersonCamera) — require entity query capability not yet in the spec; these system declarations are stubbed
 
@@ -80,12 +79,6 @@ All new modules are data definitions and pure function declarations — no compi
 
 ---
 
-### D7: `std.debug` as effectful free functions
-
-**Decision:** Debug utilities are declared as `pub func` in `std.debug` but are designated effectful — the semantic analyzer (future change) will reject calls inside pure `func` declarations. All calls compile to nothing with `--release`. String literals are permitted as label arguments (a second exception to the const-string rule, alongside asset paths).
-
-**Rationale:** Debug code must be easy to write (quick `watch_float("speed", speed)` calls without const boilerplate). Stripping in release is standard practice. Effectful designation prevents debug calls from "infecting" pure functions.
-
 ## Risks / Trade-offs
 
 **[Risk] Camera FollowCamera/FPS/TPS systems require entity query — not yet in spec**
@@ -99,9 +92,6 @@ All new modules are data definitions and pure function declarations — no compi
 
 **[Risk] Same trait name in both sub-modules — if user imports both, ambiguity**
 → Mitigation: The semantic analyzer already detects ambiguous symbol references and requires qualification. The error message "ambiguous reference 'Transform': defined in std.transform.flat and std.transform.volume; use qualified form" is helpful. Mixed imports are unusual and intentional.
-
-**[Risk] `std.debug` string literal exception requires semantic analyzer change**
-→ Mitigation: Without the semantic analyzer change, `watch_float("speed", val)` would be a const-string rule violation. Users can still use debug functions with `const:`-defined labels in the interim.
 
 ## Open Questions
 

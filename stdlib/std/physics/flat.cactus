@@ -1,0 +1,32 @@
+module std.physics.flat
+
+# ── 2D Kinematic Physics Traits & Events ─────────────────────────────────────
+# Passive traits — the backend simulates these automatically.
+# No user physics system is needed. CharacterBody + Collider entities are
+# simulated and their fields updated each tick by the generated runtime.
+
+# Kinematic character controller for 2D entities.
+# velocity: current movement velocity in world units per second
+# grounded: true when the entity is resting on a surface (set by backend)
+# gravity:  downward acceleration in world units per second squared
+pub trait CharacterBody:
+    var velocity: vec2 = vec2(0.0, 0.0)
+    var grounded: bool = false
+    var gravity: float = 30.0
+
+# Axis-aligned bounding box collider for 2D entities.
+# width, height: collider size in world units
+# layer: collision layer bitmask this entity belongs to
+# mask:  collision layer bitmask this entity collides with
+pub trait Collider:
+    var width: float = 1.0
+    var height: float = 1.0
+    var layer: int = 1
+    var mask: int = 1
+
+# Fired when this entity's collider first overlaps another entity's collider.
+# other:   entity_id of the entity that was hit
+# overlap: overlap vector (direction and depth of penetration)
+pub event CollisionEnter:
+    var other: entity_id
+    var overlap: vec2

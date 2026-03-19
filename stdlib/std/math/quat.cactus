@@ -1,0 +1,35 @@
+module std.math.quat
+
+# ── Quaternion Pure Functions ─────────────────────────────────────────────────
+# Implementations provided by the backend. These declarations are symbol
+# references only — game code calls them; the backend resolves the bodies.
+
+# Identity quaternion (no rotation)
+pub func identity() -> quat
+
+# Quaternion from Euler angles (pitch, yaw, roll in radians)
+pub func from_euler(pitch, yaw, roll: float) -> quat
+
+# Quaternion from axis and angle (axis must be unit length, angle in radians)
+pub func from_axis_angle(axis: vec3, angle: float) -> quat
+
+# Forward direction vector from quaternion (local -Z axis)
+pub func forward(q: quat) -> vec3
+
+# Right direction vector from quaternion (local +X axis)
+pub func right(q: quat) -> vec3
+
+# Up direction vector from quaternion (local +Y axis)
+pub func up(q: quat) -> vec3
+
+# Rotate a 3D vector by a quaternion
+pub func rotate(q: quat, v: vec3) -> vec3
+
+# Spherical linear interpolation between two quaternions by factor t (0..1)
+pub func slerp(a, b: quat, t: float) -> quat
+
+# Multiply two quaternions (compose rotations)
+pub func multiply(a, b: quat) -> quat
+
+# Inverse (conjugate) of a unit quaternion
+pub func inverse(q: quat) -> quat

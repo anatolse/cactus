@@ -1,0 +1,48 @@
+module std.math
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+pub const PI = 3.14159265
+
+# ── Scalar Pure Functions ─────────────────────────────────────────────────────
+# Implementations provided by the backend. These declarations are symbol
+# references only — game code calls them; the backend resolves the bodies.
+
+# Linear interpolation between a and b by factor t (0..1)
+pub func lerp(a, b, t: float) -> float
+
+# Clamp x to the range [lo, hi]
+pub func clamp(x, lo, hi: float) -> float
+
+# Absolute value
+pub func abs(v: float) -> float
+
+# Minimum of two values
+pub func min(a, b: float) -> float
+
+# Maximum of two values
+pub func max(a, b: float) -> float
+
+# Square root
+pub func sqrt(v: float) -> float
+
+# Sine of angle in radians
+pub func sin(a: float) -> float
+
+# Cosine of angle in radians
+pub func cos(a: float) -> float
+
+# Arc-tangent of y/x, returning angle in radians
+pub func atan2(y, x: float) -> float
+
+# Floor: largest integer not greater than v
+pub func floor(v: float) -> int
+
+# Ceil: smallest integer not less than v
+pub func ceil(v: float) -> int
+
+# Round: nearest integer to v
+pub func round(v: float) -> int
+
+# base raised to exp
+pub func pow(base, exp: float) -> float

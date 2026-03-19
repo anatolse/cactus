@@ -1,0 +1,50 @@
+module std.audio
+
+# ── Audio Events & Traits ─────────────────────────────────────────────────────
+
+# Fire-and-forget one-shot sound effect.
+# Emit this event to play a sound with no persistent state.
+# sound:  asset handle for the sound clip to play
+# volume: playback volume multiplier (1.0 = normal)
+# pitch:  playback pitch multiplier (1.0 = normal)
+pub event PlaySound:
+    var sound: sound_id
+    var volume: float
+    var pitch: float
+
+# Persistent sound emitter attached to an entity.
+# Useful for looping ambient sounds or sounds that need runtime control.
+# sound:   asset handle for the sound clip
+# playing: set true to start playback, false to stop
+# looping: whether the sound restarts after finishing
+# volume:  playback volume multiplier (1.0 = normal)
+# pitch:   playback pitch multiplier (1.0 = normal)
+# radius:  world-space radius for 3D attenuation (0 = no attenuation)
+pub trait AudioSource:
+    var sound: sound_id
+    var playing: bool = false
+    var looping: bool = true
+    var volume: float = 1.0
+    var pitch: float = 1.0
+    var radius: float = 10.0
+
+# Persistent music stream attached to an entity.
+# Suitable for background music tracks with runtime volume/looping control.
+# music:   asset handle for the music stream
+# playing: set true to start playback, false to stop
+# looping: whether the track restarts after finishing
+# volume:  playback volume multiplier (1.0 = normal)
+pub trait MusicTrack:
+    var music: music_id
+    var playing: bool = false
+    var looping: bool = true
+    var volume: float = 1.0
+
+# Global audio volume settings. Apply to a singleton entity.
+# master_volume: overall output volume multiplier
+# music_volume:  multiplier applied to all MusicTrack playback
+# sfx_volume:    multiplier applied to all AudioSource and PlaySound playback
+pub trait AudioSettings:
+    var master_volume: float = 1.0
+    var music_volume: float = 0.8
+    var sfx_volume: float = 1.0

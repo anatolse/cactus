@@ -1,0 +1,26 @@
+module std.math.vec3
+
+# ── 3D Vector Pure Functions ──────────────────────────────────────────────────
+# Implementations provided by the backend. These declarations are symbol
+# references only — game code calls them; the backend resolves the bodies.
+
+# Length (magnitude) of a 3D vector
+pub func length(v: vec3) -> float
+
+# Normalize a 3D vector to unit length
+pub func normalize(v: vec3) -> vec3
+
+# Dot product of two 3D vectors
+pub func dot(a, b: vec3) -> float
+
+# Cross product of two 3D vectors
+pub func cross(a, b: vec3) -> vec3
+
+# Linear interpolation between two 3D vectors by factor t (0..1)
+pub func lerp(a, b: vec3, t: float) -> vec3
+
+# Euclidean distance between two 3D points
+pub func distance(a, b: vec3) -> float
+
+# Reflect vector v about a surface with the given normal
+pub func reflect(v, normal: vec3) -> vec3

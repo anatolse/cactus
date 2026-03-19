@@ -28,8 +28,6 @@ A set of new `.cactus` files under `stdlib/std/` implementing the agreed stdlib 
 
 6. **`std.audio` uses an event for fire-and-forget sounds** — `emit PlaySound(...)` is the idiomatic way to play one-shot sounds, consistent with the event-driven model.
 
-7. **`std.debug` is effectful and build-stripped** — Functions in `std.debug` may only be called from system handler bodies (not from pure `func` declarations). All calls are compiled to nothing in `--release` builds.
-
 ### New stdlib files
 
 ```
@@ -52,7 +50,6 @@ stdlib/std/
     flat.cactus            → std.camera.flat      (Camera, FollowCamera + systems for 2D)
     volume.cactus          → std.camera.volume    (Camera, FollowCamera, FirstPersonCamera + systems for 3D)
   audio.cactus             → std.audio    (PlaySound event, AudioSource, MusicTrack, AudioSettings)
-  debug.cactus             → std.debug    (watch_*, draw_*, assert — effectful, debug-only)
 ```
 
 (Existing `std.core` and `std.input` are unchanged.)
@@ -292,21 +289,6 @@ pub trait AudioSettings:
     var sfx_volume: float = 1.0
 ```
 
-**std.debug** — effectful debug utilities (stripped in --release):
-```cactus
-pub func watch_int(label: string_id, value: int)
-pub func watch_float(label: string_id, value: float)
-pub func watch_bool(label: string_id, value: bool)
-pub func watch_vec2(label: string_id, value: vec2)
-pub func watch_vec3(label: string_id, value: vec3)
-pub func assert(condition: bool, label: string_id)
-pub func draw_line3(start, end: vec3, color: color)
-pub func draw_box(center, size: vec3, color: color)
-pub func draw_sphere(center: vec3, radius: float, color: color)
-pub func draw_line2(start, end: vec2, color: color)
-pub func draw_rect2(center, size: vec2, color: color)
-```
-
 ## Capabilities
 
 ### New Capabilities
@@ -317,7 +299,6 @@ pub func draw_rect2(center, size: vec2, color: color)
 - `stdlib-physics`: `std.physics.flat`, `std.physics.volume`
 - `stdlib-camera`: `std.camera.flat`, `std.camera.volume`
 - `stdlib-audio`: `std.audio`
-- `stdlib-debug`: `std.debug`
 
 ### Modified Capabilities
 
@@ -328,6 +309,5 @@ _(none — this change only adds new stdlib files)_
 - **New files only**: all changes are new `.cactus` files under `stdlib/std/`
 - **No compiler source changes required** for the DSL part — these are just `.cactus` source files that the compiler processes with existing rules
 - **Backend changes required** for passive traits: the Raylib backend code generator must be updated to read and act on `std.render`, `std.physics`, `std.audio`, and `std.camera` traits (separate backend change, not in scope here)
-- **`std.debug`** requires a small semantic analyzer change to allow string literals in its function call arguments (debug label exception), and to enforce that its functions cannot be called from pure `func` declarations
 - **`collider_shape`** is a new built-in type needed by `std.physics.volume.Collider` — requires a type system addition
 - The `std.camera.flat` and `std.camera.volume` systems that update cameras need access to entity_id lookup (following a `target: entity_id` field) — the spec currently has no way to read another entity's trait fields from a system. This is a known gap that may require a query mechanism. The camera systems in these modules may need to be simplified or stubbed pending that feature.

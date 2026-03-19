@@ -1,0 +1,12 @@
+module std.transform.flat
+
+# ── 2D Spatial Transform ──────────────────────────────────────────────────────
+
+# Standard 2D transform. Apply to any entity that has a position in the world.
+# position: world-space 2D position
+# rotation: angle in radians (counter-clockwise)
+# scale:    per-axis scale factor (1.0 = normal size)
+pub trait Transform:
+    var position: vec2 = vec2(0.0, 0.0)
+    var rotation: float = 0.0
+    var scale: vec2 = vec2(1.0, 1.0)

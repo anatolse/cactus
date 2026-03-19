@@ -1,0 +1,35 @@
+module std.physics.volume
+
+# ── 3D Kinematic Physics Traits & Events ─────────────────────────────────────
+# Passive traits — the backend simulates these automatically.
+# No user physics system is needed. CharacterBody + Collider entities are
+# simulated and their fields updated each tick by the generated runtime.
+
+# Kinematic character controller for 3D entities.
+# velocity:     current movement velocity in world units per second
+# grounded:     true when the entity is resting on a surface (set by backend)
+# ground_normal: surface normal of the ground being stood on (set by backend)
+# step_height:  maximum step height the character can climb automatically
+pub trait CharacterBody:
+    var velocity: vec3 = vec3(0.0, 0.0, 0.0)
+    var grounded: bool = false
+    var ground_normal: vec3 = vec3(0.0, 1.0, 0.0)
+    var step_height: float = 0.3
+
+# 3D collider for physics simulation.
+# layer: collision layer bitmask this entity belongs to
+# mask:  collision layer bitmask this entity collides with
+# NOTE: shape field (let shape: collider_shape) is pending a type system
+# addition for the collider_shape built-in type. Add when available.
+pub trait Collider:
+    var layer: int = 1
+    var mask: int = 1
+
+# Fired when this entity's collider first contacts another entity's collider.
+# other:  entity_id of the entity that was hit
+# point:  world-space contact point
+# normal: surface normal at the contact point (pointing away from other)
+pub event CollisionEnter:
+    var other: entity_id
+    var point: vec3
+    var normal: vec3

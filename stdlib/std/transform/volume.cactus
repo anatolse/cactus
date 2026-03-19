@@ -1,0 +1,12 @@
+module std.transform.volume
+
+# ── 3D Spatial Transform ──────────────────────────────────────────────────────
+
+# Standard 3D transform. Apply to any entity that has a position in 3D space.
+# position: world-space 3D position
+# rotation: orientation as a quaternion (identity = no rotation)
+# scale:    per-axis scale factor (1.0 = normal size)
+pub trait Transform:
+    var position: vec3 = vec3(0.0, 0.0, 0.0)
+    var rotation: quat = quat(0.0, 0.0, 0.0, 1.0)
+    var scale: vec3 = vec3(1.0, 1.0, 1.0)

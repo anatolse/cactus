@@ -1,6 +1,6 @@
 # Cactus DSL Language Specification
 
-**Version:** 0.2.0
+**Version:** 0.3.0
 **Status:** Draft
 
 ## 1. Overview
@@ -35,7 +35,7 @@ var x: int  # Inline comment
 
 ```
 module  use     const   struct  enum    trait   unit    system
-event   func
+event   func    extern
 let     var     persist sync    pub
 on      emit    if      else    match   return
 apply   config  filter  exclude
@@ -90,7 +90,7 @@ Double-quoted UTF-8 strings: `"Hello World"`. Only valid inside `const` blocks (
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
                 | enum_decl | trait_decl | unit_decl | template_decl | system_decl
-                | event_decl | func_decl | asset_decl | input_decl ;
+                | event_decl | func_decl | extern_func_decl | asset_decl | input_decl ;
 ```
 
 ### 3.2 Module and Imports
@@ -144,9 +144,11 @@ Traits may have a body (data traits) or no body (marker traits). Marker traits a
 ```ebnf
 trait_decl      = [ "pub" ] "trait" IDENTIFIER
                   [ ":" NEWLINE INDENT
-                    { field_decl | event_handler | func_decl }
+                    { field_decl }
                     DEDENT ] ;
 ```
+
+Traits are **data-only** — event handlers and `func` declarations are not allowed inside a trait body. Logic belongs in `system` declarations.
 
 **Marker traits** (no colon, no body):
 ```cactus
@@ -182,11 +184,12 @@ unit_decl       = [ "pub" ] "unit" IDENTIFIER ":" NEWLINE INDENT
 apply_block     = "apply" ":" NEWLINE INDENT
                   { apply_entry }
                   DEDENT ;
-apply_entry     = dotted_name [ ":" "disabled" ] NEWLINE ;
+apply_entry     = dotted_name [ "as" IDENTIFIER ] [ ":" "disabled" ] NEWLINE ;
 config_block    = "config" ":" NEWLINE INDENT
                   { config_assign }
                   DEDENT ;
-config_assign   = IDENTIFIER "=" expression NEWLINE ;
+config_assign   = config_key "=" expression NEWLINE ;
+config_key      = IDENTIFIER [ "." IDENTIFIER ] ;
 ```
 
 > **Note:** The `child:` block was removed in v0.2. To compose entities with sub-entities, use `spawn` in `on spawn()` handlers and `destroy entity_id` in `on destroy()` handlers. See §9.1 for the pattern.
@@ -221,6 +224,7 @@ Both `filter:` and `exclude:` are optional. A system with no `filter:` matches *
 system_decl     = "system" IDENTIFIER ":" NEWLINE INDENT
                   [ filter_clause ]
                   [ exclude_clause ]
+                  [ after_clause ]
                   { event_handler }
                   DEDENT ;
 filter_clause   = "filter" ":" NEWLINE INDENT
@@ -230,6 +234,35 @@ filter_entry    = dotted_name [ "as" IDENTIFIER ] NEWLINE ;
 exclude_clause  = "exclude" ":" NEWLINE INDENT
                   { dotted_name NEWLINE }
                   DEDENT ;
+after_clause    = "after" ":" NEWLINE INDENT
+                  { IDENTIFIER NEWLINE }
+                  DEDENT ;
+```
+
+The optional `after:` clause declares explicit execution ordering: this system must run after all named systems within the same execution phase. `after:` is validated by the compiler — all named systems must exist and cycles (A after B, B after A) are a compile error.
+
+```cactus
+# Render pass ordering: scene → UI → debug overlay
+system SceneRenderSystem:
+    filter:
+        Renderer as r
+    on tick(dt: float):
+        draw_scene(r)
+
+system UIRenderSystem:
+    filter:
+        UIRenderer as ui
+    after:
+        SceneRenderSystem
+    on tick(dt: float):
+        draw_ui(ui)
+
+system DebugOverlaySystem:
+    after:
+        SceneRenderSystem
+        UIRenderSystem
+    on tick(dt: float):
+        draw_debug()
 ```
 
 ```cactus
@@ -306,11 +339,38 @@ event_decl      = "event" IDENTIFIER ":" NEWLINE INDENT
 
 ### 3.12 Func
 
+Regular `func` declarations are pure and must have a body. `extern func` declarations are body-less and mark functions whose implementation is provided by the backend runtime (the `cactus_runtime.h` header). The return type follows the closing `)` directly — the `->` arrow token is **not used** in function declarations.
+
 ```ebnf
-func_decl       = [ "pub" ] "func" IDENTIFIER "(" [ param_list ] ")"
-                  [ "->" type_ref ] ":" NEWLINE INDENT
-                  { statement }
-                  DEDENT ;
+func_decl        = [ "pub" ] "func" IDENTIFIER "(" [ param_list ] ")"
+                   [ type_ref ] ":" NEWLINE INDENT
+                   { statement }
+                   DEDENT ;
+
+extern_func_decl = [ "pub" ] "extern" "func" IDENTIFIER
+                   "(" [ param_list ] ")" [ type_ref ] NEWLINE ;
+```
+
+**`extern func` rules:**
+- No colon and no body after the signature.
+- Exempt from purity enforcement (§6.2) and recursion detection (§6.3).
+- When `pub`, the function is exported in the module's `ImportedSymbols.funcs` map and visible to importers.
+- When any `extern func` is in scope (locally or via `use`), C++ backends emit `#include "cactus_runtime.h"` in the generated file.
+
+```cactus
+# In std/math.cactus — backend provides the implementation:
+pub extern func lerp(a: float, b: float, t: float) float
+pub extern func sqrt(v: float) float
+
+# In game code:
+use std.math
+
+system Smooth:
+    filter:
+        Position as pos
+        Target as tgt
+    on tick(dt: float):
+        pos.x = std.math.lerp(pos.x, tgt.x, 0.1)
 ```
 
 ### 3.13 Types
@@ -601,27 +661,34 @@ system UI:
 
 ### 6.2 Func Purity
 
-Functions declared with `func` are **pure**:
+Functions declared with `func` (non-extern) are **pure**:
 - No `emit` statements allowed
 - No mutation of external state
 - No `world` access
 - Return value only
 - No side effects
 
-```
-# VALID
-func distance(a: vec3, b: vec3) -> float:
+`extern func` declarations are **exempt** from purity checks. Their bodies live in the backend runtime and may have arbitrary side effects (e.g., playing audio, drawing). The purity rule applies only to user-defined Cactus func bodies.
+
+```cactus
+# VALID user func
+func distance(a: vec3, b: vec3) float:
     return ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z))
 
-# INVALID
-func bad() -> int:
+# INVALID user func
+func bad() int:
     emit SomeEvent()  # ERROR: emit in func
     return 0
+
+# VALID — extern func: purity not enforced
+pub extern func play_sfx(id: sound_id)
 ```
 
 ### 6.3 No Recursion
 
-Recursive function calls (direct or indirect) are forbidden. This is required for GPU safety and deterministic execution.
+Recursive function calls (direct or indirect) are forbidden in user-defined `func` declarations. This is required for GPU safety and deterministic execution.
+
+`extern func` declarations are **excluded from the call graph** — calling an extern func from a user func does not create a call-graph edge for the extern func, and the extern func itself is never checked for recursion.
 
 ### 6.4 No Imperative Loops
 
@@ -716,9 +783,18 @@ Frame execution with max_cascade_depth = 1:
 ```
 
 **Handler ordering:**
-- Within a module: systems execute in declaration order
+- Within a module: systems execute in declaration order, subject to `after:` constraints
 - Across modules: systems execute in import order (of the root module)
 - Multiple systems handling the same event: each runs in system declaration order
+- `after:` constraints create explicit ordering edges: a system with `after: X` always runs after system `X` within the same phase, regardless of declaration order
+- The compiler performs topological sort (DFS) over declaration order + `after:` edges and detects cycles at compile time; a cycle is a compile error
+
+**System ordering example:**
+```cactus
+system Physics:    on tick(dt: float): ...    # runs first (no after:)
+system Render:     after: Physics             # runs after Physics
+system DebugHUD:   after: Render             # runs after Render
+```
 
 **Queue semantics:** Multiple instances of the same event type are queued FIFO and each processed in turn.
 
@@ -1099,21 +1175,22 @@ system LevelSetup:
         let e2 = spawn Enemy(pos = vec2(800.0, 568.0), patrol_min_x = 700.0, patrol_max_x = 1000.0)
 ```
 
-### 9.4 Standard Library (`std.core`)
+### 9.4 Standard Library
 
-The `std.core` module ships with the compiler and must be explicitly imported:
+All standard library modules ship with the compiler and must be explicitly imported with `use`. Each module is a normal `.cactus` file processed by the same compiler pipeline; `extern func` declarations in stdlib modules are resolved against `cactus_runtime.h` at link time.
+
+#### `std.core`
 
 ```cactus
 use std.core
 ```
 
-It provides:
-
-**`pub trait Persistent`** — marker trait; entity survives `load` transitions when `std.SceneCleanup` is active.
+**`pub trait Persistent`** — marker trait; entity survives `load` transitions when `std.core.SceneCleanup` is active.
 
 **`pub system SceneCleanup`** — no-filter system that destroys all non-persistent entities on scene unload:
+
 ```cactus
-# std/core.cactus (conceptual — ships with compiler)
+# std/core.cactus
 module std.core
 
 pub trait Persistent
@@ -1121,7 +1198,6 @@ pub trait Persistent
 pub system SceneCleanup:
     exclude:
         Persistent
-
     on unload():
         destroy
 ```
@@ -1140,3 +1216,346 @@ pub unit Player:
 ```
 
 Without `use std.core`, no automatic cleanup occurs on `load` — the developer is responsible for custom teardown.
+
+---
+
+#### `std.math`
+
+Scalar math utilities. All functions are `extern func` — backend-provided.
+
+```cactus
+use std.math
+
+const:
+    HALF_PI = std.math.PI    # pub const PI = 3.14159265
+```
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `lerp` | `(a, b, t: float) float` | Linear interpolation |
+| `clamp` | `(x, lo, hi: float) float` | Clamp to range |
+| `abs` | `(v: float) float` | Absolute value |
+| `min` | `(a, b: float) float` | Minimum |
+| `max` | `(a, b: float) float` | Maximum |
+| `sqrt` | `(v: float) float` | Square root |
+| `sin` | `(a: float) float` | Sine (radians) |
+| `cos` | `(a: float) float` | Cosine (radians) |
+| `atan2` | `(y, x: float) float` | Arc-tangent y/x |
+| `floor` | `(v: float) int` | Floor |
+| `ceil` | `(v: float) int` | Ceiling |
+| `round` | `(v: float) int` | Round |
+| `pow` | `(base, exp: float) float` | Exponentiation |
+
+Also exports `pub const PI = 3.14159265`.
+
+---
+
+#### `std.math.vec2`
+
+2D vector math. All functions are `extern func`.
+
+```cactus
+use std.math.vec2
+```
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `length` | `(v: vec2) float` | Magnitude |
+| `normalize` | `(v: vec2) vec2` | Unit vector |
+| `dot` | `(a, b: vec2) float` | Dot product |
+| `lerp` | `(a, b: vec2, t: float) vec2` | Interpolate |
+| `distance` | `(a, b: vec2) float` | Euclidean distance |
+| `angle` | `(v: vec2) float` | Angle from +X axis (radians) |
+
+---
+
+#### `std.math.vec3`
+
+3D vector math. All functions are `extern func`.
+
+```cactus
+use std.math.vec3
+```
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `length` | `(v: vec3) float` | Magnitude |
+| `normalize` | `(v: vec3) vec3` | Unit vector |
+| `dot` | `(a, b: vec3) float` | Dot product |
+| `cross` | `(a, b: vec3) vec3` | Cross product |
+| `lerp` | `(a, b: vec3, t: float) vec3` | Interpolate |
+| `distance` | `(a, b: vec3) float` | Euclidean distance |
+| `reflect` | `(v, normal: vec3) vec3` | Reflect about normal |
+
+---
+
+#### `std.math.quat`
+
+Quaternion math. All functions are `extern func`.
+
+```cactus
+use std.math.quat
+```
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `identity` | `() quat` | Identity rotation |
+| `from_euler` | `(pitch, yaw, roll: float) quat` | From Euler angles (radians) |
+| `from_axis_angle` | `(axis: vec3, angle: float) quat` | From axis + angle |
+| `forward` | `(q: quat) vec3` | Local −Z direction |
+| `right` | `(q: quat) vec3` | Local +X direction |
+| `up` | `(q: quat) vec3` | Local +Y direction |
+| `rotate` | `(q: quat, v: vec3) vec3` | Rotate vector |
+| `slerp` | `(a, b: quat, t: float) quat` | Spherical interpolation |
+| `multiply` | `(a, b: quat) quat` | Compose rotations |
+| `inverse` | `(q: quat) quat` | Inverse (unit quat) |
+
+---
+
+#### `std.input`
+
+Input query functions and enum constants. Already described in §3.17. Summary:
+
+```cactus
+use std.input
+```
+
+Exports enums `Key`, `MouseButton`, `GamepadButton`, `GamepadAxis` and the following `extern func` query functions:
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `pressed` | `(b: InputButton) bool` | True on first press frame |
+| `down` | `(b: InputButton) bool` | True while held |
+| `released` | `(b: InputButton) bool` | True on first release frame |
+| `axis` | `(a: InputAxis) float` | Axis value −1.0 … 1.0 |
+| `axis2` | `(x, y: InputAxis) vec2` | 2D axis vector |
+
+---
+
+#### `std.audio`
+
+Audio traits and events for sound effects and music.
+
+```cactus
+use std.audio
+```
+
+**Events:**
+
+| Declaration | Description |
+|-------------|-------------|
+| `pub event PlaySound` | Fire-and-forget one-shot sound effect |
+
+`PlaySound` fields: `sound: sound_id`, `volume: float`, `pitch: float`.
+
+**Traits:**
+
+| Trait | Description |
+|-------|-------------|
+| `pub trait AudioSource` | Persistent looping/one-shot sound emitter |
+| `pub trait MusicTrack` | Streaming music player attached to an entity |
+| `pub trait AudioSettings` | Global master/music/sfx volume controls |
+
+`AudioSource` fields: `sound: sound_id`, `playing: bool`, `looping: bool`, `volume: float`, `pitch: float`, `radius: float`.
+
+`MusicTrack` fields: `music: music_id`, `playing: bool`, `looping: bool`, `volume: float`.
+
+`AudioSettings` fields: `master_volume: float`, `music_volume: float`, `sfx_volume: float`.
+
+```cactus
+use std.audio
+
+asset ShootSfx: sound = "audio/shoot.wav"
+
+system PlayerShoot:
+    filter:
+        PlayerTag
+
+    on ShootButton():
+        emit PlaySound(sound = ShootSfx, volume = 1.0, pitch = 1.0)
+```
+
+---
+
+#### `std.transform.flat`
+
+2D spatial transform.
+
+```cactus
+use std.transform.flat
+```
+
+**`pub trait Transform`** — standard 2D transform. Fields: `position: vec2`, `rotation: float` (radians, CCW), `scale: vec2`.
+
+Defaults: `position = vec2(0.0, 0.0)`, `rotation = 0.0`, `scale = vec2(1.0, 1.0)`.
+
+---
+
+#### `std.transform.volume`
+
+3D spatial transform.
+
+```cactus
+use std.transform.volume
+```
+
+**`pub trait Transform`** — standard 3D transform. Fields: `position: vec3`, `rotation: quat`, `scale: vec3`.
+
+Defaults: `position = vec3(0.0, 0.0, 0.0)`, `rotation = quat(0.0, 0.0, 0.0, 1.0)`, `scale = vec3(1.0, 1.0, 1.0)`.
+
+---
+
+#### `std.render.sprites`
+
+2D sprite rendering traits. Passive — the backend reads these and renders automatically. No user system required. An entity with `std.transform.flat.Transform` + one of these traits is drawn.
+
+```cactus
+use std.render.sprites
+```
+
+| Trait | Description |
+|-------|-------------|
+| `pub trait Renderer` | Static texture at entity transform |
+| `pub trait AnimatedSprite` | Sprite-sheet animation |
+| `pub trait Canvas2D` | Solid-color screen fill |
+
+`Renderer` fields: `texture: texture_id` (let), `size: vec2`, `color: color`, `visible: bool`, `layer: int`.
+
+`AnimatedSprite` fields: `texture: texture_id` (let), `frame: int`, `frame_count: int`, `fps: float`, `playing: bool`.
+
+`Canvas2D` fields: `color: color`, `visible: bool`.
+
+---
+
+#### `std.render.meshes`
+
+3D mesh rendering traits. Passive — the backend renders automatically.
+
+```cactus
+use std.render.meshes
+```
+
+| Trait | Description |
+|-------|-------------|
+| `pub trait Renderer` | 3D mesh + material |
+| `pub trait BillboardRenderer` | Camera-facing textured quad |
+| `pub trait PointLight` | Point light emitter |
+| `pub trait DirectionalLight` | Directional (sun-like) light |
+
+`Renderer` fields: `mesh: mesh_id` (let), `material: material_id` (let), `visible: bool`, `cast_shadow: bool`.
+
+`BillboardRenderer` fields: `texture: texture_id` (let), `size: vec2`, `color: color`, `visible: bool`.
+
+`PointLight` fields: `color: color`, `intensity: float`, `range: float`, `enabled: bool`.
+
+`DirectionalLight` fields: `direction: vec3`, `color: color`, `intensity: float`, `enabled: bool`.
+
+---
+
+#### `std.physics.flat`
+
+2D kinematic physics. Passive — the backend simulates automatically.
+
+```cactus
+use std.physics.flat
+```
+
+| Declaration | Description |
+|-------------|-------------|
+| `pub trait CharacterBody` | Kinematic 2D character controller |
+| `pub trait Collider` | AABB 2D collider |
+| `pub event CollisionEnter` | Fired on first contact with another collider |
+
+`CharacterBody` fields: `velocity: vec2`, `grounded: bool`, `gravity: float`.
+
+`Collider` fields: `width: float`, `height: float`, `layer: int`, `mask: int`.
+
+`CollisionEnter` fields: `other: entity_id`, `overlap: vec2`.
+
+```cactus
+use std.physics.flat
+
+system PlayerMove:
+    filter:
+        CharacterBody as body
+        PlayerTag
+
+    on tick(dt: float):
+        body.velocity.x = move_input * MOVE_SPEED
+
+    on CollisionEnter():
+        # event.other holds the entity_id of the colliding entity
+        pass
+```
+
+---
+
+#### `std.physics.volume`
+
+3D kinematic physics. Passive — the backend simulates automatically.
+
+```cactus
+use std.physics.volume
+```
+
+| Declaration | Description |
+|-------------|-------------|
+| `pub trait CharacterBody` | Kinematic 3D character controller |
+| `pub trait Collider` | 3D collider |
+| `pub event CollisionEnter` | Fired on first 3D contact |
+
+`CharacterBody` fields: `velocity: vec3`, `grounded: bool`, `ground_normal: vec3`, `step_height: float`.
+
+`Collider` fields: `layer: int`, `mask: int`.
+
+`CollisionEnter` fields: `other: entity_id`, `point: vec3`, `normal: vec3`.
+
+---
+
+#### `std.camera.flat`
+
+2D orthographic camera traits and follow system.
+
+```cactus
+use std.camera.flat
+```
+
+| Declaration | Description |
+|-------------|-------------|
+| `pub trait Camera` | Orthographic camera config |
+| `pub trait FollowCamera` | Smooth-follow target entity |
+| `pub system FollowCameraSystem` | Updates `Camera.offset` to track target |
+
+`Camera` fields: `zoom: float`, `offset: vec2`, `rotation: float`, `active: bool`.
+
+`FollowCamera` fields: `target: entity_id`, `offset: vec2`, `smoothing: float`.
+
+Only the entity with `active = true` is used for rendering.
+
+---
+
+#### `std.camera.volume`
+
+3D perspective camera traits and follow/FPS/third-person systems.
+
+```cactus
+use std.camera.volume
+```
+
+| Declaration | Description |
+|-------------|-------------|
+| `pub trait Camera` | Perspective camera config |
+| `pub trait FollowCamera` | Smooth 3D follow |
+| `pub trait FirstPersonCamera` | Pitch/yaw look |
+| `pub trait ThirdPersonCamera` | Orbit around target |
+| `pub system FollowCameraSystem` | Smooth-follow update |
+| `pub system FirstPersonCameraSystem` | Pitch/yaw → Transform update |
+| `pub system ThirdPersonCameraSystem` | Orbit position update |
+
+`Camera` fields: `fov_y: float`, `near: float`, `far: float`, `active: bool`.
+
+`FollowCamera` fields: `target: entity_id`, `offset: vec3`, `smoothing: float`.
+
+`FirstPersonCamera` fields: `pitch: float`, `yaw: float`, `sensitivity: float`.
+
+`ThirdPersonCamera` fields: `target: entity_id`, `distance: float`, `height: float`, `smoothing: float`.

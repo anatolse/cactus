@@ -172,10 +172,18 @@ struct IfStmt {
     SourceLocation location;
 };
 
+// A single spawn override argument: [prefix.]field = expr
+struct SpawnArg {
+    std::string name;       // field name
+    std::string key_prefix; // trait name or alias prefix; empty if bare
+    std::unique_ptr<ExprNode> value;
+    SourceLocation location;
+};
+
 // spawn TemplateName(field = expr, ...)
 struct SpawnStmt {
     std::string template_name;
-    std::vector<std::pair<std::string, std::unique_ptr<ExprNode>>> overrides;
+    std::vector<SpawnArg> overrides;
     SourceLocation location;
 };
 
@@ -267,14 +275,15 @@ struct TraitNode {
     std::string name;
     bool is_pub = false;
     std::vector<FieldNode> fields;
-    std::vector<EventHandlerNode> handlers;
+    // Note: handlers intentionally removed — traits are data-only; logic belongs in systems.
     SourceLocation location;
 };
 
-// Entry in an apply: block — trait name + optional : disabled annotation
+// Entry in an apply: block — trait name + optional alias + optional : disabled annotation
 struct ApplyEntry {
     std::string trait_name;
-    bool initially_active = true;  // false when annotated ': disabled'
+    std::optional<std::string> alias;  // declared via 'as identifier'; empty if none
+    bool initially_active = true;      // false when annotated ': disabled'
     SourceLocation location;
 };
 
@@ -292,7 +301,8 @@ struct ApplyBlock {
 };
 
 struct ConfigAssignment {
-    std::string name;
+    std::string name;         // field name (last component, or the full bare name)
+    std::string key_prefix;   // trait name or alias prefix; empty if bare key (no dot)
     std::unique_ptr<ExprNode> value;
     SourceLocation location;
 };
@@ -347,9 +357,10 @@ struct FilterClause {
 
 struct SystemNode {
     std::string name;
-    FilterClause filter;    // empty entries = no filter (match all)
-    FilterClause exclude;   // empty entries = no exclude
-    std::optional<std::string> target;  // "cpu" or "gpu"
+    FilterClause filter;                    // empty entries = no filter (match all)
+    FilterClause exclude;                   // empty entries = no exclude
+    std::vector<std::string> after_systems; // explicit ordering: this system runs after these
+    std::optional<std::string> target;      // "cpu" or "gpu"
     std::vector<EventHandlerNode> handlers;
     SourceLocation location;
 };

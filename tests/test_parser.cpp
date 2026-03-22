@@ -472,8 +472,8 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
     REQUIRE(spawn != nullptr);
     CHECK(spawn->template_name == "Enemy");
     CHECK(spawn->overrides.size() == 2);
-    CHECK(spawn->overrides[0].first == "pos");
-    CHECK(spawn->overrides[1].first == "patrol_speed");
+    CHECK(spawn->overrides[0].name == "pos");
+    CHECK(spawn->overrides[1].name == "patrol_speed");
 }
 
 // Task 4.7: destroy statement
@@ -526,7 +526,7 @@ TEST_CASE("Parser: marker trait without body", "[parser][dynamic-ecs]") {
     auto& trait = std::get<TraitNode>(prog.declarations[0]);
     CHECK(trait.name == "Persistent");
     CHECK(trait.fields.empty());
-    CHECK(trait.handlers.empty());
+    // Note: TraitNode no longer has handlers — traits are data-only
 }
 
 TEST_CASE("Parser: pub marker trait", "[parser][dynamic-ecs]") {
@@ -798,4 +798,102 @@ TEST_CASE("Parser: func with arrow return type produces error", "[parser][extern
     Parser parser(std::move(tokens), errors);
     parser.parse_program();
     CHECK(errors.has_errors());  // parser should error: unexpected '->'
+}
+
+// ── system-ordering-and-trait-cleanup tests ─────────────────────────────────
+
+// Task 12.1: Trait body with 'on' produces error
+TEST_CASE("Parser: trait body with on handler produces error", "[parser][trait-cleanup]") {
+    ErrorReporter errors;
+    Lexer lexer("trait Bad:\n    var x: int\n    on tick(dt: float):\n        x = 1\n", "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    Parser parser(std::move(tokens), errors);
+    parser.parse_program();
+    CHECK(errors.has_errors());
+}
+
+// Task 12.2: after: block parses correctly into SystemNode.after_systems
+TEST_CASE("Parser: system after: block parsed correctly", "[parser][system-ordering]") {
+    auto prog = parse(
+        "system SceneRender:\n"
+        "    on tick(dt: float):\n"
+        "        x = 1\n"
+        "\n"
+        "system UIRender:\n"
+        "    after:\n"
+        "        SceneRender\n"
+        "    on tick(dt: float):\n"
+        "        y = 2\n"
+    );
+    REQUIRE(prog.declarations.size() == 2);
+    auto& ui = std::get<SystemNode>(prog.declarations[1]);
+    CHECK(ui.name == "UIRender");
+    REQUIRE(ui.after_systems.size() == 1);
+    CHECK(ui.after_systems[0] == "SceneRender");
+    // SceneRender has empty after_systems
+    auto& scene = std::get<SystemNode>(prog.declarations[0]);
+    CHECK(scene.after_systems.empty());
+}
+
+// Task 12.3: apply: with 'as alias' records alias in ApplyEntry
+TEST_CASE("Parser: apply entry with as alias records alias", "[parser][config-qualification]") {
+    auto prog = parse(
+        "trait Position:\n"
+        "    var x: float\n"
+        "unit Player:\n"
+        "    apply:\n"
+        "        Position as pos\n"
+    );
+    auto& unit = std::get<UnitNode>(prog.declarations[1]);
+    REQUIRE(unit.apply.entries.size() == 1);
+    CHECK(unit.apply.entries[0].trait_name == "Position");
+    REQUIRE(unit.apply.entries[0].alias.has_value());
+    CHECK(*unit.apply.entries[0].alias == "pos");
+}
+
+// Task 12.4: config: dotted key parsed as (prefix, field)
+TEST_CASE("Parser: config dotted key parsed correctly", "[parser][config-qualification]") {
+    auto prog = parse(
+        "trait Health:\n"
+        "    var health: int = 100\n"
+        "unit Player:\n"
+        "    apply:\n"
+        "        Health\n"
+        "    config:\n"
+        "        Health.health = 50\n"
+    );
+    auto& unit = std::get<UnitNode>(prog.declarations[1]);
+    REQUIRE(unit.config.has_value());
+    REQUIRE(unit.config->assignments.size() == 1);
+    CHECK(unit.config->assignments[0].name == "health");
+    CHECK(unit.config->assignments[0].key_prefix == "Health");
+}
+
+TEST_CASE("Parser: apply alias with disabled annotation", "[parser][config-qualification]") {
+    auto prog = parse(
+        "template Enemy:\n"
+        "    apply:\n"
+        "        Position as pos\n"
+        "        Frozen as ice: disabled\n"
+    );
+    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
+    REQUIRE(tmpl.apply.entries.size() == 2);
+    CHECK(*tmpl.apply.entries[0].alias == "pos");
+    CHECK(*tmpl.apply.entries[1].alias == "ice");
+    CHECK(tmpl.apply.entries[1].initially_active == false);
+}
+
+TEST_CASE("Parser: system with multiple after: entries", "[parser][system-ordering]") {
+    auto prog = parse(
+        "system Debug:\n"
+        "    after:\n"
+        "        SceneRender\n"
+        "        UIRender\n"
+        "    on tick(dt: float):\n"
+        "        x = 1\n"
+    );
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.after_systems.size() == 2);
+    CHECK(sys.after_systems[0] == "SceneRender");
+    CHECK(sys.after_systems[1] == "UIRender");
 }

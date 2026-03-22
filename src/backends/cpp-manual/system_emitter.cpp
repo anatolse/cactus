@@ -173,8 +173,8 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s,
 
     // Build override map: field_name → expr_string
     std::unordered_map<std::string, std::string> overrides;
-    for (const auto& [fname, expr] : s.overrides) {
-        overrides[fname] = emit_expr(*expr);
+    for (const auto& arg : s.overrides) {
+        overrides[arg.name] = emit_expr(*arg.value);
     }
 
     // Build argument list in field declaration order across applied traits

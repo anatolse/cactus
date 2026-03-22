@@ -54,6 +54,7 @@ enum class TokenType {
     CHILD,
     FILTER,
     EXCLUDE,
+    AFTER,
     TARGET,
     DISABLED,
 
@@ -177,6 +178,7 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::CHILD: return "CHILD";
         case TokenType::FILTER: return "FILTER";
         case TokenType::EXCLUDE: return "EXCLUDE";
+        case TokenType::AFTER: return "AFTER";
         case TokenType::TARGET: return "TARGET";
         case TokenType::DISABLED: return "DISABLED";
         case TokenType::MAP: return "MAP";

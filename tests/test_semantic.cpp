@@ -210,3 +210,117 @@ TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][exter
         CHECK(func.is_pub);
     }
 }
+
+// ── system-ordering-and-trait-cleanup semantic tests ────────────────────────
+
+// Task 12.5: after: referencing unknown system reports error
+TEST_CASE("Semantic: after: unknown system reports error", "[semantic][system-ordering]") {
+    CHECK(analyze_has_errors(
+        "trait T:\n    var x: float\n"
+        "system A:\n"
+        "    after:\n"
+        "        NonExistentSystem\n"
+        "    on tick(dt: float):\n"
+        "        x = 1.0\n"));
+}
+
+// Task 12.6: direct after: cycle reports error
+TEST_CASE("Semantic: after: direct cycle reports error", "[semantic][system-ordering]") {
+    CHECK(analyze_has_errors(
+        "trait T:\n    var x: float\n"
+        "system A:\n"
+        "    after:\n"
+        "        B\n"
+        "    on tick(dt: float):\n"
+        "        x = 1.0\n"
+        "system B:\n"
+        "    after:\n"
+        "        A\n"
+        "    on tick(dt: float):\n"
+        "        x = 2.0\n"));
+}
+
+// Task 12.7: valid after: chain passes and after_systems populated
+TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[semantic][system-ordering]") {
+    auto result = analyze(
+        "trait T:\n    var x: float\n"
+        "system A:\n"
+        "    filter: [T]\n"
+        "    on tick(dt: float):\n"
+        "        x = 1.0\n"
+        "system B:\n"
+        "    filter: [T]\n"
+        "    after:\n"
+        "        A\n"
+        "    on tick(dt: float):\n"
+        "        x = 2.0\n"
+        "system C:\n"
+        "    filter: [T]\n"
+        "    after:\n"
+        "        B\n"
+        "    on tick(dt: float):\n"
+        "        x = 3.0\n");
+    REQUIRE(result.dependency_graph.size() == 3);
+    // Find B and C in dependency graph
+    bool found_B = false, found_C = false;
+    for (auto& dep : result.dependency_graph) {
+        if (dep.system_name == "B") {
+            REQUIRE(dep.after_systems.size() == 1);
+            CHECK(dep.after_systems[0] == "A");
+            found_B = true;
+        }
+        if (dep.system_name == "C") {
+            REQUIRE(dep.after_systems.size() == 1);
+            CHECK(dep.after_systems[0] == "B");
+            found_C = true;
+        }
+    }
+    CHECK(found_B);
+    CHECK(found_C);
+}
+
+// Task 12.8: ambiguous bare config key reports error
+TEST_CASE("Semantic: ambiguous bare config key reports error", "[semantic][config-qualification]") {
+    CHECK(analyze_has_errors(
+        "trait TraitA:\n    var value: int\n"
+        "trait TraitB:\n    var value: int\n"
+        "unit Player:\n"
+        "    apply:\n"
+        "        TraitA\n"
+        "        TraitB\n"
+        "    config:\n"
+        "        value = 5\n"));
+}
+
+// Task 12.9: dotted config key resolves correctly (no error)
+TEST_CASE("Semantic: dotted config key resolves correctly", "[semantic][config-qualification]") {
+    CHECK_FALSE(analyze_has_errors(
+        "trait Health:\n    var hp: int = 100\n"
+        "unit Player:\n"
+        "    apply:\n"
+        "        Health\n"
+        "    config:\n"
+        "        Health.hp = 50\n"));
+}
+
+// Task 12.9b: dotted config key with unknown field reports error
+TEST_CASE("Semantic: dotted config key with unknown field reports error", "[semantic][config-qualification]") {
+    CHECK(analyze_has_errors(
+        "trait Health:\n    var hp: int = 100\n"
+        "unit Player:\n"
+        "    apply:\n"
+        "        Health\n"
+        "    config:\n"
+        "        Health.notafield = 50\n"));
+}
+
+// Task 12.10: bare config key with unambiguous field passes
+TEST_CASE("Semantic: unambiguous bare config key passes", "[semantic][config-qualification]") {
+    CHECK_FALSE(analyze_has_errors(
+        "trait Health:\n    var hp: int = 100\n"
+        "unit Player:\n"
+        "    apply:\n"
+        "        Health\n"
+        "    config:\n"
+        "        hp = 50\n"));
+}

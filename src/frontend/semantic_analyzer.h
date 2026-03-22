@@ -59,6 +59,7 @@ struct SystemDependency {
     std::unordered_set<std::string> reads;
     std::unordered_set<std::string> writes;
     std::unordered_set<std::string> emits;
+    std::vector<std::string> after_systems;  // explicit ordering: this system runs after these
 };
 
 struct DecoratedProgram {
@@ -175,6 +176,15 @@ private:
     void build_dependency_graph(ProgramNode& program);
     void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts,
                              SystemDependency& dep);
+
+    // Phase 5: after: validation and config key resolution
+    void validate_after_clauses(ProgramNode& program);
+    void validate_config_keys(ProgramNode& program);
+
+    // Helper: build alias→trait map for an apply block
+    // Returns: map from alias/trait-name → trait name in result_.traits
+    std::unordered_map<std::string, std::string> build_alias_map(
+        const std::vector<ApplyEntry>& apply) const;
 
     // Helpers
     bool is_known_type(const std::string& name) const;

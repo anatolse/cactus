@@ -385,3 +385,84 @@ The parser SHALL accept dotted identifiers in `module` and `use` declarations. T
 #### Scenario: Use with alias
 - **WHEN** `use phys.body as b` appears
 - **THEN** the parser produces a `UseNode` with `module_name = "phys.body"` and `alias = "b"`
+
+### Requirement: Trait declaration body restricted to field declarations only
+The parser SHALL accept only `field_decl` entries inside a trait body. Event handlers (`on ...`) and `func` declarations are not valid inside a trait body. Encountering `on` or `func` inside a trait block SHALL produce a parse error with a helpful message.
+
+```ebnf
+trait_decl      = [ "pub" ] "trait" IDENTIFIER
+                  [ ":" NEWLINE INDENT
+                    { field_decl }
+                    DEDENT ] ;
+```
+
+#### Scenario: Trait with only field declarations accepted
+- **WHEN** a trait body contains only `let` and `var` field declarations
+- **THEN** the parser accepts the trait body
+
+#### Scenario: Event handler inside trait body rejected
+- **WHEN** a trait body contains `on tick(dt: float):`
+- **THEN** the parser reports an error: "event handlers are not allowed in trait bodies; declare a system instead"
+
+#### Scenario: Func inside trait body rejected
+- **WHEN** a trait body contains `func helper() float:`
+- **THEN** the parser reports an error: "func declarations are not allowed in trait bodies; use a top-level func instead"
+
+### Requirement: `after:` clause parsing in system declarations
+The parser SHALL parse an optional `after:` clause inside a system body using the same indented block structure as `filter:` and `exclude:`. The `after:` clause MUST appear after any `filter:` and `exclude:` blocks and before the first event handler.
+
+```ebnf
+after_clause    = "after" ":" NEWLINE INDENT
+                  { IDENTIFIER NEWLINE }
+                  DEDENT ;
+```
+
+The keyword `after` is added to the lexer keyword set with token type `AFTER`.
+
+#### Scenario: `after:` with single entry parsed correctly
+- **WHEN** a system body contains an `after:` block with one indented system name
+- **THEN** the parser populates `SystemNode.after_systems` with that one name
+
+#### Scenario: `after:` with multiple entries parsed correctly
+- **WHEN** a system body contains an `after:` block with `SystemA` and `SystemB` on separate lines
+- **THEN** the parser populates `SystemNode.after_systems` with `["SystemA", "SystemB"]`
+
+#### Scenario: Empty `after:` block is a parse error
+- **WHEN** a system body contains `after:` with an empty indented block
+- **THEN** the parser reports an error: "after: block must contain at least one system name"
+
+### Requirement: Optional `as` alias in `apply:` entries of units and templates
+The parser SHALL accept an optional `as IDENTIFIER` alias after the trait name in each `apply:` block entry, before any `: disabled` annotation.
+
+```ebnf
+apply_entry     = dotted_name [ "as" IDENTIFIER ] [ ":" "disabled" ] NEWLINE ;
+```
+
+#### Scenario: Apply entry with alias and disabled both parsed
+- **WHEN** `apply:` contains `EnemyAI as ai: disabled`
+- **THEN** the parser records `alias = "ai"` and `initially_active = false`
+
+#### Scenario: Apply entry with alias only parsed
+- **WHEN** `apply:` contains `Position as pos`
+- **THEN** the parser records `alias = "pos"` and `initially_active = true`
+
+### Requirement: Dotted key form in `config:` assignments and `spawn` override arguments
+The parser SHALL accept a `config_key` that is either a bare `IDENTIFIER` or a dotted `IDENTIFIER.IDENTIFIER`.
+
+```ebnf
+config_assign   = config_key "=" expression NEWLINE ;
+config_key      = IDENTIFIER [ "." IDENTIFIER ] ;
+spawn_arg       = config_key "=" expression ;
+```
+
+#### Scenario: Bare config key parsed
+- **WHEN** `config:` contains `health = 100`
+- **THEN** `ConfigAssignment.key_prefix` is empty and `.name` is `"health"`
+
+#### Scenario: Dotted config key parsed
+- **WHEN** `config:` contains `Health.health = 100`
+- **THEN** `ConfigAssignment.key_prefix` is `"Health"` and `.name` is `"health"`
+
+#### Scenario: Dotted spawn override key parsed
+- **WHEN** `spawn Enemy(EnemyAI.patrol_speed = 5.0)` is parsed
+- **THEN** the spawn arg has `key_prefix = "EnemyAI"` and `name = "patrol_speed"`

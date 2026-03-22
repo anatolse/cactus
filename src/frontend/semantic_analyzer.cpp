@@ -1,6 +1,7 @@
 #include "frontend/semantic_analyzer.h"
 
 #include <algorithm>
+#include <functional>
 #include <sstream>
 
 namespace cactus {
@@ -116,6 +117,10 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
 
     // Phase 4: Build dependency graph
     build_dependency_graph(program);
+
+    // Phase 5: Validate after: clauses, cycle detection, config/spawn key resolution
+    validate_after_clauses(program);
+    validate_config_keys(program);
 
     return std::move(result_);
 }
@@ -891,19 +896,46 @@ void SemanticAnalyzer::validate_spawn_stmts(
                     auto appl_it = archetype_apply_.find(s.template_name);
                     if (appl_it != archetype_apply_.end()) {
                         auto accessible = get_archetype_fields(appl_it->second);
-                        for (auto& [field_name, _] : s.overrides) {
-                            if (!accessible.count(field_name)) {
-                                errors_.error(
-                                    s.location,
-                                    "unknown field '" + field_name + "' for template '" +
-                                        s.template_name + "'");
+                        auto alias_map  = build_alias_map(appl_it->second);
+                        for (auto& arg : s.overrides) {
+                            const auto& field_name = arg.name;
+                            if (arg.key_prefix.empty()) {
+                                // Bare key — check against all accessible fields
+                                if (!accessible.count(field_name)) {
+                                    errors_.error(
+                                        s.location,
+                                        "unknown field '" + field_name + "' for template '" +
+                                            s.template_name + "'");
+                                }
+                            } else {
+                                // Dotted key: resolve prefix then check field
+                                auto am_it = alias_map.find(arg.key_prefix);
+                                if (am_it == alias_map.end()) {
+                                    errors_.error(s.location,
+                                                  "unknown trait or alias '" + arg.key_prefix +
+                                                      "' in spawn override for template '" +
+                                                      s.template_name + "'");
+                                } else {
+                                    const auto& trait_name = am_it->second;
+                                    auto trait_it = result_.traits.find(trait_name);
+                                    if (trait_it != result_.traits.end()) {
+                                        bool found = false;
+                                        for (auto& f : trait_it->second.fields)
+                                            if (f.name == field_name) { found = true; break; }
+                                        if (!found) {
+                                            errors_.error(s.location,
+                                                          "trait '" + trait_name + "' has no field '" +
+                                                              field_name + "' in spawn override");
+                                        }
+                                    }
+                                }
                             }
                         }
                         // 5.3: Check required fields are provided
                         auto req_it = template_required_fields_.find(s.template_name);
                         if (req_it != template_required_fields_.end()) {
                             std::unordered_set<std::string> provided;
-                            for (auto& [fn, _] : s.overrides) provided.insert(fn);
+                            for (auto& arg : s.overrides) provided.insert(arg.name);
                             for (auto& req : req_it->second) {
                                 if (!provided.count(req)) {
                                     errors_.error(
@@ -1120,6 +1152,184 @@ void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) {
                                 errors_.error(node.exclude.location,
                                               "undeclared trait '" + trait_name +
                                                   "' in exclude clause");
+                            }
+                        }
+                    }
+                }
+            },
+            decl);
+    }
+}
+
+// ── Phase 5a: after: clause validation and cycle detection ─────────────────
+
+void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
+    // Collect all system names
+    std::unordered_set<std::string> all_system_names;
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            all_system_names.insert(sys->name);
+        }
+    }
+
+    // Validate each system's after_systems list
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            for (auto& after_name : sys->after_systems) {
+                if (!all_system_names.count(after_name)) {
+                    errors_.error(sys->location,
+                                  "unknown system '" + after_name + "' in after clause");
+                } else if (after_name == sys->name) {
+                    errors_.error(sys->location,
+                                  "system '" + sys->name + "' cannot list itself in after:");
+                }
+            }
+        }
+    }
+
+    // Build adjacency graph for cycle detection: sys → list of systems it must run after
+    std::unordered_map<std::string, std::vector<std::string>> after_graph;
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            after_graph[sys->name] = sys->after_systems;
+        }
+    }
+
+    // DFS cycle detection
+    enum class Color { White, Gray, Black };
+    std::unordered_map<std::string, Color> color;
+    for (auto& [name, _] : after_graph) color[name] = Color::White;
+
+    std::function<bool(const std::string&, std::vector<std::string>&)> dfs =
+        [&](const std::string& node, std::vector<std::string>& path) -> bool {
+        color[node] = Color::Gray;
+        path.push_back(node);
+        auto it = after_graph.find(node);
+        if (it != after_graph.end()) {
+            for (auto& neighbor : it->second) {
+                if (!all_system_names.count(neighbor)) continue;  // already reported
+                if (color[neighbor] == Color::Gray) {
+                    // Found a cycle — build path string
+                    std::string cycle_path;
+                    bool in_cycle = false;
+                    for (auto& p : path) {
+                        if (p == neighbor) in_cycle = true;
+                        if (in_cycle) { if (!cycle_path.empty()) cycle_path += " → "; cycle_path += p; }
+                    }
+                    cycle_path += " → " + neighbor;
+                    errors_.error({}, "cycle in system ordering: " + cycle_path);
+                    color[node] = Color::Black;
+                    path.pop_back();
+                    return true;
+                }
+                if (color[neighbor] == Color::White) {
+                    if (dfs(neighbor, path)) {
+                        color[node] = Color::Black;
+                        path.pop_back();
+                        return true;
+                    }
+                }
+            }
+        }
+        color[node] = Color::Black;
+        path.pop_back();
+        return false;
+    };
+
+    for (auto& [name, _] : after_graph) {
+        if (color[name] == Color::White) {
+            std::vector<std::string> path;
+            dfs(name, path);
+        }
+    }
+
+    // Populate after_systems in dependency graph
+    for (auto& dep : result_.dependency_graph) {
+        auto it = after_graph.find(dep.system_name);
+        if (it != after_graph.end()) {
+            for (auto& after_name : it->second) {
+                if (all_system_names.count(after_name)) {
+                    dep.after_systems.push_back(after_name);
+                }
+            }
+        }
+    }
+}
+
+// ── Phase 5b: apply alias map helper ────────────────────────────────────────
+
+std::unordered_map<std::string, std::string> SemanticAnalyzer::build_alias_map(
+    const std::vector<ApplyEntry>& apply) const {
+    // Maps from alias-or-trait-name → resolved trait name
+    std::unordered_map<std::string, std::string> alias_map;
+    for (auto& entry : apply) {
+        // Implicit alias: the trait name itself
+        alias_map[entry.trait_name] = entry.trait_name;
+        // Explicit alias declared with 'as'
+        if (entry.alias.has_value()) {
+            alias_map[*entry.alias] = entry.trait_name;
+        }
+    }
+    return alias_map;
+}
+
+// ── Phase 5c: config key and spawn key resolution ───────────────────────────
+
+void SemanticAnalyzer::validate_config_keys(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        std::visit(
+            [this](auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, TemplateNode> ||
+                              std::is_same_v<T, UnitNode>) {
+                    if (!node.config.has_value()) return;
+
+                    // Build alias map for this archetype
+                    auto alias_map = build_alias_map(node.apply.entries);
+
+                    for (auto& assign : node.config->assignments) {
+                        if (assign.key_prefix.empty()) {
+                            // Bare key — already validated by validate_template_unit_declarations
+                            // Check for ambiguity when two applied traits have the same field
+                            std::vector<std::string> owners;
+                            for (auto& entry : node.apply.entries) {
+                                auto it = result_.traits.find(entry.trait_name);
+                                if (it != result_.traits.end()) {
+                                    for (auto& f : it->second.fields) {
+                                        if (f.name == assign.name) {
+                                            owners.push_back(entry.trait_name);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (owners.size() > 1) {
+                                errors_.error(assign.location,
+                                              "ambiguous field '" + assign.name +
+                                                  "' in config; qualify as '" + owners[0] + "." +
+                                                  assign.name + "' or '" + owners[1] + "." +
+                                                  assign.name + "'");
+                            }
+                        } else {
+                            // Dotted key: prefix.fieldname
+                            auto am_it = alias_map.find(assign.key_prefix);
+                            if (am_it == alias_map.end()) {
+                                errors_.error(assign.location,
+                                              "unknown trait or alias '" + assign.key_prefix +
+                                                  "' in config key");
+                                continue;
+                            }
+                            const auto& trait_name = am_it->second;
+                            auto trait_it = result_.traits.find(trait_name);
+                            if (trait_it == result_.traits.end()) continue;  // trait not resolved
+                            bool found = false;
+                            for (auto& f : trait_it->second.fields) {
+                                if (f.name == assign.name) { found = true; break; }
+                            }
+                            if (!found) {
+                                errors_.error(assign.location,
+                                              "trait '" + trait_name + "' has no field '" +
+                                                  assign.name + "'");
                             }
                         }
                     }

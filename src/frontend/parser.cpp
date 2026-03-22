@@ -280,7 +280,13 @@ TraitNode Parser::parse_trait() {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
         if (check(TokenType::ON)) {
-            node.handlers.push_back(parse_event_handler());
+            errors_.error(peek().location,
+                "event handlers are not allowed in trait bodies; declare a system instead");
+            parse_event_handler();  // consume to avoid cascading errors
+        } else if (check(TokenType::FUNC)) {
+            errors_.error(peek().location,
+                "func declarations are not allowed in trait bodies; use a top-level func instead");
+            parse_func(false);  // consume to avoid cascading errors
         } else {
             node.fields.push_back(parse_field());
         }
@@ -494,6 +500,13 @@ ApplyBlock Parser::parse_apply_block() {
         auto entry_loc = peek().location;
         auto entry_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
 
+        // Optional 'as alias' (must come before optional ': disabled')
+        std::optional<std::string> alias;
+        if (check(TokenType::AS)) {
+            advance();  // consume 'as'
+            alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
+        }
+
         // Task 4.2: Handle ': disabled' annotation
         bool initially_active = true;
         if (check(TokenType::COLON)) {
@@ -504,6 +517,7 @@ ApplyBlock Parser::parse_apply_block() {
 
         ApplyEntry entry;
         entry.trait_name = entry_name;
+        entry.alias = alias;
         entry.initially_active = initially_active;
         entry.location = entry_loc;
         block.entries.push_back(std::move(entry));
@@ -528,12 +542,21 @@ ConfigBlock Parser::parse_config_block() {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
         auto assign_loc = peek().location;
-        auto name = consume(TokenType::IDENTIFIER, "expected config field name").value;
+        // Parse config key: IDENTIFIER [ DOT IDENTIFIER ] = expression
+        auto key_first = consume(TokenType::IDENTIFIER, "expected config field name").value;
+        std::string key_prefix;
+        std::string field_name = key_first;
+        if (check(TokenType::DOT)) {
+            advance();  // consume '.'
+            key_prefix = key_first;
+            field_name = consume(TokenType::IDENTIFIER, "expected field name after '.'").value;
+        }
         consume(TokenType::ASSIGN, "expected '='");
         auto value = parse_expression();
         expect_newline();
         ConfigAssignment assign;
-        assign.name = name;
+        assign.name = field_name;
+        assign.key_prefix = key_prefix;
         assign.value = std::move(value);
         assign.location = assign_loc;
         block.assignments.push_back(std::move(assign));
@@ -592,6 +615,29 @@ SystemNode Parser::parse_system() {
         node.exclude = parse_exclude_clause();
     }
 
+    // Parse optional after: clause (block format: AFTER COLON NEWLINE INDENT { IDENT NEWLINE } DEDENT)
+    skip_newlines();
+    if (check(TokenType::AFTER)) {
+        auto after_loc = peek().location;
+        advance();  // consume 'after'
+        consume(TokenType::COLON, "expected ':'");
+        expect_newline();
+        expect_indent();
+        bool any = false;
+        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+            skip_newlines();
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+            node.after_systems.push_back(
+                consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
+            expect_newline();
+            any = true;
+        }
+        expect_dedent();
+        if (!any) {
+            errors_.error(after_loc, "after: block must contain at least one system name");
+        }
+    }
+
     skip_newlines();
     if (check(TokenType::TARGET)) {
         advance();
@@ -614,26 +660,48 @@ FilterClause Parser::parse_filter_clause() {
     auto loc = peek().location;
     consume(TokenType::FILTER, "expected 'filter'");
     consume(TokenType::COLON, "expected ':'");
-    consume(TokenType::LBRACKET, "expected '['");
 
     FilterClause clause;
     clause.location = loc;
 
-    while (true) {
-        auto entry_loc = peek().location;
-        auto qname = parse_dotted_name();
-        std::optional<std::string> alias;
-        if (match(TokenType::AS)) {
-            alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
+    // Support both bracket syntax: filter: [A, B]
+    // and block syntax: filter:\n    A\n    B
+    if (check(TokenType::LBRACKET)) {
+        advance();  // consume '['
+        while (true) {
+            auto entry_loc = peek().location;
+            auto qname = parse_dotted_name();
+            std::optional<std::string> alias;
+            if (match(TokenType::AS)) {
+                alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
+            }
+            clause.entries.push_back({qname, alias, entry_loc});
+            auto dot_pos = qname.rfind('.');
+            clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
+            if (!match(TokenType::COMMA)) break;
         }
-        clause.entries.push_back({qname, alias, entry_loc});
-        // Extract simple trait name (last component after last dot) for backward compat
-        auto dot_pos = qname.rfind('.');
-        clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
-        if (!match(TokenType::COMMA)) break;
+        consume(TokenType::RBRACKET, "expected ']'");
+        expect_newline();
+    } else {
+        // Block syntax (consistent with exclude: and after:)
+        expect_newline();
+        expect_indent();
+        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+            skip_newlines();
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+            auto entry_loc = peek().location;
+            auto qname = parse_dotted_name();
+            std::optional<std::string> alias;
+            if (match(TokenType::AS)) {
+                alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
+            }
+            clause.entries.push_back({qname, alias, entry_loc});
+            auto dot_pos = qname.rfind('.');
+            clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
+            expect_newline();
+        }
+        expect_dedent();
     }
-    consume(TokenType::RBRACKET, "expected ']'");
-    expect_newline();
     return clause;
 }
 
@@ -953,10 +1021,23 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
         spawn_stmt.template_name = template_name;
         spawn_stmt.location = loc;
         while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
-            auto field_name = consume(TokenType::IDENTIFIER, "expected field name").value;
+            // Parse spawn override key: IDENTIFIER [ DOT IDENTIFIER ] = expression
+            auto key_first = consume(TokenType::IDENTIFIER, "expected field name").value;
+            std::string spawn_prefix;
+            std::string spawn_field = key_first;
+            if (check(TokenType::DOT)) {
+                advance();  // consume '.'
+                spawn_prefix = key_first;
+                spawn_field = consume(TokenType::IDENTIFIER, "expected field name after '.'").value;
+            }
             consume(TokenType::ASSIGN, "expected '='");
             auto value = parse_expression();
-            spawn_stmt.overrides.push_back({field_name, std::move(value)});
+            SpawnArg arg;
+            arg.name = spawn_field;
+            arg.key_prefix = spawn_prefix;
+            arg.value = std::move(value);
+            arg.location = loc;
+            spawn_stmt.overrides.push_back(std::move(arg));
             if (!match(TokenType::COMMA)) break;
         }
         consume(TokenType::RPAREN, "expected ')'");

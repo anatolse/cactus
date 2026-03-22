@@ -9,6 +9,16 @@
 
 namespace cactus {
 
+namespace {
+// Task 6.1: Check if the program has any extern funcs requiring the runtime header
+bool has_extern_funcs(const DecoratedProgram& program) {
+    for (auto& [name, func] : program.funcs) {
+        if (func.is_extern) return true;
+    }
+    return false;
+}
+}  // namespace
+
 std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     std::ostringstream out;
 
@@ -19,7 +29,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <string>\n";
     out << "#include <vector>\n";
     out << "#include <entt/entt.hpp>\n";
-    out << "#include \"raylib.h\"\n\n";
+    out << "#include \"raylib.h\"\n";
+    // Task 6.2: Include runtime header when extern funcs are present
+    if (has_extern_funcs(program)) {
+        out << "#include \"cactus_runtime.h\"\n";
+    }
+    out << "\n";
 
     // Helper: vec2() constructor mapped to Vector2
     out << "inline Vector2 vec2(float x, float y) { return {x, y}; }\n\n";

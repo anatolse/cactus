@@ -39,10 +39,10 @@ pub unit CameraUnit:
         parallax_far = PARALLAX_FAR
         parallax_mid = PARALLAX_MID
 
-func lerp(a: float, b: float, t: float) -> float:
+func lerp(a: float, b: float, t: float) float:
     return a + (b - a) * t
 
-func clamp_cam(value: float, min_val: float, max_val: float) -> float:
+func clamp_cam(value: float, min_val: float, max_val: float) float:
     if value < min_val:
         return min_val
     if value > max_val:

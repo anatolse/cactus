@@ -25,6 +25,19 @@ struct ResolvedField {
     bool has_default = false;  // true if field has a default value in trait definition
 };
 
+struct ResolvedParam {
+    std::string name;
+    TypeInfo type;
+};
+
+struct ResolvedFunc {
+    std::string name;
+    bool is_pub = false;
+    bool is_extern = false;
+    std::vector<ResolvedParam> params;
+    std::optional<TypeInfo> return_type;
+};
+
 struct ResolvedTrait {
     std::string name;
     std::vector<ResolvedField> fields;
@@ -52,6 +65,7 @@ struct DecoratedProgram {
     std::unordered_map<std::string, ResolvedTrait> traits;
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
+    std::unordered_map<std::string, ResolvedFunc> funcs;
     std::vector<SystemDependency> dependency_graph;
     StringPool string_pool;
     ProgramNode* ast = nullptr;  // non-owning pointer to original AST
@@ -67,6 +81,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ResolvedTrait>  traits;   // pub traits
     std::unordered_map<std::string, ResolvedStruct> structs;  // pub structs
     std::unordered_map<std::string, ResolvedEnum>   enums;    // pub enums
+    std::unordered_map<std::string, ResolvedFunc>   funcs;    // pub extern funcs
 };
 
 // ── Module Imports (aggregate for one compilation unit) ────────────────────
@@ -86,6 +101,7 @@ struct ModuleImports {
     std::unordered_map<std::string, std::vector<std::string>> trait_providers;
     std::unordered_map<std::string, std::vector<std::string>> struct_providers;
     std::unordered_map<std::string, std::vector<std::string>> enum_providers;
+    std::unordered_map<std::string, std::vector<std::string>> func_providers;
 
     [[nodiscard]] bool empty() const { return modules.empty(); }
 

@@ -9,40 +9,40 @@ pub const PI = 3.14159265
 # references only — game code calls them; the backend resolves the bodies.
 
 # Linear interpolation between a and b by factor t (0..1)
-pub func lerp(a, b, t: float) -> float
+pub extern func lerp(a: float, b: float, t: float) float
 
 # Clamp x to the range [lo, hi]
-pub func clamp(x, lo, hi: float) -> float
+pub extern func clamp(x: float, lo: float, hi: float) float
 
 # Absolute value
-pub func abs(v: float) -> float
+pub extern func abs(v: float) float
 
 # Minimum of two values
-pub func min(a, b: float) -> float
+pub extern func min(a: float, b: float) float
 
 # Maximum of two values
-pub func max(a, b: float) -> float
+pub extern func max(a: float, b: float) float
 
 # Square root
-pub func sqrt(v: float) -> float
+pub extern func sqrt(v: float) float
 
 # Sine of angle in radians
-pub func sin(a: float) -> float
+pub extern func sin(a: float) float
 
 # Cosine of angle in radians
-pub func cos(a: float) -> float
+pub extern func cos(a: float) float
 
 # Arc-tangent of y/x, returning angle in radians
-pub func atan2(y, x: float) -> float
+pub extern func atan2(y: float, x: float) float
 
 # Floor: largest integer not greater than v
-pub func floor(v: float) -> int
+pub extern func floor(v: float) int
 
 # Ceil: smallest integer not less than v
-pub func ceil(v: float) -> int
+pub extern func ceil(v: float) int
 
 # Round: nearest integer to v
-pub func round(v: float) -> int
+pub extern func round(v: float) int
 
 # base raised to exp
-pub func pow(base, exp: float) -> float
+pub extern func pow(base: float, exp: float) float

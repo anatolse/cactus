@@ -705,6 +705,35 @@ TEST_CASE("Codegen: Persistent entity survives load with SceneCleanup (task 11.1
     CHECK(player_init != std::string::npos);
 }
 
+// ── extern-func codegen tests (task 7.4) ─────────────────────────────────────
+
+TEST_CASE("Codegen Manual: extern func generates runtime header include", "[codegen-manual][extern-func]") {
+    auto code = generate(
+        "pub extern func lerp(a: float, b: float, t: float) float\n"
+        "trait Pos:\n    var x: float = 0.0\n");
+
+    CHECK(code.find("#include \"cactus_runtime.h\"") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: no extern func means no runtime header", "[codegen-manual][extern-func]") {
+    auto code = generate(
+        "trait Pos:\n    var x: float = 0.0\n");
+
+    CHECK(code.find("#include \"cactus_runtime.h\"") == std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: runtime header placed after standard includes", "[codegen-manual][extern-func]") {
+    auto code = generate(
+        "pub extern func sin(a: float) float\n");
+
+    auto raylib_pos  = code.find("#include \"raylib.h\"");
+    auto runtime_pos = code.find("#include \"cactus_runtime.h\"");
+    CHECK(raylib_pos  != std::string::npos);
+    CHECK(runtime_pos != std::string::npos);
+    // cactus_runtime.h comes after raylib.h
+    CHECK(runtime_pos > raylib_pos);
+}
+
 // ── Full pipeline structure tests ─────────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[codegen-manual]") {

@@ -25,7 +25,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 1;
+    static constexpr uint8_t CURRENT_VERSION = 2;
     static constexpr const char* MAGIC = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -62,6 +62,8 @@ private:
                        const std::unordered_map<std::string, ResolvedStruct>& structs);
     void write_enums(std::ostream& out,
                      const std::unordered_map<std::string, ResolvedEnum>& enums);
+    void write_funcs(std::ostream& out,
+                     const std::unordered_map<std::string, ResolvedFunc>& funcs);
     void write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph);
     void write_string_pool(std::ostream& out, const StringPool& pool);
 
@@ -75,6 +77,7 @@ private:
     std::unordered_map<std::string, ResolvedTrait>  read_traits(std::istream& in);
     std::unordered_map<std::string, ResolvedStruct> read_structs(std::istream& in);
     std::unordered_map<std::string, ResolvedEnum>   read_enums(std::istream& in);
+    std::unordered_map<std::string, ResolvedFunc>   read_funcs(std::istream& in);
     std::vector<SystemDependency> read_dep_graph(std::istream& in);
     StringPool read_string_pool(std::istream& in);
 

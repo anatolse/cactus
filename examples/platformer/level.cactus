@@ -93,7 +93,7 @@ pub unit WallBlock1:
         platform_type = PlatformType.Wall
         color = WALL_COLOR
 
-func aabb_overlap_x(ax: float, aw: float, bx: float, bw: float) -> float:
+func aabb_overlap_x(ax: float, aw: float, bx: float, bw: float) float:
     let half_a = aw * 0.5
     let half_b = bw * 0.5
     let dx = (ax + half_a) - (bx + half_b)
@@ -102,7 +102,7 @@ func aabb_overlap_x(ax: float, aw: float, bx: float, bw: float) -> float:
         return 0.0
     return overlap
 
-func aabb_overlap_y(ay: float, ah: float, by: float, bh: float) -> float:
+func aabb_overlap_y(ay: float, ah: float, by: float, bh: float) float:
     let half_a = ah * 0.5
     let half_b = bh * 0.5
     let dy = (ay + half_a) - (by + half_b)
@@ -111,7 +111,7 @@ func aabb_overlap_y(ay: float, ah: float, by: float, bh: float) -> float:
         return 0.0
     return overlap
 
-func abs_float(v: float) -> float:
+func abs_float(v: float) float:
     if v < 0.0:
         return v * -1.0
     return v

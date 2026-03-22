@@ -256,6 +256,131 @@ TEST_CASE("ModuleArtifact: version mismatch error", "[artifact]") {
     fs::remove_all(build_dir, ec);
 }
 
+// ── Funcs round-trip (task 5.7) ─────────────────────────────────────────────
+
+TEST_CASE("ModuleArtifact: extern func round-trips through save/load", "[artifact][extern-func]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    DecoratedProgram prog = make_test_program();
+
+    // Add an extern func
+    ResolvedFunc lerp;
+    lerp.name = "lerp";
+    lerp.is_pub = true;
+    lerp.is_extern = true;
+    ResolvedParam pa; pa.name = "a"; pa.type = make_float_type(); lerp.params.push_back(pa);
+    ResolvedParam pb; pb.name = "b"; pb.type = make_float_type(); lerp.params.push_back(pb);
+    ResolvedParam pt; pt.name = "t"; pt.type = make_float_type(); lerp.params.push_back(pt);
+    lerp.return_type = make_float_type();
+    prog.funcs["lerp"] = lerp;
+
+    // Also add a non-pub func
+    ResolvedFunc helper;
+    helper.name = "internal_helper";
+    helper.is_pub = false;
+    helper.is_extern = true;
+    prog.funcs["internal_helper"] = helper;
+
+    artifact.save(prog, "mathlib", build_dir);
+    REQUIRE_FALSE(errors.has_errors());
+
+    auto path = build_dir / "mathlib.cmod";
+    std::string name;
+    auto loaded = artifact.load(path, name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+
+    CHECK(name == "mathlib");
+    REQUIRE(loaded->funcs.count("lerp") == 1);
+    auto& lf = loaded->funcs.at("lerp");
+    CHECK(lf.name == "lerp");
+    CHECK(lf.is_pub);
+    CHECK(lf.is_extern);
+    REQUIRE(lf.params.size() == 3);
+    CHECK(lf.params[0].name == "a");
+    CHECK(lf.params[0].type.kind == TypeKind::Float);
+    REQUIRE(lf.return_type.has_value());
+    CHECK(lf.return_type->kind == TypeKind::Float);
+
+    // Non-pub func also round-trips
+    REQUIRE(loaded->funcs.count("internal_helper") == 1);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: extract_pub_symbols returns pub extern funcs only", "[artifact][extern-func]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    DecoratedProgram prog = make_test_program();
+
+    // Add pub extern func
+    ResolvedFunc pub_func;
+    pub_func.name = "lerp";
+    pub_func.is_pub = true;
+    pub_func.is_extern = true;
+    prog.funcs["lerp"] = pub_func;
+
+    // Add non-pub extern func
+    ResolvedFunc priv_func;
+    priv_func.name = "internal";
+    priv_func.is_pub = false;
+    priv_func.is_extern = true;
+    prog.funcs["internal"] = priv_func;
+
+    artifact.save(prog, "testmod", build_dir);
+    REQUIRE_FALSE(errors.has_errors());
+
+    auto path = build_dir / "testmod.cmod";
+    auto symbols = artifact.extract_pub_symbols(path);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+
+    // Only pub func should be in symbols
+    CHECK(symbols->funcs.size() == 1);
+    REQUIRE(symbols->funcs.count("lerp") == 1);
+    CHECK(symbols->funcs.count("internal") == 0);
+    CHECK(symbols->funcs.at("lerp").is_pub);
+    CHECK(symbols->funcs.at("lerp").is_extern);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: version-1 artifact rejected with error", "[artifact][extern-func]") {
+    // This is covered by the existing "version mismatch error" test (version 99)
+    // which also rejects version 1 (since CURRENT_VERSION is now 2)
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    // Write a file with version 1 (old format, no funcs section)
+    auto path = build_dir / "v1.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        uint8_t v1 = 1;
+        out.write(reinterpret_cast<const char*>(&v1), 1);
+        // rest doesn't matter
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    auto result = artifact.load(path, name);
+    CHECK_FALSE(result.has_value());
+    CHECK(errors.has_errors());  // version 1 != CURRENT_VERSION(2) → error
+
+    fs::remove_all(build_dir, ec);
+}
+
 // ── Invalid magic ─────────────────────────────────────────────────────────────
 
 TEST_CASE("ModuleArtifact: invalid magic rejected", "[artifact]") {

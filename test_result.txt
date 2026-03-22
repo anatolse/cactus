@@ -1,8 +1,8 @@
-RNG seed: 3852733767
-C:\Data\Projects\anatol\cactus\tests\test_data_file.cpp(124): failed: records[0].fields[0].second.color.r == 0xFF for: 0 == 255
-C:\Data\Projects\anatol\cactus\tests\test_data_file.cpp(125): failed: records[0].fields[0].second.color.g == 0x88 for: 0 == 136
-:0:0: error: data file version mismatch: expected 1, got 65535 in: C:\Users\sevos\AppData\Local\Temp\cactus_test_version\ver_test_data.bin
-test cases: 11 | 10 passed | 1 failed
-assertions: 91 | 89 passed | 2 failed
-
-
+Test project C:/Data/Projects/anatol/cactus/build
+      Start  1: LexerTests
+ 1/12 Test  #1: LexerTests .......................   Passed    3.14 sec
+      Start  2: ParserTests
+ 2/12 Test  #2: ParserTests ......................   Passed    3.17 sec
+      Start  3: SemanticTests
+ 3/12 Test  #3: SemanticTests ....................   Passed    5.68 sec
+      Start  4: CodegenManualTests

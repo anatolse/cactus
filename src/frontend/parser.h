@@ -41,6 +41,7 @@ private:
     ViewNode parse_view();
     EventNode parse_event();
     FuncNode parse_func(bool is_pub);
+    FuncNode parse_extern_func(bool is_pub);
     InterfaceNode parse_interface();
     AssetDeclNode parse_asset_decl(bool is_pub);
     InputDeclNode parse_input_decl(bool is_pub);

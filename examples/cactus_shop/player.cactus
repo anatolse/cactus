@@ -61,7 +61,7 @@ pub unit Player:
         height = CAMERA_HEIGHT
         target_offset = vec3(0.0, 1.5, 0.0)
 
-func clamp_int(value: int, min_val: int, max_val: int) -> int:
+func clamp_int(value: int, min_val: int, max_val: int) int:
     if value < min_val:
         return min_val
     if value > max_val:

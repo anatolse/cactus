@@ -115,6 +115,27 @@ void ModuleArtifact::write_enums(
     }
 }
 
+void ModuleArtifact::write_funcs(
+    std::ostream& out,
+    const std::unordered_map<std::string, ResolvedFunc>& funcs) {
+    write_u32(out, static_cast<uint32_t>(funcs.size()));
+    for (auto& [name, func] : funcs) {
+        write_str(out, func.name);
+        write_bool(out, func.is_pub);
+        write_bool(out, func.is_extern);
+        write_u32(out, static_cast<uint32_t>(func.params.size()));
+        for (auto& p : func.params) {
+            write_str(out, p.name);
+            write_type_info(out, p.type);
+        }
+        bool has_ret = func.return_type.has_value();
+        write_bool(out, has_ret);
+        if (has_ret) {
+            write_type_info(out, *func.return_type);
+        }
+    }
+}
+
 void ModuleArtifact::write_dep_graph(std::ostream& out,
                                       const std::vector<SystemDependency>& graph) {
     write_u32(out, static_cast<uint32_t>(graph.size()));
@@ -262,6 +283,31 @@ std::unordered_map<std::string, ResolvedEnum> ModuleArtifact::read_enums(std::is
     return enums;
 }
 
+std::unordered_map<std::string, ResolvedFunc> ModuleArtifact::read_funcs(std::istream& in) {
+    std::unordered_map<std::string, ResolvedFunc> funcs;
+    uint32_t count = read_u32(in);
+    for (uint32_t i = 0; i < count; ++i) {
+        ResolvedFunc func;
+        func.name = read_str(in);
+        func.is_pub = read_bool(in);
+        func.is_extern = read_bool(in);
+        uint32_t param_count = read_u32(in);
+        func.params.reserve(param_count);
+        for (uint32_t j = 0; j < param_count; ++j) {
+            ResolvedParam p;
+            p.name = read_str(in);
+            p.type = read_type_info(in);
+            func.params.push_back(std::move(p));
+        }
+        bool has_ret = read_bool(in);
+        if (has_ret) {
+            func.return_type = read_type_info(in);
+        }
+        funcs[func.name] = std::move(func);
+    }
+    return funcs;
+}
+
 std::vector<SystemDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
     std::vector<SystemDependency> graph;
     uint32_t count = read_u32(in);
@@ -326,6 +372,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_traits(out, program.traits);
     write_structs(out, program.structs);
     write_enums(out, program.enums);
+    write_funcs(out, program.funcs);
     write_dep_graph(out, program.dependency_graph);
     write_string_pool(out, program.string_pool);
 
@@ -365,6 +412,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path,
         program.traits = read_traits(in);
         program.structs = read_structs(in);
         program.enums = read_enums(in);
+        program.funcs = read_funcs(in);
         program.dependency_graph = read_dep_graph(in);
         program.string_pool = read_string_pool(in);
         program.ast = nullptr;  // not serialized
@@ -403,6 +451,12 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     }
     for (auto& [name, enm] : program->enums) {
         symbols.enums[name] = enm;
+    }
+    // Task 5.6: Only include pub funcs in exported symbols
+    for (auto& [name, func] : program->funcs) {
+        if (func.is_pub) {
+            symbols.funcs[name] = func;
+        }
     }
 
     return symbols;

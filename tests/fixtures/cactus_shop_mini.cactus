@@ -29,7 +29,7 @@ pub unit Player:
     config:
         coins = START_COINS
 
-func can_afford(coins: int, price: int) -> bool:
+func can_afford(coins: int, price: int) bool:
     return coins >= price
 
 system ShopSystem:

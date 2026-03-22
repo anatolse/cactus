@@ -85,10 +85,10 @@ pub unit GoldenCactus:
     config:
         item = ShopItem(GOLDEN_CACTUS_PRICE, GOLDEN_CACTUS_PRICE, ItemRarity.Legendary, 2.0)
 
-func can_afford(coins: int, price: int) -> bool:
+func can_afford(coins: int, price: int) bool:
     return coins >= price
 
-func calculate_total(items: list[ShopItem]) -> int:
+func calculate_total(items: list[ShopItem]) int:
     return items.map(i => i.price).reduce(0, acc, p => acc + p)
 
 system ShopInteraction:

@@ -110,7 +110,7 @@ pub unit Player:
         lives = START_LIVES
         invincible_timer = 0.0
 
-func clamp_float(value: float, min_val: float, max_val: float) -> float:
+func clamp_float(value: float, min_val: float, max_val: float) float:
     if value < min_val:
         return min_val
     if value > max_val:

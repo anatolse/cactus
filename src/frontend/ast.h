@@ -377,6 +377,7 @@ struct EventNode {
 struct FuncNode {
     std::string name;
     bool is_pub = false;
+    bool is_extern = false;
     std::vector<FuncParam> params;
     std::optional<TypeRef> return_type;
     std::vector<std::unique_ptr<StmtNode>> body;

@@ -72,6 +72,10 @@ void ModuleImports::add(const std::string& qualifier, ImportedSymbols pub_syms,
     for (auto& [name, _] : pub_syms.enums) {
         enum_providers[name].push_back(qualifier);
     }
+    // Task 4.8: Index func providers for qualified func resolution
+    for (auto& [name, _] : pub_syms.funcs) {
+        func_providers[name].push_back(qualifier);
+    }
     // Store non-pub trait names for error diagnostics
     if (!non_pub.empty()) {
         non_pub_trait_names[qualifier] = std::move(non_pub);
@@ -234,6 +238,22 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                         rt.fields.push_back(std::move(rf));
                     }
                     result_.traits[node.name] = std::move(rt);
+                } else if constexpr (std::is_same_v<T, FuncNode>) {
+                    // Task 4.4: Resolve func parameter types and return type
+                    ResolvedFunc rf;
+                    rf.name = node.name;
+                    rf.is_pub = node.is_pub;
+                    rf.is_extern = node.is_extern;
+                    for (auto& p : node.params) {
+                        ResolvedParam rp;
+                        rp.name = p.name;
+                        rp.type = resolve_type_ref(p.type);
+                        rf.params.push_back(std::move(rp));
+                    }
+                    if (node.return_type.has_value()) {
+                        rf.return_type = resolve_type_ref(*node.return_type);
+                    }
+                    result_.funcs[node.name] = std::move(rf);
                 }
             },
             decl);
@@ -446,6 +466,8 @@ void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_co
 void SemanticAnalyzer::check_func_purity(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* fn = std::get_if<FuncNode>(&decl)) {
+            // Task 4.5: Skip extern funcs — no body, purity is guaranteed
+            if (fn->is_extern) continue;
             for (auto& stmt : fn->body) {
                 check_func_purity_stmt(*stmt, fn->name);
             }

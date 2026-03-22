@@ -69,7 +69,7 @@ TEST_CASE("Semantic: const string — allowed in const block", "[semantic]") {
 }
 
 TEST_CASE("Semantic: const string — rejected in func", "[semantic]") {
-    CHECK(analyze_has_errors("func test() -> int:\n    x = \"bad\"\n    return 0\n"));
+    CHECK(analyze_has_errors("func test() int:\n    x = \"bad\"\n    return 0\n"));
 }
 
 TEST_CASE("Semantic: func purity — emit rejected", "[semantic]") {
@@ -79,11 +79,11 @@ TEST_CASE("Semantic: func purity — emit rejected", "[semantic]") {
 }
 
 TEST_CASE("Semantic: func purity — pure func allowed", "[semantic]") {
-    CHECK_FALSE(analyze_has_errors("func add(a: int, b: int) -> int:\n    return a + b\n"));
+    CHECK_FALSE(analyze_has_errors("func add(a: int, b: int) int:\n    return a + b\n"));
 }
 
 TEST_CASE("Semantic: no recursion — direct", "[semantic]") {
-    CHECK(analyze_has_errors("func loop(x: int) -> int:\n    return loop(x)\n"));
+    CHECK(analyze_has_errors("func loop(x: int) int:\n    return loop(x)\n"));
 }
 
 TEST_CASE("Semantic: persist on var — allowed", "[semantic]") {
@@ -150,4 +150,63 @@ TEST_CASE("Semantic: resolved struct fields", "[semantic]") {
     auto result = analyze("struct Vec2:\n    x: float\n    y: float\n");
     REQUIRE(result.structs.count("Vec2"));
     CHECK(result.structs["Vec2"].fields.size() == 2);
+}
+
+// ── extern-func semantic tests (task 4.9) ─────────────────────────────────────
+
+TEST_CASE("Semantic: extern func produces ResolvedFunc with is_extern=true", "[semantic][extern-func]") {
+    auto result = analyze("pub extern func lerp(a: float, b: float, t: float) float\n");
+    REQUIRE(result.funcs.count("lerp") == 1);
+    auto& rf = result.funcs.at("lerp");
+    CHECK(rf.name == "lerp");
+    CHECK(rf.is_pub);
+    CHECK(rf.is_extern);
+    REQUIRE(rf.params.size() == 3);
+    CHECK(rf.params[0].name == "a");
+    CHECK(rf.params[0].type.kind == TypeKind::Float);
+    CHECK(rf.params[1].name == "b");
+    CHECK(rf.params[2].name == "t");
+    REQUIRE(rf.return_type.has_value());
+    CHECK(rf.return_type->kind == TypeKind::Float);
+}
+
+TEST_CASE("Semantic: non-pub extern func is in funcs map but not pub", "[semantic][extern-func]") {
+    auto result = analyze("extern func internal_helper(x: int) int\n");
+    REQUIRE(result.funcs.count("internal_helper") == 1);
+    CHECK_FALSE(result.funcs.at("internal_helper").is_pub);
+    CHECK(result.funcs.at("internal_helper").is_extern);
+}
+
+TEST_CASE("Semantic: extern func without return type has no return_type", "[semantic][extern-func]") {
+    auto result = analyze("pub extern func init()\n");
+    REQUIRE(result.funcs.count("init") == 1);
+    CHECK(result.funcs.at("init").is_extern);
+    CHECK_FALSE(result.funcs.at("init").return_type.has_value());
+}
+
+TEST_CASE("Semantic: extern func not flagged by purity check", "[semantic][extern-func]") {
+    // extern func should not be checked for purity (it has no body)
+    CHECK_FALSE(analyze_has_errors("pub extern func lerp(a: float, b: float, t: float) float\n"));
+}
+
+TEST_CASE("Semantic: non-extern func with emit is still flagged", "[semantic][extern-func]") {
+    // Regular func with emit still fails purity check
+    CHECK(analyze_has_errors(
+        "event Boom:\n    var x: int\n"
+        "func bad():\n    emit Boom(1)\n"));
+}
+
+TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][extern-func]") {
+    auto result = analyze(
+        "pub extern func sin(a: float) float\n"
+        "pub extern func cos(a: float) float\n"
+        "pub extern func sqrt(v: float) float\n");
+    REQUIRE(result.funcs.size() == 3);
+    CHECK(result.funcs.count("sin") == 1);
+    CHECK(result.funcs.count("cos") == 1);
+    CHECK(result.funcs.count("sqrt") == 1);
+    for (auto& [name, func] : result.funcs) {
+        CHECK(func.is_extern);
+        CHECK(func.is_pub);
+    }
 }

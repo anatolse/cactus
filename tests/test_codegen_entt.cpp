@@ -101,6 +101,39 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("replicate_Pos") != std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: extern func generates runtime header include", "[codegen-entt][extern-func]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern func lerp(a: float, b: float, t: float) float\n"
+        "trait Pos:\n    var x: float\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("#include \"cactus_runtime.h\"") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: no extern func means no runtime header", "[codegen-entt][extern-func]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Pos:\n    var x: float\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("#include \"cactus_runtime.h\"") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: extern func body is not emitted", "[codegen-entt][extern-func]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern func sin(a: float) float\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    // No function definition should be emitted for the extern func
+    // (the include is present but no function body)
+    CHECK(code.find("float sin(") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(

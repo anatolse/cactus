@@ -20,6 +20,7 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"view", TokenType::VIEW},
         {"event", TokenType::EVENT},
         {"func", TokenType::FUNC},
+        {"extern", TokenType::EXTERN},
         {"interface", TokenType::INTERFACE},
         {"let", TokenType::LET},
         {"var", TokenType::VAR},

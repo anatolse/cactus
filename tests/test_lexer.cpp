@@ -384,3 +384,34 @@ TEST_CASE("Lexer: new keyword string representations", "[lexer][dsl-spec-new-fea
     CHECK(std::string(token_type_to_string(TokenType::FIXED_TICK)) == "FIXED_TICK");
     CHECK(std::string(token_type_to_string(TokenType::LATE_TICK)) == "LATE_TICK");
 }
+
+// ── extern-func keyword tests ─────────────────────────────────────────────────
+
+TEST_CASE("Lexer: extern keyword", "[lexer][extern-func]") {
+    auto tokens = lex("extern");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::EXTERN);
+    CHECK(tokens[0].value == "extern");
+}
+
+TEST_CASE("Lexer: extern_value tokenizes as IDENTIFIER", "[lexer][extern-func]") {
+    auto tokens = lex("extern_value");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::IDENTIFIER);
+    CHECK(tokens[0].value == "extern_value");
+}
+
+TEST_CASE("Lexer: extern string representation", "[lexer][extern-func]") {
+    CHECK(std::string(token_type_to_string(TokenType::EXTERN)) == "EXTERN");
+}
+
+TEST_CASE("Lexer: extern keyword distinct from identifier prefixes", "[lexer][extern-func]") {
+    auto tokens = lex("extern externals external_data");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 3);
+    CHECK(types[0] == TokenType::EXTERN);      // keyword
+    CHECK(types[1] == TokenType::IDENTIFIER);  // "externals" — not a keyword
+    CHECK(types[2] == TokenType::IDENTIFIER);  // "external_data" — not a keyword
+}

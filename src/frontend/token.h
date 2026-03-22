@@ -20,6 +20,7 @@ enum class TokenType {
     VIEW,
     EVENT,
     FUNC,
+    EXTERN,
     INTERFACE,
     ASSET,
     INPUT,
@@ -148,6 +149,7 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::VIEW: return "VIEW";
         case TokenType::EVENT: return "EVENT";
         case TokenType::FUNC: return "FUNC";
+        case TokenType::EXTERN: return "EXTERN";
         case TokenType::INTERFACE: return "INTERFACE";
         case TokenType::ASSET: return "ASSET";
         case TokenType::INPUT: return "INPUT";

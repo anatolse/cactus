@@ -12,6 +12,14 @@ namespace cactus {
 
 namespace {
 
+// Task 7.1: Check if the program has any extern funcs requiring the runtime header
+bool has_extern_funcs(const DecoratedProgram& program) {
+    for (auto& [name, func] : program.funcs) {
+        if (func.is_extern) return true;
+    }
+    return false;
+}
+
 // ── Build CodegenContext from a DecoratedProgram ────────────────────────────
 
 CodegenContext build_context(const DecoratedProgram& program,
@@ -199,7 +207,12 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) {
     out << "#include <cstdint>\n";
     out << "#include <string>\n";
     out << "#include <vector>\n";
-    out << "#include \"raylib.h\"\n\n";
+    out << "#include \"raylib.h\"\n";
+    // Task 7.2: Include runtime header when extern funcs are present
+    if (has_extern_funcs(program)) {
+        out << "#include \"cactus_runtime.h\"\n";
+    }
+    out << "\n";
 
     // ── Step 4: Enums and structs ──────────────────────────────────────────
     for (const auto& [name, e] : program.enums) {

@@ -150,7 +150,7 @@ TEST_CASE("Parser: event declaration", "[parser]") {
 }
 
 TEST_CASE("Parser: func declaration", "[parser]") {
-    auto prog = parse("func add(a: int, b: int) -> int:\n    return a + b\n");
+    auto prog = parse("func add(a: int, b: int) int:\n    return a + b\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
     CHECK(decl.name == "add");
@@ -703,4 +703,99 @@ TEST_CASE("Parser: system with multiple lifecycle handlers", "[parser][dsl-spec-
     CHECK(sys.handlers[0].event_name == "input");
     CHECK(sys.handlers[1].event_name == "fixed_tick");
     CHECK(sys.handlers[2].event_name == "late_tick");
+}
+
+// ── extern-func parser tests (tasks 3.3, 8.4) ──────────────────────────────
+
+TEST_CASE("Parser: pub extern func declaration with return type", "[parser][extern-func]") {
+    auto prog = parse("pub extern func lerp(a: float, b: float, t: float) float\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    CHECK(decl.name == "lerp");
+    CHECK(decl.is_pub);
+    CHECK(decl.is_extern);
+    REQUIRE(decl.params.size() == 3);
+    CHECK(decl.params[0].name == "a");
+    CHECK(decl.params[0].type.name == "float");
+    CHECK(decl.params[1].name == "b");
+    CHECK(decl.params[2].name == "t");
+    REQUIRE(decl.return_type.has_value());
+    CHECK(decl.return_type->name == "float");
+    CHECK(decl.body.empty());  // no body for extern
+}
+
+TEST_CASE("Parser: extern func without pub", "[parser][extern-func]") {
+    auto prog = parse("extern func sin(a: float) float\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    CHECK(decl.name == "sin");
+    CHECK_FALSE(decl.is_pub);
+    CHECK(decl.is_extern);
+    REQUIRE(decl.params.size() == 1);
+    REQUIRE(decl.return_type.has_value());
+    CHECK(decl.return_type->name == "float");
+    CHECK(decl.body.empty());
+}
+
+TEST_CASE("Parser: extern func without return type", "[parser][extern-func]") {
+    auto prog = parse("pub extern func init()\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    CHECK(decl.name == "init");
+    CHECK(decl.is_pub);
+    CHECK(decl.is_extern);
+    CHECK(decl.params.empty());
+    CHECK_FALSE(decl.return_type.has_value());
+    CHECK(decl.body.empty());
+}
+
+TEST_CASE("Parser: consecutive extern funcs parse cleanly", "[parser][extern-func]") {
+    auto prog = parse(
+        "pub extern func sin(a: float) float\n"
+        "pub extern func cos(a: float) float\n"
+        "pub extern func sqrt(v: float) float\n"
+    );
+    REQUIRE(prog.declarations.size() == 3);
+    CHECK(std::get<FuncNode>(prog.declarations[0]).name == "sin");
+    CHECK(std::get<FuncNode>(prog.declarations[1]).name == "cos");
+    CHECK(std::get<FuncNode>(prog.declarations[2]).name == "sqrt");
+    for (auto& d : prog.declarations) {
+        CHECK(std::get<FuncNode>(d).is_extern);
+        CHECK(std::get<FuncNode>(d).body.empty());
+    }
+}
+
+TEST_CASE("Parser: non-extern func without body still errors", "[parser][extern-func]") {
+    // A regular func must have a body (colon + indented block)
+    // Without it, the parser will error on the missing ':'
+    ErrorReporter errors;
+    Lexer lexer("func missing_body(a: float) float\n", "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    Parser parser(std::move(tokens), errors);
+    parser.parse_program();
+    CHECK(errors.has_errors());  // should error: expected ':'
+}
+
+// Task 8.4: func return type without arrow, and arrow produces error
+
+TEST_CASE("Parser: func with return type using no arrow", "[parser][extern-func]") {
+    auto prog = parse("func distance(a: float, b: float) float:\n    return a - b\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    CHECK(decl.name == "distance");
+    CHECK_FALSE(decl.is_extern);
+    REQUIRE(decl.return_type.has_value());
+    CHECK(decl.return_type->name == "float");
+    REQUIRE(decl.body.size() == 1);
+}
+
+TEST_CASE("Parser: func with arrow return type produces error", "[parser][extern-func]") {
+    // Using old -> syntax should produce an error
+    ErrorReporter errors;
+    Lexer lexer("func add(a: int, b: int) -> int:\n    return a + b\n", "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    REQUIRE_FALSE(errors.has_errors());  // lexing should be fine
+    Parser parser(std::move(tokens), errors);
+    parser.parse_program();
+    CHECK(errors.has_errors());  // parser should error: unexpected '->'
 }

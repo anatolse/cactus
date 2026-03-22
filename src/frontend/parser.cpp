@@ -110,15 +110,17 @@ Declaration Parser::parse_declaration() {
         if (check(TokenType::UNIT)) return parse_unit(true);
         if (check(TokenType::TEMPLATE)) return parse_template(true);
         if (check(TokenType::FUNC)) return parse_func(true);
+        if (check(TokenType::EXTERN)) return parse_extern_func(true);
         if (check(TokenType::ASSET)) return parse_asset_decl(true);
         if (check(TokenType::INPUT)) return parse_input_decl(true);
-        errors_.error(peek().location, "expected trait, unit, template, func, asset, or input after 'pub'");
+        errors_.error(peek().location, "expected trait, unit, template, func, extern func, asset, or input after 'pub'");
     }
 
     if (tok.type == TokenType::UNIT) return parse_unit(false);
     if (tok.type == TokenType::FUNC) return parse_func(false);
+    if (tok.type == TokenType::EXTERN) return parse_extern_func(false);
 
-    errors_.error(tok.location, "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, interface, asset, input)");
+    errors_.error(tok.location, "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, extern, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{"<error>", tok.location};
 }
@@ -760,7 +762,13 @@ FuncNode Parser::parse_func(bool is_pub) {
     consume(TokenType::RPAREN, "expected ')'");
 
     std::optional<TypeRef> return_type;
-    if (match(TokenType::ARROW)) {
+    // Task 8.1/8.2: Return type follows ')' directly — no arrow.
+    // Produce an error if old '->' syntax is used.
+    if (check(TokenType::ARROW)) {
+        errors_.error(peek().location, "unexpected '->'; return type follows ')' directly");
+        advance();  // consume and skip the arrow
+    }
+    if (check(TokenType::IDENTIFIER)) {
         return_type = parse_type_ref();
     }
 
@@ -775,6 +783,40 @@ FuncNode Parser::parse_func(bool is_pub) {
     node.params = std::move(params);
     node.return_type = std::move(return_type);
     node.body = std::move(body);
+    node.location = loc;
+    return node;
+}
+
+// ── Extern Func ──────────────────────────────────────────────────────────────
+
+FuncNode Parser::parse_extern_func(bool is_pub) {
+    auto loc = peek().location;
+    consume(TokenType::EXTERN, "expected 'extern'");
+    consume(TokenType::FUNC, "expected 'func' after 'extern'");
+    auto name = consume(TokenType::IDENTIFIER, "expected function name").value;
+    consume(TokenType::LPAREN, "expected '('");
+    auto params = parse_param_list();
+    consume(TokenType::RPAREN, "expected ')'");
+
+    // Return type directly follows ')', no arrow, no colon, no body
+    std::optional<TypeRef> return_type;
+    if (check(TokenType::ARROW)) {
+        errors_.error(peek().location, "unexpected '->'; return type follows ')' directly");
+        advance();  // consume and skip the arrow
+    }
+    if (check(TokenType::IDENTIFIER)) {
+        return_type = parse_type_ref();
+    }
+
+    expect_newline();
+
+    FuncNode node;
+    node.name = name;
+    node.is_pub = is_pub;
+    node.is_extern = true;
+    node.params = std::move(params);
+    node.return_type = std::move(return_type);
+    // body intentionally empty for extern
     node.location = loc;
     return node;
 }

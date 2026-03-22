@@ -112,17 +112,12 @@ pub enum GamepadAxis:
 # These are called from on input() and any system handler.
 # InputButton and InputAxis values come from `input` declarations (see spec §3.17).
 
-pub func pressed(b: InputButton) -> bool:
-    return false
+pub extern func pressed(b: InputButton) bool
 
-pub func down(b: InputButton) -> bool:
-    return false
+pub extern func down(b: InputButton) bool
 
-pub func released(b: InputButton) -> bool:
-    return false
+pub extern func released(b: InputButton) bool
 
-pub func axis(a: InputAxis) -> float:
-    return 0.0
+pub extern func axis(a: InputAxis) float
 
-pub func axis2(x: InputAxis, y: InputAxis) -> vec2:
-    return vec2(0.0, 0.0)
+pub extern func axis2(x: InputAxis, y: InputAxis) vec2

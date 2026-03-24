@@ -16,7 +16,7 @@ The lexer SHALL maintain an indent stack and emit explicit INDENT and DEDENT tok
 - **THEN** the lexer reports an error with the source location
 
 ### Requirement: Keyword recognition
-The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `view`, `event`, `func`, `interface`, `let`, `var`, `persist`, `sync`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `apply`, `config`, `child`, `filter`, `target`, `map`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`.
+The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `view`, `event`, `func`, `interface`, `let`, `var`, `persist`, `sync`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `apply`, `config`, `child`, `filter`, `target`, `map`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`, `extern`.
 
 #### Scenario: Keyword vs identifier
 - **WHEN** the source contains the text `system`
@@ -25,6 +25,14 @@ The lexer SHALL recognize all Cactus keywords and produce the corresponding Toke
 #### Scenario: Identifier with keyword prefix
 - **WHEN** the source contains the text `system_name`
 - **THEN** the lexer produces a token with type IDENTIFIER (not SYSTEM)
+
+#### Scenario: extern keyword tokenized
+- **WHEN** the source contains the text `extern`
+- **THEN** the lexer produces a token with type EXTERN (not IDENTIFIER)
+
+#### Scenario: extern_value not a keyword
+- **WHEN** the source contains the text `extern_value`
+- **THEN** the lexer produces a token with type IDENTIFIER
 
 ### Requirement: Numeric literal tokenization
 The lexer SHALL distinguish integer literals from float literals. A number containing a decimal point SHALL be tokenized as FLOAT_LITERAL; otherwise as INT_LITERAL.
@@ -121,3 +129,10 @@ These keywords are reserved and SHALL NOT be usable as identifiers.
 #### Scenario: New keywords rejected as identifiers
 - **WHEN** a declaration uses `template`, `spawn`, `destroy`, `load`, `enable`, `disable`, `exclude`, or `disabled` as an identifier name
 - **THEN** the lexer emits the reserved keyword token, and the parser SHALL report an error
+
+### Requirement: `extern` reserved keyword
+The lexer SHALL recognize `extern` as a reserved keyword with token type `EXTERN`. The keyword SHALL NOT be usable as an identifier.
+
+#### Scenario: extern in declaration context tokenized
+- **WHEN** the source contains `pub extern func lerp(a, b, t: float) float`
+- **THEN** the lexer emits `PUB EXTERN FUNC IDENTIFIER("lerp") LPAREN ...`

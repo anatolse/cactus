@@ -224,7 +224,7 @@ struct StmtNode {
 
 struct EventHandlerNode {
     std::string event_name;
-    std::vector<FuncParam> params;
+    std::optional<std::string> alias;  // optional 'as alias' clause
     std::vector<std::unique_ptr<StmtNode>> body;
     SourceLocation location;
 };
@@ -381,6 +381,7 @@ struct ViewNode {
 
 struct EventNode {
     std::string name;
+    bool is_pub = false;
     std::vector<FieldNode> fields;
     SourceLocation location;
 };

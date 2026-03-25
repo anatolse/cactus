@@ -129,8 +129,8 @@ TEST_CASE("Parser: system with filter and handler", "[parser]") {
     auto prog = parse(
         "system MoveSystem:\n"
         "    filter: [Position, Velocity]\n"
-        "    on tick(dt: float):\n"
-        "        x = x + vx * dt\n");
+        "    on tick:\n"
+        "        x = x + vx * tick.dt\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<SystemNode>(prog.declarations[0]);
     CHECK(decl.name == "MoveSystem");
@@ -139,6 +139,7 @@ TEST_CASE("Parser: system with filter and handler", "[parser]") {
     CHECK(decl.filter.trait_names[1] == "Velocity");
     REQUIRE(decl.handlers.size() == 1);
     CHECK(decl.handlers[0].event_name == "tick");
+    CHECK_FALSE(decl.handlers[0].alias.has_value());
 }
 
 TEST_CASE("Parser: event declaration", "[parser]") {
@@ -293,7 +294,7 @@ TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
     auto prog = parse(
         "system Render:\n"
         "    filter: [phys.Body, render.Sprite]\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);

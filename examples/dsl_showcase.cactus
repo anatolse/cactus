@@ -1,0 +1,881 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Cactus DSL — Comprehensive Feature Showcase
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This single file demonstrates every syntactic and semantic feature of the
+# Cactus DSL as defined in the openspec/specs directory.
+#
+# Sections:
+#   1.  Module declaration & imports (use, use as)
+#   2.  Const block  — int, float, string, hex color (6- and 8-digit)
+#   3.  Asset declarations — all six asset types
+#   4.  Input declarations — button and axis
+#   5.  Struct types
+#   6.  Enum types
+#   7.  Trait declarations — all field modifiers (let, var, persist, sync, pub)
+#   8.  Marker traits      — body-less (zero-cost tag)
+#   9.  Event declarations — including marker events (body-less)
+#   10. Pure func declarations  — no emit, no world access, no recursion
+#   11. Extern func declarations — body-less, backend-provided
+#   12. Unit declarations — apply with aliases, disabled traits, dotted config
+#   13. Template declarations  — spawn-only blueprints
+#   14. Systems — all phases, filter/exclude/after, all handler kinds
+#       · on input                      (Input phase — no payload fields)
+#       · on fixed_tick                 (Physics phase — fixed_tick.dt)
+#       · on tick  [as alias]           (Update phase — tick.dt or alias.dt)
+#       · on late_tick                  (Post-update phase — late_tick.dt)
+#       · on spawn  / on destroy        (Entity lifecycle — no fields)
+#       · on load   / on unload         (Scene lifecycle — no fields)
+#       · on UserEvent  [as alias]      (Custom event — EventName.field or alias.field)
+#   15. Statements — let/var, if/else, match, emit (broadcast + targeted),
+#       spawn (statement + expression), destroy (self + entity_id),
+#       load, enable, disable, return
+#   16. Expressions — binary ops, unary, member access, function calls,
+#       lambda (map), bool literals, vec2/vec3/quat constructors
+
+# ── 1. Module declaration & imports ───────────────────────────────────────────
+
+module showcase
+
+use std.core                      # provides Persistent, SceneCleanup, and lifecycle events
+use std.input
+use std.math as math              # use ... as ALIAS form
+use std.math.vec2 as v2
+use std.math.vec3 as v3
+use std.math.quat as quat
+use std.transform.flat as tr_flat
+use std.transform.volume as tr_vol
+use std.render.sprites as spr
+use std.render.meshes as mesh_r
+use std.physics.flat as phys_flat
+use std.physics.volume as phys_vol
+use std.camera.flat as cam_flat
+use std.camera.volume as cam_vol
+use std.audio
+
+use level2                        # referenced by load statement below
+use game_over                     # referenced by load statement below
+
+# ── 2. Const block ─────────────────────────────────────────────────────────────
+# Permitted literal types: integer, float, string, hex color (6-digit, 8-digit)
+
+const:
+    WINDOW_TITLE       = "DSL Showcase"
+    WINDOW_WIDTH       = 1280
+    WINDOW_HEIGHT      = 720
+    TARGET_FPS         = 60
+    GRAVITY            = 30.0
+    MOVE_SPEED         = 5.0
+    JUMP_FORCE         = 12.0
+    MAX_HEALTH         = 100
+    SCORE_PER_COIN     = 10
+    PLAYER_COLOR       = #3399FF        # 6-digit RGB
+    ENEMY_COLOR        = #CC3333FF      # 8-digit RGBA
+    UI_BG_COLOR        = #00000080      # 8-digit RGBA (semi-transparent black)
+    CLEAR_WHITE        = #FFFFFF
+    SCORE_LABEL        = "Score:"
+    LIVES_LABEL        = "Lives:"
+    DEBUG_LABEL        = "DEBUG"
+
+# ── 3. Asset declarations ──────────────────────────────────────────────────────
+# Six asset types: mesh, texture, sound, music, font, material.
+# String path literals are exempt from the const-string rule here.
+# pub makes an asset importable by other modules.
+
+pub asset PlayerMesh:    mesh     = "models/player.glb"
+pub asset PlayerTex:     texture  = "textures/player.png"
+pub asset EnemyTex:      texture  = "textures/enemy.png"
+    asset CoinTex:       texture  = "textures/coin.png"
+    asset HitSound:      sound    = "audio/hit.wav"
+    asset CoinSound:     sound    = "audio/coin.wav"
+pub asset ThemeMusic:    music    = "audio/theme.ogg"
+pub asset BossMusic:     music    = "audio/boss.ogg"
+pub asset HudFont:       font     = "fonts/hud.ttf"
+pub asset PlayerMat:     material = "materials/player.mat"
+
+# ── 4. Input declarations ──────────────────────────────────────────────────────
+# button: key, mouse, gamepad properties.
+# axis:   negative, positive, gamepad, invert properties.
+
+pub input Jump: button
+    key     = Key.Space
+    gamepad = GamepadButton.South
+
+pub input Fire: button
+    key   = Key.LeftControl
+    mouse = MouseButton.Left
+
+pub input Pause: button
+    key     = Key.Escape
+    gamepad = GamepadButton.Start
+
+pub input MoveX: axis
+    negative = Key.A
+    positive = Key.D
+    gamepad  = GamepadAxis.LeftX
+
+pub input MoveY: axis
+    negative = Key.S
+    positive = Key.W
+    gamepad  = GamepadAxis.LeftY
+    invert   = true
+
+# ── 5. Struct types ────────────────────────────────────────────────────────────
+# Value objects with typed fields; no methods or inheritance.
+
+struct Item:
+    name:  string
+    price: int
+    count: int
+
+struct Bounds:
+    x: float
+    y: float
+    w: float
+    h: float
+
+# ── 6. Enum types ──────────────────────────────────────────────────────────────
+# Named integer constants.
+
+enum GameState:
+    MainMenu
+    Playing
+    Paused
+    GameOver
+
+enum EnemyType:
+    Walker
+    Flyer
+    Boss
+
+enum FacingDir:
+    Left
+    Right
+
+# ── 7. Trait declarations ──────────────────────────────────────────────────────
+# Fields:    let (immutable after init)   var (mutable)
+# Modifiers: persist (serialized to disk) sync (network-replicated)
+#            pub (exported in ImportedSymbols)
+
+# — Primitive scalar types —
+trait Health:
+    let max_health: int = 100           # let: immutable, with default
+    persist sync var health: int        # persist + sync + var
+    pub var shield: int                 # pub field
+    var invincible_timer: float
+
+# — vec2 / float types —
+trait Position2D:
+    persist sync var pos:      vec2
+    var velocity:              vec2
+
+# — vec3 / quat types —
+trait Transform3D:
+    persist sync var pos:      vec3
+    persist sync var rotation: quat
+    var velocity:              vec3
+
+# — list[T] generic type —
+trait Inventory:
+    var items:     list[Item]
+    var gold:      int
+    var max_slots: int
+
+# — Asset opaque handle types (texture_id, mesh_id, material_id, etc.) —
+trait Renderable2D:
+    let texture:  texture_id            # only obtainable from an asset declaration
+    var visible:  bool
+    var layer:    int
+    var tint:     color
+
+trait Renderable3D:
+    let mesh:     mesh_id               # mesh_id opaque type
+    let material: material_id           # material_id opaque type
+    var visible:  bool
+
+# — entity_id type: always refers to a live entity; no null sentinel —
+trait Parent:
+    var parent_id: entity_id
+
+trait Follower:
+    var target: entity_id               # entity_id field
+    var offset: vec3
+    var speed:  float
+
+# — color type —
+trait Visual:
+    var color:  color
+    var width:  float
+    var height: float
+
+# — bool + enum types —
+trait EnemyAI:
+    var patrol_min_x:  float
+    var patrol_max_x:  float
+    var patrol_speed:  float
+    var direction:     float
+    var enemy_type:    EnemyType
+    var is_aggro:      bool
+
+# — InputButton / InputAxis field types (resolved from input declarations) —
+trait PlayerInput:
+    let jump_action:   InputButton      # InputButton opaque type
+    let move_x_action: InputAxis        # InputAxis opaque type
+
+# — pub trait (exported in module ImportedSymbols) —
+pub trait Score:
+    persist var score:           int
+    persist var high_score:      int
+    var combo_multiplier:        int
+
+# — music_id / sound_id / font_id types —
+trait AudioConfig:
+    let theme:   music_id
+    let hit_sfx: sound_id
+    let hud_fnt: font_id
+
+# ── 8. Marker traits ───────────────────────────────────────────────────────────
+# No colon, no body — zero-cost tag component; used for filter/exclude.
+
+trait Frozen                    # entity is paused/frozen
+trait Invincible                # entity takes no damage
+trait PlayerOwned               # entity belongs to the player
+trait Collectible               # entity can be picked up
+pub trait Boss                  # pub marker: importable by other modules
+
+# ── 9. Event declarations ──────────────────────────────────────────────────────
+# In handlers, payload is accessed via the event name or optional alias:
+#   on PlayerDamaged:      → PlayerDamaged.amount
+#   on PlayerDamaged as d: → d.amount
+#
+# Lifecycle events (tick, fixed_tick, late_tick, spawn, destroy, input,
+# load, unload) are declared as pub events in std.core and are always in scope.
+# Marker events (no fields) may also be declared without a body.
+
+event PlayerJumped:
+    var position: vec2
+    var velocity: vec2
+
+event PlayerDamaged:
+    var amount:   int
+    var source:   entity_id
+
+event PlayerDied:
+    var lives_remaining: int
+
+event EnemyDefeated:
+    var position:    vec2
+    var enemy_type:  EnemyType
+    var score_value: int
+
+event CoinCollected:
+    var value: int
+
+event FreezeApplied:
+    var duration: float
+
+event SceneTransition:
+    var next_state: GameState
+
+# Marker event — no colon, no fields (body-less form)
+event GamePaused
+
+# ── 10. Pure func declarations ─────────────────────────────────────────────────
+# Rules: no emit, no world access, no recursion.
+# Return type follows ')' directly — no arrow token.
+
+func clamp_float(v: float, lo: float, hi: float) float:
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    return v
+
+func clamp_int(v: int, lo: int, hi: int) int:
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    return v
+
+func abs_f(v: float) float:
+    if v < 0.0:
+        return v * -1.0
+    return v
+
+func aabb_overlap_x(ax: float, aw: float, bx: float, bw: float) float:
+    let half_a  = aw * 0.5
+    let half_b  = bw * 0.5
+    let dx      = (ax + half_a) - (bx + half_b)
+    let overlap = half_a + half_b - abs_f(dx)
+    if overlap < 0.0:
+        return 0.0
+    return overlap
+
+func aabb_overlap_y(ay: float, ah: float, by: float, bh: float) float:
+    let half_a  = ah * 0.5
+    let half_b  = bh * 0.5
+    let dy      = (ay + half_a) - (by + half_b)
+    let overlap = half_a + half_b - abs_f(dy)
+    if overlap < 0.0:
+        return 0.0
+    return overlap
+
+# match expression inside a func
+pub func score_for_enemy(etype: EnemyType, multiplier: int) int:
+    var base = 0
+    match etype:
+        EnemyType.Walker => base = 10
+        EnemyType.Flyer  => base = 20
+        EnemyType.Boss   => base = 100
+    return base * multiplier
+
+# lambda expression: map over list[Item]
+func item_prices(items: list[Item]) list[int]:
+    return items.map(i => i.price)
+
+# lambda expression with field arithmetic
+func inventory_value(items: list[Item]) int:
+    return items.reduce(0, acc => acc + 1)
+
+# binary operators: +, -, *, /, %, comparisons, logical and/or/not
+func is_in_range(value: float, lo: float, hi: float) bool:
+    return value >= lo and value <= hi and not (value == lo and value == hi)
+
+# ── 11. Extern func declarations ───────────────────────────────────────────────
+# No body, no colon, no purity/recursion checks.
+# Backend provides the implementation (e.g. from cactus_runtime.h).
+
+pub extern func lerp(a: float, b: float, t: float) float
+pub extern func sin_f(angle: float) float
+pub extern func cos_f(angle: float) float
+pub extern func sqrt_f(v: float) float
+    extern func get_screen_width() int
+    extern func get_screen_height() int
+    extern func get_time() float
+    extern func draw_rect(pos: vec2, size: vec2, col: color)
+    extern func draw_text(text: string, x: float, y: float, size: int, col: color)
+pub extern func play_particle_effect(x: float, y: float)
+pub extern func get_player_entity() entity_id
+
+# ── 12. Unit declarations ──────────────────────────────────────────────────────
+# Auto-instantiated at program start (or on module load).
+# apply: — list of traits; "as ALIAS" declares local alias for field access
+#          ": disabled" marks a trait as initially inactive
+# config: — sets initial field values; bare key, alias.field, or TraitName.field
+
+pub unit Player:
+    apply:
+        Position2D as pos           # alias: pos.pos, pos.velocity
+        Health as hp                # alias: hp.health, hp.shield, etc.
+        Inventory as inv            # alias: inv.items, inv.gold
+        Score as sc                 # alias: sc.score, sc.high_score
+        Renderable2D as rndr        # alias: rndr.texture, rndr.visible
+        PlayerOwned                 # marker trait — no fields, no alias needed
+        Frozen: disabled            # starts INACTIVE; enable/disable at runtime
+        Invincible: disabled        # starts INACTIVE
+    config:
+        pos.pos          = vec2(100.0, 300.0)   # alias-qualified
+        pos.velocity     = vec2(0.0, 0.0)
+        Health.health    = MAX_HEALTH            # TraitName-qualified
+        Health.shield    = 0
+        hp.invincible_timer = 0.0               # alias-qualified
+        inv.gold         = 0
+        inv.max_slots    = 20
+        sc.score         = 0
+        sc.high_score    = 0
+        sc.combo_multiplier = 1
+        rndr.texture     = PlayerTex            # asset name resolves to texture_id
+        rndr.visible     = true
+        rndr.layer       = 1
+        rndr.tint        = PLAYER_COLOR
+
+unit Camera2D:
+    apply:
+        cam_flat.Camera as cam
+        cam_flat.FollowCamera as follow
+        std.core.Persistent                     # qualified with module path
+    config:
+        cam.zoom     = 1.0
+        cam.active   = true
+        cam.rotation = 0.0
+
+unit AudioManager:
+    apply:
+        std.audio.AudioSettings as settings
+        std.audio.MusicTrack as track
+        std.core.Persistent
+    config:
+        settings.master_volume = 1.0
+        settings.sfx_volume    = 0.8
+        settings.music_volume  = 0.7
+        track.music            = ThemeMusic     # ThemeMusic resolves to music_id
+        track.playing          = true
+
+# Bare config key — valid when field name is unambiguous across applied traits
+unit GameManager:
+    apply:
+        Score as sc
+        std.core.Persistent
+    config:
+        score            = 0                    # bare key (unambiguous: only sc has it)
+        high_score       = 0
+        combo_multiplier = 1
+
+# ── 13. Template declarations ─────────────────────────────────────────────────
+# NOT auto-instantiated. Spawned via `spawn TemplateName(overrides)`.
+# Same structure as unit (apply: + config:).
+
+pub template WalkerEnemy:
+    apply:
+        Position2D as pos
+        Health as hp
+        EnemyAI as ai
+        Renderable2D as rndr
+        Frozen: disabled            # starts unfrozen; can be frozen externally
+    config:
+        pos.pos         = vec2(0.0, 0.0)    # overridden at spawn site
+        pos.velocity    = vec2(0.0, 0.0)
+        hp.health       = 30
+        hp.invincible_timer = 0.0
+        ai.patrol_min_x = 0.0
+        ai.patrol_max_x = 400.0
+        ai.patrol_speed = 2.0
+        ai.direction    = 1.0
+        ai.enemy_type   = EnemyType.Walker
+        ai.is_aggro     = false
+        rndr.texture    = EnemyTex
+        rndr.visible    = true
+        rndr.layer      = 0
+        rndr.tint       = ENEMY_COLOR
+
+pub template FlyerEnemy:
+    apply:
+        Position2D as pos
+        Health as hp
+        EnemyAI as ai
+        Renderable2D as rndr
+    config:
+        pos.pos         = vec2(0.0, 0.0)
+        pos.velocity    = vec2(0.0, 0.0)
+        hp.health       = 20
+        hp.invincible_timer = 0.0
+        ai.patrol_min_x = 0.0
+        ai.patrol_max_x = 600.0
+        ai.patrol_speed = 3.5
+        ai.direction    = 1.0
+        ai.enemy_type   = EnemyType.Flyer
+        ai.is_aggro     = false
+        rndr.texture    = EnemyTex
+        rndr.visible    = true
+        rndr.layer      = 0
+        rndr.tint       = ENEMY_COLOR
+
+pub template BossEnemy:
+    apply:
+        Position2D as pos
+        Health as hp
+        EnemyAI as ai
+        Boss                        # marker trait — just presence, no fields
+        Renderable2D as rndr
+    config:
+        pos.pos         = vec2(640.0, 200.0)
+        hp.health       = 300
+        hp.invincible_timer = 0.0
+        ai.patrol_speed = 1.0
+        ai.enemy_type   = EnemyType.Boss
+        ai.is_aggro     = true
+        rndr.visible    = true
+        rndr.layer      = 1
+        rndr.tint       = #FF6600
+
+pub template Coin:
+    apply:
+        Position2D as pos
+        Renderable2D as rndr
+        Collectible                 # marker trait
+    config:
+        pos.pos      = vec2(0.0, 0.0)
+        pos.velocity = vec2(0.0, 0.0)
+        rndr.texture = CoinTex
+        rndr.visible = true
+        rndr.layer   = 0
+
+# ── 14. Systems ────────────────────────────────────────────────────────────────
+# Components of a system declaration:
+#   filter:  — trait list; each entry may have "as ALIAS"
+#   exclude: — entities with any of these active traits are skipped
+#   after:   — ordering constraint (run after listed systems in same phase)
+#   handlers — on event_name [as alias]:
+#
+# NEW UNIFIED EVENT HANDLER SYNTAX:
+#   · No parameter list — the `()` is gone from all handlers
+#   · Event data is accessed via the event name: `tick.dt`, `PlayerDamaged.amount`
+#   · Optional alias:  `on tick as t:` → `t.dt`
+#                      `on PlayerDamaged as dmg:` → `dmg.amount`
+#   · Lifecycle events (tick, fixed_tick, late_tick, spawn, destroy, input,
+#     load, unload) are declared in std.core and are always available
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INPUT PHASE — on input:  (no fields on the input event)
+# ─────────────────────────────────────────────────────────────────────────────
+
+system PlayerInputSystem:
+    filter:
+        Position2D as pos           # filter with alias
+        Health as hp
+    exclude:
+        Frozen                      # exclude: skip frozen entities
+
+    on input:
+        # std.input query functions: pressed, down, released, axis, axis2
+        var jumped   = input.pressed(Jump)       # InputButton → bool
+        var fired    = input.down(Fire)          # held down
+        var released = input.released(Pause)     # first frame released
+        var dx       = input.axis(MoveX)         # InputAxis → float [-1..1]
+        var dy       = input.axis(MoveY)
+        var dir_vec  = input.axis2(MoveX, MoveY) # two axes → vec2
+
+        pos.velocity = vec2(dx * MOVE_SPEED, dy * MOVE_SPEED)
+
+        if jumped:
+            emit PlayerJumped(pos.pos, pos.velocity)
+
+        if fired and hp.invincible_timer <= 0.0:
+            emit PlayerDamaged(1, get_player_entity())
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHYSICS PHASE — on fixed_tick:   access dt as fixed_tick.dt
+# fixed timestep; runs 0..N times per frame via accumulator model
+# ─────────────────────────────────────────────────────────────────────────────
+
+system GravitySystem:
+    filter:
+        Position2D as pos
+    exclude:
+        Frozen                      # frozen entities skip gravity
+
+    on fixed_tick:
+        # Event name is the implicit variable: fixed_tick.dt
+        pos.velocity = vec2(pos.velocity.x, pos.velocity.y + GRAVITY * fixed_tick.dt)
+        pos.pos      = pos.pos + vec2(pos.velocity.x * fixed_tick.dt, pos.velocity.y * fixed_tick.dt)
+
+system PhysicsIntegrationSystem:
+    filter:
+        Position2D as pos
+        EnemyAI as ai
+    exclude:
+        Frozen
+
+    on fixed_tick:
+        pos.pos = pos.pos + vec2(ai.patrol_speed * ai.direction * fixed_tick.dt, 0.0)
+
+        if pos.pos.x >= ai.patrol_max_x:
+            ai.direction = -1.0
+        if pos.pos.x <= ai.patrol_min_x:
+            ai.direction = 1.0
+
+system CollisionSystem:
+    filter:
+        Position2D as pos
+        Health as hp
+
+    after:
+        PhysicsIntegrationSystem    # must run after integration in fixed_tick
+
+    on fixed_tick:
+        let ox = aabb_overlap_x(pos.pos.x, 32.0, 0.0, 5000.0)
+        let oy = aabb_overlap_y(pos.pos.y, 48.0, 600.0, 40.0)
+
+        if ox > 0.0 and oy > 0.0:
+            # targeted emit: to expression must be of type entity_id
+            emit PlayerDamaged(1, get_player_entity()) to get_player_entity()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE PHASE — on tick:   access dt as tick.dt  (or alias.dt with `as`)
+# ─────────────────────────────────────────────────────────────────────────────
+
+system HealthSystem:
+    filter:
+        Health as hp
+
+    on tick as t:
+        # `as t` alias — access event fields as t.dt instead of tick.dt
+        var timer = hp.invincible_timer
+        if timer > 0.0:
+            timer = timer - t.dt            # alias field access
+        hp.invincible_timer = clamp_float(timer, 0.0, 99.0)
+
+        # Clamp using pure func call
+        hp.health = clamp_int(hp.health, 0, hp.max_health)
+
+    on PlayerDamaged as dmg:
+        # User event with alias: access payload as dmg.field instead of PlayerDamaged.field
+        # Fields are read-only (assigning dmg.amount = 0 is an error)
+        if hp.invincible_timer <= 0.0:
+            let damage = dmg.amount         # let: immutable local binding
+            hp.health = hp.health - damage
+            hp.invincible_timer = 1.5
+
+            if hp.health <= 0:
+                emit PlayerDied(0)
+
+    on spawn:
+        # on spawn: fires once after all fields are initialized; no payload fields
+        hp.invincible_timer = 0.0
+        hp.health = hp.max_health
+
+    on destroy:
+        # on destroy: fires before entity is removed; fields still readable; no payload
+        emit EnemyDefeated(vec2(0.0, 0.0), EnemyType.Walker, SCORE_PER_COIN)
+
+system FreezeSystem:
+    filter:
+        Health as hp
+        Position2D as pos
+
+    on tick:
+        # Event name used directly: tick.dt not needed here, no dt usage
+        if hp.health < 20:
+            enable Frozen       # Frozen becomes active → excluded from GravitySystem
+        if hp.health > 50:
+            disable Frozen      # Frozen becomes inactive → included again
+
+system InvincibilitySystem:
+    filter:
+        Health as hp
+        Position2D as pos
+    exclude:
+        Frozen
+
+    on tick:
+        if hp.invincible_timer > 0.0:
+            enable Invincible
+        if hp.invincible_timer <= 0.0:
+            disable Invincible
+
+    on FreezeApplied:
+        # Access via event name directly: FreezeApplied.duration
+        hp.invincible_timer = FreezeApplied.duration
+
+system ScoreSystem:
+    filter:
+        Score as sc
+    exclude:
+        Frozen
+
+    on tick:
+        sc.score = clamp_int(sc.score, 0, 999999)
+
+    on EnemyDefeated:
+        # Access event payload via event name: EnemyDefeated.enemy_type, etc.
+        let pts = score_for_enemy(EnemyDefeated.enemy_type, sc.combo_multiplier)
+        sc.score = sc.score + pts
+        if sc.score > sc.high_score:
+            sc.high_score = sc.score
+
+    on CoinCollected:
+        # CoinCollected.value is the event payload field
+        sc.score = sc.score + CoinCollected.value * sc.combo_multiplier
+
+system EnemySpawnerSystem:
+    filter:
+        Score as sc
+        Position2D as pos
+
+    on tick:
+        # spawn expression — result is entity_id
+        let walker_id = spawn WalkerEnemy(
+            pos.pos         = vec2(pos.pos.x + 300.0, pos.pos.y),
+            ai.patrol_min_x = pos.pos.x + 100.0,
+            ai.patrol_max_x = pos.pos.x + 500.0
+        )
+
+        # spawn statement — discard result
+        spawn FlyerEnemy(
+            pos.pos = vec2(pos.pos.x + 500.0, 100.0)
+        )
+
+        # broadcast emit (no `to`)
+        emit EnemyDefeated(pos.pos, EnemyType.Walker, SCORE_PER_COIN)
+
+        # targeted emit — to must evaluate to entity_id
+        emit PlayerDamaged(5, walker_id) to walker_id
+
+    on EnemyDefeated:
+        # destroy with no argument — removes the current entity
+        destroy
+
+system CoinDropSystem:
+    filter:
+        Position2D as pos
+        EnemyAI as ai
+
+    on EnemyDefeated:
+        # spawn expression stored in var (mutable binding)
+        var coin_id = spawn Coin(
+            pos.pos = EnemyDefeated.position    # EnemyDefeated.position via event name
+        )
+        # targeted emit to the newly spawned coin entity
+        emit CoinCollected(SCORE_PER_COIN) to coin_id
+
+system CollectibleSystem:
+    filter:
+        Position2D as pos
+    exclude:
+        PlayerOwned                 # do not re-collect player-owned entities
+
+    on CoinCollected:
+        # destroy the current coin entity (the one targeted by the emit)
+        destroy
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST-UPDATE PHASE — on late_tick:   access dt as late_tick.dt
+# Runs once per frame after all tick handlers.
+# Events fired at cascade limit from late_tick are deferred to next frame.
+# ─────────────────────────────────────────────────────────────────────────────
+
+system CameraFollowSystem:
+    filter:
+        cam_flat.Camera as cam
+        cam_flat.FollowCamera as follow
+
+    after:
+        PhysicsIntegrationSystem    # must see updated positions
+        CollisionSystem
+
+    on late_tick:
+        # late_tick.dt for the variable frame delta
+        let smooth = clamp_float(follow.smoothing * late_tick.dt, 0.0, 1.0)
+        cam.offset = vec2(
+            lerp(cam.offset.x, follow.target_pos.x, smooth),
+            lerp(cam.offset.y, follow.target_pos.y, smooth)
+        )
+
+system UIRenderSystem:
+    filter:
+        Score as sc
+        Health as hp
+
+    after:
+        CameraFollowSystem          # UI draws after camera is positioned
+
+    on late_tick:
+        # extern func calls
+        let sw = get_screen_width()
+        let sh = get_screen_height()
+
+        # Variables: let (immutable) vs var (mutable)
+        var bar_w = sw - 20
+        bar_w     = clamp_int(bar_w, 0, 1260)   # re-assign var (valid)
+
+        # draw_text takes a string param — pass const reference, not literal
+        draw_text(SCORE_LABEL, 10.0, 10.0, 24, PLAYER_COLOR)
+        draw_text(LIVES_LABEL, 10.0, 40.0, 24, PLAYER_COLOR)
+
+system DebugOverlaySystem:
+    # filter: is optional — no filter means match ALL entities
+    # Cannot access any trait fields without a declared filter
+    after:
+        UIRenderSystem
+        CameraFollowSystem
+
+    on late_tick:
+        let sw = get_screen_width()
+        let sh = get_screen_height()
+        # string passed from const reference — not an inline literal
+        draw_text(DEBUG_LABEL, 10.0, 70.0, 16, CLEAR_WHITE)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCENE LIFECYCLE — on load:  and on unload:  (no payload fields)
+# ─────────────────────────────────────────────────────────────────────────────
+
+system SceneManager:
+    filter:
+        Score as sc
+        Health as hp
+
+    on load:
+        # on load: fires after on spawn: handlers complete for all new entities
+        # No payload fields (load is a marker event in std.core)
+        sc.score            = 0
+        sc.combo_multiplier = 1
+        hp.health           = MAX_HEALTH
+        hp.invincible_timer = 0.0
+
+    on unload:
+        # on unload: fires before new entities are instantiated
+        # persist var fields are still readable here
+        emit SceneTransition(GameState.Playing)
+
+system CleanupSystem:
+    # No filter, exclude Persistent — matches all non-persistent entities
+    exclude:
+        std.core.Persistent
+
+    on unload:
+        # destroy without argument — removes current entity
+        destroy
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME FLOW — load statement for scene transitions
+# ─────────────────────────────────────────────────────────────────────────────
+
+system GameFlowSystem:
+    filter:
+        Health as hp
+        Score as sc
+
+    on tick:
+        if hp.health <= 0:
+            # load: deferred to end of frame; triggers on unload → spawn → on load
+            load game_over
+
+    on SceneTransition as st:
+        # Alias `st` used to access event fields: st.next_state
+        match st.next_state:
+            GameState.Playing  => load level2
+            GameState.GameOver => load game_over
+            GameState.MainMenu => load game_over
+            GameState.Paused   => emit FreezeApplied(5.0)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SYSTEM ORDERING — after: clause across multiple phases
+# ─────────────────────────────────────────────────────────────────────────────
+
+system SceneRenderSystem:
+    filter:
+        Position2D as pos
+        Renderable2D as rndr
+    exclude:
+        Frozen
+
+    on tick:
+        if rndr.visible:
+            draw_rect(pos.pos, vec2(rndr.width, rndr.height), rndr.tint)
+
+system BossRenderSystem:
+    filter:
+        Position2D as pos
+        Renderable2D as rndr
+        Boss                        # filter on marker trait (no fields accessible)
+
+    after:
+        SceneRenderSystem           # boss renders on top of normal entities
+
+    on tick:
+        if rndr.visible:
+            draw_rect(pos.pos, vec2(rndr.width * 2.0, rndr.height * 2.0), rndr.tint)
+
+system ParticleSystem:
+    after:
+        SceneRenderSystem
+        BossRenderSystem
+
+    on tick:
+        # No filter → no trait field access; lifecycle ops and extern calls are valid
+        let t = get_time()
+        play_particle_effect(
+            cos_f(t) * 100.0 + 640.0,
+            sin_f(t) * 100.0 + 360.0
+        )

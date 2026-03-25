@@ -152,7 +152,6 @@ private:
     void validate_template_unit_declarations(ProgramNode& program);
     void validate_spawn_sites(ProgramNode& program);
     void validate_stmt_contexts(ProgramNode& program);
-    void validate_lifecycle_handler_signatures(ProgramNode& program);
     void validate_disabled_annotations(ProgramNode& program);
 
     // task 11.12: field access not allowed in systems with no filter clause

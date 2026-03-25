@@ -39,7 +39,7 @@ private:
     TemplateNode parse_template(bool is_pub);
     SystemNode parse_system();
     ViewNode parse_view();
-    EventNode parse_event();
+    EventNode parse_event(bool is_pub = false);
     FuncNode parse_func(bool is_pub);
     FuncNode parse_extern_func(bool is_pub);
     InterfaceNode parse_interface();

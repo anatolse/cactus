@@ -6,6 +6,29 @@ module std.core
 # Apply this to units/templates that should NOT be destroyed on `load`.
 pub trait Persistent
 
+# ── Standard Lifecycle Events ─────────────────────────────────────────────────
+
+# Events with a dt field (fired each frame phase)
+pub event tick:
+    let dt: float
+
+pub event fixed_tick:
+    let dt: float
+
+pub event late_tick:
+    let dt: float
+
+# Marker lifecycle events (no fields)
+pub event spawn
+
+pub event destroy
+
+pub event input
+
+pub event load
+
+pub event unload
+
 # ── Standard Systems ──────────────────────────────────────────────────────────
 
 # SceneCleanup destroys all non-persistent entities on scene unload.
@@ -13,5 +36,5 @@ pub trait Persistent
 pub system SceneCleanup:
     exclude:
         Persistent
-    on unload():
+    on unload:
         destroy

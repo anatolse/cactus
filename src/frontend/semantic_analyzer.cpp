@@ -112,7 +112,6 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
     validate_template_unit_declarations(program);
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
-    validate_lifecycle_handler_signatures(program);
     validate_disabled_annotations(program);
 
     // Phase 4: Build dependency graph
@@ -1052,41 +1051,6 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
                 }
             },
             decl);
-    }
-}
-
-// ── Task 5.8: Validate lifecycle handler signatures ──────────────────────────
-
-void SemanticAnalyzer::validate_lifecycle_handler_signatures(ProgramNode& program) {
-    for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            for (auto& handler : sys->handlers) {
-                const auto& ename = handler.event_name;
-                // spawn/destroy/load/unload/input: must have no parameters
-                if (is_lifecycle_event(ename) || ename == "input") {
-                    if (!handler.params.empty()) {
-                        errors_.error(
-                            handler.location,
-                            "lifecycle handler '" + ename + "' does not accept parameters");
-                    }
-                }
-                // fixed_tick / late_tick: must have exactly one parameter of type float
-                if (ename == "fixed_tick" || ename == "late_tick") {
-                    if (handler.params.size() != 1) {
-                        errors_.error(
-                            handler.location,
-                            "lifecycle handler '" + ename +
-                                "' requires exactly one parameter 'dt: float'");
-                    } else if (handler.params[0].type.name != "float") {
-                        errors_.error(
-                            handler.params[0].location,
-                            "lifecycle handler '" + ename +
-                                "' parameter must be of type 'float', got '" +
-                                handler.params[0].type.name + "'");
-                    }
-                }
-            }
-        }
     }
 }
 

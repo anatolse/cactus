@@ -113,7 +113,8 @@ Declaration Parser::parse_declaration() {
         if (check(TokenType::EXTERN)) return parse_extern_func(true);
         if (check(TokenType::ASSET)) return parse_asset_decl(true);
         if (check(TokenType::INPUT)) return parse_input_decl(true);
-        errors_.error(peek().location, "expected trait, unit, template, func, extern func, asset, or input after 'pub'");
+        if (check(TokenType::EVENT)) return parse_event(true);
+        errors_.error(peek().location, "expected trait, unit, template, func, extern func, asset, input, or event after 'pub'");
     }
 
     if (tok.type == TokenType::UNIT) return parse_unit(false);
@@ -361,11 +362,29 @@ std::string Parser::parse_lifecycle_event_name() {
 EventHandlerNode Parser::parse_event_handler() {
     auto loc = peek().location;
     consume(TokenType::ON, "expected 'on'");
-    // Task 4.10: Accept lifecycle keywords (spawn/destroy/load/unload) as event names
+    // Accept lifecycle keywords (spawn/destroy/load/unload) as event names
     auto event_name = parse_lifecycle_event_name();
-    consume(TokenType::LPAREN, "expected '('");
-    auto params = parse_param_list();
-    consume(TokenType::RPAREN, "expected ')'");
+
+    // Error on old parameter list syntax
+    if (check(TokenType::LPAREN)) {
+        errors_.error(peek().location,
+            "unexpected '('; event handlers no longer take a parameter list; "
+            "use 'on " + event_name + ":' and access fields as '" + event_name + ".dt'");
+        // Consume parens to avoid cascading errors
+        advance();  // consume '('
+        while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN) &&
+               !check(TokenType::NEWLINE) && !check(TokenType::COLON)) {
+            advance();
+        }
+        if (check(TokenType::RPAREN)) advance();  // consume ')'
+    }
+
+    // Optional 'as alias' clause
+    std::optional<std::string> alias;
+    if (match(TokenType::AS)) {
+        alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
+    }
+
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
 
@@ -373,7 +392,7 @@ EventHandlerNode Parser::parse_event_handler() {
 
     EventHandlerNode handler;
     handler.event_name = event_name;
-    handler.params = std::move(params);
+    handler.alias = alias;
     handler.body = std::move(body);
     handler.location = loc;
     return handler;
@@ -797,17 +816,25 @@ ViewElement Parser::parse_view_element() {
 
 // ── Event Declaration ───────────────────────────────────────────────────────
 
-EventNode Parser::parse_event() {
+EventNode Parser::parse_event(bool is_pub) {
     auto loc = peek().location;
     consume(TokenType::EVENT, "expected 'event'");
     auto name = consume(TokenType::IDENTIFIER, "expected event name").value;
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
 
     EventNode node;
     node.name = name;
+    node.is_pub = is_pub;
     node.location = loc;
+
+    // Marker event: no colon, no body (e.g., `pub event spawn`)
+    if (!check(TokenType::COLON)) {
+        expect_newline();
+        return node;
+    }
+
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();

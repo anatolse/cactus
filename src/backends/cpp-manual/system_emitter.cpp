@@ -108,15 +108,6 @@ std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const Decora
             out << storage_params[i];
         }
 
-        // Handler params
-        for (auto& param : handler.params) {
-            if (!storage_params.empty()) out << ", ";
-            out << SoaEmitter::type_to_cpp(program.traits.count(param.type.name)
-                                                ? program.traits.at(param.type.name).fields[0].type
-                                                : TypeInfo{TypeKind::Float, "float"})
-                << " " << param.name;
-        }
-
         out << ") {\n";
 
         // Use first filter trait for count
@@ -353,19 +344,41 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
 
         } else {
             // ── Loop-based handler (tick, load, unload, or custom event) ─────
+            // Determine if this is a lifecycle dt event, a user event, or a no-param lifecycle
+            const bool is_dt_event = (handler.event_name == "tick" ||
+                                      handler.event_name == "fixed_tick" ||
+                                      handler.event_name == "late_tick");
+            const bool is_builtin = (handler.event_name == "tick" ||
+                                     handler.event_name == "fixed_tick" ||
+                                     handler.event_name == "late_tick" ||
+                                     handler.event_name == "input" ||
+                                     handler.event_name == "load" ||
+                                     handler.event_name == "unload");
+
+            // Name to use for the event variable in the body (alias or event name)
+            const std::string event_var = handler.alias.has_value()
+                                              ? *handler.alias
+                                              : handler.event_name;
+
             std::string params;
-            if (handler.event_name == "tick") {
+            std::string event_var_binding;
+
+            if (is_dt_event) {
+                // Keep float dt for game-loop compatibility; bind event struct
                 params = "float dt";
-            } else if (!handler.params.empty()) {
-                // Custom event parameters
-                for (size_t i = 0; i < handler.params.size(); ++i) {
-                    if (i > 0) params += ", ";
-                    params += "float " + handler.params[i].name;  // simplified: float for all
-                }
+                event_var_binding = "    " + handler.event_name + "Event " +
+                                    event_var + "{dt};\n";
+            } else if (!is_builtin) {
+                // User event: pass as const ref using alias or event name
+                params = "const " + handler.event_name + "Event& " + event_var;
             }
+            // input/load/unload: no params needed
 
             out << "static void " << sys.name << "_" << handler.event_name
                 << "(" << params << ") {\n";
+            if (!event_var_binding.empty()) {
+                out << event_var_binding;
+            }
             out << "    uint64_t _filter_mask = " << filter_mask << ";\n";
             out << "    uint64_t _exclude_mask = " << exclude_mask << ";\n";
 

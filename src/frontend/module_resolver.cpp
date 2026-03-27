@@ -153,8 +153,9 @@ bool ModuleResolver::resolve_module(const std::string& module_name,
     fs::path file_search_root;
     auto relative_path = module_name_to_path(module_name);
     for (auto& dir : search_dirs) {
-        auto candidate = fs::canonical(dir / relative_path);
-        if (candidate == file_path) {
+        std::error_code ec;
+        auto candidate = fs::canonical(dir / relative_path, ec);
+        if (!ec && candidate == file_path) {
             file_search_root = dir;
             break;
         }

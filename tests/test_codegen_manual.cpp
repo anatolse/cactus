@@ -162,7 +162,7 @@ TEST_CASE("Codegen Manual: system loop uses bitmask filter condition", "[codegen
         "trait Position:\n    var x: float = 0.0\n"
         "system Move:\n"
         "    filter:\n        Position\n"
-        "    on tick(dt: float):\n        x = x + dt\n");
+        "    on tick:\n        x = x + tick.dt\n");
 
     CHECK(code.find("_filter_mask") != std::string::npos);
     CHECK(code.find("_exclude_mask") != std::string::npos);
@@ -173,7 +173,7 @@ TEST_CASE("Codegen Manual: system loop uses bitmask filter condition", "[codegen
 TEST_CASE("Codegen Manual: system filter_mask=0 for no-filter system", "[codegen-manual][7.3]") {
     auto code = generate(
         "system GlobalCleanup:\n"
-        "    on tick(dt: float):\n        destroy\n");
+        "    on tick:\n        destroy\n");
 
     CHECK(code.find("0ULL") != std::string::npos);
 }
@@ -185,7 +185,7 @@ TEST_CASE("Codegen Manual: exclude mask in loop condition", "[codegen-manual][7.
         "system Move:\n"
         "    filter:\n        Position\n"
         "    exclude:\n        Frozen\n"
-        "    on tick(dt: float):\n        x = x + dt\n");
+        "    on tick as t:\n        x = x + t.dt\n");
 
     CHECK(code.find("TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("_exclude_mask") != std::string::npos);
@@ -201,7 +201,7 @@ TEST_CASE("Codegen Manual: enable emits bitmask OR", "[codegen-manual][7.5]") {
         "trait Position:\n    var x: float = 0.0\n"
         "system FreezeSystem:\n"
         "    filter:\n        Position\n"
-        "    on tick(dt: float):\n        enable Frozen\n");
+        "    on tick:\n        enable Frozen\n");
 
     CHECK(code.find("|= TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("g_trait_mask[i]") != std::string::npos);
@@ -213,7 +213,7 @@ TEST_CASE("Codegen Manual: disable emits bitmask AND-NOT", "[codegen-manual][7.6
         "trait Position:\n    var x: float = 0.0\n"
         "system ThawSystem:\n"
         "    filter:\n        Position\n"
-        "    on tick(dt: float):\n        disable Frozen\n");
+        "    on tick:\n        disable Frozen\n");
 
     CHECK(code.find("&= ~TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("g_trait_mask[i]") != std::string::npos);
@@ -252,7 +252,7 @@ TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[cod
         "template Enemy:\n"
         "    apply:\n        Position\n"
         "system Spawner:\n"
-        "    on load():\n        spawn Enemy(x = 200.0)\n");
+        "    on load:\n        spawn Enemy(x = 200.0)\n");
 
     CHECK(code.find("spawn_Enemy(") != std::string::npos);
     CHECK(code.find("200.0f") != std::string::npos);
@@ -265,7 +265,7 @@ TEST_CASE("Codegen Manual: destroy emits entity_remove with swap-and-delete (tas
         "trait Health:\n    var hp: int = 100\n"
         "system DeathSystem:\n"
         "    filter:\n        Health\n"
-        "    on tick(dt: float):\n        destroy\n");
+        "    on tick:\n        destroy\n");
 
     CHECK(code.find("entity_remove(i)") != std::string::npos);
     CHECK(code.find("__destroyed = true") != std::string::npos);
@@ -279,7 +279,7 @@ TEST_CASE("Codegen Manual: destroy loop increments correctly", "[codegen-manual]
         "trait Health:\n    var hp: int = 100\n"
         "system DeathSystem:\n"
         "    filter:\n        Health\n"
-        "    on tick(dt: float):\n        destroy\n");
+        "    on tick:\n        destroy\n");
 
     // After destroy, entity slot is reused (while loop + __destroyed flag)
     CHECK(code.find("if (!__destroyed) ++i") != std::string::npos);
@@ -293,7 +293,7 @@ TEST_CASE("Codegen Manual: load emits deferred load mechanism (task 7.10)", "[co
         "trait GameState:\n    var active: bool = true\n"
         "system GameMgr:\n"
         "    filter:\n        GameState\n"
-        "    on tick(dt: float):\n        load levels.game\n");
+        "    on tick:\n        load levels.game\n");
 
     CHECK(code.find("g_pending_load") != std::string::npos);
     CHECK(code.find("g_load_pending") != std::string::npos);
@@ -307,7 +307,7 @@ TEST_CASE("Codegen Manual: on_spawn dispatch function emitted (task 7.11)", "[co
         "trait Position:\n    var x: float = 0.0\n"
         "system Init:\n"
         "    filter:\n        Position\n"
-        "    on spawn():\n        x = 0.0\n");
+        "    on spawn:\n        x = 0.0\n");
 
     CHECK(code.find("dispatch_on_spawn") != std::string::npos);
     CHECK(code.find("Init_spawn") != std::string::npos);
@@ -323,7 +323,7 @@ TEST_CASE("Codegen Manual: on_destroy dispatch function emitted (task 7.12)", "[
         "trait Position:\n    var x: float = 0.0\n"
         "system Cleanup:\n"
         "    filter:\n        Position\n"
-        "    on destroy():\n        x = 0.0\n");
+        "    on destroy:\n        x = 0.0\n");
 
     CHECK(code.find("dispatch_on_destroy") != std::string::npos);
     CHECK(code.find("Cleanup_destroy") != std::string::npos);
@@ -338,7 +338,7 @@ TEST_CASE("Codegen Manual: on_unload dispatch function emitted (task 7.13)", "[c
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n");
+        "    on unload:\n        destroy\n");
 
     CHECK(code.find("dispatch_on_unload") != std::string::npos);
     CHECK(code.find("SceneCleanup_unload") != std::string::npos);
@@ -352,7 +352,7 @@ TEST_CASE("Codegen Manual: on_load dispatch function emitted (task 7.14)", "[cod
         "trait LevelState:\n    var loaded: bool = false\n"
         "system LevelSetup:\n"
         "    filter:\n        LevelState\n"
-        "    on load():\n        loaded = true\n");
+        "    on load:\n        loaded = true\n");
 
     CHECK(code.find("dispatch_on_load") != std::string::npos);
     CHECK(code.find("LevelSetup_load") != std::string::npos);
@@ -371,12 +371,12 @@ TEST_CASE("Codegen Manual: complete codegen structure", "[codegen-manual][7.15]"
         "system PatrolSystem:\n"
         "    filter:\n        Position\n"
         "    exclude:\n        Persistent\n"
-        "    on tick(dt: float):\n        x = x + dt\n"
-        "    on spawn():\n        x = 0.0\n"
-        "    on destroy():\n        y = 0.0\n"
+        "    on tick:\n        x = x + tick.dt\n"
+        "    on spawn:\n        x = 0.0\n"
+        "    on destroy:\n        y = 0.0\n"
         "system SceneCleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n");
+        "    on unload:\n        destroy\n");
 
     // TraitBits constants (task 7.1)
     CHECK(code.find("namespace TraitBits") != std::string::npos);
@@ -431,9 +431,9 @@ TEST_CASE("Codegen Manual: perform_load has 3 phases in correct order (tasks 8.2
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n"
+        "    on unload:\n        destroy\n"
         "system LevelSetup:\n"
-        "    on load():\n        destroy\n");
+        "    on load:\n        destroy\n");
 
     CHECK(code.find("perform_load") != std::string::npos);
 
@@ -455,7 +455,7 @@ TEST_CASE("Codegen Manual: on_unload fires before new entities (task 8.5)", "[co
         "trait Persistent\n"
         "system Cleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n");
+        "    on unload:\n        destroy\n");
 
     // In perform_load, unload must come first
     auto unload_pos = code.find("dispatch_on_unload");
@@ -471,7 +471,7 @@ TEST_CASE("Codegen Manual: end-of-frame deferred load in main loop (task 8.1)", 
         "trait GameState:\n    var x: float = 0.0\n"
         "system GameMgr:\n"
         "    filter:\n        GameState\n"
-        "    on tick(dt: float):\n        load levels.game\n");
+        "    on tick:\n        load levels.game\n");
 
     // Main loop must check g_load_pending and call perform_load
     CHECK(code.find("if (g_load_pending)") != std::string::npos);
@@ -501,7 +501,7 @@ TEST_CASE("Codegen Manual: without SceneCleanup dispatch_on_unload is empty (tas
         "trait Position:\n    var x: float = 0.0\n"
         "system PatrolSystem:\n"
         "    filter:\n        Position\n"
-        "    on tick(dt: float):\n        x = x + dt\n");
+        "    on tick:\n        x = x + tick.dt\n");
 
     // dispatch_on_unload exists but has no system calls
     CHECK(code.find("dispatch_on_unload") != std::string::npos);
@@ -514,7 +514,7 @@ TEST_CASE("Codegen Manual: with SceneCleanup on_unload destroys non-persistent (
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n");
+        "    on unload:\n        destroy\n");
 
     CHECK(code.find("SceneCleanup_unload") != std::string::npos);
     CHECK(code.find("dispatch_on_unload") != std::string::npos);
@@ -541,9 +541,9 @@ TEST_CASE("Codegen: spawn creates entity, on_spawn fires (task 11.2)", "[codegen
         "template Enemy:\n    apply:\n        Position\n"
         "system Init:\n"
         "    filter:\n        Position\n"
-        "    on spawn():\n        x = 0.0\n"
+        "    on spawn:\n        x = 0.0\n"
         "system Spawner:\n"
-        "    on load():\n        spawn Enemy(x = 400.0)\n");
+        "    on load:\n        spawn Enemy(x = 400.0)\n");
 
     // Spawn call should appear in Spawner_load
     CHECK(code.find("spawn_Enemy(") != std::string::npos);
@@ -558,8 +558,8 @@ TEST_CASE("Codegen: destroy removes entity, on_destroy fires (task 11.3)", "[cod
         "trait Health:\n    var hp: int = 100\n"
         "system DeathSys:\n"
         "    filter:\n        Health\n"
-        "    on destroy():\n        hp = 0\n"
-        "    on tick(dt: float):\n        destroy\n");
+        "    on destroy:\n        hp = 0\n"
+        "    on tick:\n        destroy\n");
 
     // on_destroy handler defined
     CHECK(code.find("DeathSys_destroy") != std::string::npos);
@@ -574,9 +574,9 @@ TEST_CASE("Codegen: load transition 3-phase ordering (task 11.4)", "[codegen-man
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n"
+        "    on unload:\n        destroy\n"
         "system LevelSetup:\n"
-        "    on load():\n        destroy\n");
+        "    on load:\n        destroy\n");
 
     auto unload_call = code.find("dispatch_on_unload();\n");
     auto load_call   = code.find("dispatch_on_load();\n");
@@ -588,8 +588,8 @@ TEST_CASE("Codegen: load transition 3-phase ordering (task 11.4)", "[codegen-man
 TEST_CASE("Codegen: on_unload fires before new entities created (task 11.5)", "[codegen-manual][11.5]") {
     // Same as 11.4 — ordering verified by position in perform_load
     auto code = generate(
-        "system GlobalReset:\n    on unload():\n        destroy\n"
-        "system GlobalSetup:\n    on load():\n        destroy\n");
+        "system GlobalReset:\n    on unload:\n        destroy\n"
+        "system GlobalSetup:\n    on load:\n        destroy\n");
 
     auto u = code.find("GlobalReset_unload");
     auto l = code.find("GlobalSetup_load");
@@ -601,7 +601,7 @@ TEST_CASE("Codegen: on_unload fires before new entities created (task 11.5)", "[
 
 TEST_CASE("Codegen: on_load fires after all entities instantiated (task 11.6)", "[codegen-manual][11.6]") {
     auto code = generate(
-        "system LevelSetup:\n    on load():\n        destroy\n");
+        "system LevelSetup:\n    on load:\n        destroy\n");
 
     // Phase 3 Load fires after Phase 2 Instantiate
     auto phase2 = code.find("Phase 2");
@@ -617,7 +617,7 @@ TEST_CASE("Codegen: enable/disable toggles bitmask (task 11.7)", "[codegen-manua
         "trait Position:\n    var x: float = 0.0\n"
         "system FreezeSystem:\n"
         "    filter:\n        Position\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        enable Frozen\n"
         "        disable Frozen\n");
 
@@ -634,7 +634,7 @@ TEST_CASE("Codegen: exclude skips entities with active excluded trait (task 11.8
         "system Move:\n"
         "    filter:\n        Position\n"
         "    exclude:\n        Frozen\n"
-        "    on tick(dt: float):\n        x = x + dt\n");
+        "    on tick:\n        x = x + tick.dt\n");
 
     // Exclude mask applied in loop condition
     auto filt = code.find("TraitBits::Position");
@@ -654,7 +654,7 @@ TEST_CASE("Codegen: exclude with disabled trait - entity still processed (task 1
         "system Move:\n"
         "    filter:\n        Position\n"
         "    exclude:\n        Frozen\n"
-        "    on tick(dt: float):\n        x = x + dt\n");
+        "    on tick:\n        x = x + tick.dt\n");
 
     // The bitmask condition naturally handles disabled traits
     CHECK(code.find("g_trait_mask[i] & _exclude_mask") != std::string::npos);
@@ -676,7 +676,7 @@ TEST_CASE("Codegen: no-filter + exclude processes all non-excluded (task 11.11)"
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n");
+        "    on unload:\n        destroy\n");
 
     // filter_mask = 0 (no filter), exclude_mask = TraitBits::Persistent
     CHECK(code.find("0ULL") != std::string::npos);
@@ -692,7 +692,7 @@ TEST_CASE("Codegen: Persistent entity survives load with SceneCleanup (task 11.1
         "    apply:\n        Position\n        Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n        destroy\n");
+        "    on unload:\n        destroy\n");
 
     // SceneCleanup excludes Persistent → Player survives unload
     CHECK(code.find("TraitBits::Persistent") != std::string::npos);
@@ -739,7 +739,7 @@ TEST_CASE("Codegen Manual: runtime header placed after standard includes", "[cod
 TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[codegen-manual]") {
     auto code = generate(
         "trait Pos:\n    persist sync var x: float = 0.0\n    persist sync var y: float = 0.0\n"
-        "system Move:\n    filter:\n        Pos\n    on tick(dt: float):\n        x = x + dt\n");
+        "system Move:\n    filter:\n        Pos\n    on tick:\n        x = x + tick.dt\n");
 
     // Check overall structure
     CHECK(code.find("Generated by Cactus DSL Compiler") != std::string::npos);

@@ -91,6 +91,7 @@ std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) {
 // ── Legacy emit_system ─────────────────────────────────────────────────────
 
 std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const DecoratedProgram& program) {
+    (void)program;  // legacy SoA emitter doesn't use program — suppress C4100
     std::ostringstream out;
 
     // Collect storage parameter names from filter

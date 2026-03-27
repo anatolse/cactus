@@ -82,8 +82,13 @@ static std::string rewrite_expr(const ExprNode& expr,
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                // Check if object is an enum name — use :: instead of .
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
+                    // Translate tick.dt / fixed_tick.dt / late_tick.dt → dt
+                    if ((ident->name == "tick" || ident->name == "fixed_tick" ||
+                         ident->name == "late_tick") && e.member == "dt") {
+                        return "dt";
+                    }
+                    // Enum names — use :: notation
                     if (program.enums.count(ident->name)) {
                         return ident->name + "::" + e.member;
                     }
@@ -158,9 +163,10 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
     for (auto& handler : sys.handlers) {
         out << "void " << sys.name << "_" << handler.event_name << "(entt::registry& registry";
 
-        // Handler params
-        for (auto& param : handler.params) {
-            out << ", float " << param.name;
+        // tick/fixed_tick/late_tick handlers receive a float dt
+        if (handler.event_name == "tick" || handler.event_name == "fixed_tick" ||
+            handler.event_name == "late_tick") {
+            out << ", float dt";
         }
         out << ") {\n";
 

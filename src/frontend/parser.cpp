@@ -114,7 +114,10 @@ Declaration Parser::parse_declaration() {
         if (check(TokenType::ASSET)) return parse_asset_decl(true);
         if (check(TokenType::INPUT)) return parse_input_decl(true);
         if (check(TokenType::EVENT)) return parse_event(true);
-        errors_.error(peek().location, "expected trait, unit, template, func, extern func, asset, input, or event after 'pub'");
+        // pub enum / pub struct — visibility currently not tracked, parsed as module-private
+        if (check(TokenType::ENUM)) return parse_enum();
+        if (check(TokenType::STRUCT)) return parse_struct();
+        errors_.error(peek().location, "expected trait, unit, template, func, extern func, asset, input, event, enum, or struct after 'pub'");
     }
 
     if (tok.type == TokenType::UNIT) return parse_unit(false);
@@ -129,11 +132,27 @@ Declaration Parser::parse_declaration() {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 std::string Parser::parse_dotted_name() {
-    auto name = consume(TokenType::IDENTIFIER, "expected name").value;
+    // Helper: consume an IDENTIFIER or any keyword token as a name segment.
+    // This allows module paths that include keyword-named components (e.g. `std.input`).
+    auto consume_name_segment = [&](const std::string& msg) -> std::string {
+        if (check(TokenType::IDENTIFIER)) return advance().value;
+        // Accept any keyword whose value is non-empty (e.g. INPUT -> "input")
+        const auto& t = peek();
+        if (t.type != TokenType::NEWLINE && t.type != TokenType::EOF_TOKEN &&
+            t.type != TokenType::DOT && t.type != TokenType::COLON &&
+            t.type != TokenType::INDENT && t.type != TokenType::DEDENT &&
+            !t.value.empty()) {
+            return advance().value;
+        }
+        errors_.error(t.location, msg + ", got " + token_type_to_string(t.type));
+        return "<error>";
+    };
+
+    auto name = consume_name_segment("expected name");
     while (check(TokenType::DOT)) {
         advance();
         name += ".";
-        name += consume(TokenType::IDENTIFIER, "expected name after '.'").value;
+        name += consume_name_segment("expected name after '.'");
     }
     return name;
 }
@@ -683,44 +702,24 @@ FilterClause Parser::parse_filter_clause() {
     FilterClause clause;
     clause.location = loc;
 
-    // Support both bracket syntax: filter: [A, B]
-    // and block syntax: filter:\n    A\n    B
-    if (check(TokenType::LBRACKET)) {
-        advance();  // consume '['
-        while (true) {
-            auto entry_loc = peek().location;
-            auto qname = parse_dotted_name();
-            std::optional<std::string> alias;
-            if (match(TokenType::AS)) {
-                alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
-            }
-            clause.entries.push_back({qname, alias, entry_loc});
-            auto dot_pos = qname.rfind('.');
-            clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
-            if (!match(TokenType::COMMA)) break;
+    // Block syntax (consistent with exclude: and after:)
+    expect_newline();
+    expect_indent();
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        auto entry_loc = peek().location;
+        auto qname = parse_dotted_name();
+        std::optional<std::string> alias;
+        if (match(TokenType::AS)) {
+            alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
         }
-        consume(TokenType::RBRACKET, "expected ']'");
+        clause.entries.push_back({qname, alias, entry_loc});
+        auto dot_pos = qname.rfind('.');
+        clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
         expect_newline();
-    } else {
-        // Block syntax (consistent with exclude: and after:)
-        expect_newline();
-        expect_indent();
-        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-            skip_newlines();
-            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
-            auto entry_loc = peek().location;
-            auto qname = parse_dotted_name();
-            std::optional<std::string> alias;
-            if (match(TokenType::AS)) {
-                alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
-            }
-            clause.entries.push_back({qname, alias, entry_loc});
-            auto dot_pos = qname.rfind('.');
-            clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
-            expect_newline();
-        }
-        expect_dedent();
     }
+    expect_dedent();
     return clause;
 }
 
@@ -1411,6 +1410,15 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(list)}, loc);
     }
 
+    // `input` keyword used as built-in object in expressions (e.g. input.axis(MoveX))
+    if (check(TokenType::INPUT)) {
+        auto name = advance().value;  // "input"
+        IdentExpr ident;
+        ident.name = name;
+        ident.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(ident)}, loc);
+    }
+
     // Identifier — possibly lambda (ident => expr)
     if (check(TokenType::IDENTIFIER)) {
         auto name = advance().value;
@@ -1481,6 +1489,11 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
     }
 
     errors_.error(loc, "expected expression");
+    // Advance past the unrecognised token to prevent infinite error loops
+    if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) &&
+        !check(TokenType::EOF_TOKEN)) {
+        advance();
+    }
     IdentExpr err;
     err.name = "<error>";
     err.location = loc;

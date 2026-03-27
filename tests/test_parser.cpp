@@ -128,7 +128,9 @@ TEST_CASE("Parser: pub unit with apply and config", "[parser]") {
 TEST_CASE("Parser: system with filter and handler", "[parser]") {
     auto prog = parse(
         "system MoveSystem:\n"
-        "    filter: [Position, Velocity]\n"
+        "    filter:\n"
+        "       Position\n"
+        "       Velocity\n"
         "    on tick:\n"
         "        x = x + vx * tick.dt\n");
     REQUIRE(prog.declarations.size() == 1);
@@ -293,7 +295,9 @@ TEST_CASE("Parser: use with dotted path and alias", "[parser][modules]") {
 TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
     auto prog = parse(
         "system Render:\n"
-        "    filter: [phys.Body, render.Sprite]\n"
+        "    filter:  \n"
+        "        phys.Body\n"
+        "        render.Sprite\n"
         "    on tick:\n"
         "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
@@ -310,8 +314,10 @@ TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
 TEST_CASE("Parser: filter with aliases", "[parser][modules]") {
     auto prog = parse(
         "system Render:\n"
-        "    filter: [phys.Body as b, render.Sprite as s]\n"
-        "    on tick(dt: float):\n"
+        "    filter:\n"
+        "        phys.Body as b\n"
+        "        render.Sprite as s\n"
+        "    on tick:\n"
         "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);
@@ -326,8 +332,10 @@ TEST_CASE("Parser: filter with aliases", "[parser][modules]") {
 TEST_CASE("Parser: filter mixed qualified and unqualified", "[parser][modules]") {
     auto prog = parse(
         "system Mixed:\n"
-        "    filter: [Position, phys.Body as b]\n"
-        "    on tick(dt: float):\n"
+        "    filter:\n"
+        "        Position\n"
+        "        phys.Body as b\n"
+        "    on tick:\n"
         "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);
@@ -344,8 +352,10 @@ TEST_CASE("Parser: filter mixed qualified and unqualified", "[parser][modules]")
 TEST_CASE("Parser: filter with unqualified aliases", "[parser][modules]") {
     auto prog = parse(
         "system Simple:\n"
-        "    filter: [Position as pos, Velocity as vel]\n"
-        "    on tick(dt: float):\n"
+        "    filter:\n"
+        "        Position as pos\n"
+        "        Velocity as vel\n"
+        "    on tick:\n"
         "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);
@@ -410,20 +420,21 @@ TEST_CASE("Parser: apply_entry with disabled annotation", "[parser][dynamic-ecs]
 TEST_CASE("Parser: on spawn lifecycle handler", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system Init:\n"
-        "    filter: [Position]\n"
-        "    on spawn():\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on spawn:\n"
         "        x = 0.0\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "spawn");
-    CHECK(sys.handlers[0].params.empty());
 }
 
 TEST_CASE("Parser: on destroy lifecycle handler", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system Cleanup:\n"
-        "    filter: [Position]\n"
-        "    on destroy():\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on destroy:\n"
         "        x = 0.0\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     CHECK(sys.handlers[0].event_name == "destroy");
@@ -432,10 +443,11 @@ TEST_CASE("Parser: on destroy lifecycle handler", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: on load and on unload lifecycle handlers", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system LevelMgr:\n"
-        "    filter: [GameState]\n"
-        "    on load():\n"
+        "    filter: \n"
+        "        GameState\n"
+        "    on load:\n"
         "        x = 1\n"
-        "    on unload():\n"
+        "    on unload:\n"
         "        x = 0\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 2);
@@ -449,7 +461,7 @@ TEST_CASE("Parser: system with exclude clause", "[parser][dynamic-ecs]") {
         "system SceneCleanup:\n"
         "    exclude:\n"
         "        Persistent\n"
-        "    on unload():\n"
+        "    on unload:\n"
         "        x = 0\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     CHECK(sys.filter.entries.empty());   // no filter
@@ -463,8 +475,9 @@ TEST_CASE("Parser: system with exclude clause", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system LevelSetup:\n"
-        "    filter: [GameState]\n"
-        "    on load():\n"
+        "    filter: \n"
+        "        GameState\n"
+        "    on load:\n"
         "        spawn Enemy(pos = 0.0, patrol_speed = 2.0)\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     auto& handler = sys.handlers[0];
@@ -481,8 +494,9 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: destroy statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system DeathSys:\n"
-        "    filter: [Health]\n"
-        "    on tick(dt: float):\n"
+        "    filter: \n"
+        "        Health\n"
+        "    on tick:\n"
         "        destroy\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
@@ -493,8 +507,9 @@ TEST_CASE("Parser: destroy statement", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system GameMgr:\n"
-        "    filter: [GameState]\n"
-        "    on tick(dt: float):\n"
+        "    filter: \n"
+        "        GameState\n"
+        "    on tick:\n"
         "        load levels.level1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     auto* load = std::get_if<LoadStmt>(&sys.handlers[0].body[0]->stmt);
@@ -506,8 +521,9 @@ TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: enable and disable statements", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system FreezeSystem:\n"
-        "    filter: [Position]\n"
-        "    on tick(dt: float):\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
         "        enable Frozen\n"
         "        disable EnemyAI\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
@@ -536,22 +552,6 @@ TEST_CASE("Parser: pub marker trait", "[parser][dynamic-ecs]") {
     CHECK(trait.name == "Frozen");
     CHECK(trait.is_pub);
     CHECK(trait.fields.empty());
-}
-
-// Task 4.13: old bracket filter syntax produces parse error
-TEST_CASE("Parser: old bracket filter syntax produces error", "[parser][dynamic-ecs]") {
-    // The bracket filter syntax now produces an error (parser attempts recovery)
-    // We test that parsing it does produce an error
-    ErrorReporter errors;
-    Lexer lexer("system S:\n    filter: [Position]\n    on tick(dt: float):\n        x = 1\n",
-                "test.cactus", errors);
-    auto tokens = lexer.tokenize();
-    Parser parser(std::move(tokens), errors);
-    parser.parse_program();
-    // The bracket syntax should have been parsed (for recovery), but generated an error is expected
-    // (In this implementation, brackets still work but should ideally produce an error)
-    // For now, just verify the system was parsed
-    CHECK_FALSE(errors.has_errors());  // bracket still works (not yet erroring)
 }
 
 // ── dsl-spec-new-features parser tests ─────────────────────────────────────
@@ -649,54 +649,48 @@ TEST_CASE("Parser: input declaration axis with invert property", "[parser][dsl-s
     CHECK(node.props[2].key == "invert");
 }
 
-// Task 4.10: on fixed_tick, on late_tick, on input() lifecycle handlers
-TEST_CASE("Parser: on input() handler with no parameters", "[parser][dsl-spec-new-features]") {
+// Task 4.10: on fixed_tick, on late_tick, on input lifecycle handlers
+TEST_CASE("Parser: on input handler with no parameters", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
         "system InputSys:\n"
-        "    on input():\n"
+        "    on input:\n"
         "        x = 1\n"
     );
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "input");
-    CHECK(sys.handlers[0].params.empty());
 }
 
 TEST_CASE("Parser: on fixed_tick handler with dt parameter", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
         "system PhysSys:\n"
-        "    on fixed_tick(dt: float):\n"
+        "    on fixed_tick:\n"
         "        x = 1\n"
     );
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "fixed_tick");
-    REQUIRE(sys.handlers[0].params.size() == 1);
-    CHECK(sys.handlers[0].params[0].name == "dt");
-    CHECK(sys.handlers[0].params[0].type.name == "float");
 }
 
 TEST_CASE("Parser: on late_tick handler with dt parameter", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
         "system CamSys:\n"
-        "    on late_tick(dt: float):\n"
+        "    on late_tick:\n"
         "        x = 1\n"
     );
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "late_tick");
-    REQUIRE(sys.handlers[0].params.size() == 1);
-    CHECK(sys.handlers[0].params[0].name == "dt");
 }
 
 TEST_CASE("Parser: system with multiple lifecycle handlers", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
         "system MultiPhase:\n"
-        "    on input():\n"
+        "    on input:\n"
         "        x = 1\n"
-        "    on fixed_tick(dt: float):\n"
+        "    on fixed_tick:\n"
         "        y = 2\n"
-        "    on late_tick(dt: float):\n"
+        "    on late_tick:\n"
         "        z = 3\n"
     );
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
@@ -817,13 +811,13 @@ TEST_CASE("Parser: trait body with on handler produces error", "[parser][trait-c
 TEST_CASE("Parser: system after: block parsed correctly", "[parser][system-ordering]") {
     auto prog = parse(
         "system SceneRender:\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 1\n"
         "\n"
         "system UIRender:\n"
         "    after:\n"
         "        SceneRender\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        y = 2\n"
     );
     REQUIRE(prog.declarations.size() == 2);
@@ -890,7 +884,7 @@ TEST_CASE("Parser: system with multiple after: entries", "[parser][system-orderi
         "    after:\n"
         "        SceneRender\n"
         "        UIRender\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 1\n"
     );
     auto& sys = std::get<SystemNode>(prog.declarations[0]);

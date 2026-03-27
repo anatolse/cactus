@@ -105,37 +105,37 @@ TEST_CASE("Semantic: persist sync on var — allowed", "[semantic]") {
 TEST_CASE("Semantic: system filter — valid trait", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
         "trait Pos:\n    var x: float\n"
-        "system Move:\n    filter: [Pos]\n    on tick(dt: float):\n        x = x + dt\n"));
+        "system Move:\n    filter: \n        Pos\n    on tick:\n        x = x + tick.dt\n"));
 }
 
 TEST_CASE("Semantic: system filter — unknown trait", "[semantic]") {
     CHECK(analyze_has_errors(
-        "system Bad:\n    filter: [NonExistent]\n    on tick(dt: float):\n        x = 0\n"));
+        "system Bad:\n    filter: \n        NonExistent\n    on tick:\n        x = 0\n"));
 }
 
 TEST_CASE("Semantic: event handler — valid event", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
         "trait Pos:\n    var x: float\n"
         "event Hit:\n    var dmg: int\n"
-        "system Combat:\n    filter: [Pos]\n    on Hit(dmg: int):\n        x = x + 1.0\n"));
+        "system Combat:\n    filter: \n        Pos\n    on Hit:\n        x = x + 1.0\n"));
 }
 
 TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
     CHECK(analyze_has_errors(
         "trait Pos:\n    var x: float\n"
-        "system Bad:\n    filter: [Pos]\n    on FakeEvent(x: int):\n        x = 0\n"));
+        "system Bad:\n    filter: \n        Pos\n    on FakeEvent:\n        x = 0\n"));
 }
 
 TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
         "trait Pos:\n    var x: float\n"
-        "system Move:\n    filter: [Pos]\n    on tick(dt: float):\n        x = x + dt\n"));
+        "system Move:\n    filter: \n        Pos\n    on tick:\n        x = x + tick.dt\n"));
 }
 
 TEST_CASE("Semantic: dependency graph built", "[semantic]") {
     auto result = analyze(
         "trait Pos:\n    var x: float\n"
-        "system Move:\n    filter: [Pos]\n    on tick(dt: float):\n        x = x + dt\n");
+        "system Move:\n    filter: \n        Pos\n    on tick as t:\n        x = x + t.dt\n");
     REQUIRE(result.dependency_graph.size() == 1);
     CHECK(result.dependency_graph[0].system_name == "Move");
     CHECK(result.dependency_graph[0].reads.count("Pos"));
@@ -245,20 +245,23 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
     auto result = analyze(
         "trait T:\n    var x: float\n"
         "system A:\n"
-        "    filter: [T]\n"
-        "    on tick(dt: float):\n"
+        "    filter: \n"
+        "       T\n"
+        "    on tick:\n"
         "        x = 1.0\n"
         "system B:\n"
-        "    filter: [T]\n"
+        "    filter:\n"
+        "       T\n"
         "    after:\n"
         "        A\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 2.0\n"
         "system C:\n"
-        "    filter: [T]\n"
+        "    filter:\n"
+        "       T\n"
         "    after:\n"
         "        B\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 3.0\n");
     REQUIRE(result.dependency_graph.size() == 3);
     // Find B and C in dependency graph

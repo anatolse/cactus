@@ -89,14 +89,14 @@ TEST_CASE("Semantic: spawn valid template — ok", "[semantic][dynamic-ecs]") {
         "trait Position:\n    var x: float = 0.0\n"
         "template Enemy:\n    apply:\n        Position\n"
         "system Spawner:\n"
-        "    on load():\n"
+        "    on load:\n"
         "        spawn Enemy(x = 1.0)\n"));
 }
 
 TEST_CASE("Semantic: spawn undefined template — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "system Spawner:\n"
-        "    on load():\n"
+        "    on load:\n"
         "        spawn Ghost()\n"));
 }
 
@@ -105,7 +105,7 @@ TEST_CASE("Semantic: spawn with unknown override field — error", "[semantic][d
         "trait Position:\n    var x: float = 0.0\n"
         "template Enemy:\n    apply:\n        Position\n"
         "system Spawner:\n"
-        "    on load():\n"
+        "    on load:\n"
         "        spawn Enemy(badfield = 1.0)\n"));
 }
 
@@ -117,7 +117,7 @@ TEST_CASE("Semantic: spawn with required field provided — ok", "[semantic][dyn
         "trait Movement:\n    var speed: float\n"
         "template Bullet:\n    apply:\n        Movement\n"
         "system Spawner:\n"
-        "    on load():\n"
+        "    on load:\n"
         "        spawn Bullet(speed = 5.0)\n"));
 }
 
@@ -126,7 +126,7 @@ TEST_CASE("Semantic: spawn with required field missing — error", "[semantic][d
         "trait Movement:\n    var speed: float\n"
         "template Bullet:\n    apply:\n        Movement\n"
         "system Spawner:\n"
-        "    on load():\n"
+        "    on load:\n"
         "        spawn Bullet()\n"));
 }
 
@@ -138,7 +138,7 @@ TEST_CASE("Semantic: spawn with required field provided by template config — o
         "template Bullet:\n    apply:\n        Movement\n"
         "    config:\n        speed = 10.0\n"
         "system Spawner:\n"
-        "    on load():\n"
+        "    on load:\n"
         "        spawn Bullet()\n"));
 }
 
@@ -149,7 +149,7 @@ TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
         "trait Position:\n    var x: float = 0.0\n"
         "unit Player:\n    apply:\n        Position\n"
         "system Spawner:\n"
-        "    on load():\n"
+        "    on load:\n"
         "        spawn Player()\n");
     CHECK(err.find("is a unit, not a template") != std::string::npos);
 }
@@ -195,7 +195,7 @@ TEST_CASE("Semantic: load reachable via use — ok", "[semantic][dynamic-ecs]") 
         "system GameMgr:\n"
         "    filter:\n"
         "        GameState\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        load levels.main\n"));
 }
 
@@ -205,7 +205,7 @@ TEST_CASE("Semantic: load unreachable module — error", "[semantic][dynamic-ecs
         "system GameMgr:\n"
         "    filter:\n"
         "        GameState\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        load unknown.scene\n"));
 }
 
@@ -218,7 +218,7 @@ TEST_CASE("Semantic: enable declared trait — ok", "[semantic][dynamic-ecs]") {
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        enable Frozen\n"));
 }
 
@@ -228,7 +228,7 @@ TEST_CASE("Semantic: enable undeclared trait — error", "[semantic][dynamic-ecs
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        enable NonExistentTrait\n"));
 }
 
@@ -239,7 +239,7 @@ TEST_CASE("Semantic: disable declared trait — ok", "[semantic][dynamic-ecs]") 
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        disable Frozen\n"));
 }
 
@@ -249,7 +249,7 @@ TEST_CASE("Semantic: disable undeclared trait — error", "[semantic][dynamic-ec
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        disable BadTrait\n"));
 }
 
@@ -261,7 +261,7 @@ TEST_CASE("Semantic: on spawn no params — valid", "[semantic][dynamic-ecs]") {
         "system Init:\n"
         "    filter:\n"
         "        Position\n"
-        "    on spawn():\n"
+        "    on spawn:\n"
         "        x = 0.0\n"));
 }
 
@@ -281,7 +281,7 @@ TEST_CASE("Semantic: on destroy no params — valid", "[semantic][dynamic-ecs]")
         "system Cleanup:\n"
         "    filter:\n"
         "        Position\n"
-        "    on destroy():\n"
+        "    on destroy:\n"
         "        x = 0.0\n"));
 }
 
@@ -312,7 +312,7 @@ TEST_CASE("Semantic: exclude declared trait — valid", "[semantic][dynamic-ecs]
         "trait Persistent\n"
         "system Cleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n"
+        "    on unload:\n"
         "        destroy\n"));
 }
 
@@ -320,7 +320,7 @@ TEST_CASE("Semantic: exclude undeclared trait — error", "[semantic][dynamic-ec
     CHECK(analyze_errors(
         "system Cleanup:\n"
         "    exclude:\n        NonExistentTrait\n"
-        "    on unload():\n"
+        "    on unload:\n"
         "        destroy\n"));
 }
 
@@ -329,7 +329,7 @@ TEST_CASE("Semantic: exclude undeclared trait — error", "[semantic][dynamic-ec
 TEST_CASE("Semantic: system with no filter — valid match-all", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "system Cleanup:\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        destroy\n"));
 }
 
@@ -338,7 +338,7 @@ TEST_CASE("Semantic: system with exclude only (no filter) — valid", "[semantic
         "trait Persistent\n"
         "system Cleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on unload():\n"
+        "    on unload:\n"
         "        destroy\n"));
 }
 
@@ -373,10 +373,10 @@ TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic
         "system Sys:\n"
         "    filter:\n"
         "        Position\n"
-        "    on spawn():\n        x = 0.0\n"
-        "    on destroy():\n        x = 0.0\n"
-        "    on load():\n        x = 1.0\n"
-        "    on unload():\n        x = 0.0\n"));
+        "    on spawn:\n        x = 0.0\n"
+        "    on destroy:\n        x = 0.0\n"
+        "    on load:\n        x = 1.0\n"
+        "    on unload:\n        x = 0.0\n"));
 }
 
 // ── Marker trait accepted in apply/filter/exclude ───────────────────────────
@@ -396,7 +396,7 @@ TEST_CASE("Semantic: marker trait in exclude is valid", "[semantic][dynamic-ecs]
         "trait Persistent\n"
         "system Cleanup:\n"
         "    exclude:\n        Persistent\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        destroy\n"));
 }
 
@@ -408,7 +408,7 @@ TEST_CASE("Semantic: destroy in system handler — valid", "[semantic][dynamic-e
         "system DeathSystem:\n"
         "    filter:\n"
         "        Health\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        destroy\n"));
 }
 
@@ -421,7 +421,7 @@ TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ec
         "system Spawner:\n"
         "    filter:\n"
         "        Position\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        spawn Enemy(x = 0.0)\n"));
 }
 
@@ -433,7 +433,7 @@ TEST_CASE("Semantic: marker trait in filter is valid (task 11.10)", "[semantic][
         "system Sys:\n"
         "    filter:\n"
         "        Persistent\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        destroy\n"));
 }
 
@@ -446,7 +446,7 @@ TEST_CASE("Semantic: marker trait filter + exclude combination (task 11.10)", "[
         "        Active\n"
         "    exclude:\n"
         "        Persistent\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        destroy\n"));
 }
 
@@ -457,8 +457,8 @@ TEST_CASE("Semantic: field access in no-filter system body — error (task 11.12
     auto err = first_error(
         "trait Position:\n    var x: float = 0.0\n"
         "system GlobalSystem:\n"
-        "    on tick(dt: float):\n"
-        "        x = x + dt\n");  // 'x' is a trait field, system has no filter
+        "    on tick:\n"
+        "        x = x + tick.dt\n");  // 'x' is a trait field, system has no filter
     CHECK(err.find("not accessible") != std::string::npos);
 }
 
@@ -467,7 +467,7 @@ TEST_CASE("Semantic: non-field stmts allowed in no-filter system — ok (task 11
     // destroy, emit, spawn etc. are allowed even without filter
     CHECK_FALSE(analyze_errors(
         "system GlobalCleanup:\n"
-        "    on unload():\n"
+        "    on unload:\n"
         "        destroy\n"));
 }
 
@@ -479,16 +479,17 @@ TEST_CASE("Semantic: field access in filter system body — ok (task 11.12)",
         "system Move:\n"
         "    filter:\n"
         "        Position\n"
-        "    on tick(dt: float):\n"
-        "        x = x + dt\n"));
+        "    on tick:\n"
+        "        x = x + tick.dt\n"));
 }
 
 TEST_CASE("Semantic: field access in no-filter if-branch — error (task 11.12)",
           "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Health:\n    var hp: int = 100\n"
+        "trait Health:\n"
+        "       var hp: int = 100\n"
         "system GlobalSys:\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        if hp <= 0:\n"
         "            hp = 100\n"));
 }

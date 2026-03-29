@@ -26,7 +26,7 @@ add_test(NAME CodegenManualTests COMMAND test_codegen_manual)
 # EnTT codegen tests
 add_executable(test_codegen_entt test_codegen_entt.cpp)
 target_link_libraries(test_codegen_entt PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
-#add_test(NAME CodegenEnttTests COMMAND test_codegen_entt)
+add_test(NAME CodegenEnttTests COMMAND test_codegen_entt)
 
 # Module resolver tests
 add_executable(test_module_resolver test_module_resolver.cpp)

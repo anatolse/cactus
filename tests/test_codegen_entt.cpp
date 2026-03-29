@@ -42,8 +42,14 @@ TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
 TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "trait Pos:\n    var x: float\n    var y: float\n"
-        "system Move:\n    filter: [Pos]\n    on tick(dt: float):\n        x = x + dt\n",
+        "trait Pos:\n"
+        "   var x: float\n"
+        "   var y: float\n"
+        "system Move:\n"
+        "   filter:\n"
+        "       Pos\n"
+        "   on tick:\n"
+        "       x = x + tick.dt\n",
         program);
 
     for (auto& decl : program.declarations) {
@@ -60,7 +66,8 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
 TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "event Damage:\n    var amount: int\n",
+        "event Damage:\n"
+        "   var amount: int\n",
         program);
 
     for (auto& decl : program.declarations) {
@@ -79,7 +86,11 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait Pos:\n    persist sync var x: float\n    persist sync var y: float\n"
-        "system Move:\n    filter: [Pos]\n    on tick(dt: float):\n        x = x + dt\n",
+        "system Move:\n"
+        "   filter:\n"
+        "       Pos\n"
+        "   on tick:\n"
+        "       x = x + tick.dt\n ",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
@@ -139,7 +150,10 @@ TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     auto decorated = full_pipeline(
         "trait Pos:\n    var x: float\n    var y: float\n"
         "trait Health:\n    var hp: int\n"
-        "unit Player:\n    apply:\n        Pos\n        Health\n",
+        "unit Player:\n"
+        "   apply:\n"
+        "       Pos\n"
+        "       Health\n",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);

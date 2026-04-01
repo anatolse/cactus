@@ -122,7 +122,7 @@ system ReadPlayerInputSystem:
         MoveIntent as move
         Position as p
 
-    on input():
+    on input:
         move.axis_x      = input.axis(MoveX)
         move.jump_pressed = input.pressed(Jump)
 
@@ -132,28 +132,28 @@ system MovementSystem:
         PlayerController as ctrl
         MoveIntent as move
 
-    on fixed_tick(dt: float):
+    on fixed_tick:
         if move.axis_x > 0.0:
             ctrl.facing = FacingDirection.Right
         if move.axis_x < 0.0:
             ctrl.facing = FacingDirection.Left
 
         p.velocity = vec2(move.axis_x * ctrl.move_speed, p.velocity.y)
-        p.pos = p.pos + vec2(p.velocity.x * dt, 0.0)
+        p.pos = p.pos + vec2(p.velocity.x * fixed_tick.dt, 0.0)
 
 system GravitySystem:
     filter:
         Position as p
         PlayerPhysics as phys
 
-    on tick(dt: float):
+    on tick:
         if phys.is_grounded == false:
             if phys.jump_state == JumpState.WallSliding:
                 p.velocity = vec2(p.velocity.x, phys.wall_slide_speed)
             else:
-                p.velocity = vec2(p.velocity.x, p.velocity.y + phys.gravity * dt)
+                p.velocity = vec2(p.velocity.x, p.velocity.y + phys.gravity * tick.dt)
 
-        p.pos = p.pos + vec2(0.0, p.velocity.y * dt)
+        p.pos = p.pos + vec2(0.0, p.velocity.y * tick.dt)
 
 system JumpSystem:
     filter:
@@ -162,7 +162,7 @@ system JumpSystem:
         PlayerController as ctrl
         MoveIntent as move
 
-    on fixed_tick(dt: float):
+    on fixed_tick:
         if move.jump_pressed:
             if phys.jumps_remaining > 0:
                 p.velocity = vec2(p.velocity.x, phys.jump_force * -1.0)
@@ -174,7 +174,7 @@ system JumpSystem:
         if p.velocity.y > 0.0 and phys.jump_state == JumpState.Jumping:
             phys.jump_state = JumpState.Falling
 
-    on PlayerLanded():
+    on PlayerLanded:
         phys.is_grounded = true
         phys.jumps_remaining = phys.max_jumps
         phys.jump_state = JumpState.Grounded
@@ -184,13 +184,13 @@ system InvincibilitySystem:
     filter:
         Health as h
 
-    on tick(dt: float):
+    on tick:
         if h.invincible_timer > 0.0:
-            h.invincible_timer = h.invincible_timer - dt
+            h.invincible_timer = h.invincible_timer - tick.dt
 
-    on PlayerDamaged():
+    on PlayerDamaged:
         if h.invincible_timer <= 0.0:
-            h.health = h.health - event.amount
+            h.health = h.health - PlayerDamaged.amount
             h.invincible_timer = 1.5
             if h.health <= 0:
                 h.lives = h.lives - 1

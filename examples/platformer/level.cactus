@@ -120,7 +120,7 @@ system CollisionSystem:
     filter:
         Platform as plat
 
-    on tick(dt: float):
+    on tick:
         let player_pos = get_player_position()
         let player_w = get_player_width()
         let player_h = get_player_height()
@@ -137,23 +137,23 @@ system CollisionResolver:
         PlayerPhysics as phys
         PlayerController as ctrl
 
-    on PlatformCollision():
-        if event.overlap_y < event.overlap_x:
-            if pos.pos.y < event.platform_pos.y:
-                pos.pos = vec2(pos.pos.x, event.platform_pos.y - ctrl.height)
+    on PlatformCollision:
+        if PlatformCollision.overlap_y < PlatformCollision.overlap_x:
+            if pos.pos.y < PlatformCollision.platform_pos.y:
+                pos.pos = vec2(pos.pos.x, PlatformCollision.platform_pos.y - ctrl.height)
                 emit PlayerLanded(pos.pos)
             else:
-                pos.pos = vec2(pos.pos.x, event.platform_pos.y + event.platform_size.y)
+                pos.pos = vec2(pos.pos.x, PlatformCollision.platform_pos.y + PlatformCollision.platform_size.y)
                 pos.velocity = vec2(pos.velocity.x, 0.0)
         else:
-            if pos.pos.x < event.platform_pos.x:
-                pos.pos = vec2(event.platform_pos.x - ctrl.width, pos.pos.y)
+            if pos.pos.x < PlatformCollision.platform_pos.x:
+                pos.pos = vec2(PlatformCollision.platform_pos.x - ctrl.width, pos.pos.y)
             else:
-                pos.pos = vec2(event.platform_pos.x + event.platform_size.x, pos.pos.y)
+                pos.pos = vec2(PlatformCollision.platform_pos.x + PlatformCollision.platform_size.x, pos.pos.y)
 
 system PlatformRenderer:
     filter:
         Platform as plat
 
-    on tick(dt: float):
+    on tick:
         draw_rect(plat.pos, plat.size, plat.color)

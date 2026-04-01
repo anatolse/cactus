@@ -53,12 +53,12 @@ system CameraFollowSystem:
     filter:
         SideScrollCamera as cam
 
-    on late_tick(dt: float):
+    on late_tick:
         let player_pos = get_player_position()
         let target_x = player_pos.x - cam.offset_x
         let target_y = player_pos.y - cam.offset_y
 
-        var t = cam.smoothing * dt
+        var t = cam.smoothing * late_tick.dt
         if t > 1.0:
             t = 1.0
 
@@ -72,7 +72,7 @@ system ParallaxRenderer:
     filter:
         SideScrollCamera as cam
 
-    on tick(dt: float):
+    on tick:
         let far_x = cam.cam_x * cam.parallax_far
         let mid_x = cam.cam_x * cam.parallax_mid
 

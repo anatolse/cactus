@@ -7,6 +7,17 @@
 
 using namespace cactus;
 
+// Standard lifecycle event declarations (normally from std.core imports)
+static const std::string STDLIB_EVENTS =
+    "pub event tick:\n    let dt: float\n"
+    "pub event fixed_tick:\n    let dt: float\n"
+    "pub event late_tick:\n    let dt: float\n"
+    "pub event spawn\n"
+    "pub event destroy\n"
+    "pub event input\n"
+    "pub event load\n"
+    "pub event unload\n";
+
 static DecoratedProgram analyze(const std::string& source) {
     ErrorReporter errors;
     Lexer lexer(source, "test.cactus", errors);
@@ -108,6 +119,7 @@ TEST_CASE("Semantic: persist sync on var — allowed", "[semantic]") {
 
 TEST_CASE("Semantic: system filter — valid trait", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
+        STDLIB_EVENTS +
         "trait Pos:\n    var x: float\n"
         "system Move:\n    filter: \n        Pos\n    on tick:\n        x = x + tick.dt\n"));
 }
@@ -132,12 +144,14 @@ TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
 
 TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
+        STDLIB_EVENTS +
         "trait Pos:\n    var x: float\n"
         "system Move:\n    filter: \n        Pos\n    on tick:\n        x = x + tick.dt\n"));
 }
 
 TEST_CASE("Semantic: dependency graph built", "[semantic]") {
     auto result = analyze(
+        STDLIB_EVENTS +
         "trait Pos:\n    var x: float\n"
         "system Move:\n    filter: \n        Pos\n    on tick as t:\n        x = x + t.dt\n");
     REQUIRE(result.dependency_graph.size() == 1);
@@ -247,6 +261,7 @@ TEST_CASE("Semantic: after: direct cycle reports error", "[semantic][system-orde
 // Task 12.7: valid after: chain passes and after_systems populated
 TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[semantic][system-ordering]") {
     auto result = analyze(
+        STDLIB_EVENTS +
         "trait T:\n    var x: float\n"
         "system A:\n"
         "    filter: \n"

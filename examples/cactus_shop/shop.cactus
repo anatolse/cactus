@@ -96,7 +96,7 @@ system ShopInteraction:
         Position as p
         ShopKeeper as shop
 
-    on tick(dt: float):
+    on tick:
         let player_pos = get_player_position()
         let dist = distance_2d(p.position, player_pos)
 
@@ -109,9 +109,9 @@ system PurchaseSystem:
         Wallet as w
         Inventory as inv
 
-    on ItemPurchased():
-        if can_afford(w.coins, event.item.price):
-            w.coins = w.coins - event.item.price
-            inv.items = inv.items + [event.item]
-            inv.total_spent = inv.total_spent + event.item.price
-            emit CoinSpent(event.item.price, w.coins)
+    on ItemPurchased:
+        if can_afford(w.coins, ItemPurchased.item.price):
+            w.coins = w.coins - ItemPurchased.item.price
+            inv.items = inv.items + [ItemPurchased.item]
+            inv.total_spent = inv.total_spent + ItemPurchased.item.price
+            emit CoinSpent(ItemPurchased.item.price, w.coins)

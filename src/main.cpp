@@ -90,6 +90,8 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
     for (const auto& [name, enm] : prog.enums) {
         syms.enums[name] = enm;
     }
+    // Export pub event names so downstream modules can validate handlers
+    syms.events = prog.pub_events;
     return syms;
 }
 

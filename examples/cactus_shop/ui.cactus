@@ -21,7 +21,7 @@ system HUDSystem:
         Health as h
         Wallet as w
 
-    on tick(dt: float):
+    on tick:
         # Backend reads h.health, h.max_health, w.coins to render the HUD.
         draw_hud(h.health, h.max_health, w.coins)
 
@@ -30,10 +30,10 @@ system ShopUISystem:
         Inventory as inv
         Wallet as w
 
-    on ShopOpened():
+    on ShopOpened:
         # Backend opens shop panel, passing inventory and coin count.
-        show_shop_panel(event.shop_entity, inv.items, w.coins)
+        show_shop_panel(ShopOpened.shop_entity, inv.items, w.coins)
 
-    on ShopClosed():
+    on ShopClosed:
         # Backend closes shop panel.
         hide_shop_panel()

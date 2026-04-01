@@ -73,7 +73,7 @@ system MovementSystem:
         Position as p
         PlayerController as ctrl
 
-    on tick(dt: float):
+    on tick:
         if ctrl.state == PlayerState.Shopping:
             return
 
@@ -82,7 +82,7 @@ system MovementSystem:
 
         if input_x != 0.0 or input_z != 0.0:
             let direction = vec3(input_x, 0.0, input_z)
-            p.position = p.position + direction * ctrl.move_speed * dt
+            p.position = p.position + direction * ctrl.move_speed * tick.dt
             ctrl.state = PlayerState.Walking
             emit PlayerMoved(p.position, direction)
         else:
@@ -93,7 +93,7 @@ system CameraSystem:
         Position as p
         ThirdPersonCamera as cam
 
-    on tick(dt: float):
+    on tick:
         let cam_pos = p.position + vec3(0.0, cam.height, cam.distance * -1.0)
         let cam_target = p.position + cam.target_offset
         set_camera(cam_pos, cam_target)

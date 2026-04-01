@@ -83,8 +83,8 @@ system PatrolSystem:
         Position as p
         EnemyAI as ai
 
-    on tick(dt: float):
-        p.pos = p.pos + vec2(ai.patrol_speed * ai.direction * dt, 0.0)
+    on tick:
+        p.pos = p.pos + vec2(ai.patrol_speed * ai.direction * tick.dt, 0.0)
 
         if p.pos.x >= ai.patrol_max_x:
             ai.direction = -1.0
@@ -99,7 +99,7 @@ system EnemyCollisionSystem:
         Position as p
         EnemyAI as ai
 
-    on tick(dt: float):
+    on tick:
         let player_pos = get_player_position()
         let player_w = get_player_width()
         let player_h = get_player_height()
@@ -118,5 +118,5 @@ system EnemyRenderer:
         Position as p
         EnemyAI as ai
 
-    on tick(dt: float):
+    on tick:
         draw_rect(p.pos, vec2(ai.enemy_width, ai.enemy_height), ai.enemy_color)

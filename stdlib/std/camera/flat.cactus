@@ -29,6 +29,6 @@ pub system FollowCameraSystem:
     filter:
         Camera as cam
         FollowCamera as follow
-    on late_tick(dt: float):
+    on late_tick:
         # TODO: query target entity Transform and lerp cam.offset toward it
         pass

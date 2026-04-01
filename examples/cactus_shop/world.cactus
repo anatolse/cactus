@@ -39,13 +39,13 @@ system WorldRenderer:
     filter:
         Terrain as t
 
-    on tick(dt: float):
+    on tick:
         draw_plane(vec3(0.0, 0.0, 0.0), vec2(t.ground_size, t.ground_size), t.ground_color)
 
 system LightSystem:
     filter:
         SunLight as sun
 
-    on tick(dt: float):
+    on tick:
         set_light_direction(sun.direction)
         set_light_intensity(sun.intensity)

@@ -67,6 +67,7 @@ struct DecoratedProgram {
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
     std::unordered_map<std::string, ResolvedFunc> funcs;
+    std::unordered_set<std::string> pub_events;  // pub event names (for ImportedSymbols export)
     std::vector<SystemDependency> dependency_graph;
     StringPool string_pool;
     ProgramNode* ast = nullptr;  // non-owning pointer to original AST
@@ -83,6 +84,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ResolvedStruct> structs;  // pub structs
     std::unordered_map<std::string, ResolvedEnum>   enums;    // pub enums
     std::unordered_map<std::string, ResolvedFunc>   funcs;    // pub extern funcs
+    std::unordered_set<std::string>                 events;   // pub event names
 };
 
 // ── Module Imports (aggregate for one compilation unit) ────────────────────

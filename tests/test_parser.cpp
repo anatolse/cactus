@@ -892,3 +892,51 @@ TEST_CASE("Parser: system with multiple after: entries", "[parser][system-orderi
     CHECK(sys.after_systems[0] == "SceneRender");
     CHECK(sys.after_systems[1] == "UIRender");
 }
+
+// ── dsl-event-handler-syntax parser tests ───────────────────────────────────
+
+TEST_CASE("Parser: on tick with alias parsed", "[parser][dsl-event-handler-syntax]") {
+    auto prog = parse(
+        "system Move:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick as t:\n"
+        "        x = 1\n"
+    );
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].event_name == "tick");
+    REQUIRE(sys.handlers[0].alias.has_value());
+    CHECK(*sys.handlers[0].alias == "t");
+}
+
+TEST_CASE("Parser: on user event with alias parsed", "[parser][dsl-event-handler-syntax]") {
+    auto prog = parse(
+        "system Combat:\n"
+        "    on PlayerDamaged as dmg:\n"
+        "        x = 1\n"
+    );
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].event_name == "PlayerDamaged");
+    REQUIRE(sys.handlers[0].alias.has_value());
+    CHECK(*sys.handlers[0].alias == "dmg");
+}
+
+TEST_CASE("Parser: marker event declaration (no colon, no body)", "[parser][dsl-event-handler-syntax]") {
+    auto prog = parse("pub event spawn\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<EventNode>(prog.declarations[0]);
+    CHECK(decl.name == "spawn");
+    CHECK(decl.is_pub);
+    CHECK(decl.fields.empty());
+}
+
+TEST_CASE("Parser: marker event without pub", "[parser][dsl-event-handler-syntax]") {
+    auto prog = parse("event destroy\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<EventNode>(prog.declarations[0]);
+    CHECK(decl.name == "destroy");
+    CHECK_FALSE(decl.is_pub);
+    CHECK(decl.fields.empty());
+}

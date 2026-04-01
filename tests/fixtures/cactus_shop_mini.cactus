@@ -37,7 +37,7 @@ system ShopSystem:
         Wallet
         Inventory
 
-    on ItemBought(item: Item, buyer: int):
-        if can_afford(coins, item.price):
-            coins = coins - item.price
-            emit ItemBought(item, buyer)
+    on ItemBought:
+        if can_afford(coins, ItemBought.item.price):
+            coins = coins - ItemBought.item.price
+            emit ItemBought(ItemBought.item, ItemBought.buyer)

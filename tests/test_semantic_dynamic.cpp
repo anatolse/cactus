@@ -7,11 +7,24 @@
 
 using namespace cactus;
 
+// Standard lifecycle event declarations (normally from std.core imports)
+static const std::string STDLIB_EVENTS =
+    "pub event tick:\n    let dt: float\n"
+    "pub event fixed_tick:\n    let dt: float\n"
+    "pub event late_tick:\n    let dt: float\n"
+    "pub event spawn\n"
+    "pub event destroy\n"
+    "pub event input\n"
+    "pub event load\n"
+    "pub event unload\n";
+
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
 static bool analyze_errors(const std::string& source) {
+    // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
+    const std::string full_source = STDLIB_EVENTS + source;
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    Lexer lexer(full_source, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     if (errors.has_errors()) {
         return true;
@@ -27,8 +40,10 @@ static bool analyze_errors(const std::string& source) {
 }
 
 static std::string first_error(const std::string& source) {
+    // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
+    const std::string full_source = STDLIB_EVENTS + source;
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    Lexer lexer(full_source, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     if (errors.has_errors()) {
         return errors.diagnostics()[0].message;

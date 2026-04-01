@@ -103,7 +103,7 @@ system CollectionSystem:
         Position as p
         Collectible as col
 
-    on tick(dt: float):
+    on tick:
         if col.collected == false:
             let player_pos = get_player_position()
             let player_w = get_player_width()
@@ -120,8 +120,8 @@ system ScoreSystem:
     filter:
         Score as s
 
-    on GemCollected():
-        s.score = s.score + event.point_value
+    on GemCollected:
+        s.score = s.score + GemCollected.point_value
         s.gems_collected = s.gems_collected + 1
 
 system CollectibleRenderer:
@@ -129,6 +129,6 @@ system CollectibleRenderer:
         Position as p
         Collectible as col
 
-    on tick(dt: float):
+    on tick:
         if col.collected == false:
             draw_rect(p.pos, vec2(col.gem_size, col.gem_size), col.gem_color)

@@ -49,7 +49,7 @@ pub system FollowCameraSystem:
     filter:
         Camera as cam
         FollowCamera as follow
-    on late_tick(dt: float):
+    on late_tick:
         # TODO: query target entity Transform and lerp camera position toward offset
         pass
 
@@ -59,7 +59,7 @@ pub system FirstPersonCameraSystem:
     filter:
         Camera as cam
         FirstPersonCamera as fps
-    on late_tick(dt: float):
+    on late_tick:
         # TODO: apply pitch and yaw to Transform.rotation as a quaternion
         pass
 
@@ -69,6 +69,6 @@ pub system ThirdPersonCameraSystem:
     filter:
         Camera as cam
         ThirdPersonCamera as tps
-    on late_tick(dt: float):
+    on late_tick:
         # TODO: compute orbit position from target Transform, distance, height
         pass

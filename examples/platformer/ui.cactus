@@ -23,7 +23,7 @@ system HUDSystem:
         Health as h
         Score as s
 
-    on tick(dt: float):
+    on tick:
         # Backend reads h.health, h.max_health, h.lives, s.score to render HUD.
         # These trait fields are the source of truth for the display layer.
         draw_hud(h.health, h.max_health, h.lives, s.score)

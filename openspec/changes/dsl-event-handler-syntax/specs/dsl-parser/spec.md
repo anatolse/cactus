@@ -55,10 +55,6 @@ The handler no longer carries a parameter list node; instead, `EventHandlerNode`
 - **WHEN** `on PlayerDamaged as dmg:` appears in a system body
 - **THEN** the parser produces an `EventHandler` with `event_name = "PlayerDamaged"` and `alias = "dmg"`
 
-#### Scenario: Old parameter syntax produces parse error
-- **WHEN** `on tick(dt: float):` appears in a system body
-- **THEN** the parser reports an error: "unexpected '('; event handlers no longer take a parameter list; use 'on tick:' and access fields as 'tick.dt'"
-
 ### Requirement: Marker event declaration (body is optional)
 The parser SHALL accept `event` declarations with no colon and no body. The event body (colon + indented block) is optional, consistent with the marker trait pattern:
 

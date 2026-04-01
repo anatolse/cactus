@@ -462,22 +462,6 @@ EventHandlerNode Parser::parse_event_handler() {
     // Accept lifecycle keywords (spawn/destroy/load/unload) as event names
     auto event_name = parse_lifecycle_event_name();
 
-    // Error on old parameter list syntax
-    if (check(TokenType::LPAREN)) {
-        errors_.error(peek().location,
-            "unexpected '('; event handlers no longer take a parameter list; "
-            "use 'on " + event_name + ":' and access fields as '" + event_name + ".dt'");
-        // Consume parens to avoid cascading errors
-        advance();  // consume '('
-        while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN) &&
-               !check(TokenType::NEWLINE) && !check(TokenType::COLON)) {
-            advance();
-        }
-        if (check(TokenType::RPAREN)) {
-            advance();  // consume ')'
-        }
-    }
-
     // Optional 'as alias' clause
     std::optional<std::string> alias;
     if (match(TokenType::AS)) {

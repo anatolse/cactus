@@ -9,14 +9,13 @@ Event handlers in Cactus currently have two incompatible forms: lifecycle handle
 - Event data accessed via the event name (or alias) as an implicit read-only local variable in the handler body
 - Standard lifecycle events (`tick`, `fixed_tick`, `late_tick`, `spawn`, `destroy`, `input`, `load`, `unload`) declared as `event` blocks in `std.core` — authoritative documentation of their fields
 - Remove hardcoded lifecycle parameter validation from the semantic analyzer
-- cpp-manual backend updated to bind event data as a named local variable instead of function parameters
 
 **Non-Goals:**
 - Changing `emit` statement syntax or semantics
 - Changing `event` declaration syntax
 - Altering the runtime game loop wiring (backends still treat lifecycle event names specially for hook-up)
 - Moving non-lifecycle stdlib events to std.core
-- Updating the cpp-entt backend (deferred; only cpp-manual is in scope for this change)
+- Updating either C++ backend (both `cpp-manual` and `cpp-entt` are deferred to a follow-on change)
 
 ## Decisions
 
@@ -42,18 +41,13 @@ This replaces both the lifecycle parameter injection and the `event` implicit ob
 
 *Alternative considered*: Rename the implicit variable uniformly to `event` (e.g., `tick.dt` becomes `event.dt`). Rejected — losing the name information makes handlers harder to read and removes the self-documenting nature of `tick.dt`.
 
-### Codegen: event object passed as const-ref parameter named after the event (or alias)
-The cpp-manual backend currently emits C++ function parameters for lifecycle events. After this change it emits a single `const EventType& <name>` parameter to the handler callback, where `<name>` is the alias if present, otherwise the event name. The cpp-entt backend is **not** updated in this change — its event handler codegen remains unchanged.
-
-For lifecycle events with no fields (e.g., `spawn`), the const-ref parameter is still generated but the struct has no members (consistent with the existing empty-struct pattern for tag events).
-
-### Backends still special-case lifecycle event names for game-loop wiring
-Even though lifecycle events are now declared in std.core rather than hardcoded in the analyzer, the C++ backends continue to recognize their names (`tick`, `fixed_tick`, etc.) to wire them into the correct frame-phase callback slots. This wiring knowledge stays in the backend layer.
+### Codegen deferred to follow-on change
+Both C++ backends (`cpp-manual` and `cpp-entt`) are out of scope. Their codegen will be updated after this change lands, once the AST shape (`EventHandlerNode.alias`) is stable. The semantic analyzer's `EventHandlerNode` carries the `alias` field that backends will use to emit `const EventType& <name>` parameters.
 
 ## Risks / Trade-offs
 
 - **[Breaking change — all .cactus files]** Every existing event handler must be rewritten from `on tick(dt: float):` to `on tick:` and `dt` references to `tick.dt`. This affects examples, tests, and stdlib files.
-  → Mitigation: Update all files as part of the implementation tasks; a migration guide is included in the tasks.
+  → Mitigation: Update all affected files as part of the implementation tasks (section 5).
 
 - **[std.core always-in-scope assumption]** If a program is analyzed without std.core loaded (e.g., in unit tests that bypass the module linker), lifecycle event types won't resolve.
   → Mitigation: The module linker already auto-includes std.core; tests that need lifecycle events must also load std.core, or the test harness pre-registers event types.

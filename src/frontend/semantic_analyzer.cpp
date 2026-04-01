@@ -126,6 +126,10 @@ void ModuleImports::add(const std::string& qualifier, ImportedSymbols pub_syms,
     for (auto& [name, _] : pub_syms.funcs) {
         func_providers[name].push_back(qualifier);
     }
+    // Index imported event names (e.g. from std.core)
+    for (const auto& ev_name : pub_syms.events) {
+        (void)ev_name;  // no uniqueness conflict for events — just populate event_names_ in analyzer
+    }
     // Store non-pub trait names for error diagnostics
     if (!non_pub.empty()) {
         non_pub_trait_names[qualifier] = std::move(non_pub);
@@ -176,6 +180,13 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
 // ── Phase 1: Collect Types ──────────────────────────────────────────────────
 
 void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+    // Seed event_names_ from imported modules (e.g. std.core lifecycle events)
+    for (const auto& [qualifier, syms] : imports_.modules) {
+        for (const auto& ev_name : syms.events) {
+            event_names_.insert(ev_name);
+        }
+    }
+
     for (auto& decl : program.declarations) {
         std::visit(
             [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
@@ -203,6 +214,9 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                     trait_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, EventNode>) {
                     event_names_.insert(node.name);
+                    if (node.is_pub) {
+                        result_.pub_events.insert(node.name);
+                    }
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
                     func_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, ConstBlockNode>) {
@@ -765,29 +779,38 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
 
 // ── Phase 3f: Event Usage Validation ────────────────────────────────────────
 
-// Lifecycle event names that are built-in (not declared via event keyword)
-static bool is_lifecycle_event(const std::string& name) {
-    return name == "spawn" || name == "destroy" || name == "load" || name == "unload";
-}
-
-// All built-in handler names (includes new dsl-spec-new-features handlers)
-static bool is_builtin_handler(const std::string& name) {
-    return is_lifecycle_event(name) ||
-           name == "tick" || name == "fixed_tick" || name == "late_tick" || name == "input";
-}
-
 void SemanticAnalyzer::validate_event_usage(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            for (auto& handler : sys->handlers) {
-                // Built-in lifecycle and phase handlers are always valid
-                if (is_builtin_handler(handler.event_name)) {
-                    continue;
+            // Build set of filter-bound names (trait names and their aliases) for alias conflict check
+            std::unordered_set<std::string> filter_bound;
+            for (const auto& entry : sys->filter.entries) {
+                auto dot = entry.qualified_name.rfind('.');
+                auto simple = (dot != std::string::npos)
+                    ? entry.qualified_name.substr(dot + 1)
+                    : entry.qualified_name;
+                filter_bound.insert(simple);
+                if (entry.alias.has_value()) {
+                    filter_bound.insert(*entry.alias);
                 }
+            }
+            for (const auto& t : sys->filter.trait_names) {
+                filter_bound.insert(t);
+            }
+
+            for (auto& handler : sys->handlers) {
+                // Validate event is declared (must be in event_names_ — either local or imported from std.core)
                 if (!event_names_.contains(handler.event_name)) {
                     errors_.error(handler.location,
                                   "system '" + sys->name + "' handles unknown event '" +
                                       handler.event_name + "'");
+                }
+                // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
+                if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
+                    errors_.error(handler.location,
+                                  "handler alias '" + *handler.alias +
+                                      "' conflicts with filter alias '" + *handler.alias +
+                                      "' already in scope");
                 }
             }
         }

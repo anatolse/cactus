@@ -368,7 +368,7 @@ system MovementSystem:
         Position
         PlayerController
 
-    on tick(dt: float):
+    on tick:
         input_x = get_input_axis_x()
 
         if input_x > 0.0:
@@ -377,21 +377,21 @@ system MovementSystem:
             facing = FacingDirection.Left
 
         velocity = vec2(input_x * move_speed, velocity.y)
-        pos = pos + vec2(velocity.x * dt, 0.0)
+        pos = pos + vec2(velocity.x * tick.dt, 0.0)
 
 system GravitySystem:
     filter:
         Position
         PlayerPhysics
 
-    on tick(dt: float):
+    on tick:
         if is_grounded == false:
             if jump_state == JumpState.WallSliding:
                 velocity = vec2(velocity.x, wall_slide_speed)
             else:
-                velocity = vec2(velocity.x, velocity.y + gravity * dt)
+                velocity = vec2(velocity.x, velocity.y + gravity * tick.dt)
 
-        pos = pos + vec2(0.0, velocity.y * dt)
+        pos = pos + vec2(0.0, velocity.y * tick.dt)
 
 system JumpSystem:
     filter:
@@ -399,7 +399,7 @@ system JumpSystem:
         PlayerPhysics
         PlayerController
 
-    on tick(dt: float):
+    on tick:
         if is_jump_pressed():
             if jumps_remaining > 0:
                 velocity = vec2(velocity.x, jump_force * -1.0)
@@ -411,7 +411,7 @@ system JumpSystem:
         if velocity.y > 0.0 and jump_state == JumpState.Jumping:
             jump_state = JumpState.Falling
 
-    on PlayerLanded(position: vec2):
+    on PlayerLanded:
         is_grounded = true
         jumps_remaining = max_jumps
         jump_state = JumpState.Grounded
@@ -421,13 +421,13 @@ system InvincibilitySystem:
     filter:
         Health
 
-    on tick(dt: float):
+    on tick:
         if invincible_timer > 0.0:
-            invincible_timer = invincible_timer - dt
+            invincible_timer = invincible_timer - tick.dt
 
-    on PlayerDamaged(amount: int):
+    on PlayerDamaged:
         if invincible_timer <= 0.0:
-            health = health - amount
+            health = health - PlayerDamaged.amount
             invincible_timer = 1.5
             if health <= 0:
                 lives = lives - 1
@@ -439,8 +439,8 @@ system PatrolSystem:
         Position
         EnemyAI
 
-    on tick(dt: float):
-        pos = pos + vec2(patrol_speed * direction * dt, 0.0)
+    on tick:
+        pos = pos + vec2(patrol_speed * direction * tick.dt, 0.0)
 
         if pos.x >= patrol_max_x:
             direction = -1.0
@@ -455,7 +455,7 @@ system CollectionSystem:
         Position
         Collectible
 
-    on tick(dt: float):
+    on tick:
         if collected == false:
             player_pos = get_player_position()
             player_w = get_player_width()
@@ -470,19 +470,19 @@ system ScoreSystem:
     filter:
         Score
 
-    on GemCollected(point_value: int, gem_type: GemType, position: vec2):
-        score = score + point_value
+    on GemCollected:
+        score = score + GemCollected.point_value
         gems_collected = gems_collected + 1
 
 system CameraFollowSystem:
     filter:
         SideScrollCamera
 
-    on tick(dt: float):
+    on tick:
         player_pos = get_player_position()
         target_x = player_pos.x - offset_x
 
-        t = smoothing * dt
+        t = smoothing * tick.dt
         if t > 1.0:
             t = 1.0
 
@@ -495,7 +495,7 @@ system PlatformRenderer:
     filter:
         Platform
 
-    on tick(dt: float):
+    on tick:
         draw_rect(plat_pos, plat_size, plat_color)
 
 system EnemyRenderer:
@@ -503,7 +503,7 @@ system EnemyRenderer:
         Position
         EnemyAI
 
-    on tick(dt: float):
+    on tick:
         draw_rect(pos, vec2(enemy_width, enemy_height), enemy_color)
 
 system CollectibleRenderer:
@@ -511,6 +511,6 @@ system CollectibleRenderer:
         Position
         Collectible
 
-    on tick(dt: float):
+    on tick:
         if collected == false:
             draw_rect(pos, vec2(gem_size, gem_size), gem_color)

@@ -11,6 +11,6 @@ system MoveSystem:
         Position
         Velocity
 
-    on tick(dt: float):
-        x = x + vx * dt
-        y = y + vy * dt
+    on tick:
+        x = x + vx * tick.dt
+        y = y + vy * tick.dt

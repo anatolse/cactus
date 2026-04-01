@@ -13,7 +13,7 @@ std::string SoaEmitter::type_to_cpp(const TypeInfo& type) {
         case TypeKind::Quat: return "Quat";
         case TypeKind::Color: return "Color";
         case TypeKind::EntityId: return "uint32_t";
-        case TypeKind::Struct: return type.name;
+        case TypeKind::Struct:
         case TypeKind::Enum: return type.name;
         case TypeKind::List:
             if (type.element) {

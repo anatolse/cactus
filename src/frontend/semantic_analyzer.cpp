@@ -175,10 +175,10 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
 
 // ── Phase 1: Collect Types ──────────────────────────────────────────────────
 
-void SemanticAnalyzer::collect_types(ProgramNode& program) {
+void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         std::visit(
-            [this](auto& node) {
+            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, StructNode>) {
                     if (struct_names_.contains(node.name)) {
@@ -464,7 +464,7 @@ bool SemanticAnalyzer::is_known_type(const std::string& name) const {
 
 // ── Phase 3a: Const String Check ────────────────────────────────────────────
 
-void SemanticAnalyzer::check_const_strings(ProgramNode& program) {
+void SemanticAnalyzer::check_const_strings(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         std::visit(
             [this](auto& node) {
@@ -598,7 +598,7 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
 
 // ── Phase 3c: No Recursion ──────────────────────────────────────────────────
 
-void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {
+void SemanticAnalyzer::check_no_recursion(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& [func, callees] : call_graph_) {
         std::unordered_set<std::string> visited;
         std::vector<std::string> stack = {func};
@@ -669,7 +669,8 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
                           "unknown module qualifier '" + qualifier + "' in filter");
             return false;
         }
-        if (it->second.traits.contains(trait_name)) {
+        if (!it->second.traits.contains(trait_name)) {
+            // Trait not found in pub traits — check for non-pub helpful error
             // ── Task 4.6: Non-pub helpful error ──────────────────────────────
             auto np_it = imports_.non_pub_trait_names.find(qualifier);
             if (np_it != imports_.non_pub_trait_names.end() &&
@@ -718,7 +719,7 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
     return false;
 }
 
-void SemanticAnalyzer::validate_system_filters(ProgramNode& program) {
+void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             if (!sys->filter.entries.empty()) {
@@ -730,20 +731,22 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) {
             } else {
                 // Backward-compat: simple trait_names list
                 for (auto& trait_name : sys->filter.trait_names) {
+                    // Local trait — always valid
                     if (trait_names_.contains(trait_name)) {
-                        // Check imports too
-                        bool found = false;
-                        if (!imports_.empty()) {
-                            auto it = imports_.trait_providers.find(trait_name);
-                            if (it != imports_.trait_providers.end() && !it->second.empty()) {
-                                found = true;
-                            }
+                        continue;
+                    }
+                    // Not local — check imports
+                    bool found = false;
+                    if (!imports_.empty()) {
+                        auto it = imports_.trait_providers.find(trait_name);
+                        if (it != imports_.trait_providers.end() && !it->second.empty()) {
+                            found = true;
                         }
-                        if (!found) {
-                            errors_.error(sys->filter.location,
-                                          "system '" + sys->name + "' filters on unknown trait '" +
-                                              trait_name + "'");
-                        }
+                    }
+                    if (!found) {
+                        errors_.error(sys->filter.location,
+                                      "system '" + sys->name + "' filters on unknown trait '" +
+                                          trait_name + "'");
                     }
                 }
             }
@@ -781,7 +784,7 @@ void SemanticAnalyzer::validate_event_usage(ProgramNode& program) {
                 if (is_builtin_handler(handler.event_name)) {
                     continue;
                 }
-                if (event_names_.contains(handler.event_name)) {
+                if (!event_names_.contains(handler.event_name)) {
                     errors_.error(handler.location,
                                   "system '" + sys->name + "' handles unknown event '" +
                                       handler.event_name + "'");
@@ -858,7 +861,7 @@ bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
     return false;
 }
 
-std::unordered_set<std::string> SemanticAnalyzer::get_archetype_fields(
+std::unordered_set<std::string> SemanticAnalyzer::get_archetype_fields( // NOLINT(readability-function-cognitive-complexity)
     const std::vector<ApplyEntry>& apply) const {
     std::unordered_set<std::string> fields;
     for (const auto& entry : apply) {
@@ -892,10 +895,10 @@ std::unordered_set<std::string> SemanticAnalyzer::get_archetype_fields(
 
 // ── Task 5.1, 5.2: Validate template and unit declarations ──────────────────
 
-void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program) {
+void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         std::visit(
-            [this](auto& node) {
+            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, TemplateNode> ||
                               std::is_same_v<T, UnitNode>) {
@@ -947,12 +950,12 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
 
 // ── Task 5.3, 5.4: Validate spawn sites ─────────────────────────────────────
 
-void SemanticAnalyzer::validate_spawn_stmts(
+void SemanticAnalyzer::validate_spawn_stmts( // NOLINT(readability-function-cognitive-complexity)
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::string& context_name) {
     for (const auto& stmt : stmts) {
         std::visit(
-            [this, &context_name](auto& s) {
+            [this, &context_name](auto& s) { // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, SpawnStmt>) {
                     // 5.4: Reject spawn of a unit
@@ -1005,9 +1008,12 @@ void SemanticAnalyzer::validate_spawn_stmts(
                                             }
                                         }
                                         if (!found) {
-                                            errors_.error(s.location,
-                                                          "trait '" + trait_name + "' has no field '" +
-                                                              field_name + "' in spawn override");
+                                            std::string msg = "trait '";
+                                            msg += trait_name;
+                                            msg += "' has no field '";
+                                            msg += field_name;
+                                            msg += "' in spawn override";
+                                            errors_.error(s.location, msg);
                                         }
                                     }
                                 }
@@ -1052,13 +1058,13 @@ void SemanticAnalyzer::validate_spawn_sites(ProgramNode& program) {
 
 // ── Task 5.5, 5.6, 5.7: Statement context validation ────────────────────────
 
-void SemanticAnalyzer::validate_context_stmts(
+void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-cognitive-complexity)
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::string& context_name,
     bool in_system_handler) {
     for (const auto& stmt : stmts) {
         std::visit(
-            [this, &context_name, in_system_handler](auto& s) {
+            [this, &context_name, in_system_handler](auto& s) { // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, SpawnStmt> ||
                               std::is_same_v<S, DestroyStmt> ||
@@ -1107,14 +1113,15 @@ void SemanticAnalyzer::validate_context_stmts(
                     // 5.7: For EnableStmt/DisableStmt, validate trait is declared
                     if constexpr (std::is_same_v<S, EnableStmt> ||
                                   std::is_same_v<S, DisableStmt>) {
-                        const std::string& tname =
-                            std::is_same_v<S, EnableStmt> ? s.trait_name : s.trait_name;
+                        const std::string& tname = s.trait_name;
                         if (!is_trait_declared(tname)) {
-                            std::string kw =
-                                std::is_same_v<S, EnableStmt> ? "enable" : "disable";
-                            errors_.error(s.location,
-                                          "undeclared trait '" + tname + "' in `" + kw +
-                                              "` statement");
+                            const std::string KW = std::is_same_v<S, EnableStmt> ? "enable" : "disable";
+                            std::string msg = "undeclared trait '";
+                            msg += tname;
+                            msg += "' in `";
+                            msg += KW;
+                            msg += "` statement";
+                            errors_.error(s.location, msg);
                         }
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
@@ -1176,7 +1183,7 @@ void SemanticAnalyzer::check_no_field_access(
 
 // ── Task 5.11: Validate 'disabled' annotations in apply: blocks ─────────────
 
-void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) {
+void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         std::visit(
             [this](auto& node) {
@@ -1194,7 +1201,6 @@ void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) {
                     // 5.9: Also validate exclude clause trait names
                     if (!node.exclude.entries.empty()) {
                         for (auto& entry : node.exclude.entries) {
-                            std::string simple_name;
                             if (!is_trait_declared(entry.qualified_name)) {
                                 errors_.error(entry.location,
                                               "undeclared trait '" + entry.qualified_name +
@@ -1218,7 +1224,7 @@ void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) {
 
 // ── Phase 5a: after: clause validation and cycle detection ─────────────────
 
-void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
+void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     // Collect all system names
     std::unordered_set<std::string> all_system_names;
     for (auto& decl : program.declarations) {
@@ -1231,7 +1237,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             for (auto& after_name : sys->after_systems) {
-                if (all_system_names.contains(after_name)) {
+                if (!all_system_names.contains(after_name)) {
                     errors_.error(sys->location,
                                   "unknown system '" + after_name + "' in after clause");
                 } else if (after_name == sys->name) {
@@ -1251,14 +1257,14 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     }
 
     // DFS cycle detection
-    enum class Color { White, Gray, Black };
+    enum class Color : uint8_t { White, Gray, Black };
     std::unordered_map<std::string, Color> color;
     for (auto& [name, _] : after_graph) {
         color[name] = Color::White;
     }
 
     std::function<bool(const std::string&, std::vector<std::string>&)> dfs =
-        [&](const std::string& node, std::vector<std::string>& path) -> bool {
+        [&](const std::string& node, std::vector<std::string>& path) -> bool { // NOLINT(readability-function-cognitive-complexity)
         color[node] = Color::Gray;
         path.push_back(node);
         auto it = after_graph.find(node);
@@ -1340,10 +1346,10 @@ std::unordered_map<std::string, std::string> SemanticAnalyzer::build_alias_map(c
 
 // ── Phase 5c: config key and spawn key resolution ───────────────────────────
 
-void SemanticAnalyzer::validate_config_keys(ProgramNode& program) {
+void SemanticAnalyzer::validate_config_keys(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         std::visit(
-            [this](auto& node) {
+            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, TemplateNode> ||
                               std::is_same_v<T, UnitNode>) {

@@ -5,12 +5,12 @@
 namespace cactus {
 
 std::string ManualSystemEmitter::indent_str(int level) {
-    return std::string(static_cast<size_t>(level) * 4, ' ');
+    return std::string(static_cast<size_t>(level) * 4, ' '); // NOLINT(modernize-return-braced-init-list)
 }
 
-std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) {
+std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(readability-function-cognitive-complexity)
     return std::visit(
-        [](auto& e) -> std::string {
+        [](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
                 if (e.kind == LiteralExpr::Kind::String) {
@@ -62,7 +62,7 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) {
 
 // ── Legacy emit_stmt (indexed model) ──────────────────────────────────────
 
-std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) {
+std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) { // NOLINT(readability-function-cognitive-complexity)
     return std::visit(
         [indent](auto& s) -> std::string {
             using S = std::decay_t<decltype(s)>;
@@ -117,7 +117,11 @@ std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const Decora
     std::vector<std::string> storage_params;
     storage_params.reserve(sys.filter.trait_names.size());
     for (const auto& trait_name : sys.filter.trait_names) {
-        storage_params.push_back(trait_name + "Storage& " + trait_name + "_store");
+        std::string param = trait_name;
+        param += "Storage& ";
+        param += trait_name;
+        param += "_store";
+        storage_params.push_back(std::move(param));
     }
 
     for (const auto& handler : sys.handlers) {
@@ -181,7 +185,7 @@ std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
     return result.empty() ? "0ULL" : result;
 }
 
-std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s,
+std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(readability-function-cognitive-complexity)
                                                    const CodegenContext& ctx) {
     auto tmpl_it = ctx.template_ast.find(s.template_name);
     if (tmpl_it == ctx.template_ast.end()) {
@@ -241,12 +245,12 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s,
 
 // ── emit_stmt_dynamic ──────────────────────────────────────────────────────
 
-std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int indent,
+std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int indent, // NOLINT(readability-function-cognitive-complexity)
                                                      const CodegenContext& ctx,
                                                      const std::string& entity_index_var,
                                                      bool in_loop) {
     return std::visit(
-        [indent, &ctx, &entity_index_var, in_loop](auto& s) -> std::string {
+        [indent, &ctx, &entity_index_var, in_loop](auto& s) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using S = std::decay_t<decltype(s)>;
             std::string ind = indent_str(indent);
 
@@ -345,7 +349,7 @@ std::string ManualSystemEmitter::emit_system_forward_decls(const SystemNode& sys
 
 // ── emit_system_dynamic ────────────────────────────────────────────────────
 
-std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
+std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // NOLINT(readability-function-cognitive-complexity)
                                                       const CodegenContext& ctx) {
     std::ostringstream out;
 

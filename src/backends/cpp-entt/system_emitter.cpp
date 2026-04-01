@@ -47,13 +47,13 @@ static std::string rewrite_expr(const ExprNode& expr,
                                  const std::vector<std::string>& trait_names,
                                  const DecoratedProgram& program);
 
-static std::string rewrite_expr(const ExprNode& expr,
+static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-function-cognitive-complexity)
                                  const std::vector<std::string>& trait_names,
                                  const DecoratedProgram& program) {
     auto known_fields = collect_trait_fields(trait_names, program);
 
     return std::visit(
-        [&](auto& e) -> std::string {
+        [&](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
                 if (e.kind == LiteralExpr::Kind::String) {
@@ -118,14 +118,14 @@ static std::string rewrite_expr(const ExprNode& expr,
 
 // ── Rewrite statement: replace field[i] = with comp.field = ─────────────────
 
-static std::string rewrite_stmt(const StmtNode& stmt, int indent,
+static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(readability-function-cognitive-complexity)
                                  const std::vector<std::string>& trait_names,
                                  const DecoratedProgram& program) {
     auto known_fields = collect_trait_fields(trait_names, program);
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
     return std::visit(
-        [&](auto& s) -> std::string {
+        [&](auto& s) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;

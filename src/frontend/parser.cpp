@@ -87,7 +87,7 @@ ProgramNode Parser::parse_program() {
     return program;
 }
 
-Declaration Parser::parse_declaration() {
+Declaration Parser::parse_declaration() { // NOLINT(readability-function-cognitive-complexity)
     skip_newlines();
     const auto& tok = peek();
 
@@ -1067,7 +1067,7 @@ std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
     return stmts;
 }
 
-std::unique_ptr<StmtNode> Parser::parse_statement() {
+std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
 
     // emit statement
@@ -1430,7 +1430,7 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
     return expr;
 }
 
-std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
+std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
 
     // Integer literal

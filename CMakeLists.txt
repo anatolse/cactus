@@ -51,7 +51,7 @@ endif()
 # ── clang-tidy (auto-fix during build, set before targets so it applies to all) ──
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
 if(CLANG_TIDY_EXE)
-    set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};--fix;--fix-errors")
+    set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};--fix;--fix-errors;--fix-notes")
     message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — fixes will be applied automatically during build")
 else()
     message(STATUS "clang-tidy not found — automatic fixes disabled")
@@ -101,7 +101,11 @@ target_include_directories(cactus_backend_cpp_entt PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/cpp-entt
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(cactus_backend_cpp_entt PUBLIC cactus_frontend cactus_backend_cpp_manual EnTT::EnTT)
+target_link_libraries(cactus_backend_cpp_entt 
+    PUBLIC 
+        cactus_frontend 
+        cactus_backend_cpp_manual 
+        EnTT::EnTT)
 
 # ── CLI Executable ──────────────────────────────────────────────────────────────
 add_executable(cactus src/main.cpp)

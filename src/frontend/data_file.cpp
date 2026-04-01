@@ -1,6 +1,8 @@
 #include "frontend/data_file.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -11,14 +13,14 @@ namespace cactus {
 
 size_t FieldValue::byte_size() const {
     switch (tag) {
-        case Tag::Int:      return 4;
+        case Tag::Int:
         case Tag::Float:    return 4;
         case Tag::Bool:     return 1;
         case Tag::Color:    return 4;
         case Tag::Vec2:     return 8;
         case Tag::Vec3:     return 12;
         case Tag::Quat:     return 16;
-        case Tag::EntityId: return 4;
+        case Tag::EntityId:
         case Tag::Enum:     return 4;
         default:            return 0;
     }
@@ -32,7 +34,7 @@ DataFileWriter::DataFileWriter(const ProgramNode& ast,
     : ast_(ast), decorated_(decorated), errors_(errors) {}
 
 std::filesystem::path DataFileWriter::data_filename(const std::string& module_name) {
-    return std::filesystem::path(module_name + "_data.bin");
+    return {module_name + "_data.bin"};
 }
 
 // ── Constant collection ──────────────────────────────────────────────────────
@@ -138,11 +140,29 @@ std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
     switch (lit.kind) {
         case LiteralExpr::Kind::Int:
             fv.tag = FieldValue::Tag::Int;
-            try { fv.i32 = std::stoi(lit.value); } catch (...) { return std::nullopt; }
+            {
+                const auto* begin = lit.value.data();
+                const auto* end   = begin + lit.value.size();
+                int parsed = 0;
+                const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+                if (ec != std::errc{}) {
+                    return std::nullopt;
+                }
+                fv.i32 = parsed;
+            }
             return fv;
         case LiteralExpr::Kind::Float:
             fv.tag = FieldValue::Tag::Float;
-            try { fv.f32 = std::stof(lit.value); } catch (...) { return std::nullopt; }
+            {
+                const auto* begin = lit.value.data();
+                const auto* end   = begin + lit.value.size();
+                float parsed = 0.0F;
+                const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+                if (ec != std::errc{}) {
+                    return std::nullopt;
+                }
+                fv.f32 = parsed;
+            }
             return fv;
         case LiteralExpr::Kind::Bool:
             fv.tag = FieldValue::Tag::Bool;
@@ -161,8 +181,6 @@ std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
             return fv;
         }
         case LiteralExpr::Kind::String:
-            // Strings not supported in data file
-            return std::nullopt;
         default:
             return std::nullopt;
     }
@@ -325,7 +343,7 @@ FieldValue DataFileWriter::make_field_value(const ResolvedField& field, const st
 
 // ── Build entity records ─────────────────────────────────────────────────────
 
-std::vector<EntityInstanceData> DataFileWriter::build_records() {
+std::vector<EntityInstanceData> DataFileWriter::build_records() { // NOLINT(readability-function-cognitive-complexity)
     // Prepare evaluation tables
     collect_constants();
     collect_enums();
@@ -382,29 +400,25 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() {
 // ── Write binary helpers ─────────────────────────────────────────────────────
 
 void DataFileWriter::write_u8(std::ostream& out, uint8_t v) {
-    out.write(reinterpret_cast<const char*>(&v), 1);
+    out.put(static_cast<char>(v));
 }
 
 void DataFileWriter::write_u16(std::ostream& out, uint16_t v) {
-    uint8_t buf[2] = { static_cast<uint8_t>(v & 0xFF),
-                       static_cast<uint8_t>((v >> 8) & 0xFF) };
-    out.write(reinterpret_cast<const char*>(buf), 2);
+    out.put(static_cast<char>(v & 0xFFU));
+    out.put(static_cast<char>((v >> 8U) & 0xFFU));
 }
 
 void DataFileWriter::write_u32(std::ostream& out, uint32_t v) {
-    uint8_t buf[4] = { static_cast<uint8_t>(v & 0xFF),
-                       static_cast<uint8_t>((v >> 8) & 0xFF),
-                       static_cast<uint8_t>((v >> 16) & 0xFF),
-                       static_cast<uint8_t>((v >> 24) & 0xFF) };
-    out.write(reinterpret_cast<const char*>(buf), 4);
+    out.put(static_cast<char>(v & 0xFFU));
+    out.put(static_cast<char>((v >> 8U) & 0xFFU));
+    out.put(static_cast<char>((v >> 16U) & 0xFFU));
+    out.put(static_cast<char>((v >> 24U) & 0xFFU));
 }
 
 void DataFileWriter::write_u64(std::ostream& out, uint64_t v) {
-    uint8_t buf[8];
-    for (int i = 0; i < 8; ++i) {
-        buf[i] = static_cast<uint8_t>((v >> (i * 8)) & 0xFF);
+    for (unsigned int i = 0; i < 8U; ++i) {
+        out.put(static_cast<char>((v >> (i * 8U)) & 0xFFU));
     }
-    out.write(reinterpret_cast<const char*>(buf), 8);
 }
 
 void DataFileWriter::write_str_short(std::ostream& out, const std::string& s) {
@@ -523,24 +537,21 @@ std::vector<EntityInstanceData> DataFileWriter::write(const std::filesystem::pat
 DataFileReader::DataFileReader(ErrorReporter& errors) : errors_(errors) {}
 
 uint8_t DataFileReader::read_u8(std::istream& in) {
-    uint8_t v = 0;
-    in.read(reinterpret_cast<char*>(&v), 1);
-    return v;
+    return static_cast<uint8_t>(in.get());
 }
 
 uint16_t DataFileReader::read_u16(std::istream& in) {
-    uint8_t buf[2];
-    in.read(reinterpret_cast<char*>(buf), 2);
-    return static_cast<uint16_t>(buf[0] | (buf[1] << 8));
+    const uint32_t LO = static_cast<uint8_t>(in.get());
+    const uint32_t HI = static_cast<uint8_t>(in.get());
+    return static_cast<uint16_t>(LO | (HI << 8U));
 }
 
 uint32_t DataFileReader::read_u32(std::istream& in) {
-    uint8_t buf[4];
-    in.read(reinterpret_cast<char*>(buf), 4);
-    return static_cast<uint32_t>(buf[0]) |
-           (static_cast<uint32_t>(buf[1]) << 8) |
-           (static_cast<uint32_t>(buf[2]) << 16) |
-           (static_cast<uint32_t>(buf[3]) << 24);
+    const uint32_t B0 = static_cast<uint8_t>(in.get());
+    const uint32_t B1 = static_cast<uint8_t>(in.get());
+    const uint32_t B2 = static_cast<uint8_t>(in.get());
+    const uint32_t B3 = static_cast<uint8_t>(in.get());
+    return B0 | (B1 << 8U) | (B2 << 16U) | (B3 << 24U);
 }
 
 uint64_t DataFileReader::read_u64(std::istream& in) {
@@ -629,9 +640,9 @@ std::vector<EntityInstanceData> DataFileReader::load(const std::filesystem::path
     }
 
     // Read and verify magic
-    char magic[4];
-    in.read(magic, 4);
-    if (!in || std::strncmp(magic, DataFileWriter::MAGIC, 4) != 0) {
+    std::array<char, 4> magic = {};
+    in.read(magic.data(), 4);
+    if (!in || std::strncmp(magic.data(), DataFileWriter::MAGIC, 4) != 0) {
         errors_.error({}, "invalid data file magic in: " + path.string());
         return {};
     }

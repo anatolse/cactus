@@ -12,7 +12,7 @@ namespace cactus {
 namespace {
 // Task 6.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
-    for (const auto& [name, func] : program.funcs) {
+    for (const auto& [name, func] : program.funcs) { // NOLINT(readability-use-anyofallof)
         if (func.is_extern) {
             return true;
         }
@@ -21,7 +21,7 @@ bool has_extern_funcs(const DecoratedProgram& program) {
 }
 }  // namespace
 
-std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
+std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLINT(readability-function-cognitive-complexity)
     std::ostringstream out;
 
     // Header

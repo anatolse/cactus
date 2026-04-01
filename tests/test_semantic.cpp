@@ -269,22 +269,22 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
         "        x = 3.0\n");
     REQUIRE(result.dependency_graph.size() == 3);
     // Find B and C in dependency graph
-    bool found_B = false;
-    bool found_C = false;
+    bool found_b = false;
+    bool found_c = false;
     for (auto& dep : result.dependency_graph) {
         if (dep.system_name == "B") {
             REQUIRE(dep.after_systems.size() == 1);
             CHECK(dep.after_systems[0] == "A");
-            found_B = true;
+            found_b = true;
         }
         if (dep.system_name == "C") {
             REQUIRE(dep.after_systems.size() == 1);
             CHECK(dep.after_systems[0] == "B");
-            found_C = true;
+            found_c = true;
         }
     }
-    CHECK(found_B);
-    CHECK(found_C);
+    CHECK(found_b);
+    CHECK(found_c);
 }
 
 // Task 12.8: ambiguous bare config key reports error

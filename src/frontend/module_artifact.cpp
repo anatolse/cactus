@@ -1,8 +1,8 @@
 #include "frontend/module_artifact.h"
 
+#include <array>
 #include <cstring>
 #include <fstream>
-#include <stdexcept>
 #include <vector>
 
 namespace cactus {
@@ -14,17 +14,20 @@ ModuleArtifact::ModuleArtifact(ErrorReporter& errors) : errors_(errors) {}
 // ── Artifact filename ───────────────────────────────────────────────────────
 
 fs::path ModuleArtifact::artifact_filename(const std::string& module_name) {
-    return fs::path(module_name + ".cmod");
+    return {module_name + ".cmod"};
 }
 
 // ── Write helpers ───────────────────────────────────────────────────────────
 
 void ModuleArtifact::write_u8(std::ostream& out, uint8_t v) {
-    out.write(reinterpret_cast<const char*>(&v), 1);
+    out.put(static_cast<char>(v));
 }
 
 void ModuleArtifact::write_u32(std::ostream& out, uint32_t v) {
-    out.write(reinterpret_cast<const char*>(&v), 4);
+    out.put(static_cast<char>(v & 0xFFU));
+    out.put(static_cast<char>((v >> 8U) & 0xFFU));
+    out.put(static_cast<char>((v >> 16U) & 0xFFU));
+    out.put(static_cast<char>((v >> 24U) & 0xFFU));
 }
 
 void ModuleArtifact::write_bool(std::ostream& out, bool v) {
@@ -171,15 +174,15 @@ void ModuleArtifact::write_string_pool(std::ostream& out, const StringPool& pool
 // ── Read helpers ─────────────────────────────────────────────────────────────
 
 uint8_t ModuleArtifact::read_u8(std::istream& in) {
-    uint8_t v = 0;
-    in.read(reinterpret_cast<char*>(&v), 1);
-    return v;
+    return static_cast<uint8_t>(in.get());
 }
 
 uint32_t ModuleArtifact::read_u32(std::istream& in) {
-    uint32_t v = 0;
-    in.read(reinterpret_cast<char*>(&v), 4);
-    return v;
+    const uint32_t B0 = static_cast<uint8_t>(in.get());
+    const uint32_t B1 = static_cast<uint8_t>(in.get());
+    const uint32_t B2 = static_cast<uint8_t>(in.get());
+    const uint32_t B3 = static_cast<uint8_t>(in.get());
+    return B0 | (B1 << 8U) | (B2 << 16U) | (B3 << 24U);
 }
 
 bool ModuleArtifact::read_bool(std::istream& in) {
@@ -188,8 +191,9 @@ bool ModuleArtifact::read_bool(std::istream& in) {
 
 std::string ModuleArtifact::read_str(std::istream& in) {
     uint32_t len = read_u32(in);
-    if (len > 1024 * 1024) {
-        throw std::runtime_error("string too long in artifact");
+    if (len > 1024U * 1024U) {
+        in.setstate(std::ios::failbit);
+        return {};
     }
     std::string s(len, '\0');
     in.read(s.data(), static_cast<std::streamsize>(len));
@@ -402,9 +406,9 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path,
     }
 
     // Validate magic
-    char magic[4] = {};
-    in.read(magic, 4);
-    if (std::memcmp(magic, MAGIC, 4) != 0) {
+    std::array<char, 4> magic = {};
+    in.read(magic.data(), 4);
+    if (std::memcmp(magic.data(), MAGIC, 4) != 0) {
         errors_.error({}, "invalid artifact format in '" + path.filename().string() + "'");
         return std::nullopt;
     }
@@ -419,26 +423,21 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path,
 
     module_name_out = read_str(in);
 
-    try {
-        DecoratedProgram program;
-        program.traits = read_traits(in);
-        program.structs = read_structs(in);
-        program.enums = read_enums(in);
-        program.funcs = read_funcs(in);
-        program.dependency_graph = read_dep_graph(in);
-        program.string_pool = read_string_pool(in);
-        program.ast = nullptr;  // not serialized
+    DecoratedProgram program;
+    program.traits = read_traits(in);
+    program.structs = read_structs(in);
+    program.enums = read_enums(in);
+    program.funcs = read_funcs(in);
+    program.dependency_graph = read_dep_graph(in);
+    program.string_pool = read_string_pool(in);
+    program.ast = nullptr;  // not serialized
 
-        if (!in.good()) {
-            errors_.error({}, "truncated artifact: " + path.string());
-            return std::nullopt;
-        }
-
-        return program;
-    } catch (const std::exception& e) {
-        errors_.error({}, "error reading artifact '" + path.string() + "': " + e.what());
+    if (!in.good()) {
+        errors_.error({}, "truncated artifact: " + path.string());
         return std::nullopt;
     }
+
+    return program;
 }
 
 // ── Extract pub symbols ───────────────────────────────────────────────────────

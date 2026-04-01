@@ -18,8 +18,14 @@ bool ProgramLinker::merge_into(DecoratedProgram& target, const DecoratedProgram&
         if (trait.is_pub) {
             auto it = symbol_origins_.find(name);
             if (it != symbol_origins_.end()) {
-                errors_.error({}, "duplicate symbol '" + name + "' defined in module '" +
-                                      it->second + "' and module '" + src_module_name + "'");
+                std::string msg = "duplicate symbol '";
+                msg += name;
+                msg += "' defined in module '";
+                msg += it->second;
+                msg += "' and module '";
+                msg += src_module_name;
+                msg += "'";
+                errors_.error({}, msg);
                 ok = false;
                 continue;
             }
@@ -32,8 +38,14 @@ bool ProgramLinker::merge_into(DecoratedProgram& target, const DecoratedProgram&
     for (const auto& [name, strct] : src.structs) {
         auto it = symbol_origins_.find(name);
         if (it != symbol_origins_.end()) {
-            errors_.error({}, "duplicate symbol '" + name + "' defined in module '" +
-                                  it->second + "' and module '" + src_module_name + "'");
+            std::string msg = "duplicate symbol '";
+            msg += name;
+            msg += "' defined in module '";
+            msg += it->second;
+            msg += "' and module '";
+            msg += src_module_name;
+            msg += "'";
+            errors_.error({}, msg);
             ok = false;
             continue;
         }
@@ -45,8 +57,14 @@ bool ProgramLinker::merge_into(DecoratedProgram& target, const DecoratedProgram&
     for (const auto& [name, enm] : src.enums) {
         auto it = symbol_origins_.find(name);
         if (it != symbol_origins_.end()) {
-            errors_.error({}, "duplicate symbol '" + name + "' defined in module '" +
-                                  it->second + "' and module '" + src_module_name + "'");
+            std::string msg = "duplicate symbol '";
+            msg += name;
+            msg += "' defined in module '";
+            msg += it->second;
+            msg += "' and module '";
+            msg += src_module_name;
+            msg += "'";
+            errors_.error({}, msg);
             ok = false;
             continue;
         }

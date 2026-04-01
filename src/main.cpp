@@ -66,7 +66,7 @@ static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& pat
 
 /// Returns true if program has any `use` declarations.
 static bool has_use_declarations(const cactus::ProgramNode& prog) {
-    for (const auto& decl : prog.declarations) {
+    for (const auto& decl : prog.declarations) { // NOLINT(readability-use-anyofallof)
         if (std::holds_alternative<cactus::UseNode>(decl)) {
             return true;
         }
@@ -95,7 +95,7 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-complexity)
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;

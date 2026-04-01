@@ -9,7 +9,7 @@ std::string EnttEventEmitter::emit_event(const EventNode& event, const Decorated
     out << "struct " << event.name << "Event {\n";
     for (const auto& field : event.fields) {
         TypeInfo type;
-        if (field.type.name == "int") {
+        if (field.type.name == "int") { // NOLINT(bugprone-branch-clone)
             type = {.kind = TypeKind::Int, .name = "int"};
         } else if (field.type.name == "float") {
             type = {.kind = TypeKind::Float, .name = "float"};

@@ -32,7 +32,7 @@ std::vector<std::string> ModuleResolver::extract_dependencies(const ProgramNode&
 fs::path ModuleResolver::module_name_to_path(const std::string& module_name) {
     std::string result = module_name;
     std::ranges::replace(result, '.', static_cast<char>(fs::path::preferred_separator));
-    return fs::path(result + ".cactus");
+    return {result + ".cactus"};
 }
 
 fs::path ModuleResolver::locate_file(const std::string& module_name, const std::vector<fs::path>& search_dirs) {

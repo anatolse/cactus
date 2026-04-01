@@ -204,7 +204,7 @@ void Lexer::process_line_start(std::vector<Token>& tokens) {
     }
 }
 
-std::vector<Token> Lexer::tokenize() {
+std::vector<Token> Lexer::tokenize() { // NOLINT(readability-function-cognitive-complexity)
     std::vector<Token> tokens;
 
     while (!is_at_end()) {

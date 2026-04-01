@@ -19,8 +19,8 @@ ModuleResolver::ModuleResolver(ErrorReporter& errors) : errors_(errors) {}
 
 std::vector<std::string> ModuleResolver::extract_dependencies(const ProgramNode& program) {
     std::vector<std::string> deps;
-    for (auto& decl : program.declarations) {
-        if (auto* use = std::get_if<UseNode>(&decl)) {
+    for (const auto& decl : program.declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
             deps.push_back(use->module_name);  // alias is ignored for resolution
         }
     }
@@ -31,14 +31,13 @@ std::vector<std::string> ModuleResolver::extract_dependencies(const ProgramNode&
 
 fs::path ModuleResolver::module_name_to_path(const std::string& module_name) {
     std::string result = module_name;
-    std::replace(result.begin(), result.end(), '.', static_cast<char>(fs::path::preferred_separator));
+    std::ranges::replace(result, '.', static_cast<char>(fs::path::preferred_separator));
     return fs::path(result + ".cactus");
 }
 
-fs::path ModuleResolver::locate_file(const std::string& module_name,
-                                     const std::vector<fs::path>& search_dirs) const {
+fs::path ModuleResolver::locate_file(const std::string& module_name, const std::vector<fs::path>& search_dirs) {
     auto relative = module_name_to_path(module_name);
-    for (auto& dir : search_dirs) {
+    for (const auto& dir : search_dirs) {
         auto candidate = dir / relative;
         if (fs::exists(candidate)) {
             return fs::canonical(candidate);
@@ -55,13 +54,13 @@ std::string ModuleResolver::infer_module_name(const fs::path& search_root,
     auto str = rel.generic_string();  // use forward slashes
 
     // Remove .cactus extension
-    const std::string ext = ".cactus";
-    if (str.size() > ext.size() && str.substr(str.size() - ext.size()) == ext) {
-        str = str.substr(0, str.size() - ext.size());
+    const std::string EXT = ".cactus";
+    if (str.size() > EXT.size() && str.substr(str.size() - EXT.size()) == EXT) {
+        str = str.substr(0, str.size() - EXT.size());
     }
 
     // Replace / with .
-    std::replace(str.begin(), str.end(), '/', '.');
+    std::ranges::replace(str, '/', '.');
     return str;
 }
 
@@ -70,8 +69,8 @@ std::string ModuleResolver::infer_module_name(const fs::path& search_root,
 bool ModuleResolver::validate_module_name(const ProgramNode& program,
                                            const std::string& inferred_name,
                                            const fs::path& file_path) {
-    for (auto& decl : program.declarations) {
-        if (auto* mod = std::get_if<ModuleNode>(&decl)) {
+    for (const auto& decl : program.declarations) {
+        if (const auto* mod = std::get_if<ModuleNode>(&decl)) {
             if (mod->name != inferred_name) {
                 errors_.error(mod->location,
                               "module name '" + mod->name + "' does not match filename '" +
@@ -93,13 +92,17 @@ bool ModuleResolver::resolve_module(const std::string& module_name,
     // Already fully resolved?
     auto vit = visited_.find(module_name);
     if (vit != visited_.end()) {
-        if (vit->second) return true;  // fully resolved
+        if (vit->second) {
+            return true;  // fully resolved
+        }
 
         // Currently being visited → circular dependency
         std::string cycle;
         bool in_cycle = false;
         for (auto& name : visiting_stack) {
-            if (name == module_name) in_cycle = true;
+            if (name == module_name) {
+                in_cycle = true;
+            }
             if (in_cycle) {
                 cycle += name + " → ";
             }
@@ -152,7 +155,7 @@ bool ModuleResolver::resolve_module(const std::string& module_name,
     // For validation, find which search dir contains this file
     fs::path file_search_root;
     auto relative_path = module_name_to_path(module_name);
-    for (auto& dir : search_dirs) {
+    for (const auto& dir : search_dirs) {
         std::error_code ec;
         auto candidate = fs::canonical(dir / relative_path, ec);
         if (!ec && candidate == file_path) {
@@ -201,11 +204,11 @@ std::vector<std::string> ModuleResolver::topological_sort() const {
     std::unordered_map<std::string, int> in_degree;
     std::unordered_map<std::string, std::vector<std::string>> dependents;
 
-    for (auto& [name, info] : modules_) {
-        if (in_degree.find(name) == in_degree.end()) {
+    for (const auto& [name, info] : modules_) {
+        if (!in_degree.contains(name)) {
             in_degree[name] = 0;
         }
-        for (auto& dep : info.dependencies) {
+        for (const auto& dep : info.dependencies) {
             dependents[dep].push_back(name);
             in_degree[name]++;
         }
@@ -216,10 +219,10 @@ std::vector<std::string> ModuleResolver::topological_sort() const {
     // Use sorted order for determinism
     std::vector<std::string> all_names;
     all_names.reserve(modules_.size());
-    for (auto& [name, _] : modules_) {
+    for (const auto& [name, _] : modules_) {
         all_names.push_back(name);
     }
-    std::sort(all_names.begin(), all_names.end());
+    std::ranges::sort(all_names);
 
     for (auto& name : all_names) {
         if (in_degree[name] == 0) {
@@ -235,11 +238,11 @@ std::vector<std::string> ModuleResolver::topological_sort() const {
         ready.pop();
         order.push_back(current);
 
-        if (dependents.count(current)) {
+        if (dependents.contains(current)) {
             // Sort dependents for determinism
             auto& deps = dependents[current];
             std::vector<std::string> sorted_deps(deps.begin(), deps.end());
-            std::sort(sorted_deps.begin(), sorted_deps.end());
+            std::ranges::sort(sorted_deps);
             for (auto& dep : sorted_deps) {
                 in_degree[dep]--;
                 if (in_degree[dep] == 0) {
@@ -270,7 +273,7 @@ std::vector<ModuleInfo> ModuleResolver::resolve(const fs::path& root_file,
     // Build search dirs: root dir first, then additional paths
     std::vector<fs::path> search_dirs;
     search_dirs.push_back(root_dir);
-    for (auto& sp : search_paths) {
+    for (const auto& sp : search_paths) {
         if (fs::exists(sp)) {
             search_dirs.push_back(fs::canonical(sp));
         }

@@ -11,11 +11,13 @@ namespace cactus {
 static std::string find_comp_for_field(const std::string& field_name,
                                         const std::vector<std::string>& trait_names,
                                         const DecoratedProgram& program) {
-    for (auto& tn : trait_names) {
+    for (const auto& tn : trait_names) {
         auto it = program.traits.find(tn);
         if (it != program.traits.end()) {
-            for (auto& f : it->second.fields) {
-                if (f.name == field_name) return tn;
+            for (const auto& f : it->second.fields) {
+                if (f.name == field_name) {
+                    return tn;
+                }
             }
         }
     }
@@ -28,10 +30,10 @@ static std::unordered_set<std::string> collect_trait_fields(
     const std::vector<std::string>& trait_names,
     const DecoratedProgram& program) {
     std::unordered_set<std::string> fields;
-    for (auto& tn : trait_names) {
+    for (const auto& tn : trait_names) {
         auto it = program.traits.find(tn);
         if (it != program.traits.end()) {
-            for (auto& f : it->second.fields) {
+            for (const auto& f : it->second.fields) {
                 fields.insert(f.name);
             }
         }
@@ -54,30 +56,43 @@ static std::string rewrite_expr(const ExprNode& expr,
         [&](auto& e) -> std::string {
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
-                if (e.kind == LiteralExpr::Kind::String) return "\"" + e.value + "\"";
-                if (e.kind == LiteralExpr::Kind::Float) return e.value + "f";
+                if (e.kind == LiteralExpr::Kind::String) {
+                    return "\"" + e.value + "\"";
+                }
+                if (e.kind == LiteralExpr::Kind::Float) {
+                    return e.value + "f";
+                }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
                 // If it's a known trait field, qualify it
-                if (known_fields.count(e.name)) {
+                if (known_fields.contains(e.name)) {
                     auto comp = find_comp_for_field(e.name, trait_names, program);
-                    if (!comp.empty()) return comp + "_comp." + e.name;
+                    if (!comp.empty()) {
+                        return comp + "_comp." + e.name;
+                    }
                 }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
                 std::string op = e.op;
-                if (op == "and") op = "&&";
-                else if (op == "or") op = "||";
+                if (op == "and") {
+                    op = "&&";
+                } else if (op == "or") {
+                    op = "||";
+                }
                 return "(" + rewrite_expr(*e.left, trait_names, program) + " " + op + " " +
                        rewrite_expr(*e.right, trait_names, program) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
-                if (op == "not") op = "!";
+                if (op == "not") {
+                    op = "!";
+                }
                 return op + rewrite_expr(*e.operand, trait_names, program);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 std::string result = rewrite_expr(*e.callee, trait_names, program) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
-                    if (i > 0) result += ", ";
+                    if (i > 0) {
+                        result += ", ";
+                    }
                     result += rewrite_expr(*e.args[i], trait_names, program);
                 }
                 return result + ")";
@@ -89,7 +104,7 @@ static std::string rewrite_expr(const ExprNode& expr,
                         return "dt";
                     }
                     // Enum names — use :: notation
-                    if (program.enums.count(ident->name)) {
+                    if (program.enums.contains(ident->name)) {
                         return ident->name + "::" + e.member;
                     }
                 }
@@ -114,12 +129,13 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent,
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
-                if (known_fields.count(s.name)) {
+                if (known_fields.contains(s.name)) {
                     auto comp = find_comp_for_field(s.name, trait_names, program);
-                    if (!comp.empty())
+                    if (!comp.empty()) {
                         lhs = comp + "_comp." + s.name;
-                    else
+                    } else {
                         lhs = s.name;
+                    }
                 } else {
                     // Local variable — use auto for declaration
                     lhs = "auto " + s.name;
@@ -129,24 +145,30 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent,
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
                 for (size_t i = 0; i < s.args.size(); ++i) {
-                    if (i > 0) result += ", ";
+                    if (i > 0) {
+                        result += ", ";
+                    }
                     result += rewrite_expr(*s.args[i], trait_names, program);
                 }
                 return result + "});\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                if (s.value) return ind + "return " + rewrite_expr(**s.value, trait_names, program) + ";\n";
+                if (s.value) {
+                    return ind + "return " + rewrite_expr(**s.value, trait_names, program) + ";\n";
+                }
                 return ind + "return;\n";
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
                 return ind + rewrite_expr(*s.expr, trait_names, program) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
                 std::string result = ind + "if (" + rewrite_expr(*s.condition, trait_names, program) + ") {\n";
-                for (auto& inner : s.then_body)
+                for (auto& inner : s.then_body) {
                     result += rewrite_stmt(*inner, indent + 1, trait_names, program);
+                }
                 result += ind + "}";
                 if (!s.else_body.empty()) {
                     result += " else {\n";
-                    for (auto& inner : s.else_body)
+                    for (auto& inner : s.else_body) {
                         result += rewrite_stmt(*inner, indent + 1, trait_names, program);
+                    }
                     result += ind + "}";
                 }
                 return result + "\n";
@@ -160,7 +182,7 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent,
 std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
 
-    for (auto& handler : sys.handlers) {
+    for (const auto& handler : sys.handlers) {
         out << "void " << sys.name << "_" << handler.event_name << "(entt::registry& registry";
 
         // tick/fixed_tick/late_tick handlers receive a float dt
@@ -173,7 +195,9 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
         // Build view template args
         out << "    auto view = registry.view<";
         for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
-            if (i > 0) out << ", ";
+            if (i > 0) {
+                out << ", ";
+            }
             out << sys.filter.trait_names[i];
         }
         out << ">();\n";
@@ -181,13 +205,15 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
         // each() lambda
         out << "    view.each([&](";
         for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
-            if (i > 0) out << ", ";
+            if (i > 0) {
+                out << ", ";
+            }
             out << "auto& " << sys.filter.trait_names[i] << "_comp";
         }
         out << ") {\n";
 
         // Emit body with proper component field access
-        for (auto& stmt : handler.body) {
+        for (const auto& stmt : handler.body) {
             out << rewrite_stmt(*stmt, 2, sys.filter.trait_names, program);
         }
 

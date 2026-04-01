@@ -14,8 +14,10 @@ namespace {
 
 // Task 7.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
-    for (auto& [name, func] : program.funcs) {
-        if (func.is_extern) return true;
+    for (const auto& [name, func] : program.funcs) {
+        if (func.is_extern) {
+            return true;
+        }
     }
     return false;
 }
@@ -32,7 +34,9 @@ CodegenContext build_context(const DecoratedProgram& program,
         ctx.trait_bit_index[trait_names_ordered[i]] = static_cast<int>(i);
     }
 
-    if (!program.ast) return ctx;
+    if (program.ast == nullptr) {
+        return ctx;
+    }
 
     for (const auto& decl : program.ast->declarations) {
         std::visit(
@@ -81,7 +85,9 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
 
     for (const auto& entry : tmpl.apply.entries) {
         auto tit = ctx.traits.find(entry.trait_name);
-        if (tit == ctx.traits.end()) continue;
+        if (tit == ctx.traits.end()) {
+            continue;
+        }
         for (const auto& field : tit->second.fields) {
             Param p;
             p.cpp_type   = SoaEmitter::type_to_cpp(field.type);
@@ -93,13 +99,17 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
             auto tc_it = ctx.template_config.find(tmpl.name);
             if (tc_it != ctx.template_config.end()) {
                 auto fi = tc_it->second.find(field.name);
-                if (fi != tc_it->second.end()) p.default_val = fi->second;
+                if (fi != tc_it->second.end()) {
+                    p.default_val = fi->second;
+                }
             }
             if (p.default_val.empty()) {
                 auto td_it = ctx.trait_defaults.find(entry.trait_name);
                 if (td_it != ctx.trait_defaults.end()) {
                     auto fi = td_it->second.find(field.name);
-                    if (fi != td_it->second.end()) p.default_val = fi->second;
+                    if (fi != td_it->second.end()) {
+                        p.default_val = fi->second;
+                    }
                 }
             }
             if (p.default_val.empty()) {
@@ -113,7 +123,9 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
     // Compute initial trait_mask (set bits for all initially-active traits)
     std::string mask_expr = "0ULL";
     for (const auto& entry : tmpl.apply.entries) {
-        if (!entry.initially_active) continue;
+        if (!entry.initially_active) {
+            continue;
+        }
         auto it = ctx.trait_bit_index.find(entry.trait_name);
         if (it != ctx.trait_bit_index.end()) {
             mask_expr += " | TraitBits::" + entry.trait_name;
@@ -122,12 +134,17 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
 
     out << "static void spawn_" << tmpl.name << "(";
     for (size_t i = 0; i < params.size(); ++i) {
-        if (i > 0) out << ",\n    ";
-        else out << "\n    ";
+        if (i > 0) {
+            out << ",\n    ";
+        } else {
+            out << "\n    ";
+        }
         out << params[i].cpp_type << " " << params[i].param_name
             << " = " << params[i].default_val;
     }
-    if (!params.empty()) out << "\n";
+    if (!params.empty()) {
+        out << "\n";
+    }
     out << ") {\n";
     out << "    size_t _idx = entity_count++;\n";
     out << "    g_trait_mask[_idx] = " << mask_expr << ";\n";
@@ -147,20 +164,26 @@ std::string field_init_value(const std::string& trait_name, const std::string& f
     // 1. Unit config assignment
     if (unit.config) {
         for (const auto& a : unit.config->assignments) {
-            if (a.name == field_name) return ManualSystemEmitter::emit_expr(*a.value);
+            if (a.name == field_name) {
+                return ManualSystemEmitter::emit_expr(*a.value);
+            }
         }
     }
     // 2. Trait field default
     auto td_it = ctx.trait_defaults.find(trait_name);
     if (td_it != ctx.trait_defaults.end()) {
         auto fi = td_it->second.find(field_name);
-        if (fi != td_it->second.end()) return fi->second;
+        if (fi != td_it->second.end()) {
+            return fi->second;
+        }
     }
     // 3. Type default
     auto tit = ctx.traits.find(trait_name);
     if (tit != ctx.traits.end()) {
         for (const auto& f : tit->second.fields) {
-            if (f.name == field_name) return SoaEmitter::default_cpp_value(f.type);
+            if (f.name == field_name) {
+                return SoaEmitter::default_cpp_value(f.type);
+            }
         }
     }
     return "{}";
@@ -171,7 +194,9 @@ std::string field_init_value(const std::string& trait_name, const std::string& f
 // ── CppManualCodegen::generate ─────────────────────────────────────────────
 
 std::string CppManualCodegen::generate(const DecoratedProgram& program) {
-    if (!program.ast) return "// Generated by Cactus DSL Compiler (cpp-manual backend)\n";
+    if (program.ast == nullptr) {
+        return "// Generated by Cactus DSL Compiler (cpp-manual backend)\n";
+    }
 
     std::ostringstream out;
 
@@ -255,11 +280,13 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) {
     out << "static void dispatch_on_spawn(size_t _idx) {\n";
     for (const auto* sys : systems) {
         for (const auto& h : sys->handlers) {
-            if (h.event_name != "spawn") continue;
-            const std::string fm = ManualSystemEmitter::compute_mask_expr(sys->filter, ctx);
-            const std::string em = ManualSystemEmitter::compute_mask_expr(sys->exclude, ctx);
-            out << "    if ((g_trait_mask[_idx] & (" << fm << ")) == (" << fm << ") &&\n";
-            out << "        (g_trait_mask[_idx] & (" << em << ")) == 0) {\n";
+            if (h.event_name != "spawn") {
+                continue;
+            }
+            const std::string FM = ManualSystemEmitter::compute_mask_expr(sys->filter, ctx);
+            const std::string EM = ManualSystemEmitter::compute_mask_expr(sys->exclude, ctx);
+            out << "    if ((g_trait_mask[_idx] & (" << FM << ")) == (" << FM << ") &&\n";
+            out << "        (g_trait_mask[_idx] & (" << EM << ")) == 0) {\n";
             out << "        " << sys->name << "_spawn(_idx);\n";
             out << "    }\n";
         }
@@ -271,11 +298,13 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) {
     out << "static void dispatch_on_destroy(size_t _idx) {\n";
     for (const auto* sys : systems) {
         for (const auto& h : sys->handlers) {
-            if (h.event_name != "destroy") continue;
-            const std::string fm = ManualSystemEmitter::compute_mask_expr(sys->filter, ctx);
-            const std::string em = ManualSystemEmitter::compute_mask_expr(sys->exclude, ctx);
-            out << "    if ((g_trait_mask[_idx] & (" << fm << ")) == (" << fm << ") &&\n";
-            out << "        (g_trait_mask[_idx] & (" << em << ")) == 0) {\n";
+            if (h.event_name != "destroy") {
+                continue;
+            }
+            const std::string FM = ManualSystemEmitter::compute_mask_expr(sys->filter, ctx);
+            const std::string EM = ManualSystemEmitter::compute_mask_expr(sys->exclude, ctx);
+            out << "    if ((g_trait_mask[_idx] & (" << FM << ")) == (" << FM << ") &&\n";
+            out << "        (g_trait_mask[_idx] & (" << EM << ")) == 0) {\n";
             out << "        " << sys->name << "_destroy(_idx);\n";
             out << "    }\n";
         }
@@ -291,7 +320,9 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) {
     out << "        g_trait_mask[_idx] = g_trait_mask[_last];\n";
     for (const auto& name : trait_names_ordered) {
         auto tit = program.traits.find(name);
-        if (tit == program.traits.end()) continue;
+        if (tit == program.traits.end()) {
+            continue;
+        }
         for (const auto& f : tit->second.fields) {
             out << "        g_" << name << "_" << f.name << "[_idx] = "
                 << "g_" << name << "_" << f.name << "[_last];\n";
@@ -414,7 +445,9 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) {
         // Initialize fields
         for (const auto& entry : unit->apply.entries) {
             auto tit = ctx.traits.find(entry.trait_name);
-            if (tit == ctx.traits.end()) continue;
+            if (tit == ctx.traits.end()) {
+                continue;
+            }
             for (const auto& field : tit->second.fields) {
                 out << "        g_" << entry.trait_name << "_" << field.name << "[_idx] = "
                     << field_init_value(entry.trait_name, field.name, *unit, ctx) << ";\n";

@@ -16,7 +16,9 @@ std::string SoaEmitter::type_to_cpp(const TypeInfo& type) {
         case TypeKind::Struct: return type.name;
         case TypeKind::Enum: return type.name;
         case TypeKind::List:
-            if (type.element) return "std::vector<" + type_to_cpp(*type.element) + ">";
+            if (type.element) {
+                return "std::vector<" + type_to_cpp(*type.element) + ">";
+            }
             return "std::vector<int>";
         case TypeKind::Void: return "void";
         default: return "/* unknown */";
@@ -26,21 +28,21 @@ std::string SoaEmitter::type_to_cpp(const TypeInfo& type) {
 std::string SoaEmitter::emit_soa_storage(const ResolvedTrait& trait) {
     std::ostringstream out;
     out << "struct " << trait.name << "Storage {\n";
-    for (auto& field : trait.fields) {
+    for (const auto& field : trait.fields) {
         out << "    std::vector<" << type_to_cpp(field.type) << "> " << field.name << ";\n";
     }
     out << "    size_t count = 0;\n";
     out << "\n";
     out << "    void resize(size_t n) {\n";
     out << "        count = n;\n";
-    for (auto& field : trait.fields) {
+    for (const auto& field : trait.fields) {
         out << "        " << field.name << ".resize(n);\n";
     }
     out << "    }\n";
     out << "\n";
     out << "    void push_back() {\n";
     out << "        ++count;\n";
-    for (auto& field : trait.fields) {
+    for (const auto& field : trait.fields) {
         out << "        " << field.name << ".push_back({});\n";
     }
     out << "    }\n";
@@ -51,7 +53,7 @@ std::string SoaEmitter::emit_soa_storage(const ResolvedTrait& trait) {
 std::string SoaEmitter::emit_pod_struct(const ResolvedStruct& s) {
     std::ostringstream out;
     out << "struct " << s.name << " {\n";
-    for (auto& field : s.fields) {
+    for (const auto& field : s.fields) {
         out << "    " << type_to_cpp(field.type) << " " << field.name << ";\n";
     }
     out << "};\n";
@@ -63,7 +65,9 @@ std::string SoaEmitter::emit_enum(const ResolvedEnum& e) {
     out << "enum class " << e.name << " {\n";
     for (size_t i = 0; i < e.variants.size(); ++i) {
         out << "    " << e.variants[i];
-        if (i + 1 < e.variants.size()) out << ",";
+        if (i + 1 < e.variants.size()) {
+            out << ",";
+        }
         out << "\n";
     }
     out << "};\n";
@@ -100,7 +104,9 @@ std::string SoaEmitter::emit_global_field_arrays(
     out << "// ── Field Arrays (SoA) ───────────────────────────────────────────────\n";
     for (const auto& name : trait_names_ordered) {
         auto it = traits.find(name);
-        if (it == traits.end()) continue;
+        if (it == traits.end()) {
+            continue;
+        }
         for (const auto& field : it->second.fields) {
             out << "static " << type_to_cpp(field.type) << " g_" << name << "_"
                 << field.name << "[MAX_ENTITIES];\n";

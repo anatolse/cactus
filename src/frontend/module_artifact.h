@@ -50,36 +50,35 @@ public:
 
 private:
     // ── Write helpers ───────────────────────────────────────────────────────
-    void write_u8(std::ostream& out, uint8_t v);
-    void write_u32(std::ostream& out, uint32_t v);
-    void write_bool(std::ostream& out, bool v);
-    void write_str(std::ostream& out, const std::string& s);
+    static void write_u8(std::ostream& out, uint8_t v);
+    static void write_u32(std::ostream& out, uint32_t v);
+    static void write_bool(std::ostream& out, bool v);
+    static void write_str(std::ostream& out, const std::string& s);
     void write_type_info(std::ostream& out, const TypeInfo& t);
 
     void write_traits(std::ostream& out,
                       const std::unordered_map<std::string, ResolvedTrait>& traits);
     void write_structs(std::ostream& out,
                        const std::unordered_map<std::string, ResolvedStruct>& structs);
-    void write_enums(std::ostream& out,
-                     const std::unordered_map<std::string, ResolvedEnum>& enums);
+    static void write_enums(std::ostream& out, const std::unordered_map<std::string, ResolvedEnum>& enums);
     void write_funcs(std::ostream& out,
                      const std::unordered_map<std::string, ResolvedFunc>& funcs);
-    void write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph);
-    void write_string_pool(std::ostream& out, const StringPool& pool);
+    static void write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph);
+    static void write_string_pool(std::ostream& out, const StringPool& pool);
 
     // ── Read helpers ────────────────────────────────────────────────────────
-    uint8_t  read_u8(std::istream& in);
-    uint32_t read_u32(std::istream& in);
-    bool     read_bool(std::istream& in);
-    std::string read_str(std::istream& in);
+    static uint8_t read_u8(std::istream& in);
+    static uint32_t read_u32(std::istream& in);
+    static bool read_bool(std::istream& in);
+    static std::string read_str(std::istream& in);
     TypeInfo read_type_info(std::istream& in);
 
     std::unordered_map<std::string, ResolvedTrait>  read_traits(std::istream& in);
     std::unordered_map<std::string, ResolvedStruct> read_structs(std::istream& in);
-    std::unordered_map<std::string, ResolvedEnum>   read_enums(std::istream& in);
+    static std::unordered_map<std::string, ResolvedEnum> read_enums(std::istream& in);
     std::unordered_map<std::string, ResolvedFunc>   read_funcs(std::istream& in);
-    std::vector<SystemDependency> read_dep_graph(std::istream& in);
-    StringPool read_string_pool(std::istream& in);
+    static std::vector<SystemDependency> read_dep_graph(std::istream& in);
+    static StringPool read_string_pool(std::istream& in);
 
     ErrorReporter& errors_;
 };

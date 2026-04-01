@@ -9,38 +9,87 @@ namespace cactus {
 namespace {
 
 const std::unordered_set<std::string>& builtin_types() {
-    static const std::unordered_set<std::string> types = {
-        "int", "float", "bool", "string", "vec2", "vec3", "quat", "color", "entity_id",
-        "void", "list",
-        // Asset opaque ID types (spec 5.1 - dsl-spec-new-features)
-        "mesh_id", "texture_id", "sound_id", "music_id", "font_id", "material_id",
-        // Input handle types (spec 5.1 - dsl-spec-new-features)
-        "InputButton", "InputAxis"
-    };
-    return types;
+    static const std::unordered_set<std::string> TYPES = {"int",
+                                                          "float",
+                                                          "bool",
+                                                          "string",
+                                                          "vec2",
+                                                          "vec3",
+                                                          "quat",
+                                                          "color",
+                                                          "entity_id",
+                                                          "void",
+                                                          "list",
+                                                          // Asset opaque ID types (spec 5.1 - dsl-spec-new-features)
+                                                          "mesh_id",
+                                                          "texture_id",
+                                                          "sound_id",
+                                                          "music_id",
+                                                          "font_id",
+                                                          "material_id",
+                                                          // Input handle types (spec 5.1 - dsl-spec-new-features)
+                                                          "InputButton",
+                                                          "InputAxis"};
+    return TYPES;
 }
 
 TypeKind type_kind_from_name(const std::string& name) {
-    if (name == "int") return TypeKind::Int;
-    if (name == "float") return TypeKind::Float;
-    if (name == "bool") return TypeKind::Bool;
-    if (name == "string") return TypeKind::String;
-    if (name == "vec2") return TypeKind::Vec2;
-    if (name == "vec3") return TypeKind::Vec3;
-    if (name == "quat") return TypeKind::Quat;
-    if (name == "color") return TypeKind::Color;
-    if (name == "entity_id") return TypeKind::EntityId;
-    if (name == "void") return TypeKind::Void;
+    if (name == "int") {
+        return TypeKind::Int;
+    }
+    if (name == "float") {
+        return TypeKind::Float;
+    }
+    if (name == "bool") {
+        return TypeKind::Bool;
+    }
+    if (name == "string") {
+        return TypeKind::String;
+    }
+    if (name == "vec2") {
+        return TypeKind::Vec2;
+    }
+    if (name == "vec3") {
+        return TypeKind::Vec3;
+    }
+    if (name == "quat") {
+        return TypeKind::Quat;
+    }
+    if (name == "color") {
+        return TypeKind::Color;
+    }
+    if (name == "entity_id") {
+        return TypeKind::EntityId;
+    }
+    if (name == "void") {
+        return TypeKind::Void;
+    }
     // Asset opaque ID types
-    if (name == "mesh_id") return TypeKind::MeshId;
-    if (name == "texture_id") return TypeKind::TextureId;
-    if (name == "sound_id") return TypeKind::SoundId;
-    if (name == "music_id") return TypeKind::MusicId;
-    if (name == "font_id") return TypeKind::FontId;
-    if (name == "material_id") return TypeKind::MaterialId;
+    if (name == "mesh_id") {
+        return TypeKind::MeshId;
+    }
+    if (name == "texture_id") {
+        return TypeKind::TextureId;
+    }
+    if (name == "sound_id") {
+        return TypeKind::SoundId;
+    }
+    if (name == "music_id") {
+        return TypeKind::MusicId;
+    }
+    if (name == "font_id") {
+        return TypeKind::FontId;
+    }
+    if (name == "material_id") {
+        return TypeKind::MaterialId;
+    }
     // Input handle types
-    if (name == "InputButton") return TypeKind::InputButton;
-    if (name == "InputAxis") return TypeKind::InputAxis;
+    if (name == "InputButton") {
+        return TypeKind::InputButton;
+    }
+    if (name == "InputAxis") {
+        return TypeKind::InputAxis;
+    }
     return TypeKind::Unknown;
 }
 
@@ -132,12 +181,12 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
             [this](auto& node) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, StructNode>) {
-                    if (struct_names_.count(node.name)) {
+                    if (struct_names_.contains(node.name)) {
                         errors_.error(node.location, "duplicate struct '" + node.name + "'");
                     }
                     struct_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, EnumNode>) {
-                    if (enum_names_.count(node.name)) {
+                    if (enum_names_.contains(node.name)) {
                         errors_.error(node.location, "duplicate enum '" + node.name + "'");
                     }
                     enum_names_.insert(node.name);
@@ -148,7 +197,7 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                     }
                     result_.enums[node.name] = std::move(re);
                 } else if constexpr (std::is_same_v<T, TraitNode>) {
-                    if (trait_names_.count(node.name)) {
+                    if (trait_names_.contains(node.name)) {
                         errors_.error(node.location, "duplicate trait '" + node.name + "'");
                     }
                     trait_names_.insert(node.name);
@@ -162,7 +211,7 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                     }
                 } else if constexpr (std::is_same_v<T, TemplateNode>) {
                     // Track template names separately from units (5.2)
-                    if (template_names_.count(node.name)) {
+                    if (template_names_.contains(node.name)) {
                         errors_.error(node.location, "duplicate template '" + node.name + "'");
                     }
                     template_names_.insert(node.name);
@@ -293,13 +342,13 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
     }
 
     // ── Local user-defined types ────────────────────────────────────────────
-    if (struct_names_.count(ref.name)) {
+    if (struct_names_.contains(ref.name)) {
         TypeInfo ti;
         ti.kind = TypeKind::Struct;
         ti.name = ref.name;
         return ti;
     }
-    if (enum_names_.count(ref.name)) {
+    if (enum_names_.contains(ref.name)) {
         TypeInfo ti;
         ti.kind = TypeKind::Enum;
         ti.name = ref.name;
@@ -329,14 +378,14 @@ TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
     const auto& syms = it->second;
 
     // Check imported structs
-    if (syms.structs.count(sym_name)) {
+    if (syms.structs.contains(sym_name)) {
         TypeInfo ti;
         ti.kind = TypeKind::Struct;
         ti.name = qualifier + "." + sym_name;
         return ti;
     }
     // Check imported enums
-    if (syms.enums.count(sym_name)) {
+    if (syms.enums.contains(sym_name)) {
         TypeInfo ti;
         ti.kind = TypeKind::Enum;
         ti.name = qualifier + "." + sym_name;
@@ -345,7 +394,8 @@ TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
 
     // ── Task 4.6: Non-pub helpful error ─────────────────────────────────────
     auto np_it = imports_.non_pub_trait_names.find(qualifier);
-    if (np_it != imports_.non_pub_trait_names.end() && np_it->second.count(sym_name)) {
+    if (np_it != imports_.non_pub_trait_names.end() &&
+        np_it->second.contains(sym_name)) {
         errors_.error(loc, "trait '" + sym_name + "' is not public in module '" + qualifier +
                                "'; did you mean to mark it as 'pub'?");
         return make_unknown_type();
@@ -377,13 +427,17 @@ TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name,
         msg << "ambiguous reference '" << name << "': defined in";
         bool first = true;
         auto append = [&](const std::vector<std::string>& quals) {
-            for (auto& q : quals) {
+            for (const auto& q : quals) {
                 msg << (first ? " module '" : " and module '") << q << "'";
                 first = false;
             }
         };
-        if (struct_it != imports_.struct_providers.end()) append(struct_it->second);
-        if (enum_it   != imports_.enum_providers.end())   append(enum_it->second);
+        if (struct_it != imports_.struct_providers.end()) {
+            append(struct_it->second);
+        }
+        if (enum_it != imports_.enum_providers.end()) {
+            append(enum_it->second);
+        }
         msg << "; use qualified access to disambiguate";
         errors_.error(loc, msg.str());
         return make_unknown_type();
@@ -403,7 +457,9 @@ TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name,
 }
 
 bool SemanticAnalyzer::is_known_type(const std::string& name) const {
-    return builtin_types().count(name) || struct_names_.count(name) || enum_names_.count(name);
+    return (builtin_types().contains(name)) ||
+           (struct_names_.contains(name)) ||
+           (enum_names_.contains(name));
 }
 
 // ── Phase 3a: Const String Check ────────────────────────────────────────────
@@ -427,9 +483,13 @@ void SemanticAnalyzer::check_const_strings(ProgramNode& program) {
                                 } else if constexpr (std::is_same_v<S, ExprStmt>) {
                                     check_const_strings_expr(*s.expr, false);
                                 } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                                    if (s.value) check_const_strings_expr(**s.value, false);
+                                    if (s.value) {
+                                        check_const_strings_expr(**s.value, false);
+                                    }
                                 } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                                    for (auto& arg : s.args) check_const_strings_expr(*arg, false);
+                                    for (auto& arg : s.args) {
+                                        check_const_strings_expr(*arg, false);
+                                    }
                                 }
                             },
                             stmt->stmt);
@@ -455,11 +515,15 @@ void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_co
                 check_const_strings_expr(*e.operand, in_const);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 check_const_strings_expr(*e.callee, in_const);
-                for (auto& arg : e.args) check_const_strings_expr(*arg, in_const);
+                for (auto& arg : e.args) {
+                    check_const_strings_expr(*arg, in_const);
+                }
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 check_const_strings_expr(*e.object, in_const);
             } else if constexpr (std::is_same_v<E, ListExpr>) {
-                for (auto& el : e.elements) check_const_strings_expr(*el, in_const);
+                for (auto& el : e.elements) {
+                    check_const_strings_expr(*el, in_const);
+                }
             }
         },
         expr.expr);
@@ -471,7 +535,9 @@ void SemanticAnalyzer::check_func_purity(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* fn = std::get_if<FuncNode>(&decl)) {
             // Task 4.5: Skip extern funcs — no body, purity is guaranteed
-            if (fn->is_extern) continue;
+            if (fn->is_extern) {
+                continue;
+            }
             for (auto& stmt : fn->body) {
                 check_func_purity_stmt(*stmt, fn->name);
             }
@@ -490,11 +556,17 @@ void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::s
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
                 check_func_purity_expr(*s.expr, func_name);
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                if (s.value) check_func_purity_expr(**s.value, func_name);
+                if (s.value) {
+                    check_func_purity_expr(**s.value, func_name);
+                }
             } else if constexpr (std::is_same_v<S, IfStmt>) {
                 check_func_purity_expr(*s.condition, func_name);
-                for (auto& inner : s.then_body) check_func_purity_stmt(*inner, func_name);
-                for (auto& inner : s.else_body) check_func_purity_stmt(*inner, func_name);
+                for (auto& inner : s.then_body) {
+                    check_func_purity_stmt(*inner, func_name);
+                }
+                for (auto& inner : s.else_body) {
+                    check_func_purity_stmt(*inner, func_name);
+                }
             }
         },
         stmt.stmt);
@@ -506,7 +578,9 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, CallExpr>) {
                 check_func_purity_expr(*e.callee, func_name);
-                for (auto& arg : e.args) check_func_purity_expr(*arg, func_name);
+                for (auto& arg : e.args) {
+                    check_func_purity_expr(*arg, func_name);
+                }
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                     call_graph_[func_name].insert(ident->name);
                 }
@@ -535,9 +609,11 @@ void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {
             stack.pop_back();
 
             auto it = call_graph_.find(current);
-            if (it == call_graph_.end()) continue;
+            if (it == call_graph_.end()) {
+                continue;
+            }
 
-            for (auto& callee : it->second) {
+            for (const auto& callee : it->second) {
                 if (callee == func) {
                     for (auto& decl : program.declarations) {
                         if (auto* fn = std::get_if<FuncNode>(&decl)) {
@@ -549,7 +625,7 @@ void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {
                     }
                     break;
                 }
-                if (!visited.count(callee)) {
+                if (visited.contains(callee))) {
                     visited.insert(callee);
                     stack.push_back(callee);
                 }
@@ -593,11 +669,11 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
                           "unknown module qualifier '" + qualifier + "' in filter");
             return false;
         }
-        if (!it->second.traits.count(trait_name)) {
+        if (it->second.traits.contains(trait_name)) {
             // ── Task 4.6: Non-pub helpful error ──────────────────────────────
             auto np_it = imports_.non_pub_trait_names.find(qualifier);
             if (np_it != imports_.non_pub_trait_names.end() &&
-                np_it->second.count(trait_name)) {
+                (np_it->second.contains(trait_name))) {
                 errors_.error(entry.location,
                               "trait '" + trait_name + "' is not public in module '" +
                                   qualifier + "'; did you mean to mark it as 'pub'?");
@@ -614,7 +690,7 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
 
     // ── Unqualified ──────────────────────────────────────────────────────────
     // Check local traits first
-    if (trait_names_.count(qname)) {
+    if (trait_names_.contains(qname)) {
         out_simple_name = qname;
         return true;
     }
@@ -626,7 +702,9 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
                 std::ostringstream msg;
                 msg << "ambiguous trait '" << qname << "' in filter: found in module '"
                     << it->second[0] << "' and module '" << it->second[1] << "'";
-                if (it->second.size() > 2) msg << " (and others)";
+                if (it->second.size() > 2) {
+                    msg << " (and others)";
+                }
                 msg << "; use qualified access to disambiguate";
                 errors_.error(entry.location, msg.str());
                 return false;
@@ -652,7 +730,7 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) {
             } else {
                 // Backward-compat: simple trait_names list
                 for (auto& trait_name : sys->filter.trait_names) {
-                    if (!trait_names_.count(trait_name)) {
+                    if (trait_names_.contains(trait_name)) {
                         // Check imports too
                         bool found = false;
                         if (!imports_.empty()) {
@@ -703,7 +781,7 @@ void SemanticAnalyzer::validate_event_usage(ProgramNode& program) {
                 if (is_builtin_handler(handler.event_name)) {
                     continue;
                 }
-                if (!event_names_.count(handler.event_name)) {
+                if (event_names_.contains(handler.event_name)) {
                     errors_.error(handler.location,
                                   "system '" + sys->name + "' handles unknown event '" +
                                       handler.event_name + "'");
@@ -748,7 +826,7 @@ void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) {
 
 void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts,
                                             SystemDependency& dep) {
-    for (auto& stmt : stmts) {
+    for (const auto& stmt : stmts) {
         std::visit(
             [this, &dep](auto& s) {
                 using S = std::decay_t<decltype(s)>;
@@ -768,10 +846,14 @@ void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<Stm
 // ── Dynamic ECS: Helpers ────────────────────────────────────────────────────
 
 bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
-    if (trait_names_.count(name)) return true;
+    if (trait_names_.contains(name)) {
+        return true;
+    }
     if (!imports_.empty()) {
         auto it = imports_.trait_providers.find(name);
-        if (it != imports_.trait_providers.end() && !it->second.empty()) return true;
+        if (it != imports_.trait_providers.end() && !it->second.empty()) {
+            return true;
+        }
     }
     return false;
 }
@@ -779,11 +861,11 @@ bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
 std::unordered_set<std::string> SemanticAnalyzer::get_archetype_fields(
     const std::vector<ApplyEntry>& apply) const {
     std::unordered_set<std::string> fields;
-    for (auto& entry : apply) {
+    for (const auto& entry : apply) {
         // Local traits
         auto it = result_.traits.find(entry.trait_name);
         if (it != result_.traits.end()) {
-            for (auto& f : it->second.fields) {
+            for (const auto& f : it->second.fields) {
                 fields.insert(f.name);
             }
         }
@@ -791,12 +873,12 @@ std::unordered_set<std::string> SemanticAnalyzer::get_archetype_fields(
         if (!imports_.empty()) {
             auto pit = imports_.trait_providers.find(entry.trait_name);
             if (pit != imports_.trait_providers.end()) {
-                for (auto& qualifier : pit->second) {
+                for (const auto& qualifier : pit->second) {
                     auto mit = imports_.modules.find(qualifier);
                     if (mit != imports_.modules.end()) {
                         auto tit = mit->second.traits.find(entry.trait_name);
                         if (tit != mit->second.traits.end()) {
-                            for (auto& f : tit->second.fields) {
+                            for (const auto& f : tit->second.fields) {
                                 fields.insert(f.name);
                             }
                         }
@@ -817,15 +899,14 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, TemplateNode> ||
                               std::is_same_v<T, UnitNode>) {
-                    const std::string kind =
-                        std::is_same_v<T, TemplateNode> ? "template" : "unit";
+                    const std::string KIND = std::is_same_v<T, TemplateNode> ? "template" : "unit";
 
                     // 5.1: Validate all traits in apply: are declared
                     for (auto& entry : node.apply.entries) {
                         if (!is_trait_declared(entry.trait_name)) {
-                            errors_.error(entry.location,
-                                          "undeclared trait '" + entry.trait_name +
-                                              "' in " + kind + " '" + node.name + "'");
+                            errors_.error(
+                                entry.location,
+                                "undeclared trait '" + entry.trait_name + "' in " + KIND + " '" + node.name + "'");
                         }
                     }
 
@@ -833,11 +914,10 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                     if (node.config.has_value()) {
                         auto accessible = get_archetype_fields(node.apply.entries);
                         for (auto& assign : node.config->assignments) {
-                            if (!accessible.count(assign.name)) {
+                            if (!accessible.contains(assign.name)) {
                                 errors_.error(
                                     assign.location,
-                                    "unknown field '" + assign.name + "' in " + kind +
-                                        " '" + node.name + "' config");
+                                    "unknown field '" + assign.name + "' in " + KIND + " '" + node.name + "' config");
                             }
                         }
                     }
@@ -851,8 +931,7 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                             auto it = result_.traits.find(entry.trait_name);
                             if (it != result_.traits.end()) {
                                 for (auto& field : it->second.fields) {
-                                    if (field.is_var && !field.has_default &&
-                                        !cfg.count(field.name)) {
+                                    if (field.is_var && !field.has_default && !cfg.contains(field.name)) {
                                         required.insert(field.name);
                                     }
                                 }
@@ -871,13 +950,13 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
 void SemanticAnalyzer::validate_spawn_stmts(
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::string& context_name) {
-    for (auto& stmt : stmts) {
+    for (const auto& stmt : stmts) {
         std::visit(
             [this, &context_name](auto& s) {
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, SpawnStmt>) {
                     // 5.4: Reject spawn of a unit
-                    if (unit_names_.count(s.template_name)) {
+                    if (unit_names_.contains(s.template_name)) {
                         errors_.error(
                             s.location,
                             "'" + s.template_name +
@@ -886,7 +965,7 @@ void SemanticAnalyzer::validate_spawn_stmts(
                         return;
                     }
                     // 5.3: Reject spawn of unknown template
-                    if (!template_names_.count(s.template_name)) {
+                    if (!template_names_.contains(s.template_name)) {
                         errors_.error(s.location,
                                       "undefined template '" + s.template_name + "'");
                         return;
@@ -900,7 +979,7 @@ void SemanticAnalyzer::validate_spawn_stmts(
                             const auto& field_name = arg.name;
                             if (arg.key_prefix.empty()) {
                                 // Bare key — check against all accessible fields
-                                if (!accessible.count(field_name)) {
+                                if (!accessible.contains(field_name)) {
                                     errors_.error(
                                         s.location,
                                         "unknown field '" + field_name + "' for template '" +
@@ -919,8 +998,12 @@ void SemanticAnalyzer::validate_spawn_stmts(
                                     auto trait_it = result_.traits.find(trait_name);
                                     if (trait_it != result_.traits.end()) {
                                         bool found = false;
-                                        for (auto& f : trait_it->second.fields)
-                                            if (f.name == field_name) { found = true; break; }
+                                        for (auto& f : trait_it->second.fields) {
+                                            if (f.name == field_name) {
+                                                found = true;
+                                                break;
+                                            }
+                                        }
                                         if (!found) {
                                             errors_.error(s.location,
                                                           "trait '" + trait_name + "' has no field '" +
@@ -934,9 +1017,11 @@ void SemanticAnalyzer::validate_spawn_stmts(
                         auto req_it = template_required_fields_.find(s.template_name);
                         if (req_it != template_required_fields_.end()) {
                             std::unordered_set<std::string> provided;
-                            for (auto& arg : s.overrides) provided.insert(arg.name);
+                            for (auto& arg : s.overrides) {
+                                provided.insert(arg.name);
+                            }
                             for (auto& req : req_it->second) {
-                                if (!provided.count(req)) {
+                                if (!provided.contains(req)) {
                                     errors_.error(
                                         s.location,
                                         "required field '" + req +
@@ -971,7 +1056,7 @@ void SemanticAnalyzer::validate_context_stmts(
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::string& context_name,
     bool in_system_handler) {
-    for (auto& stmt : stmts) {
+    for (const auto& stmt : stmts) {
         std::visit(
             [this, &context_name, in_system_handler](auto& s) {
                 using S = std::decay_t<decltype(s)>;
@@ -983,21 +1068,27 @@ void SemanticAnalyzer::validate_context_stmts(
                     if (!in_system_handler) {
                         // Determine which keyword is used
                         std::string kw;
-                        if constexpr (std::is_same_v<S, SpawnStmt>) kw = "spawn";
-                        else if constexpr (std::is_same_v<S, DestroyStmt>) kw = "destroy";
-                        else if constexpr (std::is_same_v<S, LoadStmt>) kw = "load";
-                        else if constexpr (std::is_same_v<S, EnableStmt>) kw = "enable";
-                        else kw = "disable";
+                        if constexpr (std::is_same_v<S, SpawnStmt>) {
+                            kw = "spawn";
+                        } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+                            kw = "destroy";
+                        } else if constexpr (std::is_same_v<S, LoadStmt>) {
+                            kw = "load";
+                        } else if constexpr (std::is_same_v<S, EnableStmt>) {
+                            kw = "enable";
+                        } else {
+                            kw = "disable";
+                        }
                         errors_.error(
                             s.location,
                             "`" + kw + "` only allowed inside system event handlers");
                     }
                     // 5.6: For LoadStmt, validate module name is reachable via `use`
                     if constexpr (std::is_same_v<S, LoadStmt>) {
-                        if (in_system_handler && !use_names_.count(s.module_name)) {
+                        if (in_system_handler && !use_names_.contains(s.module_name)) {
                             // Check prefix match (e.g. use levels allows load levels.level1)
                             bool found = false;
-                            for (auto& use_name : use_names_) {
+                            for (const auto& use_name : use_names_) {
                                 if (s.module_name == use_name ||
                                     s.module_name.substr(0, use_name.size()) == use_name) {
                                     found = true;
@@ -1140,7 +1231,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             for (auto& after_name : sys->after_systems) {
-                if (!all_system_names.count(after_name)) {
+                if (all_system_names.contains(after_name)) {
                     errors_.error(sys->location,
                                   "unknown system '" + after_name + "' in after clause");
                 } else if (after_name == sys->name) {
@@ -1162,7 +1253,9 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // DFS cycle detection
     enum class Color { White, Gray, Black };
     std::unordered_map<std::string, Color> color;
-    for (auto& [name, _] : after_graph) color[name] = Color::White;
+    for (auto& [name, _] : after_graph) {
+        color[name] = Color::White;
+    }
 
     std::function<bool(const std::string&, std::vector<std::string>&)> dfs =
         [&](const std::string& node, std::vector<std::string>& path) -> bool {
@@ -1171,14 +1264,23 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
         auto it = after_graph.find(node);
         if (it != after_graph.end()) {
             for (auto& neighbor : it->second) {
-                if (!all_system_names.count(neighbor)) continue;  // already reported
+                if (!all_system_names.contains(neighbor)) {
+                    continue;  // already reported
+                }
                 if (color[neighbor] == Color::Gray) {
                     // Found a cycle — build path string
                     std::string cycle_path;
                     bool in_cycle = false;
                     for (auto& p : path) {
-                        if (p == neighbor) in_cycle = true;
-                        if (in_cycle) { if (!cycle_path.empty()) cycle_path += " → "; cycle_path += p; }
+                        if (p == neighbor) {
+                            in_cycle = true;
+                        }
+                        if (in_cycle) {
+                            if (!cycle_path.empty()) {
+                                cycle_path += " → ";
+                            }
+                            cycle_path += p;
+                        }
                     }
                     cycle_path += " → " + neighbor;
                     errors_.error({}, "cycle in system ordering: " + cycle_path);
@@ -1212,7 +1314,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
         auto it = after_graph.find(dep.system_name);
         if (it != after_graph.end()) {
             for (auto& after_name : it->second) {
-                if (all_system_names.count(after_name)) {
+                if (all_system_names.contains(after_name)) {
                     dep.after_systems.push_back(after_name);
                 }
             }
@@ -1222,11 +1324,10 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
 
 // ── Phase 5b: apply alias map helper ────────────────────────────────────────
 
-std::unordered_map<std::string, std::string> SemanticAnalyzer::build_alias_map(
-    const std::vector<ApplyEntry>& apply) const {
+std::unordered_map<std::string, std::string> SemanticAnalyzer::build_alias_map(const std::vector<ApplyEntry>& apply) {
     // Maps from alias-or-trait-name → resolved trait name
     std::unordered_map<std::string, std::string> alias_map;
-    for (auto& entry : apply) {
+    for (const auto& entry : apply) {
         // Implicit alias: the trait name itself
         alias_map[entry.trait_name] = entry.trait_name;
         // Explicit alias declared with 'as'
@@ -1246,7 +1347,9 @@ void SemanticAnalyzer::validate_config_keys(ProgramNode& program) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, TemplateNode> ||
                               std::is_same_v<T, UnitNode>) {
-                    if (!node.config.has_value()) return;
+                    if (!node.config.has_value()) {
+                        return;
+                    }
 
                     // Build alias map for this archetype
                     auto alias_map = build_alias_map(node.apply.entries);
@@ -1285,7 +1388,9 @@ void SemanticAnalyzer::validate_config_keys(ProgramNode& program) {
                             }
                             const auto& trait_name = am_it->second;
                             auto trait_it = result_.traits.find(trait_name);
-                            if (trait_it == result_.traits.end()) continue;  // trait not resolved
+                            if (trait_it == result_.traits.end()) {
+                                continue;  // trait not resolved
+                            }
                             bool found = false;
                             for (auto& f : trait_it->second.fields) {
                                 if (f.name == assign.name) { found = true; break; }

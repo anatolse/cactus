@@ -7,7 +7,7 @@ namespace cactus {
 std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait) {
     std::ostringstream out;
     out << "struct " << trait.name << " {\n";
-    for (auto& field : trait.fields) {
+    for (const auto& field : trait.fields) {
         out << "    " << SoaEmitter::type_to_cpp(field.type) << " " << field.name;
         out << "{};\n";
     }

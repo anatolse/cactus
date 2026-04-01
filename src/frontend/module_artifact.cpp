@@ -53,7 +53,7 @@ void ModuleArtifact::write_type_info(std::ostream& out, const TypeInfo& t) {
 
     // For Func: write params + return type
     write_u32(out, static_cast<uint32_t>(t.params.size()));
-    for (auto& p : t.params) {
+    for (const auto& p : t.params) {
         write_type_info(out, p);
     }
     bool has_ret = (t.kind == TypeKind::Func && t.ret);
@@ -67,11 +67,11 @@ void ModuleArtifact::write_traits(
     std::ostream& out,
     const std::unordered_map<std::string, ResolvedTrait>& traits) {
     write_u32(out, static_cast<uint32_t>(traits.size()));
-    for (auto& [name, trait] : traits) {
+    for (const auto& [name, trait] : traits) {
         write_str(out, trait.name);
         write_bool(out, trait.is_pub);
         write_u32(out, static_cast<uint32_t>(trait.fields.size()));
-        for (auto& field : trait.fields) {
+        for (const auto& field : trait.fields) {
             write_str(out, field.name);
             write_bool(out, field.is_let);
             write_bool(out, field.is_var);
@@ -87,10 +87,10 @@ void ModuleArtifact::write_structs(
     std::ostream& out,
     const std::unordered_map<std::string, ResolvedStruct>& structs) {
     write_u32(out, static_cast<uint32_t>(structs.size()));
-    for (auto& [name, strct] : structs) {
+    for (const auto& [name, strct] : structs) {
         write_str(out, strct.name);
         write_u32(out, static_cast<uint32_t>(strct.fields.size()));
-        for (auto& field : strct.fields) {
+        for (const auto& field : strct.fields) {
             write_str(out, field.name);
             write_bool(out, field.is_let);
             write_bool(out, field.is_var);
@@ -106,10 +106,10 @@ void ModuleArtifact::write_enums(
     std::ostream& out,
     const std::unordered_map<std::string, ResolvedEnum>& enums) {
     write_u32(out, static_cast<uint32_t>(enums.size()));
-    for (auto& [name, enm] : enums) {
+    for (const auto& [name, enm] : enums) {
         write_str(out, enm.name);
         write_u32(out, static_cast<uint32_t>(enm.variants.size()));
-        for (auto& v : enm.variants) {
+        for (const auto& v : enm.variants) {
             write_str(out, v);
         }
     }
@@ -119,12 +119,12 @@ void ModuleArtifact::write_funcs(
     std::ostream& out,
     const std::unordered_map<std::string, ResolvedFunc>& funcs) {
     write_u32(out, static_cast<uint32_t>(funcs.size()));
-    for (auto& [name, func] : funcs) {
+    for (const auto& [name, func] : funcs) {
         write_str(out, func.name);
         write_bool(out, func.is_pub);
         write_bool(out, func.is_extern);
         write_u32(out, static_cast<uint32_t>(func.params.size()));
-        for (auto& p : func.params) {
+        for (const auto& p : func.params) {
             write_str(out, p.name);
             write_type_info(out, p.type);
         }
@@ -139,17 +139,23 @@ void ModuleArtifact::write_funcs(
 void ModuleArtifact::write_dep_graph(std::ostream& out,
                                       const std::vector<SystemDependency>& graph) {
     write_u32(out, static_cast<uint32_t>(graph.size()));
-    for (auto& dep : graph) {
+    for (const auto& dep : graph) {
         write_str(out, dep.system_name);
         // reads
         write_u32(out, static_cast<uint32_t>(dep.reads.size()));
-        for (auto& r : dep.reads) write_str(out, r);
+        for (const auto& r : dep.reads) {
+            write_str(out, r);
+        }
         // writes
         write_u32(out, static_cast<uint32_t>(dep.writes.size()));
-        for (auto& w : dep.writes) write_str(out, w);
+        for (const auto& w : dep.writes) {
+            write_str(out, w);
+        }
         // emits
         write_u32(out, static_cast<uint32_t>(dep.emits.size()));
-        for (auto& e : dep.emits) write_str(out, e);
+        for (const auto& e : dep.emits) {
+            write_str(out, e);
+        }
     }
 }
 
@@ -317,13 +323,19 @@ std::vector<SystemDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
         dep.system_name = read_str(in);
 
         uint32_t reads_count = read_u32(in);
-        for (uint32_t j = 0; j < reads_count; ++j) dep.reads.insert(read_str(in));
+        for (uint32_t j = 0; j < reads_count; ++j) {
+            dep.reads.insert(read_str(in));
+        }
 
         uint32_t writes_count = read_u32(in);
-        for (uint32_t j = 0; j < writes_count; ++j) dep.writes.insert(read_str(in));
+        for (uint32_t j = 0; j < writes_count; ++j) {
+            dep.writes.insert(read_str(in));
+        }
 
         uint32_t emits_count = read_u32(in);
-        for (uint32_t j = 0; j < emits_count; ++j) dep.emits.insert(read_str(in));
+        for (uint32_t j = 0; j < emits_count; ++j) {
+            dep.emits.insert(read_str(in));
+        }
 
         graph.push_back(std::move(dep));
     }
@@ -434,7 +446,9 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path,
 std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::path& path) {
     std::string module_name;
     auto program = load(path, module_name);
-    if (!program) return std::nullopt;
+    if (!program) {
+        return std::nullopt;
+    }
 
     ImportedSymbols symbols;
     symbols.module_name = module_name;

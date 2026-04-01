@@ -182,8 +182,7 @@ private:
 
     // Helper: build alias→trait map for an apply block
     // Returns: map from alias/trait-name → trait name in result_.traits
-    std::unordered_map<std::string, std::string> build_alias_map(
-        const std::vector<ApplyEntry>& apply) const;
+    static std::unordered_map<std::string, std::string> build_alias_map(const std::vector<ApplyEntry>& apply);
 
     // Helpers
     bool is_known_type(const std::string& name) const;

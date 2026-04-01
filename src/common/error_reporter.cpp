@@ -5,13 +5,13 @@
 namespace cactus {
 
 void ErrorReporter::error(const SourceLocation& loc, const std::string& msg) {
-    diagnostics_.push_back({DiagnosticLevel::Error, loc, msg});
+    diagnostics_.push_back({.level = DiagnosticLevel::Error, .location = loc, .message = msg});
     ++error_count_;
     std::cerr << loc.filename << ":" << loc.line << ":" << loc.column << ": error: " << msg << "\n";
 }
 
 void ErrorReporter::warning(const SourceLocation& loc, const std::string& msg) {
-    diagnostics_.push_back({DiagnosticLevel::Warning, loc, msg});
+    diagnostics_.push_back({.level = DiagnosticLevel::Warning, .location = loc, .message = msg});
     ++warning_count_;
     std::cerr << loc.filename << ":" << loc.line << ":" << loc.column << ": warning: " << msg << "\n";
 }

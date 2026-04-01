@@ -47,8 +47,8 @@ public:
 
     /// Locate a module file in search directories.
     /// Returns empty path if not found.
-    std::filesystem::path locate_file(const std::string& module_name,
-                                      const std::vector<std::filesystem::path>& search_dirs) const;
+    static std::filesystem::path locate_file(const std::string& module_name,
+                                             const std::vector<std::filesystem::path>& search_dirs);
 
     /// Infer qualified module name from file path relative to a search root.
     /// e.g. ("/game", "/game/enemies/walker.cactus") → "enemies.walker"

@@ -48,6 +48,15 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 endif()
 
+# ── clang-tidy (auto-fix during build, set before targets so it applies to all) ──
+find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+if(CLANG_TIDY_EXE)
+    set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};--fix;--fix-errors")
+    message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — fixes will be applied automatically during build")
+else()
+    message(STATUS "clang-tidy not found — automatic fixes disabled")
+endif()
+
 # ── Common Library ──────────────────────────────────────────────────────────────
 add_library(cactus_common STATIC
     src/common/error_reporter.cpp

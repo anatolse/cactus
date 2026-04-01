@@ -94,7 +94,7 @@ private:
     void collect_constants();
     void collect_enums();
     std::optional<FieldValue> eval_expr(const ExprNode& expr) const;
-    std::optional<FieldValue> eval_literal(const LiteralExpr& lit) const;
+    static std::optional<FieldValue> eval_literal(const LiteralExpr& lit);
     std::optional<FieldValue> eval_ident(const IdentExpr& ident) const;
     std::optional<FieldValue> eval_call(const CallExpr& call) const;
     std::optional<FieldValue> eval_member(const MemberExpr& mem) const;
@@ -103,16 +103,15 @@ private:
     // ── Trait bitmask helpers ───────────────────────────────────────────────
     void build_trait_bit_index();
     uint64_t compute_trait_mask(const ApplyBlock& apply) const;
-    FieldValue make_field_value(const ResolvedField& field,
-                                const std::optional<FieldValue>& config_val) const;
+    static FieldValue make_field_value(const ResolvedField& field, const std::optional<FieldValue>& config_val);
 
     // ── Binary write helpers ────────────────────────────────────────────────
-    void write_u8(std::ostream& out, uint8_t v);
-    void write_u16(std::ostream& out, uint16_t v);
-    void write_u32(std::ostream& out, uint32_t v);
-    void write_u64(std::ostream& out, uint64_t v);
-    void write_str_short(std::ostream& out, const std::string& s);  // uint16 len + bytes
-    void write_field_value(std::ostream& out, const FieldValue& fv);
+    static void write_u8(std::ostream& out, uint8_t v);
+    static void write_u16(std::ostream& out, uint16_t v);
+    static void write_u32(std::ostream& out, uint32_t v);
+    static void write_u64(std::ostream& out, uint64_t v);
+    static void write_str_short(std::ostream& out, const std::string& s);  // uint16 len + bytes
+    static void write_field_value(std::ostream& out, const FieldValue& fv);
 
     const ProgramNode&      ast_;
     const DecoratedProgram& decorated_;
@@ -140,12 +139,12 @@ public:
     std::vector<EntityInstanceData> load(const std::filesystem::path& path);
 
 private:
-    uint8_t     read_u8(std::istream& in);
-    uint16_t    read_u16(std::istream& in);
-    uint32_t    read_u32(std::istream& in);
-    uint64_t    read_u64(std::istream& in);
-    std::string read_str_short(std::istream& in);
-    FieldValue  read_field_value(std::istream& in, FieldValue::Tag tag);
+    static uint8_t read_u8(std::istream& in);
+    static uint16_t read_u16(std::istream& in);
+    static uint32_t read_u32(std::istream& in);
+    static uint64_t read_u64(std::istream& in);
+    static std::string read_str_short(std::istream& in);
+    static FieldValue read_field_value(std::istream& in, FieldValue::Tag tag);
 
     ErrorReporter& errors_;
 };

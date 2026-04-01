@@ -13,24 +13,35 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) {
         [](auto& e) -> std::string {
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
-                if (e.kind == LiteralExpr::Kind::String) return "\"" + e.value + "\"";
-                if (e.kind == LiteralExpr::Kind::Float) return e.value + "f";
+                if (e.kind == LiteralExpr::Kind::String) {
+                    return "\"" + e.value + "\"";
+                }
+                if (e.kind == LiteralExpr::Kind::Float) {
+                    return e.value + "f";
+                }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
                 std::string op = e.op;
-                if (op == "and") op = "&&";
-                else if (op == "or") op = "||";
+                if (op == "and") {
+                    op = "&&";
+                } else if (op == "or") {
+                    op = "||";
+                }
                 return "(" + emit_expr(*e.left) + " " + op + " " + emit_expr(*e.right) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
-                if (op == "not") op = "!";
+                if (op == "not") {
+                    op = "!";
+                }
                 return op + emit_expr(*e.operand);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 std::string result = emit_expr(*e.callee) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
-                    if (i > 0) result += ", ";
+                    if (i > 0) {
+                        result += ", ";
+                    }
                     result += emit_expr(*e.args[i]);
                 }
                 return result + ")";
@@ -62,22 +73,30 @@ std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) {
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
                 for (size_t i = 0; i < s.args.size(); ++i) {
-                    if (i > 0) result += ", ";
+                    if (i > 0) {
+                        result += ", ";
+                    }
                     result += emit_expr(*s.args[i]);
                 }
                 return result + "});\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                if (s.value) return ind + "return " + emit_expr(**s.value) + ";\n";
+                if (s.value) {
+                    return ind + "return " + emit_expr(**s.value) + ";\n";
+                }
                 return ind + "return;\n";
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
                 return ind + emit_expr(*s.expr) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
                 std::string result = ind + "if (" + emit_expr(*s.condition) + ") {\n";
-                for (auto& inner : s.then_body) result += emit_stmt(*inner, indent + 1);
+                for (auto& inner : s.then_body) {
+                    result += emit_stmt(*inner, indent + 1);
+                }
                 result += ind + "}";
                 if (!s.else_body.empty()) {
                     result += " else {\n";
-                    for (auto& inner : s.else_body) result += emit_stmt(*inner, indent + 1);
+                    for (auto& inner : s.else_body) {
+                        result += emit_stmt(*inner, indent + 1);
+                    }
                     result += ind + "}";
                 }
                 return result + "\n";
@@ -96,16 +115,19 @@ std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const Decora
 
     // Collect storage parameter names from filter
     std::vector<std::string> storage_params;
-    for (auto& trait_name : sys.filter.trait_names) {
+    storage_params.reserve(sys.filter.trait_names.size());
+    for (const auto& trait_name : sys.filter.trait_names) {
         storage_params.push_back(trait_name + "Storage& " + trait_name + "_store");
     }
 
-    for (auto& handler : sys.handlers) {
+    for (const auto& handler : sys.handlers) {
         out << "void " << sys.name << "_" << handler.event_name << "(";
 
         // Storage params
         for (size_t i = 0; i < storage_params.size(); ++i) {
-            if (i > 0) out << ", ";
+            if (i > 0) {
+                out << ", ";
+            }
             out << storage_params[i];
         }
 
@@ -113,11 +135,11 @@ std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const Decora
 
         // Use first filter trait for count
         if (!sys.filter.trait_names.empty()) {
-            auto& first = sys.filter.trait_names[0];
+            const auto& first = sys.filter.trait_names[0];
             out << "    for (size_t i = 0; i < " << first << "_store.count; ++i) {\n";
 
             // Emit body with SoA array access
-            for (auto& stmt : handler.body) {
+            for (const auto& stmt : handler.body) {
                 out << emit_stmt(*stmt, 2);
             }
 
@@ -138,7 +160,9 @@ std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
     // Prefer the simple trait_names list (populated by both old and new parsers)
     if (!clause.trait_names.empty()) {
         for (const auto& name : clause.trait_names) {
-            if (!result.empty()) result += " | ";
+            if (!result.empty()) {
+                result += " | ";
+            }
             result += "TraitBits::" + name;
         }
     } else if (!clause.entries.empty()) {
@@ -148,7 +172,9 @@ std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
             std::string simple_name = (dot != std::string::npos)
                                           ? entry.qualified_name.substr(dot + 1)
                                           : entry.qualified_name;
-            if (!result.empty()) result += " | ";
+            if (!result.empty()) {
+                result += " | ";
+            }
             result += "TraitBits::" + simple_name;
         }
     }
@@ -174,12 +200,16 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s,
     bool first = true;
     for (const auto& entry : tmpl->apply.entries) {
         auto tit = ctx.traits.find(entry.trait_name);
-        if (tit == ctx.traits.end()) continue;
+        if (tit == ctx.traits.end()) {
+            continue;
+        }
         for (const auto& field : tit->second.fields) {
-            if (!first) args << ", ";
+            if (!first) {
+                args << ", ";
+            }
             first = false;
 
-            if (overrides.count(field.name)) {
+            if (static_cast<unsigned int>(overrides.contains(field.name)) != 0U) {
                 args << overrides[field.name];
             } else {
                 // Check template config default
@@ -228,7 +258,9 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
                 for (size_t i = 0; i < s.args.size(); ++i) {
-                    if (i > 0) result += ", ";
+                    if (i > 0) {
+                        result += ", ";
+                    }
                     result += emit_expr(*s.args[i]);
                 }
                 return result + "});\n";
@@ -237,9 +269,8 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                 // task 7.9: swap-and-delete
                 if (in_loop) {
                     return ind + "entity_remove(" + entity_index_var + "); __destroyed = true;\n";
-                } else {
-                    return ind + "entity_remove(" + entity_index_var + ");\n";
                 }
+                return ind + "entity_remove(" + entity_index_var + ");\n";
 
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
                 // task 7.8
@@ -262,7 +293,9 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                        s.trait_name + ";\n";
 
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
-                if (s.value) return ind + "return " + emit_expr(**s.value) + ";\n";
+                if (s.value) {
+                    return ind + "return " + emit_expr(**s.value) + ";\n";
+                }
                 return ind + "return;\n";
 
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
@@ -316,8 +349,8 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
                                                       const CodegenContext& ctx) {
     std::ostringstream out;
 
-    const std::string filter_mask = compute_mask_expr(sys.filter, ctx);
-    const std::string exclude_mask = compute_mask_expr(sys.exclude, ctx);
+    const std::string FILTER_MASK  = compute_mask_expr(sys.filter, ctx);
+    const std::string EXCLUDE_MASK = compute_mask_expr(sys.exclude, ctx);
 
     for (const auto& handler : sys.handlers) {
         bool is_per_entity = (handler.event_name == "spawn" ||
@@ -331,7 +364,9 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
             // Local references for filter trait fields
             for (const auto& trait_name : sys.filter.trait_names) {
                 auto tit = ctx.traits.find(trait_name);
-                if (tit == ctx.traits.end()) continue;
+                if (tit == ctx.traits.end()) {
+                    continue;
+                }
                 for (const auto& field : tit->second.fields) {
                     out << "    " << SoaEmitter::type_to_cpp(field.type) << "& " << field.name
                         << " = g_" << trait_name << "_" << field.name << "[_idx];\n";
@@ -346,32 +381,25 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
         } else {
             // ── Loop-based handler (tick, load, unload, or custom event) ─────
             // Determine if this is a lifecycle dt event, a user event, or a no-param lifecycle
-            const bool is_dt_event = (handler.event_name == "tick" ||
-                                      handler.event_name == "fixed_tick" ||
+            const bool IS_DT_EVENT = (handler.event_name == "tick" || handler.event_name == "fixed_tick" ||
                                       handler.event_name == "late_tick");
-            const bool is_builtin = (handler.event_name == "tick" ||
-                                     handler.event_name == "fixed_tick" ||
-                                     handler.event_name == "late_tick" ||
-                                     handler.event_name == "input" ||
-                                     handler.event_name == "load" ||
-                                     handler.event_name == "unload");
+            const bool IS_BUILTIN  = (handler.event_name == "tick" || handler.event_name == "fixed_tick" ||
+                                     handler.event_name == "late_tick" || handler.event_name == "input" ||
+                                     handler.event_name == "load" || handler.event_name == "unload");
 
             // Name to use for the event variable in the body (alias or event name)
-            const std::string event_var = handler.alias.has_value()
-                                              ? *handler.alias
-                                              : handler.event_name;
+            const std::string EVENT_VAR = handler.alias.has_value() ? *handler.alias : handler.event_name;
 
             std::string params;
             std::string event_var_binding;
 
-            if (is_dt_event) {
+            if (IS_DT_EVENT) {
                 // Keep float dt for game-loop compatibility; bind event struct
                 params = "float dt";
-                event_var_binding = "    " + handler.event_name + "Event " +
-                                    event_var + "{dt};\n";
-            } else if (!is_builtin) {
+                event_var_binding = "    " + handler.event_name + "Event " + EVENT_VAR + "{dt};\n";
+            } else if (!IS_BUILTIN) {
                 // User event: pass as const ref using alias or event name
-                params = "const " + handler.event_name + "Event& " + event_var;
+                params = "const " + handler.event_name + "Event& " + EVENT_VAR;
             }
             // input/load/unload: no params needed
 
@@ -380,8 +408,8 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
             if (!event_var_binding.empty()) {
                 out << event_var_binding;
             }
-            out << "    uint64_t _filter_mask = " << filter_mask << ";\n";
-            out << "    uint64_t _exclude_mask = " << exclude_mask << ";\n";
+            out << "    uint64_t _filter_mask = " << FILTER_MASK << ";\n";
+            out << "    uint64_t _exclude_mask = " << EXCLUDE_MASK << ";\n";
 
             if (handler.event_name == "load") {
                 // tasks 7.14 / 8.4: snapshot entity_count to avoid processing newly spawned
@@ -392,7 +420,9 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
                 // Local refs for filter trait fields
                 for (const auto& trait_name : sys.filter.trait_names) {
                     auto tit = ctx.traits.find(trait_name);
-                    if (tit == ctx.traits.end()) continue;
+                    if (tit == ctx.traits.end()) {
+                        continue;
+                    }
                     for (const auto& field : tit->second.fields) {
                         out << "            " << SoaEmitter::type_to_cpp(field.type) << "& "
                             << field.name << " = g_" << trait_name << "_" << field.name
@@ -413,7 +443,9 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys,
                 // Local refs for filter trait fields
                 for (const auto& trait_name : sys.filter.trait_names) {
                     auto tit = ctx.traits.find(trait_name);
-                    if (tit == ctx.traits.end()) continue;
+                    if (tit == ctx.traits.end()) {
+                        continue;
+                    }
                     for (const auto& field : tit->second.fields) {
                         out << "            " << SoaEmitter::type_to_cpp(field.type) << "& "
                             << field.name << " = g_" << trait_name << "_" << field.name

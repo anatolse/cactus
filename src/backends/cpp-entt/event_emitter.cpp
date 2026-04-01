@@ -7,14 +7,21 @@ namespace cactus {
 std::string EnttEventEmitter::emit_event(const EventNode& event, const DecoratedProgram& program) {
     std::ostringstream out;
     out << "struct " << event.name << "Event {\n";
-    for (auto& field : event.fields) {
+    for (const auto& field : event.fields) {
         TypeInfo type;
-        if (field.type.name == "int") type = {TypeKind::Int, "int"};
-        else if (field.type.name == "float") type = {TypeKind::Float, "float"};
-        else if (field.type.name == "bool") type = {TypeKind::Bool, "bool"};
-        else if (field.type.name == "string") type = {TypeKind::String, "string"};
-        else if (program.structs.count(field.type.name)) type = {TypeKind::Struct, field.type.name};
-        else type = {TypeKind::Int, "int"};
+        if (field.type.name == "int") {
+            type = {.kind = TypeKind::Int, .name = "int"};
+        } else if (field.type.name == "float") {
+            type = {.kind = TypeKind::Float, .name = "float"};
+        } else if (field.type.name == "bool") {
+            type = {.kind = TypeKind::Bool, .name = "bool"};
+        } else if (field.type.name == "string") {
+            type = {.kind = TypeKind::String, .name = "string"};
+        } else if (program.structs.contains(field.type.name)) {
+            type = {.kind = TypeKind::Struct, .name = field.type.name};
+        } else {
+            type = {.kind = TypeKind::Int, .name = "int"};
+        }
 
         out << "    " << SoaEmitter::type_to_cpp(type) << " " << field.name << ";\n";
     }

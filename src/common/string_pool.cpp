@@ -25,7 +25,7 @@ std::string_view StringPool::lookup(uint64_t id) const {
 }
 
 bool StringPool::contains(std::string_view str) const {
-    return str_to_id_.find(std::string(str)) != str_to_id_.end();
+    return str_to_id_.contains(std::string(str));
 }
 
 }  // namespace cactus

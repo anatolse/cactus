@@ -14,18 +14,24 @@ const Token& Parser::peek() const {
 }
 
 const Token& Parser::peek_next() const {
-    if (current_ + 1 < tokens_.size()) return tokens_[current_ + 1];
+    if (current_ + 1 < tokens_.size()) {
+        return tokens_[current_ + 1];
+    }
     return tokens_.back();
 }
 
 Token Parser::advance() {
     auto tok = tokens_[current_];
-    if (current_ < tokens_.size() - 1) ++current_;
+    if (current_ < tokens_.size() - 1) {
+        ++current_;
+    }
     return tok;
 }
 
 Token Parser::consume(TokenType type, const std::string& msg) {
-    if (check(type)) return advance();
+    if (check(type)) {
+        return advance();
+    }
     errors_.error(peek().location, msg + ", got " + token_type_to_string(peek().type));
     return peek();
 }
@@ -40,7 +46,9 @@ bool Parser::match(TokenType type) {
 }
 
 void Parser::skip_newlines() {
-    while (check(TokenType::NEWLINE)) advance();
+    while (check(TokenType::NEWLINE)) {
+        advance();
+    }
 }
 
 void Parser::expect_newline() {
@@ -81,23 +89,49 @@ ProgramNode Parser::parse_program() {
 
 Declaration Parser::parse_declaration() {
     skip_newlines();
-    auto& tok = peek();
+    const auto& tok = peek();
 
-    if (tok.type == TokenType::MODULE) return parse_module();
-    if (tok.type == TokenType::USE) return parse_use();
-    if (tok.type == TokenType::CONST) return parse_const_block();
-    if (tok.type == TokenType::STRUCT) return parse_struct();
-    if (tok.type == TokenType::ENUM) return parse_enum();
-    if (tok.type == TokenType::TRAIT) return parse_trait();
-    if (tok.type == TokenType::SYSTEM) return parse_system();
-    if (tok.type == TokenType::VIEW) return parse_view();
-    if (tok.type == TokenType::EVENT) return parse_event();
-    if (tok.type == TokenType::INTERFACE) return parse_interface();
+    if (tok.type == TokenType::MODULE) {
+        return parse_module();
+    }
+    if (tok.type == TokenType::USE) {
+        return parse_use();
+    }
+    if (tok.type == TokenType::CONST) {
+        return parse_const_block();
+    }
+    if (tok.type == TokenType::STRUCT) {
+        return parse_struct();
+    }
+    if (tok.type == TokenType::ENUM) {
+        return parse_enum();
+    }
+    if (tok.type == TokenType::TRAIT) {
+        return parse_trait();
+    }
+    if (tok.type == TokenType::SYSTEM) {
+        return parse_system();
+    }
+    if (tok.type == TokenType::VIEW) {
+        return parse_view();
+    }
+    if (tok.type == TokenType::EVENT) {
+        return parse_event();
+    }
+    if (tok.type == TokenType::INTERFACE) {
+        return parse_interface();
+    }
 
-    if (tok.type == TokenType::TEMPLATE) return parse_template(false);
+    if (tok.type == TokenType::TEMPLATE) {
+        return parse_template(false);
+    }
 
-    if (tok.type == TokenType::ASSET) return parse_asset_decl(false);
-    if (tok.type == TokenType::INPUT) return parse_input_decl(false);
+    if (tok.type == TokenType::ASSET) {
+        return parse_asset_decl(false);
+    }
+    if (tok.type == TokenType::INPUT) {
+        return parse_input_decl(false);
+    }
 
     if (tok.type == TokenType::PUB) {
         advance();
@@ -107,26 +141,50 @@ Declaration Parser::parse_declaration() {
             t.is_pub = true;
             return t;
         }
-        if (check(TokenType::UNIT)) return parse_unit(true);
-        if (check(TokenType::TEMPLATE)) return parse_template(true);
-        if (check(TokenType::FUNC)) return parse_func(true);
-        if (check(TokenType::EXTERN)) return parse_extern_func(true);
-        if (check(TokenType::ASSET)) return parse_asset_decl(true);
-        if (check(TokenType::INPUT)) return parse_input_decl(true);
-        if (check(TokenType::EVENT)) return parse_event(true);
+        if (check(TokenType::UNIT)) {
+            return parse_unit(true);
+        }
+        if (check(TokenType::TEMPLATE)) {
+            return parse_template(true);
+        }
+        if (check(TokenType::FUNC)) {
+            return parse_func(true);
+        }
+        if (check(TokenType::EXTERN)) {
+            return parse_extern_func(true);
+        }
+        if (check(TokenType::ASSET)) {
+            return parse_asset_decl(true);
+        }
+        if (check(TokenType::INPUT)) {
+            return parse_input_decl(true);
+        }
+        if (check(TokenType::EVENT)) {
+            return parse_event(true);
+        }
         // pub enum / pub struct — visibility currently not tracked, parsed as module-private
-        if (check(TokenType::ENUM)) return parse_enum();
-        if (check(TokenType::STRUCT)) return parse_struct();
+        if (check(TokenType::ENUM)) {
+            return parse_enum();
+        }
+        if (check(TokenType::STRUCT)) {
+            return parse_struct();
+        }
         errors_.error(peek().location, "expected trait, unit, template, func, extern func, asset, input, event, enum, or struct after 'pub'");
     }
 
-    if (tok.type == TokenType::UNIT) return parse_unit(false);
-    if (tok.type == TokenType::FUNC) return parse_func(false);
-    if (tok.type == TokenType::EXTERN) return parse_extern_func(false);
+    if (tok.type == TokenType::UNIT) {
+        return parse_unit(false);
+    }
+    if (tok.type == TokenType::FUNC) {
+        return parse_func(false);
+    }
+    if (tok.type == TokenType::EXTERN) {
+        return parse_extern_func(false);
+    }
 
     errors_.error(tok.location, "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, extern, interface, asset, input)");
     advance();  // skip bad token
-    return ModuleNode{"<error>", tok.location};
+    return ModuleNode{.name = "<error>", .location = tok.location};
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -135,7 +193,9 @@ std::string Parser::parse_dotted_name() {
     // Helper: consume an IDENTIFIER or any keyword token as a name segment.
     // This allows module paths that include keyword-named components (e.g. `std.input`).
     auto consume_name_segment = [&](const std::string& msg) -> std::string {
-        if (check(TokenType::IDENTIFIER)) return advance().value;
+        if (check(TokenType::IDENTIFIER)) {
+            return advance().value;
+        }
         // Accept any keyword whose value is non-empty (e.g. INPUT -> "input")
         const auto& t = peek();
         if (t.type != TokenType::NEWLINE && t.type != TokenType::EOF_TOKEN &&
@@ -164,7 +224,7 @@ ModuleNode Parser::parse_module() {
     consume(TokenType::MODULE, "expected 'module'");
     auto name = parse_dotted_name();
     expect_newline();
-    return {name, loc};
+    return {.name = name, .location = loc};
 }
 
 UseNode Parser::parse_use() {
@@ -176,7 +236,7 @@ UseNode Parser::parse_use() {
         alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
     }
     expect_newline();
-    return {name, alias, loc};
+    return {.module_name = name, .alias = alias, .location = loc};
 }
 
 // ── Const Block ─────────────────────────────────────────────────────────────
@@ -193,7 +253,9 @@ ConstBlockNode Parser::parse_const_block() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto assign_loc = peek().location;
         auto name = consume(TokenType::IDENTIFIER, "expected constant name").value;
         consume(TokenType::ASSIGN, "expected '='");
@@ -226,7 +288,9 @@ StructNode Parser::parse_struct() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         // Struct fields: name: type (no let/var modifiers)
         auto field_loc = peek().location;
         auto field_name = consume(TokenType::IDENTIFIER, "expected field name").value;
@@ -260,7 +324,9 @@ EnumNode Parser::parse_enum() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto var_loc = peek().location;
         auto var_name = consume(TokenType::IDENTIFIER, "expected variant name").value;
         std::optional<int> val;
@@ -268,7 +334,7 @@ EnumNode Parser::parse_enum() {
             val = std::stoi(consume(TokenType::INT_LITERAL, "expected integer value").value);
         }
         expect_newline();
-        node.variants.push_back({var_name, val, var_loc});
+        node.variants.push_back({.name = var_name, .value = val, .location = var_loc});
     }
 
     expect_dedent();
@@ -298,7 +364,9 @@ TraitNode Parser::parse_trait() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         if (check(TokenType::ON)) {
             errors_.error(peek().location,
                 "event handlers are not allowed in trait bodies; declare a system instead");
@@ -321,10 +389,20 @@ TraitNode Parser::parse_trait() {
 FieldModifiers Parser::parse_field_modifiers() {
     FieldModifiers mods;
     while (true) {
-        if (check(TokenType::PERSIST)) { advance(); mods.is_persist = true; }
-        else if (check(TokenType::SYNC)) { advance(); mods.is_sync = true; }
-        else if (check(TokenType::PUB)) { advance(); mods.is_pub = true; }
-        else break;
+        if (check(TokenType::PERSIST)) {
+            advance();
+            mods.is_persist = true;
+        }
+        else if (check(TokenType::SYNC)) {
+            advance();
+            mods.is_sync = true;
+        }
+        else if (check(TokenType::PUB)) {
+            advance();
+            mods.is_pub = true;
+        } else {
+            break;
+        }
     }
     return mods;
 }
@@ -395,7 +473,9 @@ EventHandlerNode Parser::parse_event_handler() {
                !check(TokenType::NEWLINE) && !check(TokenType::COLON)) {
             advance();
         }
-        if (check(TokenType::RPAREN)) advance();  // consume ')'
+        if (check(TokenType::RPAREN)) {
+            advance();  // consume ')'
+        }
     }
 
     // Optional 'as alias' clause
@@ -439,7 +519,7 @@ FuncParam Parser::parse_param() {
     auto name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
     consume(TokenType::COLON, "expected ':'");
     auto type = parse_type_ref();
-    return {name, std::move(type), loc};
+    return {.name = name, .type = std::move(type), .location = loc};
 }
 
 std::vector<FuncParam> Parser::parse_param_list() {
@@ -534,7 +614,9 @@ ApplyBlock Parser::parse_apply_block() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto entry_loc = peek().location;
         auto entry_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
 
@@ -578,7 +660,9 @@ ConfigBlock Parser::parse_config_block() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto assign_loc = peek().location;
         // Parse config key: IDENTIFIER [ DOT IDENTIFIER ] = expression
         auto key_first = consume(TokenType::IDENTIFIER, "expected config field name").value;
@@ -616,12 +700,14 @@ ChildBlock Parser::parse_child_block() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto entry_loc = peek().location;
         auto type_name = consume(TokenType::IDENTIFIER, "expected child type").value;
         auto inst_name = consume(TokenType::IDENTIFIER, "expected child instance name").value;
         expect_newline();
-        block.children.push_back({type_name, inst_name, entry_loc});
+        block.children.push_back({.type_name = type_name, .instance_name = inst_name, .location = entry_loc});
     }
 
     expect_dedent();
@@ -664,7 +750,9 @@ SystemNode Parser::parse_system() {
         bool any = false;
         while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
             skip_newlines();
-            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+                break;
+            }
             node.after_systems.push_back(
                 consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
             expect_newline();
@@ -686,7 +774,9 @@ SystemNode Parser::parse_system() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         node.handlers.push_back(parse_event_handler());
     }
 
@@ -707,14 +797,16 @@ FilterClause Parser::parse_filter_clause() {
     expect_indent();
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto entry_loc = peek().location;
         auto qname = parse_dotted_name();
         std::optional<std::string> alias;
         if (match(TokenType::AS)) {
             alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
         }
-        clause.entries.push_back({qname, alias, entry_loc});
+        clause.entries.push_back({.qualified_name = qname, .alias = alias, .location = entry_loc});
         auto dot_pos = qname.rfind('.');
         clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
         expect_newline();
@@ -743,7 +835,9 @@ ViewNode Parser::parse_view() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         node.elements.push_back(parse_view_element());
     }
 
@@ -764,7 +858,9 @@ ViewElement Parser::parse_view_element() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
 
         // Check if this is a nested element (identifier followed by colon then newline)
         // or a property (identifier = expression)
@@ -837,7 +933,9 @@ EventNode Parser::parse_event(bool is_pub) {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         node.fields.push_back(parse_field());
     }
 
@@ -931,7 +1029,9 @@ InterfaceNode Parser::parse_interface() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto sig_loc = peek().location;
         consume(TokenType::FUNC, "expected 'func'");
         auto sig_name = consume(TokenType::IDENTIFIER, "expected method name").value;
@@ -943,7 +1043,8 @@ InterfaceNode Parser::parse_interface() {
             ret = parse_type_ref();
         }
         expect_newline();
-        node.methods.push_back({sig_name, std::move(sig_params), std::move(ret), sig_loc});
+        node.methods.push_back(
+            {.name = sig_name, .params = std::move(sig_params), .return_type = std::move(ret), .location = sig_loc});
     }
 
     expect_dedent();
@@ -957,7 +1058,9 @@ std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
     std::vector<std::unique_ptr<StmtNode>> stmts;
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         stmts.push_back(parse_statement());
     }
     expect_dedent();
@@ -1025,17 +1128,16 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
             if_stmt.else_body = std::move(else_body);
             if_stmt.location = loc;
             return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
-        } else {
-            // Inline if: if cond: stmt
-            auto inner = parse_statement();
-            std::vector<std::unique_ptr<StmtNode>> then_body;
-            then_body.push_back(std::move(inner));
-            IfStmt if_stmt;
-            if_stmt.condition = std::move(condition);
-            if_stmt.then_body = std::move(then_body);
-            if_stmt.location = loc;
-            return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
         }
+        // Inline if: if cond: stmt
+        auto inner = parse_statement();
+        std::vector<std::unique_ptr<StmtNode>> then_body;
+        then_body.push_back(std::move(inner));
+        IfStmt if_stmt;
+        if_stmt.condition = std::move(condition);
+        if_stmt.then_body = std::move(then_body);
+        if_stmt.location  = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
     }
 
     // Task 4.5-4.6: spawn statement — spawn TemplateName(field = expr, ...)
@@ -1064,7 +1166,9 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
             arg.value = std::move(value);
             arg.location = loc;
             spawn_stmt.overrides.push_back(std::move(arg));
-            if (!match(TokenType::COMMA)) break;
+            if (!match(TokenType::COMMA)) {
+                break;
+            }
         }
         consume(TokenType::RPAREN, "expected ')'");
         expect_newline();
@@ -1454,7 +1558,9 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
 
         while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
             skip_newlines();
-            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+                break;
+            }
             auto arm_loc = peek().location;
             auto pattern = parse_expression();
             consume(TokenType::FAT_ARROW, "expected '=>'");
@@ -1515,11 +1621,13 @@ FilterClause Parser::parse_exclude_clause() {
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
         auto entry_loc = peek().location;
         auto name = consume(TokenType::IDENTIFIER, "expected trait name").value;
         clause.trait_names.push_back(name);
-        clause.entries.push_back({name, std::nullopt, entry_loc});
+        clause.entries.push_back({.qualified_name = name, .alias = std::nullopt, .location = entry_loc});
         expect_newline();
     }
 
@@ -1606,7 +1714,9 @@ InputDeclNode Parser::parse_input_decl(bool is_pub) {
         advance();  // consume INDENT
         while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
             skip_newlines();
-            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) break;
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+                break;
+            }
             auto prop_loc = peek().location;
             auto key = consume(TokenType::IDENTIFIER, "expected property key").value;
             consume(TokenType::ASSIGN, "expected '='");

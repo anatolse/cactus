@@ -12,8 +12,10 @@ namespace cactus {
 namespace {
 // Task 6.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
-    for (auto& [name, func] : program.funcs) {
-        if (func.is_extern) return true;
+    for (const auto& [name, func] : program.funcs) {
+        if (func.is_extern) {
+            return true;
+        }
     }
     return false;
 }
@@ -40,22 +42,22 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "inline Vector2 vec2(float x, float y) { return {x, y}; }\n\n";
 
     // Enums
-    for (auto& [name, e] : program.enums) {
+    for (const auto& [name, e] : program.enums) {
         out << EnttComponentEmitter::emit_enum(e) << "\n";
     }
 
     // POD structs
-    for (auto& [name, s] : program.structs) {
+    for (const auto& [name, s] : program.structs) {
         out << EnttComponentEmitter::emit_pod_struct(s) << "\n";
     }
 
     // Component structs (from traits)
-    for (auto& [name, t] : program.traits) {
+    for (const auto& [name, t] : program.traits) {
         out << EnttComponentEmitter::emit_component(t) << "\n";
     }
 
     // Events
-    if (program.ast) {
+    if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* event = std::get_if<EventNode>(&decl)) {
                 out << EnttEventEmitter::emit_event(*event, program) << "\n";
@@ -65,21 +67,21 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // Persist serialization stubs
     out << "// ── Persist Serialization ────────────────────────────────────────────\n\n";
-    for (auto& [name, t] : program.traits) {
+    for (const auto& [name, t] : program.traits) {
         bool has_persist = false;
-        for (auto& f : t.fields) {
+        for (const auto& f : t.fields) {
             if (f.is_persist) { has_persist = true; break; }
         }
         if (has_persist) {
             out << "void save_" << name << "(const " << name << "& comp) {\n";
-            for (auto& f : t.fields) {
+            for (const auto& f : t.fields) {
                 if (f.is_persist) {
                     out << "    // serialize comp." << f.name << "\n";
                 }
             }
             out << "}\n\n";
             out << "void load_" << name << "(" << name << "& comp) {\n";
-            for (auto& f : t.fields) {
+            for (const auto& f : t.fields) {
                 if (f.is_persist) {
                     out << "    // deserialize into comp." << f.name << "\n";
                 }
@@ -90,14 +92,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // Sync replication stubs
     out << "// ── Sync Replication ─────────────────────────────────────────────────\n\n";
-    for (auto& [name, t] : program.traits) {
+    for (const auto& [name, t] : program.traits) {
         bool has_sync = false;
-        for (auto& f : t.fields) {
+        for (const auto& f : t.fields) {
             if (f.is_sync) { has_sync = true; break; }
         }
         if (has_sync) {
             out << "void replicate_" << name << "(const " << name << "& comp) {\n";
-            for (auto& f : t.fields) {
+            for (const auto& f : t.fields) {
                 if (f.is_sync) {
                     out << "    // send delta for comp." << f.name << "\n";
                 }
@@ -107,7 +109,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     }
 
     // System functions
-    if (program.ast) {
+    if (program.ast != nullptr) {
         out << "// ── Systems ─────────────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
@@ -117,7 +119,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     }
 
     // Entity creation from units
-    if (program.ast) {
+    if (program.ast != nullptr) {
         out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* unit = std::get_if<UnitNode>(&decl)) {
@@ -133,7 +135,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     }
 
     // Dispatcher setup
-    if (program.ast) {
+    if (program.ast != nullptr) {
         out << "// ── Event Dispatcher ────────────────────────────────────────────────\n\n";
         out << "void setup_dispatcher(entt::dispatcher& dispatcher) {\n";
         for (auto& decl : program.ast->declarations) {
@@ -149,14 +151,19 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     std::string win_height = "600";
     std::string win_title = "\"Cactus Game\"";
     std::string win_fps = "60";
-    if (program.ast) {
+    if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* cb = std::get_if<ConstBlockNode>(&decl)) {
                 for (auto& ca : cb->assignments) {
-                    if (ca.name == "WINDOW_WIDTH") win_width = ManualSystemEmitter::emit_expr(*ca.value);
-                    else if (ca.name == "WINDOW_HEIGHT") win_height = ManualSystemEmitter::emit_expr(*ca.value);
-                    else if (ca.name == "WINDOW_TITLE") win_title = ManualSystemEmitter::emit_expr(*ca.value);
-                    else if (ca.name == "TARGET_FPS") win_fps = ManualSystemEmitter::emit_expr(*ca.value);
+                    if (ca.name == "WINDOW_WIDTH") {
+                        win_width = ManualSystemEmitter::emit_expr(*ca.value);
+                    } else if (ca.name == "WINDOW_HEIGHT") {
+                        win_height = ManualSystemEmitter::emit_expr(*ca.value);
+                    } else if (ca.name == "WINDOW_TITLE") {
+                        win_title = ManualSystemEmitter::emit_expr(*ca.value);
+                    } else if (ca.name == "TARGET_FPS") {
+                        win_fps = ManualSystemEmitter::emit_expr(*ca.value);
+                    }
                 }
             }
         }
@@ -170,7 +177,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    entt::dispatcher dispatcher;\n\n";
 
     // Create entities from units
-    if (program.ast) {
+    if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* unit = std::get_if<UnitNode>(&decl)) {
                 out << "    create_" << unit->name << "(registry);\n";
@@ -183,7 +190,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "        float dt = GetFrameTime();\n\n";
 
     // Call system tick handlers
-    if (program.ast) {
+    if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 for (auto& handler : sys->handlers) {

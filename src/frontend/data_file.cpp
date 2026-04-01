@@ -38,9 +38,9 @@ std::filesystem::path DataFileWriter::data_filename(const std::string& module_na
 // ── Constant collection ──────────────────────────────────────────────────────
 
 void DataFileWriter::collect_constants() {
-    for (auto& decl : ast_.declarations) {
-        if (auto* cb = std::get_if<ConstBlockNode>(&decl)) {
-            for (auto& assign : cb->assignments) {
+    for (const auto& decl : ast_.declarations) {
+        if (const auto* cb = std::get_if<ConstBlockNode>(&decl)) {
+            for (const auto& assign : cb->assignments) {
                 auto val = eval_expr(*assign.value);
                 if (val) {
                     const_map_[assign.name] = *val;
@@ -51,8 +51,8 @@ void DataFileWriter::collect_constants() {
 }
 
 void DataFileWriter::collect_enums() {
-    for (auto& decl : ast_.declarations) {
-        if (auto* en = std::get_if<EnumNode>(&decl)) {
+    for (const auto& decl : ast_.declarations) {
+        if (const auto* en = std::get_if<EnumNode>(&decl)) {
             auto& variants = enum_map_[en->name];
             for (uint32_t i = 0; i < static_cast<uint32_t>(en->variants.size()); ++i) {
                 variants[en->variants[i].name] = i;
@@ -64,16 +64,16 @@ void DataFileWriter::collect_enums() {
 void DataFileWriter::build_trait_bit_index() {
     uint32_t bit = 0;
     // Assign bits in declaration order
-    for (auto& decl : ast_.declarations) {
-        if (auto* tr = std::get_if<TraitNode>(&decl)) {
-            if (!trait_bit_index_.count(tr->name)) {
+    for (const auto& decl : ast_.declarations) {
+        if (const auto* tr = std::get_if<TraitNode>(&decl)) {
+            if (static_cast<unsigned int>(trait_bit_index_.contains(tr->name)) == 0U) {
                 trait_bit_index_[tr->name] = bit++;
             }
         }
     }
     // Also cover imported traits from decorated program
-    for (auto& [name, _] : decorated_.traits) {
-        if (!trait_bit_index_.count(name)) {
+    for (const auto& [name, _] : decorated_.traits) {
+        if (static_cast<unsigned int>(trait_bit_index_.contains(name)) == 0U) {
             trait_bit_index_[name] = bit++;
         }
     }
@@ -81,8 +81,10 @@ void DataFileWriter::build_trait_bit_index() {
 
 uint64_t DataFileWriter::compute_trait_mask(const ApplyBlock& apply) const {
     uint64_t mask = 0;
-    for (auto& entry : apply.entries) {
-        if (!entry.initially_active) continue;
+    for (const auto& entry : apply.entries) {
+        if (!entry.initially_active) {
+            continue;
+        }
         auto it = trait_bit_index_.find(entry.trait_name);
         if (it != trait_bit_index_.end() && it->second < 64) {
             mask |= (uint64_t(1) << it->second);
@@ -115,9 +117,15 @@ std::optional<FieldValue> DataFileWriter::eval_expr(const ExprNode& expr) const 
 }
 
 static uint8_t hex_digit(char c) {
-    if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
-    if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
-    if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(c - 'A' + 10);
+    if (c >= '0' && c <= '9') {
+        return static_cast<uint8_t>(c - '0');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return static_cast<uint8_t>(c - 'a' + 10);
+    }
+    if (c >= 'A' && c <= 'F') {
+        return static_cast<uint8_t>(c - 'A' + 10);
+    }
     return 0;
 }
 
@@ -125,7 +133,7 @@ static uint8_t parse_hex_byte(const std::string& s, size_t offset) {
     return static_cast<uint8_t>((hex_digit(s[offset]) << 4) | hex_digit(s[offset + 1]));
 }
 
-std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) const {
+std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
     FieldValue fv;
     switch (lit.kind) {
         case LiteralExpr::Kind::Int:
@@ -171,21 +179,29 @@ std::optional<FieldValue> DataFileWriter::eval_ident(const IdentExpr& ident) con
 std::optional<FieldValue> DataFileWriter::eval_call(const CallExpr& call) const {
     // Get function name
     auto* callee_ident = std::get_if<IdentExpr>(&call.callee->expr);
-    if (!callee_ident) return std::nullopt;
+    if (callee_ident == nullptr) {
+        return std::nullopt;
+    }
 
     const auto& fname = callee_ident->name;
 
     // Evaluate all arguments
     std::vector<FieldValue> args;
-    for (auto& arg : call.args) {
+    for (const auto& arg : call.args) {
         auto val = eval_expr(*arg);
-        if (!val) return std::nullopt;
+        if (!val) {
+            return std::nullopt;
+        }
         args.push_back(*val);
     }
 
     auto get_float = [](const FieldValue& fv) -> std::optional<float> {
-        if (fv.tag == FieldValue::Tag::Float) return fv.f32;
-        if (fv.tag == FieldValue::Tag::Int)   return static_cast<float>(fv.i32);
+        if (fv.tag == FieldValue::Tag::Float) {
+            return fv.f32;
+        }
+        if (fv.tag == FieldValue::Tag::Int) {
+            return static_cast<float>(fv.i32);
+        }
         return std::nullopt;
     };
 
@@ -194,7 +210,9 @@ std::optional<FieldValue> DataFileWriter::eval_call(const CallExpr& call) const 
         fv.tag = FieldValue::Tag::Vec2;
         auto x = get_float(args[0]);
         auto y = get_float(args[1]);
-        if (!x || !y) return std::nullopt;
+        if (!x || !y) {
+            return std::nullopt;
+        }
         fv.vec2.x = *x;
         fv.vec2.y = *y;
         return fv;
@@ -206,7 +224,9 @@ std::optional<FieldValue> DataFileWriter::eval_call(const CallExpr& call) const 
         auto x = get_float(args[0]);
         auto y = get_float(args[1]);
         auto z = get_float(args[2]);
-        if (!x || !y || !z) return std::nullopt;
+        if (!x || !y || !z) {
+            return std::nullopt;
+        }
         fv.vec3.x = *x;
         fv.vec3.y = *y;
         fv.vec3.z = *z;
@@ -220,7 +240,9 @@ std::optional<FieldValue> DataFileWriter::eval_call(const CallExpr& call) const 
         auto y = get_float(args[1]);
         auto z = get_float(args[2]);
         auto w = get_float(args[3]);
-        if (!x || !y || !z || !w) return std::nullopt;
+        if (!x || !y || !z || !w) {
+            return std::nullopt;
+        }
         fv.quat.x = *x;
         fv.quat.y = *y;
         fv.quat.z = *z;
@@ -234,13 +256,19 @@ std::optional<FieldValue> DataFileWriter::eval_call(const CallExpr& call) const 
 std::optional<FieldValue> DataFileWriter::eval_member(const MemberExpr& mem) const {
     // Handles enum member access: EnumType.Variant
     auto* obj_ident = std::get_if<IdentExpr>(&mem.object->expr);
-    if (!obj_ident) return std::nullopt;
+    if (obj_ident == nullptr) {
+        return std::nullopt;
+    }
 
     auto enum_it = enum_map_.find(obj_ident->name);
-    if (enum_it == enum_map_.end()) return std::nullopt;
+    if (enum_it == enum_map_.end()) {
+        return std::nullopt;
+    }
 
     auto var_it = enum_it->second.find(mem.member);
-    if (var_it == enum_it->second.end()) return std::nullopt;
+    if (var_it == enum_it->second.end()) {
+        return std::nullopt;
+    }
 
     FieldValue fv;
     fv.tag      = FieldValue::Tag::Enum;
@@ -250,7 +278,9 @@ std::optional<FieldValue> DataFileWriter::eval_member(const MemberExpr& mem) con
 
 std::optional<FieldValue> DataFileWriter::eval_unary(const UnaryExpr& un) const {
     auto val = eval_expr(*un.operand);
-    if (!val) return std::nullopt;
+    if (!val) {
+        return std::nullopt;
+    }
 
     if (un.op == "-") {
         if (val->tag == FieldValue::Tag::Float) { val->f32 = -val->f32; return val; }
@@ -268,7 +298,9 @@ static FieldValue default_for_type(TypeKind kind) {
     FieldValue fv;
     switch (kind) {
         case TypeKind::Int:      fv.tag = FieldValue::Tag::Int;   fv.i32 = 0;     break;
-        case TypeKind::Float:    fv.tag = FieldValue::Tag::Float; fv.f32 = 0.0f;  break;
+        case TypeKind::Float:    fv.tag = FieldValue::Tag::Float;
+            fv.f32                      = 0.0F;
+            break;
         case TypeKind::Bool:     fv.tag = FieldValue::Tag::Bool;  fv.b = false;   break;
         case TypeKind::Color:    fv.tag = FieldValue::Tag::Color;                 break;
         case TypeKind::Vec2:     fv.tag = FieldValue::Tag::Vec2;                  break;
@@ -283,8 +315,7 @@ static FieldValue default_for_type(TypeKind kind) {
     return fv;
 }
 
-FieldValue DataFileWriter::make_field_value(const ResolvedField& field,
-                                             const std::optional<FieldValue>& config_val) const {
+FieldValue DataFileWriter::make_field_value(const ResolvedField& field, const std::optional<FieldValue>& config_val) {
     if (config_val && config_val->is_serializable()) {
         return *config_val;
     }
@@ -302,8 +333,8 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() {
 
     std::vector<EntityInstanceData> records;
 
-    for (auto& decl : ast_.declarations) {
-        if (auto* unit = std::get_if<UnitNode>(&decl)) {
+    for (const auto& decl : ast_.declarations) {
+        if (const auto* unit = std::get_if<UnitNode>(&decl)) {
             EntityInstanceData rec;
             rec.name = unit->name;
             rec.trait_mask = compute_trait_mask(unit->apply);
@@ -311,21 +342,27 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() {
             // Build config map: field_name → evaluated value
             std::unordered_map<std::string, FieldValue> config_vals;
             if (unit->config.has_value()) {
-                for (auto& assign : unit->config->assignments) {
+                for (const auto& assign : unit->config->assignments) {
                     auto val = eval_expr(*assign.value);
-                    if (val) config_vals[assign.name] = *val;
+                    if (val) {
+                        config_vals[assign.name] = *val;
+                    }
                 }
             }
 
             // For each applied trait, emit all fields in declaration order
-            for (auto& entry : unit->apply.entries) {
+            for (const auto& entry : unit->apply.entries) {
                 auto it = decorated_.traits.find(entry.trait_name);
-                if (it == decorated_.traits.end()) continue;
+                if (it == decorated_.traits.end()) {
+                    continue;
+                }
 
-                for (auto& field : it->second.fields) {
+                for (const auto& field : it->second.fields) {
                     auto cfg_it = config_vals.find(field.name);
                     std::optional<FieldValue> cfg_val;
-                    if (cfg_it != config_vals.end()) cfg_val = cfg_it->second;
+                    if (cfg_it != config_vals.end()) {
+                        cfg_val = cfg_it->second;
+                    }
 
                     FieldValue fv = make_field_value(field, cfg_val);
                     if (fv.is_serializable()) {
@@ -364,7 +401,9 @@ void DataFileWriter::write_u32(std::ostream& out, uint32_t v) {
 
 void DataFileWriter::write_u64(std::ostream& out, uint64_t v) {
     uint8_t buf[8];
-    for (int i = 0; i < 8; ++i) buf[i] = static_cast<uint8_t>((v >> (i * 8)) & 0xFF);
+    for (int i = 0; i < 8; ++i) {
+        buf[i] = static_cast<uint8_t>((v >> (i * 8)) & 0xFF);
+    }
     out.write(reinterpret_cast<const char*>(buf), 8);
 }
 
@@ -377,13 +416,13 @@ void DataFileWriter::write_field_value(std::ostream& out, const FieldValue& fv) 
     write_u8(out, static_cast<uint8_t>(fv.tag));
     switch (fv.tag) {
         case FieldValue::Tag::Int: {
-            uint32_t v;
+            uint32_t v = 0;
             std::memcpy(&v, &fv.i32, 4);
             write_u32(out, v);
             break;
         }
         case FieldValue::Tag::Float: {
-            uint32_t v;
+            uint32_t v = 0;
             std::memcpy(&v, &fv.f32, 4);
             write_u32(out, v);
             break;
@@ -398,7 +437,8 @@ void DataFileWriter::write_field_value(std::ostream& out, const FieldValue& fv) 
             write_u8(out, fv.color.a);
             break;
         case FieldValue::Tag::Vec2: {
-            uint32_t x, y;
+            uint32_t x = 0;
+            uint32_t y = 0;
             std::memcpy(&x, &fv.vec2.x, 4);
             std::memcpy(&y, &fv.vec2.y, 4);
             write_u32(out, x);
@@ -406,7 +446,9 @@ void DataFileWriter::write_field_value(std::ostream& out, const FieldValue& fv) 
             break;
         }
         case FieldValue::Tag::Vec3: {
-            uint32_t x, y, z;
+            uint32_t x = 0;
+            uint32_t y = 0;
+            uint32_t z = 0;
             std::memcpy(&x, &fv.vec3.x, 4);
             std::memcpy(&y, &fv.vec3.y, 4);
             std::memcpy(&z, &fv.vec3.z, 4);
@@ -416,7 +458,10 @@ void DataFileWriter::write_field_value(std::ostream& out, const FieldValue& fv) 
             break;
         }
         case FieldValue::Tag::Quat: {
-            uint32_t x, y, z, w;
+            uint32_t x = 0;
+            uint32_t y = 0;
+            uint32_t z = 0;
+            uint32_t w = 0;
             std::memcpy(&x, &fv.quat.x, 4);
             std::memcpy(&y, &fv.quat.y, 4);
             std::memcpy(&z, &fv.quat.z, 4);
@@ -537,21 +582,26 @@ FieldValue DataFileReader::read_field_value(std::istream& in, FieldValue::Tag ta
             fv.color.a  = read_u8(in);
             break;
         case FieldValue::Tag::Vec2: {
-            uint32_t x = read_u32(in), y = read_u32(in);
+            uint32_t x = read_u32(in);
+            uint32_t y = read_u32(in);
             std::memcpy(&fv.vec2.x, &x, 4);
             std::memcpy(&fv.vec2.y, &y, 4);
             break;
         }
         case FieldValue::Tag::Vec3: {
-            uint32_t x = read_u32(in), y = read_u32(in), z = read_u32(in);
+            uint32_t x = read_u32(in);
+            uint32_t y = read_u32(in);
+            uint32_t z = read_u32(in);
             std::memcpy(&fv.vec3.x, &x, 4);
             std::memcpy(&fv.vec3.y, &y, 4);
             std::memcpy(&fv.vec3.z, &z, 4);
             break;
         }
         case FieldValue::Tag::Quat: {
-            uint32_t x = read_u32(in), y = read_u32(in),
-                     z = read_u32(in), w = read_u32(in);
+            uint32_t x = read_u32(in);
+            uint32_t y = read_u32(in);
+            uint32_t z = read_u32(in);
+            uint32_t w = read_u32(in);
             std::memcpy(&fv.quat.x, &x, 4);
             std::memcpy(&fv.quat.y, &y, 4);
             std::memcpy(&fv.quat.z, &z, 4);

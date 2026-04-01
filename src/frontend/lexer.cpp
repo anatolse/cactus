@@ -8,7 +8,7 @@ namespace cactus {
 namespace {
 
 const std::unordered_map<std::string, TokenType>& keyword_map() {
-    static const std::unordered_map<std::string, TokenType> kw = {
+    static const std::unordered_map<std::string, TokenType> KW = {
         {"module", TokenType::MODULE},
         {"use", TokenType::USE},
         {"const", TokenType::CONST},
@@ -38,8 +38,8 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"child", TokenType::CHILD},
         {"filter", TokenType::FILTER},
         {"exclude", TokenType::EXCLUDE},
-        {"after",   TokenType::AFTER},
-        {"target",  TokenType::TARGET},
+        {"after", TokenType::AFTER},
+        {"target", TokenType::TARGET},
         {"disabled", TokenType::DISABLED},
         {"template", TokenType::TEMPLATE},
         {"spawn", TokenType::SPAWN},
@@ -61,7 +61,7 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"or", TokenType::OR},
         {"not", TokenType::NOT},
     };
-    return kw;
+    return KW;
 }
 
 bool is_hex_digit(char c) {
@@ -74,12 +74,16 @@ Lexer::Lexer(std::string source, std::string filename, ErrorReporter& errors)
     : source_(std::move(source)), filename_(std::move(filename)), errors_(errors) {}
 
 char Lexer::peek_char() const {
-    if (is_at_end()) return '\0';
+    if (is_at_end()) {
+        return '\0';
+    }
     return source_[pos_];
 }
 
 char Lexer::peek_next() const {
-    if (pos_ + 1 >= source_.size()) return '\0';
+    if (pos_ + 1 >= source_.size()) {
+        return '\0';
+    }
     return source_[pos_ + 1];
 }
 
@@ -105,10 +109,10 @@ SourceLocation Lexer::current_location() const {
 Token Lexer::read_identifier() {
     auto loc = current_location();
     std::string value;
-    while (!is_at_end() && (std::isalnum(peek_char()) || peek_char() == '_')) {
+    while (!is_at_end() && ((std::isalnum(peek_char()) != 0) || peek_char() == '_')) {
         value += advance_char();
     }
-    auto& kw = keyword_map();
+    const auto& kw = keyword_map();
     auto it = kw.find(value);
     if (it != kw.end()) {
         return {it->second, value, loc};
@@ -119,12 +123,12 @@ Token Lexer::read_identifier() {
 Token Lexer::read_number() {
     auto loc = current_location();
     std::string value;
-    while (!is_at_end() && std::isdigit(peek_char())) {
+    while (!is_at_end() && (std::isdigit(peek_char()) != 0)) {
         value += advance_char();
     }
-    if (!is_at_end() && peek_char() == '.' && std::isdigit(peek_next())) {
+    if (!is_at_end() && peek_char() == '.' && (std::isdigit(peek_next()) != 0)) {
         value += advance_char();  // consume '.'
-        while (!is_at_end() && std::isdigit(peek_char())) {
+        while (!is_at_end() && (std::isdigit(peek_char()) != 0)) {
             value += advance_char();
         }
         return {TokenType::FLOAT_LITERAL, value, loc};
@@ -188,11 +192,11 @@ void Lexer::process_line_start(std::vector<Token>& tokens) {
 
     if (spaces > current_indent) {
         indent_stack_.push_back(spaces);
-        tokens.push_back({TokenType::INDENT, "", current_location()});
+        tokens.emplace_back(TokenType::INDENT, "", current_location());
     } else if (spaces < current_indent) {
         while (indent_stack_.back() > spaces) {
             indent_stack_.pop_back();
-            tokens.push_back({TokenType::DEDENT, "", current_location()});
+            tokens.emplace_back(TokenType::DEDENT, "", current_location());
         }
         if (indent_stack_.back() != spaces) {
             errors_.error(current_location(), "inconsistent indentation");
@@ -208,7 +212,9 @@ std::vector<Token> Lexer::tokenize() {
         if (at_line_start_) {
             at_line_start_ = false;
             process_line_start(tokens);
-            if (is_at_end()) break;
+            if (is_at_end()) {
+                break;
+            }
         }
 
         char c = peek_char();
@@ -225,7 +231,7 @@ std::vector<Token> Lexer::tokenize() {
             if (!tokens.empty()) {
                 auto last = tokens.back().type;
                 if (last != TokenType::NEWLINE && last != TokenType::INDENT && last != TokenType::DEDENT) {
-                    tokens.push_back({TokenType::NEWLINE, "\\n", current_location()});
+                    tokens.emplace_back(TokenType::NEWLINE, "\\n", current_location());
                 }
             }
             advance_char();
@@ -258,13 +264,13 @@ std::vector<Token> Lexer::tokenize() {
         }
 
         // Number literal
-        if (std::isdigit(c)) {
+        if (std::isdigit(c) != 0) {
             tokens.push_back(read_number());
             continue;
         }
 
         // Identifier or keyword
-        if (std::isalpha(c) || c == '_') {
+        if ((std::isalpha(c) != 0) || c == '_') {
             tokens.push_back(read_identifier());
             continue;
         }
@@ -274,76 +280,118 @@ std::vector<Token> Lexer::tokenize() {
         if (c == '-' && peek_next() == '>') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::ARROW, "->", loc});
+            tokens.emplace_back(TokenType::ARROW, "->", loc);
             continue;
         }
         if (c == '=' && peek_next() == '>') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::FAT_ARROW, "=>", loc});
+            tokens.emplace_back(TokenType::FAT_ARROW, "=>", loc);
             continue;
         }
         if (c == '=' && peek_next() == '=') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::EQUALS, "==", loc});
+            tokens.emplace_back(TokenType::EQUALS, "==", loc);
             continue;
         }
         if (c == '!' && peek_next() == '=') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::NOT_EQUALS, "!=", loc});
+            tokens.emplace_back(TokenType::NOT_EQUALS, "!=", loc);
             continue;
         }
         if (c == '<' && peek_next() == '=') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::LESS_EQ, "<=", loc});
+            tokens.emplace_back(TokenType::LESS_EQ, "<=", loc);
             continue;
         }
         if (c == '>' && peek_next() == '=') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::GREATER_EQ, ">=", loc});
+            tokens.emplace_back(TokenType::GREATER_EQ, ">=", loc);
             continue;
         }
         if (c == '+' && peek_next() == '=') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::PLUS_ASSIGN, "+=", loc});
+            tokens.emplace_back(TokenType::PLUS_ASSIGN, "+=", loc);
             continue;
         }
         if (c == '-' && peek_next() == '=') {
             advance_char();
             advance_char();
-            tokens.push_back({TokenType::MINUS_ASSIGN, "-=", loc});
+            tokens.emplace_back(TokenType::MINUS_ASSIGN, "-=", loc);
             continue;
         }
 
         // Single-character operators and punctuation
         advance_char();
         switch (c) {
-            case ':': tokens.push_back({TokenType::COLON, ":", loc}); break;
-            case ',': tokens.push_back({TokenType::COMMA, ",", loc}); break;
-            case '.': tokens.push_back({TokenType::DOT, ".", loc}); break;
-            case '(': tokens.push_back({TokenType::LPAREN, "(", loc}); break;
-            case ')': tokens.push_back({TokenType::RPAREN, ")", loc}); break;
-            case '[': tokens.push_back({TokenType::LBRACKET, "[", loc}); break;
-            case ']': tokens.push_back({TokenType::RBRACKET, "]", loc}); break;
-            case '{': tokens.push_back({TokenType::LBRACE, "{", loc}); break;
-            case '}': tokens.push_back({TokenType::RBRACE, "}", loc}); break;
-            case '+': tokens.push_back({TokenType::PLUS, "+", loc}); break;
-            case '-': tokens.push_back({TokenType::MINUS, "-", loc}); break;
-            case '*': tokens.push_back({TokenType::STAR, "*", loc}); break;
-            case '/': tokens.push_back({TokenType::SLASH, "/", loc}); break;
-            case '%': tokens.push_back({TokenType::PERCENT, "%", loc}); break;
-            case '&': tokens.push_back({TokenType::AMPERSAND, "&", loc}); break;
-            case '|': tokens.push_back({TokenType::PIPE, "|", loc}); break;
-            case '^': tokens.push_back({TokenType::CARET, "^", loc}); break;
-            case '~': tokens.push_back({TokenType::TILDE, "~", loc}); break;
-            case '<': tokens.push_back({TokenType::LESS, "<", loc}); break;
-            case '>': tokens.push_back({TokenType::GREATER, ">", loc}); break;
-            case '=': tokens.push_back({TokenType::ASSIGN, "=", loc}); break;
+            case ':':
+                tokens.emplace_back(TokenType::COLON, ":", loc);
+                break;
+            case ',':
+                tokens.emplace_back(TokenType::COMMA, ",", loc);
+                break;
+            case '.':
+                tokens.emplace_back(TokenType::DOT, ".", loc);
+                break;
+            case '(':
+                tokens.emplace_back(TokenType::LPAREN, "(", loc);
+                break;
+            case ')':
+                tokens.emplace_back(TokenType::RPAREN, ")", loc);
+                break;
+            case '[':
+                tokens.emplace_back(TokenType::LBRACKET, "[", loc);
+                break;
+            case ']':
+                tokens.emplace_back(TokenType::RBRACKET, "]", loc);
+                break;
+            case '{':
+                tokens.emplace_back(TokenType::LBRACE, "{", loc);
+                break;
+            case '}':
+                tokens.emplace_back(TokenType::RBRACE, "}", loc);
+                break;
+            case '+':
+                tokens.emplace_back(TokenType::PLUS, "+", loc);
+                break;
+            case '-':
+                tokens.emplace_back(TokenType::MINUS, "-", loc);
+                break;
+            case '*':
+                tokens.emplace_back(TokenType::STAR, "*", loc);
+                break;
+            case '/':
+                tokens.emplace_back(TokenType::SLASH, "/", loc);
+                break;
+            case '%':
+                tokens.emplace_back(TokenType::PERCENT, "%", loc);
+                break;
+            case '&':
+                tokens.emplace_back(TokenType::AMPERSAND, "&", loc);
+                break;
+            case '|':
+                tokens.emplace_back(TokenType::PIPE, "|", loc);
+                break;
+            case '^':
+                tokens.emplace_back(TokenType::CARET, "^", loc);
+                break;
+            case '~':
+                tokens.emplace_back(TokenType::TILDE, "~", loc);
+                break;
+            case '<':
+                tokens.emplace_back(TokenType::LESS, "<", loc);
+                break;
+            case '>':
+                tokens.emplace_back(TokenType::GREATER, ">", loc);
+                break;
+            case '=':
+                tokens.emplace_back(TokenType::ASSIGN, "=", loc);
+                break;
             default:
                 errors_.error(loc, std::string("unexpected character '") + c + "'");
                 break;
@@ -353,15 +401,15 @@ std::vector<Token> Lexer::tokenize() {
     // Emit remaining DEDENTs
     while (indent_stack_.size() > 1) {
         indent_stack_.pop_back();
-        tokens.push_back({TokenType::DEDENT, "", current_location()});
+        tokens.emplace_back(TokenType::DEDENT, "", current_location());
     }
 
     // Ensure final NEWLINE
     if (!tokens.empty() && tokens.back().type != TokenType::NEWLINE) {
-        tokens.push_back({TokenType::NEWLINE, "\\n", current_location()});
+        tokens.emplace_back(TokenType::NEWLINE, "\\n", current_location());
     }
 
-    tokens.push_back({TokenType::EOF_TOKEN, "", current_location()});
+    tokens.emplace_back(TokenType::EOF_TOKEN, "", current_location());
     return tokens;
 }
 

@@ -38,8 +38,20 @@ static std::string generate(const std::string& source) {
 TEST_CASE("Codegen Manual: SoA storage from trait (legacy)", "[codegen-manual]") {
     ResolvedTrait trait;
     trait.name = "Position";
-    trait.fields.push_back({"x", {TypeKind::Float, "float"}, false, true, false, false, false});
-    trait.fields.push_back({"y", {TypeKind::Float, "float"}, false, true, false, false, false});
+    trait.fields.push_back({.name       = "x",
+                            .type       = {.kind = TypeKind::Float, .name = "float"},
+                            .is_let     = false,
+                            .is_var     = true,
+                            .is_persist = false,
+                            .is_sync    = false,
+                            .is_pub     = false});
+    trait.fields.push_back({.name       = "y",
+                            .type       = {.kind = TypeKind::Float, .name = "float"},
+                            .is_let     = false,
+                            .is_var     = true,
+                            .is_persist = false,
+                            .is_sync    = false,
+                            .is_pub     = false});
 
     auto code = SoaEmitter::emit_soa_storage(trait);
     CHECK(code.find("struct PositionStorage") != std::string::npos);
@@ -51,8 +63,8 @@ TEST_CASE("Codegen Manual: SoA storage from trait (legacy)", "[codegen-manual]")
 TEST_CASE("Codegen Manual: POD struct", "[codegen-manual]") {
     ResolvedStruct s;
     s.name = "Item";
-    s.fields.push_back({"price", {TypeKind::Int, "int"}});
-    s.fields.push_back({"weight", {TypeKind::Float, "float"}});
+    s.fields.push_back({.name = "price", .type = {.kind = TypeKind::Int, .name = "int"}});
+    s.fields.push_back({.name = "weight", .type = {.kind = TypeKind::Float, .name = "float"}});
 
     auto code = SoaEmitter::emit_pod_struct(s);
     CHECK(code.find("struct Item") != std::string::npos);
@@ -135,8 +147,8 @@ TEST_CASE("Codegen Manual: global field arrays emitted", "[codegen-manual][7.2]"
     std::unordered_map<std::string, ResolvedTrait> traits;
     ResolvedTrait pos;
     pos.name = "Position";
-    pos.fields.push_back({"x", {TypeKind::Float, "float"}});
-    pos.fields.push_back({"y", {TypeKind::Float, "float"}});
+    pos.fields.push_back({.name = "x", .type = {.kind = TypeKind::Float, .name = "float"}});
+    pos.fields.push_back({.name = "y", .type = {.kind = TypeKind::Float, .name = "float"}});
     traits["Position"] = pos;
 
     auto code = SoaEmitter::emit_global_field_arrays(traits, {"Position"});

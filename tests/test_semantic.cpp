@@ -25,10 +25,14 @@ static bool analyze_has_errors(const std::string& source) {
     ErrorReporter errors;
     Lexer lexer(source, "test.cactus", errors);
     auto tokens = lexer.tokenize();
-    if (errors.has_errors()) return true;
+    if (errors.has_errors()) {
+        return true;
+    }
     Parser parser(std::move(tokens), errors);
     auto program = parser.parse_program();
-    if (errors.has_errors()) return true;
+    if (errors.has_errors()) {
+        return true;
+    }
     SemanticAnalyzer analyzer(errors);
     analyzer.analyze(program);
     return errors.has_errors();
@@ -265,7 +269,8 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
         "        x = 3.0\n");
     REQUIRE(result.dependency_graph.size() == 3);
     // Find B and C in dependency graph
-    bool found_B = false, found_C = false;
+    bool found_B = false;
+    bool found_C = false;
     for (auto& dep : result.dependency_graph) {
         if (dep.system_name == "B") {
             REQUIRE(dep.after_systems.size() == 1);

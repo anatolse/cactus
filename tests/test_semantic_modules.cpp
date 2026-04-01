@@ -22,7 +22,7 @@ static ProgramNode make_program_with_trait_field(const std::string& trait_name,
     field.type.name = field_type_name;
     field.modifiers.is_var = true;
     trait.fields.push_back(std::move(field));
-    prog.declarations.push_back(std::move(trait));
+    prog.declarations.emplace_back(std::move(trait));
     return prog;
 }
 
@@ -33,13 +33,13 @@ static ProgramNode make_program_with_system(const std::string& sys_name,
     SystemNode sys;
     sys.name = sys_name;
     sys.filter.entries = entries;
-    for (auto& e : entries) {
+    for (const auto& e : entries) {
         // Also populate backward-compat trait_names with the last component
         auto dot = e.qualified_name.find('.');
         sys.filter.trait_names.push_back(
             dot != std::string::npos ? e.qualified_name.substr(dot + 1) : e.qualified_name);
     }
-    prog.declarations.push_back(std::move(sys));
+    prog.declarations.emplace_back(std::move(sys));
     return prog;
 }
 
@@ -179,11 +179,11 @@ TEST_CASE("semantic_modules: unqualified ambiguous type reports error", "[semant
 
     ImportedSymbols syms_a;
     syms_a.module_name = "modA";
-    syms_a.structs["Config"] = ResolvedStruct{"Config", {}};
+    syms_a.structs["Config"] = ResolvedStruct{.name = "Config", .fields = {}};
 
     ImportedSymbols syms_b;
     syms_b.module_name = "modB";
-    syms_b.structs["Config"] = ResolvedStruct{"Config", {}};
+    syms_b.structs["Config"] = ResolvedStruct{.name = "Config", .fields = {}};
 
     ModuleImports imports;
     imports.add("modA", std::move(syms_a));
@@ -194,7 +194,7 @@ TEST_CASE("semantic_modules: unqualified ambiguous type reports error", "[semant
     analyzer.analyze(prog, imports);
 
     CHECK(errors.has_errors());
-    auto& msg = errors.diagnostics()[0].message;
+    const auto& msg = errors.diagnostics()[0].message;
     CHECK(msg.find("ambiguous") != std::string::npos);
     CHECK(msg.find("Config") != std::string::npos);
 }
@@ -288,7 +288,7 @@ TEST_CASE("semantic_modules: non-pub type reference suggests adding pub", "[sema
     analyzer.analyze(prog, imports);
 
     CHECK(errors.has_errors());
-    auto& msg = errors.diagnostics()[0].message;
+    const auto& msg = errors.diagnostics()[0].message;
     CHECK(msg.find("not public") != std::string::npos);
     CHECK(msg.find("PlayerPhysics") != std::string::npos);
     CHECK(msg.find("pub") != std::string::npos);
@@ -325,7 +325,7 @@ TEST_CASE("semantic_modules: backward compat — no imports works as before", "[
     f.type.name = "float";
     f.modifiers.is_var = true;
     trait.fields.push_back(std::move(f));
-    prog.declarations.push_back(std::move(trait));
+    prog.declarations.emplace_back(std::move(trait));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -341,13 +341,13 @@ TEST_CASE("semantic_modules: backward compat — local filter trait still works"
     ProgramNode prog;
     TraitNode trait;
     trait.name = "Health";
-    prog.declarations.push_back(std::move(trait));
+    prog.declarations.emplace_back(std::move(trait));
 
     SystemNode sys;
     sys.name = "HealSystem";
     sys.filter.trait_names = {"Health"};
     // entries is empty — backward-compat path
-    prog.declarations.push_back(std::move(sys));
+    prog.declarations.emplace_back(std::move(sys));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);

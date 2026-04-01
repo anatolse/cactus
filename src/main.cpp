@@ -31,7 +31,7 @@ static void print_usage(const char* program) {
 }
 
 static void print_errors(const cactus::ErrorReporter& errors) {
-    for (auto& d : errors.diagnostics()) {
+    for (const auto& d : errors.diagnostics()) {
         std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column
                   << ": " << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning")
                   << ": " << d.message << "\n";
@@ -52,18 +52,24 @@ static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& pat
 
     cactus::Lexer lexer(source, path, errors);
     auto tokens = lexer.tokenize();
-    if (errors.has_errors()) return nullptr;
+    if (errors.has_errors()) {
+        return nullptr;
+    }
 
     cactus::Parser parser(std::move(tokens), errors);
     auto prog = std::make_unique<cactus::ProgramNode>(parser.parse_program());
-    if (errors.has_errors()) return nullptr;
+    if (errors.has_errors()) {
+        return nullptr;
+    }
     return prog;
 }
 
 /// Returns true if program has any `use` declarations.
 static bool has_use_declarations(const cactus::ProgramNode& prog) {
-    for (auto& decl : prog.declarations) {
-        if (std::holds_alternative<cactus::UseNode>(decl)) return true;
+    for (const auto& decl : prog.declarations) {
+        if (std::holds_alternative<cactus::UseNode>(decl)) {
+            return true;
+        }
     }
     return false;
 }
@@ -73,13 +79,15 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
                                                      const cactus::DecoratedProgram& prog) {
     cactus::ImportedSymbols syms;
     syms.module_name = module_name;
-    for (auto& [name, trait] : prog.traits) {
-        if (trait.is_pub) syms.traits[name] = trait;
+    for (const auto& [name, trait] : prog.traits) {
+        if (trait.is_pub) {
+            syms.traits[name] = trait;
+        }
     }
-    for (auto& [name, strct] : prog.structs) {
+    for (const auto& [name, strct] : prog.structs) {
         syms.structs[name] = strct;
     }
-    for (auto& [name, enm] : prog.enums) {
+    for (const auto& [name, enm] : prog.enums) {
         syms.enums[name] = enm;
     }
     return syms;

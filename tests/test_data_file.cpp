@@ -69,7 +69,7 @@ TEST_CASE("DataFile: float field with constant reference", "[datafile]") {
     CHECK(records[0].name == "Ball");
     REQUIRE(records[0].fields.size() == 1);
     CHECK(records[0].fields[0].second.tag == FieldValue::Tag::Float);
-    CHECK(records[0].fields[0].second.f32 == 30.0f);
+    CHECK(records[0].fields[0].second.f32 == 30.0F);
 }
 
 TEST_CASE("DataFile: vec2 field from constructor call", "[datafile]") {
@@ -86,8 +86,8 @@ TEST_CASE("DataFile: vec2 field from constructor call", "[datafile]") {
     REQUIRE(records.size() == 1);
     REQUIRE(records[0].fields.size() == 1);
     CHECK(records[0].fields[0].second.tag == FieldValue::Tag::Vec2);
-    CHECK(records[0].fields[0].second.vec2.x == 100.0f);
-    CHECK(records[0].fields[0].second.vec2.y == 200.0f);
+    CHECK(records[0].fields[0].second.vec2.x == 100.0F);
+    CHECK(records[0].fields[0].second.vec2.y == 200.0F);
 }
 
 TEST_CASE("DataFile: bool field", "[datafile]") {
@@ -221,7 +221,9 @@ TEST_CASE("DataFile: write and read round-trip", "[datafile]") {
     REQUIRE(loaded[0].fields.size() == written[0].fields.size());
 
     // Check hp field
-    bool found_hp = false, found_x = false, found_y = false;
+    bool found_hp = false;
+    bool found_x  = false;
+    bool found_y  = false;
     for (auto& [fname, fval] : loaded[0].fields) {
         if (fname == "hp") {
             found_hp = true;
@@ -231,12 +233,12 @@ TEST_CASE("DataFile: write and read round-trip", "[datafile]") {
         if (fname == "x") {
             found_x = true;
             CHECK(fval.tag == FieldValue::Tag::Float);
-            CHECK(fval.f32 == 10.0f);
+            CHECK(fval.f32 == 10.0F);
         }
         if (fname == "y") {
             found_y = true;
             CHECK(fval.tag == FieldValue::Tag::Float);
-            CHECK(fval.f32 == 20.0f);
+            CHECK(fval.f32 == 20.0F);
         }
     }
     CHECK(found_hp);

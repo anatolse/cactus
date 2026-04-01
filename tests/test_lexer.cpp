@@ -24,7 +24,7 @@ static std::vector<Token> lex_with_errors(const std::string& source, ErrorReport
 // Helper: find token types (excluding NEWLINE and EOF for cleaner assertions)
 static std::vector<TokenType> token_types(const std::vector<Token>& tokens) {
     std::vector<TokenType> types;
-    for (auto& t : tokens) {
+    for (const auto& t : tokens) {
         if (t.type != TokenType::NEWLINE && t.type != TokenType::EOF_TOKEN) {
             types.push_back(t.type);
         }
@@ -165,8 +165,12 @@ TEST_CASE("Lexer: INDENT and DEDENT", "[lexer]") {
     bool found_indent = false;
     bool found_dedent = false;
     for (auto& t : tokens) {
-        if (t.type == TokenType::INDENT) found_indent = true;
-        if (t.type == TokenType::DEDENT) found_dedent = true;
+        if (t.type == TokenType::INDENT) {
+            found_indent = true;
+        }
+        if (t.type == TokenType::DEDENT) {
+            found_dedent = true;
+        }
     }
     CHECK(found_indent);
     CHECK(found_dedent);
@@ -177,7 +181,9 @@ TEST_CASE("Lexer: multiple dedent levels", "[lexer]") {
     auto tokens = lex(src);
     int dedent_count = 0;
     for (auto& t : tokens) {
-        if (t.type == TokenType::DEDENT) ++dedent_count;
+        if (t.type == TokenType::DEDENT) {
+            ++dedent_count;
+        }
     }
     CHECK(dedent_count == 2);
 }

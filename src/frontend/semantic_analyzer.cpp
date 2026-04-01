@@ -625,7 +625,7 @@ void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {
                     }
                     break;
                 }
-                if (visited.contains(callee))) {
+                if (visited.contains(callee)) {
                     visited.insert(callee);
                     stack.push_back(callee);
                 }

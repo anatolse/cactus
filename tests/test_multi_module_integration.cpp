@@ -43,17 +43,23 @@ static std::optional<DecoratedProgram> compile_file(const fs::path& path,
     // Lex
     Lexer lexer(source, path.string(), errors);
     auto tokens = lexer.tokenize();
-    if (errors.has_errors()) return std::nullopt;
+    if (errors.has_errors()) {
+        return std::nullopt;
+    }
 
     // Parse
     Parser parser(std::move(tokens), errors);
     auto program_node = parser.parse_program();
-    if (errors.has_errors()) return std::nullopt;
+    if (errors.has_errors()) {
+        return std::nullopt;
+    }
 
     // Semantic analyze
     SemanticAnalyzer analyzer(errors);
     auto decorated = analyzer.analyze(program_node, imports);
-    if (errors.has_errors()) return std::nullopt;
+    if (errors.has_errors()) {
+        return std::nullopt;
+    }
 
     return decorated;
 }
@@ -101,7 +107,9 @@ TEST_CASE("integration: resolve → compile → link player + level", "[integrat
     ImportedSymbols player_syms;
     player_syms.module_name = "player";
     for (auto& [name, trait] : player_prog->traits) {
-        if (trait.is_pub) player_syms.traits[name] = trait;
+        if (trait.is_pub) {
+            player_syms.traits[name] = trait;
+        }
     }
     ModuleImports level_imports;
     level_imports.add("player", std::move(player_syms));
@@ -147,8 +155,12 @@ TEST_CASE("integration: module resolver produces topo order for multi_module fix
     size_t player_idx = SIZE_MAX;
     size_t level_idx  = SIZE_MAX;
     for (size_t i = 0; i < modules.size(); ++i) {
-        if (modules[i].qualified_name == "player") player_idx = i;
-        if (modules[i].qualified_name == "level")  level_idx  = i;
+        if (modules[i].qualified_name == "player") {
+            player_idx = i;
+        }
+        if (modules[i].qualified_name == "level") {
+            level_idx = i;
+        }
     }
     REQUIRE(player_idx != SIZE_MAX);
     REQUIRE(level_idx != SIZE_MAX);
@@ -180,7 +192,9 @@ TEST_CASE("integration: full pipeline using module resolver", "[integration][7.2
                 ImportedSymbols syms;
                 syms.module_name = dep_name;
                 for (auto& [name, trait] : it->second.traits) {
-                    if (trait.is_pub) syms.traits[name] = trait;
+                    if (trait.is_pub) {
+                        syms.traits[name] = trait;
+                    }
                 }
                 for (auto& [name, strct] : it->second.structs) {
                     syms.structs[name] = strct;

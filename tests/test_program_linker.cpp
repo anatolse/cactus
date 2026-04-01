@@ -116,7 +116,7 @@ TEST_CASE("program_linker: duplicate pub trait name detected", "[linker][5.3]") 
 
     CHECK_FALSE(ok);
     CHECK(errors.has_errors());
-    auto& msg = errors.diagnostics()[0].message;
+    const auto& msg = errors.diagnostics()[0].message;
     CHECK(msg.find("duplicate symbol") != std::string::npos);
     CHECK(msg.find("Position") != std::string::npos);
     CHECK(msg.find("modA") != std::string::npos);

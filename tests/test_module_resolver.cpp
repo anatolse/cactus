@@ -1,10 +1,10 @@
-#include <catch2/catch_test_macros.hpp>
-
 #include "common/error_reporter.h"
 #include "frontend/ast.h"
 #include "frontend/lexer.h"
 #include "frontend/module_resolver.h"
 #include "frontend/parser.h"
+
+#include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -110,7 +110,7 @@ TEST_CASE("ModuleResolver: missing module declaration accepted", "[resolver]") {
 TEST_CASE("ModuleResolver: locate file in search dir", "[resolver]") {
     ErrorReporter errors;
     ModuleResolver resolver(errors);
-    auto path = resolver.locate_file("player", {FIXTURES});
+    auto path = cactus::ModuleResolver::locate_file("player", {FIXTURES});
     CHECK_FALSE(path.empty());
     CHECK(path.filename() == "player.cactus");
 }
@@ -118,7 +118,7 @@ TEST_CASE("ModuleResolver: locate file in search dir", "[resolver]") {
 TEST_CASE("ModuleResolver: locate nonexistent file", "[resolver]") {
     ErrorReporter errors;
     ModuleResolver resolver(errors);
-    auto path = resolver.locate_file("nonexistent", {FIXTURES});
+    auto path = cactus::ModuleResolver::locate_file("nonexistent", {FIXTURES});
     CHECK(path.empty());
 }
 
@@ -144,11 +144,14 @@ TEST_CASE("ModuleResolver: multi-module resolution with transitive deps", "[reso
 
     // Find positions
     std::vector<std::string> names;
-    for (auto& m : result) names.push_back(m.qualified_name);
+    names.reserve(result.size());
+    for (auto& m : result) {
+        names.push_back(m.qualified_name);
+    }
 
-    auto player_pos = std::find(names.begin(), names.end(), "player") - names.begin();
-    auto level_pos = std::find(names.begin(), names.end(), "level") - names.begin();
-    auto main_pos = std::find(names.begin(), names.end(), "main") - names.begin();
+    auto player_pos = std::ranges::find(names, "player") - names.begin();
+    auto level_pos  = std::ranges::find(names, "level") - names.begin();
+    auto main_pos   = std::ranges::find(names, "main") - names.begin();
 
     // player must come before level (level depends on player)
     CHECK(player_pos < level_pos);
@@ -167,7 +170,9 @@ TEST_CASE("ModuleResolver: diamond dependency deduplication", "[resolver]") {
 
     int player_count = 0;
     for (auto& m : result) {
-        if (m.qualified_name == "player") player_count++;
+        if (m.qualified_name == "player") {
+            player_count++;
+        }
     }
     CHECK(player_count == 1);
 }
@@ -186,6 +191,6 @@ TEST_CASE("ModuleResolver: module not found error", "[resolver]") {
     // Create a temp program that uses nonexistent module
     // We need a file on disk — use the main.cactus with a search path that excludes player
     // Instead, test with locate_file returning empty
-    auto path = resolver.locate_file("nonexistent", {FIXTURES});
+    auto path = cactus::ModuleResolver::locate_file("nonexistent", {FIXTURES});
     CHECK(path.empty());
 }

@@ -13,10 +13,14 @@ static bool analyze_errors(const std::string& source) {
     ErrorReporter errors;
     Lexer lexer(source, "test.cactus", errors);
     auto tokens = lexer.tokenize();
-    if (errors.has_errors()) return true;
+    if (errors.has_errors()) {
+        return true;
+    }
     Parser parser(std::move(tokens), errors);
     auto program = parser.parse_program();
-    if (errors.has_errors()) return true;
+    if (errors.has_errors()) {
+        return true;
+    }
     SemanticAnalyzer analyzer(errors);
     analyzer.analyze(program);
     return errors.has_errors();
@@ -26,10 +30,14 @@ static std::string first_error(const std::string& source) {
     ErrorReporter errors;
     Lexer lexer(source, "test.cactus", errors);
     auto tokens = lexer.tokenize();
-    if (errors.has_errors()) return errors.diagnostics()[0].message;
+    if (errors.has_errors()) {
+        return errors.diagnostics()[0].message;
+    }
     Parser parser(std::move(tokens), errors);
     auto program = parser.parse_program();
-    if (errors.has_errors()) return errors.diagnostics()[0].message;
+    if (errors.has_errors()) {
+        return errors.diagnostics()[0].message;
+    }
     SemanticAnalyzer analyzer(errors);
     analyzer.analyze(program);
     return errors.has_errors() ? errors.diagnostics()[0].message : "";

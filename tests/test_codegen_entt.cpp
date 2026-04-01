@@ -28,8 +28,20 @@ static DecoratedProgram full_pipeline(const std::string& source, ProgramNode& pr
 TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
     ResolvedTrait trait;
     trait.name = "Position";
-    trait.fields.push_back({"x", {TypeKind::Float, "float"}, false, true, false, false, false});
-    trait.fields.push_back({"y", {TypeKind::Float, "float"}, false, true, false, false, false});
+    trait.fields.push_back({.name       = "x",
+                            .type       = {.kind = TypeKind::Float, .name = "float"},
+                            .is_let     = false,
+                            .is_var     = true,
+                            .is_persist = false,
+                            .is_sync    = false,
+                            .is_pub     = false});
+    trait.fields.push_back({.name       = "y",
+                            .type       = {.kind = TypeKind::Float, .name = "float"},
+                            .is_let     = false,
+                            .is_var     = true,
+                            .is_persist = false,
+                            .is_sync    = false,
+                            .is_pub     = false});
 
     auto code = EnttComponentEmitter::emit_component(trait);
     CHECK(code.find("struct Position") != std::string::npos);

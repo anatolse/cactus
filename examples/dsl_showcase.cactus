@@ -5,6 +5,16 @@
 # This single file demonstrates every syntactic and semantic feature of the
 # Cactus DSL as defined in the openspec/specs directory and pending changes.
 #
+# Language identity:
+#   Cactus is a declarative, data-oriented gameplay description language that
+#   compiles to an engine backend. Authors describe WHAT EXISTS, WHAT REACTS TO
+#   WHAT, HOW STATE CHANGES, and WHAT IS PRESENTED. The backend handles all
+#   plumbing: rendering, physics integration, lifetime management, serialization.
+#
+# See openspec/specs/language-philosophy/spec.md for the authoritative language
+# identity and design principles (predictability, total semantics, author/backend
+# split, performance as backend obligation, feature evaluation criteria).
+#
 # Sections:
 #   1.  Module declaration & imports (use, use as)
 #   2.  Const block  — int, float, string, hex color (6- and 8-digit)
@@ -40,11 +50,41 @@
 #       · TraitName as alias =>          (bind trait data of other entity)
 #       · TraitName =>                   (marker trait — no alias)
 #       · _ =>                           (optional wildcard)
-#   18. Statements — let/var, if/else, match (value + trait), emit (broadcast + targeted),
+#   18. Entity liveness — `exists(entity_id)` built-in
+#       · entity_id is an opaque handle; may become stale when entity destroyed
+#       · exists(id) → bool; guards cross-entity access; stale ops are safe no-ops
+#       · match on stale id fires NO arms — including `_ =>`
+#   19. Extern system — `extern system` declarations (no event handlers)
+#       · stdlib-known: backend recognises trait set and auto-generates full pass
+#       · user-defined: backend generates typed C++ callback scaffold
+#   20. Statements — let/var, if/else, match (value + trait), emit (broadcast + targeted),
 #       spawn (statement + expression), destroy (self + entity_id),
 #       load, add, remove, return
-#   19. Expressions — binary ops, unary, member access, function calls,
+#   21. Expressions — binary ops, unary, member access, function calls,
 #       lambda (map), bool literals, vec2/vec3/quat constructors
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ASPIRATIONAL vs. CURRENT IMPLEMENTATION GAPS
+#
+# Most of this file demonstrates the INTENDED authoring pattern as specified.
+# The following sections contain KNOWN GAPS where the authoring surface is not
+# yet fully declarative:
+#
+#   · draw_rect / draw_text calls  (SceneRenderSystem, BossRenderSystem,
+#     UIRenderSystem, DebugOverlaySystem, ParticleSystem)
+#     → KNOWN GAP: explicit rendering calls are NOT the intended pattern.
+#       The intended pattern is `extern system SpriteRenderPass` (Section 19).
+#       `draw_rect` calls exist here only to illustrate system handler syntax
+#       while the stdlib rendering layer is still pending.
+#       Tracked by: dsl-extern-system (tasks 6.x, stdlib updates).
+#
+#   · play_particle_effect extern func call  (ParticleSystem)
+#     → KNOWN GAP: particle effects should be driven by a trait + extern system.
+#       Tracked by: dsl-declarative-audio (future change).
+#
+# Section 19 (extern system) shows the CORRECT declarative pattern that will
+# replace all direct draw_* calls once the stdlib rendering layer is in place.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── 1. Module declaration & imports ───────────────────────────────────────────
 
@@ -215,12 +255,13 @@ trait Renderable3D:
     let material: material_id           # material_id opaque type
     var visible:  bool
 
-# — entity_id type: always refers to a live entity; no null sentinel —
+# — entity_id type: opaque handle; may become stale when the referenced entity is destroyed —
+# Use exists(id) to test liveness. All ops on a stale handle are safe no-ops / silent no-match.
 trait Parent:
     var parent_id: entity_id
 
 trait Follower:
-    var target: entity_id               # entity_id field
+    var target: entity_id               # may become stale — guard with exists()
     var offset: vec3
     var speed:  float
 
@@ -770,6 +811,36 @@ system CollectibleSystem:
         destroy
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SECTION 18 — ENTITY LIVENESS: `exists(entity_id)` built-in
+#
+# entity_id is an opaque handle. It may become stale after the referenced entity
+# is destroyed. `exists()` is a built-in that tests liveness:
+#
+#   if exists(f.target):         ...   → guard cross-entity access
+#   if not exists(f.target):     ...   → clean up dangling refs
+#
+# All ops on a stale handle are safe no-ops: add/remove, targeted emit, destroy.
+# A `match stale_id:` fires NO arms — including `_ =>`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+system FollowerSystem:
+    filter:
+        Position2D as pos
+        Follower as f
+    after:
+        PhysicsIntegrationSystem
+
+    on tick:
+        if exists(f.target):
+            # Target is still live — apply follow velocity toward offset
+            let spd = f.speed * tick.dt
+            pos.velocity = vec2(f.offset.x * spd, f.offset.y * spd)
+        if not exists(f.target):
+            # Target was destroyed — detach follower cleanly
+            # (all ops above on a stale handle would have been safe no-ops anyway)
+            remove Follower
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SECTION 17 — TRAIT PATTERN MATCHING: `match entity_id:` (double dispatch)
 #
 # When the subject has type entity_id, `match` dispatches by RUNTIME trait presence:
@@ -957,3 +1028,53 @@ system ParticleSystem:
             cos_f(t) * 100.0 + 640.0,
             sin_f(t) * 100.0 + 360.0
         )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 19 — EXTERN SYSTEM: `extern system` — declarative backend systems
+#
+# `extern system` declares a filter (and optionally order by:, exclude:, after:)
+# but contains NO event handlers. The backend provides the full implementation.
+#
+# Two patterns:
+#   · Stdlib-known:   backend identifies traits by fully-qualified name and
+#                     auto-generates a complete rendering / physics / audio pass.
+#   · User-defined:   backend generates a typed C++ callback scaffold:
+#                     void SystemName_update(registry, entity, TraitA& a, ...)
+#
+# `extern system` participates in the `after:` ordering graph like any system.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Stdlib-known extern system — backend auto-generates the sprite rendering pass
+# because it recognises spr.Renderer + tr_flat.Position as std.render.sprites + std.transform.flat.
+# No C++ to write; no parameters to configure; the `order by:` is honoured by the backend.
+extern system SpriteRenderPass:
+    filter:
+        spr.Renderer as r
+        tr_flat.Position as pos
+    order by:
+        r.layer asc
+        pos.pos.y asc
+    after:
+        CollisionSystem
+
+# Stdlib-known extern system — backend auto-generates the 2D physics integration pass
+extern system Physics2DPass:
+    filter:
+        tr_flat.Position as pos
+        phys_flat.RigidBody as rb
+    after:
+        GravitySystem
+
+# User-defined extern system — backend generates a typed C++ callback scaffold.
+# The author fills in the implementation in the generated .cpp file:
+#   void ParticleEffectRenderer_update(entt::registry& reg,
+#                                      entt::entity entity,
+#                                      Position2D& pos,
+#                                      Visual&     vis);
+extern system ParticleEffectRenderer:
+    filter:
+        Position2D as pos
+        Visual as vis
+    after:
+        SpriteRenderPass
+        ParticleSystem

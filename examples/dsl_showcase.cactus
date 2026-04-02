@@ -3,7 +3,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # This single file demonstrates every syntactic and semantic feature of the
-# Cactus DSL as defined in the openspec/specs directory.
+# Cactus DSL as defined in the openspec/specs directory and pending changes.
 #
 # Sections:
 #   1.  Module declaration & imports (use, use as)
@@ -13,13 +13,14 @@
 #   5.  Struct types
 #   6.  Enum types
 #   7.  Trait declarations — all field modifiers (let, var, persist, sync, pub)
-#   8.  Marker traits      — body-less (zero-cost tag)
-#   9.  Event declarations — including marker events (body-less)
+#                           — field default values (= expr)
+#   8.  Marker traits      — body-less (zero-cost tag), no fields, no alias
+#   9.  Event declarations — including events with entity_id fields
 #   10. Pure func declarations  — no emit, no world access, no recursion
 #   11. Extern func declarations — body-less, backend-provided
-#   12. Unit declarations — apply with aliases, disabled traits, dotted config
+#   12. Unit declarations — apply without `: disabled` (open-world traits)
 #   13. Template declarations  — spawn-only blueprints
-#   14. Systems — all phases, filter/exclude/after, all handler kinds
+#   14. Systems — filter / exclude / order by / after / all handler phases
 #       · on input                      (Input phase — no payload fields)
 #       · on fixed_tick                 (Physics phase — fixed_tick.dt)
 #       · on tick  [as alias]           (Update phase — tick.dt or alias.dt)
@@ -27,10 +28,22 @@
 #       · on spawn  / on destroy        (Entity lifecycle — no fields)
 #       · on load   / on unload         (Scene lifecycle — no fields)
 #       · on UserEvent  [as alias]      (Custom event — EventName.field or alias.field)
-#   15. Statements — let/var, if/else, match, emit (broadcast + targeted),
+#   15. Dynamic traits — `add` / `remove` replace `enable` / `disable`
+#       · add TraitName                  (bare — all defaults)
+#       · add TraitName(field = val)     (named args — explicit field init)
+#       · add TraitName to entity_id     (cross-entity targeting)
+#       · remove TraitName               (self)
+#       · remove TraitName from entity_id (cross-entity targeting)
+#   16. Entity sort ordering — `order by:` clause on systems
+#       · alias.field asc / desc         (primary and secondary keys)
+#   17. Trait pattern matching — `match entity_id:` (double dispatch)
+#       · TraitName as alias =>          (bind trait data of other entity)
+#       · TraitName =>                   (marker trait — no alias)
+#       · _ =>                           (optional wildcard)
+#   18. Statements — let/var, if/else, match (value + trait), emit (broadcast + targeted),
 #       spawn (statement + expression), destroy (self + entity_id),
-#       load, enable, disable, return
-#   16. Expressions — binary ops, unary, member access, function calls,
+#       load, add, remove, return
+#   19. Expressions — binary ops, unary, member access, function calls,
 #       lambda (map), bool literals, vec2/vec3/quat constructors
 
 # ── 1. Module declaration & imports ───────────────────────────────────────────
@@ -156,13 +169,22 @@ enum FacingDir:
 # Fields:    let (immutable after init)   var (mutable)
 # Modifiers: persist (serialized to disk) sync (network-replicated)
 #            pub (exported in ImportedSymbols)
+# Default values: = expr on any field (used by `add` when field is omitted)
 
 # — Primitive scalar types —
 trait Health:
     let max_health: int = 100           # let: immutable, with default
     persist sync var health: int        # persist + sync + var
-    pub var shield: int                 # pub field
-    var invincible_timer: float
+    pub var shield: int = 0             # pub field with default value
+
+# — Traits with default values — bare `add TraitName` works when all fields have defaults —
+
+trait Invincible:
+    var duration: float = 1.5           # default — `add Invincible` uses this automatically
+
+trait Stunned:
+    var duration:    float = 2.0        # default duration
+    var slow_factor: float = 0.5        # default movement slow
 
 # — vec2 / float types —
 trait Position2D:
@@ -185,7 +207,7 @@ trait Inventory:
 trait Renderable2D:
     let texture:  texture_id            # only obtainable from an asset declaration
     var visible:  bool
-    var layer:    int
+    var layer:    int = 0               # default layer (background)
     var tint:     color
 
 trait Renderable3D:
@@ -213,9 +235,9 @@ trait EnemyAI:
     var patrol_min_x:  float
     var patrol_max_x:  float
     var patrol_speed:  float
-    var direction:     float
+    var direction:     float = 1.0      # default: moving right
     var enemy_type:    EnemyType
-    var is_aggro:      bool
+    var is_aggro:      bool = false     # default: not aggressive
 
 # — InputButton / InputAxis field types (resolved from input declarations) —
 trait PlayerInput:
@@ -226,7 +248,7 @@ trait PlayerInput:
 pub trait Score:
     persist var score:           int
     persist var high_score:      int
-    var combo_multiplier:        int
+    var combo_multiplier:        int = 1    # default multiplier
 
 # — music_id / sound_id / font_id types —
 trait AudioConfig:
@@ -235,10 +257,10 @@ trait AudioConfig:
     let hud_fnt: font_id
 
 # ── 8. Marker traits ───────────────────────────────────────────────────────────
-# No colon, no body — zero-cost tag component; used for filter/exclude.
+# No colon, no body — zero-cost tag component; used for filter/exclude/add/remove.
+# Note: `Invincible` and `Stunned` are in section 7 (they have fields).
 
-trait Frozen                    # entity is paused/frozen
-trait Invincible                # entity takes no damage
+trait Frozen                    # entity is paused/frozen — dynamically added/removed
 trait PlayerOwned               # entity belongs to the player
 trait Collectible               # entity can be picked up
 pub trait Boss                  # pub marker: importable by other modules
@@ -248,9 +270,10 @@ pub trait Boss                  # pub marker: importable by other modules
 #   on PlayerDamaged:      → PlayerDamaged.amount
 #   on PlayerDamaged as d: → d.amount
 #
+# Events may carry entity_id fields — enables trait pattern matching via `match`.
 # Lifecycle events (tick, fixed_tick, late_tick, spawn, destroy, input,
 # load, unload) are declared as pub events in std.core and are always in scope.
-# Marker events (no fields) may also be declared without a body.
+# Marker events (no fields) may be declared without a body.
 
 event PlayerJumped:
     var position: vec2
@@ -258,7 +281,7 @@ event PlayerJumped:
 
 event PlayerDamaged:
     var amount:   int
-    var source:   entity_id
+    var source:   entity_id             # entity_id field in event
 
 event PlayerDied:
     var lives_remaining: int
@@ -276,6 +299,12 @@ event FreezeApplied:
 
 event SceneTransition:
     var next_state: GameState
+
+# Collision event carries entity_id for trait pattern matching (double dispatch)
+event Collision:
+    var other:  entity_id               # the other entity involved
+    var normal: vec2                    # collision surface normal
+    var depth:  float                   # penetration depth
 
 # Marker event — no colon, no fields (body-less form)
 event GamePaused
@@ -321,7 +350,7 @@ func aabb_overlap_y(ay: float, ah: float, by: float, bh: float) float:
         return 0.0
     return overlap
 
-# match expression inside a func
+# value match expression inside a func — matches on enum type
 pub func score_for_enemy(etype: EnemyType, multiplier: int) int:
     var base = 0
     match etype:
@@ -360,31 +389,29 @@ pub extern func get_player_entity() entity_id
 
 # ── 12. Unit declarations ──────────────────────────────────────────────────────
 # Auto-instantiated at program start (or on module load).
-# apply: — list of traits; "as ALIAS" declares local alias for field access
-#          ": disabled" marks a trait as initially inactive
+# apply: — list of traits; "as ALIAS" declares local alias for field access.
+# No `: disabled` annotation — the old enable/disable model is replaced by
+# dynamic add/remove. Traits not in apply: are added/removed at runtime.
 # config: — sets initial field values; bare key, alias.field, or TraitName.field
 
 pub unit Player:
     apply:
         Position2D as pos           # alias: pos.pos, pos.velocity
-        Health as hp                # alias: hp.health, hp.shield, etc.
+        Health as hp                # alias: hp.health, hp.shield
         Inventory as inv            # alias: inv.items, inv.gold
         Score as sc                 # alias: sc.score, sc.high_score
         Renderable2D as rndr        # alias: rndr.texture, rndr.visible
         PlayerOwned                 # marker trait — no fields, no alias needed
-        Frozen: disabled            # starts INACTIVE; enable/disable at runtime
-        Invincible: disabled        # starts INACTIVE
+        # Frozen, Invincible, Stunned are NOT in apply: — added dynamically
     config:
         pos.pos          = vec2(100.0, 300.0)   # alias-qualified
         pos.velocity     = vec2(0.0, 0.0)
         Health.health    = MAX_HEALTH            # TraitName-qualified
         Health.shield    = 0
-        hp.invincible_timer = 0.0               # alias-qualified
         inv.gold         = 0
         inv.max_slots    = 20
         sc.score         = 0
         sc.high_score    = 0
-        sc.combo_multiplier = 1
         rndr.texture     = PlayerTex            # asset name resolves to texture_id
         rndr.visible     = true
         rndr.layer       = 1
@@ -420,11 +447,11 @@ unit GameManager:
     config:
         score            = 0                    # bare key (unambiguous: only sc has it)
         high_score       = 0
-        combo_multiplier = 1
 
 # ── 13. Template declarations ─────────────────────────────────────────────────
 # NOT auto-instantiated. Spawned via `spawn TemplateName(overrides)`.
 # Same structure as unit (apply: + config:).
+# No `: disabled` — traits not in apply: are added dynamically.
 
 pub template WalkerEnemy:
     apply:
@@ -432,18 +459,15 @@ pub template WalkerEnemy:
         Health as hp
         EnemyAI as ai
         Renderable2D as rndr
-        Frozen: disabled            # starts unfrozen; can be frozen externally
+        # Frozen, Stunned are NOT pre-applied — added externally via `add ... to entity_id`
     config:
         pos.pos         = vec2(0.0, 0.0)    # overridden at spawn site
         pos.velocity    = vec2(0.0, 0.0)
         hp.health       = 30
-        hp.invincible_timer = 0.0
         ai.patrol_min_x = 0.0
         ai.patrol_max_x = 400.0
         ai.patrol_speed = 2.0
-        ai.direction    = 1.0
         ai.enemy_type   = EnemyType.Walker
-        ai.is_aggro     = false
         rndr.texture    = EnemyTex
         rndr.visible    = true
         rndr.layer      = 0
@@ -459,13 +483,10 @@ pub template FlyerEnemy:
         pos.pos         = vec2(0.0, 0.0)
         pos.velocity    = vec2(0.0, 0.0)
         hp.health       = 20
-        hp.invincible_timer = 0.0
         ai.patrol_min_x = 0.0
         ai.patrol_max_x = 600.0
         ai.patrol_speed = 3.5
-        ai.direction    = 1.0
         ai.enemy_type   = EnemyType.Flyer
-        ai.is_aggro     = false
         rndr.texture    = EnemyTex
         rndr.visible    = true
         rndr.layer      = 0
@@ -481,7 +502,6 @@ pub template BossEnemy:
     config:
         pos.pos         = vec2(640.0, 200.0)
         hp.health       = 300
-        hp.invincible_timer = 0.0
         ai.patrol_speed = 1.0
         ai.enemy_type   = EnemyType.Boss
         ai.is_aggro     = true
@@ -503,18 +523,17 @@ pub template Coin:
 
 # ── 14. Systems ────────────────────────────────────────────────────────────────
 # Components of a system declaration:
-#   filter:  — trait list; each entry may have "as ALIAS"
-#   exclude: — entities with any of these active traits are skipped
-#   after:   — ordering constraint (run after listed systems in same phase)
-#   handlers — on event_name [as alias]:
+#   filter:   — trait list; each entry may have "as ALIAS"
+#   exclude:  — entities with any of these traits currently attached are skipped
+#   order by: — sort entities by field(s) before iteration (section 16)
+#   after:    — ordering constraint (run after listed systems in same phase)
+#   handlers  — on event_name [as alias]:
 #
-# NEW UNIFIED EVENT HANDLER SYNTAX:
-#   · No parameter list — the `()` is gone from all handlers
-#   · Event data is accessed via the event name: `tick.dt`, `PlayerDamaged.amount`
+# EVENT HANDLER SYNTAX:
+#   · No parameter list — event data accessed via name: `tick.dt`, `collision.other`
 #   · Optional alias:  `on tick as t:` → `t.dt`
-#                      `on PlayerDamaged as dmg:` → `dmg.amount`
-#   · Lifecycle events (tick, fixed_tick, late_tick, spawn, destroy, input,
-#     load, unload) are declared in std.core and are always available
+#                      `on collision as c:` → `c.other`, `c.normal`
+#   · Lifecycle events always in scope from std.core
 
 # ─────────────────────────────────────────────────────────────────────────────
 # INPUT PHASE — on input:  (no fields on the input event)
@@ -525,10 +544,10 @@ system PlayerInputSystem:
         Position2D as pos           # filter with alias
         Health as hp
     exclude:
-        Frozen                      # exclude: skip frozen entities
+        Frozen                      # frozen entities cannot provide input
+        Stunned                     # stunned entities cannot provide input
 
     on input:
-        # std.input query functions: pressed, down, released, axis, axis2
         var jumped   = input.pressed(Jump)       # InputButton → bool
         var fired    = input.down(Fire)          # held down
         var released = input.released(Pause)     # first frame released
@@ -541,12 +560,11 @@ system PlayerInputSystem:
         if jumped:
             emit PlayerJumped(pos.pos, pos.velocity)
 
-        if fired and hp.invincible_timer <= 0.0:
+        if fired:
             emit PlayerDamaged(1, get_player_entity())
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHYSICS PHASE — on fixed_tick:   access dt as fixed_tick.dt
-# fixed timestep; runs 0..N times per frame via accumulator model
 # ─────────────────────────────────────────────────────────────────────────────
 
 system GravitySystem:
@@ -556,7 +574,6 @@ system GravitySystem:
         Frozen                      # frozen entities skip gravity
 
     on fixed_tick:
-        # Event name is the implicit variable: fixed_tick.dt
         pos.velocity = vec2(pos.velocity.x, pos.velocity.y + GRAVITY * fixed_tick.dt)
         pos.pos      = pos.pos + vec2(pos.velocity.x * fixed_tick.dt, pos.velocity.y * fixed_tick.dt)
 
@@ -566,6 +583,7 @@ system PhysicsIntegrationSystem:
         EnemyAI as ai
     exclude:
         Frozen
+        Stunned                     # stunned enemies don't patrol
 
     on fixed_tick:
         pos.pos = pos.pos + vec2(ai.patrol_speed * ai.direction * fixed_tick.dt, 0.0)
@@ -588,7 +606,6 @@ system CollisionSystem:
         let oy = aabb_overlap_y(pos.pos.y, 48.0, 600.0, 40.0)
 
         if ox > 0.0 and oy > 0.0:
-            # targeted emit: to expression must be of type entity_id
             emit PlayerDamaged(1, get_player_entity()) to get_player_entity()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -598,36 +615,40 @@ system CollisionSystem:
 system HealthSystem:
     filter:
         Health as hp
+    exclude:
+        Invincible                  # invincible entities skip all damage processing
 
     on tick as t:
         # `as t` alias — access event fields as t.dt instead of tick.dt
-        var timer = hp.invincible_timer
-        if timer > 0.0:
-            timer = timer - t.dt            # alias field access
-        hp.invincible_timer = clamp_float(timer, 0.0, 99.0)
-
-        # Clamp using pure func call
+        # Clamp health using pure func call
         hp.health = clamp_int(hp.health, 0, hp.max_health)
 
     on PlayerDamaged as dmg:
-        # User event with alias: access payload as dmg.field instead of PlayerDamaged.field
-        # Fields are read-only (assigning dmg.amount = 0 is an error)
-        if hp.invincible_timer <= 0.0:
-            let damage = dmg.amount         # let: immutable local binding
-            hp.health = hp.health - damage
-            hp.invincible_timer = 1.5
+        # User event with alias: access payload as dmg.field
+        let damage = dmg.amount                         # let: immutable local binding
+        hp.health  = hp.health - damage
 
-            if hp.health <= 0:
-                emit PlayerDied(0)
+        # add with named arg — explicit grace period duration
+        add Invincible(duration = 1.5)                  # dynamically attach Invincible trait
+
+        if hp.health <= 0:
+            emit PlayerDied(0)
 
     on spawn:
         # on spawn: fires once after all fields are initialized; no payload fields
-        hp.invincible_timer = 0.0
         hp.health = hp.max_health
 
     on destroy:
-        # on destroy: fires before entity is removed; fields still readable; no payload
+        # on destroy: fires before entity is removed; fields still readable
         emit EnemyDefeated(vec2(0.0, 0.0), EnemyType.Walker, SCORE_PER_COIN)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 15 — DYNAMIC TRAITS: `add` and `remove`
+#
+# `add`   — attaches a trait (emplace-or-replace; patches if already present)
+# `remove` — destroys a trait and its data from an entity
+# No `: disabled` / `enable` / `disable` — the old model is replaced entirely.
+# ─────────────────────────────────────────────────────────────────────────────
 
 system FreezeSystem:
     filter:
@@ -635,28 +656,53 @@ system FreezeSystem:
         Position2D as pos
 
     on tick:
-        # Event name used directly: tick.dt not needed here, no dt usage
         if hp.health < 20:
-            enable Frozen       # Frozen becomes active → excluded from GravitySystem
+            add Frozen              # bare add — Frozen is a marker, no fields
         if hp.health > 50:
-            disable Frozen      # Frozen becomes inactive → included again
+            remove Frozen           # remove — Frozen detached, entity re-enters gravity/patrol
 
+    on FreezeApplied as fa:
+        # Freeze from external event — add both effects
+        add Frozen                              # stops movement
+        add Invincible(duration = fa.duration)  # named arg: use event field for duration
+
+# Invincibility timer — runs only on entities that currently HAVE Invincible
 system InvincibilitySystem:
     filter:
-        Health as hp
-        Position2D as pos
-    exclude:
-        Frozen
+        Invincible as inv           # only entities that were dynamically `add Invincible`d
 
     on tick:
-        if hp.invincible_timer > 0.0:
-            enable Invincible
-        if hp.invincible_timer <= 0.0:
-            disable Invincible
+        inv.duration = inv.duration - tick.dt
+        if inv.duration <= 0.0:
+            remove Invincible       # timer expired — entity can take damage again
 
-    on FreezeApplied:
-        # Access via event name directly: FreezeApplied.duration
-        hp.invincible_timer = FreezeApplied.duration
+# Stun timer — runs only on entities that currently HAVE Stunned
+system StunnedMovementSystem:
+    filter:
+        Position2D as pos
+        Stunned as stun             # only entities that were `add Stunned`d
+
+    on tick:
+        # Slow down stunned entities
+        pos.velocity = vec2(
+            pos.velocity.x * stun.slow_factor,
+            pos.velocity.y * stun.slow_factor
+        )
+        stun.duration = stun.duration - tick.dt
+        if stun.duration <= 0.0:
+            remove Stunned          # stun expired — full movement restored
+
+    on fixed_tick:
+        # Stunned entities still apply physics at reduced velocity
+        pos.pos = pos.pos + vec2(pos.velocity.x * fixed_tick.dt, pos.velocity.y * fixed_tick.dt)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 16 — ENTITY SORT ORDERING: `order by:` on systems
+#
+# Sorts entities before iteration. Multi-key lexicographic. Per frame.
+# Sort keys must be `alias.field` from filter:; must be int/float/bool.
+# For vec2 members, use `pos.pos.y` (resolves to float) not `pos.pos` (vec2).
+# ─────────────────────────────────────────────────────────────────────────────
 
 system ScoreSystem:
     filter:
@@ -668,14 +714,12 @@ system ScoreSystem:
         sc.score = clamp_int(sc.score, 0, 999999)
 
     on EnemyDefeated:
-        # Access event payload via event name: EnemyDefeated.enemy_type, etc.
         let pts = score_for_enemy(EnemyDefeated.enemy_type, sc.combo_multiplier)
         sc.score = sc.score + pts
         if sc.score > sc.high_score:
             sc.high_score = sc.score
 
     on CoinCollected:
-        # CoinCollected.value is the event payload field
         sc.score = sc.score + CoinCollected.value * sc.combo_multiplier
 
 system EnemySpawnerSystem:
@@ -691,19 +735,18 @@ system EnemySpawnerSystem:
             ai.patrol_max_x = pos.pos.x + 500.0
         )
 
+        # cross-entity `add` — freeze the spawned walker for 2 seconds
+        add Frozen to walker_id                         # add to another entity
+
         # spawn statement — discard result
         spawn FlyerEnemy(
             pos.pos = vec2(pos.pos.x + 500.0, 100.0)
         )
 
-        # broadcast emit (no `to`)
         emit EnemyDefeated(pos.pos, EnemyType.Walker, SCORE_PER_COIN)
-
-        # targeted emit — to must evaluate to entity_id
         emit PlayerDamaged(5, walker_id) to walker_id
 
     on EnemyDefeated:
-        # destroy with no argument — removes the current entity
         destroy
 
 system CoinDropSystem:
@@ -712,11 +755,9 @@ system CoinDropSystem:
         EnemyAI as ai
 
     on EnemyDefeated:
-        # spawn expression stored in var (mutable binding)
         var coin_id = spawn Coin(
-            pos.pos = EnemyDefeated.position    # EnemyDefeated.position via event name
+            pos.pos = EnemyDefeated.position
         )
-        # targeted emit to the newly spawned coin entity
         emit CoinCollected(SCORE_PER_COIN) to coin_id
 
 system CollectibleSystem:
@@ -726,14 +767,90 @@ system CollectibleSystem:
         PlayerOwned                 # do not re-collect player-owned entities
 
     on CoinCollected:
-        # destroy the current coin entity (the one targeted by the emit)
         destroy
 
 # ─────────────────────────────────────────────────────────────────────────────
-# POST-UPDATE PHASE — on late_tick:   access dt as late_tick.dt
-# Runs once per frame after all tick handlers.
-# Events fired at cascade limit from late_tick are deferred to next frame.
+# SECTION 17 — TRAIT PATTERN MATCHING: `match entity_id:` (double dispatch)
+#
+# When the subject has type entity_id, `match` dispatches by RUNTIME trait presence:
+#   · Arms checked in order — first match wins
+#   · `TraitName as alias =>` binds trait data (read/write access)
+#   · `TraitName =>` matches marker traits with no data binding
+#   · `_ =>` optional wildcard — executes when no arm matched
+#   · No wildcard needed — open world, no-match is silent no-op
+#
+# Under the hood: if (auto* b = registry.try_get<Boss>(c.other)) { ... }
 # ─────────────────────────────────────────────────────────────────────────────
+
+system CollisionDispatchSystem:
+    filter:
+        Position2D as pos
+        Health as hp
+    exclude:
+        Invincible                  # invincible entities bypass all collision damage
+
+    on collision as c:
+        # `match c.other:` — c.other is entity_id → TRAIT PATTERN MATCH mode
+        match c.other:
+            Boss as boss =>
+                # Boss collision: heavy damage + self grace period + stun the boss
+                hp.health = hp.health - 20
+                add Invincible(duration = 2.0)              # self: explicit duration
+                add Stunned(duration = 3.0) to c.other      # cross-entity: stun boss
+
+            EnemyAI as enemy =>
+                # Enemy collision: damage scales with enemy speed
+                hp.health = hp.health - 5
+                add Invincible                              # self: uses default (1.5s)
+                emit PlayerDamaged(5, c.other)
+
+            Collectible =>
+                # Collectible collision: no damage — consume the collectible
+                emit CoinCollected(SCORE_PER_COIN)
+                remove Collectible from c.other             # cross-entity remove
+                destroy c.other
+
+            Frozen =>
+                # Frozen obstacle: minor chip damage, no invincibility
+                hp.health = hp.health - 1
+
+            _ =>
+                # Anything else: environmental contact
+                pos.velocity = vec2(pos.velocity.x * -0.5, pos.velocity.y)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST-UPDATE PHASE — on late_tick:   access dt as late_tick.dt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SceneRenderSystem — demonstrates `order by:` for render layer + Y-sort
+system SceneRenderSystem:
+    filter:
+        Position2D as pos
+        Renderable2D as rndr
+    exclude:
+        Frozen
+    order by:
+        rndr.layer asc              # primary: layer 0 (background) first
+        pos.pos.y asc               # secondary: lower Y = further "back" (Y-sort depth)
+
+    on tick:
+        if rndr.visible:
+            draw_rect(pos.pos, vec2(32.0, 32.0), rndr.tint)
+
+system BossRenderSystem:
+    filter:
+        Position2D as pos
+        Renderable2D as rndr
+        Boss                        # filter on marker trait (no fields accessible)
+    order by:
+        rndr.layer asc              # boss sprites sorted by layer too
+
+    after:
+        SceneRenderSystem           # boss renders on top of normal entities
+
+    on tick:
+        if rndr.visible:
+            draw_rect(pos.pos, vec2(64.0, 64.0), rndr.tint)
 
 system CameraFollowSystem:
     filter:
@@ -741,11 +858,10 @@ system CameraFollowSystem:
         cam_flat.FollowCamera as follow
 
     after:
-        PhysicsIntegrationSystem    # must see updated positions
+        PhysicsIntegrationSystem
         CollisionSystem
 
     on late_tick:
-        # late_tick.dt for the variable frame delta
         let smooth = clamp_float(follow.smoothing * late_tick.dt, 0.0, 1.0)
         cam.offset = vec2(
             lerp(cam.offset.x, follow.target_pos.x, smooth),
@@ -758,24 +874,20 @@ system UIRenderSystem:
         Health as hp
 
     after:
-        CameraFollowSystem          # UI draws after camera is positioned
+        CameraFollowSystem
 
     on late_tick:
-        # extern func calls
         let sw = get_screen_width()
         let sh = get_screen_height()
 
-        # Variables: let (immutable) vs var (mutable)
         var bar_w = sw - 20
-        bar_w     = clamp_int(bar_w, 0, 1260)   # re-assign var (valid)
+        bar_w     = clamp_int(bar_w, 0, 1260)
 
-        # draw_text takes a string param — pass const reference, not literal
         draw_text(SCORE_LABEL, 10.0, 10.0, 24, PLAYER_COLOR)
         draw_text(LIVES_LABEL, 10.0, 40.0, 24, PLAYER_COLOR)
 
 system DebugOverlaySystem:
     # filter: is optional — no filter means match ALL entities
-    # Cannot access any trait fields without a declared filter
     after:
         UIRenderSystem
         CameraFollowSystem
@@ -783,7 +895,6 @@ system DebugOverlaySystem:
     on late_tick:
         let sw = get_screen_width()
         let sh = get_screen_height()
-        # string passed from const reference — not an inline literal
         draw_text(DEBUG_LABEL, 10.0, 70.0, 16, CLEAR_WHITE)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -796,29 +907,21 @@ system SceneManager:
         Health as hp
 
     on load:
-        # on load: fires after on spawn: handlers complete for all new entities
-        # No payload fields (load is a marker event in std.core)
-        sc.score            = 0
-        sc.combo_multiplier = 1
-        hp.health           = MAX_HEALTH
-        hp.invincible_timer = 0.0
+        sc.score = 0
+        hp.health = MAX_HEALTH
 
     on unload:
-        # on unload: fires before new entities are instantiated
-        # persist var fields are still readable here
         emit SceneTransition(GameState.Playing)
 
 system CleanupSystem:
-    # No filter, exclude Persistent — matches all non-persistent entities
     exclude:
         std.core.Persistent
 
     on unload:
-        # destroy without argument — removes current entity
         destroy
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GAME FLOW — load statement for scene transitions
+# GAME FLOW — load + match (value match on enum)
 # ─────────────────────────────────────────────────────────────────────────────
 
 system GameFlowSystem:
@@ -828,11 +931,10 @@ system GameFlowSystem:
 
     on tick:
         if hp.health <= 0:
-            # load: deferred to end of frame; triggers on unload → spawn → on load
             load game_over
 
     on SceneTransition as st:
-        # Alias `st` used to access event fields: st.next_state
+        # `st.next_state` is type GameState (enum) → VALUE match (not trait match)
         match st.next_state:
             GameState.Playing  => load level2
             GameState.GameOver => load game_over
@@ -840,32 +942,8 @@ system GameFlowSystem:
             GameState.Paused   => emit FreezeApplied(5.0)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SYSTEM ORDERING — after: clause across multiple phases
+# PARTICLE SYSTEM — no filter, extern func calls, no trait field access
 # ─────────────────────────────────────────────────────────────────────────────
-
-system SceneRenderSystem:
-    filter:
-        Position2D as pos
-        Renderable2D as rndr
-    exclude:
-        Frozen
-
-    on tick:
-        if rndr.visible:
-            draw_rect(pos.pos, vec2(rndr.width, rndr.height), rndr.tint)
-
-system BossRenderSystem:
-    filter:
-        Position2D as pos
-        Renderable2D as rndr
-        Boss                        # filter on marker trait (no fields accessible)
-
-    after:
-        SceneRenderSystem           # boss renders on top of normal entities
-
-    on tick:
-        if rndr.visible:
-            draw_rect(pos.pos, vec2(rndr.width * 2.0, rndr.height * 2.0), rndr.tint)
 
 system ParticleSystem:
     after:
@@ -873,7 +951,7 @@ system ParticleSystem:
         BossRenderSystem
 
     on tick:
-        # No filter → no trait field access; lifecycle ops and extern calls are valid
+        # No filter → no trait field access; only extern calls are valid
         let t = get_time()
         play_particle_effect(
             cos_f(t) * 100.0 + 640.0,

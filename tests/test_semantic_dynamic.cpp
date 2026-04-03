@@ -22,9 +22,9 @@ static const std::string STDLIB_EVENTS =
 
 static bool analyze_errors(const std::string& source) {
     // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
-    const std::string full_source = STDLIB_EVENTS + source;
+    const std::string FULL_SOURCE = STDLIB_EVENTS + source;
     ErrorReporter errors;
-    Lexer lexer(full_source, "test.cactus", errors);
+    Lexer lexer(FULL_SOURCE, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     if (errors.has_errors()) {
         return true;
@@ -41,9 +41,9 @@ static bool analyze_errors(const std::string& source) {
 
 static std::string first_error(const std::string& source) {
     // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
-    const std::string full_source = STDLIB_EVENTS + source;
+    const std::string FULL_SOURCE = STDLIB_EVENTS + source;
     ErrorReporter errors;
-    Lexer lexer(full_source, "test.cactus", errors);
+    Lexer lexer(FULL_SOURCE, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     if (errors.has_errors()) {
         return errors.diagnostics()[0].message;
@@ -63,46 +63,43 @@ static std::string first_error(const std::string& source) {
 TEST_CASE("Semantic: template with declared traits — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"));
+        "template Enemy:\n    Position\n"));
 }
 
 TEST_CASE("Semantic: template with undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "template Enemy:\n    apply:\n        UnknownTrait\n"));
+        "template Enemy:\n    UnknownTrait\n"));
 }
 
 TEST_CASE("Semantic: template with invalid config field — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"
-        "    config:\n        badfield = 1.0\n"));
+        "template Enemy:\n    Position:\n        badfield = 1.0\n"));
 }
 
 TEST_CASE("Semantic: template with valid config field — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"
-        "    config:\n        x = 5.0\n"));
+        "template Enemy:\n    Position:\n        x = 5.0\n"));
 }
 
 // ── Task 5.2: Templates tracked separately from units ─────────────────────────
 
 TEST_CASE("Semantic: unit with undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "unit Player:\n    apply:\n        NonExistent\n"));
+        "unit Player:\n    NonExistent\n"));
 }
 
 TEST_CASE("Semantic: unit with declared trait — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Health:\n    var hp: int = 100\n"
-        "unit Player:\n    apply:\n        Health\n"));
+        "unit Player:\n    Health\n"));
 }
 
 TEST_CASE("Semantic: unit config with unknown field — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Health:\n    var hp: int = 100\n"
-        "unit Player:\n    apply:\n        Health\n"
-        "    config:\n        badfield = 10\n"));
+        "unit Player:\n    Health:\n        badfield = 10\n"));
 }
 
 // ── Task 5.3: Spawn site validation ─────────────────────────────────────────
@@ -110,26 +107,32 @@ TEST_CASE("Semantic: unit config with unknown field — error", "[semantic][dyna
 TEST_CASE("Semantic: spawn valid template — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"
+        "template Enemy:\n    Position\n"
         "system Spawner:\n"
         "    on load:\n"
-        "        spawn Enemy(x = 1.0)\n"));
+        "        spawn Enemy:\n"
+        "            Position:\n"
+        "                x = 1.0\n"));
 }
 
 TEST_CASE("Semantic: spawn undefined template — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "system Spawner:\n"
         "    on load:\n"
-        "        spawn Ghost()\n"));
+        "        spawn Ghost:\n"
+        "            Position:\n"
+        "                x = 0.0\n"));
 }
 
 TEST_CASE("Semantic: spawn with unknown override field — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"
+        "template Enemy:\n    Position\n"
         "system Spawner:\n"
         "    on load:\n"
-        "        spawn Enemy(badfield = 1.0)\n"));
+        "        spawn Enemy:\n"
+        "            Position:\n"
+        "                badfield = 1.0\n"));
 }
 
 // ── Task 5.3: Spawn required field check ────────────────────────────────────
@@ -138,19 +141,22 @@ TEST_CASE("Semantic: spawn with required field provided — ok", "[semantic][dyn
     // 'speed' is var with no default → required at spawn
     CHECK_FALSE(analyze_errors(
         "trait Movement:\n    var speed: float\n"
-        "template Bullet:\n    apply:\n        Movement\n"
+        "template Bullet:\n    Movement\n"
         "system Spawner:\n"
         "    on load:\n"
-        "        spawn Bullet(speed = 5.0)\n"));
+        "        spawn Bullet:\n"
+        "            Movement:\n"
+        "                speed = 5.0\n"));
 }
 
 TEST_CASE("Semantic: spawn with required field missing — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Movement:\n    var speed: float\n"
-        "template Bullet:\n    apply:\n        Movement\n"
+        "template Bullet:\n    Movement\n"
         "system Spawner:\n"
         "    on load:\n"
-        "        spawn Bullet()\n"));
+        "        spawn Bullet:\n"
+        "            Movement\n"));
 }
 
 TEST_CASE("Semantic: spawn with required field provided by template config — ok",
@@ -158,11 +164,11 @@ TEST_CASE("Semantic: spawn with required field provided by template config — o
     // speed provided in template config — not required at spawn
     CHECK_FALSE(analyze_errors(
         "trait Movement:\n    var speed: float\n"
-        "template Bullet:\n    apply:\n        Movement\n"
-        "    config:\n        speed = 10.0\n"
+        "template Bullet:\n    Movement:\n        speed = 10.0\n"
         "system Spawner:\n"
         "    on load:\n"
-        "        spawn Bullet()\n"));
+        "        spawn Bullet:\n"
+        "            Movement\n"));
 }
 
 // ── Task 5.4: Spawn does not target a unit ──────────────────────────────────
@@ -170,10 +176,12 @@ TEST_CASE("Semantic: spawn with required field provided by template config — o
 TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
     auto err = first_error(
         "trait Position:\n    var x: float = 0.0\n"
-        "unit Player:\n    apply:\n        Position\n"
+        "unit Player:\n    Position\n"
         "system Spawner:\n"
         "    on load:\n"
-        "        spawn Player()\n");
+        "        spawn Player:\n"
+        "            Position:\n"
+        "                x = 0.0\n");
     CHECK(err.find("is a unit, not a template") != std::string::npos);
 }
 
@@ -182,8 +190,8 @@ TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
 TEST_CASE("Semantic: spawn in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"
-        "func bad():\n    spawn Enemy(x = 1.0)\n"));
+        "template Enemy:\n    Position\n"
+        "func bad():\n    spawn Enemy:\n        Position:\n            x = 1.0\n"));
 }
 
 TEST_CASE("Semantic: destroy in func body — error", "[semantic][dynamic-ecs]") {
@@ -372,9 +380,8 @@ TEST_CASE("Semantic: disabled annotation on marker trait — valid", "[semantic]
         "trait Frozen\n"
         "trait Position:\n    var x: float = 0.0\n"
         "template Enemy:\n"
-        "    apply:\n"
-        "        Position\n"
-        "        Frozen: disabled\n"));
+        "    Position\n"
+        "    Frozen: disabled\n"));
 }
 
 TEST_CASE("Semantic: disabled annotation on data trait — valid", "[semantic][dynamic-ecs]") {
@@ -382,9 +389,8 @@ TEST_CASE("Semantic: disabled annotation on data trait — valid", "[semantic][d
         "trait EnemyAI:\n    var patrol_speed: float = 2.0\n"
         "trait Position:\n    var x: float = 0.0\n"
         "template LazyEnemy:\n"
-        "    apply:\n"
-        "        Position\n"
-        "        EnemyAI: disabled\n"));
+        "    Position\n"
+        "    EnemyAI: disabled\n"));
 }
 
 // ── Lifecycle events accepted in event handler validation ───────────────────
@@ -407,7 +413,7 @@ TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic
 TEST_CASE("Semantic: marker trait in apply is valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Persistent\n"
-        "unit Player:\n    apply:\n        Persistent\n"));
+        "unit Player:\n    Persistent\n"));
 }
 
 TEST_CASE("Semantic: pub marker trait", "[semantic][dynamic-ecs]") {
@@ -440,12 +446,14 @@ TEST_CASE("Semantic: destroy in system handler — valid", "[semantic][dynamic-e
 TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"
+        "template Enemy:\n    Position\n"
         "system Spawner:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        spawn Enemy(x = 0.0)\n"));
+        "        spawn Enemy:\n"
+        "            Position:\n"
+        "                x = 0.0\n"));
 }
 
 // ── Task 11.10: Marker trait in apply/filter/exclude ────────────────────────

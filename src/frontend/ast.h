@@ -14,6 +14,7 @@ namespace cactus {
 // Forward declarations
 struct ExprNode;
 struct StmtNode;
+struct ArchetypeTraitEntry;
 
 // ── Type Reference (unresolved, from parser) ────────────────────────────────
 
@@ -48,6 +49,25 @@ struct FieldNode {
 struct FuncParam {
     std::string name;
     TypeRef type;
+    SourceLocation location;
+};
+
+struct FieldAssignment {
+    std::string name;
+    std::unique_ptr<ExprNode> value;
+    SourceLocation location;
+};
+
+struct ArchetypeTraitEntry {
+    std::string trait_name;
+    bool initially_active = true;
+    std::vector<FieldAssignment> assignments;
+    SourceLocation location;
+};
+
+struct SpawnExpr {
+    std::string template_name;
+    std::vector<ArchetypeTraitEntry> overrides;
     SourceLocation location;
 };
 
@@ -132,7 +152,7 @@ struct ListExpr {
 
 struct ExprNode {
     using Variant = std::variant<LiteralExpr, IdentExpr, BinaryExpr, UnaryExpr, CallExpr, MemberExpr, LambdaExpr,
-                                 PipelineExpr, MatchExpr, IfExpr, ListExpr>;
+                                 PipelineExpr, MatchExpr, IfExpr, ListExpr, SpawnExpr>;
     Variant expr;
     SourceLocation location;
 
@@ -149,9 +169,16 @@ struct VarAssign {
     SourceLocation location;
 };
 
+struct LetStmt {
+    std::string name;
+    std::unique_ptr<ExprNode> value;
+    SourceLocation location;
+};
+
 struct EmitStmt {
     std::string event_name;
-    std::vector<std::unique_ptr<ExprNode>> args;
+    std::optional<std::unique_ptr<ExprNode>> target;
+    std::vector<FieldAssignment> payload;
     SourceLocation location;
 };
 
@@ -172,18 +199,10 @@ struct IfStmt {
     SourceLocation location;
 };
 
-// A single spawn override argument: [prefix.]field = expr
-struct SpawnArg {
-    std::string name;       // field name
-    std::string key_prefix; // trait name or alias prefix; empty if bare
-    std::unique_ptr<ExprNode> value;
-    SourceLocation location;
-};
-
-// spawn TemplateName(field = expr, ...)
+// spawn TemplateName: Trait: field = expr
 struct SpawnStmt {
     std::string template_name;
-    std::vector<SpawnArg> overrides;
+    std::vector<ArchetypeTraitEntry> overrides;
     SourceLocation location;
 };
 
@@ -211,7 +230,7 @@ struct DisableStmt {
 };
 
 struct StmtNode {
-    using Variant = std::variant<VarAssign, EmitStmt, SpawnStmt, DestroyStmt, LoadStmt,
+    using Variant = std::variant<LetStmt, VarAssign, EmitStmt, SpawnStmt, DestroyStmt, LoadStmt,
                                  EnableStmt, DisableStmt, ReturnStmt, ExprStmt, IfStmt>;
     Variant stmt;
     SourceLocation location;
@@ -279,39 +298,6 @@ struct TraitNode {
     SourceLocation location;
 };
 
-// Entry in an apply: block — trait name + optional alias + optional : disabled annotation
-struct ApplyEntry {
-    std::string trait_name;
-    std::optional<std::string> alias;  // declared via 'as identifier'; empty if none
-    bool initially_active = true;      // false when annotated ': disabled'
-    SourceLocation location;
-};
-
-struct ApplyBlock {
-    std::vector<ApplyEntry> entries;
-    SourceLocation location;
-
-    // Helper: collect just the trait names (ignoring active state)
-    std::vector<std::string> trait_names() const {
-        std::vector<std::string> names;
-        names.reserve(entries.size());
-        for (const auto& e : entries) names.push_back(e.trait_name);
-        return names;
-    }
-};
-
-struct ConfigAssignment {
-    std::string name;         // field name (last component, or the full bare name)
-    std::string key_prefix;   // trait name or alias prefix; empty if bare key (no dot)
-    std::unique_ptr<ExprNode> value;
-    SourceLocation location;
-};
-
-struct ConfigBlock {
-    std::vector<ConfigAssignment> assignments;
-    SourceLocation location;
-};
-
 struct ChildEntry {
     std::string type_name;
     std::string instance_name;
@@ -326,8 +312,7 @@ struct ChildBlock {
 struct UnitNode {
     std::string name;
     bool is_pub = false;
-    ApplyBlock apply;
-    std::optional<ConfigBlock> config;
+    std::vector<ArchetypeTraitEntry> traits;
     std::optional<ChildBlock> child;
     SourceLocation location;
 };
@@ -337,8 +322,7 @@ struct UnitNode {
 struct TemplateNode {
     std::string name;
     bool is_pub = false;
-    ApplyBlock apply;
-    std::optional<ConfigBlock> config;
+    std::vector<ArchetypeTraitEntry> traits;
     std::optional<ChildBlock> child;
     SourceLocation location;
 };
@@ -367,7 +351,7 @@ struct SystemNode {
 
 struct ViewElement {
     std::string tag_name;
-    std::vector<ConfigAssignment> props;
+    std::vector<FieldAssignment> props;
     std::vector<ViewElement> children;
     SourceLocation location;
 };

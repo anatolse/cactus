@@ -90,7 +90,7 @@ TEST_CASE("Semantic: const string — rejected in func", "[semantic]") {
 TEST_CASE("Semantic: func purity — emit rejected", "[semantic]") {
     CHECK(analyze_has_errors(
         "event Boom:\n    var x: int\n"
-        "func bad():\n    emit Boom(1)\n"));
+        "func bad():\n    emit Boom:\n        x = 1\n"));
 }
 
 TEST_CASE("Semantic: func purity — pure func allowed", "[semantic]") {
@@ -140,6 +140,24 @@ TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
     CHECK(analyze_has_errors(
         "trait Pos:\n    var x: float\n"
         "system Bad:\n    filter: \n        Pos\n    on FakeEvent:\n        x = 0\n"));
+}
+
+TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
+    CHECK(analyze_has_errors(
+        "event Damage:\n    var amount: int\n"
+        "system Combat:\n"
+        "    on tick:\n"
+        "        emit Damage:\n"
+        "            badfield = 1\n"));
+}
+
+TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
+    CHECK_FALSE(analyze_has_errors(
+        "event Damage:\n    var amount: int\n"
+        "system Combat:\n"
+        "    on tick:\n"
+        "        emit Damage:\n"
+        "            amount = 1\n"));
 }
 
 TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
@@ -211,7 +229,7 @@ TEST_CASE("Semantic: non-extern func with emit is still flagged", "[semantic][ex
     // Regular func with emit still fails purity check
     CHECK(analyze_has_errors(
         "event Boom:\n    var x: int\n"
-        "func bad():\n    emit Boom(1)\n"));
+        "func bad():\n    emit Boom:\n        x = 1\n"));
 }
 
 TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][extern-func]") {
@@ -303,47 +321,37 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
 }
 
 // Task 12.8: ambiguous bare config key reports error
-TEST_CASE("Semantic: ambiguous bare config key reports error", "[semantic][config-qualification]") {
+TEST_CASE("Semantic: duplicate field across nested traits reports error", "[semantic][config-qualification]") {
     CHECK(analyze_has_errors(
         "trait TraitA:\n    var value: int\n"
         "trait TraitB:\n    var value: int\n"
         "unit Player:\n"
-        "    apply:\n"
-        "        TraitA\n"
-        "        TraitB\n"
-        "    config:\n"
-        "        value = 5\n"));
+        "    TraitA:\n"
+        "        value = 5\n"
+        "    TraitB:\n"
+        "        value = 6\n"));
 }
 
-// Task 12.9: dotted config key resolves correctly (no error)
-TEST_CASE("Semantic: dotted config key resolves correctly", "[semantic][config-qualification]") {
+TEST_CASE("Semantic: nested trait field resolves correctly", "[semantic][config-qualification]") {
     CHECK_FALSE(analyze_has_errors(
         "trait Health:\n    var hp: int = 100\n"
         "unit Player:\n"
-        "    apply:\n"
-        "        Health\n"
-        "    config:\n"
-        "        Health.hp = 50\n"));
+        "    Health:\n"
+        "        hp = 50\n"));
 }
 
-// Task 12.9b: dotted config key with unknown field reports error
-TEST_CASE("Semantic: dotted config key with unknown field reports error", "[semantic][config-qualification]") {
+TEST_CASE("Semantic: nested trait field with unknown field reports error", "[semantic][config-qualification]") {
     CHECK(analyze_has_errors(
         "trait Health:\n    var hp: int = 100\n"
         "unit Player:\n"
-        "    apply:\n"
-        "        Health\n"
-        "    config:\n"
-        "        Health.notafield = 50\n"));
+        "    Health:\n"
+        "        notafield = 50\n"));
 }
 
-// Task 12.10: bare config key with unambiguous field passes
-TEST_CASE("Semantic: unambiguous bare config key passes", "[semantic][config-qualification]") {
+TEST_CASE("Semantic: marker trait with nested trait assignment passes", "[semantic][config-qualification]") {
     CHECK_FALSE(analyze_has_errors(
         "trait Health:\n    var hp: int = 100\n"
         "unit Player:\n"
-        "    apply:\n"
-        "        Health\n"
-        "    config:\n"
+        "    Health:\n"
         "        hp = 50\n"));
 }

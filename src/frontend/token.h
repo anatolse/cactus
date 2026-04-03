@@ -66,6 +66,7 @@ enum class TokenType {
     TRUE_LIT,
     FALSE_LIT,
     AS,
+    TO,
     AND,
     OR,
     NOT,
@@ -186,6 +187,7 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::TRUE_LIT: return "TRUE";
         case TokenType::FALSE_LIT: return "FALSE";
         case TokenType::AS: return "AS";
+        case TokenType::TO: return "TO";
         case TokenType::AND: return "AND";
         case TokenType::OR: return "OR";
         case TokenType::NOT: return "NOT";

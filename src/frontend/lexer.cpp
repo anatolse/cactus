@@ -57,6 +57,7 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"true", TokenType::TRUE_LIT},
         {"false", TokenType::FALSE_LIT},
         {"as", TokenType::AS},
+        {"to", TokenType::TO},
         {"and", TokenType::AND},
         {"or", TokenType::OR},
         {"not", TokenType::NOT},

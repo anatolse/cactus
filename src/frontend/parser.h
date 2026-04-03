@@ -56,8 +56,11 @@ private:
     TypeRef parse_type_ref();
     FuncParam parse_param();
     std::vector<FuncParam> parse_param_list();
-    ApplyBlock parse_apply_block();
-    ConfigBlock parse_config_block();
+    FieldAssignment parse_field_assignment();
+    std::vector<FieldAssignment> parse_field_assignment_block();
+    ArchetypeTraitEntry parse_archetype_trait_entry(bool allow_disabled = false);
+    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entries(bool allow_disabled = false);
+    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entry_block(bool allow_disabled = false);
     ChildBlock parse_child_block();
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();

@@ -81,9 +81,9 @@ void DataFileWriter::build_trait_bit_index() {
     }
 }
 
-uint64_t DataFileWriter::compute_trait_mask(const ApplyBlock& apply) const {
+uint64_t DataFileWriter::compute_trait_mask(const std::vector<ArchetypeTraitEntry>& traits) const {
     uint64_t mask = 0;
-    for (const auto& entry : apply.entries) {
+    for (const auto& entry : traits) {
         if (!entry.initially_active) {
             continue;
         }
@@ -355,12 +355,12 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() { // NOLINT(read
         if (const auto* unit = std::get_if<UnitNode>(&decl)) {
             EntityInstanceData rec;
             rec.name = unit->name;
-            rec.trait_mask = compute_trait_mask(unit->apply);
+            rec.trait_mask = compute_trait_mask(unit->traits);
 
-            // Build config map: field_name → evaluated value
+            // Build config map from nested trait assignments: field_name → evaluated value
             std::unordered_map<std::string, FieldValue> config_vals;
-            if (unit->config.has_value()) {
-                for (const auto& assign : unit->config->assignments) {
+            for (const auto& trait : unit->traits) {
+                for (const auto& assign : trait.assignments) {
                     auto val = eval_expr(*assign.value);
                     if (val) {
                         config_vals[assign.name] = *val;
@@ -368,8 +368,8 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() { // NOLINT(read
                 }
             }
 
-            // For each applied trait, emit all fields in declaration order
-            for (const auto& entry : unit->apply.entries) {
+            // For each declared trait entry, emit all fields in declaration order
+            for (const auto& entry : unit->traits) {
                 auto it = decorated_.traits.find(entry.trait_name);
                 if (it == decorated_.traits.end()) {
                     continue;

@@ -164,7 +164,8 @@ private:
     // Dynamic ECS helpers
     bool is_trait_declared(const std::string& name) const;
     std::unordered_set<std::string> get_archetype_fields(
-        const std::vector<ApplyEntry>& apply) const;
+        const std::vector<ArchetypeTraitEntry>& traits) const;
+    const ResolvedTrait* find_resolved_trait(const std::string& name) const;
     void validate_spawn_stmts(
         const std::vector<std::unique_ptr<StmtNode>>& stmts,
         const std::string& context_name);
@@ -178,13 +179,8 @@ private:
     void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts,
                              SystemDependency& dep);
 
-    // Phase 5: after: validation and config key resolution
+    // Phase 5: after: validation
     void validate_after_clauses(ProgramNode& program);
-    void validate_config_keys(ProgramNode& program);
-
-    // Helper: build alias→trait map for an apply block
-    // Returns: map from alias/trait-name → trait name in result_.traits
-    static std::unordered_map<std::string, std::string> build_alias_map(const std::vector<ApplyEntry>& apply);
 
     // Helpers
     bool is_known_type(const std::string& name) const;
@@ -221,11 +217,8 @@ private:
     // Module names/aliases declared via `use` (for `load` reachability check)
     std::unordered_set<std::string> use_names_;
 
-    // Archetype apply entries: archetype_name → apply entries list
-    std::unordered_map<std::string, std::vector<ApplyEntry>> archetype_apply_;
-
-    // Archetype config fields: archetype_name → set of field names with config assignments
-    std::unordered_map<std::string, std::unordered_set<std::string>> archetype_configured_fields_;
+    // Archetype trait entries: archetype_name → nested trait entries list
+    std::unordered_map<std::string, const std::vector<ArchetypeTraitEntry>*> archetype_traits_;
 
     // Template required fields (var with no default and not in config):
     // template_name → set of field names that must be provided at spawn site

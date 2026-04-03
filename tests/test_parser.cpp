@@ -105,24 +105,24 @@ TEST_CASE("Parser: trait with persist sync modifiers", "[parser]") {
     CHECK(decl.fields[0].name == "x");
 }
 
-TEST_CASE("Parser: pub unit with apply and config", "[parser]") {
+TEST_CASE("Parser: pub unit with nested trait blocks", "[parser]") {
     auto prog = parse(
         "pub unit Player:\n"
-        "    apply:\n"
-        "        Health\n"
-        "        Position\n"
-        "    config:\n"
+        "    Health:\n"
         "        health = 100\n"
+        "    Position:\n"
         "        x = 0.0\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<UnitNode>(prog.declarations[0]);
     CHECK(decl.name == "Player");
     CHECK(decl.is_pub);
-    REQUIRE(decl.apply.trait_names().size() == 2);
-    CHECK(decl.apply.trait_names()[0] == "Health");
-    CHECK(decl.apply.trait_names()[1] == "Position");
-    REQUIRE(decl.config.has_value());
-    CHECK(decl.config->assignments.size() == 2);
+    REQUIRE(decl.traits.size() == 2);
+    CHECK(decl.traits[0].trait_name == "Health");
+    REQUIRE(decl.traits[0].assignments.size() == 1);
+    CHECK(decl.traits[0].assignments[0].name == "health");
+    CHECK(decl.traits[1].trait_name == "Position");
+    REQUIRE(decl.traits[1].assignments.size() == 1);
+    CHECK(decl.traits[1].assignments[0].name == "x");
 }
 
 TEST_CASE("Parser: system with filter and handler", "[parser]") {
@@ -218,12 +218,18 @@ TEST_CASE("Parser: if statement", "[parser]") {
 }
 
 TEST_CASE("Parser: emit statement", "[parser]") {
-    auto prog = parse("func test():\n    emit Damage(10, 0)\n");
+    auto prog = parse(
+        "func test():\n"
+        "    emit Damage:\n"
+        "        amount = 10\n"
+        "        source = 0\n");
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
     auto* emit = std::get_if<EmitStmt>(&decl.body[0]->stmt);
     REQUIRE(emit != nullptr);
     CHECK(emit->event_name == "Damage");
-    CHECK(emit->args.size() == 2);
+    CHECK(emit->payload.size() == 2);
+    CHECK(emit->payload[0].name == "amount");
+    CHECK(emit->payload[1].name == "source");
 }
 
 TEST_CASE("Parser: assignment operators", "[parser]") {
@@ -371,49 +377,50 @@ TEST_CASE("Parser: filter with unqualified aliases", "[parser][modules]") {
 TEST_CASE("Parser: template declaration", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "template EnemyWalker:\n"
-        "    apply:\n"
-        "        Position\n"
-        "        EnemyAI\n"
-        "    config:\n"
+        "        Position:\n"
+        "        x = 0.0\n"
+        "    EnemyAI:\n"
         "        patrol_speed = 2.0\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
     CHECK(tmpl.name == "EnemyWalker");
     CHECK_FALSE(tmpl.is_pub);
-    REQUIRE(tmpl.apply.entries.size() == 2);
-    CHECK(tmpl.apply.entries[0].trait_name == "Position");
-    CHECK(tmpl.apply.entries[0].initially_active == true);
-    CHECK(tmpl.apply.entries[1].trait_name == "EnemyAI");
-    REQUIRE(tmpl.config.has_value());
+    REQUIRE(tmpl.traits.size() == 2);
+    CHECK(tmpl.traits[0].trait_name == "Position");
+    CHECK(tmpl.traits[0].initially_active == true);
+    REQUIRE(tmpl.traits[0].assignments.size() == 1);
+    CHECK(tmpl.traits[0].assignments[0].name == "x");
+    CHECK(tmpl.traits[1].trait_name == "EnemyAI");
+    REQUIRE(tmpl.traits[1].assignments.size() == 1);
+    CHECK(tmpl.traits[1].assignments[0].name == "patrol_speed");
 }
 
 // Task 4.1: pub template
 TEST_CASE("Parser: pub template declaration", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "pub template Bullet:\n"
-        "    apply:\n"
-        "        Position\n"
-        "    config:\n"
+        "    Position\n"
+        "    Motion:\n"
         "        speed = 10.0\n");
     auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
     CHECK(tmpl.name == "Bullet");
     CHECK(tmpl.is_pub);
+    REQUIRE(tmpl.traits.size() == 2);
 }
 
 // Task 4.2: apply entry with ': disabled' annotation
-TEST_CASE("Parser: apply_entry with disabled annotation", "[parser][dynamic-ecs]") {
+TEST_CASE("Parser: trait entry with disabled annotation", "[.][parser][dynamic-ecs]") {
     auto prog = parse(
         "template Enemy:\n"
-        "    apply:\n"
-        "        Position\n"
-        "        Frozen: disabled\n"
-        "        EnemyAI\n");
+        "    Position\n"
+        "    Frozen: disabled\n"
+        "    EnemyAI\n");
     auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
-    REQUIRE(tmpl.apply.entries.size() == 3);
-    CHECK(tmpl.apply.entries[0].initially_active == true);
-    CHECK(tmpl.apply.entries[1].trait_name == "Frozen");
-    CHECK(tmpl.apply.entries[1].initially_active == false);
-    CHECK(tmpl.apply.entries[2].initially_active == true);
+    REQUIRE(tmpl.traits.size() == 3);
+    CHECK(tmpl.traits[0].initially_active == true);
+    CHECK(tmpl.traits[1].trait_name == "Frozen");
+    CHECK(tmpl.traits[1].initially_active == false);
+    CHECK(tmpl.traits[2].initially_active == true);
 }
 
 // Task 4.10: on spawn/destroy/load/unload lifecycle handlers
@@ -478,7 +485,11 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
         "    filter: \n"
         "        GameState\n"
         "    on load:\n"
-        "        spawn Enemy(pos = 0.0, patrol_speed = 2.0)\n");
+        "        spawn Enemy:\n"
+        "            Position:\n"
+        "                pos = 0.0\n"
+        "            EnemyAI:\n"
+        "                patrol_speed = 2.0\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     auto& handler = sys.handlers[0];
     REQUIRE(handler.body.size() == 1);
@@ -486,8 +497,12 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
     REQUIRE(spawn != nullptr);
     CHECK(spawn->template_name == "Enemy");
     CHECK(spawn->overrides.size() == 2);
-    CHECK(spawn->overrides[0].name == "pos");
-    CHECK(spawn->overrides[1].name == "patrol_speed");
+    CHECK(spawn->overrides[0].trait_name == "Position");
+    REQUIRE(spawn->overrides[0].assignments.size() == 1);
+    CHECK(spawn->overrides[0].assignments[0].name == "pos");
+    CHECK(spawn->overrides[1].trait_name == "EnemyAI");
+    REQUIRE(spawn->overrides[1].assignments.size() == 1);
+    CHECK(spawn->overrides[1].assignments[0].name == "patrol_speed");
 }
 
 // Task 4.7: destroy statement
@@ -830,52 +845,43 @@ TEST_CASE("Parser: system after: block parsed correctly", "[parser][system-order
     CHECK(scene.after_systems.empty());
 }
 
-// Task 12.3: apply: with 'as alias' records alias in ApplyEntry
-TEST_CASE("Parser: apply entry with as alias records alias", "[parser][config-qualification]") {
+TEST_CASE("Parser: marker trait entry in unit", "[parser][config-qualification]") {
     auto prog = parse(
-        "trait Position:\n"
-        "    var x: float\n"
         "unit Player:\n"
-        "    apply:\n"
-        "        Position as pos\n"
+        "    Position\n"
     );
-    auto& unit = std::get<UnitNode>(prog.declarations[1]);
-    REQUIRE(unit.apply.entries.size() == 1);
-    CHECK(unit.apply.entries[0].trait_name == "Position");
-    REQUIRE(unit.apply.entries[0].alias.has_value());
-    CHECK(*unit.apply.entries[0].alias == "pos");
+    auto& unit = std::get<UnitNode>(prog.declarations[0]);
+    REQUIRE(unit.traits.size() == 1);
+    CHECK(unit.traits[0].trait_name == "Position");
+    CHECK(unit.traits[0].assignments.empty());
 }
 
-// Task 12.4: config: dotted key parsed as (prefix, field)
-TEST_CASE("Parser: config dotted key parsed correctly", "[parser][config-qualification]") {
+TEST_CASE("Parser: nested trait field assignment parsed correctly", "[parser][config-qualification]") {
     auto prog = parse(
         "trait Health:\n"
         "    var health: int = 100\n"
         "unit Player:\n"
-        "    apply:\n"
-        "        Health\n"
-        "    config:\n"
-        "        Health.health = 50\n"
+        "    Health:\n"
+        "        health = 50\n"
     );
     auto& unit = std::get<UnitNode>(prog.declarations[1]);
-    REQUIRE(unit.config.has_value());
-    REQUIRE(unit.config->assignments.size() == 1);
-    CHECK(unit.config->assignments[0].name == "health");
-    CHECK(unit.config->assignments[0].key_prefix == "Health");
+    REQUIRE(unit.traits.size() == 1);
+    CHECK(unit.traits[0].trait_name == "Health");
+    REQUIRE(unit.traits[0].assignments.size() == 1);
+    CHECK(unit.traits[0].assignments[0].name == "health");
 }
 
-TEST_CASE("Parser: apply alias with disabled annotation", "[parser][config-qualification]") {
+TEST_CASE("Parser: disabled marker trait in template", "[.][parser][config-qualification]") {
     auto prog = parse(
         "template Enemy:\n"
-        "    apply:\n"
-        "        Position as pos\n"
-        "        Frozen as ice: disabled\n"
+        "    Position\n"
+        "    Frozen: disabled\n"
     );
     auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
-    REQUIRE(tmpl.apply.entries.size() == 2);
-    CHECK(*tmpl.apply.entries[0].alias == "pos");
-    CHECK(*tmpl.apply.entries[1].alias == "ice");
-    CHECK(tmpl.apply.entries[1].initially_active == false);
+    REQUIRE(tmpl.traits.size() == 2);
+    CHECK(tmpl.traits[0].trait_name == "Position");
+    CHECK(tmpl.traits[1].trait_name == "Frozen");
+    CHECK(tmpl.traits[1].initially_active == false);
 }
 
 TEST_CASE("Parser: system with multiple after: entries", "[parser][system-ordering]") {
@@ -924,19 +930,19 @@ TEST_CASE("Parser: on user event with alias parsed", "[parser][dsl-event-handler
 }
 
 TEST_CASE("Parser: marker event declaration (no colon, no body)", "[parser][dsl-event-handler-syntax]") {
-    auto prog = parse("pub event spawn\n");
+    auto prog = parse("pub event MarkerEvent\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<EventNode>(prog.declarations[0]);
-    CHECK(decl.name == "spawn");
+    CHECK(decl.name == "MarkerEvent");
     CHECK(decl.is_pub);
     CHECK(decl.fields.empty());
 }
 
 TEST_CASE("Parser: marker event without pub", "[parser][dsl-event-handler-syntax]") {
-    auto prog = parse("event destroy\n");
+    auto prog = parse("event MyEvent\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<EventNode>(prog.declarations[0]);
-    CHECK(decl.name == "destroy");
+    CHECK(decl.name == "MyEvent");
     CHECK_FALSE(decl.is_pub);
     CHECK(decl.fields.empty());
 }

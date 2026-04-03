@@ -41,7 +41,10 @@ bool Parser::check(TokenType type) const {
 }
 
 bool Parser::match(TokenType type) {
-    if (check(type)) { advance(); return true; }
+    if (check(type)) {
+        advance();
+        return true;
+    }
     return false;
 }
 
@@ -517,6 +520,78 @@ std::vector<FuncParam> Parser::parse_param_list() {
     return params;
 }
 
+FieldAssignment Parser::parse_field_assignment() {
+    auto loc = peek().location;
+    auto name = consume(TokenType::IDENTIFIER, "expected field name").value;
+    consume(TokenType::ASSIGN, "expected '='");
+    auto value = parse_expression();
+    expect_newline();
+    FieldAssignment assign;
+    assign.name = name;
+    assign.value = std::move(value);
+    assign.location = loc;
+    return assign;
+}
+
+std::vector<FieldAssignment> Parser::parse_field_assignment_block() {
+    expect_newline();
+    expect_indent();
+    std::vector<FieldAssignment> assignments;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        assignments.push_back(parse_field_assignment());
+    }
+    expect_dedent();
+    return assignments;
+}
+
+ArchetypeTraitEntry Parser::parse_archetype_trait_entry(bool allow_disabled) {
+    auto loc = peek().location;
+    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+
+    ArchetypeTraitEntry entry;
+    entry.trait_name = trait_name;
+    entry.location = loc;
+
+    if (check(TokenType::COLON)) {
+        advance();
+        if (allow_disabled && check(TokenType::DISABLED)) {
+            advance();
+            entry.initially_active = false;
+            expect_newline();
+            return entry;
+        }
+        entry.assignments = parse_field_assignment_block();
+        return entry;
+    }
+
+    expect_newline();
+    return entry;
+}
+
+std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries(bool allow_disabled) {
+    std::vector<ArchetypeTraitEntry> entries;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN) && !check(TokenType::CHILD)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN) || check(TokenType::CHILD)) {
+            break;
+        }
+        entries.push_back(parse_archetype_trait_entry(allow_disabled));
+    }
+    return entries;
+}
+
+std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entry_block(bool allow_disabled) {
+    expect_newline();
+    expect_indent();
+    auto entries = parse_archetype_trait_entries(allow_disabled);
+    expect_dedent();
+    return entries;
+}
+
 // ── Unit ────────────────────────────────────────────────────────────────────
 
 UnitNode Parser::parse_unit(bool is_pub) {
@@ -532,15 +607,7 @@ UnitNode Parser::parse_unit(bool is_pub) {
     node.is_pub = is_pub;
     node.location = loc;
 
-    skip_newlines();
-    if (check(TokenType::APPLY)) {
-        node.apply = parse_apply_block();
-    }
-
-    skip_newlines();
-    if (check(TokenType::CONFIG)) {
-        node.config = parse_config_block();
-    }
+    node.traits = parse_archetype_trait_entries(false);
 
     skip_newlines();
     if (check(TokenType::CHILD)) {
@@ -566,15 +633,7 @@ TemplateNode Parser::parse_template(bool is_pub) {
     node.is_pub = is_pub;
     node.location = loc;
 
-    skip_newlines();
-    if (check(TokenType::APPLY)) {
-        node.apply = parse_apply_block();
-    }
-
-    skip_newlines();
-    if (check(TokenType::CONFIG)) {
-        node.config = parse_config_block();
-    }
+    node.traits = parse_archetype_trait_entries(false);
 
     skip_newlines();
     if (check(TokenType::CHILD)) {
@@ -584,92 +643,6 @@ TemplateNode Parser::parse_template(bool is_pub) {
     skip_newlines();
     expect_dedent();
     return node;
-}
-
-ApplyBlock Parser::parse_apply_block() {
-    auto loc = peek().location;
-    consume(TokenType::APPLY, "expected 'apply'");
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
-    ApplyBlock block;
-    block.location = loc;
-
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        auto entry_loc = peek().location;
-        auto entry_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
-
-        // Optional 'as alias' (must come before optional ': disabled')
-        std::optional<std::string> alias;
-        if (check(TokenType::AS)) {
-            advance();  // consume 'as'
-            alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
-        }
-
-        // Task 4.2: Handle ': disabled' annotation
-        bool initially_active = true;
-        if (check(TokenType::COLON)) {
-            advance();  // consume ':'
-            consume(TokenType::DISABLED, "expected 'disabled' after ':'");
-            initially_active = false;
-        }
-
-        ApplyEntry entry;
-        entry.trait_name = entry_name;
-        entry.alias = alias;
-        entry.initially_active = initially_active;
-        entry.location = entry_loc;
-        block.entries.push_back(std::move(entry));
-        expect_newline();
-    }
-
-    expect_dedent();
-    return block;
-}
-
-ConfigBlock Parser::parse_config_block() {
-    auto loc = peek().location;
-    consume(TokenType::CONFIG, "expected 'config'");
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
-    ConfigBlock block;
-    block.location = loc;
-
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        auto assign_loc = peek().location;
-        // Parse config key: IDENTIFIER [ DOT IDENTIFIER ] = expression
-        auto key_first = consume(TokenType::IDENTIFIER, "expected config field name").value;
-        std::string key_prefix;
-        std::string field_name = key_first;
-        if (check(TokenType::DOT)) {
-            advance();  // consume '.'
-            key_prefix = key_first;
-            field_name = consume(TokenType::IDENTIFIER, "expected field name after '.'").value;
-        }
-        consume(TokenType::ASSIGN, "expected '='");
-        auto value = parse_expression();
-        expect_newline();
-        ConfigAssignment assign;
-        assign.name = field_name;
-        assign.key_prefix = key_prefix;
-        assign.value = std::move(value);
-        assign.location = assign_loc;
-        block.assignments.push_back(std::move(assign));
-    }
-
-    expect_dedent();
-    return block;
 }
 
 ChildBlock Parser::parse_child_block() {
@@ -866,7 +839,7 @@ ViewElement Parser::parse_view_element() {
                 consume(TokenType::ASSIGN, "expected '='");
                 auto value = parse_expression();
                 expect_newline();
-                ConfigAssignment prop;
+                FieldAssignment prop;
                 prop.name = prop_name;
                 prop.value = std::move(value);
                 prop.location = prop_loc;
@@ -878,7 +851,7 @@ ViewElement Parser::parse_view_element() {
             consume(TokenType::ASSIGN, "expected '='");
             auto value = parse_expression();
             expect_newline();
-            ConfigAssignment prop;
+            FieldAssignment prop;
             prop.name = prop_name;
             prop.value = std::move(value);
             prop.location = prop_loc;
@@ -1054,23 +1027,32 @@ std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
 std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
 
+    if (check(TokenType::LET)) {
+        advance();
+        auto name = consume(TokenType::IDENTIFIER, "expected binding name").value;
+        consume(TokenType::ASSIGN, "expected '='");
+        auto value = parse_expression();
+        expect_newline();
+        LetStmt let_stmt;
+        let_stmt.name = name;
+        let_stmt.value = std::move(value);
+        let_stmt.location = loc;
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(let_stmt)}, loc);
+    }
+
     // emit statement
     if (check(TokenType::EMIT)) {
         advance();
         auto event_name = consume(TokenType::IDENTIFIER, "expected event name").value;
-        consume(TokenType::LPAREN, "expected '('");
-        std::vector<std::unique_ptr<ExprNode>> args;
-        if (!check(TokenType::RPAREN)) {
-            args.push_back(parse_expression());
-            while (match(TokenType::COMMA)) {
-                args.push_back(parse_expression());
-            }
+        std::optional<std::unique_ptr<ExprNode>> target;
+        if (match(TokenType::TO)) {
+            target = parse_expression();
         }
-        consume(TokenType::RPAREN, "expected ')'");
-        expect_newline();
+        consume(TokenType::COLON, "expected ':'");
         EmitStmt emit;
         emit.event_name = event_name;
-        emit.args = std::move(args);
+        emit.target = std::move(target);
+        emit.payload = parse_field_assignment_block();
         emit.location = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(emit)}, loc);
     }
@@ -1128,34 +1110,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
     if (check(TokenType::SPAWN)) {
         advance();
         auto template_name = consume(TokenType::IDENTIFIER, "expected template name").value;
-        consume(TokenType::LPAREN, "expected '('");
         SpawnStmt spawn_stmt;
         spawn_stmt.template_name = template_name;
         spawn_stmt.location = loc;
-        while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
-            // Parse spawn override key: IDENTIFIER [ DOT IDENTIFIER ] = expression
-            auto key_first = consume(TokenType::IDENTIFIER, "expected field name").value;
-            std::string spawn_prefix;
-            std::string spawn_field = key_first;
-            if (check(TokenType::DOT)) {
-                advance();  // consume '.'
-                spawn_prefix = key_first;
-                spawn_field = consume(TokenType::IDENTIFIER, "expected field name after '.'").value;
-            }
-            consume(TokenType::ASSIGN, "expected '='");
-            auto value = parse_expression();
-            SpawnArg arg;
-            arg.name = spawn_field;
-            arg.key_prefix = spawn_prefix;
-            arg.value = std::move(value);
-            arg.location = loc;
-            spawn_stmt.overrides.push_back(std::move(arg));
-            if (!match(TokenType::COMMA)) {
-                break;
-            }
-        }
-        consume(TokenType::RPAREN, "expected ')'");
-        expect_newline();
+        consume(TokenType::COLON, "expected ':'");
+        spawn_stmt.overrides = parse_archetype_trait_entry_block(false);
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(spawn_stmt)}, loc);
     }
 
@@ -1416,6 +1375,17 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
 
 std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
+
+    if (check(TokenType::SPAWN)) {
+        advance();
+        auto template_name = consume(TokenType::IDENTIFIER, "expected template name").value;
+        consume(TokenType::COLON, "expected ':'");
+        SpawnExpr spawn;
+        spawn.template_name = template_name;
+        spawn.overrides = parse_archetype_trait_entry_block(false);
+        spawn.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(spawn)}, loc);
+    }
 
     // Integer literal
     if (check(TokenType::INT_LITERAL)) {

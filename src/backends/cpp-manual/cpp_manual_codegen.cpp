@@ -53,8 +53,8 @@ CodegenContext build_context(const DecoratedProgram& program, // NOLINT(readabil
                     }
                 } else if constexpr (std::is_same_v<T, TemplateNode>) {
                     ctx.template_ast[node.name] = &node;
-                    if (node.config) {
-                        for (const auto& a : node.config->assignments) {
+                    for (const auto& trait : node.traits) {
+                        for (const auto& a : trait.assignments) {
                             ctx.template_config[node.name][a.name] =
                                 ManualSystemEmitter::emit_expr(*a.value);
                         }
@@ -74,7 +74,7 @@ CodegenContext build_context(const DecoratedProgram& program, // NOLINT(readabil
 std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext& ctx) { // NOLINT(readability-function-cognitive-complexity)
     std::ostringstream out;
 
-    // Collect factory parameters: one per field of each applied trait, in order
+    // Collect factory parameters: one per field of each declared trait, in order
     struct Param {
         std::string cpp_type;
         std::string param_name;
@@ -84,7 +84,7 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
     };
     std::vector<Param> params;
 
-    for (const auto& entry : tmpl.apply.entries) {
+    for (const auto& entry : tmpl.traits) {
         auto tit = ctx.traits.find(entry.trait_name);
         if (tit == ctx.traits.end()) {
             continue;
@@ -96,12 +96,11 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
             p.trait_name = entry.trait_name;
             p.field_name = field.name;
 
-            // Default: template config → trait default → type default
-            auto tc_it = ctx.template_config.find(tmpl.name);
-            if (tc_it != ctx.template_config.end()) {
-                auto fi = tc_it->second.find(field.name);
-                if (fi != tc_it->second.end()) {
-                    p.default_val = fi->second;
+            // Default: template nested assignment → trait default → type default
+            for (const auto& assign : entry.assignments) {
+                if (assign.name == field.name) {
+                    p.default_val = ManualSystemEmitter::emit_expr(*assign.value);
+                    break;
                 }
             }
             if (p.default_val.empty()) {
@@ -123,7 +122,7 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
 
     // Compute initial trait_mask (set bits for all initially-active traits)
     std::string mask_expr = "0ULL";
-    for (const auto& entry : tmpl.apply.entries) {
+    for (const auto& entry : tmpl.traits) {
         if (!entry.initially_active) {
             continue;
         }
@@ -162,9 +161,12 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
 
 std::string field_init_value(const std::string& trait_name, const std::string& field_name,
                               const UnitNode& unit, const CodegenContext& ctx) {
-    // 1. Unit config assignment
-    if (unit.config) {
-        for (const auto& a : unit.config->assignments) {
+    // 1. Unit nested trait assignment
+    for (const auto& trait : unit.traits) {
+        if (trait.trait_name != trait_name) {
+            continue;
+        }
+        for (const auto& a : trait.assignments) {
             if (a.name == field_name) {
                 return ManualSystemEmitter::emit_expr(*a.value);
             }
@@ -434,17 +436,15 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
         out << "    // Unit: " << unit->name << "\n";
         out << "    {\n";
         out << "        size_t _idx = entity_count++;\n";
-        // Compute initial trait_mask
         std::string mask = "0ULL";
-        for (const auto& entry : unit->apply.entries) {
+        for (const auto& entry : unit->traits) {
             auto it = ctx.trait_bit_index.find(entry.trait_name);
             if (it != ctx.trait_bit_index.end() && entry.initially_active) {
                 mask += " | TraitBits::" + entry.trait_name;
             }
         }
-        out << "        g_trait_mask[_idx] = " << mask << ";\n";
         // Initialize fields
-        for (const auto& entry : unit->apply.entries) {
+        for (const auto& entry : unit->traits) {
             auto tit = ctx.traits.find(entry.trait_name);
             if (tit == ctx.traits.end()) {
                 continue;

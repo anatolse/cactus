@@ -102,7 +102,7 @@ private:
 
     // ── Trait bitmask helpers ───────────────────────────────────────────────
     void build_trait_bit_index();
-    uint64_t compute_trait_mask(const ApplyBlock& apply) const;
+    uint64_t compute_trait_mask(const std::vector<ArchetypeTraitEntry>& traits) const;
     static FieldValue make_field_value(const ResolvedField& field, const std::optional<FieldValue>& config_val);
 
     // ── Binary write helpers ────────────────────────────────────────────────

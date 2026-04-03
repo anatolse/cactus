@@ -109,6 +109,8 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                     }
                 }
                 return rewrite_expr(*e.object, trait_names, program) + "." + e.member;
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                return "/* spawn expr */";
             } else {
                 return "/* unsupported expr */";
             }
@@ -127,7 +129,9 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
     return std::visit(
         [&](auto& s) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using S = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<S, VarAssign>) {
+            if constexpr (std::is_same_v<S, LetStmt>) {
+                return ind + "auto " + s.name + " = " + rewrite_expr(*s.value, trait_names, program) + ";\n";
+            } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
                 if (known_fields.contains(s.name)) {
                     auto comp = find_comp_for_field(s.name, trait_names, program);
@@ -144,11 +148,11 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                        rewrite_expr(*s.value, trait_names, program) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
-                for (size_t i = 0; i < s.args.size(); ++i) {
+                for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*s.args[i], trait_names, program);
+                    result += "." + s.payload[i].name + " = " + rewrite_expr(*s.payload[i].value, trait_names, program);
                 }
                 return result + "});\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {

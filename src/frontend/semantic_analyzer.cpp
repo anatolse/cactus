@@ -170,9 +170,8 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
     // Phase 4: Build dependency graph
     build_dependency_graph(program);
 
-    // Phase 5: Validate after: clauses, cycle detection, config/spawn key resolution
+    // Phase 5: Validate after: clauses and cycle detection
     validate_after_clauses(program);
-    validate_config_keys(program);
 
     return std::move(result_);
 }
@@ -229,26 +228,11 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                         errors_.error(node.location, "duplicate template '" + node.name + "'");
                     }
                     template_names_.insert(node.name);
-                    archetype_apply_[node.name] = node.apply.entries;
-                    // Collect config fields
-                    std::unordered_set<std::string> cfg_fields;
-                    if (node.config.has_value()) {
-                        for (auto& assign : node.config->assignments) {
-                            cfg_fields.insert(assign.name);
-                        }
-                    }
-                    archetype_configured_fields_[node.name] = std::move(cfg_fields);
+                    archetype_traits_[node.name] = &node.traits;
                 } else if constexpr (std::is_same_v<T, UnitNode>) {
                     // Track unit names to distinguish from templates (5.4)
                     unit_names_.insert(node.name);
-                    archetype_apply_[node.name] = node.apply.entries;
-                    std::unordered_set<std::string> cfg_fields;
-                    if (node.config.has_value()) {
-                        for (auto& assign : node.config->assignments) {
-                            cfg_fields.insert(assign.name);
-                        }
-                    }
-                    archetype_configured_fields_[node.name] = std::move(cfg_fields);
+                    archetype_traits_[node.name] = &node.traits;
                 } else if constexpr (std::is_same_v<T, UseNode>) {
                     // Track declared module names for `load` reachability (5.6)
                     use_names_.insert(node.module_name);
@@ -480,8 +464,9 @@ bool SemanticAnalyzer::is_known_type(const std::string& name) const {
 
 void SemanticAnalyzer::check_const_strings(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         std::visit(
-            [this](auto& node) {
+            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, ConstBlockNode>) {
                     for (auto& a : node.assignments) {
@@ -489,10 +474,11 @@ void SemanticAnalyzer::check_const_strings(ProgramNode& program) { // NOLINT(rea
                     }
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
                     for (auto& stmt : node.body) {
+                        // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-branch-clone)
                         std::visit(
                             [this](auto& s) {
                                 using S = std::decay_t<decltype(s)>;
-                                if constexpr (std::is_same_v<S, VarAssign>) {
+                                if constexpr (std::is_same_v<S, VarAssign> || std::is_same_v<S, LetStmt>) {
                                     check_const_strings_expr(*s.value, false);
                                 } else if constexpr (std::is_same_v<S, ExprStmt>) {
                                     check_const_strings_expr(*s.expr, false);
@@ -501,8 +487,11 @@ void SemanticAnalyzer::check_const_strings(ProgramNode& program) { // NOLINT(rea
                                         check_const_strings_expr(**s.value, false);
                                     }
                                 } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                                    for (auto& arg : s.args) {
-                                        check_const_strings_expr(*arg, false);
+                                    if (s.target.has_value()) {
+                                        check_const_strings_expr(**s.target, false);
+                                    }
+                                    for (auto& field : s.payload) {
+                                        check_const_strings_expr(*field.value, false);
                                     }
                                 }
                             },
@@ -538,6 +527,12 @@ void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_co
                 for (auto& el : e.elements) {
                     check_const_strings_expr(*el, in_const);
                 }
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                for (auto& trait : e.overrides) {
+                    for (auto& field : trait.assignments) {
+                        check_const_strings_expr(*field.value, in_const);
+                    }
+                }
             }
         },
         expr.expr);
@@ -565,7 +560,7 @@ void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::s
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, EmitStmt>) {
                 errors_.error(s.location, "func '" + func_name + "' cannot use 'emit' (funcs must be pure)");
-            } else if constexpr (std::is_same_v<S, VarAssign>) {
+            } else if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
                 check_func_purity_expr(*s.value, func_name);
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
                 check_func_purity_expr(*s.expr, func_name);
@@ -605,6 +600,12 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
                 check_func_purity_expr(*e.operand, func_name);
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 check_func_purity_expr(*e.object, func_name);
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                for (auto& trait : e.overrides) {
+                    for (auto& field : trait.assignments) {
+                        check_func_purity_expr(*field.value, func_name);
+                    }
+                }
             }
         },
         expr.expr);
@@ -779,7 +780,7 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
 
 // ── Phase 3f: Event Usage Validation ────────────────────────────────────────
 
-void SemanticAnalyzer::validate_event_usage(ProgramNode& program) {
+void SemanticAnalyzer::validate_event_usage(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             // Build set of filter-bound names (trait names and their aliases) for alias conflict check
@@ -856,8 +857,10 @@ void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<Stm
         std::visit(
             [this, &dep](auto& s) {
                 using S = std::decay_t<decltype(s)>;
-                if constexpr (std::is_same_v<S, VarAssign>) {
-                    dep.writes.insert(s.name);
+                if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
+                    if constexpr (std::is_same_v<S, VarAssign>) {
+                        dep.writes.insert(s.name);
+                    }
                 } else if constexpr (std::is_same_v<S, EmitStmt>) {
                     dep.emits.insert(s.event_name);
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
@@ -884,32 +887,35 @@ bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
     return false;
 }
 
-std::unordered_set<std::string> SemanticAnalyzer::get_archetype_fields( // NOLINT(readability-function-cognitive-complexity)
-    const std::vector<ApplyEntry>& apply) const {
-    std::unordered_set<std::string> fields;
-    for (const auto& entry : apply) {
-        // Local traits
-        auto it = result_.traits.find(entry.trait_name);
-        if (it != result_.traits.end()) {
-            for (const auto& f : it->second.fields) {
-                fields.insert(f.name);
-            }
-        }
-        // Imported traits (unqualified lookup)
-        if (!imports_.empty()) {
-            auto pit = imports_.trait_providers.find(entry.trait_name);
-            if (pit != imports_.trait_providers.end()) {
-                for (const auto& qualifier : pit->second) {
-                    auto mit = imports_.modules.find(qualifier);
-                    if (mit != imports_.modules.end()) {
-                        auto tit = mit->second.traits.find(entry.trait_name);
-                        if (tit != mit->second.traits.end()) {
-                            for (const auto& f : tit->second.fields) {
-                                fields.insert(f.name);
-                            }
-                        }
+const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::string& name) const {
+    auto it = result_.traits.find(name);
+    if (it != result_.traits.end()) {
+        return &it->second;
+    }
+    if (!imports_.empty()) {
+        auto pit = imports_.trait_providers.find(name);
+        if (pit != imports_.trait_providers.end()) {
+            for (const auto& qualifier : pit->second) {
+                auto mit = imports_.modules.find(qualifier);
+                if (mit != imports_.modules.end()) {
+                    auto tit = mit->second.traits.find(name);
+                    if (tit != mit->second.traits.end()) {
+                        return &tit->second;
                     }
                 }
+            }
+        }
+    }
+    return nullptr;
+}
+
+std::unordered_set<std::string>
+SemanticAnalyzer::get_archetype_fields(const std::vector<ArchetypeTraitEntry>& traits) const {
+    std::unordered_set<std::string> fields;
+    for (const auto& entry : traits) {
+        if (const auto* trait = find_resolved_trait(entry.trait_name)) {
+            for (const auto& f : trait->fields) {
+                fields.insert(f.name);
             }
         }
     }
@@ -927,8 +933,8 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                               std::is_same_v<T, UnitNode>) {
                     const std::string KIND = std::is_same_v<T, TemplateNode> ? "template" : "unit";
 
-                    // 5.1: Validate all traits in apply: are declared
-                    for (auto& entry : node.apply.entries) {
+                    // 5.1: Validate all traits in nested trait blocks are declared
+                    for (auto& entry : node.traits) {
                         if (!is_trait_declared(entry.trait_name)) {
                             errors_.error(
                                 entry.location,
@@ -936,30 +942,48 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                         }
                     }
 
-                    // 5.1: Validate config fields belong to applied traits
-                    if (node.config.has_value()) {
-                        auto accessible = get_archetype_fields(node.apply.entries);
-                        for (auto& assign : node.config->assignments) {
-                            if (!accessible.contains(assign.name)) {
+                    // 5.1: Validate field assignments in trait blocks belong to the trait
+                    for (auto& entry : node.traits) {
+                        const auto* trait = find_resolved_trait(entry.trait_name);
+                        if (!trait) {
+                            continue;
+                        }
+
+                        std::unordered_set<std::string> trait_fields;
+                        for (const auto& f : trait->fields) {
+                            trait_fields.insert(f.name);
+                        }
+                        
+                        for (auto& assign : entry.assignments) {
+                            if (!trait_fields.contains(assign.name)) {
                                 errors_.error(
                                     assign.location,
-                                    "unknown field '" + assign.name + "' in " + KIND + " '" + node.name + "' config");
+                                    "unknown field '" + assign.name + "' for trait '" + 
+                                    entry.trait_name + "' in " + KIND + " '" + node.name + "'");
                             }
                         }
                     }
 
-                    // 5.2: After trait validation, compute required fields for templates
-                    // (fields that are `var` with no default, not in config)
+                    // 5.2: Compute required fields for templates
+                    // (fields that are `var` with no default and not initialized in trait block)
                     if constexpr (std::is_same_v<T, TemplateNode>) {
-                        const auto& cfg = archetype_configured_fields_[node.name];
+                        std::unordered_set<std::string> provided;
+                        for (auto& entry : node.traits) {
+                            for (auto& assign : entry.assignments) {
+                                provided.insert(assign.name);
+                            }
+                        }
+                        
                         std::unordered_set<std::string> required;
-                        for (auto& entry : node.apply.entries) {
-                            auto it = result_.traits.find(entry.trait_name);
-                            if (it != result_.traits.end()) {
-                                for (auto& field : it->second.fields) {
-                                    if (field.is_var && !field.has_default && !cfg.contains(field.name)) {
-                                        required.insert(field.name);
-                                    }
+                        for (auto& entry : node.traits) {
+                            const auto* trait = find_resolved_trait(entry.trait_name);
+                            if (!trait) {
+                                continue;
+                            }
+
+                            for (auto& field : trait->fields) {
+                                if (field.is_var && !field.has_default && !provided.contains(field.name)) {
+                                    required.insert(field.name);
                                 }
                             }
                         }
@@ -996,58 +1020,43 @@ void SemanticAnalyzer::validate_spawn_stmts( // NOLINT(readability-function-cogn
                                       "undefined template '" + s.template_name + "'");
                         return;
                     }
-                    // 5.3: Validate override field names
-                    auto appl_it = archetype_apply_.find(s.template_name);
-                    if (appl_it != archetype_apply_.end()) {
-                        auto accessible = get_archetype_fields(appl_it->second);
-                        auto alias_map  = build_alias_map(appl_it->second);
-                        for (auto& arg : s.overrides) {
-                            const auto& field_name = arg.name;
-                            if (arg.key_prefix.empty()) {
-                                // Bare key — check against all accessible fields
-                                if (!accessible.contains(field_name)) {
-                                    errors_.error(
-                                        s.location,
-                                        "unknown field '" + field_name + "' for template '" +
-                                            s.template_name + "'");
-                                }
-                            } else {
-                                // Dotted key: resolve prefix then check field
-                                auto am_it = alias_map.find(arg.key_prefix);
-                                if (am_it == alias_map.end()) {
-                                    errors_.error(s.location,
-                                                  "unknown trait or alias '" + arg.key_prefix +
-                                                      "' in spawn override for template '" +
-                                                      s.template_name + "'");
-                                } else {
-                                    const auto& trait_name = am_it->second;
-                                    auto trait_it = result_.traits.find(trait_name);
-                                    if (trait_it != result_.traits.end()) {
-                                        bool found = false;
-                                        for (auto& f : trait_it->second.fields) {
-                                            if (f.name == field_name) {
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!found) {
-                                            std::string msg = "trait '";
-                                            msg += trait_name;
-                                            msg += "' has no field '";
-                                            msg += field_name;
-                                            msg += "' in spawn override";
-                                            errors_.error(s.location, msg);
-                                        }
-                                    }
+                    // 5.3: Validate override trait blocks
+                    auto traits_it = archetype_traits_.find(s.template_name);
+                    if (traits_it != archetype_traits_.end() && traits_it->second != nullptr) {
+                        // Validate each override trait entry
+                        for (auto& override : s.overrides) {
+                            const auto* trait = find_resolved_trait(override.trait_name);
+                            if (!trait) {
+                                errors_.error(override.location,
+                                             "undeclared trait '" + override.trait_name +
+                                             "' in spawn override");
+                                continue;
+                            }
+                            
+                            // Validate field assignments belong to the trait
+                            std::unordered_set<std::string> trait_fields;
+                            for (const auto& f : trait->fields) {
+                                trait_fields.insert(f.name);
+                            }
+                            
+                            for (auto& assign : override.assignments) {
+                                if (!trait_fields.contains(assign.name)) {
+                                    errors_.error(assign.location,
+                                                 "unknown field '" + assign.name +
+                                                 "' for trait '" + override.trait_name +
+                                                 "' in spawn override");
                                 }
                             }
                         }
+                        
                         // 5.3: Check required fields are provided
                         auto req_it = template_required_fields_.find(s.template_name);
                         if (req_it != template_required_fields_.end()) {
                             std::unordered_set<std::string> provided;
-                            for (auto& arg : s.overrides) {
-                                provided.insert(arg.name);
+                            for (auto& override : s.overrides) {
+                                for (auto& assign : override.assignments) {
+                                    provided.insert(assign.name);
+                                }
                             }
                             for (auto& req : req_it->second) {
                                 if (!provided.contains(req)) {
@@ -1188,7 +1197,9 @@ void SemanticAnalyzer::check_no_field_access(
         std::visit(
             [this, &sys_name](const auto& s) {
                 using S = std::decay_t<decltype(s)>;
-                if constexpr (std::is_same_v<S, VarAssign>) {
+                if constexpr (std::is_same_v<S, LetStmt>) {
+                    // local binding is allowed without filter access checks
+                } else if constexpr (std::is_same_v<S, VarAssign>) {
                     // All VarAssign statements in system handlers are trait-field accesses
                     errors_.error(s.location,
                                   "trait field '" + s.name +
@@ -1213,11 +1224,10 @@ void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) { // 
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, TemplateNode> ||
                               std::is_same_v<T, UnitNode>) {
-                    for (auto& entry : node.apply.entries) {
+                    for (auto& entry : node.traits) {
+                        // Check initially_active flag (new block syntax equivalent to : disabled)
                         // Trait must be declared (already checked in 5.1)
-                        // Just additional: warn if : disabled trait is in a system filter
-                        // (this is just a structural check — actual filter cross-check
-                        //  would require iterating all systems which is expensive)
+                        // Note: initially_active validation integrated with trait block validation
                         (void)entry;
                     }
                 } else if constexpr (std::is_same_v<T, SystemNode>) {
@@ -1348,92 +1358,6 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) { // NOLINT(
                 }
             }
         }
-    }
-}
-
-// ── Phase 5b: apply alias map helper ────────────────────────────────────────
-
-std::unordered_map<std::string, std::string> SemanticAnalyzer::build_alias_map(const std::vector<ApplyEntry>& apply) {
-    // Maps from alias-or-trait-name → resolved trait name
-    std::unordered_map<std::string, std::string> alias_map;
-    for (const auto& entry : apply) {
-        // Implicit alias: the trait name itself
-        alias_map[entry.trait_name] = entry.trait_name;
-        // Explicit alias declared with 'as'
-        if (entry.alias.has_value()) {
-            alias_map[*entry.alias] = entry.trait_name;
-        }
-    }
-    return alias_map;
-}
-
-// ── Phase 5c: config key and spawn key resolution ───────────────────────────
-
-void SemanticAnalyzer::validate_config_keys(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
-    for (auto& decl : program.declarations) {
-        std::visit(
-            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
-                using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, TemplateNode> ||
-                              std::is_same_v<T, UnitNode>) {
-                    if (!node.config.has_value()) {
-                        return;
-                    }
-
-                    // Build alias map for this archetype
-                    auto alias_map = build_alias_map(node.apply.entries);
-
-                    for (auto& assign : node.config->assignments) {
-                        if (assign.key_prefix.empty()) {
-                            // Bare key — already validated by validate_template_unit_declarations
-                            // Check for ambiguity when two applied traits have the same field
-                            std::vector<std::string> owners;
-                            for (auto& entry : node.apply.entries) {
-                                auto it = result_.traits.find(entry.trait_name);
-                                if (it != result_.traits.end()) {
-                                    for (auto& f : it->second.fields) {
-                                        if (f.name == assign.name) {
-                                            owners.push_back(entry.trait_name);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if (owners.size() > 1) {
-                                errors_.error(assign.location,
-                                              "ambiguous field '" + assign.name +
-                                                  "' in config; qualify as '" + owners[0] + "." +
-                                                  assign.name + "' or '" + owners[1] + "." +
-                                                  assign.name + "'");
-                            }
-                        } else {
-                            // Dotted key: prefix.fieldname
-                            auto am_it = alias_map.find(assign.key_prefix);
-                            if (am_it == alias_map.end()) {
-                                errors_.error(assign.location,
-                                              "unknown trait or alias '" + assign.key_prefix +
-                                                  "' in config key");
-                                continue;
-                            }
-                            const auto& trait_name = am_it->second;
-                            auto trait_it = result_.traits.find(trait_name);
-                            if (trait_it == result_.traits.end()) {
-                                continue;  // trait not resolved
-                            }
-                            bool found = false;
-                            for (auto& f : trait_it->second.fields) {
-                                if (f.name == assign.name) { found = true; break; }
-                            }
-                            if (!found) {
-                                errors_.error(assign.location,
-                                              "trait '" + trait_name + "' has no field '" +
-                                                  assign.name + "'");
-                            }
-                        }
-                    }
-                }
-            },
-            decl);
     }
 }
 

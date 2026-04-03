@@ -125,8 +125,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             if (auto* unit = std::get_if<UnitNode>(&decl)) {
                 out << "entt::entity create_" << unit->name << "(entt::registry& registry) {\n";
                 out << "    auto entity = registry.create();\n";
-                for (auto& trait_name : unit->apply.trait_names()) {
-                    out << "    registry.emplace<" << trait_name << ">(entity);\n";
+                for (const auto& trait : unit->traits) {
+                    out << "    registry.emplace<" << trait.trait_name << ">(entity);\n";
                 }
                 out << "    return entity;\n";
                 out << "}\n\n";

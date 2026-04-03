@@ -53,6 +53,8 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(rea
                     }
                 }
                 return emit_expr(*e.object) + "." + e.member;
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                return "/* spawn expr */";
             } else {
                 return "/* unsupported expr */";
             }
@@ -70,13 +72,15 @@ std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) { /
             if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string op = s.op;
                 return ind + s.name + "[i] " + op + " " + emit_expr(*s.value) + ";\n";
+            } else if constexpr (std::is_same_v<S, LetStmt>) {
+                return ind + "auto " + s.name + " = " + emit_expr(*s.value) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
-                for (size_t i = 0; i < s.args.size(); ++i) {
+                for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += emit_expr(*s.args[i]);
+                    result += "." + s.payload[i].name + " = " + emit_expr(*s.payload[i].value);
                 }
                 return result + "});\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
@@ -195,14 +199,16 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(r
 
     // Build override map: field_name → expr_string
     std::unordered_map<std::string, std::string> overrides;
-    for (const auto& arg : s.overrides) {
-        overrides[arg.name] = emit_expr(*arg.value);
+    for (const auto& trait : s.overrides) {
+        for (const auto& arg : trait.assignments) {
+            overrides[arg.name] = emit_expr(*arg.value);
+        }
     }
 
-    // Build argument list in field declaration order across applied traits
+    // Build argument list in field declaration order across declared traits
     std::ostringstream args;
     bool first = true;
-    for (const auto& entry : tmpl->apply.entries) {
+    for (const auto& entry : tmpl->traits) {
         auto tit = ctx.traits.find(entry.trait_name);
         if (tit == ctx.traits.end()) {
             continue;
@@ -216,14 +222,16 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(r
             if (static_cast<unsigned int>(overrides.contains(field.name)) != 0U) {
                 args << overrides[field.name];
             } else {
-                // Check template config default
-                auto tc_it = ctx.template_config.find(s.template_name);
-                if (tc_it != ctx.template_config.end()) {
-                    auto fi = tc_it->second.find(field.name);
-                    if (fi != tc_it->second.end()) {
-                        args << fi->second;
-                        continue;
+                bool found_default = false;
+                for (const auto& assign : entry.assignments) {
+                    if (assign.name == field.name) {
+                        args << ManualSystemEmitter::emit_expr(*assign.value);
+                        found_default = true;
+                        break;
                     }
+                }
+                if (found_default) {
+                    continue;
                 }
                 // Check trait field default
                 auto td_it = ctx.trait_defaults.find(entry.trait_name);
@@ -259,13 +267,16 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                 std::string op = s.op;
                 return ind + s.name + " " + op + " " + emit_expr(*s.value) + ";\n";
 
+            } else if constexpr (std::is_same_v<S, LetStmt>) {
+                return ind + "auto " + s.name + " = " + emit_expr(*s.value) + ";\n";
+
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
-                for (size_t i = 0; i < s.args.size(); ++i) {
+                for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += emit_expr(*s.args[i]);
+                    result += "." + s.payload[i].name + " = " + emit_expr(*s.payload[i].value);
                 }
                 return result + "});\n";
 

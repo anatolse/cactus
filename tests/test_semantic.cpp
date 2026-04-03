@@ -9,9 +9,12 @@ using namespace cactus;
 
 // Standard lifecycle event declarations (normally from std.core imports)
 static const std::string STDLIB_EVENTS =
-    "pub event tick:\n    let dt: float\n"
-    "pub event fixed_tick:\n    let dt: float\n"
-    "pub event late_tick:\n    let dt: float\n"
+    "pub event tick:\n"
+    "    let dt: float\n"
+    "pub event fixed_tick:\n"
+    "    let dt: float\n"
+    "pub event late_tick:\n"
+    "    let dt: float\n"
     "pub event spawn\n"
     "pub event destroy\n"
     "pub event input\n"
@@ -50,7 +53,10 @@ static bool analyze_has_errors(const std::string& source) {
 }
 
 TEST_CASE("Semantic: type resolution — built-in types", "[semantic]") {
-    auto result = analyze("trait Pos:\n    var x: float\n    var y: int\n");
+    auto result = analyze(
+        "trait Pos:\n"
+        "    var x: float\n"
+        "    var y: int\n");
     REQUIRE(result.traits.count("Pos"));
     auto& trait = result.traits["Pos"];
     REQUIRE(trait.fields.size() == 2);
@@ -59,92 +65,146 @@ TEST_CASE("Semantic: type resolution — built-in types", "[semantic]") {
 }
 
 TEST_CASE("Semantic: type resolution — struct type", "[semantic]") {
-    auto result = analyze("struct Item:\n    price: int\ntrait Inv:\n    var item: Item\n");
+    auto result = analyze(
+        "struct Item:\n"
+        "    price: int\n"
+        "trait Inv:\n"
+        "    var item: Item\n");
     REQUIRE(result.traits.count("Inv"));
     CHECK(result.traits["Inv"].fields[0].type.kind == TypeKind::Struct);
     CHECK(result.traits["Inv"].fields[0].type.name == "Item");
 }
 
 TEST_CASE("Semantic: type resolution — enum type", "[semantic]") {
-    auto result = analyze("enum Color:\n    Red\n    Green\ntrait Paint:\n    var color: Color\n");
+    auto result = analyze(
+        "enum Color:\n"
+        "    Red\n"
+        "    Green\n"
+        "trait Paint:\n"
+        "    var color: Color\n");
     CHECK(result.traits["Paint"].fields[0].type.kind == TypeKind::Enum);
 }
 
 TEST_CASE("Semantic: type resolution — list type", "[semantic]") {
-    auto result = analyze("trait Bag:\n    var items: list[int]\n");
+    auto result = analyze(
+        "trait Bag:\n"
+        "    var items: list[int]\n");
     CHECK(result.traits["Bag"].fields[0].type.kind == TypeKind::List);
 }
 
 TEST_CASE("Semantic: unknown type error", "[semantic]") {
-    CHECK(analyze_has_errors("trait Bad:\n    var x: UnknownType\n"));
+    CHECK(analyze_has_errors(
+        "trait Bad:\n"
+        "    var x: UnknownType\n"));
 }
 
 TEST_CASE("Semantic: const string — allowed in const block", "[semantic]") {
-    CHECK_FALSE(analyze_has_errors("const:\n    NAME = \"hello\"\n"));
+    CHECK_FALSE(analyze_has_errors(
+        "const:\n"
+        "    NAME = \"hello\"\n"));
 }
 
 TEST_CASE("Semantic: const string — rejected in func", "[semantic]") {
-    CHECK(analyze_has_errors("func test() int:\n    x = \"bad\"\n    return 0\n"));
+    CHECK(analyze_has_errors(
+        "func test() int:\n"
+        "    x = \"bad\"\n"
+        "    return 0\n"));
 }
 
 TEST_CASE("Semantic: func purity — emit rejected", "[semantic]") {
     CHECK(analyze_has_errors(
-        "event Boom:\n    var x: int\n"
-        "func bad():\n    emit Boom:\n        x = 1\n"));
+        "event Boom:\n"
+        "    var x: int\n"
+        "func bad():\n"
+        "    emit Boom:\n"
+        "        x = 1\n"));
 }
 
 TEST_CASE("Semantic: func purity — pure func allowed", "[semantic]") {
-    CHECK_FALSE(analyze_has_errors("func add(a: int, b: int) int:\n    return a + b\n"));
+    CHECK_FALSE(analyze_has_errors(
+        "func add(a: int, b: int) int:\n"
+        "    return a + b\n"));
 }
 
 TEST_CASE("Semantic: no recursion — direct", "[semantic]") {
-    CHECK(analyze_has_errors("func loop(x: int) int:\n    return loop(x)\n"));
+    CHECK(analyze_has_errors(
+        "func loop(x: int) int:\n"
+        "    return loop(x)\n"));
 }
 
 TEST_CASE("Semantic: persist on var — allowed", "[semantic]") {
-    CHECK_FALSE(analyze_has_errors("trait Save:\n    persist var data: int\n"));
+    CHECK_FALSE(analyze_has_errors(
+        "trait Save:\n"
+        "    persist var data: int\n"));
 }
 
 TEST_CASE("Semantic: persist on let — rejected", "[semantic]") {
-    CHECK(analyze_has_errors("trait Bad:\n    persist let data: int = 0\n"));
+    CHECK(analyze_has_errors(
+        "trait Bad:\n"
+        "    persist let data: int = 0\n"));
 }
 
 TEST_CASE("Semantic: sync on let — rejected", "[semantic]") {
-    CHECK(analyze_has_errors("trait Bad:\n    sync let data: int = 0\n"));
+    CHECK(analyze_has_errors(
+        "trait Bad:\n"
+        "    sync let data: int = 0\n"));
 }
 
 TEST_CASE("Semantic: persist sync on var — allowed", "[semantic]") {
-    CHECK_FALSE(analyze_has_errors("trait Net:\n    persist sync var pos: float\n"));
+    CHECK_FALSE(analyze_has_errors(
+        "trait Net:\n"
+        "    persist sync var pos: float\n"));
 }
 
 TEST_CASE("Semantic: system filter — valid trait", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
         STDLIB_EVENTS +
-        "trait Pos:\n    var x: float\n"
-        "system Move:\n    filter: \n        Pos\n    on tick:\n        x = x + tick.dt\n"));
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system Move:\n"
+        "    filter: \n"
+        "        Pos\n"
+        "    on tick:\n"
+        "        x = x + tick.dt\n"));
 }
 
 TEST_CASE("Semantic: system filter — unknown trait", "[semantic]") {
     CHECK(analyze_has_errors(
-        "system Bad:\n    filter: \n        NonExistent\n    on tick:\n        x = 0\n"));
+        "system Bad:\n"
+        "    filter: \n"
+        "        NonExistent\n"
+        "    on tick:\n"
+        "        x = 0\n"));
 }
 
 TEST_CASE("Semantic: event handler — valid event", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
-        "trait Pos:\n    var x: float\n"
-        "event Hit:\n    var dmg: int\n"
-        "system Combat:\n    filter: \n        Pos\n    on Hit:\n        x = x + 1.0\n"));
+        "trait Pos:\n"
+        "    var x: float\n"
+        "event Hit:\n"
+        "    var dmg: int\n"
+        "system Combat:\n"
+        "    filter: \n"
+        "        Pos\n"
+        "    on Hit:\n"
+        "        x = x + 1.0\n"));
 }
 
 TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
     CHECK(analyze_has_errors(
-        "trait Pos:\n    var x: float\n"
-        "system Bad:\n    filter: \n        Pos\n    on FakeEvent:\n        x = 0\n"));
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system Bad:\n"
+        "    filter: \n"
+        "        Pos\n"
+        "    on FakeEvent:\n"
+        "        x = 0\n"));
 }
 
 TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
     CHECK(analyze_has_errors(
-        "event Damage:\n    var amount: int\n"
+        "event Damage:\n"
+        "    var amount: int\n"
         "system Combat:\n"
         "    on tick:\n"
         "        emit Damage:\n"
@@ -153,7 +213,8 @@ TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
 
 TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
-        "event Damage:\n    var amount: int\n"
+        "event Damage:\n"
+        "    var amount: int\n"
         "system Combat:\n"
         "    on tick:\n"
         "        emit Damage:\n"
@@ -163,15 +224,25 @@ TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
 TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
         STDLIB_EVENTS +
-        "trait Pos:\n    var x: float\n"
-        "system Move:\n    filter: \n        Pos\n    on tick:\n        x = x + tick.dt\n"));
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system Move:\n"
+        "    filter: \n"
+        "        Pos\n"
+        "    on tick:\n"
+        "        x = x + tick.dt\n"));
 }
 
 TEST_CASE("Semantic: dependency graph built", "[semantic]") {
     auto result = analyze(
         STDLIB_EVENTS +
-        "trait Pos:\n    var x: float\n"
-        "system Move:\n    filter: \n        Pos\n    on tick as t:\n        x = x + t.dt\n");
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system Move:\n"
+        "    filter: \n"
+        "        Pos\n"
+        "    on tick as t:\n"
+        "        x = x + t.dt\n");
     REQUIRE(result.dependency_graph.size() == 1);
     CHECK(result.dependency_graph[0].system_name == "Move");
     CHECK(result.dependency_graph[0].reads.count("Pos"));
@@ -179,11 +250,18 @@ TEST_CASE("Semantic: dependency graph built", "[semantic]") {
 }
 
 TEST_CASE("Semantic: duplicate struct error", "[semantic]") {
-    CHECK(analyze_has_errors("struct A:\n    x: int\nstruct A:\n    y: int\n"));
+    CHECK(analyze_has_errors(
+        "struct A:\n"
+        "    x: int\n"
+        "struct A:\n"
+        "    y: int\n"));
 }
 
 TEST_CASE("Semantic: resolved struct fields", "[semantic]") {
-    auto result = analyze("struct Vec2:\n    x: float\n    y: float\n");
+    auto result = analyze(
+        "struct Vec2:\n"
+        "    x: float\n"
+        "    y: float\n");
     REQUIRE(result.structs.count("Vec2"));
     CHECK(result.structs["Vec2"].fields.size() == 2);
 }
@@ -228,8 +306,11 @@ TEST_CASE("Semantic: extern func not flagged by purity check", "[semantic][exter
 TEST_CASE("Semantic: non-extern func with emit is still flagged", "[semantic][extern-func]") {
     // Regular func with emit still fails purity check
     CHECK(analyze_has_errors(
-        "event Boom:\n    var x: int\n"
-        "func bad():\n    emit Boom:\n        x = 1\n"));
+        "event Boom:\n"
+        "    var x: int\n"
+        "func bad():\n"
+        "    emit Boom:\n"
+        "        x = 1\n"));
 }
 
 TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][extern-func]") {
@@ -252,27 +333,29 @@ TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][exter
 // Task 12.5: after: referencing unknown system reports error
 TEST_CASE("Semantic: after: unknown system reports error", "[semantic][system-ordering]") {
     CHECK(analyze_has_errors(
-        "trait T:\n    var x: float\n"
+        "trait T:\n"
+        "    var x: float\n"
         "system A:\n"
         "    after:\n"
         "        NonExistentSystem\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 1.0\n"));
 }
 
 // Task 12.6: direct after: cycle reports error
 TEST_CASE("Semantic: after: direct cycle reports error", "[semantic][system-ordering]") {
     CHECK(analyze_has_errors(
-        "trait T:\n    var x: float\n"
+        "trait T:\n"
+        "    var x: float\n"
         "system A:\n"
         "    after:\n"
         "        B\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 1.0\n"
         "system B:\n"
         "    after:\n"
         "        A\n"
-        "    on tick(dt: float):\n"
+        "    on tick:\n"
         "        x = 2.0\n"));
 }
 
@@ -280,7 +363,8 @@ TEST_CASE("Semantic: after: direct cycle reports error", "[semantic][system-orde
 TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[semantic][system-ordering]") {
     auto result = analyze(
         STDLIB_EVENTS +
-        "trait T:\n    var x: float\n"
+        "trait T:\n"
+        "    var x: float\n"
         "system A:\n"
         "    filter: \n"
         "       T\n"
@@ -323,8 +407,10 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
 // Task 12.8: ambiguous bare config key reports error
 TEST_CASE("Semantic: duplicate field across nested traits reports error", "[semantic][config-qualification]") {
     CHECK(analyze_has_errors(
-        "trait TraitA:\n    var value: int\n"
-        "trait TraitB:\n    var value: int\n"
+        "trait TraitA:\n"
+        "    var value: int\n"
+        "trait TraitB:\n"
+        "    var value: int\n"
         "unit Player:\n"
         "    TraitA:\n"
         "        value = 5\n"
@@ -334,7 +420,8 @@ TEST_CASE("Semantic: duplicate field across nested traits reports error", "[sema
 
 TEST_CASE("Semantic: nested trait field resolves correctly", "[semantic][config-qualification]") {
     CHECK_FALSE(analyze_has_errors(
-        "trait Health:\n    var hp: int = 100\n"
+        "trait Health:\n"
+        "    var hp: int = 100\n"
         "unit Player:\n"
         "    Health:\n"
         "        hp = 50\n"));
@@ -342,7 +429,8 @@ TEST_CASE("Semantic: nested trait field resolves correctly", "[semantic][config-
 
 TEST_CASE("Semantic: nested trait field with unknown field reports error", "[semantic][config-qualification]") {
     CHECK(analyze_has_errors(
-        "trait Health:\n    var hp: int = 100\n"
+        "trait Health:\n"
+        "    var hp: int = 100\n"
         "unit Player:\n"
         "    Health:\n"
         "        notafield = 50\n"));
@@ -350,7 +438,8 @@ TEST_CASE("Semantic: nested trait field with unknown field reports error", "[sem
 
 TEST_CASE("Semantic: marker trait with nested trait assignment passes", "[semantic][config-qualification]") {
     CHECK_FALSE(analyze_has_errors(
-        "trait Health:\n    var hp: int = 100\n"
+        "trait Health:\n"
+        "    var hp: int = 100\n"
         "unit Player:\n"
         "    Health:\n"
         "        hp = 50\n"));

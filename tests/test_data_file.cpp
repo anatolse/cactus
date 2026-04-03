@@ -33,10 +33,11 @@ static std::pair<ProgramNode, DecoratedProgram> compile(const std::string& sourc
 
 TEST_CASE("DataFile: simple unit — field values and trait mask", "[datafile]") {
     auto [program, decorated] = compile(
-        "trait Health:\n    var hp: int = 100\n"
+        "trait Health:\n"
+        "    var hp: int = 100\n"
         "unit Player:\n"
-        "    apply:\n        Health\n"
-        "    config:\n        hp = 42\n");
+        "    Health:\n"
+        "        hp = 42\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -55,11 +56,13 @@ TEST_CASE("DataFile: simple unit — field values and trait mask", "[datafile]")
 
 TEST_CASE("DataFile: float field with constant reference", "[datafile]") {
     auto [program, decorated] = compile(
-        "const:\n    GRAVITY = 30.0\n"
-        "trait Physics:\n    var gravity: float = 0.0\n"
+        "const:\n"
+        "    GRAVITY = 30.0\n"
+        "trait Physics:\n"
+        "    var gravity: float = 0.0\n"
         "unit Ball:\n"
-        "    apply:\n        Physics\n"
-        "    config:\n        gravity = GRAVITY\n");
+        "    Physics:\n"
+        "        gravity = GRAVITY\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -74,10 +77,11 @@ TEST_CASE("DataFile: float field with constant reference", "[datafile]") {
 
 TEST_CASE("DataFile: vec2 field from constructor call", "[datafile]") {
     auto [program, decorated] = compile(
-        "trait Position:\n    var pos: vec2\n"
+        "trait Position:\n"
+        "    var pos: vec2\n"
         "unit Enemy:\n"
-        "    apply:\n        Position\n"
-        "    config:\n        pos = vec2(100.0, 200.0)\n");
+        "    Position:\n"
+        "        pos = vec2(100.0, 200.0)\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -92,10 +96,11 @@ TEST_CASE("DataFile: vec2 field from constructor call", "[datafile]") {
 
 TEST_CASE("DataFile: bool field", "[datafile]") {
     auto [program, decorated] = compile(
-        "trait Collectible:\n    var collected: bool = false\n"
+        "trait Collectible:\n"
+        "    var collected: bool = false\n"
         "unit Gem:\n"
-        "    apply:\n        Collectible\n"
-        "    config:\n        collected = false\n");
+        "    Collectible:\n"
+        "        collected = false\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -109,10 +114,11 @@ TEST_CASE("DataFile: bool field", "[datafile]") {
 
 TEST_CASE("DataFile: color field from hex literal", "[datafile]") {
     auto [program, decorated] = compile(
-        "trait Visual:\n    var color: color\n"
+        "trait Visual:\n"
+        "    var color: color\n"
         "unit Block:\n"
-        "    apply:\n        Visual\n"
-        "    config:\n        color = #FF8800\n");
+        "    Visual:\n"
+        "        color = #FF8800\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -131,9 +137,13 @@ TEST_CASE("DataFile: color field from hex literal", "[datafile]") {
 
 TEST_CASE("DataFile: template declarations excluded from data file", "[datafile]") {
     auto [program, decorated] = compile(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    apply:\n        Position\n"
-        "unit Floor:\n    apply:\n        Position\n    config:\n        x = 0.0\n");
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position\n"
+        "unit Floor:\n"
+        "    Position:\n"
+        "        x = 0.0\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -146,10 +156,17 @@ TEST_CASE("DataFile: template declarations excluded from data file", "[datafile]
 
 TEST_CASE("DataFile: multiple units all included", "[datafile]") {
     auto [program, decorated] = compile(
-        "trait HP:\n    var hp: int = 100\n"
-        "unit UnitA:\n    apply:\n        HP\n    config:\n        hp = 10\n"
-        "unit UnitB:\n    apply:\n        HP\n    config:\n        hp = 20\n"
-        "unit UnitC:\n    apply:\n        HP\n    config:\n        hp = 30\n");
+        "trait HP:\n"
+        "    var hp: int = 100\n"
+        "unit UnitA:\n"
+        "    HP:\n"
+        "        hp = 10\n"
+        "unit UnitB:\n"
+        "    HP:\n"
+        "        hp = 20\n"
+        "unit UnitC:\n"
+        "    HP:\n"
+        "        hp = 30\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -169,12 +186,12 @@ TEST_CASE("DataFile: multiple units all included", "[datafile]") {
 TEST_CASE("DataFile: disabled trait not set in trait_mask", "[datafile]") {
     auto [program, decorated] = compile(
         "trait Frozen\n"
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "unit Enemy:\n"
-        "    apply:\n"
-        "        Position\n"
-        "        Frozen: disabled\n"
-        "    config:\n        x = 1.0\n");
+        "    Position:\n"
+        "        x = 1.0\n"
+        "    Frozen: disabled\n");
 
     ErrorReporter errors;
     DataFileWriter writer(program, decorated, errors);
@@ -194,11 +211,17 @@ TEST_CASE("DataFile: disabled trait not set in trait_mask", "[datafile]") {
 
 TEST_CASE("DataFile: write and read round-trip", "[datafile]") {
     auto [program, decorated] = compile(
-        "trait Health:\n    var hp: int = 100\n"
-        "trait Position:\n    var x: float = 0.0\n    var y: float = 0.0\n"
+        "trait Health:\n"
+        "    var hp: int = 100\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "    var y: float = 0.0\n"
         "unit Player:\n"
-        "    apply:\n        Health\n        Position\n"
-        "    config:\n        hp = 75\n        x = 10.0\n        y = 20.0\n");
+        "    Health:\n"
+        "        hp = 75\n"
+        "    Position:\n"
+        "        x = 10.0\n"
+        "        y = 20.0\n");
 
     // Write
     auto tmp_dir = std::filesystem::temp_directory_path() / "cactus_test_data";
@@ -252,8 +275,11 @@ TEST_CASE("DataFile: write and read round-trip", "[datafile]") {
 TEST_CASE("DataFile: version mismatch error", "[datafile]") {
     // Write a valid file, then manually corrupt the version
     auto [program, decorated] = compile(
-        "trait HP:\n    var hp: int = 100\n"
-        "unit P:\n    apply:\n        HP\n    config:\n        hp = 1\n");
+        "trait HP:\n"
+        "    var hp: int = 100\n"
+        "unit P:\n"
+        "    HP:\n"
+        "        hp = 1\n");
 
     auto tmp_dir = std::filesystem::temp_directory_path() / "cactus_test_version";
     ErrorReporter write_errors;

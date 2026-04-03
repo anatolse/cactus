@@ -43,7 +43,10 @@ TEST_CASE("Parser: use with alias", "[parser]") {
 }
 
 TEST_CASE("Parser: const block", "[parser]") {
-    auto prog = parse("const:\n    X = 42\n    Y = 3.14\n");
+    auto prog = parse(
+        "const:\n"
+        "    X = 42\n"
+        "    Y = 3.14\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
     REQUIRE(decl.assignments.size() == 2);
@@ -52,7 +55,10 @@ TEST_CASE("Parser: const block", "[parser]") {
 }
 
 TEST_CASE("Parser: struct declaration", "[parser]") {
-    auto prog = parse("struct Item:\n    name: int\n    price: float\n");
+    auto prog = parse(
+        "struct Item:\n"
+        "    name: int\n"
+        "    price: float\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<StructNode>(prog.declarations[0]);
     CHECK(decl.name == "Item");
@@ -64,7 +70,11 @@ TEST_CASE("Parser: struct declaration", "[parser]") {
 }
 
 TEST_CASE("Parser: enum declaration", "[parser]") {
-    auto prog = parse("enum Color:\n    Red\n    Green\n    Blue\n");
+    auto prog = parse(
+        "enum Color:\n"
+        "    Red\n"
+        "    Green\n"
+        "    Blue\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<EnumNode>(prog.declarations[0]);
     CHECK(decl.name == "Color");
@@ -75,7 +85,10 @@ TEST_CASE("Parser: enum declaration", "[parser]") {
 }
 
 TEST_CASE("Parser: enum with explicit values", "[parser]") {
-    auto prog = parse("enum Priority:\n    Low = 0\n    High = 10\n");
+    auto prog = parse(
+        "enum Priority:\n"
+        "    Low = 0\n"
+        "    High = 10\n");
     auto& decl = std::get<EnumNode>(prog.declarations[0]);
     REQUIRE(decl.variants[0].value.has_value());
     CHECK(*decl.variants[0].value == 0);
@@ -84,7 +97,10 @@ TEST_CASE("Parser: enum with explicit values", "[parser]") {
 }
 
 TEST_CASE("Parser: trait with var fields", "[parser]") {
-    auto prog = parse("trait Health:\n    var health: int = 100\n    let max_health: int = 100\n");
+    auto prog = parse(
+        "trait Health:\n"
+        "    var health: int = 100\n"
+        "    let max_health: int = 100\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<TraitNode>(prog.declarations[0]);
     CHECK(decl.name == "Health");
@@ -96,7 +112,10 @@ TEST_CASE("Parser: trait with var fields", "[parser]") {
 }
 
 TEST_CASE("Parser: trait with persist sync modifiers", "[parser]") {
-    auto prog = parse("trait Position:\n    persist sync var x: float\n    persist sync var y: float\n");
+    auto prog = parse(
+        "trait Position:\n"
+        "    persist sync var x: float\n"
+        "    persist sync var y: float\n");
     auto& decl = std::get<TraitNode>(prog.declarations[0]);
     REQUIRE(decl.fields.size() == 2);
     CHECK(decl.fields[0].modifiers.is_persist);
@@ -145,7 +164,10 @@ TEST_CASE("Parser: system with filter and handler", "[parser]") {
 }
 
 TEST_CASE("Parser: event declaration", "[parser]") {
-    auto prog = parse("event Damage:\n    var amount: int\n    var source: int\n");
+    auto prog = parse(
+        "event Damage:\n"
+        "    var amount: int\n"
+        "    var source: int\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<EventNode>(prog.declarations[0]);
     CHECK(decl.name == "Damage");
@@ -153,7 +175,9 @@ TEST_CASE("Parser: event declaration", "[parser]") {
 }
 
 TEST_CASE("Parser: func declaration", "[parser]") {
-    auto prog = parse("func add(a: int, b: int) int:\n    return a + b\n");
+    auto prog = parse(
+        "func add(a: int, b: int) int:\n"
+        "    return a + b\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
     CHECK(decl.name == "add");
@@ -164,7 +188,9 @@ TEST_CASE("Parser: func declaration", "[parser]") {
 }
 
 TEST_CASE("Parser: expression — binary arithmetic", "[parser]") {
-    auto prog = parse("const:\n    X = 1 + 2 * 3\n");
+    auto prog = parse(
+        "const:\n"
+        "    X = 1 + 2 * 3\n");
     auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
     auto& expr = decl.assignments[0].value;
     // Should be (1 + (2 * 3)) due to precedence
@@ -174,7 +200,9 @@ TEST_CASE("Parser: expression — binary arithmetic", "[parser]") {
 }
 
 TEST_CASE("Parser: expression — function call", "[parser]") {
-    auto prog = parse("func test():\n    foo(1, 2)\n");
+    auto prog = parse(
+        "func test():\n"
+        "    foo(1, 2)\n");
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
     REQUIRE(decl.body.size() == 1);
     auto* expr_stmt = std::get_if<ExprStmt>(&decl.body[0]->stmt);
@@ -185,7 +213,9 @@ TEST_CASE("Parser: expression — function call", "[parser]") {
 }
 
 TEST_CASE("Parser: expression — member access", "[parser]") {
-    auto prog = parse("const:\n    X = a.b\n");
+    auto prog = parse(
+        "const:\n"
+        "    X = a.b\n");
     auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
     auto* mem = std::get_if<MemberExpr>(&decl.assignments[0].value->expr);
     REQUIRE(mem != nullptr);
@@ -193,7 +223,9 @@ TEST_CASE("Parser: expression — member access", "[parser]") {
 }
 
 TEST_CASE("Parser: expression — unary not", "[parser]") {
-    auto prog = parse("const:\n    X = not true\n");
+    auto prog = parse(
+        "const:\n"
+        "    X = not true\n");
     auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
     auto* un = std::get_if<UnaryExpr>(&decl.assignments[0].value->expr);
     REQUIRE(un != nullptr);
@@ -201,7 +233,9 @@ TEST_CASE("Parser: expression — unary not", "[parser]") {
 }
 
 TEST_CASE("Parser: expression — list literal", "[parser]") {
-    auto prog = parse("const:\n    X = [1, 2, 3]\n");
+    auto prog = parse(
+        "const:\n"
+        "    X = [1, 2, 3]\n");
     auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
     auto* list = std::get_if<ListExpr>(&decl.assignments[0].value->expr);
     REQUIRE(list != nullptr);
@@ -209,7 +243,10 @@ TEST_CASE("Parser: expression — list literal", "[parser]") {
 }
 
 TEST_CASE("Parser: if statement", "[parser]") {
-    auto prog = parse("func test():\n    if x > 0:\n        return x\n");
+    auto prog = parse(
+        "func test():\n"
+        "    if x > 0:\n"
+        "        return x\n");
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
     REQUIRE(decl.body.size() == 1);
     auto* if_stmt = std::get_if<IfStmt>(&decl.body[0]->stmt);
@@ -233,7 +270,11 @@ TEST_CASE("Parser: emit statement", "[parser]") {
 }
 
 TEST_CASE("Parser: assignment operators", "[parser]") {
-    auto prog = parse("func test():\n    x = 1\n    y += 2\n    z -= 3\n");
+    auto prog = parse(
+        "func test():\n"
+        "    x = 1\n"
+        "    y += 2\n"
+        "    z -= 3\n");
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
     REQUIRE(decl.body.size() == 3);
     auto* a1 = std::get_if<VarAssign>(&decl.body[0]->stmt);
@@ -248,7 +289,10 @@ TEST_CASE("Parser: assignment operators", "[parser]") {
 }
 
 TEST_CASE("Parser: interface declaration", "[parser]") {
-    auto prog = parse("interface Renderable:\n    func draw(x: int, y: int)\n    func update(dt: float)\n");
+    auto prog = parse(
+        "interface Renderable:\n"
+        "    func draw(x: int, y: int)\n"
+        "    func update(dt: float)\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<InterfaceNode>(prog.declarations[0]);
     CHECK(decl.name == "Renderable");
@@ -377,7 +421,7 @@ TEST_CASE("Parser: filter with unqualified aliases", "[parser][modules]") {
 TEST_CASE("Parser: template declaration", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "template EnemyWalker:\n"
-        "        Position:\n"
+        "    Position:\n"
         "        x = 0.0\n"
         "    EnemyAI:\n"
         "        patrol_speed = 2.0\n");
@@ -789,7 +833,9 @@ TEST_CASE("Parser: non-extern func without body still errors", "[parser][extern-
 // Task 8.4: func return type without arrow, and arrow produces error
 
 TEST_CASE("Parser: func with return type using no arrow", "[parser][extern-func]") {
-    auto prog = parse("func distance(a: float, b: float) float:\n    return a - b\n");
+    auto prog = parse(
+        "func distance(a: float, b: float) float:\n"
+        "    return a - b\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
     CHECK(decl.name == "distance");
@@ -802,7 +848,9 @@ TEST_CASE("Parser: func with return type using no arrow", "[parser][extern-func]
 TEST_CASE("Parser: func with arrow return type produces error", "[parser][extern-func]") {
     // Using old -> syntax should produce an error
     ErrorReporter errors;
-    Lexer lexer("func add(a: int, b: int) -> int:\n    return a + b\n", "test.cactus", errors);
+    Lexer lexer(
+        "func add(a: int, b: int) -> int:\n"
+        "    return a + b\n", "test.cactus", errors);
     auto tokens = lexer.tokenize();
     REQUIRE_FALSE(errors.has_errors());  // lexing should be fine
     Parser parser(std::move(tokens), errors);
@@ -815,7 +863,11 @@ TEST_CASE("Parser: func with arrow return type produces error", "[parser][extern
 // Task 12.1: Trait body with 'on' produces error
 TEST_CASE("Parser: trait body with on handler produces error", "[parser][trait-cleanup]") {
     ErrorReporter errors;
-    Lexer lexer("trait Bad:\n    var x: int\n    on tick(dt: float):\n        x = 1\n", "test.cactus", errors);
+    Lexer lexer(
+        "trait Bad:\n"
+        "    var x: int\n"
+        "    on tick(dt: float):\n"
+        "        x = 1\n", "test.cactus", errors);
     auto tokens = lexer.tokenize();
     Parser parser(std::move(tokens), errors);
     parser.parse_program();

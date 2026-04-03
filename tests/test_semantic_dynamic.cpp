@@ -9,9 +9,12 @@ using namespace cactus;
 
 // Standard lifecycle event declarations (normally from std.core imports)
 static const std::string STDLIB_EVENTS =
-    "pub event tick:\n    let dt: float\n"
-    "pub event fixed_tick:\n    let dt: float\n"
-    "pub event late_tick:\n    let dt: float\n"
+    "pub event tick:\n"
+    "    let dt: float\n"
+    "pub event fixed_tick:\n"
+    "    let dt: float\n"
+    "pub event late_tick:\n"
+    "    let dt: float\n"
     "pub event spawn\n"
     "pub event destroy\n"
     "pub event input\n"
@@ -62,52 +65,69 @@ static std::string first_error(const std::string& source) {
 
 TEST_CASE("Semantic: template with declared traits — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    Position\n"));
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position\n"));
 }
 
 TEST_CASE("Semantic: template with undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "template Enemy:\n    UnknownTrait\n"));
+        "template Enemy:\n"
+        "    UnknownTrait\n"));
 }
 
 TEST_CASE("Semantic: template with invalid config field — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    Position:\n        badfield = 1.0\n"));
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position:\n"
+        "        badfield = 1.0\n"));
 }
 
 TEST_CASE("Semantic: template with valid config field — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    Position:\n        x = 5.0\n"));
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position:\n"
+        "        x = 5.0\n"));
 }
 
 // ── Task 5.2: Templates tracked separately from units ─────────────────────────
 
 TEST_CASE("Semantic: unit with undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "unit Player:\n    NonExistent\n"));
+        "unit Player:\n"
+        "    NonExistent\n"));
 }
 
 TEST_CASE("Semantic: unit with declared trait — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Health:\n    var hp: int = 100\n"
-        "unit Player:\n    Health\n"));
+        "trait Health:\n"
+        "    var hp: int = 100\n"
+        "unit Player:\n"
+        "    Health\n"));
 }
 
 TEST_CASE("Semantic: unit config with unknown field — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Health:\n    var hp: int = 100\n"
-        "unit Player:\n    Health:\n        badfield = 10\n"));
+        "trait Health:\n"
+        "    var hp: int = 100\n"
+        "unit Player:\n"
+        "    Health:\n"
+        "        badfield = 10\n"));
 }
 
 // ── Task 5.3: Spawn site validation ─────────────────────────────────────────
 
 TEST_CASE("Semantic: spawn valid template — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    Position\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position\n"
         "system Spawner:\n"
         "    on load:\n"
         "        spawn Enemy:\n"
@@ -126,8 +146,10 @@ TEST_CASE("Semantic: spawn undefined template — error", "[semantic][dynamic-ec
 
 TEST_CASE("Semantic: spawn with unknown override field — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    Position\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position\n"
         "system Spawner:\n"
         "    on load:\n"
         "        spawn Enemy:\n"
@@ -140,8 +162,10 @@ TEST_CASE("Semantic: spawn with unknown override field — error", "[semantic][d
 TEST_CASE("Semantic: spawn with required field provided — ok", "[semantic][dynamic-ecs]") {
     // 'speed' is var with no default → required at spawn
     CHECK_FALSE(analyze_errors(
-        "trait Movement:\n    var speed: float\n"
-        "template Bullet:\n    Movement\n"
+        "trait Movement:\n"
+        "    var speed: float\n"
+        "template Bullet:\n"
+        "    Movement\n"
         "system Spawner:\n"
         "    on load:\n"
         "        spawn Bullet:\n"
@@ -151,8 +175,10 @@ TEST_CASE("Semantic: spawn with required field provided — ok", "[semantic][dyn
 
 TEST_CASE("Semantic: spawn with required field missing — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Movement:\n    var speed: float\n"
-        "template Bullet:\n    Movement\n"
+        "trait Movement:\n"
+        "    var speed: float\n"
+        "template Bullet:\n"
+        "    Movement\n"
         "system Spawner:\n"
         "    on load:\n"
         "        spawn Bullet:\n"
@@ -163,8 +189,11 @@ TEST_CASE("Semantic: spawn with required field provided by template config — o
           "[semantic][dynamic-ecs]") {
     // speed provided in template config — not required at spawn
     CHECK_FALSE(analyze_errors(
-        "trait Movement:\n    var speed: float\n"
-        "template Bullet:\n    Movement:\n        speed = 10.0\n"
+        "trait Movement:\n"
+        "    var speed: float\n"
+        "template Bullet:\n"
+        "    Movement:\n"
+        "        speed = 10.0\n"
         "system Spawner:\n"
         "    on load:\n"
         "        spawn Bullet:\n"
@@ -175,8 +204,10 @@ TEST_CASE("Semantic: spawn with required field provided by template config — o
 
 TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
     auto err = first_error(
-        "trait Position:\n    var x: float = 0.0\n"
-        "unit Player:\n    Position\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "unit Player:\n"
+        "    Position\n"
         "system Spawner:\n"
         "    on load:\n"
         "        spawn Player:\n"
@@ -189,32 +220,41 @@ TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
 
 TEST_CASE("Semantic: spawn in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    Position\n"
-        "func bad():\n    spawn Enemy:\n        Position:\n            x = 1.0\n"));
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position\n"
+        "func bad():\n"
+        "    spawn Enemy:\n"
+        "        Position:\n"
+        "            x = 1.0\n"));
 }
 
 TEST_CASE("Semantic: destroy in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "func bad():\n    destroy\n"));
+        "func bad():\n"
+        "    destroy\n"));
 }
 
 TEST_CASE("Semantic: load in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "use levels\n"
-        "func bad():\n    load levels.main\n"));
+        "func bad():\n"
+        "    load levels.main\n"));
 }
 
 TEST_CASE("Semantic: enable in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Frozen\n"
-        "func bad():\n    enable Frozen\n"));
+        "func bad():\n"
+        "    enable Frozen\n"));
 }
 
 TEST_CASE("Semantic: disable in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Frozen\n"
-        "func bad():\n    disable Frozen\n"));
+        "func bad():\n"
+        "    disable Frozen\n"));
 }
 
 // ── Task 5.6: load module reachability ──────────────────────────────────────
@@ -222,7 +262,8 @@ TEST_CASE("Semantic: disable in func body — error", "[semantic][dynamic-ecs]")
 TEST_CASE("Semantic: load reachable via use — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "use levels\n"
-        "trait GameState:\n    var active: bool = true\n"
+        "trait GameState:\n"
+        "    var active: bool = true\n"
         "system GameMgr:\n"
         "    filter:\n"
         "        GameState\n"
@@ -232,7 +273,8 @@ TEST_CASE("Semantic: load reachable via use — ok", "[semantic][dynamic-ecs]") 
 
 TEST_CASE("Semantic: load unreachable module — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait GameState:\n    var active: bool = true\n"
+        "trait GameState:\n"
+        "    var active: bool = true\n"
         "system GameMgr:\n"
         "    filter:\n"
         "        GameState\n"
@@ -245,7 +287,8 @@ TEST_CASE("Semantic: load unreachable module — error", "[semantic][dynamic-ecs
 TEST_CASE("Semantic: enable declared trait — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Frozen\n"
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
@@ -255,7 +298,8 @@ TEST_CASE("Semantic: enable declared trait — ok", "[semantic][dynamic-ecs]") {
 
 TEST_CASE("Semantic: enable undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
@@ -266,7 +310,8 @@ TEST_CASE("Semantic: enable undeclared trait — error", "[semantic][dynamic-ecs
 TEST_CASE("Semantic: disable declared trait — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Frozen\n"
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
@@ -276,7 +321,8 @@ TEST_CASE("Semantic: disable declared trait — ok", "[semantic][dynamic-ecs]") 
 
 TEST_CASE("Semantic: disable undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
@@ -288,7 +334,8 @@ TEST_CASE("Semantic: disable undeclared trait — error", "[semantic][dynamic-ec
 
 TEST_CASE("Semantic: on spawn no params — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system Init:\n"
         "    filter:\n"
         "        Position\n"
@@ -298,7 +345,8 @@ TEST_CASE("Semantic: on spawn no params — valid", "[semantic][dynamic-ecs]") {
 
 TEST_CASE("Semantic: on spawn with params — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system Init:\n"
         "    filter:\n"
         "        Position\n"
@@ -308,7 +356,8 @@ TEST_CASE("Semantic: on spawn with params — error", "[semantic][dynamic-ecs]")
 
 TEST_CASE("Semantic: on destroy no params — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system Cleanup:\n"
         "    filter:\n"
         "        Position\n"
@@ -318,7 +367,8 @@ TEST_CASE("Semantic: on destroy no params — valid", "[semantic][dynamic-ecs]")
 
 TEST_CASE("Semantic: on load with params — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait GameState:\n    var active: bool = true\n"
+        "trait GameState:\n"
+        "    var active: bool = true\n"
         "system GameMgr:\n"
         "    filter:\n"
         "        GameState\n"
@@ -328,7 +378,8 @@ TEST_CASE("Semantic: on load with params — error", "[semantic][dynamic-ecs]") 
 
 TEST_CASE("Semantic: on unload with params — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
-        "trait GameState:\n    var active: bool = true\n"
+        "trait GameState:\n"
+        "    var active: bool = true\n"
         "system GameMgr:\n"
         "    filter:\n"
         "        GameState\n"
@@ -342,7 +393,8 @@ TEST_CASE("Semantic: exclude declared trait — valid", "[semantic][dynamic-ecs]
     CHECK_FALSE(analyze_errors(
         "trait Persistent\n"
         "system Cleanup:\n"
-        "    exclude:\n        Persistent\n"
+        "    exclude:\n"
+        "        Persistent\n"
         "    on unload:\n"
         "        destroy\n"));
 }
@@ -350,7 +402,8 @@ TEST_CASE("Semantic: exclude declared trait — valid", "[semantic][dynamic-ecs]
 TEST_CASE("Semantic: exclude undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "system Cleanup:\n"
-        "    exclude:\n        NonExistentTrait\n"
+        "    exclude:\n"
+        "        NonExistentTrait\n"
         "    on unload:\n"
         "        destroy\n"));
 }
@@ -368,7 +421,8 @@ TEST_CASE("Semantic: system with exclude only (no filter) — valid", "[semantic
     CHECK_FALSE(analyze_errors(
         "trait Persistent\n"
         "system Cleanup:\n"
-        "    exclude:\n        Persistent\n"
+        "    exclude:\n"
+        "        Persistent\n"
         "    on unload:\n"
         "        destroy\n"));
 }
@@ -378,7 +432,8 @@ TEST_CASE("Semantic: system with exclude only (no filter) — valid", "[semantic
 TEST_CASE("Semantic: disabled annotation on marker trait — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Frozen\n"
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "template Enemy:\n"
         "    Position\n"
         "    Frozen: disabled\n"));
@@ -386,8 +441,10 @@ TEST_CASE("Semantic: disabled annotation on marker trait — valid", "[semantic]
 
 TEST_CASE("Semantic: disabled annotation on data trait — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait EnemyAI:\n    var patrol_speed: float = 2.0\n"
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait EnemyAI:\n"
+        "    var patrol_speed: float = 2.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "template LazyEnemy:\n"
         "    Position\n"
         "    EnemyAI: disabled\n"));
@@ -398,14 +455,19 @@ TEST_CASE("Semantic: disabled annotation on data trait — valid", "[semantic][d
 TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic][dynamic-ecs]") {
     // spawn, destroy, load, unload handlers should not trigger 'unknown event' error
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system Sys:\n"
         "    filter:\n"
         "        Position\n"
-        "    on spawn:\n        x = 0.0\n"
-        "    on destroy:\n        x = 0.0\n"
-        "    on load:\n        x = 1.0\n"
-        "    on unload:\n        x = 0.0\n"));
+        "    on spawn:\n"
+        "        x = 0.0\n"
+        "    on destroy:\n"
+        "        x = 0.0\n"
+        "    on load:\n"
+        "        x = 1.0\n"
+        "    on unload:\n"
+        "        x = 0.0\n"));
 }
 
 // ── Marker trait accepted in apply/filter/exclude ───────────────────────────
@@ -413,7 +475,8 @@ TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic
 TEST_CASE("Semantic: marker trait in apply is valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Persistent\n"
-        "unit Player:\n    Persistent\n"));
+        "unit Player:\n"
+        "    Persistent\n"));
 }
 
 TEST_CASE("Semantic: pub marker trait", "[semantic][dynamic-ecs]") {
@@ -424,7 +487,8 @@ TEST_CASE("Semantic: marker trait in exclude is valid", "[semantic][dynamic-ecs]
     CHECK_FALSE(analyze_errors(
         "trait Persistent\n"
         "system Cleanup:\n"
-        "    exclude:\n        Persistent\n"
+        "    exclude:\n"
+        "        Persistent\n"
         "    on tick:\n"
         "        destroy\n"));
 }
@@ -433,7 +497,8 @@ TEST_CASE("Semantic: marker trait in exclude is valid", "[semantic][dynamic-ecs]
 
 TEST_CASE("Semantic: destroy in system handler — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Health:\n    var hp: int = 100\n"
+        "trait Health:\n"
+        "    var hp: int = 100\n"
         "system DeathSystem:\n"
         "    filter:\n"
         "        Health\n"
@@ -445,8 +510,10 @@ TEST_CASE("Semantic: destroy in system handler — valid", "[semantic][dynamic-e
 
 TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
-        "template Enemy:\n    Position\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position\n"
         "system Spawner:\n"
         "    filter:\n"
         "        Position\n"
@@ -486,7 +553,8 @@ TEST_CASE("Semantic: marker trait filter + exclude combination (task 11.10)", "[
 TEST_CASE("Semantic: field access in no-filter system body — error (task 11.12)",
           "[semantic][dynamic-ecs]") {
     auto err = first_error(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system GlobalSystem:\n"
         "    on tick:\n"
         "        x = x + tick.dt\n");  // 'x' is a trait field, system has no filter
@@ -506,7 +574,8 @@ TEST_CASE("Semantic: field access in filter system body — ok (task 11.12)",
           "[semantic][dynamic-ecs]") {
     // With filter, field access is fine
     CHECK_FALSE(analyze_errors(
-        "trait Position:\n    var x: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
         "system Move:\n"
         "    filter:\n"
         "        Position\n"

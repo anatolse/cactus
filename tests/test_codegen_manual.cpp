@@ -209,6 +209,7 @@ TEST_CASE("Codegen Manual: system loop uses bitmask filter condition", "[codegen
 
 TEST_CASE("Codegen Manual: system filter_mask=0 for no-filter system", "[codegen-manual][7.3]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "system GlobalCleanup:\n"
         "    on tick:\n"
         "        destroy\n");
@@ -218,6 +219,7 @@ TEST_CASE("Codegen Manual: system filter_mask=0 for no-filter system", "[codegen
 
 TEST_CASE("Codegen Manual: exclude mask in loop condition", "[codegen-manual][7.4]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "trait Frozen\n"
@@ -239,6 +241,7 @@ TEST_CASE("Codegen Manual: exclude mask in loop condition", "[codegen-manual][7.
 
 TEST_CASE("Codegen Manual: enable emits bitmask OR", "[codegen-manual][7.5]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Frozen\n"
         "trait Position:\n"
         "    var x: float = 0.0\n"
@@ -254,6 +257,7 @@ TEST_CASE("Codegen Manual: enable emits bitmask OR", "[codegen-manual][7.5]") {
 
 TEST_CASE("Codegen Manual: disable emits bitmask AND-NOT", "[codegen-manual][7.6]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Frozen\n"
         "trait Position:\n"
         "    var x: float = 0.0\n"
@@ -300,6 +304,7 @@ TEST_CASE("Codegen Manual: template factory has correct initial trait_mask", "[c
 
 TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[codegen-manual][7.8]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "    var y: float = 0.0\n"
@@ -319,6 +324,7 @@ TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[cod
 
 TEST_CASE("Codegen Manual: destroy emits entity_remove with swap-and-delete (task 7.9)", "[codegen-manual][7.9]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Health:\n"
         "    var hp: int = 100\n"
         "system DeathSystem:\n"
@@ -336,6 +342,7 @@ TEST_CASE("Codegen Manual: destroy emits entity_remove with swap-and-delete (tas
 
 TEST_CASE("Codegen Manual: destroy loop increments correctly", "[codegen-manual][7.9]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Health:\n"
         "    var hp: int = 100\n"
         "system DeathSystem:\n"
@@ -352,6 +359,7 @@ TEST_CASE("Codegen Manual: destroy loop increments correctly", "[codegen-manual]
 
 TEST_CASE("Codegen Manual: load emits deferred load mechanism (task 7.10)", "[codegen-manual][7.10]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "use levels\n"
         "trait GameState:\n"
         "    var active: bool = true\n"
@@ -370,6 +378,7 @@ TEST_CASE("Codegen Manual: load emits deferred load mechanism (task 7.10)", "[co
 
 TEST_CASE("Codegen Manual: on_spawn dispatch function emitted (task 7.11)", "[codegen-manual][7.11]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "system Init:\n"
@@ -389,6 +398,7 @@ TEST_CASE("Codegen Manual: on_spawn dispatch function emitted (task 7.11)", "[co
 
 TEST_CASE("Codegen Manual: on_destroy dispatch function emitted (task 7.12)", "[codegen-manual][7.12]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "system Cleanup:\n"
@@ -407,6 +417,7 @@ TEST_CASE("Codegen Manual: on_destroy dispatch function emitted (task 7.12)", "[
 
 TEST_CASE("Codegen Manual: on_unload dispatch function emitted (task 7.13)", "[codegen-manual][7.13]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n"
@@ -423,6 +434,7 @@ TEST_CASE("Codegen Manual: on_unload dispatch function emitted (task 7.13)", "[c
 
 TEST_CASE("Codegen Manual: on_load dispatch function emitted (task 7.14)", "[codegen-manual][7.14]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait LevelState:\n"
         "    var loaded: bool = false\n"
         "system LevelSetup:\n"
@@ -439,6 +451,7 @@ TEST_CASE("Codegen Manual: on_load dispatch function emitted (task 7.14)", "[cod
 
 TEST_CASE("Codegen Manual: complete codegen structure", "[codegen-manual][7.15]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "    var y: float = 0.0\n"
@@ -520,6 +533,7 @@ TEST_CASE("Codegen Manual: deferred load state globals emitted (task 8.1)", "[co
 
 TEST_CASE("Codegen Manual: perform_load has 3 phases in correct order (tasks 8.2-8.4)", "[codegen-manual][8.2-8.4]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n"
@@ -547,6 +561,7 @@ TEST_CASE("Codegen Manual: perform_load has 3 phases in correct order (tasks 8.2
 TEST_CASE("Codegen Manual: on_unload fires before new entities (task 8.5)", "[codegen-manual][8.5]") {
     // Verify that dispatch_on_unload comes before any data-file loading
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Persistent\n"
         "system Cleanup:\n"
         "    exclude:\n"
@@ -564,6 +579,7 @@ TEST_CASE("Codegen Manual: on_unload fires before new entities (task 8.5)", "[co
 
 TEST_CASE("Codegen Manual: end-of-frame deferred load in main loop (task 8.1)", "[codegen-manual][8.6]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "use levels\n"
         "trait GameState:\n"
         "    var x: float = 0.0\n"
@@ -598,6 +614,7 @@ TEST_CASE("Codegen Manual: std.core Persistent trait codegen", "[codegen-manual]
 TEST_CASE("Codegen Manual: without SceneCleanup dispatch_on_unload is empty (task 9.4)", "[codegen-manual][9.4]") {
     // Without std.core, no SceneCleanup system, so dispatch_on_unload does nothing
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "system PatrolSystem:\n"
@@ -614,6 +631,7 @@ TEST_CASE("Codegen Manual: without SceneCleanup dispatch_on_unload is empty (tas
 
 TEST_CASE("Codegen Manual: with SceneCleanup on_unload destroys non-persistent (task 9.4)", "[codegen-manual][9.4]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n"
@@ -644,6 +662,7 @@ TEST_CASE("Codegen: template declared, not auto-instantiated (task 11.1)", "[cod
 
 TEST_CASE("Codegen: spawn creates entity, on_spawn fires (task 11.2)", "[codegen-manual][11.2]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "template Enemy:\n"
@@ -669,6 +688,7 @@ TEST_CASE("Codegen: spawn creates entity, on_spawn fires (task 11.2)", "[codegen
 
 TEST_CASE("Codegen: destroy removes entity, on_destroy fires (task 11.3)", "[codegen-manual][11.3]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Health:\n"
         "    var hp: int = 100\n"
         "system DeathSys:\n"
@@ -689,6 +709,7 @@ TEST_CASE("Codegen: destroy removes entity, on_destroy fires (task 11.3)", "[cod
 
 TEST_CASE("Codegen: load transition 3-phase ordering (task 11.4)", "[codegen-manual][11.4]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n"
@@ -709,6 +730,7 @@ TEST_CASE("Codegen: load transition 3-phase ordering (task 11.4)", "[codegen-man
 TEST_CASE("Codegen: on_unload fires before new entities created (task 11.5)", "[codegen-manual][11.5]") {
     // Same as 11.4 — ordering verified by position in perform_load
     auto code = generate(
+        STDLIB_EVENTS + 
         "system GlobalReset:\n"
         "    on unload:\n"
         "        destroy\n"
@@ -726,6 +748,7 @@ TEST_CASE("Codegen: on_unload fires before new entities created (task 11.5)", "[
 
 TEST_CASE("Codegen: on_load fires after all entities instantiated (task 11.6)", "[codegen-manual][11.6]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "system LevelSetup:\n"
         "    on load:\n"
         "        destroy\n");
@@ -740,6 +763,7 @@ TEST_CASE("Codegen: on_load fires after all entities instantiated (task 11.6)", 
 
 TEST_CASE("Codegen: enable/disable toggles bitmask (task 11.7)", "[codegen-manual][11.7]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Frozen\n"
         "trait Position:\n"
         "    var x: float = 0.0\n"
@@ -758,6 +782,7 @@ TEST_CASE("Codegen: enable/disable toggles bitmask (task 11.7)", "[codegen-manua
 
 TEST_CASE("Codegen: exclude skips entities with active excluded trait (task 11.8)", "[codegen-manual][11.8]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "trait Frozen\n"
@@ -782,6 +807,7 @@ TEST_CASE("Codegen: exclude with disabled trait - entity still processed (task 1
     // (trait_mask & exclude_mask) == 0 is true → entity IS processed
     // This is automatically correct with the bitmask approach
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "trait Frozen\n"
@@ -811,6 +837,7 @@ TEST_CASE("Codegen: marker trait in apply initializes trait_mask bit (task 11.10
 
 TEST_CASE("Codegen: no-filter + exclude processes all non-excluded (task 11.11)", "[codegen-manual][11.11]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Persistent\n"
         "system SceneCleanup:\n"
         "    exclude:\n"
@@ -826,6 +853,7 @@ TEST_CASE("Codegen: no-filter + exclude processes all non-excluded (task 11.11)"
 
 TEST_CASE("Codegen: Persistent entity survives load with SceneCleanup (task 11.13)", "[codegen-manual][11.13]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Persistent\n"
         "trait Position:\n"
         "    var x: float = 0.0\n"
@@ -884,6 +912,7 @@ TEST_CASE("Codegen Manual: runtime header placed after standard includes", "[cod
 
 TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[codegen-manual]") {
     auto code = generate(
+        STDLIB_EVENTS + 
         "trait Pos:\n"
         "    persist sync var x: float = 0.0\n"
         "    persist sync var y: float = 0.0\n"

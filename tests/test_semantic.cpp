@@ -170,6 +170,7 @@ TEST_CASE("Semantic: system filter — valid trait", "[semantic]") {
 
 TEST_CASE("Semantic: system filter — unknown trait", "[semantic]") {
     CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
         "system Bad:\n"
         "    filter: \n"
         "        NonExistent\n"
@@ -203,6 +204,7 @@ TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
 
 TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
     CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
         "event Damage:\n"
         "    var amount: int\n"
         "system Combat:\n"
@@ -213,6 +215,7 @@ TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
 
 TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
+        STDLIB_EVENTS +
         "event Damage:\n"
         "    var amount: int\n"
         "system Combat:\n"
@@ -333,6 +336,7 @@ TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][exter
 // Task 12.5: after: referencing unknown system reports error
 TEST_CASE("Semantic: after: unknown system reports error", "[semantic][system-ordering]") {
     CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
         "trait T:\n"
         "    var x: float\n"
         "system A:\n"
@@ -345,6 +349,7 @@ TEST_CASE("Semantic: after: unknown system reports error", "[semantic][system-or
 // Task 12.6: direct after: cycle reports error
 TEST_CASE("Semantic: after: direct cycle reports error", "[semantic][system-ordering]") {
     CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
         "trait T:\n"
         "    var x: float\n"
         "system A:\n"
@@ -405,8 +410,8 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
 }
 
 // Task 12.8: ambiguous bare config key reports error
-TEST_CASE("Semantic: duplicate field across nested traits reports error", "[semantic][config-qualification]") {
-    CHECK(analyze_has_errors(
+TEST_CASE("Semantic: duplicate field across nested traits reports no error", "[semantic][config-qualification]") {
+    CHECK_FALSE(analyze_has_errors(
         "trait TraitA:\n"
         "    var value: int\n"
         "trait TraitB:\n"

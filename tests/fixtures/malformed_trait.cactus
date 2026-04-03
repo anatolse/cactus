@@ -1,0 +1,9 @@
+trait BrokenTrait:
+    var health int
+    let mana: int = 10
+    on tick:
+        health = 1
+
+trait AnotherTrait:
+    ???
+    var speed: float

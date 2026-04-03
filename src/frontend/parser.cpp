@@ -48,6 +48,59 @@ bool Parser::match(TokenType type) {
     return false;
 }
 
+bool Parser::is_synchronization_point() const {
+    // Recovery boundaries:
+    // - NEWLINE: end of the current statement/item
+    // - DEDENT: exit from the current indented block
+    // - EOF: stop at end of token stream
+    // - declaration keywords: safe places to resume top-level parsing
+    switch (peek().type) {
+        case TokenType::NEWLINE:
+        case TokenType::DEDENT:
+        case TokenType::EOF_TOKEN:
+        case TokenType::TRAIT:
+        case TokenType::SYSTEM:
+        case TokenType::FUNC:
+        case TokenType::STRUCT:
+        case TokenType::ENUM:
+        case TokenType::EVENT:
+        case TokenType::UNIT:
+        case TokenType::TEMPLATE:
+        case TokenType::VIEW:
+        case TokenType::INTERFACE:
+        case TokenType::ASSET:
+        case TokenType::INPUT:
+        case TokenType::MODULE:
+        case TokenType::USE:
+        case TokenType::CONST:
+        case TokenType::PUB:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void Parser::synchronize() {
+    if (check(TokenType::EOF_TOKEN)) {
+        return;
+    }
+
+    if (check(TokenType::NEWLINE)) {
+        advance();
+        skip_newlines();
+        return;
+    }
+
+    while (!check(TokenType::EOF_TOKEN) && !is_synchronization_point()) {
+        advance();
+    }
+
+    if (check(TokenType::NEWLINE)) {
+        advance();
+        skip_newlines();
+    }
+}
+
 void Parser::skip_newlines() {
     while (check(TokenType::NEWLINE)) {
         advance();
@@ -259,11 +312,16 @@ ConstBlockNode Parser::parse_const_block() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         auto assign_loc = peek().location;
         auto name = consume(TokenType::IDENTIFIER, "expected constant name").value;
         consume(TokenType::ASSIGN, "expected '='");
         auto value = parse_expression();
         expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
         ConstAssignment assign;
         assign.name = name;
         assign.value = std::move(value);
@@ -294,12 +352,17 @@ StructNode Parser::parse_struct() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         // Struct fields: name: type (no let/var modifiers)
         auto field_loc = peek().location;
         auto field_name = consume(TokenType::IDENTIFIER, "expected field name").value;
         consume(TokenType::COLON, "expected ':'");
         auto type = parse_type_ref();
         expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
         FieldNode field;
         field.name = field_name;
         field.type = std::move(type);
@@ -330,6 +393,7 @@ EnumNode Parser::parse_enum() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         auto var_loc = peek().location;
         auto var_name = consume(TokenType::IDENTIFIER, "expected variant name").value;
         std::optional<int> val;
@@ -337,6 +401,10 @@ EnumNode Parser::parse_enum() {
             val = std::stoi(consume(TokenType::INT_LITERAL, "expected integer value").value);
         }
         expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
         node.variants.push_back({.name = var_name, .value = val, .location = var_loc});
     }
 
@@ -370,6 +438,7 @@ TraitNode Parser::parse_trait() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         if (check(TokenType::ON)) {
             errors_.error(peek().location,
                 "event handlers are not allowed in trait bodies; declare a system instead");
@@ -380,6 +449,9 @@ TraitNode Parser::parse_trait() {
             parse_func(false);  // consume to avoid cascading errors
         } else {
             node.fields.push_back(parse_field());
+        }
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
         }
     }
 
@@ -542,7 +614,13 @@ std::vector<FieldAssignment> Parser::parse_field_assignment_block() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
-        assignments.push_back(parse_field_assignment());
+        auto error_count_before = errors_.error_count();
+        auto assignment = parse_field_assignment();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        assignments.push_back(std::move(assignment));
     }
     expect_dedent();
     return assignments;
@@ -579,7 +657,13 @@ std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries(bool allo
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN) || check(TokenType::CHILD)) {
             break;
         }
-        entries.push_back(parse_archetype_trait_entry(allow_disabled));
+        auto error_count_before = errors_.error_count();
+        auto entry = parse_archetype_trait_entry(allow_disabled);
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        entries.push_back(std::move(entry));
     }
     return entries;
 }
@@ -607,7 +691,7 @@ UnitNode Parser::parse_unit(bool is_pub) {
     node.is_pub = is_pub;
     node.location = loc;
 
-    node.traits = parse_archetype_trait_entries(false);
+    node.traits = parse_archetype_trait_entries(true);
 
     skip_newlines();
     if (check(TokenType::CHILD)) {
@@ -633,7 +717,7 @@ TemplateNode Parser::parse_template(bool is_pub) {
     node.is_pub = is_pub;
     node.location = loc;
 
-    node.traits = parse_archetype_trait_entries(false);
+    node.traits = parse_archetype_trait_entries(true);
 
     skip_newlines();
     if (check(TokenType::CHILD)) {
@@ -660,10 +744,15 @@ ChildBlock Parser::parse_child_block() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         auto entry_loc = peek().location;
         auto type_name = consume(TokenType::IDENTIFIER, "expected child type").value;
         auto inst_name = consume(TokenType::IDENTIFIER, "expected child instance name").value;
         expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
         block.children.push_back({.type_name = type_name, .instance_name = inst_name, .location = entry_loc});
     }
 
@@ -673,7 +762,7 @@ ChildBlock Parser::parse_child_block() {
 
 // ── System ──────────────────────────────────────────────────────────────────
 
-SystemNode Parser::parse_system() {
+SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
     consume(TokenType::SYSTEM, "expected 'system'");
     auto name = consume(TokenType::IDENTIFIER, "expected system name").value;
@@ -687,19 +776,28 @@ SystemNode Parser::parse_system() {
 
     skip_newlines();
     if (check(TokenType::FILTER)) {
+        auto error_count_before = errors_.error_count();
         node.filter = parse_filter_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
     }
 
     // Task 4.4: Parse optional exclude: clause
     skip_newlines();
     if (check(TokenType::EXCLUDE)) {
+        auto error_count_before = errors_.error_count();
         node.exclude = parse_exclude_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
     }
 
     // Parse optional after: clause (block format: AFTER COLON NEWLINE INDENT { IDENT NEWLINE } DEDENT)
     skip_newlines();
     if (check(TokenType::AFTER)) {
         auto after_loc = peek().location;
+        auto error_count_before = errors_.error_count();
         advance();  // consume 'after'
         consume(TokenType::COLON, "expected ':'");
         expect_newline();
@@ -714,10 +812,17 @@ SystemNode Parser::parse_system() {
                 consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
             expect_newline();
             any = true;
+            if (errors_.error_count() > error_count_before) {
+                synchronize();
+                break;
+            }
         }
         expect_dedent();
         if (!any) {
             errors_.error(after_loc, "after: block must contain at least one system name");
+        }
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
         }
     }
 
@@ -734,7 +839,13 @@ SystemNode Parser::parse_system() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
-        node.handlers.push_back(parse_event_handler());
+        auto error_count_before = errors_.error_count();
+        auto handler = parse_event_handler();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        node.handlers.push_back(std::move(handler));
     }
 
     expect_dedent();
@@ -757,6 +868,7 @@ FilterClause Parser::parse_filter_clause() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         auto entry_loc = peek().location;
         auto qname = parse_dotted_name();
         std::optional<std::string> alias;
@@ -767,6 +879,9 @@ FilterClause Parser::parse_filter_clause() {
         auto dot_pos = qname.rfind('.');
         clause.trait_names.push_back(dot_pos != std::string::npos ? qname.substr(dot_pos + 1) : qname);
         expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
     }
     expect_dedent();
     return clause;
@@ -795,7 +910,13 @@ ViewNode Parser::parse_view() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
-        node.elements.push_back(parse_view_element());
+        auto error_count_before = errors_.error_count();
+        auto element = parse_view_element();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        node.elements.push_back(std::move(element));
     }
 
     expect_dedent();
@@ -818,6 +939,7 @@ ViewElement Parser::parse_view_element() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
 
         // Check if this is a nested element (identifier followed by colon then newline)
         // or a property (identifier = expression)
@@ -858,7 +980,11 @@ ViewElement Parser::parse_view_element() {
             elem.props.push_back(std::move(prop));
         } else {
             errors_.error(peek().location, "expected property or nested element in view");
-            advance();
+        }
+
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
         }
     }
 
@@ -871,7 +997,7 @@ ViewElement Parser::parse_view_element() {
 EventNode Parser::parse_event(bool is_pub) {
     auto loc = peek().location;
     consume(TokenType::EVENT, "expected 'event'");
-    auto name = consume(TokenType::IDENTIFIER, "expected event name").value;
+    auto name = parse_lifecycle_event_name();
 
     EventNode node;
     node.name = name;
@@ -893,7 +1019,13 @@ EventNode Parser::parse_event(bool is_pub) {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
-        node.fields.push_back(parse_field());
+        auto error_count_before = errors_.error_count();
+        auto field = parse_field();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        node.fields.push_back(std::move(field));
     }
 
     expect_dedent();
@@ -989,6 +1121,7 @@ InterfaceNode Parser::parse_interface() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         auto sig_loc = peek().location;
         consume(TokenType::FUNC, "expected 'func'");
         auto sig_name = consume(TokenType::IDENTIFIER, "expected method name").value;
@@ -1000,6 +1133,10 @@ InterfaceNode Parser::parse_interface() {
             ret = parse_type_ref();
         }
         expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
         node.methods.push_back(
             {.name = sig_name, .params = std::move(sig_params), .return_type = std::move(ret), .location = sig_loc});
     }
@@ -1018,7 +1155,13 @@ std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
-        stmts.push_back(parse_statement());
+        auto error_count_before = errors_.error_count();
+        auto stmt = parse_statement();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        stmts.push_back(std::move(stmt));
     }
     expect_dedent();
     return stmts;
@@ -1515,11 +1658,16 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
+            auto error_count_before = errors_.error_count();
             auto arm_loc = peek().location;
             auto pattern = parse_expression();
             consume(TokenType::FAT_ARROW, "expected '=>'");
             auto body = parse_expression();
             expect_newline();
+            if (errors_.error_count() > error_count_before) {
+                synchronize();
+                continue;
+            }
             MatchArm arm;
             arm.pattern = std::move(pattern);
             arm.body = std::move(body);
@@ -1578,11 +1726,15 @@ FilterClause Parser::parse_exclude_clause() {
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
+        auto error_count_before = errors_.error_count();
         auto entry_loc = peek().location;
         auto name = consume(TokenType::IDENTIFIER, "expected trait name").value;
         clause.trait_names.push_back(name);
         clause.entries.push_back({.qualified_name = name, .alias = std::nullopt, .location = entry_loc});
         expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
     }
 
     expect_dedent();
@@ -1671,11 +1823,16 @@ InputDeclNode Parser::parse_input_decl(bool is_pub) {
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
+            auto error_count_before = errors_.error_count();
             auto prop_loc = peek().location;
             auto key = consume(TokenType::IDENTIFIER, "expected property key").value;
             consume(TokenType::ASSIGN, "expected '='");
             auto value = parse_expression();
             expect_newline();
+            if (errors_.error_count() > error_count_before) {
+                synchronize();
+                continue;
+            }
             InputPropNode prop;
             prop.key = key;
             prop.value = std::move(value);

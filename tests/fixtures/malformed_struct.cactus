@@ -1,0 +1,11 @@
+struct BrokenA:
+    name int
+    price: float
+
+struct BrokenB:
+    ok: int
+    ???
+    still_ok: float
+
+struct Final:
+    value: int

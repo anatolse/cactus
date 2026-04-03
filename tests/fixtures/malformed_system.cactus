@@ -1,0 +1,13 @@
+system BrokenSystem:
+    filter:
+        Position
+        ???
+    after:
+        
+    on tick:
+        let x =
+        y = 2
+
+system Followup:
+    on tick:
+        z = 3

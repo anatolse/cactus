@@ -1,0 +1,13 @@
+system Nested:
+    on tick:
+        if value > 0:
+            emit Damage:
+                amount =
+                source = 1
+        if other > 0:
+            spawn Enemy:
+                Position:
+                    x =
+                Motion:
+                    speed = 1
+        return

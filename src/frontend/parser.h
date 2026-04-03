@@ -22,10 +22,17 @@ private:
     Token consume(TokenType type, const std::string& msg);
     [[nodiscard]] bool check(TokenType type) const;
     bool match(TokenType type);
+
+    // Panic-mode error recovery.
+    // When a parse step reports an error, synchronization skips forward until a
+    // safe recovery boundary is reached so outer loops can continue making
+    // progress instead of repeatedly re-reading the same unexpected token.
     void skip_newlines();
     void expect_newline();
     void expect_indent();
     void expect_dedent();
+    void synchronize();
+    [[nodiscard]] bool is_synchronization_point() const;
 
     // Top-level declarations
     Declaration parse_declaration();

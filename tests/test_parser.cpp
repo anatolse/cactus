@@ -5,7 +5,14 @@
 #include "frontend/lexer.h"
 #include "frontend/parser.h"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <sstream>
+
 using namespace cactus;
+namespace fs = std::filesystem;
 
 static ProgramNode parse(const std::string& source) {
     ErrorReporter errors;
@@ -16,6 +23,35 @@ static ProgramNode parse(const std::string& source) {
     auto program = parser.parse_program();
     REQUIRE_FALSE(errors.has_errors());
     return program;
+}
+
+static std::string read_fixture(const std::string& name) {
+    auto fixture_path = fs::path(CACTUS_TEST_FIXTURES_DIR) / name;
+    std::ifstream ifs(fixture_path);
+    REQUIRE(ifs.good());
+    std::ostringstream ss;
+    ss << ifs.rdbuf();
+    return ss.str();
+}
+
+static ErrorReporter parse_expect_errors(const std::string& source, const std::string& filename = "test.cactus") {
+    ErrorReporter errors;
+    Lexer lexer(source, filename, errors);
+    auto tokens = lexer.tokenize();
+    Parser parser(std::move(tokens), errors);
+    parser.parse_program();
+    REQUIRE(errors.has_errors());
+    return errors;
+}
+
+static ErrorReporter parse_fixture_expect_errors_with_timeout(const std::string& fixture_name) {
+    auto future = std::async(std::launch::async, [fixture_name]() {
+        return parse_expect_errors(read_fixture(fixture_name), fixture_name);
+    });
+
+    auto future_status = future.wait_for(std::chrono::seconds(5));
+    REQUIRE(future_status == std::future_status::ready);
+    return future.get();
 }
 
 
@@ -997,4 +1033,53 @@ TEST_CASE("Parser: marker event without pub", "[parser][dsl-event-handler-syntax
     CHECK(decl.name == "MyEvent");
     CHECK_FALSE(decl.is_pub);
     CHECK(decl.fields.empty());
+}
+
+TEST_CASE("Parser: malformed struct fixture completes without hanging", "[parser][recovery]") {
+    auto errors = parse_fixture_expect_errors_with_timeout("malformed_struct.cactus");
+    CHECK(errors.error_count() >= 2);
+}
+
+TEST_CASE("Parser: malformed trait fixture completes without hanging", "[parser][recovery]") {
+    auto errors = parse_fixture_expect_errors_with_timeout("malformed_trait.cactus");
+    CHECK(errors.error_count() >= 2);
+}
+
+TEST_CASE("Parser: malformed system fixture completes without hanging", "[parser][recovery]") {
+    auto errors = parse_fixture_expect_errors_with_timeout("malformed_system.cactus");
+    CHECK(errors.error_count() >= 2);
+}
+
+TEST_CASE("Parser: malformed nested fixture completes without hanging", "[parser][recovery]") {
+    auto errors = parse_fixture_expect_errors_with_timeout("malformed_nested.cactus");
+    CHECK(errors.error_count() >= 1);
+}
+
+TEST_CASE("Parser: multiple independent errors are reported in one pass", "[parser][recovery]") {
+    auto errors = parse_expect_errors(
+        "struct Broken:\n"
+        "    name int\n"
+        "\n"
+        "trait AlsoBroken:\n"
+        "    var hp int\n",
+        "multi_error.cactus");
+
+    CHECK(errors.error_count() >= 2);
+}
+
+TEST_CASE("Parser: error messages retain source locations during recovery", "[parser][recovery]") {
+    auto errors = parse_expect_errors(
+        "struct Broken:\n"
+        "    name int\n",
+        "location_test.cactus");
+
+    REQUIRE_FALSE(errors.diagnostics().empty());
+    CHECK(errors.diagnostics().front().location.filename == "location_test.cactus");
+    CHECK(errors.diagnostics().front().location.line == 2);
+}
+
+TEST_CASE("Parser: synchronization limits spurious cascade errors", "[parser][recovery]") {
+    auto errors = parse_expect_errors(read_fixture("malformed_struct.cactus"), "malformed_struct.cactus");
+    CHECK(errors.error_count() >= 2);
+    CHECK(errors.error_count() <= 8);
 }

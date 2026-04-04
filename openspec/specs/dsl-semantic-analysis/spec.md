@@ -311,6 +311,27 @@ The semantic analyzer SHALL validate that all trait names in `filter:` and `excl
 - **WHEN** a system has no `filter:` block but its handler body reads or writes a trait field
 - **THEN** the analyzer SHALL report an error: "trait field '<name>' not accessible — no filter clause declares this trait"
 
+### Requirement: `add` statement semantic validation
+The semantic analyzer SHALL validate `add` statements as follows: the trait name resolves to a declared trait, supplied field names and values match the trait definition, any `to expr` target has type `entity_id`, and `add` appears only inside system event handler bodies.
+
+#### Scenario: Cross-entity target type check
+- **WHEN** `add Frozen to some_float` appears where `some_float` is of type `float`
+- **THEN** the semantic analyzer SHALL report: "`to` target must be of type `entity_id`"
+
+### Requirement: `remove` statement semantic validation
+The semantic analyzer SHALL validate `remove` statements as follows: the trait name resolves to a declared trait, any `from expr` target has type `entity_id`, and `remove` appears only inside system event handler bodies.
+
+#### Scenario: Remove unknown trait
+- **WHEN** `remove Phantom` appears and `Phantom` is not declared
+- **THEN** the semantic analyzer SHALL report: "undeclared trait 'Phantom'"
+
+### Requirement: Trait field default value validation
+The semantic analyzer SHALL validate field default value expressions in trait declarations. The default expression MUST type-check against the field's declared type. Default expressions MUST be constant-foldable.
+
+#### Scenario: Default value type mismatch
+- **WHEN** `var count: int = 3.14` appears in a trait
+- **THEN** the semantic analyzer SHALL report a type error: "default value type 'float' does not match field type 'int'"
+
 ### Requirement: Asset declaration registration
 The semantic analyzer SHALL register `asset` declarations in the module symbol table, mapping the declared identifier name to its corresponding opaque ID TypeKind.
 

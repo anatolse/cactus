@@ -36,6 +36,20 @@ The backend SHALL generate entity creation code from `unit` declarations. Each `
 - **WHEN** the decorated AST contains `unit Cactus:` with `apply:` listing `Position` and `Renderable` and `config:` setting position values
 - **THEN** the backend generates `auto entity = registry.create();` followed by `registry.emplace<Position>(entity, ...);` for each trait
 
+### Requirement: Code generation for `add` statement
+The backend SHALL generate code for `AddTraitStmt` nodes. For the EnTT backend, marker adds use `registry.emplace_or_replace<TraitName>(entity)`, data-bearing adds initialize fields, and `to` targets use the resolved target entity.
+
+#### Scenario: add marker trait generates emplace_or_replace
+- **WHEN** `add Frozen` is compiled and `Frozen` is a marker trait
+- **THEN** the generated code is `registry.emplace_or_replace<Frozen>(entity)`
+
+### Requirement: Code generation for `remove` statement
+The backend SHALL generate code for `RemoveTraitStmt` nodes. For the EnTT backend, `remove TraitName` compiles to `registry.remove<TraitName>(entity)` and `remove TraitName from target_expr` uses the resolved target entity.
+
+#### Scenario: remove trait generates registry.remove call
+- **WHEN** `remove Frozen` is compiled
+- **THEN** the generated code is `registry.remove<Frozen>(entity)`
+
 ### Requirement: Persist field serialization hooks
 The backend SHALL generate serialization functions for fields marked with `persist`, iterating over the registry view to serialize/deserialize marked components.
 

@@ -75,25 +75,8 @@ The parser SHALL parse `[pub] unit Name:` blocks as a sequence of nested trait e
 - **WHEN** the source contains `unit Cactus:` with a bare `Persistent` entry in the body
 - **THEN** the parser produces a UnitNode containing a marker-trait entry for `Persistent`
 
-### Requirement: `disabled` trait state in `apply:` block
-The parser SHALL preserve disabled-state support on archetype trait entries using the nested trait-entry form. A trait entry may appear as `TraitName: disabled` in `unit` and `template` bodies.
-
-```ebnf
-archetype_trait_entry = IDENTIFIER [ ":" "disabled" ] NEWLINE
-                      | IDENTIFIER ":" NEWLINE INDENT
-                        { field_assignment }
-                        DEDENT ;
-```
-
-#### Scenario: Trait with disabled annotation parsed
-- **WHEN** `Frozen: disabled` appears inside a `unit` or `template` body
-- **THEN** the parser produces an archetype trait entry with `trait_name = "Frozen"` and `initially_active = false`
-
-#### Scenario: Trait without annotation defaults to active
-- **WHEN** `Position` appears as a bare trait entry with no annotation
-- **THEN** the parser produces an archetype trait entry with `trait_name = "Position"` and `initially_active = true`
-
 ### Requirement: `template` declaration grammar
+
 The parser SHALL accept `template_decl` as a top-level declaration whose body is a sequence of nested trait entries, structurally identical to `unit_decl` except using the `TEMPLATE` keyword. `apply:` and `config:` blocks are not part of template syntax.
 
 ```ebnf
@@ -246,21 +229,30 @@ load_stmt = "load" dotted_name NEWLINE ;
 - **WHEN** `load ui` appears in a handler
 - **THEN** the parser produces a `LoadStmt` with `module_name = "ui"`
 
-### Requirement: `enable` and `disable` statement grammar
-The parser SHALL accept `enable` and `disable` as statements inside event handler bodies.
+### Requirement: `add` statement parsing
+The parser SHALL recognize `add IDENTIFIER` as a statement inside event handler bodies. The `add` statement has two forms: bare (for markers and all-defaulted traits) and block (for data traits with field assignments). An optional `to expr` clause may appear after the trait name to specify a target entity. The `add` and `to` keywords SHALL be added to the keyword list.
 
 ```ebnf
-enable_stmt  = "enable"  IDENTIFIER NEWLINE ;
-disable_stmt = "disable" IDENTIFIER NEWLINE ;
+add_stmt = "add" IDENTIFIER ["to" expr] NEWLINE
+         | "add" IDENTIFIER ["to" expr] ":" NEWLINE INDENT
+           { IDENTIFIER "=" expr NEWLINE }
+           DEDENT ;
 ```
 
-#### Scenario: Enable statement parsed
-- **WHEN** `enable Frozen` appears in a handler
-- **THEN** the parser produces an `EnableStmt` with `trait_name = "Frozen"`
+#### Scenario: bare add statement parsed
+- **WHEN** `add Frozen` appears in a handler body
+- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Frozen"`, empty field assignments, no `target_expr`
 
-#### Scenario: Disable statement parsed
-- **WHEN** `disable EnemyAI` appears in a handler
-- **THEN** the parser produces a `DisableStmt` with `trait_name = "EnemyAI"`
+### Requirement: `remove` statement parsing
+The parser SHALL recognize `remove IDENTIFIER` as a statement inside event handler bodies. An optional `from expr` clause may follow to specify a target entity. The `remove` and `from` keywords SHALL be added to the keyword list.
+
+```ebnf
+remove_stmt = "remove" IDENTIFIER ["from" expr] NEWLINE ;
+```
+
+#### Scenario: bare remove statement parsed
+- **WHEN** `remove Frozen` appears in a handler body
+- **THEN** the parser produces a `RemoveTraitStmt` with `trait_name = "Frozen"` and no `target_expr`
 
 ### Requirement: Lifecycle event handler grammar
 The parser SHALL accept `on` handlers using the parameter-free syntax. The `( param_list )` is removed entirely. An optional `as IDENTIFIER` alias clause is added after the event name. The event name accepts both reserved lifecycle keywords and user-defined identifiers.

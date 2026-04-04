@@ -361,13 +361,30 @@ struct FilterClause {
     SourceLocation location;
 };
 
+struct OrderByKey {
+    std::string expr_text;
+    bool ascending = true;
+    SourceLocation location;
+};
+
 struct SystemNode {
     std::string name;
     FilterClause filter;                    // empty entries = no filter (match all)
     FilterClause exclude;                   // empty entries = no exclude
+    std::vector<OrderByKey> order_by;
     std::vector<std::string> after_systems; // explicit ordering: this system runs after these
     std::optional<std::string> target;      // "cpu" or "gpu"
     std::vector<EventHandlerNode> handlers;
+    SourceLocation location;
+};
+
+struct ExternSystemNode {
+    std::string name;
+    FilterClause filter;
+    FilterClause exclude;
+    std::vector<OrderByKey> order_by;
+    std::vector<std::string> after_systems;
+    std::optional<std::string> target;
     SourceLocation location;
 };
 
@@ -453,7 +470,7 @@ struct InputDeclNode {
 // ── Program (AST Root) ─────────────────────────────────────────────────────
 
 using Declaration = std::variant<ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode,
-                                 TemplateNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode,
+                                 TemplateNode, SystemNode, ExternSystemNode, ViewNode, EventNode, FuncNode, InterfaceNode,
                                  AssetDeclNode, InputDeclNode>;
 
 struct ProgramNode {

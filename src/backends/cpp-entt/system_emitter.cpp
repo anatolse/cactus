@@ -322,4 +322,48 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
     return out.str();
 }
 
+std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
+                                                  const DecoratedProgram& program) {
+    (void)program;
+    std::ostringstream out;
+
+    out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
+    out << "    auto view = registry.view<";
+    for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
+        if (i > 0) {
+            out << ", ";
+        }
+        out << sys.filter.trait_names[i];
+    }
+    out << ">();\n";
+
+    if (!sys.order_by.empty()) {
+        out << "    // order by:\n";
+        for (const auto& key : sys.order_by) {
+            out << "    //   " << key.expr_text << (key.ascending ? " asc" : " desc") << "\n";
+        }
+    }
+
+    out << "    view.each([&](entt::entity entity";
+    for (const auto& trait_name : sys.filter.trait_names) {
+        out << ", auto& " << trait_name << "_comp";
+    }
+    out << ") {\n";
+    out << "        " << sys.name << "_update(registry, entity";
+    for (const auto& trait_name : sys.filter.trait_names) {
+        out << ", " << trait_name << "_comp";
+    }
+    out << ");\n";
+    out << "    });\n";
+    out << "}\n\n";
+
+    out << "void " << sys.name << "_update(entt::registry& registry, entt::entity entity";
+    for (const auto& trait_name : sys.filter.trait_names) {
+        out << ", " << trait_name << "& " << trait_name << "_comp";
+    }
+    out << ");\n\n";
+
+    return out.str();
+}
+
 }  // namespace cactus

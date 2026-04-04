@@ -263,3 +263,82 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
         }
     }
 }
+
+TEST_CASE("Codegen EnTT: extern system emits callback scaffold", "[codegen-entt][extern-system]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Position:\n"
+        "    var x: float\n"
+        "trait Velocity:\n"
+        "    var dx: float\n"
+        "extern system ParticleSystem:\n"
+        "    filter:\n"
+        "        Position\n"
+        "        Velocity\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_extern_system(*sys, decorated);
+            CHECK(code.find("void ParticleSystem_tick(entt::registry& registry)") != std::string::npos);
+            CHECK(code.find("registry.view<Position, Velocity>()") != std::string::npos);
+            CHECK(code.find("ParticleSystem_update(registry, entity, Position_comp, Velocity_comp)") != std::string::npos);
+            CHECK(code.find("void ParticleSystem_update(entt::registry& registry, entt::entity entity, Position& Position_comp, Velocity& Velocity_comp);") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: extern system order by is reflected in scaffold comments", "[codegen-entt][extern-system]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Position:\n"
+        "    var y: float\n"
+        "extern system SortedRenderer:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    order by:\n"
+        "        Position.y desc\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_extern_system(*sys, decorated);
+            CHECK(code.find("// order by:") != std::string::npos);
+            CHECK(code.find("//   Position.y desc") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: full pipeline includes extern system tick call", "[codegen-entt][extern-system]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Position:\n"
+        "    var x: float\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        Position\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("void SpriteRenderer_tick(entt::registry& registry)") != std::string::npos);
+    CHECK(code.find("SpriteRenderer_update(registry, entity, Position_comp)") != std::string::npos);
+    CHECK(code.find("SpriteRenderer_tick(registry);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: stdlib-style extern sprite renderer emits scaffold", "[codegen-entt][extern-system]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Renderer:\n"
+        "    var layer: int\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        Transform\n"
+        "        Renderer\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("void SpriteRenderer_tick(entt::registry& registry)") != std::string::npos);
+    CHECK(code.find("void SpriteRenderer_update(entt::registry& registry, entt::entity entity, Transform& Transform_comp, Renderer& Renderer_comp);") != std::string::npos);
+}

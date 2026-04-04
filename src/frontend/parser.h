@@ -45,6 +45,7 @@ private:
     UnitNode parse_unit(bool is_pub);
     TemplateNode parse_template(bool is_pub);
     SystemNode parse_system();
+    ExternSystemNode parse_extern_system();
     ViewNode parse_view();
     EventNode parse_event(bool is_pub = false);
     FuncNode parse_func(bool is_pub);
@@ -71,6 +72,7 @@ private:
     ChildBlock parse_child_block();
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();
+    std::vector<OrderByKey> parse_order_by_clause();
     std::string parse_lifecycle_event_name();  // handles spawn/destroy/load/unload as names
     ViewElement parse_view_element();
 

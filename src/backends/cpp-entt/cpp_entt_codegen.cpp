@@ -115,6 +115,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 out << EnttSystemEmitter::emit_system(*sys, program);
             }
+            if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+                out << EnttSystemEmitter::emit_extern_system(*sys, program);
+            }
         }
     }
 
@@ -198,6 +201,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                         out << "        " << sys->name << "_tick(registry, dt);\n";
                     }
                 }
+            }
+            if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+                out << "        " << sys->name << "_tick(registry);\n";
             }
         }
     }

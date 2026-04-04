@@ -47,3 +47,17 @@ pub trait DirectionalLight:
     var color: color = #FFFFFFFF
     var intensity: float = 1.0
     var enabled: bool = true
+
+extern system MeshRenderer:
+    filter:
+        std.transform.volume.Transform
+        Renderer
+
+extern system PointLightSystem:
+    filter:
+        std.transform.volume.Transform
+        PointLight
+
+extern system DirectionalLightSystem:
+    filter:
+        DirectionalLight

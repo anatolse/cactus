@@ -331,6 +331,41 @@ TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][exter
     }
 }
 
+TEST_CASE("Semantic: extern system with filter is valid", "[semantic][extern-system]") {
+    CHECK_FALSE(analyze_has_errors(
+        "trait Position:\n"
+        "    var x: float\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        Position\n"));
+}
+
+TEST_CASE("Semantic: extern system requires filter", "[semantic][extern-system]") {
+    CHECK(analyze_has_errors(
+        "extern system SpriteRenderer:\n"
+        "    after:\n"
+        "        Move\n"));
+}
+
+TEST_CASE("Semantic: after cycle with extern system reports error", "[semantic][extern-system]") {
+    CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
+        "trait T:\n"
+        "    var x: float\n"
+        "extern system A:\n"
+        "    filter:\n"
+        "        T\n"
+        "    after:\n"
+        "        B\n"
+        "system B:\n"
+        "    filter:\n"
+        "        T\n"
+        "    after:\n"
+        "        A\n"
+        "    on tick:\n"
+        "        x = 1.0\n"));
+}
+
 // ── system-ordering-and-trait-cleanup semantic tests ────────────────────────
 
 // Task 12.5: after: referencing unknown system reports error

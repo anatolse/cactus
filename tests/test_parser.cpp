@@ -999,6 +999,51 @@ TEST_CASE("Parser: bare add statement parsed", "[parser][dynamic-traits]") {
     CHECK_FALSE(add->target_expr.has_value());
 }
 
+TEST_CASE("Parser: extern system declaration with filter and order by", "[parser][extern-system]") {
+    auto prog = parse(
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        std.transform.flat.Position as pos\n"
+        "        std.render.sprites.Renderer as r\n"
+        "    exclude:\n"
+        "        Hidden\n"
+        "    order by:\n"
+        "        r.layer asc\n"
+        "        pos.pos.y desc\n"
+        "    after:\n"
+        "        TransformUpdate\n"
+        "    target: cpu\n");
+
+    REQUIRE(prog.declarations.size() == 1);
+    auto& decl = std::get<ExternSystemNode>(prog.declarations[0]);
+    CHECK(decl.name == "SpriteRenderer");
+    REQUIRE(decl.filter.entries.size() == 2);
+    CHECK(decl.filter.entries[0].qualified_name == "std.transform.flat.Position");
+    REQUIRE(decl.filter.entries[0].alias.has_value());
+    CHECK(*decl.filter.entries[0].alias == "pos");
+    REQUIRE(decl.exclude.entries.size() == 1);
+    CHECK(decl.exclude.entries[0].qualified_name == "Hidden");
+    REQUIRE(decl.order_by.size() == 2);
+    CHECK(decl.order_by[0].expr_text == "r.layer");
+    CHECK(decl.order_by[0].ascending);
+    CHECK(decl.order_by[1].expr_text == "pos.pos.y");
+    CHECK_FALSE(decl.order_by[1].ascending);
+    REQUIRE(decl.after_systems.size() == 1);
+    CHECK(decl.after_systems[0] == "TransformUpdate");
+    REQUIRE(decl.target.has_value());
+    CHECK(*decl.target == "cpu");
+}
+
+TEST_CASE("Parser: extern system with handler produces error", "[parser][extern-system]") {
+    auto errors = parse_expect_errors(
+        "extern system Bad:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        pass\n");
+    REQUIRE(errors.has_errors());
+}
+
 TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait-match]") {
     auto prog = parse(
         "event Collision:\n"

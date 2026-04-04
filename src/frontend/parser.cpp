@@ -207,6 +207,9 @@ Declaration Parser::parse_declaration() { // NOLINT(readability-function-cogniti
             return parse_func(true);
         }
         if (check(TokenType::EXTERN)) {
+            if (peek_next().type == TokenType::SYSTEM) {
+                return parse_extern_system();
+            }
             return parse_extern_func(true);
         }
         if (check(TokenType::ASSET)) {
@@ -235,6 +238,9 @@ Declaration Parser::parse_declaration() { // NOLINT(readability-function-cogniti
         return parse_func(false);
     }
     if (tok.type == TokenType::EXTERN) {
+        if (peek_next().type == TokenType::SYSTEM) {
+            return parse_extern_system();
+        }
         return parse_extern_func(false);
     }
 
@@ -787,6 +793,16 @@ SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-com
         }
     }
 
+    skip_newlines();
+    if (check(TokenType::IDENTIFIER) && peek().value == "order" &&
+        peek_next().type == TokenType::IDENTIFIER && peek_next().value == "by") {
+        auto error_count_before = errors_.error_count();
+        node.order_by = parse_order_by_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
     // Parse optional after: clause (block format: AFTER COLON NEWLINE INDENT { IDENT NEWLINE } DEDENT)
     skip_newlines();
     if (check(TokenType::AFTER)) {
@@ -879,6 +895,51 @@ FilterClause Parser::parse_filter_clause() {
     }
     expect_dedent();
     return clause;
+}
+
+std::vector<OrderByKey> Parser::parse_order_by_clause() {
+    auto loc = peek().location;
+    auto order_kw = consume(TokenType::IDENTIFIER, "expected 'order'");
+    if (order_kw.value != "order") {
+        errors_.error(order_kw.location, "expected 'order by:'");
+    }
+    auto by_kw = consume(TokenType::IDENTIFIER, "expected 'by' after 'order'");
+    if (by_kw.value != "by") {
+        errors_.error(by_kw.location, "expected 'by' after 'order'");
+    }
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    std::vector<OrderByKey> keys;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+
+        auto key_loc = peek().location;
+        auto expr_text = parse_dotted_name();
+        bool ascending = true;
+        if (check(TokenType::IDENTIFIER)) {
+            std::string direction = advance().value;
+            if (direction == "asc") {
+                ascending = true;
+            } else if (direction == "desc") {
+                ascending = false;
+            } else {
+                errors_.error(peek().location, "expected 'asc' or 'desc' in order by clause");
+            }
+        }
+        expect_newline();
+        keys.push_back({.expr_text = expr_text, .ascending = ascending, .location = key_loc});
+    }
+
+    expect_dedent();
+    if (keys.empty()) {
+        errors_.error(loc, "order by: block must contain at least one sort key");
+    }
+    return keys;
 }
 
 // ── View ────────────────────────────────────────────────────────────────────
@@ -1817,6 +1878,107 @@ FilterClause Parser::parse_exclude_clause() {
 
     expect_dedent();
     return clause;
+}
+
+ExternSystemNode Parser::parse_extern_system() { // NOLINT(readability-function-cognitive-complexity)
+    auto loc = peek().location;
+    consume(TokenType::EXTERN, "expected 'extern'");
+    consume(TokenType::SYSTEM, "expected 'system' after 'extern'");
+    auto name = consume(TokenType::IDENTIFIER, "expected system name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ExternSystemNode node;
+    node.name = name;
+    node.location = loc;
+
+    skip_newlines();
+    if (check(TokenType::FILTER)) {
+        auto error_count_before = errors_.error_count();
+        node.filter = parse_filter_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
+    if (check(TokenType::EXCLUDE)) {
+        auto error_count_before = errors_.error_count();
+        node.exclude = parse_exclude_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
+    if (check(TokenType::IDENTIFIER) && peek().value == "order" &&
+        peek_next().type == TokenType::IDENTIFIER && peek_next().value == "by") {
+        auto error_count_before = errors_.error_count();
+        node.order_by = parse_order_by_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
+    if (check(TokenType::AFTER)) {
+        auto after_loc = peek().location;
+        auto error_count_before = errors_.error_count();
+        advance();
+        consume(TokenType::COLON, "expected ':'");
+        expect_newline();
+        expect_indent();
+        bool any = false;
+        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+            skip_newlines();
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+                break;
+            }
+            node.after_systems.push_back(
+                consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
+            expect_newline();
+            any = true;
+            if (errors_.error_count() > error_count_before) {
+                synchronize();
+                break;
+            }
+        }
+        expect_dedent();
+        if (!any) {
+            errors_.error(after_loc, "after: block must contain at least one system name");
+        }
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
+    if (check(TokenType::TARGET)) {
+        advance();
+        consume(TokenType::COLON, "expected ':'");
+        node.target = consume(TokenType::IDENTIFIER, "expected 'cpu' or 'gpu'").value;
+        expect_newline();
+    }
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        if (check(TokenType::ON)) {
+            errors_.error(peek().location,
+                "`extern system` cannot have event handlers; use `system` instead");
+            parse_event_handler();
+            continue;
+        }
+        errors_.error(peek().location,
+            "expected extern system clause (filter, exclude, order by, after, target)");
+        synchronize();
+    }
+
+    expect_dedent();
+    return node;
 }
 
 // ── Asset Declaration ────────────────────────────────────────────────────────

@@ -219,6 +219,7 @@ private:
     std::unordered_set<std::string> trait_names_;
     std::unordered_set<std::string> event_names_;
     std::unordered_set<std::string> func_names_;
+    std::unordered_set<std::string> system_names_;
 
     // Asset and input declaration tracking (dsl-spec-new-features)
     // Maps identifier name → resolved TypeKind (e.g., "PlayerMesh" → MeshId)

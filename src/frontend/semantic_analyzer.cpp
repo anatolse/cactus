@@ -251,6 +251,11 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                     }
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
                     func_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
+                    if (system_names_.contains(node.name)) {
+                        errors_.error(node.location, "duplicate system '" + node.name + "'");
+                    }
+                    system_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, ConstBlockNode>) {
                     for (auto& a : node.assignments) {
                         result_.string_pool.intern(a.name);
@@ -855,6 +860,38 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
                 }
             }
         }
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+            bool has_filter = !sys->filter.entries.empty() || !sys->filter.trait_names.empty();
+            if (!has_filter) {
+                errors_.error(sys->location,
+                              "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
+            }
+
+            if (!sys->filter.entries.empty()) {
+                for (auto& entry : sys->filter.entries) {
+                    std::string simple_name;
+                    resolve_filter_entry(entry, simple_name);
+                }
+            } else {
+                for (auto& trait_name : sys->filter.trait_names) {
+                    if (trait_names_.contains(trait_name)) {
+                        continue;
+                    }
+                    bool found = false;
+                    if (!imports_.empty()) {
+                        auto it = imports_.trait_providers.find(trait_name);
+                        if (it != imports_.trait_providers.end() && !it->second.empty()) {
+                            found = true;
+                        }
+                    }
+                    if (!found) {
+                        errors_.error(sys->filter.location,
+                                      "extern system '" + sys->name + "' filters on unknown trait '" +
+                                          trait_name + "'");
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1134,32 +1171,40 @@ void SemanticAnalyzer::validate_trait_match_stmt(
 
 // ── Phase 4: Dependency Graph ───────────────────────────────────────────────
 
-void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) {
+void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+    auto add_dep_from_filter = [this](const auto& sys, SystemDependency& dep) {
+        if (!sys.filter.entries.empty()) {
+            for (auto& entry : sys.filter.entries) {
+                auto dot = entry.qualified_name.find('.');
+                auto simple = (dot != std::string::npos)
+                                  ? entry.qualified_name.substr(dot + 1)
+                                  : entry.qualified_name;
+                dep.reads.insert(simple);
+            }
+        } else {
+            for (auto& t : sys.filter.trait_names) {
+                dep.reads.insert(t);
+            }
+        }
+    };
+
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             SystemDependency dep;
             dep.system_name = sys->name;
-
-            // Filter traits are reads — use simple (unqualified) names
-            if (!sys->filter.entries.empty()) {
-                for (auto& entry : sys->filter.entries) {
-                    auto dot = entry.qualified_name.find('.');
-                    auto simple = (dot != std::string::npos)
-                                      ? entry.qualified_name.substr(dot + 1)
-                                      : entry.qualified_name;
-                    dep.reads.insert(simple);
-                }
-            } else {
-                for (auto& t : sys->filter.trait_names) {
-                    dep.reads.insert(t);
-                }
-            }
+            add_dep_from_filter(*sys, dep);
 
             // Analyze handler bodies
             for (auto& handler : sys->handlers) {
                 collect_system_deps(handler.body, dep);
             }
 
+            result_.dependency_graph.push_back(std::move(dep));
+        }
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+            SystemDependency dep;
+            dep.system_name = sys->name;
+            add_dep_from_filter(*sys, dep);
             result_.dependency_graph.push_back(std::move(dep));
         }
     }
@@ -1708,6 +1753,11 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
                     for (auto& handler : node.handlers) {
                         validate_context_stmts(handler.body, node.name, true);
                     }
+                } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
+                    if (node.filter.entries.empty() && node.filter.trait_names.empty()) {
+                        errors_.error(node.location,
+                                      "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
+                    }
                 }
             },
             decl);
@@ -1746,27 +1796,33 @@ void SemanticAnalyzer::check_no_field_access(
 }
 
 void SemanticAnalyzer::validate_trait_modifier_rules(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+    auto validate_exclude_clause = [this](const auto& node) {
+        if (!node.exclude.entries.empty()) {
+            for (auto& entry : node.exclude.entries) {
+                if (!is_trait_declared(entry.qualified_name)) {
+                    errors_.error(entry.location,
+                                  "undeclared trait '" + entry.qualified_name +
+                                      "' in exclude clause");
+                }
+            }
+        } else {
+            for (auto& trait_name : node.exclude.trait_names) {
+                if (!is_trait_declared(trait_name)) {
+                    errors_.error(node.exclude.location,
+                                  "undeclared trait '" + trait_name +
+                                      "' in exclude clause");
+                }
+            }
+        }
+    };
+
     for (auto& decl : program.declarations) {
         std::visit(
-            [this](auto& node) {
+            [this, &validate_exclude_clause](auto& node) {
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, SystemNode>) {
-                    if (!node.exclude.entries.empty()) {
-                        for (auto& entry : node.exclude.entries) {
-                            if (!is_trait_declared(entry.qualified_name)) {
-                                errors_.error(entry.location,
-                                              "undeclared trait '" + entry.qualified_name +
-                                                  "' in exclude clause");
-                            }
-                        }
-                    } else {
-                        for (auto& trait_name : node.exclude.trait_names) {
-                            if (!is_trait_declared(trait_name)) {
-                                errors_.error(node.exclude.location,
-                                              "undeclared trait '" + trait_name +
-                                                  "' in exclude clause");
-                            }
-                        }
+                if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
+                    if (!node.exclude.entries.empty() || !node.exclude.trait_names.empty()) {
+                        validate_exclude_clause(node);
                     }
                 }
             },
@@ -1781,6 +1837,9 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) { // NOLINT(
     std::unordered_set<std::string> all_system_names;
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            all_system_names.insert(sys->name);
+        }
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
             all_system_names.insert(sys->name);
         }
     }
@@ -1798,12 +1857,26 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) { // NOLINT(
                 }
             }
         }
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+            for (auto& after_name : sys->after_systems) {
+                if (!all_system_names.contains(after_name)) {
+                    errors_.error(sys->location,
+                                  "unknown system '" + after_name + "' in after clause");
+                } else if (after_name == sys->name) {
+                    errors_.error(sys->location,
+                                  "system '" + sys->name + "' cannot list itself in after:");
+                }
+            }
+        }
     }
 
     // Build adjacency graph for cycle detection: sys → list of systems it must run after
     std::unordered_map<std::string, std::vector<std::string>> after_graph;
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            after_graph[sys->name] = sys->after_systems;
+        }
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
             after_graph[sys->name] = sys->after_systems;
         }
     }

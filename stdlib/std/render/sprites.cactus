@@ -36,3 +36,12 @@ pub trait AnimatedSprite:
 pub trait Canvas2D:
     var color: color = #FFFFFFFF
     var visible: bool = true
+
+extern system SpriteRenderer:
+    filter:
+        std.transform.flat.Transform
+        Renderer
+
+extern system AnimatedSpriteSystem:
+    filter:
+        AnimatedSprite

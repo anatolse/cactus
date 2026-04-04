@@ -1024,14 +1024,67 @@ TEST_CASE("Parser: extern system declaration with filter and order by", "[parser
     REQUIRE(decl.exclude.entries.size() == 1);
     CHECK(decl.exclude.entries[0].qualified_name == "Hidden");
     REQUIRE(decl.order_by.size() == 2);
-    CHECK(decl.order_by[0].expr_text == "r.layer");
-    CHECK(decl.order_by[0].ascending);
-    CHECK(decl.order_by[1].expr_text == "pos.pos.y");
-    CHECK_FALSE(decl.order_by[1].ascending);
+    CHECK(decl.order_by[0].alias == "r");
+    CHECK(decl.order_by[0].field == "layer");
+    CHECK_FALSE(decl.order_by[0].descending);
+    CHECK(decl.order_by[1].alias == "pos");
+    CHECK(decl.order_by[1].field == "pos.y");
+    CHECK(decl.order_by[1].descending);
     REQUIRE(decl.after_systems.size() == 1);
     CHECK(decl.after_systems[0] == "TransformUpdate");
     REQUIRE(decl.target.has_value());
     CHECK(*decl.target == "cpu");
+}
+
+TEST_CASE("Parser: system order by single and default asc", "[parser][system-order-by]") {
+    auto prog = parse(
+        "system Render:\n"
+        "    filter:\n"
+        "        Sprite as s\n"
+        "    order by:\n"
+        "        s.layer\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.order_by.size() == 1);
+    CHECK(sys.order_by[0].alias == "s");
+    CHECK(sys.order_by[0].field == "layer");
+    CHECK_FALSE(sys.order_by[0].descending);
+}
+
+TEST_CASE("Parser: system order by multi key", "[parser][system-order-by]") {
+    auto prog = parse(
+        "system Render:\n"
+        "    filter:\n"
+        "        Position as p\n"
+        "        Sprite as s\n"
+        "    order by:\n"
+        "        s.layer asc\n"
+        "        p.pos.y desc\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.order_by.size() == 2);
+    CHECK(sys.order_by[0].alias == "s");
+    CHECK(sys.order_by[0].field == "layer");
+    CHECK_FALSE(sys.order_by[0].descending);
+    CHECK(sys.order_by[1].alias == "p");
+    CHECK(sys.order_by[1].field == "pos.y");
+    CHECK(sys.order_by[1].descending);
+}
+
+TEST_CASE("Parser: system without order by leaves clause empty", "[parser][system-order-by]") {
+    auto prog = parse(
+        "system Render:\n"
+        "    filter:\n"
+        "        Sprite\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    CHECK(sys.order_by.empty());
 }
 
 TEST_CASE("Parser: extern system with handler produces error", "[parser][extern-system]") {

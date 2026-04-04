@@ -897,7 +897,7 @@ FilterClause Parser::parse_filter_clause() {
     return clause;
 }
 
-std::vector<OrderByKey> Parser::parse_order_by_clause() {
+std::vector<SortKey> Parser::parse_order_by_clause() {
     auto loc = peek().location;
     auto order_kw = consume(TokenType::IDENTIFIER, "expected 'order'");
     if (order_kw.value != "order") {
@@ -911,7 +911,7 @@ std::vector<OrderByKey> Parser::parse_order_by_clause() {
     expect_newline();
     expect_indent();
 
-    std::vector<OrderByKey> keys;
+    std::vector<SortKey> keys;
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
@@ -919,20 +919,27 @@ std::vector<OrderByKey> Parser::parse_order_by_clause() {
         }
 
         auto key_loc = peek().location;
-        auto expr_text = parse_dotted_name();
-        bool ascending = true;
+        auto alias = consume(TokenType::IDENTIFIER, "expected sort key alias").value;
+        consume(TokenType::DOT, "expected '.' after sort key alias");
+        auto field = consume(TokenType::IDENTIFIER, "expected sort key field").value;
+        while (match(TokenType::DOT)) {
+            field += ".";
+            field += consume(TokenType::IDENTIFIER, "expected field member after '.'").value;
+        }
+
+        bool descending = false;
         if (check(TokenType::IDENTIFIER)) {
             std::string direction = advance().value;
             if (direction == "asc") {
-                ascending = true;
+                descending = false;
             } else if (direction == "desc") {
-                ascending = false;
+                descending = true;
             } else {
-                errors_.error(peek().location, "expected 'asc' or 'desc' in order by clause");
+                errors_.error(key_loc, "expected 'asc' or 'desc' in order by clause");
             }
         }
         expect_newline();
-        keys.push_back({.expr_text = expr_text, .ascending = ascending, .location = key_loc});
+        keys.push_back({.alias = alias, .field = field, .descending = descending, .location = key_loc});
     }
 
     expect_dedent();

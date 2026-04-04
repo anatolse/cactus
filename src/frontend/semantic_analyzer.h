@@ -148,6 +148,8 @@ private:
     void check_no_recursion(ProgramNode& program);
     void check_persist_sync(ProgramNode& program);
     void validate_system_filters(ProgramNode& program);
+    void validateOrderByClause(const SystemNode& system);
+    void validateOrderByClause(const ExternSystemNode& system);
     void validate_event_usage(ProgramNode& program);
     void validate_event_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts,
                               const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,

@@ -309,6 +309,82 @@ TEST_CASE("Codegen EnTT: extern system order by is reflected in scaffold comment
     }
 }
 
+TEST_CASE("Codegen EnTT: system order by emits registry sort for single key", "[codegen-entt][system-order-by]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    let dt: float\n"
+        "trait Sprite:\n"
+        "    var layer: int\n"
+        "system Render:\n"
+        "    filter:\n"
+        "        Sprite as s\n"
+        "    order by:\n"
+        "        s.layer asc\n"
+        "    on tick:\n"
+        "        let x = 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.sort<Sprite>([&](entt::entity a, entt::entity b)") != std::string::npos);
+            CHECK(code.find("registry.get<Sprite>(a).layer < registry.get<Sprite>(b).layer") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: system order by emits multi-key comparator", "[codegen-entt][system-order-by]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    let dt: float\n"
+        "trait Position:\n"
+        "    var pos: vec2\n"
+        "trait Sprite:\n"
+        "    var layer: int\n"
+        "system Render:\n"
+        "    filter:\n"
+        "        Position as p\n"
+        "        Sprite as s\n"
+        "    order by:\n"
+        "        s.layer asc\n"
+        "        p.pos.y desc\n"
+        "    on tick:\n"
+        "        let x = 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("if (registry.get<Sprite>(a).layer != registry.get<Sprite>(b).layer)") != std::string::npos);
+            CHECK(code.find("return registry.get<Position>(a).pos.y > registry.get<Position>(b).pos.y;") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: system without order by emits no sort call", "[codegen-entt][system-order-by]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    let dt: float\n"
+        "trait Sprite:\n"
+        "    var layer: int\n"
+        "system Render:\n"
+        "    filter:\n"
+        "        Sprite\n"
+        "    on tick:\n"
+        "        let x = 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.sort<") == std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("Codegen EnTT: full pipeline includes extern system tick call", "[codegen-entt][extern-system]") {
     ProgramNode program;
     auto decorated = full_pipeline(

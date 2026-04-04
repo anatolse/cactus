@@ -819,6 +819,106 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
     return false;
 }
 
+void SemanticAnalyzer::validateOrderByClause(const SystemNode& system) { // NOLINT(readability-function-cognitive-complexity)
+    if (system.order_by.empty()) {
+        return;
+    }
+
+    if (system.filter.entries.empty() && system.filter.trait_names.empty()) {
+        errors_.error(system.location,
+                      "system '" + system.name + "' cannot use `order by:` without a `filter:` clause");
+        return;
+    }
+
+    std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
+    for (const auto& entry : system.filter.entries) {
+        auto dot = entry.qualified_name.rfind('.');
+        auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+        const auto* trait = find_resolved_trait(simple);
+        if (trait != nullptr) {
+            filter_bindings[simple] = trait;
+            if (entry.alias.has_value()) {
+                filter_bindings[*entry.alias] = trait;
+            }
+        }
+    }
+    for (const auto& name : system.filter.trait_names) {
+        const auto* trait = find_resolved_trait(name);
+        if (trait != nullptr) {
+            filter_bindings[name] = trait;
+        }
+    }
+
+    for (const auto& key : system.order_by) {
+        auto binding_it = filter_bindings.find(key.alias);
+        if (binding_it == filter_bindings.end() || binding_it->second == nullptr) {
+            errors_.error(key.location,
+                          "order by alias '" + key.alias + "' is not declared in system filter");
+            continue;
+        }
+
+        TypeInfo current;
+        bool resolved_any = false;
+        const auto* current_trait = binding_it->second;
+        size_t start = 0;
+        while (start < key.field.size()) {
+            size_t dot = key.field.find('.', start);
+            std::string member = key.field.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+
+            if (!resolved_any) {
+                current = find_field_type_in(current_trait->fields, member);
+                resolved_any = true;
+            } else if (current.kind == TypeKind::Vec2 || current.kind == TypeKind::Vec3) {
+                if (member == "x" || member == "y" || (current.kind == TypeKind::Vec3 && member == "z")) {
+                    current = make_float_type();
+                } else {
+                    current = make_unknown_type();
+                }
+            } else {
+                current = make_unknown_type();
+            }
+
+            if (current.kind == TypeKind::Unknown) {
+                errors_.error(key.location,
+                              "order by field '" + key.alias + "." + key.field +
+                                  "' is not valid for the referenced filter trait");
+                break;
+            }
+
+            if (dot == std::string::npos) {
+                break;
+            }
+            start = dot + 1;
+        }
+
+        if (current.kind == TypeKind::Unknown) {
+            continue;
+        }
+
+        if (current.kind != TypeKind::Int && current.kind != TypeKind::Float && current.kind != TypeKind::Bool) {
+            errors_.error(key.location,
+                          "order by key '" + key.alias + "." + key.field +
+                              "' must have scalar-comparable type (int, float, bool)");
+        }
+    }
+}
+
+void SemanticAnalyzer::validateOrderByClause(const ExternSystemNode& system) {
+    if (system.order_by.empty()) {
+        return;
+    }
+
+    SystemNode proxy;
+    proxy.name = system.name;
+    proxy.filter = system.filter;
+    proxy.exclude = system.exclude;
+    proxy.order_by = system.order_by;
+    proxy.after_systems = system.after_systems;
+    proxy.target = system.target;
+    proxy.location = system.location;
+    validateOrderByClause(proxy);
+}
+
 void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
@@ -859,6 +959,8 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
                     check_no_field_access(handler.body, sys->name);
                 }
             }
+
+            validateOrderByClause(*sys);
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
             bool has_filter = !sys->filter.entries.empty() || !sys->filter.trait_names.empty();
@@ -891,6 +993,8 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
                     }
                 }
             }
+
+            validateOrderByClause(*sys);
         }
     }
 }

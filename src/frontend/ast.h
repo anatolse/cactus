@@ -361,9 +361,10 @@ struct FilterClause {
     SourceLocation location;
 };
 
-struct OrderByKey {
-    std::string expr_text;
-    bool ascending = true;
+struct SortKey {
+    std::string alias;
+    std::string field;
+    bool descending = false;
     SourceLocation location;
 };
 
@@ -371,7 +372,7 @@ struct SystemNode {
     std::string name;
     FilterClause filter;                    // empty entries = no filter (match all)
     FilterClause exclude;                   // empty entries = no exclude
-    std::vector<OrderByKey> order_by;
+    std::vector<SortKey> order_by;
     std::vector<std::string> after_systems; // explicit ordering: this system runs after these
     std::optional<std::string> target;      // "cpu" or "gpu"
     std::vector<EventHandlerNode> handlers;
@@ -382,7 +383,7 @@ struct ExternSystemNode {
     std::string name;
     FilterClause filter;
     FilterClause exclude;
-    std::vector<OrderByKey> order_by;
+    std::vector<SortKey> order_by;
     std::vector<std::string> after_systems;
     std::optional<std::string> target;
     SourceLocation location;

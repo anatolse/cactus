@@ -444,6 +444,66 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
     CHECK(found_c);
 }
 
+TEST_CASE("Semantic: order by valid alias and scalar fields", "[semantic][system-order-by]") {
+    CHECK_FALSE(analyze_has_errors(
+        STDLIB_EVENTS +
+        "trait Position:\n"
+        "    var pos: vec2\n"
+        "trait Sprite:\n"
+        "    var layer: int\n"
+        "system Render:\n"
+        "    filter:\n"
+        "        Position as p\n"
+        "        Sprite as s\n"
+        "    order by:\n"
+        "        s.layer asc\n"
+        "        p.pos.y desc\n"
+        "    on tick:\n"
+        "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: order by alias not in filter errors", "[semantic][system-order-by]") {
+    CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
+        "trait Position:\n"
+        "    var pos: vec2\n"
+        "system Render:\n"
+        "    filter:\n"
+        "        Position as p\n"
+        "    order by:\n"
+        "        s.pos.y asc\n"
+        "    on tick:\n"
+        "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: order by non-orderable type errors", "[semantic][system-order-by]") {
+    CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
+        "trait Position:\n"
+        "    var pos: vec2\n"
+        "system Render:\n"
+        "    filter:\n"
+        "        Position as p\n"
+        "    order by:\n"
+        "        p.pos asc\n"
+        "    on tick:\n"
+        "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: order by invalid vec2 member errors", "[semantic][system-order-by]") {
+    CHECK(analyze_has_errors(
+        STDLIB_EVENTS +
+        "trait Position:\n"
+        "    var pos: vec2\n"
+        "system Render:\n"
+        "    filter:\n"
+        "        Position as p\n"
+        "    order by:\n"
+        "        p.pos.z asc\n"
+        "    on tick:\n"
+        "        let x = 1\n"));
+}
+
 // Task 12.8: ambiguous bare config key reports error
 TEST_CASE("Semantic: duplicate field across nested traits reports no error", "[semantic][config-qualification]") {
     CHECK_FALSE(analyze_has_errors(

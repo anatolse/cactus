@@ -72,7 +72,7 @@ private:
     ChildBlock parse_child_block();
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();
-    std::vector<OrderByKey> parse_order_by_clause();
+    std::vector<SortKey> parse_order_by_clause();
     std::string parse_lifecycle_event_name();  // handles spawn/destroy/load/unload as names
     ViewElement parse_view_element();
 

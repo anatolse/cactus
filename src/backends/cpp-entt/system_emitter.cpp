@@ -6,6 +6,69 @@
 
 namespace cactus {
 
+namespace {
+
+std::string sort_key_expr(const SortKey& key, const std::string& entity_name,
+                         const SystemNode& sys) {
+    auto alias_to_trait = [&]() -> std::string {
+        for (const auto& entry : sys.filter.entries) {
+            auto dot = entry.qualified_name.rfind('.');
+            auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+            if (entry.alias.has_value() && *entry.alias == key.alias) {
+                return simple;
+            }
+            if (simple == key.alias) {
+                return simple;
+            }
+        }
+        for (const auto& trait : sys.filter.trait_names) {
+            if (trait == key.alias) {
+                return trait;
+            }
+        }
+        return "";
+    };
+
+    std::string trait_name = alias_to_trait();
+    std::ostringstream expr;
+    expr << "registry.get<" << trait_name << ">(" << entity_name << ")." << key.field;
+    return expr.str();
+}
+
+std::string primary_sort_trait(const SortKey& key, const SystemNode& sys) {
+    for (const auto& entry : sys.filter.entries) {
+        auto dot = entry.qualified_name.rfind('.');
+        auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+        if ((entry.alias.has_value() && *entry.alias == key.alias) || simple == key.alias) {
+            return simple;
+        }
+    }
+    for (const auto& trait : sys.filter.trait_names) {
+        if (trait == key.alias) {
+            return trait;
+        }
+    }
+    return key.alias;
+}
+
+void emit_sort_call(std::ostringstream& out, const SystemNode& sys) {
+    if (sys.order_by.empty()) {
+        return;
+    }
+
+    out << "    registry.sort<" << primary_sort_trait(sys.order_by.front(), sys) << ">([&](entt::entity a, entt::entity b) {\n";
+    for (const auto& key : sys.order_by) {
+        auto left = sort_key_expr(key, "a", sys);
+        auto right = sort_key_expr(key, "b", sys);
+        out << "        if (" << left << " != " << right << ") return "
+            << left << (key.descending ? " > " : " < ") << right << ";\n";
+    }
+    out << "        return false;\n";
+    out << "    });\n";
+}
+
+}  // namespace
+
 // ── Helper: resolve which component a field belongs to ──────────────────────
 
 static std::string find_comp_for_field(const std::string& field_name,
@@ -292,6 +355,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
         out << ") {\n";
 
         // Build view template args
+        emit_sort_call(out, sys);
         out << "    auto view = registry.view<";
         for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
             if (i > 0) {
@@ -340,7 +404,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     if (!sys.order_by.empty()) {
         out << "    // order by:\n";
         for (const auto& key : sys.order_by) {
-            out << "    //   " << key.expr_text << (key.ascending ? " asc" : " desc") << "\n";
+            out << "    //   " << key.alias << "." << key.field << (key.descending ? " desc" : " asc") << "\n";
         }
     }
 

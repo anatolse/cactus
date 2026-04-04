@@ -165,6 +165,11 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                 }
                 return op + rewrite_expr(*e.operand, trait_names, program, pointer_aliases);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
+                if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
+                    ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
+                    return "registry.valid(" +
+                           rewrite_expr(*e.args[0], trait_names, program, pointer_aliases) + ")";
+                }
                 std::string result = rewrite_expr(*e.callee, trait_names, program, pointer_aliases) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
@@ -208,6 +213,7 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     out << ind << "{\n";
     out << ind << "    auto __match_entity = "
         << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases) << ";\n";
+    out << ind << "    if (registry.valid(__match_entity)) {\n";
 
     bool first = true;
     for (const auto& arm : match_stmt.arms) {
@@ -215,7 +221,7 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
         const bool IS_MARKER = TRAIT_IT == program.traits.end() || TRAIT_IT->second.fields.empty();
         std::unordered_set<std::string> arm_aliases = pointer_aliases;
 
-        out << ind << "    " << (first ? "if" : "else if") << " (";
+        out << ind << "        " << (first ? "if" : "else if") << " (";
         if (IS_MARKER) {
             out << "registry.all_of<" << arm.trait_name << ">(__match_entity)) {\n";
         } else {
@@ -225,9 +231,9 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
         }
 
         for (const auto& stmt : arm.body) {
-            out << rewrite_stmt(*stmt, indent + 2, trait_names, program, arm_aliases);
+            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, arm_aliases);
         }
-        out << ind << "    }";
+        out << ind << "        }";
         first = false;
         if (!first || arm.location.line >= 0) {
             out << "\n";
@@ -235,13 +241,14 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     }
 
     if (match_stmt.wildcard.has_value()) {
-        out << ind << "    " << (first ? "if (true)" : "else") << " {\n";
+        out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
         for (const auto& stmt : match_stmt.wildcard->body) {
-            out << rewrite_stmt(*stmt, indent + 2, trait_names, program, pointer_aliases);
+            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, pointer_aliases);
         }
-        out << ind << "    }\n";
+        out << ind << "        }\n";
     }
 
+    out << ind << "    }\n";
     out << ind << "}\n";
     return out.str();
 }
@@ -274,38 +281,70 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                 return ind + lhs + " " + s.op + " " +
                        rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                std::string result = ind + s.event_name + "_buffer.push_back({";
+                std::string emit_call = s.event_name + "_buffer.push_back({";
                 for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
-                        result += ", ";
+                        emit_call += ", ";
                     }
-                    result += "." + s.payload[i].name + " = " + rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases);
+                    emit_call += "." + s.payload[i].name + " = " + rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases);
                 }
-                return result + "});\n";
+                emit_call += "});";
+                if (s.target.has_value()) {
+                    const std::string target = rewrite_expr(**s.target, trait_names, program, pointer_aliases);
+                    return ind + "if (registry.valid(" + target + ")) {\n" +
+                           ind + "    " + emit_call + "\n" +
+                           ind + "}\n";
+                }
+                return ind + emit_call + "\n";
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                 std::string target = s.target_expr.has_value()
                     ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
                     : "entity";
+                const bool guarded = s.target_expr.has_value();
                 if (s.args.empty()) {
+                    if (guarded) {
+                        return ind + "if (registry.valid(" + target + ")) {\n" +
+                               ind + "    registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n" +
+                               ind + "}\n";
+                    }
                     return ind + "registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n";
                 }
 
                 std::ostringstream result;
-                result << ind << "{\n";
-                result << ind << "    auto __existing = registry.try_get<" << s.trait_name << ">(" << target << ");\n";
-                result << ind << "    auto __value = __existing ? *__existing : " << s.trait_name << "{};\n";
+                if (guarded) {
+                    result << ind << "if (registry.valid(" << target << ")) {\n";
+                }
+                result << ind << (guarded ? "    " : "") << "{\n";
+                result << ind << (guarded ? "        " : "    ") << "auto __existing = registry.try_get<" << s.trait_name << ">(" << target << ");\n";
+                result << ind << (guarded ? "        " : "    ") << "auto __value = __existing ? *__existing : " << s.trait_name << "{};\n";
                 for (const auto& arg : s.args) {
-                    result << ind << "    __value." << arg.name << " = "
+                    result << ind << (guarded ? "        " : "    ") << "__value." << arg.name << " = "
                            << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
                 }
-                result << ind << "    registry.emplace_or_replace<" << s.trait_name << ">(" << target << ", __value);\n";
-                result << ind << "}\n";
+                result << ind << (guarded ? "        " : "    ") << "registry.emplace_or_replace<" << s.trait_name << ">(" << target << ", __value);\n";
+                result << ind << (guarded ? "    " : "") << "}\n";
+                if (guarded) {
+                    result << ind << "}\n";
+                }
                 return result.str();
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
                 std::string target = s.target_expr.has_value()
                     ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
                     : "entity";
+                if (s.target_expr.has_value()) {
+                    return ind + "if (registry.valid(" + target + ")) {\n" +
+                           ind + "    registry.remove<" + s.trait_name + ">(" + target + ");\n" +
+                           ind + "}\n";
+                }
                 return ind + "registry.remove<" + s.trait_name + ">(" + target + ");\n";
+            } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+                if (s.target_expr.has_value()) {
+                    std::string target = rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases);
+                    return ind + "if (registry.valid(" + target + ")) {\n" +
+                           ind + "    registry.destroy(" + target + ");\n" +
+                           ind + "}\n";
+                }
+                return ind + "registry.destroy(entity);\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
                     return ind + "return " + rewrite_expr(**s.value, trait_names, program, pointer_aliases) + ";\n";

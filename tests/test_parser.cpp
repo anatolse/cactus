@@ -582,6 +582,19 @@ TEST_CASE("Parser: destroy statement", "[parser][dynamic-ecs]") {
     REQUIRE(destroy != nullptr);
 }
 
+TEST_CASE("Parser: destroy targeted entity statement", "[parser][dynamic-ecs]") {
+    auto prog = parse(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "system Cleanup:\n"
+        "    on Collision as c:\n"
+        "        destroy c.other\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[1]);
+    auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(destroy != nullptr);
+    REQUIRE(destroy->target_expr.has_value());
+}
+
 // Task 4.8: load statement
 TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
     auto prog = parse(

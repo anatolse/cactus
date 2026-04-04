@@ -1422,8 +1422,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
     // Task 4.7: destroy statement
     if (check(TokenType::DESTROY)) {
         advance();
-        expect_newline();
         DestroyStmt destroy;
+        if (!check(TokenType::NEWLINE)) {
+            destroy.target_expr = parse_expression();
+        }
+        expect_newline();
         destroy.location = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(destroy)}, loc);
     }

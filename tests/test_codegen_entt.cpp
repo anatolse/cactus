@@ -214,6 +214,94 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
     }
 }
 
+TEST_CASE("Codegen EnTT: cross-entity add/remove/destroy use validity guards", "[codegen-entt][entity-id]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "trait Frozen\n"
+        "system Cleanup:\n"
+        "    on Collision as c:\n"
+        "        add Frozen to c.other\n"
+        "        remove Frozen from c.other\n"
+        "        destroy c.other\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
+            CHECK(code.find("registry.emplace_or_replace<Frozen>(c.other)") != std::string::npos);
+            CHECK(code.find("registry.remove<Frozen>(c.other)") != std::string::npos);
+            CHECK(code.find("registry.destroy(c.other)") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: targeted emit uses validity guard", "[codegen-entt][entity-id]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Hit:\n"
+        "    var amount: int\n"
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        emit Hit to c.other:\n"
+        "            amount = 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
+            CHECK(code.find("Hit_buffer.push_back({.amount = 1})") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: exists compiles to registry.valid", "[codegen-entt][entity-id]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        if exists(c.other):\n"
+        "            let x = 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: trait match is guarded by entity validity", "[codegen-entt][entity-id]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "trait Boss:\n"
+        "    var phase: int\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        match c.other:\n"
+        "            Boss as b =>\n"
+        "                let x = b.phase\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
+            CHECK(code.find("if (registry.valid(__match_entity))") != std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen-entt][trait-match]") {
     ProgramNode program;
     auto decorated = full_pipeline(

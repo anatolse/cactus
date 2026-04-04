@@ -226,6 +226,7 @@ struct SpawnStmt {
 
 // destroy — removes current entity
 struct DestroyStmt {
+    std::optional<std::unique_ptr<ExprNode>> target_expr;
     SourceLocation location;
 };
 

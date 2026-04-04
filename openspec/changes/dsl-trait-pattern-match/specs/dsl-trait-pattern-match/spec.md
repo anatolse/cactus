@@ -3,6 +3,8 @@
 ### Requirement: `match entity_id:` statement with trait pattern arms
 The DSL SHALL support a statement-level `match` construct. When the subject expression has type `entity_id`, the `match` performs **trait pattern matching**: each arm tests whether the referenced entity currently has the named trait attached. Arms execute in declaration order; the first matching arm fires and subsequent arms are skipped. If no arm matches and no wildcard is present, execution continues silently (no error, no-op).
 
+When the subject handle is stale, no arm fires — see dsl-entity-id-total-semantics.
+
 ```ebnf
 trait_match_stmt = "match" expr ":" INDENT trait_match_arm+ DEDENT ;
 trait_match_arm  = trait_arm | wildcard_arm ;

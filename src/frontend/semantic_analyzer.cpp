@@ -628,6 +628,11 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
                 for (auto& arg : e.args) {
                     check_func_purity_expr(*arg, func_name);
                 }
+                if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
+                    ident != nullptr && ident->name == "exists") {
+                    errors_.error(e.location,
+                                  "`exists()` requires world access; only allowed inside system event handlers");
+                }
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                     call_graph_[func_name].insert(ident->name);
                 }
@@ -1174,6 +1179,16 @@ void SemanticAnalyzer::validate_event_stmts(
         }
     };
 
+    auto validate_destroy = [this, &filter_bindings, &locals, handler_event](const DestroyStmt& destroy) {
+        if (!destroy.target_expr.has_value()) {
+            return;
+        }
+        auto t = infer_expr_type(**destroy.target_expr, filter_bindings, locals, handler_event);
+        if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+            errors_.error(destroy.location, "`destroy` target must be of type `entity_id`");
+        }
+    };
+
     auto in_system_handler = !system_name.empty();
 
     for (const auto& stmt : stmts) {
@@ -1200,6 +1215,10 @@ void SemanticAnalyzer::validate_event_stmts(
         }
         if (const auto* remove_stmt = std::get_if<RemoveTraitStmt>(&stmt->stmt)) {
             validate_remove(*remove_stmt);
+            continue;
+        }
+        if (const auto* destroy_stmt = std::get_if<DestroyStmt>(&stmt->stmt)) {
+            validate_destroy(*destroy_stmt);
             continue;
         }
         if (const auto* trait_match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
@@ -1455,12 +1474,36 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
     if (std::holds_alternative<SpawnExpr>(expr.expr)) {
         return make_entity_id_type();
     }
+    if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        if (auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
+            ident != nullptr && ident->name == "exists") {
+            if (handler_event == nullptr) {
+                errors_.error(expr.location,
+                              "`exists()` requires world access; only allowed inside system event handlers");
+            }
+            if (call->args.size() != 1) {
+                return make_bool_type();
+            }
+            auto arg_type = infer_expr_type(*call->args.front(), filter_bindings, local_bindings, handler_event);
+            if (arg_type.kind != TypeKind::EntityId && arg_type.kind != TypeKind::Unknown) {
+                errors_.error(expr.location, "`exists()` argument must be of type `entity_id`");
+            }
+            return make_bool_type();
+        }
+        return make_unknown_type();
+    }
     if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
         return infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event);
     }
     if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
         auto left = infer_expr_type(*binary->left, filter_bindings, local_bindings, handler_event);
         auto right = infer_expr_type(*binary->right, filter_bindings, local_bindings, handler_event);
+        if ((binary->op == "==" || binary->op == "!=") &&
+            ((left.kind == TypeKind::EntityId && right.kind == TypeKind::Int) ||
+             (right.kind == TypeKind::EntityId && left.kind == TypeKind::Int))) {
+            errors_.error(expr.location,
+                          "entity_id has no null literal; use `exists(id)` to test handle validity or `add`/`remove` to model absent relationships via trait presence");
+        }
         if (binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == ">" ||
             binary->op == "<=" || binary->op == ">=" || binary->op == "and" || binary->op == "or") {
             return make_bool_type();
@@ -1824,6 +1867,14 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                                 if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
                                     errors_.error(s.location, "`from` target must be of type `entity_id`");
                                 }
+                            }
+                        }
+                    }
+                    if constexpr (std::is_same_v<S, DestroyStmt>) {
+                        if (s.target_expr.has_value()) {
+                            auto t = infer_expr_type(**s.target_expr, {}, {}, nullptr);
+                            if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+                                errors_.error(s.location, "`destroy` target must be of type `entity_id`");
                             }
                         }
                     }

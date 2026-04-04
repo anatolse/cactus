@@ -282,6 +282,9 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
 
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 // task 7.9: swap-and-delete
+                if (s.target_expr.has_value()) {
+                    return ind + "entity_remove(" + emit_expr(**s.target_expr) + ");\n";
+                }
                 if (in_loop) {
                     return ind + "entity_remove(" + entity_index_var + "); __destroyed = true;\n";
                 }

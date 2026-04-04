@@ -27,6 +27,8 @@ The DSL SHALL support a `remove` statement inside system event handlers. `remove
 ### Requirement: Cross-entity targeting with `to` and `from`
 The `add` statement SHALL support an optional `to expr` suffix where `expr` evaluates to `entity_id`, targeting another entity instead of self. The `remove` statement SHALL support an optional `from expr` suffix for the same purpose. The semantic analyzer SHALL validate that the target expression has type `entity_id`.
 
+Operations on stale handles are silent no-ops per dsl-entity-id-total-semantics.
+
 #### Scenario: add trait to another entity
 - **WHEN** `add Stunned to c.other:` appears where `c.other` is of type `entity_id`
 - **THEN** the semantic analyzer accepts it and generates code to attach `Stunned` to `c.other`

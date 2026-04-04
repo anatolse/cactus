@@ -52,6 +52,24 @@ static bool analyze_has_errors(const std::string& source) {
     return errors.has_errors();
 }
 
+static std::string analyze_first_error(const std::string& source) {
+    ErrorReporter errors;
+    Lexer lexer(source, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    if (errors.has_errors()) {
+        return errors.diagnostics().front().message;
+    }
+    Parser parser(std::move(tokens), errors);
+    auto program = parser.parse_program();
+    if (errors.has_errors()) {
+        return errors.diagnostics().front().message;
+    }
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(program);
+    REQUIRE(errors.has_errors());
+    return errors.diagnostics().front().message;
+}
+
 TEST_CASE("Semantic: type resolution — built-in types", "[semantic]") {
     auto result = analyze(
         "trait Pos:\n"
@@ -637,4 +655,42 @@ TEST_CASE("Semantic: trait match outside handler error", "[semantic][trait-match
         "    match subject_id:\n"
         "        Boss as b =>\n"
         "            let x = b.phase\n"));
+}
+
+TEST_CASE("Semantic: entity_id compared to zero uses total-semantics error", "[semantic][entity-id]") {
+    CHECK(analyze_first_error(
+              "event Collision:\n"
+              "    var other: entity_id\n"
+              "system Combat:\n"
+              "    on Collision as c:\n"
+              "        let dead = c.other == 0\n") ==
+          "entity_id has no null literal; use `exists(id)` to test handle validity or `add`/`remove` to model absent relationships via trait presence");
+}
+
+TEST_CASE("Semantic: exists(entity_id) valid in system handler", "[semantic][entity-id]") {
+    CHECK_FALSE(analyze_has_errors(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        if exists(c.other):\n"
+        "            let x = 1\n"));
+}
+
+TEST_CASE("Semantic: exists requires entity_id argument", "[semantic][entity-id]") {
+    CHECK(analyze_first_error(
+              "event tick:\n"
+              "    let dt: float\n"
+              "system Combat:\n"
+              "    on tick:\n"
+              "        if exists(42):\n"
+              "            let x = 1\n") ==
+          "`exists()` argument must be of type `entity_id`");
+}
+
+TEST_CASE("Semantic: exists forbidden in func body", "[semantic][entity-id]") {
+    CHECK(analyze_first_error(
+              "func test(id: entity_id) bool:\n"
+              "    return exists(id)\n") ==
+          "`exists()` requires world access; only allowed inside system event handlers");
 }

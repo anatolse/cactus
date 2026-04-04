@@ -212,11 +212,11 @@ TEST_CASE("Parser: event declaration", "[parser]") {
 
 TEST_CASE("Parser: func declaration", "[parser]") {
     auto prog = parse(
-        "func add(a: int, b: int) int:\n"
+        "func sum(a: int, b: int) int:\n"
         "    return a + b\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<FuncNode>(prog.declarations[0]);
-    CHECK(decl.name == "add");
+    CHECK(decl.name == "sum");
     REQUIRE(decl.params.size() == 2);
     REQUIRE(decl.return_type.has_value());
     CHECK(decl.return_type->name == "int");

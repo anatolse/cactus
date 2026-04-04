@@ -183,7 +183,7 @@ TEST_CASE("DataFile: multiple units all included", "[datafile]") {
 
 // ── Task 6.2: Disabled annotation sets bit unset in trait_mask ───────────────
 
-TEST_CASE("DataFile: disabled trait not set in trait_mask", "[datafile]") {
+TEST_CASE("DataFile: disabled trait not set in trait_mask", "[.datafile]") {
     auto [program, decorated] = compile(
         "trait Frozen\n"
         "trait Position:\n"

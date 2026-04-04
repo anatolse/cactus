@@ -365,15 +365,15 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
 std::string ManualSystemEmitter::emit_system_forward_decls(const SystemNode& sys) {
     std::ostringstream out;
     for (const auto& handler : sys.handlers) {
+        const std::string EVENT_VAR = handler.alias.value_or(handler.event_name);
         bool is_per_entity = (handler.event_name == "spawn" ||
                               handler.event_name == "destroy");
         if (is_per_entity) {
             out << "static void " << sys.name << "_" << handler.event_name
-                << "(size_t _idx);\n";
-        } else if (handler.event_name == "tick") {
-            out << "static void " << sys.name << "_tick(float dt);\n";
+                << "(size_t _idx, const " << handler.event_name << "Event& " << EVENT_VAR << ");\n";
         } else {
-            out << "static void " << sys.name << "_" << handler.event_name << "();\n";
+            out << "static void " << sys.name << "_" << handler.event_name
+                << "(const " << handler.event_name << "Event& " << EVENT_VAR << ");\n";
         }
     }
     return out.str();
@@ -391,11 +391,12 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
     for (const auto& handler : sys.handlers) {
         bool is_per_entity = (handler.event_name == "spawn" ||
                               handler.event_name == "destroy");
+        const std::string EVENT_VAR = handler.alias.value_or(handler.event_name);
 
         if (is_per_entity) {
             // ── Per-entity handler: called with a specific entity index ──────
             out << "static void " << sys.name << "_" << handler.event_name
-                << "(size_t _idx) {\n";
+                << "(size_t _idx, const " << handler.event_name << "Event& " << EVENT_VAR << ") {\n";
 
             // Local references for filter trait fields
             for (const auto& trait_name : sys.filter.trait_names) {
@@ -416,34 +417,8 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
 
         } else {
             // ── Loop-based handler (tick, load, unload, or custom event) ─────
-            // Determine if this is a lifecycle dt event, a user event, or a no-param lifecycle
-            const bool IS_DT_EVENT = (handler.event_name == "tick" || handler.event_name == "fixed_tick" ||
-                                      handler.event_name == "late_tick");
-            const bool IS_BUILTIN  = (handler.event_name == "tick" || handler.event_name == "fixed_tick" ||
-                                     handler.event_name == "late_tick" || handler.event_name == "input" ||
-                                     handler.event_name == "load" || handler.event_name == "unload");
-
-            // Name to use for the event variable in the body (alias or event name)
-            const std::string EVENT_VAR = handler.alias.has_value() ? *handler.alias : handler.event_name;
-
-            std::string params;
-            std::string event_var_binding;
-
-            if (IS_DT_EVENT) {
-                // Keep float dt for game-loop compatibility; bind event struct
-                params = "float dt";
-                event_var_binding = "    " + handler.event_name + "Event " + EVENT_VAR + "{dt};\n";
-            } else if (!IS_BUILTIN) {
-                // User event: pass as const ref using alias or event name
-                params = "const " + handler.event_name + "Event& " + EVENT_VAR;
-            }
-            // input/load/unload: no params needed
-
             out << "static void " << sys.name << "_" << handler.event_name
-                << "(" << params << ") {\n";
-            if (!event_var_binding.empty()) {
-                out << event_var_binding;
-            }
+                << "(const " << handler.event_name << "Event& " << EVENT_VAR << ") {\n";
             out << "    uint64_t _filter_mask = " << FILTER_MASK << ";\n";
             out << "    uint64_t _exclude_mask = " << EXCLUDE_MASK << ";\n";
 

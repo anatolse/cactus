@@ -198,7 +198,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 for (auto& handler : sys->handlers) {
                     if (handler.event_name == "tick") {
-                        out << "        " << sys->name << "_tick(registry, dt);\n";
+                        out << "        " << sys->name << "_tick(registry, TickEvent{dt});\n";
                     }
                 }
             }

@@ -24,7 +24,7 @@ namespace fs = std::filesystem;
 static void print_usage(const char* program) {
     std::cerr << "Usage: " << program << " <input.cactus> [options]\n"
               << "\nOptions:\n"
-              << "  --backend <cpp-manual|cpp-entt>     Code generation backend (default: cpp-manual)\n"
+              << "  --backend <cpp-manual|cpp-entt>     Code generation backend (default: cpp-entt)\n"
               << "  --output <file>                      Output file (default: stdout)\n"
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
               << "  --help                               Show this help message\n";
@@ -104,7 +104,7 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
     }
 
     std::string input_file;
-    std::string backend = "cpp-manual";
+    std::string backend = "cpp-entt";
     std::string output_file;
     std::vector<fs::path> module_paths;  // 6.1: --module-path flag
 

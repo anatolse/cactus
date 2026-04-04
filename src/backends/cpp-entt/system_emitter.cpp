@@ -175,11 +175,6 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
-                    // Translate tick.dt / fixed_tick.dt / late_tick.dt → dt
-                    if ((ident->name == "tick" || ident->name == "fixed_tick" ||
-                         ident->name == "late_tick") && e.member == "dt") {
-                        return "dt";
-                    }
                     // Enum names — use :: notation
                     if (program.enums.contains(ident->name)) {
                         return ident->name + "::" + e.member;
@@ -346,12 +341,8 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
 
     for (const auto& handler : sys.handlers) {
         out << "void " << sys.name << "_" << handler.event_name << "(entt::registry& registry";
-
-        // tick/fixed_tick/late_tick handlers receive a float dt
-        if (handler.event_name == "tick" || handler.event_name == "fixed_tick" ||
-            handler.event_name == "late_tick") {
-            out << ", float dt";
-        }
+        out << ", const " << handler.event_name << "Event& "
+            << handler.alias.value_or(handler.event_name);
         out << ") {\n";
 
         // Build view template args

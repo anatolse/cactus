@@ -205,6 +205,9 @@ TEST_CASE("Codegen Manual: system loop uses bitmask filter condition", "[codegen
     CHECK(code.find("_exclude_mask") != std::string::npos);
     CHECK(code.find("g_trait_mask[i] & _filter_mask") != std::string::npos);
     CHECK(code.find("while (i < entity_count)") != std::string::npos);
+    CHECK(code.find("static void Move_tick(const tickEvent& tick)") != std::string::npos);
+    CHECK(code.find("x = x + tick.dt") == std::string::npos);
+    CHECK(code.find("x = (x + tick.dt)") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: system filter_mask=0 for no-filter system", "[codegen-manual][7.3]") {
@@ -235,6 +238,8 @@ TEST_CASE("Codegen Manual: exclude mask in loop condition", "[codegen-manual][7.
     CHECK(code.find("_exclude_mask") != std::string::npos);
     CHECK(code.find("g_trait_mask[i] & _exclude_mask") != std::string::npos);
     CHECK(code.find("== 0") != std::string::npos);
+    CHECK(code.find("static void Move_tick(const tickEvent& t)") != std::string::npos);
+    CHECK(code.find("x = (x + t.dt)") != std::string::npos);
 }
 
 // ── Dynamic trait add/remove codegen ────────────────────────────────────────
@@ -407,9 +412,41 @@ TEST_CASE("Codegen Manual: on_spawn dispatch function emitted (task 7.11)", "[co
 
     CHECK(code.find("dispatch_on_spawn") != std::string::npos);
     CHECK(code.find("Init_spawn") != std::string::npos);
+    CHECK(code.find("static void Init_spawn(size_t _idx, const spawnEvent& spawn)") != std::string::npos);
+    CHECK(code.find("Init_spawn(_idx, SpawnEvent{})") != std::string::npos);
     // Filter check inside dispatch
     CHECK(code.find("g_trait_mask[_idx]") != std::string::npos);
     CHECK(code.find("TraitBits::Position") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: aliased tick handler uses alias in signature", "[codegen-manual][event-handler]") {
+    auto code = generate(
+        STDLIB_EVENTS +
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick as t:\n"
+        "        x = x + t.dt\n");
+
+    CHECK(code.find("static void Move_tick(const tickEvent& t)") != std::string::npos);
+    CHECK(code.find("x = (x + t.dt)") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: marker spawn event emits empty struct and parameter", "[codegen-manual][event-handler]") {
+    auto code = generate(
+        STDLIB_EVENTS +
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "system Init:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on spawn:\n"
+        "        x = 0.0\n");
+
+    CHECK(code.find("struct spawnEvent {\n};") != std::string::npos);
+    CHECK(code.find("static void Init_spawn(size_t _idx, const spawnEvent& spawn)") != std::string::npos);
 }
 
 // ── Task 7.12: on_destroy dispatch ───────────────────────────────────────────

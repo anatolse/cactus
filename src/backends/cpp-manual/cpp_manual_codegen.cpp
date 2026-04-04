@@ -287,7 +287,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
             const std::string EM = ManualSystemEmitter::compute_mask_expr(sys->exclude, ctx);
             out << "    if ((g_trait_mask[_idx] & (" << FM << ")) == (" << FM << ") &&\n";
             out << "        (g_trait_mask[_idx] & (" << EM << ")) == 0) {\n";
-            out << "        " << sys->name << "_spawn(_idx);\n";
+            out << "        " << sys->name << "_spawn(_idx, SpawnEvent{});\n";
             out << "    }\n";
         }
     }
@@ -305,7 +305,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
             const std::string EM = ManualSystemEmitter::compute_mask_expr(sys->exclude, ctx);
             out << "    if ((g_trait_mask[_idx] & (" << FM << ")) == (" << FM << ") &&\n";
             out << "        (g_trait_mask[_idx] & (" << EM << ")) == 0) {\n";
-            out << "        " << sys->name << "_destroy(_idx);\n";
+            out << "        " << sys->name << "_destroy(_idx, DestroyEvent{});\n";
             out << "    }\n";
         }
     }
@@ -352,7 +352,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     for (const auto* sys : systems) {
         for (const auto& h : sys->handlers) {
             if (h.event_name == "unload") {
-                out << "    " << sys->name << "_unload();\n";
+                out << "    " << sys->name << "_unload(UnloadEvent{});\n";
             }
         }
     }
@@ -364,7 +364,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     for (const auto* sys : systems) {
         for (const auto& h : sys->handlers) {
             if (h.event_name == "load") {
-                out << "    " << sys->name << "_load();\n";
+                out << "    " << sys->name << "_load(LoadEvent{});\n";
             }
         }
     }
@@ -470,7 +470,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     for (const auto* sys : systems) {
         for (const auto& handler : sys->handlers) {
             if (handler.event_name == "tick") {
-                out << "        " << sys->name << "_tick(dt);\n";
+                out << "        " << sys->name << "_tick(TickEvent{dt});\n";
             }
         }
     }

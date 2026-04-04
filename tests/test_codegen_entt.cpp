@@ -71,6 +71,8 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("void Move_tick") != std::string::npos);
             CHECK(code.find("entt::registry& registry") != std::string::npos);
+            CHECK(code.find("const tickEvent& tick") != std::string::npos);
+            CHECK(code.find("Pos_comp.x = (Pos_comp.x + tick.dt)") != std::string::npos);
             CHECK(code.find("registry.view<Pos>()") != std::string::npos);
             CHECK(code.find("view.each") != std::string::npos);
         }
@@ -119,6 +121,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("entt::dispatcher dispatcher") != std::string::npos);
     CHECK(code.find("int main()") != std::string::npos);
     CHECK(code.find("InitWindow") != std::string::npos);
+    CHECK(code.find("Move_tick(registry, TickEvent{dt});") != std::string::npos);
 
     // Persist hooks
     CHECK(code.find("save_Pos") != std::string::npos);
@@ -237,6 +240,50 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
             CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
             CHECK(code.find("registry.all_of<Spike>(__match_entity)") != std::string::npos);
             CHECK(code.find("else {") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: aliased tick handler uses alias in signature and body", "[codegen-entt][event-handler]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    let dt: float\n"
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on tick as t:\n"
+        "        x = x + t.dt\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("const tickEvent& t") != std::string::npos);
+            CHECK(code.find("Pos_comp.x = (Pos_comp.x + t.dt)") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: spawn handler uses marker event parameter", "[codegen-entt][event-handler]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event spawn\n"
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system Init:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on spawn:\n"
+        "        x = 0.0\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("void Init_spawn(entt::registry& registry, const spawnEvent& spawn)") != std::string::npos);
         }
     }
 }

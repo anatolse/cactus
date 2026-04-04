@@ -679,8 +679,7 @@ TEST_CASE("Semantic: exists(entity_id) valid in system handler", "[semantic][ent
 
 TEST_CASE("Semantic: exists requires entity_id argument", "[semantic][entity-id]") {
     CHECK(analyze_first_error(
-              "event tick:\n"
-              "    let dt: float\n"
+              STDLIB_EVENTS +
               "system Combat:\n"
               "    on tick:\n"
               "        if exists(42):\n"

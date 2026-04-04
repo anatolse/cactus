@@ -290,19 +290,18 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                 }
                 emit_call += "});";
                 if (s.target.has_value()) {
-                    const std::string target = rewrite_expr(**s.target, trait_names, program, pointer_aliases);
-                    return ind + "if (registry.valid(" + target + ")) {\n" +
-                           ind + "    " + emit_call + "\n" +
-                           ind + "}\n";
+                    const std::string TARGET = rewrite_expr(**s.target, trait_names, program, pointer_aliases);
+                    return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + "\n" + ind +
+                           "}\n";
                 }
                 return ind + emit_call + "\n";
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                 std::string target = s.target_expr.has_value()
                     ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
                     : "entity";
-                const bool guarded = s.target_expr.has_value();
+                const bool GUARDED = s.target_expr.has_value();
                 if (s.args.empty()) {
-                    if (guarded) {
+                    if (GUARDED) {
                         return ind + "if (registry.valid(" + target + ")) {\n" +
                                ind + "    registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n" +
                                ind + "}\n";
@@ -311,19 +310,22 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                 }
 
                 std::ostringstream result;
-                if (guarded) {
+                if (GUARDED) {
                     result << ind << "if (registry.valid(" << target << ")) {\n";
                 }
-                result << ind << (guarded ? "    " : "") << "{\n";
-                result << ind << (guarded ? "        " : "    ") << "auto __existing = registry.try_get<" << s.trait_name << ">(" << target << ");\n";
-                result << ind << (guarded ? "        " : "    ") << "auto __value = __existing ? *__existing : " << s.trait_name << "{};\n";
+                result << ind << (GUARDED ? "    " : "") << "{\n";
+                result << ind << (GUARDED ? "        " : "    ") << "auto __existing = registry.try_get<"
+                       << s.trait_name << ">(" << target << ");\n";
+                result << ind << (GUARDED ? "        " : "    ")
+                       << "auto __value = __existing ? *__existing : " << s.trait_name << "{};\n";
                 for (const auto& arg : s.args) {
-                    result << ind << (guarded ? "        " : "    ") << "__value." << arg.name << " = "
+                    result << ind << (GUARDED ? "        " : "    ") << "__value." << arg.name << " = "
                            << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
                 }
-                result << ind << (guarded ? "        " : "    ") << "registry.emplace_or_replace<" << s.trait_name << ">(" << target << ", __value);\n";
-                result << ind << (guarded ? "    " : "") << "}\n";
-                if (guarded) {
+                result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << s.trait_name
+                       << ">(" << target << ", __value);\n";
+                result << ind << (GUARDED ? "    " : "") << "}\n";
+                if (GUARDED) {
                     result << ind << "}\n";
                 }
                 return result.str();

@@ -1227,6 +1227,7 @@ void SemanticAnalyzer::validate_event_stmts(
             continue;
         }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
+            (void)infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event);
             validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, "");
             validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, "");
         }

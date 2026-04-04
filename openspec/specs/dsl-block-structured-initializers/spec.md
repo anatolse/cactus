@@ -1,4 +1,4 @@
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Nested block initialization syntax for archetypes, spawn, and emit
 The language SHALL support a unified block-structured initialization style in three contexts:

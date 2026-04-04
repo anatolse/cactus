@@ -106,6 +106,23 @@ TypeKind asset_kind_to_type_kind(AssetKind ak) {
     return TypeKind::Unknown;
 }
 
+TypeInfo make_named_type(TypeKind kind, std::string name) {
+    TypeInfo info;
+    info.kind = kind;
+    info.name = std::move(name);
+    return info;
+}
+
+template <typename FieldContainer>
+TypeInfo find_field_type_in(const FieldContainer& fields, const std::string& member) {
+    for (const auto& field : fields) {
+        if (field.name == member) {
+            return field.type;
+        }
+    }
+    return make_unknown_type();
+}
+
 }  // namespace
 
 // ── ModuleImports::add ──────────────────────────────────────────────────────
@@ -213,6 +230,21 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                     trait_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, EventNode>) {
                     event_names_.insert(node.name);
+                    ResolvedStruct rs;
+                    rs.name = node.name;
+                    for (auto& f : node.fields) {
+                        ResolvedField rf;
+                        rf.name = f.name;
+                        rf.type = resolve_type_ref(f.type);
+                        rf.is_let = f.modifiers.is_let;
+                        rf.is_var = f.modifiers.is_var;
+                        rf.is_persist = f.modifiers.is_persist;
+                        rf.is_sync = f.modifiers.is_sync;
+                        rf.is_pub = f.modifiers.is_pub;
+                        rf.has_default = f.default_value.has_value();
+                        rs.fields.push_back(std::move(rf));
+                    }
+                    event_structs_[node.name] = std::move(rs);
                     if (node.is_pub) {
                         result_.pub_events.insert(node.name);
                     }
@@ -800,6 +832,27 @@ void SemanticAnalyzer::validate_event_usage(ProgramNode& program) { // NOLINT(re
             }
 
             for (auto& handler : sys->handlers) {
+                std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
+                for (const auto& entry : sys->filter.entries) {
+                    auto dot = entry.qualified_name.rfind('.');
+                    auto simple = (dot != std::string::npos)
+                        ? entry.qualified_name.substr(dot + 1)
+                        : entry.qualified_name;
+                    const auto* trait = find_resolved_trait(simple);
+                    if (trait != nullptr) {
+                        filter_bindings[simple] = trait;
+                        if (entry.alias.has_value()) {
+                            filter_bindings[*entry.alias] = trait;
+                        }
+                    }
+                }
+                for (const auto& name : sys->filter.trait_names) {
+                    const auto* trait = find_resolved_trait(name);
+                    if (trait != nullptr) {
+                        filter_bindings[name] = trait;
+                    }
+                }
+
                 // Validate event is declared (must be in event_names_ — either local or imported from std.core)
                 if (!event_names_.contains(handler.event_name)) {
                     errors_.error(handler.location,
@@ -813,7 +866,87 @@ void SemanticAnalyzer::validate_event_usage(ProgramNode& program) { // NOLINT(re
                                       "' conflicts with filter alias '" + *handler.alias +
                                       "' already in scope");
                 }
+
+                const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
+                std::unordered_map<std::string, TypeInfo> local_bindings;
+                if (handler_event != nullptr) {
+                    local_bindings[handler.event_name] =
+                        TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                }
+                if (handler.alias.has_value() && handler_event != nullptr) {
+                    local_bindings[*handler.alias] = TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                }
+
+                validate_event_stmts(handler.body, filter_bindings, local_bindings, handler_event, sys->name);
             }
+        }
+    }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_event_stmts(
+    const std::vector<std::unique_ptr<StmtNode>>& stmts,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const std::string& system_name) {
+    (void)system_name;
+    auto locals = local_bindings;
+
+    auto validate_emit = [this, &filter_bindings, &locals, handler_event](const EmitStmt& emit) {
+        if (!event_names_.contains(emit.event_name)) {
+            errors_.error(emit.location, "undeclared event '" + emit.event_name + "'");
+            return;
+        }
+
+        const auto* event = find_resolved_event(emit.event_name);
+        std::unordered_set<std::string> event_fields;
+        if (event != nullptr) {
+            for (const auto& field : event->fields) {
+                event_fields.insert(field.name);
+            }
+        }
+
+        for (const auto& field : emit.payload) {
+            if (event != nullptr && !event_fields.contains(field.name)) {
+                errors_.error(field.location,
+                              "unknown event field '" + field.name + "' for event '" +
+                                  emit.event_name + "'");
+            }
+        }
+
+        if (!emit.target.has_value()) {
+            return;
+        }
+
+        auto target_type = infer_expr_type(**emit.target, filter_bindings, locals, handler_event);
+        if (target_type.kind != TypeKind::EntityId && target_type.kind != TypeKind::Unknown) {
+            errors_.error(emit.location,
+                          "emit target must be of type entity_id, got " + target_type.name);
+        }
+    };
+
+    for (const auto& stmt : stmts) {
+        if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
+            locals[let_stmt->name] = infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event);
+            if (const auto* spawn = std::get_if<SpawnExpr>(&let_stmt->value->expr)) {
+                validate_spawn_expr(*spawn, let_stmt->location);
+            }
+            continue;
+        }
+        if (const auto* expr_stmt = std::get_if<ExprStmt>(&stmt->stmt)) {
+            if (const auto* spawn = std::get_if<SpawnExpr>(&expr_stmt->expr->expr)) {
+                validate_spawn_expr(*spawn, expr_stmt->location);
+            }
+            continue;
+        }
+        if (const auto* emit_stmt = std::get_if<EmitStmt>(&stmt->stmt)) {
+            validate_emit(*emit_stmt);
+            continue;
+        }
+        if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
+            validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, "");
+            validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, "");
         }
     }
 }
@@ -909,6 +1042,108 @@ const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::string& na
     return nullptr;
 }
 
+const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& name) const {
+    auto it = event_structs_.find(name);
+    if (it != event_structs_.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TypeInfo SemanticAnalyzer::infer_expr_type(
+    const ExprNode& expr,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event) const {
+    if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
+        switch (literal->kind) {
+            case LiteralExpr::Kind::Int: return make_int_type();
+            case LiteralExpr::Kind::Float: return make_float_type();
+            case LiteralExpr::Kind::String: return make_string_type();
+            case LiteralExpr::Kind::HexColor: return make_color_type();
+            case LiteralExpr::Kind::Bool: return make_bool_type();
+        }
+    }
+
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        if (auto local_it = local_bindings.find(ident->name); local_it != local_bindings.end()) {
+            return local_it->second;
+        }
+        if (auto asset_it = asset_decl_types_.find(ident->name); asset_it != asset_decl_types_.end()) {
+            switch (asset_it->second) {
+                case TypeKind::MeshId: return make_mesh_id_type();
+                case TypeKind::TextureId: return make_texture_id_type();
+                case TypeKind::SoundId: return make_sound_id_type();
+                case TypeKind::MusicId: return make_music_id_type();
+                case TypeKind::FontId: return make_font_id_type();
+                case TypeKind::MaterialId: return make_material_id_type();
+                default: break;
+            }
+        }
+        if (auto input_it = input_decl_types_.find(ident->name); input_it != input_decl_types_.end()) {
+            return input_it->second == TypeKind::InputAxis ? make_input_axis_type()
+                                                           : make_input_button_type();
+        }
+        return make_unknown_type();
+    }
+
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        const auto* owner = std::get_if<IdentExpr>(&member->object->expr);
+        if (owner == nullptr) {
+            return make_unknown_type();
+        }
+        if (auto trait_it = filter_bindings.find(owner->name);
+            trait_it != filter_bindings.end() && trait_it->second != nullptr) {
+            return find_field_type_in(trait_it->second->fields, member->member);
+        }
+        if (handler_event != nullptr && owner->name == handler_event->name) {
+            return find_field_type_in(handler_event->fields, member->member);
+        }
+        if (auto local_it = local_bindings.find(owner->name);
+            local_it != local_bindings.end() && local_it->second.kind == TypeKind::Struct) {
+            if (auto struct_it = result_.structs.find(local_it->second.name);
+                struct_it != result_.structs.end()) {
+                return find_field_type_in(struct_it->second.fields, member->member);
+            }
+        }
+        return make_unknown_type();
+    }
+
+    if (std::holds_alternative<SpawnExpr>(expr.expr)) {
+        return make_entity_id_type();
+    }
+    if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
+        return infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event);
+    }
+    if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
+        auto left = infer_expr_type(*binary->left, filter_bindings, local_bindings, handler_event);
+        auto right = infer_expr_type(*binary->right, filter_bindings, local_bindings, handler_event);
+        if (binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == ">" ||
+            binary->op == "<=" || binary->op == ">=" || binary->op == "and" || binary->op == "or") {
+            return make_bool_type();
+        }
+        if (left.kind == TypeKind::Float || right.kind == TypeKind::Float) {
+            return make_float_type();
+        }
+        if (left.kind == TypeKind::Int && right.kind == TypeKind::Int) {
+            return make_int_type();
+        }
+        return left;
+    }
+    if (const auto* if_expr = std::get_if<IfExpr>(&expr.expr)) {
+        return infer_expr_type(*if_expr->then_expr, filter_bindings, local_bindings, handler_event);
+    }
+    if (const auto* list = std::get_if<ListExpr>(&expr.expr)) {
+        if (list->elements.empty()) {
+            return make_list_type(make_unknown_type());
+        }
+        return make_list_type(
+            infer_expr_type(*list->elements.front(), filter_bindings, local_bindings, handler_event));
+    }
+    return make_unknown_type();
+}
+
 std::unordered_set<std::string>
 SemanticAnalyzer::get_archetype_fields(const std::vector<ArchetypeTraitEntry>& traits) const {
     std::unordered_set<std::string> fields;
@@ -945,7 +1180,7 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                     // 5.1: Validate field assignments in trait blocks belong to the trait
                     for (auto& entry : node.traits) {
                         const auto* trait = find_resolved_trait(entry.trait_name);
-                        if (!trait) {
+                        if (trait == nullptr) {
                             continue;
                         }
 
@@ -1078,11 +1313,88 @@ void SemanticAnalyzer::validate_spawn_stmts( // NOLINT(readability-function-cogn
     }
 }
 
+void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location) {
+    if (unit_names_.contains(spawn.template_name)) {
+        errors_.error(location,
+                      "'" + spawn.template_name +
+                          "' is a unit, not a template; use `spawn` only with `template` declarations");
+        return;
+    }
+    if (!template_names_.contains(spawn.template_name)) {
+        errors_.error(location, "undefined template '" + spawn.template_name + "'");
+        return;
+    }
+
+    auto traits_it = archetype_traits_.find(spawn.template_name);
+    if (traits_it == archetype_traits_.end() || traits_it->second == nullptr) {
+        return;
+    }
+
+    std::unordered_set<std::string> provided;
+    for (const auto& override_entry : spawn.overrides) {
+        const auto* trait = find_resolved_trait(override_entry.trait_name);
+        if (trait == nullptr) {
+            errors_.error(override_entry.location,
+                          "undeclared trait '" + override_entry.trait_name + "' in spawn override");
+            continue;
+        }
+
+        std::unordered_set<std::string> trait_fields;
+        for (const auto& field : trait->fields) {
+            trait_fields.insert(field.name);
+        }
+
+        for (const auto& assign : override_entry.assignments) {
+            provided.insert(assign.name);
+            if (!trait_fields.contains(assign.name)) {
+                errors_.error(assign.location,
+                              "unknown field '" + assign.name + "' for trait '" +
+                                  override_entry.trait_name + "' in spawn override");
+            }
+        }
+    }
+
+    if (auto req_it = template_required_fields_.find(spawn.template_name);
+        req_it != template_required_fields_.end()) {
+        for (const auto& req : req_it->second) {
+            if (!provided.contains(req)) {
+                errors_.error(location,
+                              "required field '" + req + "' not set for template '" +
+                                  spawn.template_name + "'");
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                            const std::string& context_name) {
+    for (const auto& stmt : stmts) {
+        std::visit(
+            [this, &context_name](const auto& s) {
+                using S = std::decay_t<decltype(s)>;
+                if constexpr (std::is_same_v<S, LetStmt>) {
+                    if (const auto* spawn = std::get_if<SpawnExpr>(&s.value->expr)) {
+                        validate_spawn_expr(*spawn, s.location);
+                    }
+                } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                    if (const auto* spawn = std::get_if<SpawnExpr>(&s.expr->expr)) {
+                        validate_spawn_expr(*spawn, s.location);
+                    }
+                } else if constexpr (std::is_same_v<S, IfStmt>) {
+                    validate_spawn_exprs(s.then_body, context_name);
+                    validate_spawn_exprs(s.else_body, context_name);
+                }
+            },
+            stmt->stmt);
+    }
+}
+
 void SemanticAnalyzer::validate_spawn_sites(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             for (auto& handler : sys->handlers) {
                 validate_spawn_stmts(handler.body, sys->name);
+                validate_spawn_exprs(handler.body, sys->name);
             }
         }
     }
@@ -1215,7 +1527,7 @@ void SemanticAnalyzer::check_no_field_access(
     }
 }
 
-// ── Task 5.11: Validate 'disabled' annotations in apply: blocks ─────────────
+// ── Task 5.11: Validate disabled trait entries in nested archetype blocks ───
 
 void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {

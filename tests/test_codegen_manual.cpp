@@ -676,7 +676,7 @@ TEST_CASE("Codegen: spawn creates entity, on_spawn fires (task 11.2)", "[codegen
         "    on load:\n"
         "        spawn Enemy:\n"
         "            Position:\n"
-        "                x = 400.0)\n");
+        "                x = 400.0\n");
 
     // Spawn call should appear in Spawner_load
     CHECK(code.find("spawn_Enemy(") != std::string::npos);

@@ -1,7 +1,7 @@
 ## Requirements
 
 ### Requirement: Template declaration syntax
-The language SHALL support a `template` top-level declaration that defines a reusable entity blueprint. A `template` declaration has the same structure as a `unit` declaration but is NOT automatically instantiated at program start. `template` declarations may be marked `pub` for cross-module access.
+The language SHALL support a `template` top-level declaration that defines a reusable entity blueprint using nested trait entries instead of `apply:` and `config:` blocks. A `template` declaration has the same body structure as a `unit` declaration but is NOT automatically instantiated at program start. `template` declarations may be marked `pub` for cross-module access.
 
 #### Scenario: Template declared but not auto-instantiated
 - **WHEN** a module contains a `template Foo:` declaration
@@ -11,28 +11,28 @@ The language SHALL support a `template` top-level declaration that defines a reu
 - **WHEN** a `template` is declared with `pub`
 - **THEN** it is accessible from other modules via qualified name or `use` import
 
-#### Scenario: Template with no config defaults (all fields required at spawn)
-- **WHEN** a `template` declares traits with fields but provides no `config:` defaults for them
-- **THEN** all such fields SHALL be provided at every `spawn` site or the compiler reports an error
+#### Scenario: Template with required fields must initialize them
+- **WHEN** a `template` declares traits with required fields and omits those fields from its nested trait blocks
+- **THEN** the remaining required fields SHALL be provided at every `spawn` site or the compiler reports an error
 
 ### Requirement: `spawn` statement creates entity from template
-The language SHALL support a `spawn` statement inside system event handlers. `spawn TemplateName(field = value, ...)` creates a new entity using the named template as its archetype. Field overrides provided in parentheses are merged with the template's `config:` defaults; provided values take precedence over defaults.
+The language SHALL support a block-structured `spawn` statement inside system event handlers. `spawn TemplateName:` creates a new entity using the named template as its archetype. Nested trait override blocks are merged with the template's trait initializers; provided values take precedence over template values.
 
-#### Scenario: Spawn can override any field including defaulted ones
-- **WHEN** `spawn Foo(field_a = value)` is called and `Foo`'s `config:` also provides a default for `field_a`
+#### Scenario: Spawn can override defaulted field
+- **WHEN** `spawn Foo:` overrides a field that `Foo` already initializes in its template body
 - **THEN** the spawn-site value takes precedence
 
-#### Scenario: Spawn with partial overrides (remaining defaults applied)
-- **WHEN** `spawn Foo(field_a = value)` is called and `Foo`'s `config:` sets `field_b = default`
-- **THEN** the new entity has `field_a = value` and `field_b = default`
+#### Scenario: Spawn with partial overrides keeps remaining template values
+- **WHEN** `spawn Foo:` overrides one field on a trait and `Foo` initializes other fields on the same or other traits
+- **THEN** the new entity uses the override for the provided field and keeps the remaining template-initialized values
 
-#### Scenario: Spawn with unknown field name
-- **WHEN** `spawn Foo(unknown_field = value)` references a field not in any of `Foo`'s applied traits
-- **THEN** the compiler SHALL report an error: "unknown field 'unknown_field' for template 'Foo'"
+#### Scenario: Spawn with unknown trait field name
+- **WHEN** `spawn Foo:` assigns a field not declared on the named overridden trait
+- **THEN** the compiler SHALL report an error naming the unknown field for that trait on template `Foo`
 
 #### Scenario: Spawn with missing required field
-- **WHEN** `spawn Foo()` omits a field that has no `config:` default and is `var`
-- **THEN** the compiler SHALL report an error: "required field '<name>' not provided for template 'Foo'"
+- **WHEN** `spawn Foo:` omits a field that has no template initializer or trait default and is still required
+- **THEN** the compiler SHALL report an error: "required field '<name>' not set for template 'Foo'"
 
 #### Scenario: Spawn outside event handler (invalid)
 - **WHEN** `spawn` appears at module top-level or inside a `func` body

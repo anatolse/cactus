@@ -31,63 +31,49 @@ event PlatformCollision:
     var overlap_y: float
 
 pub unit Ground:
-    apply:
-        Platform
-    config:
+    Platform:
         pos = vec2(0.0, GROUND_Y)
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
         platform_type = PlatformType.Ground
         color = GROUND_COLOR
 
 pub unit FloatingPlatform1:
-    apply:
-        Platform
-    config:
+    Platform:
         pos = vec2(300.0, 450.0)
         size = vec2(200.0, 20.0)
         platform_type = PlatformType.Floating
         color = PLATFORM_COLOR
 
 pub unit FloatingPlatform2:
-    apply:
-        Platform
-    config:
+    Platform:
         pos = vec2(600.0, 350.0)
         size = vec2(150.0, 20.0)
         platform_type = PlatformType.Floating
         color = PLATFORM_COLOR
 
 pub unit FloatingPlatform3:
-    apply:
-        Platform
-    config:
+    Platform:
         pos = vec2(950.0, 280.0)
         size = vec2(180.0, 20.0)
         platform_type = PlatformType.Floating
         color = PLATFORM_COLOR
 
 pub unit FloatingPlatform4:
-    apply:
-        Platform
-    config:
+    Platform:
         pos = vec2(1300.0, 400.0)
         size = vec2(250.0, 20.0)
         platform_type = PlatformType.Floating
         color = PLATFORM_COLOR
 
 pub unit FloatingPlatform5:
-    apply:
-        Platform
-    config:
+    Platform:
         pos = vec2(1700.0, 300.0)
         size = vec2(120.0, 20.0)
         platform_type = PlatformType.Floating
         color = PLATFORM_COLOR
 
 pub unit WallBlock1:
-    apply:
-        Platform
-    config:
+    Platform:
         pos = vec2(500.0, 500.0)
         size = vec2(40.0, 100.0)
         platform_type = PlatformType.Wall
@@ -129,7 +115,12 @@ system CollisionSystem:
         let oy = aabb_overlap_y(player_pos.y, player_h, plat.pos.y, plat.size.y)
 
         if ox > 0.0 and oy > 0.0:
-            emit PlatformCollision(get_player_entity(), plat.pos, plat.size, ox, oy)
+            emit PlatformCollision:
+                entity = get_player_entity()
+                platform_pos = plat.pos
+                platform_size = plat.size
+                overlap_x = ox
+                overlap_y = oy
 
 system CollisionResolver:
     filter:
@@ -141,7 +132,8 @@ system CollisionResolver:
         if PlatformCollision.overlap_y < PlatformCollision.overlap_x:
             if pos.pos.y < PlatformCollision.platform_pos.y:
                 pos.pos = vec2(pos.pos.x, PlatformCollision.platform_pos.y - ctrl.height)
-                emit PlayerLanded(pos.pos)
+                emit PlayerLanded:
+                    position = pos.pos
             else:
                 pos.pos = vec2(pos.pos.x, PlatformCollision.platform_pos.y + PlatformCollision.platform_size.y)
                 pos.velocity = vec2(pos.velocity.x, 0.0)

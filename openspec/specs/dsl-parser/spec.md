@@ -65,43 +65,46 @@ The parser SHALL parse `trait Name:` blocks containing fields with modifiers (`l
 - **THEN** the parser produces a TraitNode containing an EventHandlerNode with event_name "damage"
 
 ### Requirement: Unit parsing with apply and config blocks
-The parser SHALL parse `[pub] unit Name:` blocks containing `apply:` (list of traits) and optional `config:` (field overrides). The `child:` block is not supported.
+The parser SHALL parse `[pub] unit Name:` blocks as a sequence of nested trait entries. Each entry is either a bare trait name for a marker trait or a trait name followed by `:` and an indented field-assignment block. `apply:` and `config:` blocks are not part of unit syntax.
 
-#### Scenario: Unit with apply and config
-- **WHEN** the source contains `unit Cactus:` with `apply:` listing traits and `config:` with field assignments
-- **THEN** the parser produces a UnitNode with an ApplyBlock and a ConfigBlock
+#### Scenario: Unit with nested trait block parsed
+- **WHEN** the source contains `unit Cactus:` with `Position:` followed by indented field assignments
+- **THEN** the parser produces a UnitNode containing a trait entry for `Position` and its nested assignments
+
+#### Scenario: Unit with marker trait parsed
+- **WHEN** the source contains `unit Cactus:` with a bare `Persistent` entry in the body
+- **THEN** the parser produces a UnitNode containing a marker-trait entry for `Persistent`
 
 ### Requirement: `disabled` trait state in `apply:` block
-The parser SHALL accept an optional `: disabled` annotation on trait entries within `apply:` blocks. This applies to both `unit_decl` and `template_decl`. The EBNF for an apply entry becomes:
+The parser SHALL preserve disabled-state support on archetype trait entries using the nested trait-entry form. A trait entry may appear as `TraitName: disabled` in `unit` and `template` bodies.
 
 ```ebnf
-apply_entry = IDENTIFIER [ ":" "disabled" ] NEWLINE ;
-apply_block = "apply" ":" NEWLINE INDENT
-              { apply_entry }
-              DEDENT ;
+archetype_trait_entry = IDENTIFIER [ ":" "disabled" ] NEWLINE
+                      | IDENTIFIER ":" NEWLINE INDENT
+                        { field_assignment }
+                        DEDENT ;
 ```
 
 #### Scenario: Trait with disabled annotation parsed
-- **WHEN** `Frozen: disabled` appears inside `apply:`
-- **THEN** the parser produces an apply entry with `trait_name = "Frozen"` and `initially_active = false`
+- **WHEN** `Frozen: disabled` appears inside a `unit` or `template` body
+- **THEN** the parser produces an archetype trait entry with `trait_name = "Frozen"` and `initially_active = false`
 
 #### Scenario: Trait without annotation defaults to active
-- **WHEN** `Position` appears inside `apply:` with no annotation
-- **THEN** the parser produces an apply entry with `trait_name = "Position"` and `initially_active = true`
+- **WHEN** `Position` appears as a bare trait entry with no annotation
+- **THEN** the parser produces an archetype trait entry with `trait_name = "Position"` and `initially_active = true`
 
 ### Requirement: `template` declaration grammar
-The parser SHALL accept `template_decl` as a new top-level declaration, structurally identical to `unit_decl` except using the `TEMPLATE` keyword. The `child:` block is not supported.
+The parser SHALL accept `template_decl` as a top-level declaration whose body is a sequence of nested trait entries, structurally identical to `unit_decl` except using the `TEMPLATE` keyword. `apply:` and `config:` blocks are not part of template syntax.
 
 ```ebnf
 template_decl = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
-                apply_block
-                [ config_block ]
+                { archetype_trait_entry }
                 DEDENT ;
 ```
 
-#### Scenario: Template with apply and config parsed
-- **WHEN** source contains a complete `template` declaration with `apply:` and `config:` blocks
-- **THEN** the parser produces a `TemplateDecl` AST node with `apply` and `config` children
+#### Scenario: Template with nested trait blocks parsed
+- **WHEN** source contains `template Enemy:` followed by `Position:` and indented field assignments
+- **THEN** the parser produces a `TemplateDecl` AST node containing a trait entry for `Position`
 
 #### Scenario: Template with pub modifier parsed
 - **WHEN** `pub template Foo:` appears in source
@@ -179,20 +182,22 @@ var_decl = "var" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 - **THEN** the parser produces a `LetDecl` node with a method call expression as the initializer
 
 ### Requirement: `spawn` as primary expression returning `entity_id`
-The parser SHALL accept `spawn` as a primary expression in addition to the statement form.
+The parser SHALL accept `spawn` as a primary expression and statement using block syntax instead of parenthesized flat arguments.
 
 ```ebnf
-spawn_expr   = "spawn" IDENTIFIER "(" [ spawn_arg_list ] ")" ;
+spawn_expr   = "spawn" IDENTIFIER ":" NEWLINE INDENT
+               { archetype_trait_entry }
+               DEDENT ;
 primary_expr = ... | spawn_expr ;
 ```
 
 #### Scenario: Spawn expression assigned to let binding
-- **WHEN** `let enemy = spawn Enemy(pos = vec2(400.0, 200.0))` appears in a handler body
-- **THEN** the parser produces a `LetDecl` with a `SpawnExpr` initializer
+- **WHEN** `let enemy = spawn Enemy:` appears with an indented `Position:` override block
+- **THEN** the parser produces a `LetDecl` with a `SpawnExpr` initializer carrying nested override entries
 
-#### Scenario: Spawn statement (discard result) still valid
-- **WHEN** `spawn Enemy(pos = vec2(400.0, 200.0))` appears as a standalone statement
-- **THEN** the parser produces an `ExprStmt` wrapping a `SpawnExpr`
+#### Scenario: Spawn statement discard result valid
+- **WHEN** `spawn Enemy:` appears as a standalone statement with an indented override block
+- **THEN** the parser produces a statement wrapping a `SpawnExpr`
 
 ### Requirement: `destroy` statement grammar
 The parser SHALL accept `destroy` as a statement inside event handler bodies. Without an expression, it destroys the current entity. With an expression, it destroys the specified entity.
@@ -210,19 +215,21 @@ destroy_stmt = "destroy" [ expression ] NEWLINE ;
 - **THEN** the parser produces a `DestroyStmt` with a member access expression as the target
 
 ### Requirement: `emit` statement grammar
-The parser SHALL accept `emit` as a statement with an optional `to expression` suffix for targeted dispatch.
+The parser SHALL accept `emit` as a statement using block syntax for payload initialization and an optional `to expression` suffix before the colon for targeted dispatch.
 
 ```ebnf
-emit_stmt = "emit" IDENTIFIER "(" [ arg_list ] ")" [ "to" expression ] NEWLINE ;
+emit_stmt = "emit" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
+            { IDENTIFIER "=" expression NEWLINE }
+            DEDENT ;
 ```
 
-#### Scenario: Broadcast emit (no target) parsed
-- **WHEN** `emit PlayerDamaged(amount = 5)` appears in a handler
-- **THEN** the parser produces an `EmitStmt` with `event_name = "PlayerDamaged"` and `target = nil`
+#### Scenario: Broadcast emit block parsed
+- **WHEN** `emit PlayerDamaged:` appears with indented payload field assignments
+- **THEN** the parser produces an `EmitStmt` with `event_name = "PlayerDamaged"`, no target, and the parsed payload assignments
 
 #### Scenario: Targeted emit parsed
-- **WHEN** `emit Damage(amount = 10) to EnemyAI.target` appears in a handler
-- **THEN** the parser produces an `EmitStmt` with a target expression
+- **WHEN** `emit Damage to EnemyAI.target:` appears with indented payload field assignments
+- **THEN** the parser produces an `EmitStmt` with a target expression and the parsed payload assignments
 
 ### Requirement: `load` statement grammar
 The parser SHALL accept `load` as a statement inside event handler bodies, followed by a dotted module name.
@@ -484,37 +491,9 @@ The keyword `after` is added to the lexer keyword set with token type `AFTER`.
 - **THEN** the parser reports an error: "after: block must contain at least one system name"
 
 ### Requirement: Optional `as` alias in `apply:` entries of units and templates
-The parser SHALL accept an optional `as IDENTIFIER` alias after the trait name in each `apply:` block entry, before any `: disabled` annotation.
-
-```ebnf
-apply_entry     = dotted_name [ "as" IDENTIFIER ] [ ":" "disabled" ] NEWLINE ;
-```
-
-#### Scenario: Apply entry with alias and disabled both parsed
-- **WHEN** `apply:` contains `EnemyAI as ai: disabled`
-- **THEN** the parser records `alias = "ai"` and `initially_active = false`
-
-#### Scenario: Apply entry with alias only parsed
-- **WHEN** `apply:` contains `Position as pos`
-- **THEN** the parser records `alias = "pos"` and `initially_active = true`
+**Reason**: Archetype declarations no longer use `apply:` entries. Trait ownership is expressed structurally through nested trait blocks, so archetype-local aliases are unnecessary.
+**Migration**: Replace `apply:` entries and alias-qualified config keys with nested trait blocks under the trait name.
 
 ### Requirement: Dotted key form in `config:` assignments and `spawn` override arguments
-The parser SHALL accept a `config_key` that is either a bare `IDENTIFIER` or a dotted `IDENTIFIER.IDENTIFIER`.
-
-```ebnf
-config_assign   = config_key "=" expression NEWLINE ;
-config_key      = IDENTIFIER [ "." IDENTIFIER ] ;
-spawn_arg       = config_key "=" expression ;
-```
-
-#### Scenario: Bare config key parsed
-- **WHEN** `config:` contains `health = 100`
-- **THEN** `ConfigAssignment.key_prefix` is empty and `.name` is `"health"`
-
-#### Scenario: Dotted config key parsed
-- **WHEN** `config:` contains `Health.health = 100`
-- **THEN** `ConfigAssignment.key_prefix` is `"Health"` and `.name` is `"health"`
-
-#### Scenario: Dotted spawn override key parsed
-- **WHEN** `spawn Enemy(EnemyAI.patrol_speed = 5.0)` is parsed
-- **THEN** the spawn arg has `key_prefix = "EnemyAI"` and `name = "patrol_speed"`
+**Reason**: `config:` blocks and flat parenthesized spawn override arguments are removed. Nested trait blocks make field ownership explicit without dotted keys.
+**Migration**: Move each field assignment under its owning trait block in the unit/template or spawn body.

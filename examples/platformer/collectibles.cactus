@@ -34,12 +34,10 @@ event GemCollected:
     var position: vec2
 
 pub unit BlueGem1:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(250.0, 560.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
         gem_color = GEM_COLOR_BLUE
@@ -47,12 +45,10 @@ pub unit BlueGem1:
         collected = false
 
 pub unit BlueGem2:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(350.0, 410.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
         gem_color = GEM_COLOR_BLUE
@@ -60,12 +56,10 @@ pub unit BlueGem2:
         collected = false
 
 pub unit BlueGem3:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(650.0, 310.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
         gem_color = GEM_COLOR_BLUE
@@ -73,12 +67,10 @@ pub unit BlueGem3:
         collected = false
 
 pub unit RedGem1:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(1000.0, 240.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = RED_GEM_POINTS
         gem_type = GemType.Red
         gem_color = GEM_COLOR_RED
@@ -86,12 +78,10 @@ pub unit RedGem1:
         collected = false
 
 pub unit GoldGem1:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(1750.0, 260.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = GOLD_GEM_POINTS
         gem_type = GemType.Gold
         gem_color = GEM_COLOR_GOLD
@@ -114,7 +104,10 @@ system CollectionSystem:
 
             if ox > 0.0 and oy > 0.0:
                 col.collected = true
-                emit GemCollected(col.point_value, col.gem_type, p.pos)
+                emit GemCollected:
+                    point_value = col.point_value
+                    gem_type = col.gem_type
+                    position = p.pos
 
 system ScoreSystem:
     filter:

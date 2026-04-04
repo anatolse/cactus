@@ -199,76 +199,64 @@ event GemCollected:
 # ── Units ────────────────────────────────────────────────────────────────────────
 
 pub unit Player:
-    apply:
-        Position
-        PlayerPhysics
-        PlayerController
-        Health
-        Score
-        Persistent
-    config:
+    Position:
         pos = vec2(100.0, 300.0)
         velocity = vec2(0.0, 0.0)
+    PlayerPhysics:
         gravity = GRAVITY
         jump_force = JUMP_FORCE
         is_grounded = false
         jumps_remaining = MAX_JUMPS
         max_jumps = MAX_JUMPS
         wall_slide_speed = WALL_SLIDE_SPEED
+    PlayerController:
         move_speed = MOVE_SPEED
         facing = FacingDirection.Right
         jump_state = JumpState.Falling
         width = PLAYER_WIDTH
         height = PLAYER_HEIGHT
+    Health:
         health = START_HEALTH
         lives = START_LIVES
         invincible_timer = 0.0
+    Score:
         score = 0
         gems_collected = 0
+    Persistent
 
 pub unit GroundPlatform:
-    apply:
-        Platform
-    config:
+    Platform:
         plat_pos = vec2(0.0, GROUND_Y)
         plat_size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
         platform_type = PlatformType.Ground
         plat_color = GROUND_COLOR
 
 pub unit FloatingPlatform1:
-    apply:
-        Platform
-    config:
+    Platform:
         plat_pos = vec2(300.0, 450.0)
         plat_size = vec2(200.0, 20.0)
         platform_type = PlatformType.Floating
         plat_color = PLATFORM_COLOR
 
 pub unit FloatingPlatform2:
-    apply:
-        Platform
-    config:
+    Platform:
         plat_pos = vec2(600.0, 350.0)
         plat_size = vec2(150.0, 20.0)
         platform_type = PlatformType.Floating
         plat_color = PLATFORM_COLOR
 
 pub unit FloatingPlatform3:
-    apply:
-        Platform
-    config:
+    Platform:
         plat_pos = vec2(950.0, 280.0)
         plat_size = vec2(180.0, 20.0)
         platform_type = PlatformType.Floating
         plat_color = PLATFORM_COLOR
 
 pub unit WalkerEnemy1:
-    apply:
-        Position
-        EnemyAI
-    config:
+    Position:
         pos = vec2(400.0, 568.0)
         velocity = vec2(0.0, 0.0)
+    EnemyAI:
         patrol_min_x = 350.0
         patrol_max_x = 550.0
         patrol_speed = PATROL_SPEED
@@ -279,12 +267,10 @@ pub unit WalkerEnemy1:
         enemy_height = ENEMY_HEIGHT
 
 pub unit WalkerEnemy2:
-    apply:
-        Position
-        EnemyAI
-    config:
+    Position:
         pos = vec2(800.0, 568.0)
         velocity = vec2(0.0, 0.0)
+    EnemyAI:
         patrol_min_x = 700.0
         patrol_max_x = 1000.0
         patrol_speed = PATROL_SPEED
@@ -295,12 +281,10 @@ pub unit WalkerEnemy2:
         enemy_height = ENEMY_HEIGHT
 
 pub unit BlueGem1:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(250.0, 560.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
         gem_color = GEM_COLOR_BLUE
@@ -308,12 +292,10 @@ pub unit BlueGem1:
         collected = false
 
 pub unit BlueGem2:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(350.0, 410.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
         gem_color = GEM_COLOR_BLUE
@@ -321,12 +303,10 @@ pub unit BlueGem2:
         collected = false
 
 pub unit GoldGem1:
-    apply:
-        Position
-        Collectible
-    config:
+    Position:
         pos = vec2(1000.0, 240.0)
         velocity = vec2(0.0, 0.0)
+    Collectible:
         point_value = GOLD_GEM_POINTS
         gem_type = GemType.Gold
         gem_color = GEM_COLOR_GOLD
@@ -334,9 +314,7 @@ pub unit GoldGem1:
         collected = false
 
 pub unit CameraUnit:
-    apply:
-        SideScrollCamera
-    config:
+    SideScrollCamera:
         cam_x = 0.0
         cam_y = 0.0
         offset_x = CAMERA_OFFSET_X
@@ -406,7 +384,9 @@ system JumpSystem:
                 jumps_remaining = jumps_remaining - 1
                 is_grounded = false
                 jump_state = JumpState.Jumping
-                emit PlayerJumped(pos, jumps_remaining)
+                emit PlayerJumped:
+                    position = pos
+                    jumps_remaining = jumps_remaining
 
         if velocity.y > 0.0 and jump_state == JumpState.Jumping:
             jump_state = JumpState.Falling
@@ -432,7 +412,8 @@ system InvincibilitySystem:
             if health <= 0:
                 lives = lives - 1
                 health = max_health
-                emit PlayerDied(lives)
+                emit PlayerDied:
+                    lives_remaining = lives
 
 system PatrolSystem:
     filter:
@@ -464,7 +445,10 @@ system CollectionSystem:
             if abs_f(pos.x - player_pos.x) < gem_size + player_w:
                 if abs_f(pos.y - player_pos.y) < gem_size + player_h:
                     collected = true
-                    emit GemCollected(point_value, gem_type, pos)
+                    emit GemCollected:
+                        point_value = point_value
+                        gem_type = gem_type
+                        position = pos
 
 system ScoreSystem:
     filter:

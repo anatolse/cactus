@@ -443,6 +443,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
                 mask += " | TraitBits::" + entry.trait_name;
             }
         }
+        out << "        g_trait_mask[_idx] = " << mask << ";\n";
         // Initialize fields
         for (const auto& entry : unit->traits) {
             auto tit = ctx.traits.find(entry.trait_name);

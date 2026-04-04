@@ -87,25 +87,23 @@ event PlayerDied:
     var lives_remaining: int
 
 pub unit Player:
-    apply:
-        Position
-        PlayerPhysics
-        PlayerController
-        Health
-    config:
+    Position:
         pos = vec2(100.0, 300.0)
         velocity = vec2(0.0, 0.0)
+    PlayerPhysics:
         gravity = GRAVITY
         jump_force = JUMP_FORCE
         is_grounded = false
         jumps_remaining = MAX_JUMPS
         max_jumps = MAX_JUMPS
         wall_slide_speed = WALL_SLIDE_SPEED
+    PlayerController:
         move_speed = MOVE_SPEED
         facing = FacingDirection.Right
         jump_state = JumpState.Falling
         width = PLAYER_WIDTH
         height = PLAYER_HEIGHT
+    Health:
         health = START_HEALTH
         lives = START_LIVES
         invincible_timer = 0.0
@@ -169,7 +167,9 @@ system JumpSystem:
                 phys.jumps_remaining = phys.jumps_remaining - 1
                 phys.is_grounded = false
                 phys.jump_state = JumpState.Jumping
-                emit PlayerJumped(p.pos, phys.jumps_remaining)
+                emit PlayerJumped:
+                    position = p.pos
+                    jumps_remaining = phys.jumps_remaining
 
         if p.velocity.y > 0.0 and phys.jump_state == JumpState.Jumping:
             phys.jump_state = JumpState.Falling
@@ -195,4 +195,5 @@ system InvincibilitySystem:
             if h.health <= 0:
                 h.lives = h.lives - 1
                 h.health = h.max_health
-                emit PlayerDied(h.lives)
+                emit PlayerDied:
+                    lives_remaining = h.lives

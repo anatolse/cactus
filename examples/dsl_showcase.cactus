@@ -430,137 +430,115 @@ pub extern func get_player_entity() entity_id
 
 # ── 12. Unit declarations ──────────────────────────────────────────────────────
 # Auto-instantiated at program start (or on module load).
-# apply: — list of traits; "as ALIAS" declares local alias for field access.
-# No `: disabled` annotation — the old enable/disable model is replaced by
-# dynamic add/remove. Traits not in apply: are added/removed at runtime.
-# config: — sets initial field values; bare key, alias.field, or TraitName.field
+# Bodies now use nested trait blocks directly. Marker traits appear as bare lines.
 
 pub unit Player:
-    apply:
-        Position2D as pos           # alias: pos.pos, pos.velocity
-        Health as hp                # alias: hp.health, hp.shield
-        Inventory as inv            # alias: inv.items, inv.gold
-        Score as sc                 # alias: sc.score, sc.high_score
-        Renderable2D as rndr        # alias: rndr.texture, rndr.visible
-        PlayerOwned                 # marker trait — no fields, no alias needed
-        # Frozen, Invincible, Stunned are NOT in apply: — added dynamically
-    config:
-        pos.pos          = vec2(100.0, 300.0)   # alias-qualified
-        pos.velocity     = vec2(0.0, 0.0)
-        Health.health    = MAX_HEALTH            # TraitName-qualified
-        Health.shield    = 0
-        inv.gold         = 0
-        inv.max_slots    = 20
-        sc.score         = 0
-        sc.high_score    = 0
-        rndr.texture     = PlayerTex            # asset name resolves to texture_id
-        rndr.visible     = true
-        rndr.layer       = 1
-        rndr.tint        = PLAYER_COLOR
+    Position2D:
+        pos = vec2(100.0, 300.0)
+        velocity = vec2(0.0, 0.0)
+    Health:
+        health = MAX_HEALTH
+        shield = 0
+    Inventory:
+        gold = 0
+        max_slots = 20
+    Score:
+        score = 0
+        high_score = 0
+    Renderable2D:
+        texture = PlayerTex
+        visible = true
+        layer = 1
+        tint = PLAYER_COLOR
+    PlayerOwned
 
 unit Camera2D:
-    apply:
-        cam_flat.Camera as cam
-        cam_flat.FollowCamera as follow
-        std.core.Persistent                     # qualified with module path
-    config:
-        cam.zoom     = 1.0
-        cam.active   = true
-        cam.rotation = 0.0
+    Camera:
+        zoom = 1.0
+        active = true
+        rotation = 0.0
+    FollowCamera
+    Persistent
 
 unit AudioManager:
-    apply:
-        std.audio.AudioSettings as settings
-        std.audio.MusicTrack as track
-        std.core.Persistent
-    config:
-        settings.master_volume = 1.0
-        settings.sfx_volume    = 0.8
-        settings.music_volume  = 0.7
-        track.music            = ThemeMusic     # ThemeMusic resolves to music_id
-        track.playing          = true
+    AudioSettings:
+        master_volume = 1.0
+        sfx_volume = 0.8
+        music_volume = 0.7
+    MusicTrack:
+        music = ThemeMusic
+        playing = true
+    Persistent
 
 # Bare config key — valid when field name is unambiguous across applied traits
 unit GameManager:
-    apply:
-        Score as sc
-        std.core.Persistent
-    config:
-        score            = 0                    # bare key (unambiguous: only sc has it)
-        high_score       = 0
+    Score:
+        score = 0
+        high_score = 0
+    Persistent
 
 # ── 13. Template declarations ─────────────────────────────────────────────────
-# NOT auto-instantiated. Spawned via `spawn TemplateName(overrides)`.
-# Same structure as unit (apply: + config:).
-# No `: disabled` — traits not in apply: are added dynamically.
+# NOT auto-instantiated. Spawned via block-structured `spawn TemplateName:`.
+# Same nested trait structure as `unit` declarations.
 
 pub template WalkerEnemy:
-    apply:
-        Position2D as pos
-        Health as hp
-        EnemyAI as ai
-        Renderable2D as rndr
-        # Frozen, Stunned are NOT pre-applied — added externally via `add ... to entity_id`
-    config:
-        pos.pos         = vec2(0.0, 0.0)    # overridden at spawn site
-        pos.velocity    = vec2(0.0, 0.0)
-        hp.health       = 30
-        ai.patrol_min_x = 0.0
-        ai.patrol_max_x = 400.0
-        ai.patrol_speed = 2.0
-        ai.enemy_type   = EnemyType.Walker
-        rndr.texture    = EnemyTex
-        rndr.visible    = true
-        rndr.layer      = 0
-        rndr.tint       = ENEMY_COLOR
+    Position2D:
+        pos = vec2(0.0, 0.0)
+        velocity = vec2(0.0, 0.0)
+    Health:
+        health = 30
+    EnemyAI:
+        patrol_min_x = 0.0
+        patrol_max_x = 400.0
+        patrol_speed = 2.0
+        enemy_type = EnemyType.Walker
+    Renderable2D:
+        texture = EnemyTex
+        visible = true
+        layer = 0
+        tint = ENEMY_COLOR
 
 pub template FlyerEnemy:
-    apply:
-        Position2D as pos
-        Health as hp
-        EnemyAI as ai
-        Renderable2D as rndr
-    config:
-        pos.pos         = vec2(0.0, 0.0)
-        pos.velocity    = vec2(0.0, 0.0)
-        hp.health       = 20
-        ai.patrol_min_x = 0.0
-        ai.patrol_max_x = 600.0
-        ai.patrol_speed = 3.5
-        ai.enemy_type   = EnemyType.Flyer
-        rndr.texture    = EnemyTex
-        rndr.visible    = true
-        rndr.layer      = 0
-        rndr.tint       = ENEMY_COLOR
+    Position2D:
+        pos = vec2(0.0, 0.0)
+        velocity = vec2(0.0, 0.0)
+    Health:
+        health = 20
+    EnemyAI:
+        patrol_min_x = 0.0
+        patrol_max_x = 600.0
+        patrol_speed = 3.5
+        enemy_type = EnemyType.Flyer
+    Renderable2D:
+        texture = EnemyTex
+        visible = true
+        layer = 0
+        tint = ENEMY_COLOR
 
 pub template BossEnemy:
-    apply:
-        Position2D as pos
-        Health as hp
-        EnemyAI as ai
-        Boss                        # marker trait — just presence, no fields
-        Renderable2D as rndr
-    config:
-        pos.pos         = vec2(640.0, 200.0)
-        hp.health       = 300
-        ai.patrol_speed = 1.0
-        ai.enemy_type   = EnemyType.Boss
-        ai.is_aggro     = true
-        rndr.visible    = true
-        rndr.layer      = 1
-        rndr.tint       = #FF6600
+    Position2D:
+        pos = vec2(640.0, 200.0)
+    Health:
+        health = 300
+    EnemyAI:
+        patrol_speed = 1.0
+        enemy_type = EnemyType.Boss
+        is_aggro = true
+    Boss
+    Renderable2D:
+        visible = true
+        layer = 1
+        tint = #FF6600
 
 pub template Coin:
-    apply:
-        Position2D as pos
-        Renderable2D as rndr
-        Collectible                 # marker trait
-    config:
-        pos.pos      = vec2(0.0, 0.0)
-        pos.velocity = vec2(0.0, 0.0)
-        rndr.texture = CoinTex
-        rndr.visible = true
-        rndr.layer   = 0
+    Position2D:
+        pos = vec2(0.0, 0.0)
+        velocity = vec2(0.0, 0.0)
+    Renderable2D:
+        texture = CoinTex
+        visible = true
+        layer = 0
+    Collectible
 
 # ── 14. Systems ────────────────────────────────────────────────────────────────
 # Components of a system declaration:
@@ -599,10 +577,13 @@ system PlayerInputSystem:
         pos.velocity = vec2(dx * MOVE_SPEED, dy * MOVE_SPEED)
 
         if jumped:
-            emit PlayerJumped(pos.pos, pos.velocity)
+            emit PlayerJumped:
+                position = pos.pos
+                jumps_remaining = 0
 
         if fired:
-            emit PlayerDamaged(1, get_player_entity())
+            emit PlayerDamaged:
+                amount = 1
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHYSICS PHASE — on fixed_tick:   access dt as fixed_tick.dt
@@ -647,7 +628,8 @@ system CollisionSystem:
         let oy = aabb_overlap_y(pos.pos.y, 48.0, 600.0, 40.0)
 
         if ox > 0.0 and oy > 0.0:
-            emit PlayerDamaged(1, get_player_entity()) to get_player_entity()
+            emit PlayerDamaged to get_player_entity():
+                amount = 1
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE PHASE — on tick:   access dt as tick.dt  (or alias.dt with `as`)
@@ -673,7 +655,8 @@ system HealthSystem:
         add Invincible(duration = 1.5)                  # dynamically attach Invincible trait
 
         if hp.health <= 0:
-            emit PlayerDied(0)
+            emit PlayerDied:
+                lives_remaining = 0
 
     on spawn:
         # on spawn: fires once after all fields are initialized; no payload fields
@@ -681,7 +664,10 @@ system HealthSystem:
 
     on destroy:
         # on destroy: fires before entity is removed; fields still readable
-        emit EnemyDefeated(vec2(0.0, 0.0), EnemyType.Walker, SCORE_PER_COIN)
+        emit EnemyDefeated:
+            position = vec2(0.0, 0.0)
+            enemy_type = EnemyType.Walker
+            score_value = SCORE_PER_COIN
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 15 — DYNAMIC TRAITS: `add` and `remove`
@@ -770,22 +756,27 @@ system EnemySpawnerSystem:
 
     on tick:
         # spawn expression — result is entity_id
-        let walker_id = spawn WalkerEnemy(
-            pos.pos         = vec2(pos.pos.x + 300.0, pos.pos.y),
-            ai.patrol_min_x = pos.pos.x + 100.0,
-            ai.patrol_max_x = pos.pos.x + 500.0
-        )
+        let walker_id = spawn WalkerEnemy:
+            Position2D:
+                pos = vec2(pos.pos.x + 300.0, pos.pos.y)
+            EnemyAI:
+                patrol_min_x = pos.pos.x + 100.0
+                patrol_max_x = pos.pos.x + 500.0
 
         # cross-entity `add` — freeze the spawned walker for 2 seconds
         add Frozen to walker_id                         # add to another entity
 
         # spawn statement — discard result
-        spawn FlyerEnemy(
-            pos.pos = vec2(pos.pos.x + 500.0, 100.0)
-        )
+        spawn FlyerEnemy:
+            Position2D:
+                pos = vec2(pos.pos.x + 500.0, 100.0)
 
-        emit EnemyDefeated(pos.pos, EnemyType.Walker, SCORE_PER_COIN)
-        emit PlayerDamaged(5, walker_id) to walker_id
+        emit EnemyDefeated:
+            position = pos.pos
+            enemy_type = EnemyType.Walker
+            score_value = SCORE_PER_COIN
+        emit PlayerDamaged to walker_id:
+            amount = 5
 
     on EnemyDefeated:
         destroy
@@ -796,10 +787,11 @@ system CoinDropSystem:
         EnemyAI as ai
 
     on EnemyDefeated:
-        var coin_id = spawn Coin(
-            pos.pos = EnemyDefeated.position
-        )
-        emit CoinCollected(SCORE_PER_COIN) to coin_id
+        var coin_id = spawn Coin:
+            Position2D:
+                pos = EnemyDefeated.position
+        emit CoinCollected to coin_id:
+            value = SCORE_PER_COIN
 
 system CollectibleSystem:
     filter:
@@ -873,11 +865,13 @@ system CollisionDispatchSystem:
                 # Enemy collision: damage scales with enemy speed
                 hp.health = hp.health - 5
                 add Invincible                              # self: uses default (1.5s)
-                emit PlayerDamaged(5, c.other)
+                emit PlayerDamaged:
+                    amount = 5
 
             Collectible =>
                 # Collectible collision: no damage — consume the collectible
-                emit CoinCollected(SCORE_PER_COIN)
+                emit CoinCollected:
+                    value = SCORE_PER_COIN
                 remove Collectible from c.other             # cross-entity remove
                 destroy c.other
 
@@ -982,7 +976,8 @@ system SceneManager:
         hp.health = MAX_HEALTH
 
     on unload:
-        emit SceneTransition(GameState.Playing)
+        emit SceneTransition:
+            next_state = GameState.Playing
 
 system CleanupSystem:
     exclude:
@@ -1010,7 +1005,8 @@ system GameFlowSystem:
             GameState.Playing  => load level2
             GameState.GameOver => load game_over
             GameState.MainMenu => load game_over
-            GameState.Paused   => emit FreezeApplied(5.0)
+            GameState.Paused   => emit FreezeApplied:
+                duration = 5.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PARTICLE SYSTEM — no filter, extern func calls, no trait field access

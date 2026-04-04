@@ -246,29 +246,33 @@ The semantic analyzer SHALL continue to work identically for single-file program
 - **THEN** the analyzer produces the same `DecoratedProgram` as before this change
 
 ### Requirement: Template declaration validation
-The semantic analyzer SHALL validate `template` declarations: all traits in `apply:` must be declared, all field names in `config:` must belong to applied traits.
+The semantic analyzer SHALL validate `template` declarations by checking that every nested trait entry names a declared trait and that every field assignment inside a trait block belongs to that trait.
 
 #### Scenario: Template with undeclared trait rejected
-- **WHEN** a `template Foo:` lists `apply: UnknownTrait`
+- **WHEN** a `template Foo:` contains a nested trait entry `UnknownTrait:`
 - **THEN** the analyzer SHALL report an error: "undeclared trait 'UnknownTrait'"
 
-#### Scenario: Template with invalid config field rejected
-- **WHEN** a `template` sets a field in `config:` that belongs to no applied trait
-- **THEN** the analyzer SHALL report an error: "unknown field '<name>' in template config"
+#### Scenario: Template with invalid nested field rejected
+- **WHEN** a `template` assigns a field inside `Health:` that is not declared on `Health`
+- **THEN** the analyzer SHALL report an error naming the unknown trait field
 
 ### Requirement: Spawn-site validation
-At each `spawn TemplateName(...)` call site, the semantic analyzer SHALL verify the template exists, all override fields are valid, and all required fields are provided.
+At each block-structured `spawn TemplateName:` call site, the semantic analyzer SHALL verify the template exists, every overridden trait exists on the template, all overridden fields are valid for that trait, and all required fields remain satisfied after applying overrides.
 
 #### Scenario: Spawn of undeclared template rejected
-- **WHEN** `spawn UnknownFoo()` is used
+- **WHEN** `spawn UnknownFoo:` is used
 - **THEN** the analyzer SHALL report an error: "undefined template 'UnknownFoo'"
 
 #### Scenario: Spawn of unit (not template) rejected
-- **WHEN** `spawn Player()` is used and `Player` is a `unit`, not a `template`
+- **WHEN** `spawn Player:` is used and `Player` is a `unit`, not a `template`
 - **THEN** the analyzer SHALL report an error: "'Player' is a unit, not a template"
 
+#### Scenario: Spawn overriding trait not present on template rejected
+- **WHEN** `spawn Enemy:` contains an override block for `Loot:` but `Enemy` does not define `Loot`
+- **THEN** the analyzer SHALL report an error naming the unknown trait override for template `Enemy`
+
 #### Scenario: Spawn with missing required field rejected
-- **WHEN** a template has a `var` field with no `config:` default and the spawn site omits it
+- **WHEN** a template has a required field with no default or template initializer and the `spawn` site still leaves it unset
 - **THEN** the analyzer SHALL report an error: "required field '<name>' not set for template '<T>'"
 
 ### Requirement: `destroy` statement context validation
@@ -371,49 +375,16 @@ The semantic analyzer SHALL populate the `after_systems` field of each `SystemIn
 - **THEN** `SystemInfo.after_systems` is an empty vector
 
 ### Requirement: `apply:` alias uniqueness validation
-The semantic analyzer SHALL verify that no two `apply:` entries in the same unit or template declare the same alias.
-
-#### Scenario: Duplicate alias rejected
-- **WHEN** `apply:` contains `Position as p` and `Velocity as p` in the same unit
-- **THEN** the analyzer reports: "duplicate alias 'p' in apply block"
+**Reason**: Archetype declarations no longer support `apply:` aliases.
+**Migration**: Replace alias-based archetype configuration with nested trait blocks.
 
 ### Requirement: Qualified `config:` key resolution
-The semantic analyzer SHALL resolve each `config:` key against the applied traits of the enclosing unit or template. Bare keys are resolved by searching all applied traits for a matching field name. Dotted keys resolve the first component as an alias or trait name, then the second as a field of that trait.
-
-#### Scenario: Bare key resolved unambiguously
-- **WHEN** only `Health` has a field `health` and `config:` contains bare `health = 100`
-- **THEN** the key resolves to `Health.health`
-
-#### Scenario: Ambiguous bare key produces error
-- **WHEN** both `TraitA` and `TraitB` have a field `pos` and `config:` contains bare `pos = ...`
-- **THEN** the analyzer reports: "ambiguous field 'pos' in config; qualify as 'TraitA.pos' or 'TraitB.pos'"
-
-#### Scenario: Dotted key with valid alias resolves
-- **WHEN** `apply:` has `Position as p` and `config:` contains `p.position = vec3(...)`
-- **THEN** the key resolves to `Position.position`
-
-#### Scenario: Dotted key with trait name (implicit alias) resolves
-- **WHEN** `apply:` has `Health` (no alias) and `config:` contains `Health.health = 100`
-- **THEN** the key resolves to `Health.health`
-
-#### Scenario: Unknown first component in dotted key rejected
-- **WHEN** `config:` contains `Unknown.field = 5` and `Unknown` is not an alias or applied trait
-- **THEN** the analyzer reports: "unknown trait or alias 'Unknown' in config key"
+**Reason**: `config:` blocks are removed. Trait ownership is explicit in the nested syntax, so key qualification rules are unnecessary.
+**Migration**: Move field assignments into the owning trait block in the unit or template body.
 
 ### Requirement: Qualified `spawn()` override argument key resolution
-The semantic analyzer SHALL resolve `spawn` override argument keys using the same rules as `config:` key resolution, but against the template's applied traits.
-
-#### Scenario: Bare spawn key resolved when unambiguous
-- **WHEN** `spawn Enemy(patrol_speed = 5.0)` and only `EnemyAI` has `patrol_speed`
-- **THEN** the key resolves to `EnemyAI.patrol_speed`
-
-#### Scenario: Ambiguous bare spawn key produces error
-- **WHEN** two of a template's applied traits both have a field `speed` and `spawn Foo(speed = 1.0)` uses bare form
-- **THEN** the analyzer reports: "ambiguous field 'speed' in spawn override; qualify as 'TraitA.speed' or 'TraitB.speed'"
-
-#### Scenario: TraitName-qualified spawn key resolves
-- **WHEN** `spawn Enemy(EnemyAI.patrol_speed = 5.0)` is used
-- **THEN** the key resolves to `EnemyAI.patrol_speed`
+**Reason**: `spawn` no longer uses flat override arguments. Nested trait override blocks replace prefixed key resolution.
+**Migration**: Move spawn override fields into the appropriate nested trait block under `spawn TemplateName:`.
 
 ### Requirement: `ResolvedFunc` produced in `DecoratedProgram`
 The semantic analyzer SHALL populate a `funcs` map in `DecoratedProgram` containing a `ResolvedFunc` entry for every `func` and `extern func` declaration in the analyzed program. The `ResolvedFunc` struct SHALL include: `name`, `is_pub`, `is_extern`, resolved parameter types, and resolved return type.

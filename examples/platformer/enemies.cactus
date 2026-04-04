@@ -31,12 +31,10 @@ event EnemyDefeated:
     var position: vec2
 
 pub unit WalkerEnemy1:
-    apply:
-        Position
-        EnemyAI
-    config:
+    Position:
         pos = vec2(400.0, 568.0)
         velocity = vec2(0.0, 0.0)
+    EnemyAI:
         patrol_min_x = 350.0
         patrol_max_x = 550.0
         patrol_speed = PATROL_SPEED
@@ -47,12 +45,10 @@ pub unit WalkerEnemy1:
         enemy_height = ENEMY_HEIGHT
 
 pub unit WalkerEnemy2:
-    apply:
-        Position
-        EnemyAI
-    config:
+    Position:
         pos = vec2(800.0, 568.0)
         velocity = vec2(0.0, 0.0)
+    EnemyAI:
         patrol_min_x = 700.0
         patrol_max_x = 1000.0
         patrol_speed = PATROL_SPEED
@@ -63,12 +59,10 @@ pub unit WalkerEnemy2:
         enemy_height = ENEMY_HEIGHT
 
 pub unit FlyerEnemy1:
-    apply:
-        Position
-        EnemyAI
-    config:
+    Position:
         pos = vec2(1100.0, 250.0)
         velocity = vec2(0.0, 0.0)
+    EnemyAI:
         patrol_min_x = 1000.0
         patrol_max_x = 1250.0
         patrol_speed = PATROL_SPEED
@@ -109,9 +103,11 @@ system EnemyCollisionSystem:
 
         if ox > 0.0 and oy > 0.0:
             if player_pos.y + player_h < p.pos.y + ai.enemy_height * 0.5:
-                emit EnemyDefeated(p.pos)
+                emit EnemyDefeated:
+                    position = p.pos
             else:
-                emit PlayerDamaged(DAMAGE_AMOUNT)
+                emit PlayerDamaged:
+                    amount = DAMAGE_AMOUNT
 
 system EnemyRenderer:
     filter:

@@ -149,6 +149,11 @@ private:
     void check_persist_sync(ProgramNode& program);
     void validate_system_filters(ProgramNode& program);
     void validate_event_usage(ProgramNode& program);
+    void validate_event_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                              const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                              const ResolvedStruct* handler_event,
+                              const std::string& system_name);
 
     // Phase 3: Dynamic ECS validations (dynamic-ecs-language change)
     void validate_template_unit_declarations(ProgramNode& program);
@@ -166,9 +171,17 @@ private:
     std::unordered_set<std::string> get_archetype_fields(
         const std::vector<ArchetypeTraitEntry>& traits) const;
     const ResolvedTrait* find_resolved_trait(const std::string& name) const;
+    const ResolvedStruct* find_resolved_event(const std::string& name) const;
+    TypeInfo infer_expr_type(const ExprNode& expr,
+                             const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                             const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                             const ResolvedStruct* handler_event) const;
     void validate_spawn_stmts(
         const std::vector<std::unique_ptr<StmtNode>>& stmts,
         const std::string& context_name);
+    void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                              const std::string& context_name);
+    void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);
     void validate_context_stmts(
         const std::vector<std::unique_ptr<StmtNode>>& stmts,
         const std::string& context_name,
@@ -223,6 +236,9 @@ private:
     // Template required fields (var with no default and not in config):
     // template_name → set of field names that must be provided at spawn site
     std::unordered_map<std::string, std::unordered_set<std::string>> template_required_fields_;
+
+    // Event declarations as struct-like field maps for emit payload validation.
+    std::unordered_map<std::string, ResolvedStruct> event_structs_;
 };
 
 }  // namespace cactus

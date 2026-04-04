@@ -49,40 +49,30 @@ event ItemPurchased:
     var buyer: entity_id
 
 pub unit CactusShop:
-    apply:
-        Position
-        ShopKeeper
-    config:
+    Position:
         position = vec3(10.0, 0.0, 5.0)
+    ShopKeeper:
         is_open = true
         interact_distance = INTERACT_DISTANCE
 
 pub unit SmallCactus:
-    apply:
-        Position
-        Purchasable
-    config:
+    Position
+    Purchasable:
         item = ShopItem(CACTUS_SMALL_PRICE, CACTUS_SMALL_PRICE, ItemRarity.Common, 0.5)
 
 pub unit MediumCactus:
-    apply:
-        Position
-        Purchasable
-    config:
+    Position
+    Purchasable:
         item = ShopItem(CACTUS_MEDIUM_PRICE, CACTUS_MEDIUM_PRICE, ItemRarity.Uncommon, 1.0)
 
 pub unit LargeCactus:
-    apply:
-        Position
-        Purchasable
-    config:
+    Position
+    Purchasable:
         item = ShopItem(CACTUS_LARGE_PRICE, CACTUS_LARGE_PRICE, ItemRarity.Rare, 1.5)
 
 pub unit GoldenCactus:
-    apply:
-        Position
-        Purchasable
-    config:
+    Position
+    Purchasable:
         item = ShopItem(GOLDEN_CACTUS_PRICE, GOLDEN_CACTUS_PRICE, ItemRarity.Legendary, 2.0)
 
 func can_afford(coins: int, price: int) bool:
@@ -102,7 +92,8 @@ system ShopInteraction:
 
         if dist < shop.interact_distance and shop.is_open:
             if is_interact_pressed():   # TODO: replace with input.pressed once std.input is available
-                emit ShopOpened(get_self_entity())
+                emit ShopOpened:
+                    shop_entity = get_self_entity()
 
 system PurchaseSystem:
     filter:
@@ -114,4 +105,6 @@ system PurchaseSystem:
             w.coins = w.coins - ItemPurchased.item.price
             inv.items = inv.items + [ItemPurchased.item]
             inv.total_spent = inv.total_spent + ItemPurchased.item.price
-            emit CoinSpent(ItemPurchased.item.price, w.coins)
+            emit CoinSpent:
+                amount = ItemPurchased.item.price
+                remaining = w.coins

@@ -60,7 +60,6 @@ struct FieldAssignment {
 
 struct ArchetypeTraitEntry {
     std::string trait_name;
-    bool initially_active = true;
     std::vector<FieldAssignment> assignments;
     SourceLocation location;
 };
@@ -217,21 +216,24 @@ struct LoadStmt {
     SourceLocation location;
 };
 
-// enable TraitName — activate trait on current entity
-struct EnableStmt {
+// add TraitName[: ...] [to expr] — attach or patch trait on entity
+struct AddTraitStmt {
     std::string trait_name;
+    std::vector<FieldAssignment> args;
+    std::optional<std::unique_ptr<ExprNode>> target_expr;
     SourceLocation location;
 };
 
-// disable TraitName — deactivate trait on current entity
-struct DisableStmt {
+// remove TraitName [from expr] — detach trait from entity
+struct RemoveTraitStmt {
     std::string trait_name;
+    std::optional<std::unique_ptr<ExprNode>> target_expr;
     SourceLocation location;
 };
 
 struct StmtNode {
     using Variant = std::variant<LetStmt, VarAssign, EmitStmt, SpawnStmt, DestroyStmt, LoadStmt,
-                                 EnableStmt, DisableStmt, ReturnStmt, ExprStmt, IfStmt>;
+                                 AddTraitStmt, RemoveTraitStmt, ReturnStmt, ExprStmt, IfStmt>;
     Variant stmt;
     SourceLocation location;
 

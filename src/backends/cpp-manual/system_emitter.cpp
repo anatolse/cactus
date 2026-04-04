@@ -297,15 +297,36 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                        ind + "g_pending_load = \"" + s.module_name + "\";\n" +
                        ind + "g_load_pending = true;\n";
 
-            } else if constexpr (std::is_same_v<S, EnableStmt>) {
-                // task 7.5
-                return ind + "g_trait_mask[" + entity_index_var + "] |= TraitBits::" +
-                       s.trait_name + ";\n";
+            } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                std::string target = s.target_expr.has_value() ? emit_expr(**s.target_expr) : entity_index_var;
+                std::ostringstream result;
+                result << ind << "if ((g_trait_mask[" << target << "] & TraitBits::" << s.trait_name << ") == 0) {\n";
+                auto td_it = ctx.trait_defaults.find(s.trait_name);
+                auto trait_it = ctx.traits.find(s.trait_name);
+                if (trait_it != ctx.traits.end()) {
+                    for (const auto& field : trait_it->second.fields) {
+                        std::string init_value = SoaEmitter::default_cpp_value(field.type);
+                        if (td_it != ctx.trait_defaults.end()) {
+                            auto def_it = td_it->second.find(field.name);
+                            if (def_it != td_it->second.end()) {
+                                init_value = def_it->second;
+                            }
+                        }
+                        result << ind << "    g_" << s.trait_name << "_" << field.name << "[" << target << "] = "
+                               << init_value << ";\n";
+                    }
+                }
+                result << ind << "}\n";
+                for (const auto& arg : s.args) {
+                    result << ind << "g_" << s.trait_name << "_" << arg.name << "[" << target << "] = "
+                           << emit_expr(*arg.value) << ";\n";
+                }
+                result << ind << "g_trait_mask[" << target << "] |= TraitBits::" << s.trait_name << ";\n";
+                return result.str();
 
-            } else if constexpr (std::is_same_v<S, DisableStmt>) {
-                // task 7.6
-                return ind + "g_trait_mask[" + entity_index_var + "] &= ~TraitBits::" +
-                       s.trait_name + ";\n";
+            } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+                std::string target = s.target_expr.has_value() ? emit_expr(**s.target_expr) : entity_index_var;
+                return ind + "g_trait_mask[" + target + "] &= ~TraitBits::" + s.trait_name + ";\n";
 
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {

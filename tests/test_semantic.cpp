@@ -122,7 +122,7 @@ TEST_CASE("Semantic: func purity — emit rejected", "[semantic]") {
 
 TEST_CASE("Semantic: func purity — pure func allowed", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
-        "func add(a: int, b: int) int:\n"
+        "func sum(a: int, b: int) int:\n"
         "    return a + b\n"));
 }
 

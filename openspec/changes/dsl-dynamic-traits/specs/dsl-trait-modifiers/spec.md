@@ -2,7 +2,7 @@
 
 ### Requirement: `disabled` initial state in `apply:` block
 **Reason**: The `: disabled` annotation is being removed as part of the shift to open-world dynamic traits. The `add`/`remove` statements replace the enable/disable model. The "start inactive" pattern is replaced by simply not listing the trait in `apply:` and using `add` to attach it dynamically when needed.
-**Migration**: Remove `: disabled` annotations from all `apply:` blocks. If the trait needs to start absent, simply omit it from `apply:` entirely. Use `add TraitName(...)` when it should be attached.
+**Migration**: Remove `: disabled` annotations from all `apply:` blocks. If the trait needs to start absent, simply omit it from `apply:` entirely. Use `add TraitName` or `add TraitName:` when it should be attached.
 
 ### Requirement: `enable` and `disable` statements toggle trait activation
 **Reason**: `enable`/`disable` are being replaced by `add`/`remove`. The new `remove` statement destroys the component; the "preserve data while invisible to systems" pattern is now expressed using a zero-cost marker trait combined with `exclude:` on systems that should skip those entities.
@@ -37,7 +37,7 @@ The language SHALL allow trait declarations with no body (no colon, no fields, n
 - **THEN** the compiler SHALL report an error: "trait 'Frozen' has no fields"
 
 ### Requirement: `filter:` and `exclude:` are both optional; no `filter:` means match all entities
-Both `filter:` and `exclude:` are optional on system declarations. When `filter:` is omitted, the system matches all entities. `filter:` and `exclude:` are runtime queries — no static guarantee of component presence is made. The compiler validates that trait names listed in `filter:` and `exclude:` refer to declared traits.
+Both `filter:` and `exclude:` SHALL be optional on system declarations. When `filter:` is omitted, the system matches all entities. `filter:` and `exclude:` are runtime queries — no static guarantee of component presence is made. The compiler validates that trait names listed in `filter:` and `exclude:` refer to declared traits.
 
 #### Scenario: System with no filter matches all entities
 - **WHEN** a system has no `filter:` block

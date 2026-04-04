@@ -467,7 +467,6 @@ TEST_CASE("Parser: template declaration", "[parser][dynamic-ecs]") {
     CHECK_FALSE(tmpl.is_pub);
     REQUIRE(tmpl.traits.size() == 2);
     CHECK(tmpl.traits[0].trait_name == "Position");
-    CHECK(tmpl.traits[0].initially_active == true);
     REQUIRE(tmpl.traits[0].assignments.size() == 1);
     CHECK(tmpl.traits[0].assignments[0].name == "x");
     CHECK(tmpl.traits[1].trait_name == "EnemyAI");
@@ -486,21 +485,6 @@ TEST_CASE("Parser: pub template declaration", "[parser][dynamic-ecs]") {
     CHECK(tmpl.name == "Bullet");
     CHECK(tmpl.is_pub);
     REQUIRE(tmpl.traits.size() == 2);
-}
-
-// Task 4.2: apply entry with ': disabled' annotation
-TEST_CASE("Parser: trait entry with disabled annotation", "[.][parser][dynamic-ecs]") {
-    auto prog = parse(
-        "template Enemy:\n"
-        "    Position\n"
-        "    Frozen: disabled\n"
-        "    EnemyAI\n");
-    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
-    REQUIRE(tmpl.traits.size() == 3);
-    CHECK(tmpl.traits[0].initially_active == true);
-    CHECK(tmpl.traits[1].trait_name == "Frozen");
-    CHECK(tmpl.traits[1].initially_active == false);
-    CHECK(tmpl.traits[2].initially_active == true);
 }
 
 // Task 4.10: on spawn/destroy/load/unload lifecycle handlers
@@ -612,23 +596,53 @@ TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
     CHECK(load->module_name == "levels.level1");
 }
 
-// Task 4.9: enable/disable statements
-TEST_CASE("Parser: enable and disable statements", "[parser][dynamic-ecs]") {
+TEST_CASE("Parser: add and remove statements", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "system FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        enable Frozen\n"
-        "        disable EnemyAI\n");
+        "        add Frozen\n"
+        "        remove EnemyAI\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 2);
-    auto* en = std::get_if<EnableStmt>(&sys.handlers[0].body[0]->stmt);
-    auto* dis = std::get_if<DisableStmt>(&sys.handlers[0].body[1]->stmt);
-    REQUIRE(en != nullptr);
-    CHECK(en->trait_name == "Frozen");
-    REQUIRE(dis != nullptr);
-    CHECK(dis->trait_name == "EnemyAI");
+    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[1]->stmt);
+    REQUIRE(add != nullptr);
+    CHECK(add->trait_name == "Frozen");
+    REQUIRE(remove != nullptr);
+    CHECK(remove->trait_name == "EnemyAI");
+}
+
+TEST_CASE("Parser: add statement with field block and target", "[parser][dynamic-ecs]") {
+    auto prog = parse(
+        "system FreezeSystem:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        add Frozen to target_id:\n"
+        "            duration = 2.0\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(add != nullptr);
+    CHECK(add->trait_name == "Frozen");
+    REQUIRE(add->args.size() == 1);
+    CHECK(add->args[0].name == "duration");
+    REQUIRE(add->target_expr.has_value());
+}
+
+TEST_CASE("Parser: remove statement with target", "[parser][dynamic-ecs]") {
+    auto prog = parse(
+        "system FreezeSystem:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        remove Frozen from target_id\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(remove != nullptr);
+    CHECK(remove->trait_name == "Frozen");
+    REQUIRE(remove->target_expr.has_value());
 }
 
 // Task 4.11: marker trait (no body)
@@ -959,17 +973,63 @@ TEST_CASE("Parser: nested trait field assignment parsed correctly", "[parser][co
     CHECK(unit.traits[0].assignments[0].name == "health");
 }
 
-TEST_CASE("Parser: disabled marker trait in template", "[.][parser][config-qualification]") {
+TEST_CASE("Parser: trait field default values are parsed", "[parser][dynamic-traits]") {
     auto prog = parse(
-        "template Enemy:\n"
-        "    Position\n"
-        "    Frozen: disabled\n"
-    );
-    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
-    REQUIRE(tmpl.traits.size() == 2);
-    CHECK(tmpl.traits[0].trait_name == "Position");
-    CHECK(tmpl.traits[1].trait_name == "Frozen");
-    CHECK(tmpl.traits[1].initially_active == false);
+        "trait Frozen:\n"
+        "    var duration: float = 3.0\n"
+        "    let stacks: int = 1\n");
+    auto& trait = std::get<TraitNode>(prog.declarations[0]);
+    REQUIRE(trait.fields.size() == 2);
+    CHECK(trait.fields[0].default_value.has_value());
+    CHECK(trait.fields[1].default_value.has_value());
+}
+
+TEST_CASE("Parser: bare add statement parsed", "[parser][dynamic-traits]") {
+    auto prog = parse(
+        "system FreezeSystem:\n"
+        "    on tick:\n"
+        "        add Frozen\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    REQUIRE(sys.handlers[0].body.size() == 1);
+    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(add != nullptr);
+    CHECK(add->trait_name == "Frozen");
+    CHECK(add->args.empty());
+    CHECK_FALSE(add->target_expr.has_value());
+}
+
+TEST_CASE("Parser: add statement with block parsed", "[parser][dynamic-traits]") {
+    auto prog = parse(
+        "system FreezeSystem:\n"
+        "    on tick:\n"
+        "        add Health:\n"
+        "            current = 100\n"
+        "            max = 100\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(add != nullptr);
+    CHECK(add->trait_name == "Health");
+    REQUIRE(add->args.size() == 2);
+    CHECK(add->args[0].name == "current");
+    CHECK(add->args[1].name == "max");
+}
+
+TEST_CASE("Parser: add and remove statements with cross-entity targets parsed", "[parser][dynamic-traits]") {
+    auto prog = parse(
+        "system FreezeSystem:\n"
+        "    on tick:\n"
+        "        add Frozen to target_id:\n"
+        "            duration = 2.0\n"
+        "        remove Frozen from target_id\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers[0].body.size() == 2);
+    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[1]->stmt);
+    REQUIRE(add != nullptr);
+    REQUIRE(remove != nullptr);
+    REQUIRE(add->target_expr.has_value());
+    REQUIRE(remove->target_expr.has_value());
 }
 
 TEST_CASE("Parser: system with multiple after: entries", "[parser][system-ordering]") {

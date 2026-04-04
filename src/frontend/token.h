@@ -43,8 +43,8 @@ enum class TokenType {
     DESTROY,
     LOAD,
     UNLOAD,
-    ENABLE,
-    DISABLE,
+    ADD,
+    REMOVE,
     FIXED_TICK,
     LATE_TICK,
 
@@ -56,7 +56,6 @@ enum class TokenType {
     EXCLUDE,
     AFTER,
     TARGET,
-    DISABLED,
 
     // Keywords — functional
     MAP,
@@ -67,6 +66,7 @@ enum class TokenType {
     FALSE_LIT,
     AS,
     TO,
+    FROM,
     AND,
     OR,
     NOT,
@@ -170,8 +170,8 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::DESTROY: return "DESTROY";
         case TokenType::LOAD: return "LOAD";
         case TokenType::UNLOAD: return "UNLOAD";
-        case TokenType::ENABLE: return "ENABLE";
-        case TokenType::DISABLE: return "DISABLE";
+        case TokenType::ADD: return "ADD";
+        case TokenType::REMOVE: return "REMOVE";
         case TokenType::FIXED_TICK: return "FIXED_TICK";
         case TokenType::LATE_TICK: return "LATE_TICK";
         case TokenType::APPLY: return "APPLY";
@@ -181,13 +181,13 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::EXCLUDE: return "EXCLUDE";
         case TokenType::AFTER: return "AFTER";
         case TokenType::TARGET: return "TARGET";
-        case TokenType::DISABLED: return "DISABLED";
         case TokenType::MAP: return "MAP";
         case TokenType::REDUCE: return "REDUCE";
         case TokenType::TRUE_LIT: return "TRUE";
         case TokenType::FALSE_LIT: return "FALSE";
         case TokenType::AS: return "AS";
         case TokenType::TO: return "TO";
+        case TokenType::FROM: return "FROM";
         case TokenType::AND: return "AND";
         case TokenType::OR: return "OR";
         case TokenType::NOT: return "NOT";

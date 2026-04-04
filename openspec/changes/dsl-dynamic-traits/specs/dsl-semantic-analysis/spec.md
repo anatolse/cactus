@@ -21,26 +21,26 @@
 ### Requirement: `add` statement semantic validation
 The semantic analyzer SHALL validate `add` statements as follows:
 1. The trait name MUST resolve to a declared trait in scope
-2. If the named trait has fields with no default values and no existing component, all such fields MUST be supplied as named arguments
-3. All supplied argument names MUST match declared field names on the trait
-4. All supplied argument values MUST type-check against the corresponding field's declared type
+2. If the named trait has fields with no default values and no existing component, all such fields MUST be supplied as field assignments in the block
+3. All supplied field names MUST match declared field names on the trait
+4. All supplied field values MUST type-check against the corresponding field's declared type
 5. If a `to expr` clause is present, `expr` MUST have type `entity_id`
 6. `add` statements MUST only appear inside system event handler bodies
 
 #### Scenario: Valid add with all required fields
-- **WHEN** `add Health(current = 100, max = 100)` appears and both fields are declared without defaults
+- **WHEN** `add Health:` with `current = 100` and `max = 100` appears and both fields are declared without defaults
 - **THEN** the semantic analyzer accepts it
 
 #### Scenario: Missing required field on first add
 - **WHEN** `add Health` appears and `Health.current: int` has no default
 - **THEN** the semantic analyzer SHALL report: "required field 'current' must be supplied in `add Health`"
 
-#### Scenario: Unknown argument name
-- **WHEN** `add Health(hp = 100)` appears and `Health` has no field named `hp`
+#### Scenario: Unknown field name
+- **WHEN** `add Health:` with `hp = 100` appears and `Health` has no field named `hp`
 - **THEN** the semantic analyzer SHALL report: "unknown field 'hp' in `add Health`"
 
-#### Scenario: Argument type mismatch
-- **WHEN** `add Health(current = true)` appears and `Health.current` is type `int`
+#### Scenario: Field type mismatch
+- **WHEN** `add Health:` with `current = true` appears and `Health.current` is type `int`
 - **THEN** the semantic analyzer SHALL report a type error
 
 #### Scenario: Cross-entity target type check

@@ -216,7 +216,7 @@ TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
     CHECK(err.find("is a unit, not a template") != std::string::npos);
 }
 
-// ── Task 5.5: spawn/destroy/load/enable/disable only in system handlers ──────
+// ── Task 5.5: spawn/destroy/load/add/remove only in system handlers ──────
 
 TEST_CASE("Semantic: spawn in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
@@ -243,18 +243,18 @@ TEST_CASE("Semantic: load in func body — error", "[semantic][dynamic-ecs]") {
         "    load levels.main\n"));
 }
 
-TEST_CASE("Semantic: enable in func body — error", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: add in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Frozen\n"
         "func bad():\n"
-        "    enable Frozen\n"));
+        "    add Frozen\n"));
 }
 
-TEST_CASE("Semantic: disable in func body — error", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: remove in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Frozen\n"
         "func bad():\n"
-        "    disable Frozen\n"));
+        "    remove Frozen\n"));
 }
 
 // ── Task 5.6: load module reachability ──────────────────────────────────────
@@ -282,9 +282,9 @@ TEST_CASE("Semantic: load unreachable module — error", "[semantic][dynamic-ecs
         "        load unknown.scene\n"));
 }
 
-// ── Task 5.7: enable/disable trait validation ────────────────────────────────
+// ── Task 5.7: add/remove trait validation ────────────────────────────────
 
-TEST_CASE("Semantic: enable declared trait — ok", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: add declared trait — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Frozen\n"
         "trait Position:\n"
@@ -293,10 +293,10 @@ TEST_CASE("Semantic: enable declared trait — ok", "[semantic][dynamic-ecs]") {
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        enable Frozen\n"));
+        "        add Frozen\n"));
 }
 
-TEST_CASE("Semantic: enable undeclared trait — error", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: add undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Position:\n"
         "    var x: float = 0.0\n"
@@ -304,10 +304,10 @@ TEST_CASE("Semantic: enable undeclared trait — error", "[semantic][dynamic-ecs
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        enable NonExistentTrait\n"));
+        "        add NonExistentTrait\n"));
 }
 
-TEST_CASE("Semantic: disable declared trait — ok", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: remove declared trait — ok", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
         "trait Frozen\n"
         "trait Position:\n"
@@ -316,10 +316,10 @@ TEST_CASE("Semantic: disable declared trait — ok", "[semantic][dynamic-ecs]") 
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        disable Frozen\n"));
+        "        remove Frozen\n"));
 }
 
-TEST_CASE("Semantic: disable undeclared trait — error", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: remove undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(analyze_errors(
         "trait Position:\n"
         "    var x: float = 0.0\n"
@@ -327,7 +327,7 @@ TEST_CASE("Semantic: disable undeclared trait — error", "[semantic][dynamic-ec
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        disable BadTrait\n"));
+        "        remove BadTrait\n"));
 }
 
 // ── Task 5.8: Lifecycle handler empty params ─────────────────────────────────
@@ -427,27 +427,52 @@ TEST_CASE("Semantic: system with exclude only (no filter) — valid", "[semantic
         "        destroy\n"));
 }
 
-// ── Task 5.11: Disabled annotation ──────────────────────────────────────────
-
-TEST_CASE("Semantic: disabled annotation on marker trait — valid", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: add trait with required fields — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(analyze_errors(
-        "trait Frozen\n"
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "template Enemy:\n"
-        "    Position\n"
-        "    Frozen: disabled\n"));
+        "trait Health:\n"
+        "    var current: int\n"
+        "    var max: int\n"
+        "system FreezeSystem:\n"
+        "    on tick:\n"
+        "        add Health:\n"
+        "            current = 10\n"
+        "            max = 20\n"));
 }
 
-TEST_CASE("Semantic: disabled annotation on data trait — valid", "[semantic][dynamic-ecs]") {
-    CHECK_FALSE(analyze_errors(
-        "trait EnemyAI:\n"
-        "    var patrol_speed: float = 2.0\n"
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "template LazyEnemy:\n"
-        "    Position\n"
-        "    EnemyAI: disabled\n"));
+TEST_CASE("Semantic: add trait with missing required field — error", "[semantic][dynamic-ecs]") {
+    CHECK(analyze_errors(
+        "trait Health:\n"
+        "    var current: int\n"
+        "    var max: int\n"
+        "system FreezeSystem:\n"
+        "    on tick:\n"
+        "        add Health:\n"
+        "            current = 10\n"));
+}
+
+TEST_CASE("Semantic: add/remove cross-entity target must be entity_id", "[semantic][dynamic-ecs]") {
+    CHECK(analyze_errors(
+        "trait Frozen\n"
+        "system FreezeSystem:\n"
+        "    on tick:\n"
+        "        add Frozen to 42\n"));
+    CHECK(analyze_errors(
+        "trait Frozen\n"
+        "system FreezeSystem:\n"
+        "    on tick:\n"
+        "        remove Frozen from 42\n"));
+}
+
+TEST_CASE("Semantic: trait default value type mismatch — error", "[semantic][dynamic-ecs]") {
+    CHECK(analyze_errors(
+        "trait Frozen:\n"
+        "    var duration: int = 3.14\n"));
+}
+
+TEST_CASE("Semantic: trait default value must be constant — error", "[semantic][dynamic-ecs]") {
+    CHECK(analyze_errors(
+        "trait Frozen:\n"
+        "    var duration: int = other\n"));
 }
 
 // ── Lifecycle events accepted in event handler validation ───────────────────

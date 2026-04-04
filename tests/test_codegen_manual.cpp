@@ -237,9 +237,9 @@ TEST_CASE("Codegen Manual: exclude mask in loop condition", "[codegen-manual][7.
     CHECK(code.find("== 0") != std::string::npos);
 }
 
-// ── Tasks 7.5, 7.6: enable/disable trait bitmask ops ─────────────────────────
+// ── Dynamic trait add/remove codegen ────────────────────────────────────────
 
-TEST_CASE("Codegen Manual: enable emits bitmask OR", "[codegen-manual][7.5]") {
+TEST_CASE("Codegen Manual: add emits trait bit set", "[codegen-manual][dynamic-traits]") {
     auto code = generate(
         STDLIB_EVENTS + 
         "trait Frozen\n"
@@ -249,13 +249,13 @@ TEST_CASE("Codegen Manual: enable emits bitmask OR", "[codegen-manual][7.5]") {
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        enable Frozen\n");
+        "        add Frozen\n");
 
     CHECK(code.find("|= TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("g_trait_mask[i]") != std::string::npos);
 }
 
-TEST_CASE("Codegen Manual: disable emits bitmask AND-NOT", "[codegen-manual][7.6]") {
+TEST_CASE("Codegen Manual: remove emits trait bit clear", "[codegen-manual][dynamic-traits]") {
     auto code = generate(
         STDLIB_EVENTS + 
         "trait Frozen\n"
@@ -265,10 +265,28 @@ TEST_CASE("Codegen Manual: disable emits bitmask AND-NOT", "[codegen-manual][7.6
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        disable Frozen\n");
+        "        remove Frozen\n");
 
     CHECK(code.find("&= ~TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("g_trait_mask[i]") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: add with fields initializes arrays", "[codegen-manual][dynamic-traits]") {
+    auto code = generate(
+        STDLIB_EVENTS +
+        "trait Stunned:\n"
+        "    var duration: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "system FreezeSystem:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        add Stunned:\n"
+        "            duration = 2.0\n");
+
+    CHECK(code.find("g_Stunned_duration[i] = 2.0f") != std::string::npos);
+    CHECK(code.find("g_trait_mask[i] |= TraitBits::Stunned") != std::string::npos);
 }
 
 // ── Task 7.7: Template factory function ──────────────────────────────────────
@@ -761,7 +779,7 @@ TEST_CASE("Codegen: on_load fires after all entities instantiated (task 11.6)", 
     CHECK(phase2 < phase3);
 }
 
-TEST_CASE("Codegen: enable/disable toggles bitmask (task 11.7)", "[codegen-manual][11.7]") {
+TEST_CASE("Codegen: add/remove toggles trait presence bitmask", "[codegen-manual][11.7]") {
     auto code = generate(
         STDLIB_EVENTS + 
         "trait Frozen\n"
@@ -771,12 +789,11 @@ TEST_CASE("Codegen: enable/disable toggles bitmask (task 11.7)", "[codegen-manua
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
-        "        enable Frozen\n"
-        "        disable Frozen\n");
+        "        add Frozen\n"
+        "        remove Frozen\n");
 
     CHECK(code.find("|= TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("&= ~TraitBits::Frozen") != std::string::npos);
-    // Field data preserved (x still accessed via local ref)
     CHECK(code.find("g_Position_x[i]") != std::string::npos);
 }
 
@@ -802,10 +819,7 @@ TEST_CASE("Codegen: exclude skips entities with active excluded trait (task 11.8
     CHECK(code.find("_exclude_mask") != std::string::npos);
 }
 
-TEST_CASE("Codegen: exclude with disabled trait - entity still processed (task 11.9)", "[codegen-manual][11.9]") {
-    // When a trait is disabled (bit clear in trait_mask), the exclude check
-    // (trait_mask & exclude_mask) == 0 is true → entity IS processed
-    // This is automatically correct with the bitmask approach
+TEST_CASE("Codegen: exclude checks current trait presence bitmask (task 11.9)", "[codegen-manual][11.9]") {
     auto code = generate(
         STDLIB_EVENTS + 
         "trait Position:\n"
@@ -819,7 +833,6 @@ TEST_CASE("Codegen: exclude with disabled trait - entity still processed (task 1
         "    on tick:\n"
         "        x = x + tick.dt\n");
 
-    // The bitmask condition naturally handles disabled traits
     CHECK(code.find("g_trait_mask[i] & _exclude_mask") != std::string::npos);
 }
 

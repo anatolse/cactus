@@ -15,31 +15,41 @@
 ## ADDED Requirements
 
 ### Requirement: `add` statement parsing
-The parser SHALL recognize `add IDENTIFIER` as a statement inside event handler bodies. An optional argument list `(field = expr, ...)` may follow the trait name. An optional `to expr` clause may follow to specify a target entity. The `add` keyword SHALL be added to the keyword list.
+The parser SHALL recognize `add IDENTIFIER` as a statement inside event handler bodies. The `add` statement has two forms: bare (for markers and all-defaulted traits) and block (for data traits with field assignments). An optional `to expr` clause may appear after the trait name to specify a target entity. The `add` and `to` keywords SHALL be added to the keyword list.
 
 ```ebnf
-add_stmt = "add" IDENTIFIER ["(" named_args ")"] ["to" expr] ;
-named_args = named_arg {"," named_arg} ;
-named_arg  = IDENTIFIER "=" expr ;
+add_stmt = "add" IDENTIFIER ["to" expr] NEWLINE
+         | "add" IDENTIFIER ["to" expr] ":" NEWLINE INDENT
+           { IDENTIFIER "=" expr NEWLINE }
+           DEDENT ;
 ```
 
 #### Scenario: bare add statement parsed
 - **WHEN** `add Frozen` appears in a handler body
-- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Frozen"`, empty `args`, no `target_expr`
+- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Frozen"`, empty field assignments, no `target_expr`
 
-#### Scenario: add with named args parsed
-- **WHEN** `add Health(current = 100, max = 100)` appears in a handler body
-- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Health"` and two named args
+#### Scenario: add with block field assignments parsed
+- **WHEN** the following appears in a handler body:
+  ```
+  add Health:
+      current = 100
+      max = 100
+  ```
+- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Health"` and two field assignments
 
-#### Scenario: add with target entity parsed
-- **WHEN** `add Stunned(duration = 2.0) to other_id` appears in a handler body
-- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Stunned"`, one named arg, and `target_expr = IdentExpr("other_id")`
+#### Scenario: add with target entity and block parsed
+- **WHEN** the following appears in a handler body:
+  ```
+  add Stunned to other_id:
+      duration = 2.0
+  ```
+- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Stunned"`, one field assignment, and `target_expr = IdentExpr("other_id")`
 
 ### Requirement: `remove` statement parsing
-The parser SHALL recognize `remove IDENTIFIER` as a statement inside event handler bodies. An optional `from expr` clause may follow to specify a target entity. The `remove` keyword SHALL be added to the keyword list.
+The parser SHALL recognize `remove IDENTIFIER` as a statement inside event handler bodies. An optional `from expr` clause may follow to specify a target entity. The `remove` and `from` keywords SHALL be added to the keyword list.
 
 ```ebnf
-remove_stmt = "remove" IDENTIFIER ["from" expr] ;
+remove_stmt = "remove" IDENTIFIER ["from" expr] NEWLINE ;
 ```
 
 #### Scenario: bare remove statement parsed

@@ -120,12 +120,9 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
         }
     }
 
-    // Compute initial trait_mask (set bits for all initially-active traits)
+    // Compute initial trait_mask (all listed traits are active at spawn)
     std::string mask_expr = "0ULL";
     for (const auto& entry : tmpl.traits) {
-        if (!entry.initially_active) {
-            continue;
-        }
         auto it = ctx.trait_bit_index.find(entry.trait_name);
         if (it != ctx.trait_bit_index.end()) {
             mask_expr += " | TraitBits::" + entry.trait_name;
@@ -439,7 +436,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
         std::string mask = "0ULL";
         for (const auto& entry : unit->traits) {
             auto it = ctx.trait_bit_index.find(entry.trait_name);
-            if (it != ctx.trait_bit_index.end() && entry.initially_active) {
+            if (it != ctx.trait_bit_index.end()) {
                 mask += " | TraitBits::" + entry.trait_name;
             }
         }

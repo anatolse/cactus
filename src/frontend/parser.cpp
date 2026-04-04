@@ -626,7 +626,7 @@ std::vector<FieldAssignment> Parser::parse_field_assignment_block() {
     return assignments;
 }
 
-ArchetypeTraitEntry Parser::parse_archetype_trait_entry(bool allow_disabled) {
+ArchetypeTraitEntry Parser::parse_archetype_trait_entry() {
     auto loc = peek().location;
     auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
 
@@ -636,12 +636,6 @@ ArchetypeTraitEntry Parser::parse_archetype_trait_entry(bool allow_disabled) {
 
     if (check(TokenType::COLON)) {
         advance();
-        if (allow_disabled && check(TokenType::DISABLED)) {
-            advance();
-            entry.initially_active = false;
-            expect_newline();
-            return entry;
-        }
         entry.assignments = parse_field_assignment_block();
         return entry;
     }
@@ -650,7 +644,7 @@ ArchetypeTraitEntry Parser::parse_archetype_trait_entry(bool allow_disabled) {
     return entry;
 }
 
-std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries(bool allow_disabled) {
+std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries() {
     std::vector<ArchetypeTraitEntry> entries;
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN) && !check(TokenType::CHILD)) {
         skip_newlines();
@@ -658,7 +652,7 @@ std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries(bool allo
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto entry = parse_archetype_trait_entry(allow_disabled);
+        auto entry = parse_archetype_trait_entry();
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -668,10 +662,10 @@ std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries(bool allo
     return entries;
 }
 
-std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entry_block(bool allow_disabled) {
+std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entry_block() {
     expect_newline();
     expect_indent();
-    auto entries = parse_archetype_trait_entries(allow_disabled);
+    auto entries = parse_archetype_trait_entries();
     expect_dedent();
     return entries;
 }
@@ -691,7 +685,7 @@ UnitNode Parser::parse_unit(bool is_pub) {
     node.is_pub = is_pub;
     node.location = loc;
 
-    node.traits = parse_archetype_trait_entries(true);
+    node.traits = parse_archetype_trait_entries();
 
     skip_newlines();
     if (check(TokenType::CHILD)) {
@@ -717,7 +711,7 @@ TemplateNode Parser::parse_template(bool is_pub) {
     node.is_pub = is_pub;
     node.location = loc;
 
-    node.traits = parse_archetype_trait_entries(true);
+    node.traits = parse_archetype_trait_entries();
 
     skip_newlines();
     if (check(TokenType::CHILD)) {
@@ -1167,6 +1161,46 @@ std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
     return stmts;
 }
 
+AddTraitStmt Parser::parse_add_trait_stmt() {
+    auto loc = peek().location;
+    consume(TokenType::ADD, "expected 'add'");
+    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+
+    AddTraitStmt stmt;
+    stmt.trait_name = trait_name;
+    stmt.location = loc;
+
+    if (match(TokenType::TO)) {
+        stmt.target_expr = parse_expression();
+    }
+
+    if (check(TokenType::COLON)) {
+        advance();
+        stmt.args = parse_field_assignment_block();
+    } else {
+        expect_newline();
+    }
+
+    return stmt;
+}
+
+RemoveTraitStmt Parser::parse_remove_trait_stmt() {
+    auto loc = peek().location;
+    consume(TokenType::REMOVE, "expected 'remove'");
+    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+
+    RemoveTraitStmt stmt;
+    stmt.trait_name = trait_name;
+    stmt.location = loc;
+
+    if (match(TokenType::FROM)) {
+        stmt.target_expr = parse_expression();
+    }
+
+    expect_newline();
+    return stmt;
+}
+
 std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
 
@@ -1257,7 +1291,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         spawn_stmt.template_name = template_name;
         spawn_stmt.location = loc;
         consume(TokenType::COLON, "expected ':'");
-        spawn_stmt.overrides = parse_archetype_trait_entry_block(false);
+        spawn_stmt.overrides = parse_archetype_trait_entry_block();
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(spawn_stmt)}, loc);
     }
 
@@ -1281,26 +1315,14 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(load)}, loc);
     }
 
-    // Task 4.9: enable statement
-    if (check(TokenType::ENABLE)) {
-        advance();
-        auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
-        expect_newline();
-        EnableStmt enable;
-        enable.trait_name = trait_name;
-        enable.location = loc;
-        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(enable)}, loc);
+    if (check(TokenType::ADD)) {
+        auto add = parse_add_trait_stmt();
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(add)}, loc);
     }
 
-    // Task 4.9: disable statement
-    if (check(TokenType::DISABLE)) {
-        advance();
-        auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
-        expect_newline();
-        DisableStmt disable;
-        disable.trait_name = trait_name;
-        disable.location = loc;
-        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(disable)}, loc);
+    if (check(TokenType::REMOVE)) {
+        auto remove = parse_remove_trait_stmt();
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(remove)}, loc);
     }
 
     // Assignment or expression statement
@@ -1525,7 +1547,7 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
         consume(TokenType::COLON, "expected ':'");
         SpawnExpr spawn;
         spawn.template_name = template_name;
-        spawn.overrides = parse_archetype_trait_entry_block(false);
+        spawn.overrides = parse_archetype_trait_entry_block();
         spawn.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(spawn)}, loc);
     }

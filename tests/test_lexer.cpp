@@ -247,12 +247,14 @@ TEST_CASE("Lexer: new action keywords spawn destroy load unload", "[lexer][dynam
     CHECK(types[3] == TokenType::UNLOAD);
 }
 
-TEST_CASE("Lexer: new action keywords enable disable", "[lexer][dynamic-ecs]") {
-    auto tokens = lex("enable disable");
+TEST_CASE("Lexer: new action keywords add remove to from", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("add remove to from");
     auto types = token_types(tokens);
-    REQUIRE(types.size() == 2);
-    CHECK(types[0] == TokenType::ENABLE);
-    CHECK(types[1] == TokenType::DISABLE);
+    REQUIRE(types.size() == 4);
+    CHECK(types[0] == TokenType::ADD);
+    CHECK(types[1] == TokenType::REMOVE);
+    CHECK(types[2] == TokenType::TO);
+    CHECK(types[3] == TokenType::FROM);
 }
 
 TEST_CASE("Lexer: new block keyword exclude", "[lexer][dynamic-ecs]") {
@@ -260,13 +262,6 @@ TEST_CASE("Lexer: new block keyword exclude", "[lexer][dynamic-ecs]") {
     auto types = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::EXCLUDE);
-}
-
-TEST_CASE("Lexer: new block keyword disabled", "[lexer][dynamic-ecs]") {
-    auto tokens = lex("disabled");
-    auto types = token_types(tokens);
-    REQUIRE(types.size() == 1);
-    CHECK(types[0] == TokenType::DISABLED);
 }
 
 TEST_CASE("Lexer: new keywords are distinct from identifiers with similar names", "[lexer][dynamic-ecs]") {
@@ -295,35 +290,25 @@ TEST_CASE("Lexer: new keywords have correct string representations", "[lexer][dy
     CHECK(std::string(token_type_to_string(TokenType::DESTROY)) == "DESTROY");
     CHECK(std::string(token_type_to_string(TokenType::LOAD)) == "LOAD");
     CHECK(std::string(token_type_to_string(TokenType::UNLOAD)) == "UNLOAD");
-    CHECK(std::string(token_type_to_string(TokenType::ENABLE)) == "ENABLE");
-    CHECK(std::string(token_type_to_string(TokenType::DISABLE)) == "DISABLE");
+    CHECK(std::string(token_type_to_string(TokenType::ADD)) == "ADD");
+    CHECK(std::string(token_type_to_string(TokenType::REMOVE)) == "REMOVE");
     CHECK(std::string(token_type_to_string(TokenType::EXCLUDE)) == "EXCLUDE");
-    CHECK(std::string(token_type_to_string(TokenType::DISABLED)) == "DISABLED");
 }
 
-TEST_CASE("Lexer: disabled keyword in apply context", "[lexer][dynamic-ecs]") {
-    // 'Frozen: disabled' inside apply block
-    auto tokens = lex("Frozen: disabled");
+TEST_CASE("Lexer: all dynamic ECS keywords in one string", "[lexer][dynamic-ecs]") {
+    auto tokens = lex("template spawn destroy load unload add remove to from exclude");
     auto types = token_types(tokens);
-    REQUIRE(types.size() == 3);
-    CHECK(types[0] == TokenType::IDENTIFIER); // Frozen
-    CHECK(types[1] == TokenType::COLON);
-    CHECK(types[2] == TokenType::DISABLED);
-}
-
-TEST_CASE("Lexer: all 9 new keywords in one string", "[lexer][dynamic-ecs]") {
-    auto tokens = lex("template spawn destroy load unload enable disable exclude disabled");
-    auto types = token_types(tokens);
-    REQUIRE(types.size() == 9);
+    REQUIRE(types.size() == 10);
     CHECK(types[0] == TokenType::TEMPLATE);
     CHECK(types[1] == TokenType::SPAWN);
     CHECK(types[2] == TokenType::DESTROY);
     CHECK(types[3] == TokenType::LOAD);
     CHECK(types[4] == TokenType::UNLOAD);
-    CHECK(types[5] == TokenType::ENABLE);
-    CHECK(types[6] == TokenType::DISABLE);
-    CHECK(types[7] == TokenType::EXCLUDE);
-    CHECK(types[8] == TokenType::DISABLED);
+    CHECK(types[5] == TokenType::ADD);
+    CHECK(types[6] == TokenType::REMOVE);
+    CHECK(types[7] == TokenType::TO);
+    CHECK(types[8] == TokenType::FROM);
+    CHECK(types[9] == TokenType::EXCLUDE);
 }
 
 // ── New keyword tests (dsl-spec-new-features) ─────────────────────────────────

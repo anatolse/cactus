@@ -155,6 +155,30 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                     result += "." + s.payload[i].name + " = " + rewrite_expr(*s.payload[i].value, trait_names, program);
                 }
                 return result + "});\n";
+            } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                std::string target = s.target_expr.has_value()
+                    ? rewrite_expr(**s.target_expr, trait_names, program)
+                    : "entity";
+                if (s.args.empty()) {
+                    return ind + "registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n";
+                }
+
+                std::ostringstream result;
+                result << ind << "{\n";
+                result << ind << "    auto __existing = registry.try_get<" << s.trait_name << ">(" << target << ");\n";
+                result << ind << "    auto __value = __existing ? *__existing : " << s.trait_name << "{};\n";
+                for (const auto& arg : s.args) {
+                    result << ind << "    __value." << arg.name << " = "
+                           << rewrite_expr(*arg.value, trait_names, program) << ";\n";
+                }
+                result << ind << "    registry.emplace_or_replace<" << s.trait_name << ">(" << target << ", __value);\n";
+                result << ind << "}\n";
+                return result.str();
+            } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+                std::string target = s.target_expr.has_value()
+                    ? rewrite_expr(**s.target_expr, trait_names, program)
+                    : "entity";
+                return ind + "registry.remove<" + s.trait_name + ">(" + target + ");\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
                     return ind + "return " + rewrite_expr(**s.value, trait_names, program) + ";\n";
@@ -208,11 +232,10 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
 
         // each() lambda
         out << "    view.each([&](";
-        for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
-            if (i > 0) {
-                out << ", ";
-            }
-            out << "auto& " << sys.filter.trait_names[i] << "_comp";
+        out << "entt::entity entity";
+        for (const auto& trait_name : sys.filter.trait_names) {
+            out << ", ";
+            out << "auto& " << trait_name << "_comp";
         }
         out << ") {\n";
 

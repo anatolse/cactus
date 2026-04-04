@@ -182,7 +182,8 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
     validate_template_unit_declarations(program);
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
-    validate_disabled_annotations(program);
+    validate_trait_default_values(program);
+    validate_trait_modifier_rules(program);
 
     // Phase 4: Build dependency graph
     build_dependency_graph(program);
@@ -698,6 +699,53 @@ void SemanticAnalyzer::check_persist_sync(ProgramNode& program) {
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        if (auto* trait = std::get_if<TraitNode>(&decl)) {
+            std::unordered_map<std::string, TypeInfo> empty_locals;
+            for (auto& field : trait->fields) {
+                if (!field.default_value.has_value()) {
+                    continue;
+                }
+
+                auto expected = resolve_type_ref(field.type);
+                auto actual = infer_expr_type(**field.default_value, {}, empty_locals, nullptr);
+                if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
+                    actual.kind != expected.kind) {
+                    errors_.error(field.location,
+                                  "default value type '" + actual.name + "' does not match field type '" +
+                                      expected.name + "'");
+                }
+
+                bool constant_ok = true;
+                std::function<void(const ExprNode&)> check_const = [&](const ExprNode& expr) {
+                    std::visit([&](const auto& e) {
+                        using E = std::decay_t<decltype(e)>;
+                        if constexpr (std::is_same_v<E, LiteralExpr>) {
+                        } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                            check_const(*e.operand);
+                        } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                            check_const(*e.left);
+                            check_const(*e.right);
+                        } else if constexpr (std::is_same_v<E, ListExpr>) {
+                            for (const auto& el : e.elements) {
+                                check_const(*el);
+                            }
+                        } else {
+                            constant_ok = false;
+                        }
+                    }, expr.expr);
+                };
+                check_const(**field.default_value);
+                if (!constant_ok) {
+                    errors_.error(field.location, "trait field default value must be a constant expression");
+                }
+            }
+        }
+    }
+}
+
 // ── Phase 3e: System Filter Validation (tasks 4.2, 4.4, 4.5, 4.6) ──────────
 
 bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
@@ -926,6 +974,65 @@ void SemanticAnalyzer::validate_event_stmts(
         }
     };
 
+    auto validate_add = [this, &filter_bindings, &locals, handler_event](const AddTraitStmt& add) {
+        const auto* trait = find_resolved_trait(add.trait_name);
+        if (trait == nullptr) {
+            errors_.error(add.location, "undeclared trait '" + add.trait_name + "'");
+            return;
+        }
+
+        if (add.target_expr.has_value()) {
+            auto t = infer_expr_type(**add.target_expr, filter_bindings, locals, handler_event);
+            if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+                errors_.error(add.location, "`to` target must be of type `entity_id`");
+            }
+        }
+
+        std::unordered_map<std::string, const ResolvedField*> fields_by_name;
+        for (const auto& field : trait->fields) {
+            fields_by_name[field.name] = &field;
+        }
+
+        std::unordered_set<std::string> supplied;
+        for (const auto& arg : add.args) {
+            supplied.insert(arg.name);
+            auto it = fields_by_name.find(arg.name);
+            if (it == fields_by_name.end()) {
+                errors_.error(arg.location,
+                              "unknown field '" + arg.name + "' in `add " + add.trait_name + "`");
+                continue;
+            }
+
+            auto actual = infer_expr_type(*arg.value, filter_bindings, locals, handler_event);
+            const auto& expected = it->second->type;
+            if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
+                actual.kind != expected.kind) {
+                errors_.error(arg.location,
+                              "type mismatch for field '" + arg.name + "' in `add " + add.trait_name + "`");
+            }
+        }
+
+        for (const auto& field : trait->fields) {
+            if (!field.has_default && !supplied.contains(field.name)) {
+                errors_.error(add.location,
+                              "required field '" + field.name + "' must be supplied in `add " + add.trait_name + "`");
+                break;
+            }
+        }
+    };
+
+    auto validate_remove = [this, &filter_bindings, &locals, handler_event](const RemoveTraitStmt& remove) {
+        if (!is_trait_declared(remove.trait_name)) {
+            errors_.error(remove.location, "undeclared trait '" + remove.trait_name + "'");
+        }
+        if (remove.target_expr.has_value()) {
+            auto t = infer_expr_type(**remove.target_expr, filter_bindings, locals, handler_event);
+            if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+                errors_.error(remove.location, "`from` target must be of type `entity_id`");
+            }
+        }
+    };
+
     for (const auto& stmt : stmts) {
         if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
             locals[let_stmt->name] = infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event);
@@ -942,6 +1049,14 @@ void SemanticAnalyzer::validate_event_stmts(
         }
         if (const auto* emit_stmt = std::get_if<EmitStmt>(&stmt->stmt)) {
             validate_emit(*emit_stmt);
+            continue;
+        }
+        if (const auto* add_stmt = std::get_if<AddTraitStmt>(&stmt->stmt)) {
+            validate_add(*add_stmt);
+            continue;
+        }
+        if (const auto* remove_stmt = std::get_if<RemoveTraitStmt>(&stmt->stmt)) {
+            validate_remove(*remove_stmt);
             continue;
         }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
@@ -1413,8 +1528,8 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                 if constexpr (std::is_same_v<S, SpawnStmt> ||
                               std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> ||
-                              std::is_same_v<S, EnableStmt> ||
-                              std::is_same_v<S, DisableStmt>) {
+                              std::is_same_v<S, AddTraitStmt> ||
+                              std::is_same_v<S, RemoveTraitStmt>) {
                     if (!in_system_handler) {
                         // Determine which keyword is used
                         std::string kw;
@@ -1424,10 +1539,10 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                             kw = "destroy";
                         } else if constexpr (std::is_same_v<S, LoadStmt>) {
                             kw = "load";
-                        } else if constexpr (std::is_same_v<S, EnableStmt>) {
-                            kw = "enable";
+                        } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                            kw = "add";
                         } else {
-                            kw = "disable";
+                            kw = "remove";
                         }
                         errors_.error(
                             s.location,
@@ -1454,18 +1569,32 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                             }
                         }
                     }
-                    // 5.7: For EnableStmt/DisableStmt, validate trait is declared
-                    if constexpr (std::is_same_v<S, EnableStmt> ||
-                                  std::is_same_v<S, DisableStmt>) {
+                    if constexpr (std::is_same_v<S, AddTraitStmt> ||
+                                  std::is_same_v<S, RemoveTraitStmt>) {
                         const std::string& tname = s.trait_name;
                         if (!is_trait_declared(tname)) {
-                            const std::string KW = std::is_same_v<S, EnableStmt> ? "enable" : "disable";
+                            const std::string KW = std::is_same_v<S, AddTraitStmt> ? "add" : "remove";
                             std::string msg = "undeclared trait '";
                             msg += tname;
                             msg += "' in `";
                             msg += KW;
                             msg += "` statement";
                             errors_.error(s.location, msg);
+                        }
+                        if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                            if (s.target_expr.has_value()) {
+                                auto t = infer_expr_type(**s.target_expr, {}, {}, nullptr);
+                                if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+                                    errors_.error(s.location, "`to` target must be of type `entity_id`");
+                                }
+                            }
+                        } else {
+                            if (s.target_expr.has_value()) {
+                                auto t = infer_expr_type(**s.target_expr, {}, {}, nullptr);
+                                if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+                                    errors_.error(s.location, "`from` target must be of type `entity_id`");
+                                }
+                            }
                         }
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
@@ -1483,7 +1612,7 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
             [this](auto& node) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, FuncNode>) {
-                    // 5.5: func bodies must not contain spawn/destroy/load/enable/disable
+                    // func bodies must not contain spawn/destroy/load/add/remove
                     validate_context_stmts(node.body, node.name, false);
                 } else if constexpr (std::is_same_v<T, SystemNode>) {
                     // System handlers: these statements are valid
@@ -1521,29 +1650,18 @@ void SemanticAnalyzer::check_no_field_access(
                     check_no_field_access(s.then_body, sys_name);
                     check_no_field_access(s.else_body, sys_name);
                 }
-                // emit, spawn, destroy, load, enable, disable, return, expr: all allowed
+                // emit, spawn, destroy, load, add, remove, return, expr: all allowed
             },
             stmt->stmt);
     }
 }
 
-// ── Task 5.11: Validate disabled trait entries in nested archetype blocks ───
-
-void SemanticAnalyzer::validate_disabled_annotations(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_trait_modifier_rules(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         std::visit(
             [this](auto& node) {
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, TemplateNode> ||
-                              std::is_same_v<T, UnitNode>) {
-                    for (auto& entry : node.traits) {
-                        // Check initially_active flag (new block syntax equivalent to : disabled)
-                        // Trait must be declared (already checked in 5.1)
-                        // Note: initially_active validation integrated with trait block validation
-                        (void)entry;
-                    }
-                } else if constexpr (std::is_same_v<T, SystemNode>) {
-                    // 5.9: Also validate exclude clause trait names
+                if constexpr (std::is_same_v<T, SystemNode>) {
                     if (!node.exclude.entries.empty()) {
                         for (auto& entry : node.exclude.entries) {
                             if (!is_trait_declared(entry.qualified_name)) {

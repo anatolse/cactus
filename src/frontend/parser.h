@@ -65,9 +65,9 @@ private:
     std::vector<FuncParam> parse_param_list();
     FieldAssignment parse_field_assignment();
     std::vector<FieldAssignment> parse_field_assignment_block();
-    ArchetypeTraitEntry parse_archetype_trait_entry(bool allow_disabled = false);
-    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entries(bool allow_disabled = false);
-    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entry_block(bool allow_disabled = false);
+    ArchetypeTraitEntry parse_archetype_trait_entry();
+    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entries();
+    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entry_block();
     ChildBlock parse_child_block();
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();
@@ -75,6 +75,8 @@ private:
     ViewElement parse_view_element();
 
     // Statements
+    AddTraitStmt parse_add_trait_stmt();
+    RemoveTraitStmt parse_remove_trait_stmt();
     std::unique_ptr<StmtNode> parse_statement();
     std::vector<std::unique_ptr<StmtNode>> parse_block();
 

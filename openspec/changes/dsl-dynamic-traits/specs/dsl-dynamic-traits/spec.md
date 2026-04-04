@@ -1,21 +1,32 @@
 ## ADDED Requirements
 
 ### Requirement: `add` statement attaches a trait to an entity
-The DSL SHALL support an `add` statement inside system event handlers. `add TraitName` attaches the named trait to the current entity (self). `add TraitName(field = expr, ...)` initializes named fields at attachment time. If the entity already has the trait, existing fields are updated with the supplied values (emplace-or-replace semantics). Unsupplied fields with defaults retain their current values; unsupplied fields without defaults retain their current values if the component already exists.
+The DSL SHALL support an `add` statement inside system event handlers. `add TraitName` attaches the named trait to the current entity (self). For data traits with fields, `add TraitName:` followed by an indented field-assignment block initializes named fields at attachment time. If the entity already has the trait, existing fields are updated with the supplied values (emplace-or-replace semantics). Unsupplied fields with defaults retain their current values; unsupplied fields without defaults retain their current values if the component already exists.
 
 #### Scenario: add bare marker trait to self
 - **WHEN** `add Frozen` appears in a system handler and `Frozen` is a declared marker trait (no fields)
-- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Frozen"`, empty `args`, and no `target_expr`
+- **THEN** the parser produces an `AddTraitStmt` with `trait_name = "Frozen"`, empty field assignments, and no `target_expr`
 
-#### Scenario: add trait with required fields
-- **WHEN** `add Health(current = 100, max = 100)` appears and `Health` has fields `current: int` and `max: int` with no defaults
+#### Scenario: add trait with required fields using block syntax
+- **WHEN** the following appears in a handler body:
+  ```
+  add Health:
+      current = 100
+      max = 100
+  ```
+  and `Health` has fields `current: int` and `max: int` with no defaults
 - **THEN** the semantic analyzer accepts it and generates code to attach the `Health` component initialized with the supplied values
 
-#### Scenario: add trait with partial args when fields have defaults
-- **WHEN** `add Invincible(duration = 2.0)` appears and `Invincible` has `var duration: float = 1.5`
+#### Scenario: add trait with partial fields when fields have defaults
+- **WHEN** the following appears in a handler body:
+  ```
+  add Invincible:
+      duration = 2.0
+  ```
+  and `Invincible` has `var duration: float = 1.5`
 - **THEN** the semantic analyzer accepts it; `duration` is set to `2.0`
 
-#### Scenario: add trait with no args when all fields have defaults
+#### Scenario: add trait with no fields when all fields have defaults
 - **WHEN** `add Invincible` appears and all fields of `Invincible` have default values
 - **THEN** the semantic analyzer accepts it; all fields use their default values on first add
 
@@ -28,7 +39,7 @@ The DSL SHALL support an `add` statement inside system event handlers. `add Trai
 - **THEN** the semantic analyzer SHALL report an error: "undeclared trait 'UnknownTrait'"
 
 #### Scenario: add idempotent — re-adding existing trait patches fields
-- **WHEN** an entity already has `Invincible(duration = 0.5)` and `add Invincible(duration = 2.0)` executes
+- **WHEN** an entity already has `Invincible(duration = 0.5)` and `add Invincible:` with `duration = 2.0` executes
 - **THEN** the entity's `Invincible.duration` becomes `2.0`; the entity still has `Invincible`
 
 ### Requirement: `remove` statement detaches a trait from an entity
@@ -51,10 +62,15 @@ The DSL SHALL support a `remove` statement inside system event handlers. `remove
 - **THEN** the semantic analyzer SHALL report an error: "undeclared trait 'UnknownTrait'"
 
 ### Requirement: Cross-entity targeting with `to` and `from`
-The `add` statement SHALL support an optional `to expr` clause where `expr` evaluates to `entity_id`, targeting another entity instead of self. The `remove` statement SHALL support an optional `from expr` clause for the same purpose. The semantic analyzer SHALL validate that the target expression has type `entity_id`.
+The `add` statement SHALL support an optional `to expr` suffix where `expr` evaluates to `entity_id`, targeting another entity instead of self. The `remove` statement SHALL support an optional `from expr` suffix for the same purpose. The semantic analyzer SHALL validate that the target expression has type `entity_id`.
 
 #### Scenario: add trait to another entity
-- **WHEN** `add Stunned(duration = 3.0) to c.other` appears where `c.other` is of type `entity_id`
+- **WHEN** the following appears in a handler body:
+  ```
+  add Stunned to c.other:
+      duration = 3.0
+  ```
+  where `c.other` is of type `entity_id`
 - **THEN** the semantic analyzer accepts it and generates code to attach `Stunned` to `c.other`
 
 #### Scenario: remove trait from another entity
@@ -66,7 +82,7 @@ The `add` statement SHALL support an optional `to expr` clause where `expr` eval
 - **THEN** the semantic analyzer SHALL report a type error: "`to` target must be of type `entity_id`"
 
 ### Requirement: Trait field default values
-Trait field declarations SHALL support optional default values using `= expr` syntax. Fields with default values MAY be omitted in `add` argument lists. Fields without default values are required in `add` argument lists when the component is being created for the first time; if the component already exists, omitted fields retain their current values.
+Trait field declarations SHALL support optional default values using `= expr` syntax. Fields with default values MAY be omitted from `add` field blocks. Fields without default values are required when the component is being created for the first time; if the component already exists, omitted fields retain their current values.
 
 #### Scenario: Default value on var field
 - **WHEN** `var duration: float = 1.5` appears in a trait declaration
@@ -77,7 +93,7 @@ Trait field declarations SHALL support optional default values using `= expr` sy
 - **THEN** the parser accepts it; the default is used when no value is supplied in `add`
 
 #### Scenario: add with omitted defaulted field uses default
-- **WHEN** `add Invincible` and `Invincible` has `var duration: float = 1.5`
+- **WHEN** `add Invincible` appears and `Invincible` has `var duration: float = 1.5`
 - **THEN** the component is created with `duration = 1.5`
 
 ### Requirement: `add` and `remove` are only valid inside system event handlers

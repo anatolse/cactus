@@ -6,7 +6,7 @@ The `add`/`remove` replacement makes the entity component set open at runtime, m
 
 Key existing pieces that shape this design:
 - `FieldNode` already has `default_value: optional<ExprNode>` in the AST — default values are already parseable
-- `SpawnArg` already defines named-arg initialization (`name`, `key_prefix`, `value`) — `add` reuses this pattern exactly
+- The DSL is already moving toward indented block syntax for structured initialization (`unit`, `template`, `spawn`, `emit`) — dynamic trait mutation should follow the same direction instead of reintroducing parenthesized argument lists
 - `entity_id` is already a primitive type — cross-entity targeting is naturally expressible
 - `EnableStmt` / `DisableStmt` exist in the AST and are the primary removal targets
 - `ApplyEntry.initially_active` exists solely for `: disabled` and will be removed
@@ -17,8 +17,8 @@ Key existing pieces that shape this design:
 - Replace `enable`/`disable` with `add`/`remove` as the sole runtime trait management mechanism
 - `add` uses emplace-or-replace semantics (idempotent, safe to call repeatedly)
 - `remove` destroys the component and all its field data
-- Trait field declarations support default values — traits where all fields have defaults can be `add`ed bare (no args)
-- Cross-entity targeting: `add Trait to entity_id` / `remove Trait from entity_id`
+- Trait field declarations support default values — traits where all fields have defaults can be `add`ed bare (no block needed)
+- Cross-entity targeting: `add TraitName to expr:` / `remove TraitName from expr`
 - `apply:` simplified — no `: disabled` annotation; it becomes a plain spawn-time add list
 - `exclude:` + marker traits replaces the "disable to hide from filter" pattern
 - All changes are breaking; no migration compatibility layer
@@ -27,27 +27,42 @@ Key existing pieces that shape this design:
 - Preserving data across `remove` (data is destroyed on remove)
 - Partial field updates on existing components (add patches all supplied fields, leaves others as-is)
 - Deferred/batched structural changes (structural changes take effect immediately)
-- Enabling/disabling multiple traits in one statement
+- Supporting legacy parenthesized `add TraitName(...)` syntax
 
 ## Decisions
 
 ### Decision 1: `add` uses emplace-or-replace semantics
 
-`add Frozen(duration = 5.0)` on an entity that already has `Frozen` will overwrite the `duration` field with the new value (and leave other fields untouched). This maps to EnTT's `emplace_or_replace<T>(entity, ...)`.
+An `add` statement on an entity that already has the trait will overwrite the supplied fields (and leave other fields untouched). This maps to EnTT's `emplace_or_replace<T>(entity, ...)`.
 
 **Alternative considered**: Error on duplicate add. Rejected because the most common use case — refreshing a status effect timer — requires idempotent re-add. Forcing the caller to `remove` then `add` is verbose and introduces a frame where the entity lacks the component.
 
 **Alternative considered**: No-op if present. Rejected because it prevents refreshing fields, which is the primary reason to re-add.
 
-### Decision 2: Named args matching `spawn` pattern
+### Decision 2: `add` uses block syntax for field initialization
 
-`add Health(current = 100, max = 100)` uses the same named-arg syntax as `spawn Enemy(pos = vec2(0,0))`. This reuses the existing `SpawnArg` AST structure and keeps the language consistent.
+Each `add` is its own statement. Data traits with fields use block syntax (colon + indented field assignments), consistent with the DSL's broader block-syntax direction for `unit`, `template`, `spawn`, and `emit`:
+
+```cactus
+add Frozen
+add Health:
+    current = 100
+    max = 100
+
+add Stunned to other_id:
+    duration = 2.0
+
+remove Frozen
+remove Shield from parent_id
+```
+
+Marker traits and traits where all fields have defaults use a bare `add TraitName` form. Data traits with required fields use `add TraitName:` followed by an indented field-assignment block. `remove` is always bare (no field block needed).
 
 Fields are matched by name. Field order does not matter. If a field has a default value, it may be omitted. If a field has no default, it must be supplied — this is a compile-time error.
 
-### Decision 3: Cross-entity targeting via `to` / `from` prepositions
+### Decision 3: Cross-entity targeting via `to` / `from` suffixes
 
-`add Stunned(duration = 2.0) to other_id` — reads naturally. `remove Shield from parent_id`.
+`add Stunned to other_id:` and `remove Shield from parent_id` — the target appears on the statement header, before any field block.
 
 The target expression must evaluate to `entity_id`. This is validated at semantic analysis time. When no `to`/`from` is given, the target is implicitly `self` (the current entity being processed by the handler).
 
@@ -83,15 +98,15 @@ This is more expressive — a single marker trait can be `exclude:`d by any numb
 
 - **Iteration invalidation**: Structural changes (`add`/`remove`) while iterating a view can invalidate the view in some ECS implementations. EnTT handles this gracefully for the common cases (adds/removes on entities not currently being iterated). Document as a best-practice constraint rather than a compiler enforcement.
 
-- **`add` patches only supplied fields**: If a trait has fields `{a, b, c}` and you `add T(a = 1)` on an existing instance, only `a` is updated. This may surprise users expecting all-or-nothing replacement. The semantics follow `emplace_or_replace` naturally.
+- **`add` patches only supplied fields**: If a trait has fields `{a, b, c}` and an `add` statement supplies only `a = 1` on an existing instance, only `a` is updated. This may surprise users expecting all-or-nothing replacement. The semantics follow `emplace_or_replace` naturally.
 
 ## Migration Plan
 
 1. Remove `EnableStmt`, `DisableStmt` from `ast.h`
 2. Remove `ApplyEntry.initially_active` from `ast.h`
 3. Add `AddTraitStmt`, `RemoveTraitStmt` to `ast.h`
-4. Update lexer: remove `enable`/`disable` keywords; add `add`, `remove` as keywords
-5. Update parser: remove `enable_stmt`/`disable_stmt` productions; add `add_stmt`/`remove_stmt`
+4. Update lexer: remove `enable`/`disable` keywords; add `add`, `remove`, `to`, `from` as keywords
+5. Update parser: remove `enable_stmt`/`disable_stmt` productions; add `add_stmt`/`remove_stmt` with block syntax support
 6. Update semantic analyzer: remove enable/disable checks; add add/remove validation
 7. Update both backends (cpp-entt, cpp-manual): generate `emplace_or_replace`/`remove` calls
 8. Migrate all example files and test fixtures

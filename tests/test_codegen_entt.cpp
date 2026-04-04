@@ -180,3 +180,33 @@ TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     CHECK(code.find("registry.emplace<Pos>") != std::string::npos);
     CHECK(code.find("registry.emplace<Health>") != std::string::npos);
 }
+
+TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    let dt: float\n"
+        "trait Frozen\n"
+        "trait Stunned:\n"
+        "    var duration: float = 0.0\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "system Freeze:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        add Frozen\n"
+        "        add Stunned:\n"
+        "            duration = 2.0\n"
+        "        remove Frozen\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.emplace_or_replace<Frozen>(entity)") != std::string::npos);
+            CHECK(code.find("registry.emplace_or_replace<Stunned>(entity, __value)") != std::string::npos);
+            CHECK(code.find("registry.remove<Frozen>(entity)") != std::string::npos);
+        }
+    }
+}

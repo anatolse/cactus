@@ -84,9 +84,6 @@ void DataFileWriter::build_trait_bit_index() {
 uint64_t DataFileWriter::compute_trait_mask(const std::vector<ArchetypeTraitEntry>& traits) const {
     uint64_t mask = 0;
     for (const auto& entry : traits) {
-        if (!entry.initially_active) {
-            continue;
-        }
         auto it = trait_bit_index_.find(entry.trait_name);
         if (it != trait_bit_index_.end() && it->second < 64) {
             mask |= (uint64_t(1) << it->second);

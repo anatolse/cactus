@@ -28,7 +28,7 @@
 #   9.  Event declarations — including events with entity_id fields
 #   10. Pure func declarations  — no emit, no world access, no recursion
 #   11. Extern func declarations — body-less, backend-provided
-#   12. Unit declarations — apply without `: disabled` (open-world traits)
+#   12. Unit declarations — nested trait blocks (open-world traits)
 #   13. Template declarations  — spawn-only blueprints
 #   14. Systems — filter / exclude / order by / after / all handler phases
 #       · on input                      (Input phase — no payload fields)
@@ -38,7 +38,7 @@
 #       · on spawn  / on destroy        (Entity lifecycle — no fields)
 #       · on load   / on unload         (Scene lifecycle — no fields)
 #       · on UserEvent  [as alias]      (Custom event — EventName.field or alias.field)
-#   15. Dynamic traits — `add` / `remove` replace `enable` / `disable`
+#   15. Dynamic traits — `add` / `remove` are the runtime trait mutation model
 #       · add TraitName                  (bare — all defaults)
 #       · add TraitName(field = val)     (named args — explicit field init)
 #       · add TraitName to entity_id     (cross-entity targeting)
@@ -674,7 +674,7 @@ system HealthSystem:
 #
 # `add`   — attaches a trait (emplace-or-replace; patches if already present)
 # `remove` — destroys a trait and its data from an entity
-# No `: disabled` / `enable` / `disable` — the old model is replaced entirely.
+# No legacy inactive-trait toggle syntax remains — open-world trait mutation is the model.
 # ─────────────────────────────────────────────────────────────────────────────
 
 system FreezeSystem:

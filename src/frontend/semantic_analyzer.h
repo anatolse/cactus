@@ -159,7 +159,7 @@ private:
     void validate_template_unit_declarations(ProgramNode& program);
     void validate_spawn_sites(ProgramNode& program);
     void validate_stmt_contexts(ProgramNode& program);
-    void validate_disabled_annotations(ProgramNode& program);
+    void validate_trait_modifier_rules(ProgramNode& program);
 
     // task 11.12: field access not allowed in systems with no filter clause
     void check_no_field_access(
@@ -186,6 +186,7 @@ private:
         const std::vector<std::unique_ptr<StmtNode>>& stmts,
         const std::string& context_name,
         bool in_system_handler);
+    void validate_trait_default_values(ProgramNode& program);
 
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);

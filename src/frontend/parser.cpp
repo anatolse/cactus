@@ -1201,6 +1201,57 @@ RemoveTraitStmt Parser::parse_remove_trait_stmt() {
     return stmt;
 }
 
+TraitMatchStmt Parser::parse_trait_match_stmt() {
+    auto loc = peek().location;
+    consume(TokenType::MATCH, "expected 'match'");
+
+    TraitMatchStmt stmt;
+    stmt.location = loc;
+    stmt.subject = parse_expression();
+
+    consume(TokenType::COLON, "expected ':' after match subject");
+    expect_newline();
+    expect_indent();
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+
+        auto arm_loc = peek().location;
+        if (check(TokenType::IDENTIFIER) && peek().value == "_") {
+            advance();
+            consume(TokenType::FAT_ARROW, "expected '=>' after '_' in wildcard arm");
+            expect_newline();
+
+            WildcardMatchArm wildcard;
+            wildcard.location = arm_loc;
+            wildcard.body = parse_block();
+            stmt.wildcard = std::move(wildcard);
+            skip_newlines();
+            if (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+                errors_.error(peek().location, "wildcard arm `_ =>` must be the last arm in a trait match");
+            }
+            continue;
+        }
+
+        TraitMatchArm arm;
+        arm.location = arm_loc;
+        arm.trait_name = consume(TokenType::IDENTIFIER, "expected trait name or '_' in match arm").value;
+        if (match(TokenType::AS)) {
+            arm.alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
+        }
+        consume(TokenType::FAT_ARROW, "expected '=>' after trait match arm");
+        expect_newline();
+        arm.body = parse_block();
+        stmt.arms.push_back(std::move(arm));
+    }
+
+    expect_dedent();
+    return stmt;
+}
+
 std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
 
@@ -1281,6 +1332,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         if_stmt.then_body = std::move(then_body);
         if_stmt.location  = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
+    }
+
+    if (check(TokenType::MATCH)) {
+        auto match_stmt = parse_trait_match_stmt();
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(match_stmt)}, loc);
     }
 
     // Task 4.5-4.6: spawn statement — spawn TemplateName(field = expr, ...)

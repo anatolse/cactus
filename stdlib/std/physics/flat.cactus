@@ -30,3 +30,8 @@ pub trait Collider:
 pub event CollisionEnter:
     var other: entity_id
     var overlap: vec2
+
+pub event Collision:
+    var other: entity_id
+    var normal: vec2
+    var depth: float

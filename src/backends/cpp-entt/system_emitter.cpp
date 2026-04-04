@@ -45,11 +45,25 @@ static std::unordered_set<std::string> collect_trait_fields(
 
 static std::string rewrite_expr(const ExprNode& expr,
                                  const std::vector<std::string>& trait_names,
-                                 const DecoratedProgram& program);
+                                 const DecoratedProgram& program,
+                                 const std::unordered_set<std::string>& pointer_aliases = {});
+
+static std::string rewrite_stmt(const StmtNode& stmt,
+                                 int indent,
+                                 const std::vector<std::string>& trait_names,
+                                 const DecoratedProgram& program,
+                                 const std::unordered_set<std::string>& pointer_aliases = {});
+
+static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
+                                         int indent,
+                                         const std::vector<std::string>& trait_names,
+                                         const DecoratedProgram& program,
+                                         const std::unordered_set<std::string>& pointer_aliases = {});
 
 static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-function-cognitive-complexity)
                                  const std::vector<std::string>& trait_names,
-                                 const DecoratedProgram& program) {
+                                  const DecoratedProgram& program,
+                                  const std::unordered_set<std::string>& pointer_aliases) {
     auto known_fields = collect_trait_fields(trait_names, program);
 
     return std::visit(
@@ -79,21 +93,21 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                 } else if (op == "or") {
                     op = "||";
                 }
-                return "(" + rewrite_expr(*e.left, trait_names, program) + " " + op + " " +
-                       rewrite_expr(*e.right, trait_names, program) + ")";
+                return "(" + rewrite_expr(*e.left, trait_names, program, pointer_aliases) + " " + op + " " +
+                       rewrite_expr(*e.right, trait_names, program, pointer_aliases) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
                 if (op == "not") {
                     op = "!";
                 }
-                return op + rewrite_expr(*e.operand, trait_names, program);
+                return op + rewrite_expr(*e.operand, trait_names, program, pointer_aliases);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
-                std::string result = rewrite_expr(*e.callee, trait_names, program) + "(";
+                std::string result = rewrite_expr(*e.callee, trait_names, program, pointer_aliases) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*e.args[i], trait_names, program);
+                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases);
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
@@ -108,7 +122,12 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                         return ident->name + "::" + e.member;
                     }
                 }
-                return rewrite_expr(*e.object, trait_names, program) + "." + e.member;
+                if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
+                    if (pointer_aliases.contains(ident->name)) {
+                        return ident->name + "->" + e.member;
+                    }
+                }
+                return rewrite_expr(*e.object, trait_names, program, pointer_aliases) + "." + e.member;
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 return "/* spawn expr */";
             } else {
@@ -120,9 +139,59 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
 
 // ── Rewrite statement: replace field[i] = with comp.field = ─────────────────
 
+static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
+                                         int indent,
+                                         const std::vector<std::string>& trait_names,
+                                         const DecoratedProgram& program,
+                                         const std::unordered_set<std::string>& pointer_aliases) {
+    std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    std::ostringstream out;
+
+    out << ind << "{\n";
+    out << ind << "    auto __match_entity = "
+        << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases) << ";\n";
+
+    bool first = true;
+    for (const auto& arm : match_stmt.arms) {
+        const auto TRAIT_IT  = program.traits.find(arm.trait_name);
+        const bool IS_MARKER = TRAIT_IT == program.traits.end() || TRAIT_IT->second.fields.empty();
+        std::unordered_set<std::string> arm_aliases = pointer_aliases;
+
+        out << ind << "    " << (first ? "if" : "else if") << " (";
+        if (IS_MARKER) {
+            out << "registry.all_of<" << arm.trait_name << ">(__match_entity)) {\n";
+        } else {
+            const std::string ALIAS = arm.alias.value_or("__match_" + arm.trait_name);
+            arm_aliases.insert(ALIAS);
+            out << "auto* " << ALIAS << " = registry.try_get<" << arm.trait_name << ">(__match_entity)) {\n";
+        }
+
+        for (const auto& stmt : arm.body) {
+            out << rewrite_stmt(*stmt, indent + 2, trait_names, program, arm_aliases);
+        }
+        out << ind << "    }";
+        first = false;
+        if (!first || arm.location.line >= 0) {
+            out << "\n";
+        }
+    }
+
+    if (match_stmt.wildcard.has_value()) {
+        out << ind << "    " << (first ? "if (true)" : "else") << " {\n";
+        for (const auto& stmt : match_stmt.wildcard->body) {
+            out << rewrite_stmt(*stmt, indent + 2, trait_names, program, pointer_aliases);
+        }
+        out << ind << "    }\n";
+    }
+
+    out << ind << "}\n";
+    return out.str();
+}
+
 static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(readability-function-cognitive-complexity)
                                  const std::vector<std::string>& trait_names,
-                                 const DecoratedProgram& program) {
+                                 const DecoratedProgram& program,
+                                 const std::unordered_set<std::string>& pointer_aliases) {
     auto known_fields = collect_trait_fields(trait_names, program);
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
@@ -130,7 +199,7 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
         [&](auto& s) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, LetStmt>) {
-                return ind + "auto " + s.name + " = " + rewrite_expr(*s.value, trait_names, program) + ";\n";
+                return ind + "auto " + s.name + " = " + rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
                 if (known_fields.contains(s.name)) {
@@ -145,19 +214,19 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                     lhs = "auto " + s.name;
                 }
                 return ind + lhs + " " + s.op + " " +
-                       rewrite_expr(*s.value, trait_names, program) + ";\n";
+                       rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
                 for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += "." + s.payload[i].name + " = " + rewrite_expr(*s.payload[i].value, trait_names, program);
+                    result += "." + s.payload[i].name + " = " + rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases);
                 }
                 return result + "});\n";
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                 std::string target = s.target_expr.has_value()
-                    ? rewrite_expr(**s.target_expr, trait_names, program)
+                    ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
                     : "entity";
                 if (s.args.empty()) {
                     return ind + "registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n";
@@ -169,37 +238,39 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                 result << ind << "    auto __value = __existing ? *__existing : " << s.trait_name << "{};\n";
                 for (const auto& arg : s.args) {
                     result << ind << "    __value." << arg.name << " = "
-                           << rewrite_expr(*arg.value, trait_names, program) << ";\n";
+                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
                 }
                 result << ind << "    registry.emplace_or_replace<" << s.trait_name << ">(" << target << ", __value);\n";
                 result << ind << "}\n";
                 return result.str();
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
                 std::string target = s.target_expr.has_value()
-                    ? rewrite_expr(**s.target_expr, trait_names, program)
+                    ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
                     : "entity";
                 return ind + "registry.remove<" + s.trait_name + ">(" + target + ");\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
-                    return ind + "return " + rewrite_expr(**s.value, trait_names, program) + ";\n";
+                    return ind + "return " + rewrite_expr(**s.value, trait_names, program, pointer_aliases) + ";\n";
                 }
                 return ind + "return;\n";
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                return ind + rewrite_expr(*s.expr, trait_names, program) + ";\n";
+                return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                std::string result = ind + "if (" + rewrite_expr(*s.condition, trait_names, program) + ") {\n";
+                std::string result = ind + "if (" + rewrite_expr(*s.condition, trait_names, program, pointer_aliases) + ") {\n";
                 for (auto& inner : s.then_body) {
-                    result += rewrite_stmt(*inner, indent + 1, trait_names, program);
+                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
                 }
                 result += ind + "}";
                 if (!s.else_body.empty()) {
                     result += " else {\n";
                     for (auto& inner : s.else_body) {
-                        result += rewrite_stmt(*inner, indent + 1, trait_names, program);
+                        result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
                     }
                     result += ind + "}";
                 }
                 return result + "\n";
+            } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                return emit_trait_match_stmt(s, indent, trait_names, program, pointer_aliases);
             } else {
                 return ind + "/* unsupported stmt */\n";
             }

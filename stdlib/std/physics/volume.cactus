@@ -33,3 +33,8 @@ pub event CollisionEnter:
     var other: entity_id
     var point: vec3
     var normal: vec3
+
+pub event Collision:
+    var other: entity_id
+    var normal: vec2
+    var depth: float

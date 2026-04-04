@@ -67,6 +67,8 @@ trait PlayerController:
     var width: float
     var height: float
 
+trait PlayerTag
+
 trait Health:
     persist sync var health: int
     persist var lives: int
@@ -103,6 +105,7 @@ pub unit Player:
         jump_state = JumpState.Falling
         width = PLAYER_WIDTH
         height = PLAYER_HEIGHT
+    PlayerTag
     Health:
         health = START_HEALTH
         lives = START_LIVES

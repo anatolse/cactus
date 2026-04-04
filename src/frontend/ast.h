@@ -198,6 +198,25 @@ struct IfStmt {
     SourceLocation location;
 };
 
+struct TraitMatchArm {
+    std::string trait_name;
+    std::optional<std::string> alias;
+    std::vector<std::unique_ptr<StmtNode>> body;
+    SourceLocation location;
+};
+
+struct WildcardMatchArm {
+    std::vector<std::unique_ptr<StmtNode>> body;
+    SourceLocation location;
+};
+
+struct TraitMatchStmt {
+    std::unique_ptr<ExprNode> subject;
+    std::vector<TraitMatchArm> arms;
+    std::optional<WildcardMatchArm> wildcard;
+    SourceLocation location;
+};
+
 // spawn TemplateName: Trait: field = expr
 struct SpawnStmt {
     std::string template_name;
@@ -233,7 +252,8 @@ struct RemoveTraitStmt {
 
 struct StmtNode {
     using Variant = std::variant<LetStmt, VarAssign, EmitStmt, SpawnStmt, DestroyStmt, LoadStmt,
-                                 AddTraitStmt, RemoveTraitStmt, ReturnStmt, ExprStmt, IfStmt>;
+                                 AddTraitStmt, RemoveTraitStmt, ReturnStmt, ExprStmt, IfStmt,
+                                 TraitMatchStmt>;
     Variant stmt;
     SourceLocation location;
 

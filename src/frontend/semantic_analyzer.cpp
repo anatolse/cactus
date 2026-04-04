@@ -1033,6 +1033,8 @@ void SemanticAnalyzer::validate_event_stmts(
         }
     };
 
+    auto in_system_handler = !system_name.empty();
+
     for (const auto& stmt : stmts) {
         if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
             locals[let_stmt->name] = infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event);
@@ -1059,10 +1061,74 @@ void SemanticAnalyzer::validate_event_stmts(
             validate_remove(*remove_stmt);
             continue;
         }
+        if (const auto* trait_match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
+            validate_trait_match_stmt(*trait_match, filter_bindings, locals, handler_event, system_name,
+                                      in_system_handler);
+            continue;
+        }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
             validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, "");
             validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, "");
         }
+    }
+}
+
+void SemanticAnalyzer::validate_trait_match_stmt(
+    const TraitMatchStmt& stmt,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const std::string& system_name,
+    bool in_system_handler) {
+    if (!in_system_handler) {
+        errors_.error(stmt.location,
+                      "statement-level `match entity_id` only allowed inside system event handlers");
+    }
+
+    auto subject_type = infer_expr_type(*stmt.subject, filter_bindings, local_bindings, handler_event);
+    if (subject_type.kind != TypeKind::EntityId && subject_type.kind != TypeKind::Unknown) {
+        errors_.error(stmt.location,
+                      "statement-level `match` subject must be of type `entity_id`; use expression-level match for value dispatch");
+    }
+
+    std::unordered_set<std::string> in_scope_names;
+    for (const auto& [name, _] : filter_bindings) {
+        in_scope_names.insert(name);
+    }
+    for (const auto& [name, _] : local_bindings) {
+        in_scope_names.insert(name);
+    }
+
+    for (const auto& arm : stmt.arms) {
+        const auto* trait = find_resolved_trait(arm.trait_name);
+        if (trait == nullptr) {
+            errors_.error(arm.location, "undeclared trait '" + arm.trait_name + "'");
+            continue;
+        }
+
+        const bool IS_MARKER = trait->fields.empty();
+        if (IS_MARKER && arm.alias.has_value()) {
+            errors_.error(arm.location,
+                          "marker trait '" + arm.trait_name + "' has no fields; alias 'as " +
+                              *arm.alias + "' is not allowed");
+        }
+
+        auto arm_locals = local_bindings;
+        if (arm.alias.has_value()) {
+            if (in_scope_names.contains(*arm.alias)) {
+                errors_.error(arm.location,
+                              "match arm alias '" + *arm.alias + "' conflicts with filter alias '" +
+                                  *arm.alias + "'");
+            } else {
+                arm_locals[*arm.alias] = TypeInfo{.kind = TypeKind::Struct, .name = trait->name};
+            }
+        }
+
+        validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, system_name);
+    }
+
+    if (stmt.wildcard.has_value()) {
+        validate_event_stmts(stmt.wildcard->body, filter_bindings, local_bindings, handler_event, system_name);
     }
 }
 
@@ -1114,6 +1180,14 @@ void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<Stm
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     collect_system_deps(s.then_body, dep);
                     collect_system_deps(s.else_body, dep);
+                } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                    for (const auto& arm : s.arms) {
+                        dep.reads.insert(arm.trait_name);
+                        collect_system_deps(arm.body, dep);
+                    }
+                    if (s.wildcard.has_value()) {
+                        collect_system_deps(s.wildcard->body, dep);
+                    }
                 }
             },
             stmt->stmt);
@@ -1220,6 +1294,10 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
             if (auto struct_it = result_.structs.find(local_it->second.name);
                 struct_it != result_.structs.end()) {
                 return find_field_type_in(struct_it->second.fields, member->member);
+            }
+            if (auto event_it = event_structs_.find(local_it->second.name);
+                event_it != event_structs_.end()) {
+                return find_field_type_in(event_it->second.fields, member->member);
             }
         }
         return make_unknown_type();
@@ -1529,7 +1607,8 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                               std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> ||
                               std::is_same_v<S, AddTraitStmt> ||
-                              std::is_same_v<S, RemoveTraitStmt>) {
+                              std::is_same_v<S, RemoveTraitStmt> ||
+                              std::is_same_v<S, TraitMatchStmt>) {
                     if (!in_system_handler) {
                         // Determine which keyword is used
                         std::string kw;
@@ -1541,6 +1620,8 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                             kw = "load";
                         } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                             kw = "add";
+                        } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                            kw = "match";
                         } else {
                             kw = "remove";
                         }
@@ -1595,6 +1676,14 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                                     errors_.error(s.location, "`from` target must be of type `entity_id`");
                                 }
                             }
+                        }
+                    }
+                    if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                        for (const auto& arm : s.arms) {
+                            validate_context_stmts(arm.body, context_name, in_system_handler);
+                        }
+                        if (s.wildcard.has_value()) {
+                            validate_context_stmts(s.wildcard->body, context_name, in_system_handler);
                         }
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {

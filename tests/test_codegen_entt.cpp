@@ -210,3 +210,56 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
         }
     }
 }
+
+TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen-entt][trait-match]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "trait Boss:\n"
+        "    var phase: int\n"
+        "trait Spike\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        match c.other:\n"
+        "            Boss as b =>\n"
+        "                let x = b.phase\n"
+        "            Spike =>\n"
+        "                let y = 1\n"
+        "            _ =>\n"
+        "                let z = 2\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
+            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
+            CHECK(code.find("registry.all_of<Spike>(__match_entity)") != std::string::npos);
+            CHECK(code.find("else {") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-entt][trait-match]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "trait Boss:\n"
+        "    var phase: int\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        match c.other:\n"
+        "            Boss as b =>\n"
+        "                let x = b.phase\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
+            CHECK(code.find("else {") == std::string::npos);
+        }
+    }
+}

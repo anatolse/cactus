@@ -999,6 +999,46 @@ TEST_CASE("Parser: bare add statement parsed", "[parser][dynamic-traits]") {
     CHECK_FALSE(add->target_expr.has_value());
 }
 
+TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait-match]") {
+    auto prog = parse(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        match c.other:\n"
+        "            Boss as b =>\n"
+        "                let x = b.phase\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[1]);
+    auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(match_stmt != nullptr);
+    REQUIRE(match_stmt->arms.size() == 1);
+    CHECK(match_stmt->arms[0].trait_name == "Boss");
+    REQUIRE(match_stmt->arms[0].alias.has_value());
+    CHECK(*match_stmt->arms[0].alias == "b");
+}
+
+TEST_CASE("Parser: trait match statement multiple arms and wildcard", "[parser][trait-match]") {
+    auto prog = parse(
+        "event Collision:\n"
+        "    var other: entity_id\n"
+        "system Combat:\n"
+        "    on Collision as c:\n"
+        "        match c.other:\n"
+        "            Boss as b =>\n"
+        "                pass\n"
+        "            EnemyAI =>\n"
+        "                pass\n"
+        "            _ =>\n"
+        "                pass\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[1]);
+    auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(match_stmt != nullptr);
+    REQUIRE(match_stmt->arms.size() == 2);
+    CHECK(match_stmt->arms[0].trait_name == "Boss");
+    CHECK(match_stmt->arms[1].trait_name == "EnemyAI");
+    REQUIRE(match_stmt->wildcard.has_value());
+}
+
 TEST_CASE("Parser: add statement with block parsed", "[parser][dynamic-traits]") {
     auto prog = parse(
         "system FreezeSystem:\n"

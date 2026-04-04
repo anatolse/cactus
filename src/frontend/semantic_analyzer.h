@@ -154,6 +154,12 @@ private:
                               const std::unordered_map<std::string, TypeInfo>& local_bindings,
                               const ResolvedStruct* handler_event,
                               const std::string& system_name);
+    void validate_trait_match_stmt(const TraitMatchStmt& stmt,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                   const ResolvedStruct* handler_event,
+                                   const std::string& system_name,
+                                   bool in_system_handler);
 
     // Phase 3: Dynamic ECS validations (dynamic-ecs-language change)
     void validate_template_unit_declarations(ProgramNode& program);

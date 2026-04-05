@@ -28,10 +28,10 @@ pub trait Collider:
 # other:   entity_id of the entity that was hit
 # overlap: overlap vector (direction and depth of penetration)
 pub event CollisionEnter:
-    var other: entity_id
-    var overlap: vec2
+    other: entity_id
+    overlap: vec2
 
-pub event Collision:
-    var other: entity_id
-    var normal: vec2
-    var depth: float
+    other: entity_id
+    normal: vec2
+    material: material_id
+    depth: float

@@ -10,11 +10,11 @@ using namespace cactus;
 // Standard lifecycle event declarations (normally from std.core imports)
 static const std::string STDLIB_EVENTS =
     "pub event tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event fixed_tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event late_tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event spawn\n"
     "pub event destroy\n"
     "pub event input\n"

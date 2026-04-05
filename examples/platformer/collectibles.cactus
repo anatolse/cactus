@@ -29,9 +29,9 @@ trait Score:
     persist var gems_collected: int
 
 event GemCollected:
-    var point_value: int
-    var gem_type: GemType
-    var position: vec2
+    point_value: int
+    gem_type: GemType
+    position: vec2
 
 pub unit BlueGem1:
     Position:

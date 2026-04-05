@@ -76,17 +76,17 @@ trait Health:
     var invincible_timer: float
 
 event PlayerJumped:
-    var position: vec2
-    var jumps_remaining: int
+    position: vec2
+    jumps_remaining: int
 
 event PlayerLanded:
-    var position: vec2
+    position: vec2
 
 event PlayerDamaged:
-    var amount: int
+    amount: int
 
 event PlayerDied:
-    var lives_remaining: int
+    lives_remaining: int
 
 pub unit Player:
     Position:

@@ -8,9 +8,9 @@ module std.audio
 # volume: playback volume multiplier (1.0 = normal)
 # pitch:  playback pitch multiplier (1.0 = normal)
 pub event PlaySound:
-    var sound: sound_id
-    var volume: float
-    var pitch: float
+    sound: sound_id
+    volume: float
+    pitch: float
 
 # Persistent sound emitter attached to an entity.
 # Useful for looping ambient sounds or sounds that need runtime control.

@@ -10,11 +10,11 @@ using namespace cactus;
 // Standard lifecycle event declarations (normally from std.core imports)
 static const std::string STDLIB_EVENTS =
     "pub event tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event fixed_tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event late_tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event spawn\n"
     "pub event destroy\n"
     "pub event input\n"
@@ -132,7 +132,7 @@ TEST_CASE("Semantic: const string — rejected in func", "[semantic]") {
 TEST_CASE("Semantic: func purity — emit rejected", "[semantic]") {
     CHECK(analyze_has_errors(
         "event Boom:\n"
-        "    var x: int\n"
+        "    x: int\n"
         "func bad():\n"
         "    emit Boom:\n"
         "        x = 1\n"));
@@ -201,7 +201,7 @@ TEST_CASE("Semantic: event handler — valid event", "[semantic]") {
         "trait Pos:\n"
         "    var x: float\n"
         "event Hit:\n"
-        "    var dmg: int\n"
+        "    dmg: int\n"
         "system Combat:\n"
         "    filter: \n"
         "        Pos\n"
@@ -224,7 +224,7 @@ TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
     CHECK(analyze_has_errors(
         STDLIB_EVENTS +
         "event Damage:\n"
-        "    var amount: int\n"
+        "    amount: int\n"
         "system Combat:\n"
         "    on tick:\n"
         "        emit Damage:\n"
@@ -235,7 +235,7 @@ TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(
         STDLIB_EVENTS +
         "event Damage:\n"
-        "    var amount: int\n"
+        "    amount: int\n"
         "system Combat:\n"
         "    on tick:\n"
         "        emit Damage:\n"
@@ -566,7 +566,7 @@ TEST_CASE("Semantic: marker trait with nested trait assignment passes", "[semant
 TEST_CASE("Semantic: trait match valid", "[semantic][trait-match]") {
     CHECK_FALSE(analyze_has_errors(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Boss:\n"
         "    var phase: int\n"
         "trait Spike\n"
@@ -582,7 +582,7 @@ TEST_CASE("Semantic: trait match valid", "[semantic][trait-match]") {
 TEST_CASE("Semantic: trait match non-entity subject error", "[semantic][trait-match]") {
     CHECK(analyze_has_errors(
         "event Collision:\n"
-        "    var other: int\n"
+        "    other: int\n"
         "trait Boss:\n"
         "    var phase: int\n"
         "system Combat:\n"
@@ -595,7 +595,7 @@ TEST_CASE("Semantic: trait match non-entity subject error", "[semantic][trait-ma
 TEST_CASE("Semantic: trait match unknown trait error", "[semantic][trait-match]") {
     CHECK(analyze_has_errors(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "system Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"
@@ -606,7 +606,7 @@ TEST_CASE("Semantic: trait match unknown trait error", "[semantic][trait-match]"
 TEST_CASE("Semantic: trait match alias conflict error", "[semantic][trait-match]") {
     CHECK(analyze_has_errors(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Position:\n"
         "    var x: float\n"
         "trait Boss:\n"
@@ -623,7 +623,7 @@ TEST_CASE("Semantic: trait match alias conflict error", "[semantic][trait-match]
 TEST_CASE("Semantic: marker trait alias error", "[semantic][trait-match]") {
     CHECK(analyze_has_errors(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Spike\n"
         "system Combat:\n"
         "    on Collision as c:\n"
@@ -635,7 +635,7 @@ TEST_CASE("Semantic: marker trait alias error", "[semantic][trait-match]") {
 TEST_CASE("Semantic: wildcard not last error", "[semantic][trait-match]") {
     CHECK(analyze_has_errors(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Boss:\n"
         "    var phase: int\n"
         "system Combat:\n"
@@ -660,7 +660,7 @@ TEST_CASE("Semantic: trait match outside handler error", "[semantic][trait-match
 TEST_CASE("Semantic: entity_id compared to zero uses total-semantics error", "[semantic][entity-id]") {
     CHECK(analyze_first_error(
               "event Collision:\n"
-              "    var other: entity_id\n"
+              "    other: entity_id\n"
               "system Combat:\n"
               "    on Collision as c:\n"
               "        let dead = c.other == 0\n") ==
@@ -670,11 +670,20 @@ TEST_CASE("Semantic: entity_id compared to zero uses total-semantics error", "[s
 TEST_CASE("Semantic: exists(entity_id) valid in system handler", "[semantic][entity-id]") {
     CHECK_FALSE(analyze_has_errors(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "system Combat:\n"
         "    on Collision as c:\n"
         "        if exists(c.other):\n"
         "            let x = 1\n"));
+}
+
+TEST_CASE("Semantic: event field modifiers rejected", "[semantic]") {
+    CHECK(analyze_has_errors(
+        "event Tick:\n"
+        "    let dt: float\n"));
+    CHECK(analyze_first_error(
+        "event Tick:\n"
+        "    let dt: float\n").find("event fields use bare `name: type` syntax") != std::string::npos);
 }
 
 TEST_CASE("Semantic: exists requires entity_id argument", "[semantic][entity-id]") {

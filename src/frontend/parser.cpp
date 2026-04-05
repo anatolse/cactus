@@ -515,6 +515,21 @@ FieldNode Parser::parse_field() {
     return field;
 }
 
+namespace {
+bool is_event_field_modifier_token(TokenType type) {
+    switch (type) {
+        case TokenType::LET:
+        case TokenType::VAR:
+        case TokenType::PERSIST:
+        case TokenType::SYNC:
+        case TokenType::PUB:
+            return true;
+        default:
+            return false;
+    }
+}
+}  // namespace
+
 // ── Lifecycle Event Name Helper ─────────────────────────────────────────────
 
 // Task 4.10: Accept keyword tokens as lifecycle event names
@@ -1082,11 +1097,34 @@ EventNode Parser::parse_event(bool is_pub) {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto field = parse_field();
+        auto field_loc = peek().location;
+        if (is_event_field_modifier_token(peek().type)) {
+            errors_.error(peek().location,
+                          "event fields use bare `name: type` syntax; trait field modifiers are not allowed in event declarations");
+            while (is_event_field_modifier_token(peek().type)) {
+                advance();
+            }
+        }
+
+        auto field_name = consume(TokenType::IDENTIFIER, "expected event field name").value;
+        consume(TokenType::COLON, "expected ':'");
+        auto field_type = parse_type_ref();
+
+        std::optional<std::unique_ptr<ExprNode>> default_val;
+        if (match(TokenType::ASSIGN)) {
+            default_val = parse_expression();
+        }
+        expect_newline();
+
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
         }
+        FieldNode field;
+        field.name = field_name;
+        field.type = std::move(field_type);
+        field.default_value = std::move(default_val);
+        field.location = field_loc;
         node.fields.push_back(std::move(field));
     }
 

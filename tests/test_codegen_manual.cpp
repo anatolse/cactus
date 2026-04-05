@@ -14,11 +14,11 @@ using namespace cactus;
 // Standard lifecycle event declarations (normally from std.core imports)
 static const std::string STDLIB_EVENTS =
     "pub event tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event fixed_tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event late_tick:\n"
-    "    let dt: float\n"
+    "    dt: float\n"
     "pub event spawn\n"
     "pub event destroy\n"
     "pub event input\n"
@@ -111,8 +111,8 @@ TEST_CASE("Codegen Manual: event buffer generation", "[codegen-manual]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Damage:\n"
-        "    var amount: int\n"
-        "    var source: int\n",
+        "    amount: int\n"
+        "    source: int\n",
         program);
 
     for (auto& decl : program.declarations) {

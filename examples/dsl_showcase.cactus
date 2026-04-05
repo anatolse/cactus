@@ -317,35 +317,35 @@ pub trait Boss                  # pub marker: importable by other modules
 # Marker events (no fields) may be declared without a body.
 
 event PlayerJumped:
-    var position: vec2
-    var velocity: vec2
+    position: vec2
+    velocity: vec2
 
 event PlayerDamaged:
-    var amount:   int
-    var source:   entity_id             # entity_id field in event
+    amount:   int
+    source:   entity_id             # entity_id field in event
 
 event PlayerDied:
-    var lives_remaining: int
+    lives_remaining: int
 
 event EnemyDefeated:
-    var position:    vec2
-    var enemy_type:  EnemyType
-    var score_value: int
+    position:    vec2
+    enemy_type:  EnemyType
+    score_value: int
 
 event CoinCollected:
-    var value: int
+    value: int
 
 event FreezeApplied:
-    var duration: float
+    duration: float
 
 event SceneTransition:
-    var next_state: GameState
+    next_state: GameState
 
 # Collision event carries entity_id for trait pattern matching (double dispatch)
 event Collision:
-    var other:  entity_id               # the other entity involved
-    var normal: vec2                    # collision surface normal
-    var depth:  float                   # penetration depth
+    other:  entity_id               # the other entity involved
+    normal: vec2                    # collision surface normal
+    depth:  float                   # penetration depth
 
 # Marker event — no colon, no fields (body-less form)
 event GamePaused

@@ -55,7 +55,7 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
-        "    let dt: float\n"
+        "    dt: float\n"
         "trait Pos:\n"
         "    var x: float\n"
         "    var y: float\n"
@@ -83,7 +83,7 @@ TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Damage:\n"
-        "   var amount: int\n",
+        "   amount: int\n",
         program);
 
     for (auto& decl : program.declarations) {
@@ -102,7 +102,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick: \n"
-        "    let dt: float\n"
+        "    dt: float\n"
         "trait Pos:\n    persist sync var x: float\n    persist sync var y: float\n"
         "system Move:\n"
         "    filter:\n"
@@ -188,7 +188,7 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
-        "    let dt: float\n"
+        "    dt: float\n"
         "trait Frozen\n"
         "trait Stunned:\n"
         "    var duration: float = 0.0\n"
@@ -218,7 +218,7 @@ TEST_CASE("Codegen EnTT: cross-entity add/remove/destroy use validity guards", "
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Frozen\n"
         "system Cleanup:\n"
         "    on Collision as c:\n"
@@ -242,9 +242,9 @@ TEST_CASE("Codegen EnTT: targeted emit uses validity guard", "[codegen-entt][ent
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Hit:\n"
-        "    var amount: int\n"
+        "    amount: int\n"
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "system Combat:\n"
         "    on Collision as c:\n"
         "        emit Hit to c.other:\n"
@@ -264,7 +264,7 @@ TEST_CASE("Codegen EnTT: exists compiles to registry.valid", "[codegen-entt][ent
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "system Combat:\n"
         "    on Collision as c:\n"
         "        if exists(c.other):\n"
@@ -283,7 +283,7 @@ TEST_CASE("Codegen EnTT: trait match is guarded by entity validity", "[codegen-e
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Boss:\n"
         "    var phase: int\n"
         "system Combat:\n"
@@ -306,7 +306,7 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Boss:\n"
         "    var phase: int\n"
         "trait Spike\n"
@@ -336,7 +336,7 @@ TEST_CASE("Codegen EnTT: aliased tick handler uses alias in signature and body",
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
-        "    let dt: float\n"
+        "    dt: float\n"
         "trait Pos:\n"
         "    var x: float\n"
         "system Move:\n"
@@ -380,7 +380,7 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "trait Boss:\n"
         "    var phase: int\n"
         "system Combat:\n"
@@ -448,7 +448,7 @@ TEST_CASE("Codegen EnTT: system order by emits registry sort for single key", "[
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
-        "    let dt: float\n"
+        "    dt: float\n"
         "trait Sprite:\n"
         "    var layer: int\n"
         "system Render:\n"
@@ -473,7 +473,7 @@ TEST_CASE("Codegen EnTT: system order by emits multi-key comparator", "[codegen-
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
-        "    let dt: float\n"
+        "    dt: float\n"
         "trait Position:\n"
         "    var pos: vec2\n"
         "trait Sprite:\n"
@@ -502,7 +502,7 @@ TEST_CASE("Codegen EnTT: system without order by emits no sort call", "[codegen-
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
-        "    let dt: float\n"
+        "    dt: float\n"
         "trait Sprite:\n"
         "    var layer: int\n"
         "system Render:\n"

@@ -30,11 +30,11 @@ pub trait Collider:
 # point:  world-space contact point
 # normal: surface normal at the contact point (pointing away from other)
 pub event CollisionEnter:
-    var other: entity_id
-    var point: vec3
-    var normal: vec3
+    other: entity_id
+    point: vec3
+    normal: vec3
 
-pub event Collision:
-    var other: entity_id
-    var normal: vec2
-    var depth: float
+    other: entity_id
+    normal: vec2
+    texture: texture_id
+    depth: float

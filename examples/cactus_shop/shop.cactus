@@ -39,14 +39,14 @@ trait Purchasable:
     let item: ShopItem
 
 event ShopOpened:
-    var shop_entity: entity_id
+    shop_entity: entity_id
 
 event ShopClosed:
-    var shop_entity: entity_id
+    shop_entity: entity_id
 
 event ItemPurchased:
-    var item: ShopItem
-    var buyer: entity_id
+    item: ShopItem
+    buyer: entity_id
 
 pub unit CactusShop:
     Position:

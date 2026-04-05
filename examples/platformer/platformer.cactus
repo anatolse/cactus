@@ -169,32 +169,32 @@ trait SideScrollCamera:
 # ── Events ───────────────────────────────────────────────────────────────────────
 
 event PlayerJumped:
-    var position: vec2
-    var jumps_remaining: int
+    position: vec2
+    jumps_remaining: int
 
 event PlayerLanded:
-    var position: vec2
+    position: vec2
 
 event PlayerDamaged:
-    var amount: int
+    amount: int
 
 event PlayerDied:
-    var lives_remaining: int
+    lives_remaining: int
 
 event PlatformCollision:
-    var entity: entity_id
-    var platform_pos: vec2
-    var platform_size: vec2
-    var overlap_x: float
-    var overlap_y: float
+    entity: entity_id
+    platform_pos: vec2
+    platform_size: vec2
+    overlap_x: float
+    overlap_y: float
 
 event EnemyDefeated:
-    var position: vec2
+    position: vec2
 
 event GemCollected:
-    var point_value: int
-    var gem_type: GemType
-    var position: vec2
+    point_value: int
+    gem_type: GemType
+    position: vec2
 
 # ── Units ────────────────────────────────────────────────────────────────────────
 

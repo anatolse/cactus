@@ -237,8 +237,8 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                         ResolvedField rf;
                         rf.name = f.name;
                         rf.type = resolve_type_ref(f.type);
-                        rf.is_let = f.modifiers.is_let;
-                        rf.is_var = f.modifiers.is_var;
+                        rf.is_let = true;
+                        rf.is_var = false;
                         rf.is_persist = f.modifiers.is_persist;
                         rf.is_sync = f.modifiers.is_sync;
                         rf.is_pub = f.modifiers.is_pub;
@@ -703,6 +703,14 @@ void SemanticAnalyzer::check_persist_sync(ProgramNode& program) {
                 }
                 if (field.modifiers.is_sync && field.modifiers.is_let) {
                     errors_.error(field.location, "sync modifier can only be used on 'var' fields, not 'let'");
+                }
+            }
+        } else if (auto* event = std::get_if<EventNode>(&decl)) {
+            for (auto& field : event->fields) {
+                if (field.modifiers.is_let || field.modifiers.is_var || field.modifiers.is_persist ||
+                    field.modifiers.is_sync || field.modifiers.is_pub) {
+                    errors_.error(field.location,
+                                  "event fields use bare `name: type` syntax; trait field modifiers are not allowed in event declarations");
                 }
             }
         }

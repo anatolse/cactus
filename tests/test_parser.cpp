@@ -202,12 +202,22 @@ TEST_CASE("Parser: system with filter and handler", "[parser]") {
 TEST_CASE("Parser: event declaration", "[parser]") {
     auto prog = parse(
         "event Damage:\n"
-        "    var amount: int\n"
-        "    var source: int\n");
+        "    amount: int\n"
+        "    source: int\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<EventNode>(prog.declarations[0]);
     CHECK(decl.name == "Damage");
     REQUIRE(decl.fields.size() == 2);
+    CHECK(decl.fields[0].name == "amount");
+    CHECK(decl.fields[0].type.name == "int");
+    CHECK_FALSE(decl.fields[0].modifiers.is_var);
+}
+
+TEST_CASE("Parser: event declaration rejects trait modifiers", "[parser]") {
+    auto errors = parse_expect_errors(
+        "event Tick:\n"
+        "    let dt: float\n");
+    CHECK(errors.diagnostics().front().message.find("event fields use bare `name: type` syntax") != std::string::npos);
 }
 
 TEST_CASE("Parser: func declaration", "[parser]") {
@@ -585,7 +595,7 @@ TEST_CASE("Parser: destroy statement", "[parser][dynamic-ecs]") {
 TEST_CASE("Parser: destroy targeted entity statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "system Cleanup:\n"
         "    on Collision as c:\n"
         "        destroy c.other\n");
@@ -1113,7 +1123,7 @@ TEST_CASE("Parser: extern system with handler produces error", "[parser][extern-
 TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait-match]") {
     auto prog = parse(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "system Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"
@@ -1131,7 +1141,7 @@ TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait
 TEST_CASE("Parser: trait match statement multiple arms and wildcard", "[parser][trait-match]") {
     auto prog = parse(
         "event Collision:\n"
-        "    var other: entity_id\n"
+        "    other: entity_id\n"
         "system Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"

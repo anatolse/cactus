@@ -35,12 +35,12 @@ trait ThirdPersonCamera:
     var target_offset: vec3
 
 event PlayerMoved:
-    var position: vec3
-    var direction: vec3
+    position: vec3
+    direction: vec3
 
 event CoinSpent:
-    var amount: int
-    var remaining: int
+    amount: int
+    remaining: int
 
 pub unit Player:
     Position:

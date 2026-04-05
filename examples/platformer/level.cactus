@@ -24,11 +24,11 @@ trait Platform:
     let color: color
 
 event PlatformCollision:
-    var entity: entity_id
-    var platform_pos: vec2
-    var platform_size: vec2
-    var overlap_x: float
-    var overlap_y: float
+    entity: entity_id
+    platform_pos: vec2
+    platform_size: vec2
+    overlap_x: float
+    overlap_y: float
 
 pub unit Ground:
     Platform:

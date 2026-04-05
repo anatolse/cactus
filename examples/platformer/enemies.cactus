@@ -25,10 +25,10 @@ trait EnemyAI:
     let enemy_height: float
 
 event PlayerDamaged:
-    var amount: int
+    amount: int
 
 event EnemyDefeated:
-    var position: vec2
+    position: vec2
 
 pub unit WalkerEnemy1:
     Position:
@@ -110,9 +110,9 @@ system EnemyCollisionSystem:
                     amount = DAMAGE_AMOUNT
 
 event Collision:
-    var other: entity_id
-    var normal: vec2
-    var depth: float
+    other: entity_id
+    normal: vec2
+    depth: float
 
 system EnemyTraitMatchDemo:
     filter:

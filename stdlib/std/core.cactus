@@ -10,13 +10,13 @@ pub trait Persistent
 
 # Events with a dt field (fired each frame phase)
 pub event tick:
-    let dt: float
+    dt: float
 
 pub event fixed_tick:
-    let dt: float
+    dt: float
 
 pub event late_tick:
-    let dt: float
+    dt: float
 
 # Marker lifecycle events (no fields)
 pub event spawn

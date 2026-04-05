@@ -1,7 +1,6 @@
 ## Requirements
-
 ### Requirement: Command-line argument parsing
-The CLI SHALL accept the following arguments: input file path (positional, required), `--backend` flag (`cpp-manual` or `cpp-entt`, default: `cpp-manual`), `--output` flag (output file path, optional, defaults to stdout), `--module-path` flag (repeatable, additional directories to search for module files), and `--help` flag.
+The CLI SHALL accept the following arguments: input file path (positional, required), `--backend` flag (`cpp-manual` or `cpp-entt`, default: `cpp-entt`), `--output` flag (output file path, optional, defaults to stdout), `--module-path` flag (repeatable, additional directories to search for module files), and `--help` flag.
 
 #### Scenario: Valid invocation with manual backend
 - **WHEN** the user runs `cactus game.cactus --backend cpp-manual --output game.cpp`
@@ -9,7 +8,7 @@ The CLI SHALL accept the following arguments: input file path (positional, requi
 
 #### Scenario: Default backend
 - **WHEN** the user runs `cactus game.cactus`
-- **THEN** the CLI uses the `cpp-manual` backend by default
+- **THEN** the CLI uses the `cpp-entt` backend by default
 
 #### Scenario: Module path flag
 - **WHEN** the user runs `cactus main.cactus --module-path ./lib --module-path ./vendor`
@@ -55,3 +54,4 @@ The CLI SHALL exit with code 0 on success and code 1 on any compilation error.
 #### Scenario: Error exit code
 - **WHEN** compilation fails due to errors
 - **THEN** the process exits with code 1
+

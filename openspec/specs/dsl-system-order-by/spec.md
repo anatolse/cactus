@@ -1,5 +1,8 @@
-## ADDED Requirements
+# dsl-system-order-by Specification
 
+## Purpose
+TBD - created by archiving change dsl-system-order-by. Update Purpose after archive.
+## Requirements
 ### Requirement: `order by:` clause on system declarations
 System declarations SHALL support an optional `order by:` block. When present, the system's entity iteration order SHALL be sorted according to the specified sort keys before each handler invocation. Sort keys are `alias.field` expressions where `alias` must be declared in the system's `filter:` block. Multiple sort keys produce lexicographic ordering: the first key is the primary sort, subsequent keys break ties.
 
@@ -70,3 +73,4 @@ The sort SHALL be applied before each handler's entity iteration loop. If a syst
 #### Scenario: Sort runs before each handler independently
 - **WHEN** a system has `order by: s.layer asc` and both `on tick:` and `on late_tick:`
 - **THEN** the sort runs before `on tick:` iteration and again before `on late_tick:` iteration
+

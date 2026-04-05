@@ -1,5 +1,8 @@
-## ADDED Requirements
+# dsl-trait-pattern-match Specification
 
+## Purpose
+TBD - created by archiving change dsl-trait-pattern-match. Update Purpose after archive.
+## Requirements
 ### Requirement: `match entity_id:` statement with trait pattern arms
 The DSL SHALL support a statement-level `match` construct. When the subject expression has type `entity_id`, the `match` performs **trait pattern matching**: each arm tests whether the referenced entity currently has the named trait attached. Arms execute in declaration order; the first matching arm fires and subsequent arms are skipped. If no arm matches and no wildcard is present, execution continues silently (no error, no-op).
 
@@ -72,3 +75,4 @@ Statement-level `match` on `entity_id` SHALL only appear inside system event han
 #### Scenario: trait match outside event handler is invalid
 - **WHEN** `match some_id:` appears inside a `func` body
 - **THEN** the semantic analyzer SHALL report: "statement-level `match entity_id` only allowed inside system event handlers"
+

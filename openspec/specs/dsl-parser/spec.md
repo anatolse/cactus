@@ -1,5 +1,4 @@
 ## Requirements
-
 ### Requirement: Top-level declaration parsing
 The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. Supported declarations: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `event`, `func`, `extern func`, `template`, `asset`, `input`.
 
@@ -489,3 +488,65 @@ The keyword `after` is added to the lexer keyword set with token type `AFTER`.
 ### Requirement: Dotted key form in `config:` assignments and `spawn` override arguments
 **Reason**: `config:` blocks and flat parenthesized spawn override arguments are removed. Nested trait blocks make field ownership explicit without dotted keys.
 **Migration**: Move each field assignment under its owning trait block in the unit/template or spawn body.
+
+### Requirement: `order by:` clause parsing in system declarations
+The parser SHALL recognize an optional `order by:` block in system declarations, positioned between the `filter:`/`exclude:` clauses and the event handler list. The `order by:` block contains one or more sort key lines, each consisting of a dotted alias-field expression followed by an optional direction keyword.
+
+```ebnf
+system_decl     = "system" IDENTIFIER ":" INDENT
+                  [filter_clause]
+                  [exclude_clause]
+                  [order_by_clause]
+                  handler+
+                  DEDENT ;
+
+order_by_clause = "order" "by" ":" INDENT sort_key+ DEDENT ;
+sort_key        = IDENTIFIER "." IDENTIFIER ["asc" | "desc"] NEWLINE ;
+```
+
+`order` and `by` are contextual keywords in this production. `asc` and `desc` are contextual direction keywords.
+
+#### Scenario: order by clause with single key parsed
+- **WHEN** a system contains `order by:` with one indented `s.layer asc` line
+- **THEN** the parser produces a `SystemNode` with `order_by = [{alias="s", field="layer", descending=false}]`
+
+#### Scenario: order by clause with multiple keys parsed
+- **WHEN** a system contains `order by:` with `s.layer` then `p.pos.y desc`
+- **THEN** the parser produces `order_by` with two entries: `{alias="s", field="layer", descending=false}` and `{alias="p", field="pos.y", descending=true}`
+
+#### Scenario: order by with default asc direction
+- **WHEN** a sort key line has no direction keyword
+- **THEN** the parser produces a `SortKey` with `descending = false`
+
+#### Scenario: system without order by has empty order_by
+- **WHEN** a system declaration has no `order by:` block
+- **THEN** `SystemNode.order_by` is an empty vector
+
+### Requirement: Statement-level `match` parsing
+The parser SHALL recognize `match expr ":"` at statement position as a `TraitMatchStmt`. This is distinct from the existing `MatchExpr` (expression-level). The trait match arms use `IDENTIFIER ["as" IDENTIFIER] "=>"` syntax; the wildcard arm uses `"_" "=>"`.
+
+```ebnf
+trait_match_stmt = "match" expr ":" INDENT trait_match_arm+ DEDENT ;
+trait_match_arm  = trait_arm | wildcard_arm ;
+trait_arm        = IDENTIFIER ["as" IDENTIFIER] "=>" INDENT stmt+ DEDENT ;
+wildcard_arm     = "_" "=>" INDENT stmt+ DEDENT ;
+```
+
+The `match` keyword is already in the lexer (used by `MatchExpr`). The parser distinguishes statement vs. expression context by position. At statement position, `match expr:` always produces a `TraitMatchStmt`; type validation (entity_id vs. other) is deferred to semantic analysis.
+
+#### Scenario: Simple trait match with alias parsed
+- **WHEN** `match c.other:` followed by `Boss as b =>` and a body is parsed at statement position
+- **THEN** the parser produces a `TraitMatchStmt` with one `TraitMatchArm{trait="Boss", alias="b", body=[...]}`
+
+#### Scenario: Trait match with no alias parsed
+- **WHEN** `Spike =>` arm appears with no `as` clause
+- **THEN** the parser produces `TraitMatchArm{trait="Spike", alias=nullopt, body=[...]}`
+
+#### Scenario: Wildcard arm parsed
+- **WHEN** `_ =>` arm appears as last arm
+- **THEN** the parser produces a `WildcardArm{body=[...]}`
+
+#### Scenario: Multiple arms parsed in order
+- **WHEN** match has `Boss as b =>`, then `EnemyAI as e =>`, then `_ =>`
+- **THEN** the `TraitMatchStmt` contains arms in declaration order: `[TraitArm(Boss,b), TraitArm(EnemyAI,e), WildcardArm]`
+

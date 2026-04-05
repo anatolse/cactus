@@ -1,5 +1,8 @@
-## ADDED Requirements
+# dsl-entity-id-total-semantics Specification
 
+## Purpose
+TBD - created by archiving change dsl-entity-id-total-semantics. Update Purpose after archive.
+## Requirements
 ### Requirement: `entity_id` is an opaque entity handle with total operation semantics
 `entity_id` is an opaque value that identifies an entity instance. The language exposes no null or zero entity literal — authors never construct or manipulate null handles. Handles may become **stale** when the referenced entity is destroyed. All operations involving `entity_id` are **total**: operations on stale handles are safe no-ops or no-match at runtime. Authors are never required to check for stale handles; the generated backend takes responsibility for validity guards.
 
@@ -75,3 +78,4 @@ When a `match entity_id:` statement is evaluated and the referenced entity is de
 #### Scenario: dead-entity case handled explicitly
 - **WHEN** an author writes `if exists(c.other): match c.other: Boss as b => ...`
 - **THEN** the match is only attempted when the entity is live; dead handle case is handled by the `if` guard
+

@@ -1,5 +1,8 @@
-## ADDED Requirements
+# dsl-extern-system Specification
 
+## Purpose
+TBD - created by archiving change dsl-extern-system. Update Purpose after archive.
+## Requirements
 ### Requirement: `extern system` top-level declaration
 The DSL SHALL support `extern system Name:` as a top-level declaration. An `extern system` declares a system whose implementation is provided by the backend or by the user in C++. It has the same structural clauses as a regular `system` declaration — `filter:`, `exclude:`, `order by:`, `after:` — but MUST NOT have event handlers. An `extern system` with event handlers SHALL be a compile-time error.
 
@@ -61,3 +64,4 @@ An `extern system` MAY declare `after:` constraints naming other systems (regula
 #### Scenario: cycle involving extern system is an error
 - **WHEN** `extern system A: after: B` and `system B: after: A` creates a cycle
 - **THEN** the semantic analyzer SHALL report: "system ordering cycle detected: A → B → A"
+

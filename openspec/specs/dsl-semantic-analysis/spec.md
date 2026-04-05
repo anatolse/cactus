@@ -82,7 +82,7 @@ The semantic analyzer SHALL verify that all trait names referenced in system `fi
 - **THEN** the analyzer reports an error "unknown trait 'NonExistent' in system filter"
 
 ### Requirement: Event validation
-The semantic analyzer SHALL verify that all `emit` statements reference declared events. All event handlers SHALL have no parameter list (the new syntax has none). The analyzer SHALL NOT enforce separate rules for lifecycle vs. user event handlers — both are validated by resolving the event name against declared event types (including std.core lifecycle events).
+The semantic analyzer SHALL verify that all `emit` statements reference declared events. All event handlers SHALL have no parameter list (the new syntax has none). The analyzer SHALL NOT enforce separate rules for lifecycle vs. user event handlers — both are validated by resolving the event name against declared event types (including std.core lifecycle events). Event payload fields are declared without trait-style modifiers and are implicitly immutable members of the event type.
 
 #### Scenario: Emit of declared event accepted
 - **WHEN** a system handler contains `emit Damage(amount = 10)` and `event Damage:` is declared with field `amount: int`
@@ -99,6 +99,10 @@ The semantic analyzer SHALL verify that all `emit` statements reference declared
 #### Scenario: Handler for stdlib lifecycle event accepted
 - **WHEN** `on tick:` appears in a system body
 - **THEN** the analyzer resolves `tick` from std.core and accepts the handler
+
+#### Scenario: Event field is implicitly immutable
+- **WHEN** `event Damage:` is declared with `amount: int`
+- **THEN** the analyzer treats `amount` as a read-only field of the `Damage` event type
 
 ### Requirement: Dependency graph construction
 The semantic analyzer SHALL build a dependency graph of systems based on their trait access patterns and event relationships. This graph SHALL be included in the DecoratedProgram.
@@ -207,6 +211,17 @@ This replaces the previous `event` implicit object (for user events) and the pre
 #### Scenario: Spawn handler body has no accessible event fields
 - **WHEN** `on spawn:` handler body contains `spawn.dt`
 - **THEN** the analyzer reports an error: "event 'spawn' has no field 'dt'"
+
+### Requirement: Trait field modifiers are invalid on event fields
+The semantic analyzer SHALL reject trait-oriented field modifiers when they appear in an `event` declaration body. `let`, `var`, `persist`, `sync`, and other trait field modifiers MUST NOT be accepted as event-field metadata.
+
+#### Scenario: let event field rejected
+- **WHEN** `event Tick:` contains `let dt: float`
+- **THEN** the compiler reports an error indicating event fields use bare `name: type` syntax
+
+#### Scenario: sync event field rejected
+- **WHEN** `event NetMessage:` contains `sync var sequence: int`
+- **THEN** the compiler reports an error indicating trait field modifiers are not allowed in event declarations
 
 ### Requirement: Targeted emit validation
 The semantic analyzer SHALL verify that the expression in an `emit ... to expression` statement evaluates to type `entity_id`.

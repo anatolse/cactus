@@ -309,22 +309,40 @@ The handler no longer carries a parameter list node; instead, `EventHandlerNode`
 - **THEN** the parser produces an `EventHandler` with `event_name = "PlayerDamaged"` and `alias = "dmg"`
 
 ### Requirement: Marker event declaration (body is optional)
-The parser SHALL accept `event` declarations with no colon and no body. The event body (colon + indented block) is optional, consistent with the marker trait pattern:
+The parser SHALL accept `event` declarations with no colon and no body. The event body (colon + indented block) is optional. When an event has a body, each payload field SHALL use bare field syntax rather than trait-style field syntax.
 
 ```ebnf
 event_decl = [ "pub" ] "event" IDENTIFIER
              [ ":" NEWLINE INDENT
-               { field_decl }
+               { event_field_decl }
                DEDENT ] ;
+
+event_field_decl = IDENTIFIER ":" type_ref [ "=" expression ] NEWLINE ;
 ```
 
 #### Scenario: Marker event (no colon) parsed
 - **WHEN** `pub event spawn` appears at the top level with no colon and no body
 - **THEN** the parser produces an `EventDecl` with `name = "spawn"` and empty `fields` list
 
-#### Scenario: Event with fields still parsed
-- **WHEN** `event PlayerDamaged:` followed by an indented body appears
-- **THEN** the parser produces an `EventDecl` with the declared fields (existing behavior unchanged)
+#### Scenario: Event with bare fields parsed
+- **WHEN** `event PlayerDamaged:` is followed by `amount: int` in its indented body
+- **THEN** the parser produces an `EventDecl` with one field named `amount` of type `int`
+
+#### Scenario: Event field with default value parsed
+- **WHEN** `event Spawned:` is followed by `kind: int = 1` in its indented body
+- **THEN** the parser produces an `EventDecl` whose field stores the default expression for `kind`
+
+#### Scenario: Event field with let rejected
+- **WHEN** `event Tick:` is followed by `let dt: float` in its indented body
+- **THEN** the parser reports an error indicating event fields use bare `name: type` syntax
+
+#### Scenario: Event field with var rejected
+- **WHEN** `event Damage:` is followed by `var amount: int` in its indented body
+- **THEN** the parser reports an error indicating event fields cannot use trait field modifiers
+
+#### Scenario: Event field with persist rejected
+- **WHEN** `event Snapshot:` is followed by `persist var frame: int` in its indented body
+- **THEN** the parser reports an error indicating event fields cannot use trait field modifiers
 
 ### Requirement: `asset_decl` grammar production
 The parser SHALL parse `asset` declarations as top-level declarations.

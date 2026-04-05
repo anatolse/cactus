@@ -5,17 +5,17 @@ This spec defines the standard lifecycle event types declared in `std.core`. The
 ## Requirements
 
 ### Requirement: Standard lifecycle events declared in std.core
-The `std.core` module SHALL declare all built-in lifecycle event types as `pub event` declarations. Events with a `dt` field use a colon body; events with no fields use the marker form (no colon, no body). The canonical declarations are:
+The `std.core` module SHALL declare all built-in lifecycle event types as `pub event` declarations. Events with a `dt` field use a colon body with bare event-field syntax; events with no fields use the marker form (no colon, no body). The canonical declarations are:
 
 ```cactus
 pub event tick:
-    let dt: float
+    dt: float
 
 pub event fixed_tick:
-    let dt: float
+    dt: float
 
 pub event late_tick:
-    let dt: float
+    dt: float
 
 pub event spawn
 

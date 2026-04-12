@@ -462,4 +462,38 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     return out.str();
 }
 
+bool EnttSystemEmitter::requires_entt_hierarchy_helpers(const DecoratedProgram& program) {
+    return program.traits.contains("Parent");
+}
+
+std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgram& program) {
+    if (!requires_entt_hierarchy_helpers(program)) {
+        return "";
+    }
+
+    std::ostringstream out;
+    out << "static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity entity) {\n";
+    out << "    static std::unordered_set<entt::entity> __destroying;\n";
+    out << "    if (!registry.valid(entity) || __destroying.contains(entity)) {\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    __destroying.insert(entity);\n";
+    out << "    std::vector<entt::entity> __children;\n";
+    out << "    auto __parent_view = registry.view<Parent>();\n";
+    out << "    __parent_view.each([&](entt::entity child, const Parent& rel) {\n";
+    out << "        if (rel.parent == entity) {\n";
+    out << "            __children.push_back(child);\n";
+    out << "        }\n";
+    out << "    });\n";
+    out << "    for (auto child : __children) {\n";
+    out << "        cactus_destroy_entity_recursive(registry, child);\n";
+    out << "    }\n";
+    out << "    if (registry.valid(entity)) {\n";
+    out << "        registry.destroy(entity);\n";
+    out << "    }\n";
+    out << "    __destroying.erase(entity);\n";
+    out << "}\n\n";
+    return out.str();
+}
+
 }  // namespace cactus

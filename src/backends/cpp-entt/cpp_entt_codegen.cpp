@@ -30,6 +30,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "#include <cstdint>\n";
     out << "#include <string>\n";
     out << "#include <vector>\n";
+    out << "#include <unordered_set>\n";
     out << "#include <entt/entt.hpp>\n";
     out << "#include \"raylib.h\"\n";
     // Task 6.2: Include runtime header when extern funcs are present
@@ -64,6 +65,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             }
         }
     }
+
+    out << EnttSystemEmitter::emit_entt_hierarchy_helpers(program);
 
     // Persist serialization stubs
     out << "// ── Persist Serialization ────────────────────────────────────────────\n\n";

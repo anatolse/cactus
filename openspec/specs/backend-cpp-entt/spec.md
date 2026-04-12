@@ -120,17 +120,23 @@ The recognized stdlib patterns and their generated implementations:
 
 | Extern system filter includes | Generated implementation |
 |---|---|
-| `std.render.sprites.Renderer` + `std.transform.flat.Position` | Batched 2D sprite renderer (sorted by layer, then Y) |
+| `std.render.sprites.Renderer` + `std.transform.flat.WorldTransform` | Batched 2D sprite renderer using world-space transform data |
 | `std.render.sprites.AnimatedSprite` | Sprite animation frame advancer (increments `frame` based on `fps` and dt) |
-| `std.render.meshes.Renderer` + `std.transform.volume.Transform` | 3D mesh render submission |
-| `std.render.meshes.PointLight` + `std.transform.volume.Transform` | Point light registration |
+| `std.render.meshes.Renderer` + `std.transform.volume.WorldTransform` | 3D mesh render submission |
+| `std.render.meshes.PointLight` + `std.transform.volume.WorldTransform` | Point light registration |
 | `std.render.meshes.DirectionalLight` | Directional light registration |
+| hierarchy propagation extern systems over `Parent` + `LocalTransform` + `WorldTransform` | Hierarchy-aware transform propagation |
+| hierarchy cascade-delete extern systems over `Parent` | Recursive descendant deletion |
 
 The backend recognizes these patterns by the **fully qualified trait names** (module path + trait name) from the filter clause.
 
 #### Scenario: Stdlib SpriteRenderer generates batched render
 - **WHEN** `extern system SpriteRenderer: filter: Position as pos, Renderer as r` is compiled (where both are stdlib traits)
 - **THEN** the backend generates an optimized batched sprite rendering loop, not a per-entity callback
+
+#### Scenario: hierarchy propagation recognized as known pattern
+- **WHEN** the stdlib propagation extern system references `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
+- **THEN** the backend generates built-in hierarchy propagation code rather than a user callback scaffold
 
 #### Scenario: Non-stdlib traits do not trigger known-pattern generation
 - **WHEN** `extern system MySystem: filter: Position as pos, MyCustomTrait as c` is compiled (where `MyCustomTrait` is user-defined)
@@ -297,6 +303,28 @@ if (registry.valid(c_other)) {
 #### Scenario: self operations do not require validity guard
 - **WHEN** `add Trait` (no `to` clause) is compiled
 - **THEN** no validity guard is generated — the current entity is always valid within its own handler
+
+### Requirement: `self` compiles to the current EnTT entity handle
+The EnTT backend SHALL compile `self` to the `entt::entity` currently being processed by the generated handler or iteration loop.
+
+#### Scenario: `self` used as destroy target in EnTT
+- **WHEN** `destroy self` is compiled
+- **THEN** the generated code destroys the current `entity` rather than requiring a validity guard for another handle
+
+#### Scenario: `self` stored into Parent.parent
+- **WHEN** `Parent.parent = self` is compiled in a handler
+- **THEN** the generated code writes the current `entity` handle into the `parent` field
+
+### Requirement: EnTT backend recognizes hierarchy extern systems
+The EnTT backend SHALL recognize stdlib hierarchy extern systems for transform propagation and cascade deletion and generate complete registry-aware implementations for them.
+
+#### Scenario: hierarchy propagation extern system generates registry traversal
+- **WHEN** the stdlib hierarchy propagation extern system is compiled
+- **THEN** the backend emits registry-aware code that reads parent relationships and writes `WorldTransform` values
+
+#### Scenario: hierarchy cascade extern system generates descendant destruction
+- **WHEN** the stdlib hierarchy cascade-delete extern system is compiled
+- **THEN** the backend emits registry-aware code that recursively destroys descendants of the removed entity
 
 ### Requirement: Targeted event dispatch guarded by validity check
 When an event is emitted with a `to expr` clause, the generated dispatch code SHALL check `registry.valid(target)` before delivering the event. If the target entity is not valid, the event is silently dropped.

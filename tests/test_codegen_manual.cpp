@@ -356,7 +356,7 @@ TEST_CASE("Codegen Manual: destroy emits entity_remove with swap-and-delete (tas
         "    on tick:\n"
         "        destroy\n");
 
-    CHECK(code.find("entity_remove(i)") != std::string::npos);
+    CHECK(code.find("cactus_entity_remove_recursive(i)") != std::string::npos);
     CHECK(code.find("__destroyed = true") != std::string::npos);
     // Verify swap-and-delete logic in entity_remove
     CHECK(code.find("g_trait_mask[_idx] = g_trait_mask[_last]") != std::string::npos);
@@ -696,8 +696,8 @@ TEST_CASE("Codegen Manual: with SceneCleanup on_unload destroys non-persistent (
 
     CHECK(code.find("SceneCleanup_unload") != std::string::npos);
     CHECK(code.find("dispatch_on_unload") != std::string::npos);
-    // SceneCleanup_unload must call entity_remove for non-persistent
-    CHECK(code.find("entity_remove(i)") != std::string::npos);
+    // SceneCleanup_unload must call recursive remove for non-persistent
+    CHECK(code.find("cactus_entity_remove_recursive(i)") != std::string::npos);
 }
 
 // ── Tasks 11.1-11.13: Integration tests ──────────────────────────────────────
@@ -898,7 +898,7 @@ TEST_CASE("Codegen: no-filter + exclude processes all non-excluded (task 11.11)"
     // filter_mask = 0 (no filter), exclude_mask = TraitBits::Persistent
     CHECK(code.find("0ULL") != std::string::npos);
     CHECK(code.find("TraitBits::Persistent") != std::string::npos);
-    CHECK(code.find("entity_remove(i)") != std::string::npos);
+    CHECK(code.find("cactus_entity_remove_recursive(i)") != std::string::npos);
 }
 
 TEST_CASE("Codegen: Persistent entity survives load with SceneCleanup (task 11.13)", "[codegen-manual][11.13]") {
@@ -988,4 +988,65 @@ TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[code
 
     // Sync hooks
     CHECK(code.find("replicate_Pos") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: self lowers to current entity slot and destroy self uses recursive helper", "[codegen-manual][hierarchy]") {
+    auto code = generate(
+        STDLIB_EVENTS +
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "system Hierarchy:\n"
+        "    on tick:\n"
+        "        add Parent:\n"
+        "            parent = self\n"
+        "        destroy self\n");
+
+    CHECK(code.find("g_Parent_parent[i] = i") != std::string::npos);
+    CHECK(code.find("cactus_entity_remove_recursive(i)") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: flat transform propagation extern system is recognized", "[codegen-manual][hierarchy]") {
+    auto code = generate(
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait LocalTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "extern system TransformPropagation:\n"
+        "    filter:\n"
+        "        std.core.Parent\n"
+        "        std.transform.flat.LocalTransform\n"
+        "        std.transform.flat.WorldTransform\n");
+
+    CHECK(code.find("static void TransformPropagation_tick()") != std::string::npos);
+    CHECK(code.find("std::vector<uint8_t> _active(entity_count, 0)") != std::string::npos);
+    CHECK(code.find("g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: hierarchy propagation handles stale parents and cycles safely", "[codegen-manual][hierarchy]") {
+    auto code = generate(
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait LocalTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "extern system TransformPropagation:\n"
+        "    filter:\n"
+        "        std.core.Parent\n"
+        "        std.transform.flat.LocalTransform\n"
+        "        std.transform.flat.WorldTransform\n");
+
+    CHECK(code.find("_parent < entity_count") != std::string::npos);
+    CHECK(code.find("_active[_idx]") != std::string::npos);
+    CHECK(code.find("if (!_copied_local)") != std::string::npos);
 }

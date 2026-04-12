@@ -182,7 +182,7 @@ primary_expr = ... | spawn_expr ;
 - **THEN** the parser produces a statement wrapping a `SpawnExpr`
 
 ### Requirement: `destroy` statement grammar
-The parser SHALL accept `destroy` as a statement inside event handler bodies. Without an expression, it destroys the current entity. With an expression, it destroys the specified entity.
+The parser SHALL accept `destroy` as a statement inside event handler bodies. Without an expression, it destroys the current entity. With an expression, it destroys the specified entity. The `self` keyword SHALL be accepted as a valid target expression.
 
 ```ebnf
 destroy_stmt = "destroy" [ expression ] NEWLINE ;
@@ -195,6 +195,21 @@ destroy_stmt = "destroy" [ expression ] NEWLINE ;
 #### Scenario: Destroy specific entity by ID parsed
 - **WHEN** `destroy PlayerComposition.gun` appears in a handler
 - **THEN** the parser produces a `DestroyStmt` with a member access expression as the target
+
+#### Scenario: Destroy self parsed
+- **WHEN** `destroy self` appears in a handler
+- **THEN** the parser produces a `DestroyStmt` with a `self` target expression
+
+### Requirement: `self` parses as a reserved primary expression
+The parser SHALL recognize `self` as a reserved keyword primary expression rather than as an identifier.
+
+#### Scenario: `self` parsed in member assignment
+- **WHEN** a handler contains `Parent.parent = self`
+- **THEN** the parser produces a dedicated `self` expression node in the assignment value
+
+#### Scenario: `self` parsed as destroy target
+- **WHEN** a handler contains `destroy self`
+- **THEN** the parser produces a `DestroyStmt` whose target expression is the `self` expression node
 
 ### Requirement: `emit` statement grammar
 The parser SHALL accept `emit` as a statement using block syntax for payload initialization and an optional `to expression` suffix before the colon for targeted dispatch.

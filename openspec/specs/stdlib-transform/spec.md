@@ -1,42 +1,42 @@
 ## Requirements
 
-### Requirement: std.transform.flat provides a 2D spatial transform trait
-The `std.transform.flat` module SHALL provide a `pub trait Transform` with `vec2` position, `float` rotation (angle in radians), and `vec2` scale. All fields SHALL have sensible defaults (origin position, zero rotation, unit scale).
+### Requirement: std.transform.flat provides 2D hierarchical transform traits
+The `std.transform.flat` module SHALL provide `pub trait LocalTransform` and `pub trait WorldTransform` with `vec2` position, `float` rotation (angle in radians), and `vec2` scale. All fields SHALL have sensible defaults (origin position, zero rotation, unit scale). `LocalTransform` stores authored transform state relative to the parent; `WorldTransform` stores derived world-space state.
 
-#### Scenario: Transform trait fields for 2D
-- **WHEN** an entity has `std.transform.flat.Transform` applied
-- **THEN** the entity has fields: `position: vec2`, `rotation: float`, `scale: vec2` with defaults `(0,0)`, `0.0`, `(1,1)`
+#### Scenario: LocalTransform trait fields for 2D
+- **WHEN** an entity has `std.transform.flat.LocalTransform` applied
+- **THEN** the entity has fields `position: vec2`, `rotation: float`, `scale: vec2` with defaults `(0,0)`, `0.0`, `(1,1)`
+
+#### Scenario: WorldTransform trait fields for 2D
+- **WHEN** an entity has `std.transform.flat.WorldTransform` applied
+- **THEN** the entity has fields `position: vec2`, `rotation: float`, `scale: vec2` with defaults `(0,0)`, `0.0`, `(1,1)`
 
 #### Scenario: Used in 2D unit
-- **WHEN** a unit imports `use std.transform.flat as tr` and applies `tr.Transform`
-- **THEN** the compiler accepts the apply block and `Transform` is available for filter clauses in systems
+- **WHEN** a unit imports `use std.transform.flat as tr` and applies `tr.LocalTransform` and `tr.WorldTransform`
+- **THEN** the compiler accepts the unit and systems may reference the hierarchy transform traits in filters
 
-#### Scenario: Unambiguous when only flat is imported
-- **WHEN** only `std.transform.flat` is imported (not `std.transform.volume`)
-- **THEN** bare `Transform` in `apply:` and `filter:` resolves unambiguously to the flat variant
+### Requirement: std.transform.volume provides 3D hierarchical transform traits
+The `std.transform.volume` module SHALL provide `pub trait LocalTransform` and `pub trait WorldTransform` with `vec3` position, `quat` rotation, and `vec3` scale. All fields SHALL have sensible defaults (origin position, identity rotation, unit scale). `LocalTransform` stores authored transform state relative to the parent; `WorldTransform` stores derived world-space state.
 
----
+#### Scenario: LocalTransform trait fields for 3D
+- **WHEN** an entity has `std.transform.volume.LocalTransform` applied
+- **THEN** the entity has fields `position: vec3`, `rotation: quat`, `scale: vec3` with defaults `(0,0,0)`, identity quat, `(1,1,1)`
 
-### Requirement: std.transform.volume provides a 3D spatial transform trait
-The `std.transform.volume` module SHALL provide a `pub trait Transform` with `vec3` position, `quat` rotation, and `vec3` scale. All fields SHALL have sensible defaults (origin position, identity rotation, unit scale).
-
-#### Scenario: Transform trait fields for 3D
-- **WHEN** an entity has `std.transform.volume.Transform` applied
-- **THEN** the entity has fields: `position: vec3`, `rotation: quat`, `scale: vec3` with defaults `(0,0,0)`, identity quat, `(1,1,1)`
+#### Scenario: WorldTransform trait fields for 3D
+- **WHEN** an entity has `std.transform.volume.WorldTransform` applied
+- **THEN** the entity has fields `position: vec3`, `rotation: quat`, `scale: vec3` with defaults `(0,0,0)`, identity quat, `(1,1,1)`
 
 #### Scenario: Used in 3D unit
-- **WHEN** a unit imports `use std.transform.volume as tr` and applies `tr.Transform`
-- **THEN** the compiler accepts the apply block and `Transform` fields are accessible in systems as `t.position`, `t.rotation`, `t.scale`
+- **WHEN** a unit imports `use std.transform.volume as tr` and applies `tr.LocalTransform` and `tr.WorldTransform`
+- **THEN** the compiler accepts the unit and systems may reference the hierarchy transform traits in filters
 
----
+### Requirement: flat and volume hierarchy transform traits are not simultaneously applicable to one entity
+The semantic analyzer SHALL reject a unit or template that mixes flat and volume hierarchy transform traits on the same entity. These traits are spatially incompatible — an entity cannot simultaneously have 2D and 3D local/world transform state.
 
-### Requirement: flat and volume Transform traits are not simultaneously applicable to one entity
-The semantic analyzer SHALL reject a unit or template that applies both `std.transform.flat.Transform` and `std.transform.volume.Transform`. These traits are spatially incompatible — an entity cannot simultaneously have both a `vec2` and a `vec3` position.
+#### Scenario: Both flat and volume hierarchy transforms applied is an error
+- **WHEN** a unit applies `tr_flat.LocalTransform` and `tr_volume.WorldTransform`
+- **THEN** the compiler reports an error indicating that flat and volume hierarchy transform traits cannot be applied to the same entity
 
-#### Scenario: Both applied is an error
-- **WHEN** a unit applies both `tr_flat.Transform` and `tr_volume.Transform`
-- **THEN** the compiler reports an error: "Cannot apply both std.transform.flat.Transform and std.transform.volume.Transform to the same entity"
-
-#### Scenario: Mixing flat with volume render is valid
-- **WHEN** a unit applies `tr_volume.Transform` (3D position) and `std.render.sprites.Renderer` (sprite rendering)
-- **THEN** the compiler accepts this — transform and render sub-modules are orthogonal choices
+#### Scenario: Mixing volume world transform with mesh render is valid
+- **WHEN** a unit applies `tr_volume.WorldTransform` and `std.render.meshes.Renderer`
+- **THEN** the compiler accepts this because render and transform modules remain orthogonal

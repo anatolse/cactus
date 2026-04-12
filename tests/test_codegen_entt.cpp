@@ -233,7 +233,7 @@ TEST_CASE("Codegen EnTT: cross-entity add/remove/destroy use validity guards", "
             CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
             CHECK(code.find("registry.emplace_or_replace<Frozen>(c.other)") != std::string::npos);
             CHECK(code.find("registry.remove<Frozen>(c.other)") != std::string::npos);
-            CHECK(code.find("registry.destroy(c.other)") != std::string::npos);
+            CHECK(code.find("cactus_destroy_entity_recursive(registry, c.other)") != std::string::npos);
         }
     }
 }
@@ -552,4 +552,75 @@ TEST_CASE("Codegen EnTT: stdlib-style extern sprite renderer emits scaffold", "[
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("void SpriteRenderer_tick(entt::registry& registry)") != std::string::npos);
     CHECK(code.find("void SpriteRenderer_update(entt::registry& registry, entt::entity entity, Transform& Transform_comp, Renderer& Renderer_comp);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses recursive helper", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "system Hierarchy:\n"
+        "    on tick:\n"
+        "        add Parent:\n"
+        "            parent = self\n"
+        "        destroy self\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("__value.parent = entity") != std::string::npos);
+    CHECK(code.find("cactus_destroy_entity_recursive(registry, entity)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: flat transform propagation extern system is recognized", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait LocalTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "extern system TransformPropagation:\n"
+        "    filter:\n"
+        "        std.core.Parent\n"
+        "        std.transform.flat.LocalTransform\n"
+        "        std.transform.flat.WorldTransform\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("std::unordered_set<entt::entity> __active") != std::string::npos);
+    CHECK(code.find("world.position = {parent_world.position.x + local.position.x") != std::string::npos);
+    CHECK(code.find("if (auto* parent = registry.try_get<Parent>(entity)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles safely", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait LocalTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "extern system TransformPropagation:\n"
+        "    filter:\n"
+        "        std.core.Parent\n"
+        "        std.transform.flat.LocalTransform\n"
+        "        std.transform.flat.WorldTransform\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.valid(parent->parent)") != std::string::npos);
+    CHECK(code.find("__active.contains(entity)") != std::string::npos);
+    CHECK(code.find("if (!__copied_local)") != std::string::npos);
 }

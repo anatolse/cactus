@@ -99,3 +99,25 @@ The cpp-manual backend SHALL NOT emit a C++ function definition for any `FuncNod
 - **WHEN** the program declares `pub extern func pressed(b: InputButton) bool`
 - **THEN** the generated C++ does NOT contain a definition `bool pressed(InputButton b) { ... }`
 
+### Requirement: `self` compiles to the current manual-backend entity slot
+The manual backend SHALL compile `self` to the entity currently being processed by the generated handler. Where entity identity is represented separately from storage slots, the generated code SHALL use the current entity identity corresponding to the active slot.
+
+#### Scenario: `self` used as destroy target in manual backend
+- **WHEN** `destroy self` is compiled
+- **THEN** the generated code removes the current entity without requiring a separate target expression
+
+#### Scenario: `self` written into parent field
+- **WHEN** `Parent.parent = self` is compiled
+- **THEN** the generated code writes the current entity identity into the `parent` field storage
+
+### Requirement: manual backend implements hierarchy propagation and cascade deletion
+The manual backend SHALL generate runtime support for hierarchy transform propagation and recursive descendant deletion.
+
+#### Scenario: propagation updates world transform arrays
+- **WHEN** hierarchy propagation is emitted for entities with `Parent`, `LocalTransform`, and `WorldTransform`
+- **THEN** the generated code computes and stores derived `WorldTransform` field values in SoA storage
+
+#### Scenario: cascade deletion removes descendant subtree
+- **WHEN** a parent entity is destroyed in the manual backend
+- **THEN** the generated code destroys all descendants recursively before the hierarchy subtree is fully removed
+

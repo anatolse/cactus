@@ -235,7 +235,7 @@ The semantic analyzer SHALL verify that the expression in an `emit ... to expres
 - **THEN** the analyzer reports an error: "emit target must be of type entity_id, got float"
 
 ### Requirement: `destroy entity_id` validation
-The semantic analyzer SHALL verify that when `destroy` is given an expression argument, the expression evaluates to type `entity_id`. Without argument, it removes the current entity (always valid inside a system handler).
+The semantic analyzer SHALL verify that when `destroy` is given an expression argument, the expression evaluates to type `entity_id`. Without argument, it removes the current entity (always valid inside a system handler). The `self` keyword SHALL satisfy this requirement because it has type `entity_id` in handler context.
 
 #### Scenario: Destroy with entity_id expression accepted
 - **WHEN** `destroy PlayerComposition.gun` and `PlayerComposition.gun` is of type `entity_id`
@@ -244,6 +244,43 @@ The semantic analyzer SHALL verify that when `destroy` is given an expression ar
 #### Scenario: Destroy with non-entity_id expression rejected
 - **WHEN** `destroy Position.x` and `Position.x` is of type `float`
 - **THEN** the analyzer reports an error: "destroy argument must be of type entity_id, got float"
+
+#### Scenario: Destroy self accepted
+- **WHEN** `destroy self` appears inside a system handler
+- **THEN** the analyzer accepts the destroy statement because `self` has type `entity_id`
+
+### Requirement: `self` type-checks as `entity_id` in system handlers
+The semantic analyzer SHALL type `self` as `entity_id` when it appears inside a system event handler body.
+
+#### Scenario: `self` accepted as add target
+- **WHEN** a handler contains `add Parent to self`
+- **THEN** the analyzer accepts `self` as a valid `entity_id` target expression
+
+#### Scenario: `self` accepted in entity field assignment
+- **WHEN** a handler assigns `Parent.parent = self`
+- **THEN** the analyzer accepts the assignment because `Parent.parent` and `self` are both `entity_id`
+
+### Requirement: `self` is rejected outside handler world context
+The semantic analyzer SHALL report an error when `self` appears outside a system event handler body.
+
+#### Scenario: `self` in func rejected
+- **WHEN** a `func` returns `self`
+- **THEN** the analyzer reports that `self` requires a system event handler context
+
+#### Scenario: `self` in unit initializer rejected
+- **WHEN** a unit trait assignment sets `parent = self`
+- **THEN** the analyzer reports that `self` is unavailable during archetype initialization
+
+### Requirement: hierarchy traits are semantically compatible only within one spatial dimension
+The semantic analyzer SHALL reject entities that mix flat and volume hierarchy transform traits on the same entity.
+
+#### Scenario: flat local with volume world rejected
+- **WHEN** an entity applies `std.transform.flat.LocalTransform` and `std.transform.volume.WorldTransform`
+- **THEN** the analyzer reports an error indicating that flat and volume hierarchy transform traits cannot be mixed on one entity
+
+#### Scenario: flat hierarchy set accepted
+- **WHEN** an entity applies `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
+- **THEN** the analyzer accepts the trait combination
 
 ### Requirement: Non-pub symbol access produces helpful error
 The semantic analyzer SHALL report a clear error when a module references a symbol that exists in a dependency module but is not marked `pub`.

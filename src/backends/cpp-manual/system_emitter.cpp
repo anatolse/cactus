@@ -1,8 +1,100 @@
 #include "backends/cpp-manual/system_emitter.h"
 
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 
 namespace cactus {
+
+namespace {
+
+bool expr_is_self(const ExprNode& expr) {
+    return std::holds_alternative<SelfExpr>(expr.expr);
+}
+
+std::string filter_simple_name(const FilterEntry& entry) {
+    auto dot = entry.qualified_name.rfind('.');
+    return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+}
+
+bool filter_has_trait(const FilterClause& filter, const std::string& qualified, const std::string& simple) {
+    return std::ranges::any_of(filter.entries,
+                               [&](const auto& entry) {
+                                   return entry.qualified_name == qualified || filter_simple_name(entry) == simple;
+                               }) ||
+           std::ranges::find(filter.trait_names, simple) != filter.trait_names.end();
+}
+
+bool is_flat_transform_propagation(const ExternSystemNode& sys) {
+    return filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "LocalTransform") &&
+           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform");
+}
+
+bool is_volume_transform_propagation(const ExternSystemNode& sys) {
+    return filter_has_trait(sys.filter, "std.transform.volume.LocalTransform", "LocalTransform") &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform");
+}
+
+std::string emit_expr_dynamic_impl(const ExprNode& expr,
+                                   const std::string& entity_index_var); // NOLINT(misc-no-recursion)
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
+std::string emit_expr_dynamic_impl(const ExprNode& expr,
+                                   const std::string& entity_index_var) {
+    return std::visit(
+        [&](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, SelfExpr>) {
+                return entity_index_var;
+            } else if constexpr (std::is_same_v<E, LiteralExpr>) {
+                if (e.kind == LiteralExpr::Kind::String) {
+                    return "\"" + e.value + "\"";
+                }
+                if (e.kind == LiteralExpr::Kind::Float) {
+                    return e.value + "f";
+                }
+                return e.value;
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return e.name;
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                std::string op = e.op;
+                if (op == "and") {
+                    op = "&&";
+                } else if (op == "or") {
+                    op = "||";
+                }
+                return "(" + emit_expr_dynamic_impl(*e.left, entity_index_var) + " " + op + " " +
+                       emit_expr_dynamic_impl(*e.right, entity_index_var) + ")";
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                std::string op = e.op;
+                if (op == "not") {
+                    op = "!";
+                }
+                return op + emit_expr_dynamic_impl(*e.operand, entity_index_var);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                std::string result = emit_expr_dynamic_impl(*e.callee, entity_index_var) + "(";
+                for (size_t i = 0; i < e.args.size(); ++i) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += emit_expr_dynamic_impl(*e.args[i], entity_index_var);
+                }
+                return result + ")";
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
+                    if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
+                        return ident->name + "::" + e.member;
+                    }
+                }
+                return emit_expr_dynamic_impl(*e.object, entity_index_var) + "." + e.member;
+            } else {
+                return ManualSystemEmitter::emit_expr(expr);
+            }
+        },
+        expr.expr);
+}
+
+}  // namespace
 
 std::string ManualSystemEmitter::indent_str(int level) {
     return std::string(static_cast<size_t>(level) * 4, ' '); // NOLINT(modernize-return-braced-init-list)
@@ -60,6 +152,11 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(rea
             }
         },
         expr.expr);
+}
+
+std::string ManualSystemEmitter::emit_expr_dynamic(const ExprNode& expr,
+                                                   const std::string& entity_index_var) {
+    return emit_expr_dynamic_impl(expr, entity_index_var);
 }
 
 // ── Legacy emit_stmt (indexed model) ──────────────────────────────────────
@@ -162,8 +259,8 @@ std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const Decora
 
 // ── Dynamic ECS helpers ────────────────────────────────────────────────────
 
-std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
-                                                    const CodegenContext& /*ctx*/) {
+std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNode& sys,
+                                                            const CodegenContext& ctx) {
     std::string result;
     // Prefer the simple trait_names list (populated by both old and new parsers)
     if (!clause.trait_names.empty()) {
@@ -265,10 +362,10 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
             if constexpr (std::is_same_v<S, VarAssign>) {
                 // In the dynamic model, fields are local references — no [i] suffix
                 std::string op = s.op;
-                return ind + s.name + " " + op + " " + emit_expr(*s.value) + ";\n";
+                return ind + s.name + " " + op + " " + emit_expr_dynamic(*s.value, entity_index_var) + ";\n";
 
             } else if constexpr (std::is_same_v<S, LetStmt>) {
-                return ind + "auto " + s.name + " = " + emit_expr(*s.value) + ";\n";
+                return ind + "auto " + s.name + " = " + emit_expr_dynamic(*s.value, entity_index_var) + ";\n";
 
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
@@ -276,19 +373,19 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += "." + s.payload[i].name + " = " + emit_expr(*s.payload[i].value);
+                    result += "." + s.payload[i].name + " = " + emit_expr_dynamic(*s.payload[i].value, entity_index_var);
                 }
                 return result + "});\n";
 
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 // task 7.9: swap-and-delete
                 if (s.target_expr.has_value()) {
-                    return ind + "entity_remove(" + emit_expr(**s.target_expr) + ");\n";
+                    return ind + "cactus_entity_remove_recursive(" + emit_expr_dynamic(**s.target_expr, entity_index_var) + ");\n";
                 }
                 if (in_loop) {
-                    return ind + "entity_remove(" + entity_index_var + "); __destroyed = true;\n";
+                    return ind + "cactus_entity_remove_recursive(" + entity_index_var + "); __destroyed = true;\n";
                 }
-                return ind + "entity_remove(" + entity_index_var + ");\n";
+                return ind + "cactus_entity_remove_recursive(" + entity_index_var + ");\n";
 
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
                 // task 7.8
@@ -301,7 +398,7 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                        ind + "g_load_pending = true;\n";
 
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                std::string target = s.target_expr.has_value() ? emit_expr(**s.target_expr) : entity_index_var;
+                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var) : entity_index_var;
                 std::ostringstream result;
                 result << ind << "if ((g_trait_mask[" << target << "] & TraitBits::" << s.trait_name << ") == 0) {\n";
                 auto td_it = ctx.trait_defaults.find(s.trait_name);
@@ -322,26 +419,26 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                 result << ind << "}\n";
                 for (const auto& arg : s.args) {
                     result << ind << "g_" << s.trait_name << "_" << arg.name << "[" << target << "] = "
-                           << emit_expr(*arg.value) << ";\n";
+                           << emit_expr_dynamic(*arg.value, entity_index_var) << ";\n";
                 }
                 result << ind << "g_trait_mask[" << target << "] |= TraitBits::" << s.trait_name << ";\n";
                 return result.str();
 
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                std::string target = s.target_expr.has_value() ? emit_expr(**s.target_expr) : entity_index_var;
+                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var) : entity_index_var;
                 return ind + "g_trait_mask[" + target + "] &= ~TraitBits::" + s.trait_name + ";\n";
 
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
-                    return ind + "return " + emit_expr(**s.value) + ";\n";
+                    return ind + "return " + emit_expr_dynamic(**s.value, entity_index_var) + ";\n";
                 }
                 return ind + "return;\n";
 
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                return ind + emit_expr(*s.expr) + ";\n";
+                return ind + emit_expr_dynamic(*s.expr, entity_index_var) + ";\n";
 
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                std::string result = ind + "if (" + emit_expr(*s.condition) + ") {\n";
+                std::string result = ind + "if (" + emit_expr_dynamic(*s.condition, entity_index_var) + ") {\n";
                 for (auto& inner : s.then_body) {
                     result += emit_stmt_dynamic(*inner, indent + 1, ctx, entity_index_var, in_loop);
                 }
@@ -481,6 +578,82 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
         }
     }
 
+    return out.str();
+}
+
+std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    std::ostringstream out;
+
+    if (is_flat_transform_propagation(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    std::vector<uint8_t> _active(entity_count, 0);\n";
+        out << "    auto _resolve = [&](auto&& self, size_t _idx) -> void {\n";
+        out << "        if (_idx >= entity_count || _active[_idx]) return;\n";
+        out << "        _active[_idx] = 1;\n";
+        out << "        bool _copied_local = false;\n";
+        out << "        if ((g_trait_mask[_idx] & TraitBits::Parent) != 0) {\n";
+        out << "            uint32_t _parent = g_Parent_parent[_idx];\n";
+        out << "            if (_parent < entity_count && (g_trait_mask[_parent] & TraitBits::WorldTransform) != 0) {\n";
+        out << "                self(self, _parent);\n";
+        out << "                g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y};\n";
+        out << "                g_WorldTransform_rotation[_idx] = g_WorldTransform_rotation[_parent] + g_LocalTransform_rotation[_idx];\n";
+        out << "                g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y};\n";
+        out << "                _copied_local = true;\n";
+        out << "            }\n";
+        out << "        }\n";
+        out << "        if (!_copied_local) {\n";
+        out << "            g_WorldTransform_position[_idx] = g_LocalTransform_position[_idx];\n";
+        out << "            g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
+        out << "            g_WorldTransform_scale[_idx] = g_LocalTransform_scale[_idx];\n";
+        out << "        }\n";
+        out << "        _active[_idx] = 0;\n";
+        out << "    };\n";
+        out << "    for (size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::LocalTransform | TraitBits::WorldTransform)) == (TraitBits::LocalTransform | TraitBits::WorldTransform)) {\n";
+        out << "            _resolve(_resolve, i);\n";
+        out << "        }\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_volume_transform_propagation(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    std::vector<uint8_t> _active(entity_count, 0);\n";
+        out << "    auto _resolve = [&](auto&& self, size_t _idx) -> void {\n";
+        out << "        if (_idx >= entity_count || _active[_idx]) return;\n";
+        out << "        _active[_idx] = 1;\n";
+        out << "        bool _copied_local = false;\n";
+        out << "        if ((g_trait_mask[_idx] & TraitBits::Parent) != 0) {\n";
+        out << "            uint32_t _parent = g_Parent_parent[_idx];\n";
+        out << "            if (_parent < entity_count && (g_trait_mask[_parent] & TraitBits::WorldTransform) != 0) {\n";
+        out << "                self(self, _parent);\n";
+        out << "                g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y, g_WorldTransform_position[_parent].z + g_LocalTransform_position[_idx].z};\n";
+        out << "                g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
+        out << "                g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y, g_WorldTransform_scale[_parent].z * g_LocalTransform_scale[_idx].z};\n";
+        out << "                _copied_local = true;\n";
+        out << "            }\n";
+        out << "        }\n";
+        out << "        if (!_copied_local) {\n";
+        out << "            g_WorldTransform_position[_idx] = g_LocalTransform_position[_idx];\n";
+        out << "            g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
+        out << "            g_WorldTransform_scale[_idx] = g_LocalTransform_scale[_idx];\n";
+        out << "        }\n";
+        out << "        _active[_idx] = 0;\n";
+        out << "    };\n";
+        out << "    for (size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::LocalTransform | TraitBits::WorldTransform)) == (TraitBits::LocalTransform | TraitBits::WorldTransform)) {\n";
+        out << "            _resolve(_resolve, i);\n";
+        out << "        }\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    out << "static void " << sys.name << "_tick() {\n";
+    out << "    // generic extern system scaffold\n";
+    out << "}\n\n";
     return out.str();
 }
 

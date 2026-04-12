@@ -205,6 +205,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     std::vector<const TemplateNode*> templates;
     std::vector<const UnitNode*>     units;
     std::vector<const SystemNode*>   systems;
+    std::vector<const ExternSystemNode*> extern_systems;
 
     for (const auto& decl : program.ast->declarations) {
         std::visit(
@@ -218,6 +219,8 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
                     units.push_back(&node);
                 } else if constexpr (std::is_same_v<T, SystemNode>) {
                     systems.push_back(&node);
+                } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
+                    extern_systems.push_back(&node);
                 }
             },
             decl);
@@ -311,6 +314,27 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     }
     out << "}\n\n";
 
+    out << "// ── Hierarchy recursive removal ───────────────────────────────────────────\n";
+    out << "static void cactus_entity_remove_recursive(size_t _idx) {\n";
+    out << "    static std::vector<uint8_t> _destroying(MAX_ENTITIES, 0);\n";
+    out << "    if (_idx >= entity_count || _destroying[_idx]) {\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    _destroying[_idx] = 1;\n";
+    if (program.traits.contains("Parent")) {
+        out << "    size_t _scan = 0;\n";
+        out << "    while (_scan < entity_count) {\n";
+        out << "        if (_scan != _idx && (g_trait_mask[_scan] & TraitBits::Parent) != 0 && g_Parent_parent[_scan] == _idx) {\n";
+        out << "            cactus_entity_remove_recursive(_scan);\n";
+        out << "            continue;\n";
+        out << "        }\n";
+        out << "        ++_scan;\n";
+        out << "    }\n";
+    }
+    out << "    entity_remove(_idx);\n";
+    out << "    _destroying[_idx] = 0;\n";
+    out << "}\n\n";
+
     // ── Step 12: entity_remove (swap-and-delete) (task 7.9) ───────────────
     out << "// ── Entity Remove (swap-and-delete) ─────────────────────────────────\n";
     out << "static void entity_remove(size_t _idx) {\n";
@@ -344,6 +368,9 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     out << "// ── Systems ─────────────────────────────────────────────────────────\n\n";
     for (const auto* sys : systems) {
         out << ManualSystemEmitter::emit_system_dynamic(*sys, ctx);
+    }
+    for (const auto* sys : extern_systems) {
+        out << ManualSystemEmitter::emit_extern_system_dynamic(*sys, ctx);
     }
 
     // ── Step 15: on_unload dispatch (task 7.13 / 8.2) ────────────────────
@@ -473,6 +500,9 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
                 out << "        " << sys->name << "_tick(TickEvent{dt});\n";
             }
         }
+    }
+    for (const auto* sys : extern_systems) {
+        out << "        " << sys->name << "_tick();\n";
     }
 
     // End-of-frame deferred load (task 8.1)

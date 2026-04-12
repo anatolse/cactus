@@ -1,5 +1,6 @@
 #include "backends/cpp-entt/system_emitter.h"
 
+#include <algorithm>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -7,6 +8,28 @@
 namespace cactus {
 
 namespace {
+
+std::string filter_simple_name(const FilterEntry& entry) {
+    auto dot = entry.qualified_name.rfind('.');
+    return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+}
+
+template <typename FilterLike>
+bool filter_has_trait(const FilterLike& filter, const std::string& qualified, const std::string& simple) {
+    for (const auto& entry : filter.entries) {
+        if (entry.qualified_name == qualified || filter_simple_name(entry) == simple) {
+            return true;
+        }
+    }
+    return std::any_of(filter.trait_names.begin(), filter.trait_names.end(),
+                       [&](const auto& name) { return name == simple; });
+}
+
+bool is_flat_transform_propagation(const ExternSystemNode& sys) {
+    return filter_has_trait(sys.filter, "std.core.Parent", "Parent") &&
+           filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "LocalTransform") &&
+           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform");
+}
 
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name,
                          const SystemNode& sys) {
@@ -140,6 +163,8 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                     return e.value + "f";
                 }
                 return e.value;
+            } else if constexpr (std::is_same_v<E, SelfExpr>) {
+                return "entity";
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
                 // If it's a known trait field, qualify it
                 if (known_fields.contains(e.name)) {
@@ -343,10 +368,10 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                 if (s.target_expr.has_value()) {
                     std::string target = rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases);
                     return ind + "if (registry.valid(" + target + ")) {\n" +
-                           ind + "    registry.destroy(" + target + ");\n" +
+                           ind + "    cactus_destroy_entity_recursive(registry, " + target + ");\n" +
                            ind + "}\n";
                 }
-                return ind + "registry.destroy(entity);\n";
+                return ind + "cactus_destroy_entity_recursive(registry, entity);\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
                     return ind + "return " + rewrite_expr(**s.value, trait_names, program, pointer_aliases) + ";\n";
@@ -422,6 +447,46 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
                                                   const DecoratedProgram& program) {
     (void)program;
     std::ostringstream out;
+
+    if (is_flat_transform_propagation(sys)) {
+        out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
+        out << "    std::unordered_set<entt::entity> __active;\n";
+        out << "    auto __resolve = [&](auto&& self, entt::entity entity) -> void {\n";
+        out << "        if (!registry.valid(entity) || __active.contains(entity)) return;\n";
+        out << "        __active.insert(entity);\n";
+        out << "        auto* local_ptr = registry.try_get<LocalTransform>(entity);\n";
+        out << "        auto* world_ptr = registry.try_get<WorldTransform>(entity);\n";
+        out << "        if (local_ptr == nullptr || world_ptr == nullptr) { __active.erase(entity); return; }\n";
+        out << "        auto& local = *local_ptr;\n";
+        out << "        auto& world = *world_ptr;\n";
+        out << "        bool __copied_local = false;\n";
+        out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr && registry.valid(parent->parent)) {\n";
+        out << "            if (auto* parent_world_ptr = registry.try_get<WorldTransform>(parent->parent)) {\n";
+        out << "                self(self, parent->parent);\n";
+        out << "                auto& parent_world = *parent_world_ptr;\n";
+        out << "                world.position = {parent_world.position.x + local.position.x, parent_world.position.y + local.position.y};\n";
+        out << "                world.rotation = parent_world.rotation + local.rotation;\n";
+        out << "                world.scale = {parent_world.scale.x * local.scale.x, parent_world.scale.y * local.scale.y};\n";
+        out << "                __copied_local = true;\n";
+        out << "            }\n";
+        out << "        }\n";
+        out << "        if (!__copied_local) {\n";
+        out << "            world.position = local.position;\n";
+        out << "            world.rotation = local.rotation;\n";
+        out << "            world.scale = local.scale;\n";
+        out << "        }\n";
+        out << "        __active.erase(entity);\n";
+        out << "    };\n";
+        out << "    auto view = registry.view<LocalTransform, WorldTransform>();\n";
+        out << "    view.each([&](entt::entity entity, auto&, auto&) {\n";
+        out << "        __resolve(__resolve, entity);\n";
+        out << "    });\n";
+        out << "}\n\n";
+
+        out << "void " << sys.name
+            << "_update(entt::registry& registry, entt::entity entity, LocalTransform& LocalTransform_comp, WorldTransform& WorldTransform_comp);\n\n";
+        return out.str();
+    }
 
     out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
     out << "    auto view = registry.view<";

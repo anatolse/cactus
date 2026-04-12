@@ -50,8 +50,6 @@ enum class TokenType {
     LATE_TICK,
 
     // Keywords — blocks
-    APPLY,
-    CONFIG,
     FILTER,
     EXCLUDE,
     AFTER,
@@ -175,8 +173,6 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::REMOVE: return "REMOVE";
         case TokenType::FIXED_TICK: return "FIXED_TICK";
         case TokenType::LATE_TICK: return "LATE_TICK";
-        case TokenType::APPLY: return "APPLY";
-        case TokenType::CONFIG: return "CONFIG";
         case TokenType::FILTER: return "FILTER";
         case TokenType::EXCLUDE: return "EXCLUDE";
         case TokenType::AFTER: return "AFTER";

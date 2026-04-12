@@ -38,7 +38,7 @@ module  use     const   struct  enum    trait   unit    system
 event   func    extern
 let     var     persist sync    pub
 on      emit    if      else    match   return
-apply   config  filter  exclude
+filter  exclude
 map     reduce  true    false   as      and     or      not
 template  spawn   destroy load    unload
 enable  disable  disabled

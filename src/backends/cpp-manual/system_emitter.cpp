@@ -259,8 +259,9 @@ std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const Decora
 
 // ── Dynamic ECS helpers ────────────────────────────────────────────────────
 
-std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNode& sys,
-                                                            const CodegenContext& ctx) {
+std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
+                                                   const CodegenContext& ctx) {
+    (void)ctx;
     std::string result;
     // Prefer the simple trait_names list (populated by both old and new parsers)
     if (!clause.trait_names.empty()) {

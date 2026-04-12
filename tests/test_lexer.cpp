@@ -70,6 +70,16 @@ TEST_CASE("Lexer: keyword vs identifier", "[lexer]") {
     CHECK(tokens[1].value == "system_name");
 }
 
+TEST_CASE("Lexer: apply and config are identifiers", "[lexer]") {
+    auto tokens = lex("apply config");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 2);
+    CHECK(types[0] == TokenType::IDENTIFIER);
+    CHECK(types[1] == TokenType::IDENTIFIER);
+    CHECK(tokens[0].value == "apply");
+    CHECK(tokens[1].value == "config");
+}
+
 TEST_CASE("Lexer: integer literal", "[lexer]") {
     auto tokens = lex("42");
     auto types = token_types(tokens);

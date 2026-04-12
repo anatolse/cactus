@@ -22,13 +22,13 @@ pub trait FollowCamera:
     var offset: vec2 = vec2(0.0, 0.0)
     var smoothing: float = 8.0
 
-# Updates Camera.offset to smoothly follow the target entity's position.
-# TODO: requires entity query mechanism to read target entity's Transform.
+# Updates Camera.offset to smoothly follow the target entity's world position.
+# TODO: requires entity query mechanism to read target entity's WorldTransform.
 # Stubbed until entity-by-id field access is added to the language.
 pub system FollowCameraSystem:
     filter:
         Camera as cam
         FollowCamera as follow
     on late_tick:
-        # TODO: query target entity Transform and lerp cam.offset toward it
+        # TODO: query target entity WorldTransform and lerp cam.offset toward it
         pass

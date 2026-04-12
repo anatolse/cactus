@@ -6,6 +6,11 @@ module std.core
 # Apply this to units/templates that should NOT be destroyed on `load`.
 pub trait Persistent
 
+# Parent-child hierarchy relationship.
+# Entities without Parent are treated as hierarchy roots.
+pub trait Parent:
+    var parent: entity_id
+
 # ── Standard Lifecycle Events ─────────────────────────────────────────────────
 
 # Events with a dt field (fired each frame phase)

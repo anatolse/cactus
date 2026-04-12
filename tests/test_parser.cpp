@@ -605,6 +605,38 @@ TEST_CASE("Parser: destroy targeted entity statement", "[parser][dynamic-ecs]") 
     REQUIRE(destroy->target_expr.has_value());
 }
 
+TEST_CASE("Parser: self parsed as destroy target", "[parser][hierarchy]") {
+    auto prog = parse(
+        "system Cleanup:\n"
+        "    on tick:\n"
+        "        destroy self\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(destroy != nullptr);
+    REQUIRE(destroy->target_expr.has_value());
+    CHECK(std::holds_alternative<SelfExpr>((*destroy->target_expr)->expr));
+}
+
+TEST_CASE("Parser: self parsed in assignment expression", "[parser][hierarchy]") {
+    auto prog = parse(
+        "system Parenting:\n"
+        "    on tick:\n"
+        "        add Parent to self\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(add != nullptr);
+    REQUIRE(add->target_expr.has_value());
+    CHECK(std::holds_alternative<SelfExpr>((*add->target_expr)->expr));
+}
+
+TEST_CASE("Parser: child is no longer reserved", "[parser][hierarchy]") {
+    auto prog = parse(
+        "func child() int:\n"
+        "    return 1\n");
+    auto& fn = std::get<FuncNode>(prog.declarations[0]);
+    CHECK(fn.name == "child");
+}
+
 // Task 4.8: load statement
 TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
     auto prog = parse(

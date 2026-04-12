@@ -1,12 +1,26 @@
 module std.transform.volume
 
-# ── 3D Spatial Transform ──────────────────────────────────────────────────────
+# ── 3D Hierarchical Transforms ────────────────────────────────────────────────
 
-# Standard 3D transform. Apply to any entity that has a position in 3D space.
-# position: world-space 3D position
+# Local/authored 3D transform relative to the entity's parent.
+# position: local-space 3D position
 # rotation: orientation as a quaternion (identity = no rotation)
 # scale:    per-axis scale factor (1.0 = normal size)
-pub trait Transform:
+pub trait LocalTransform:
     var position: vec3 = vec3(0.0, 0.0, 0.0)
     var rotation: quat = quat(0.0, 0.0, 0.0, 1.0)
     var scale: vec3 = vec3(1.0, 1.0, 1.0)
+
+# Derived 3D world transform after hierarchy propagation.
+# position: world-space 3D position
+# rotation: world-space orientation as a quaternion
+# scale:    world-space per-axis scale
+pub trait WorldTransform:
+    var position: vec3 = vec3(0.0, 0.0, 0.0)
+    var rotation: quat = quat(0.0, 0.0, 0.0, 1.0)
+    var scale: vec3 = vec3(1.0, 1.0, 1.0)
+
+extern system TransformPropagation:
+    filter:
+        LocalTransform
+        WorldTransform

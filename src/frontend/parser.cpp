@@ -667,9 +667,9 @@ ArchetypeTraitEntry Parser::parse_archetype_trait_entry() {
 
 std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries() {
     std::vector<ArchetypeTraitEntry> entries;
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN) && !check(TokenType::CHILD)) {
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN) || check(TokenType::CHILD)) {
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
         auto error_count_before = errors_.error_count();
@@ -709,11 +709,6 @@ UnitNode Parser::parse_unit(bool is_pub) {
     node.traits = parse_archetype_trait_entries();
 
     skip_newlines();
-    if (check(TokenType::CHILD)) {
-        node.child = parse_child_block();
-    }
-
-    skip_newlines();
     expect_dedent();
     return node;
 }
@@ -735,44 +730,8 @@ TemplateNode Parser::parse_template(bool is_pub) {
     node.traits = parse_archetype_trait_entries();
 
     skip_newlines();
-    if (check(TokenType::CHILD)) {
-        node.child = parse_child_block();
-    }
-
-    skip_newlines();
     expect_dedent();
     return node;
-}
-
-ChildBlock Parser::parse_child_block() {
-    auto loc = peek().location;
-    consume(TokenType::CHILD, "expected 'child'");
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
-    ChildBlock block;
-    block.location = loc;
-
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        auto error_count_before = errors_.error_count();
-        auto entry_loc = peek().location;
-        auto type_name = consume(TokenType::IDENTIFIER, "expected child type").value;
-        auto inst_name = consume(TokenType::IDENTIFIER, "expected child instance name").value;
-        expect_newline();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-            continue;
-        }
-        block.children.push_back({.type_name = type_name, .instance_name = inst_name, .location = entry_loc});
-    }
-
-    expect_dedent();
-    return block;
 }
 
 // ── System ──────────────────────────────────────────────────────────────────
@@ -1805,6 +1764,13 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
         ident.name = name;
         ident.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(ident)}, loc);
+    }
+
+    if (check(TokenType::SELF)) {
+        advance();
+        SelfExpr self_expr;
+        self_expr.location = loc;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(self_expr)}, loc);
     }
 
     // Identifier — possibly lambda (ident => expr)

@@ -247,6 +247,14 @@ TEST_CASE("Lexer: new action keywords spawn destroy load unload", "[lexer][dynam
     CHECK(types[3] == TokenType::UNLOAD);
 }
 
+TEST_CASE("Lexer: self is reserved and child is no longer reserved", "[lexer][hierarchy]") {
+    auto tokens = lex("self child");
+    auto types = token_types(tokens);
+    REQUIRE(types.size() == 2);
+    CHECK(types[0] == TokenType::SELF);
+    CHECK(types[1] == TokenType::IDENTIFIER);
+}
+
 TEST_CASE("Lexer: new action keywords add remove to from", "[lexer][dynamic-ecs]") {
     auto tokens = lex("add remove to from");
     auto types = token_types(tokens);

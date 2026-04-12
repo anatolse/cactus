@@ -702,3 +702,39 @@ TEST_CASE("Semantic: exists forbidden in func body", "[semantic][entity-id]") {
               "    return exists(id)\n") ==
           "`exists()` requires world access; only allowed inside system event handlers");
 }
+
+TEST_CASE("Semantic: self is entity_id in system handler", "[semantic][hierarchy]") {
+    CHECK_FALSE(analyze_has_errors(
+        STDLIB_EVENTS +
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "system Parenting:\n"
+        "    on tick:\n"
+        "        add Parent:\n"
+        "            parent = self\n"
+        "        destroy self\n"));
+}
+
+TEST_CASE("Semantic: self rejected in func body", "[semantic][hierarchy]") {
+    CHECK(analyze_first_error(
+              "func current() entity_id:\n"
+              "    return self\n") ==
+          "`self` only allowed inside system event handlers");
+}
+
+TEST_CASE("Semantic: self rejected in trait default", "[semantic][hierarchy]") {
+    CHECK(analyze_first_error(
+              "trait Parent:\n"
+              "    var parent: entity_id = self\n") ==
+          "`self` only allowed inside system event handlers");
+}
+
+TEST_CASE("Semantic: self rejected in unit initializer", "[semantic][hierarchy]") {
+    CHECK(analyze_first_error(
+              "trait Parent:\n"
+              "    var parent: entity_id\n"
+              "unit Child:\n"
+              "    Parent:\n"
+              "        parent = self\n") ==
+          "`self` only allowed inside system event handlers");
+}

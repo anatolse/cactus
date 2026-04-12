@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <ranges>
 #include <sstream>
 
 namespace cactus {
@@ -121,6 +122,64 @@ TypeInfo find_field_type_in(const FieldContainer& fields, const std::string& mem
         }
     }
     return make_unknown_type();
+}
+
+bool expr_contains_self(const ExprNode& expr);
+bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments);
+
+template <typename ExprContainer>
+bool any_expr_contains_self(const ExprContainer& expressions) {
+    return std::ranges::any_of(expressions, [](const auto& expr) {
+        return expr_contains_self(*expr);
+    });
+}
+
+bool expr_contains_self(const ExprNode& expr) {
+    return std::visit(
+        [](const auto& e) -> bool {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, SelfExpr>) {
+                return true;
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return expr_contains_self(*e.operand);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return expr_contains_self(*e.left) || expr_contains_self(*e.right);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                return expr_contains_self(*e.callee) || any_expr_contains_self(e.args);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                return expr_contains_self(*e.object);
+            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                return expr_contains_self(*e.body);
+            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                return expr_contains_self(*e.source) ||
+                       std::ranges::any_of(e.operations, [](const auto& op) {
+                           return any_expr_contains_self(op.args);
+                       });
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                return expr_contains_self(*e.subject) ||
+                       std::ranges::any_of(e.arms, [](const auto& arm) {
+                           return expr_contains_self(*arm.pattern) || expr_contains_self(*arm.body);
+                       });
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                return expr_contains_self(*e.condition) || expr_contains_self(*e.then_expr) ||
+                       expr_contains_self(*e.else_expr);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                return any_expr_contains_self(e.elements);
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                return std::ranges::any_of(e.overrides, [](const auto& trait) {
+                    return field_assignments_contain_self(trait.assignments);
+                });
+            } else {
+                return false;
+            }
+        },
+        expr.expr);
+}
+
+bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments) {
+    return std::ranges::any_of(assignments, [](const auto& field) {
+        return expr_contains_self(*field.value);
+    });
 }
 
 }  // namespace
@@ -1454,6 +1513,14 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
         return make_unknown_type();
     }
 
+    if (std::holds_alternative<SelfExpr>(expr.expr)) {
+        if (handler_event == nullptr && !local_bindings.contains("__self_context")) {
+            errors_.error(expr.location, "`self` only allowed inside system event handlers");
+            return make_unknown_type();
+        }
+        return make_entity_id_type();
+    }
+
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
         const auto* owner = std::get_if<IdentExpr>(&member->object->expr);
         if (owner == nullptr) {
@@ -1589,6 +1656,10 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                                     assign.location,
                                     "unknown field '" + assign.name + "' for trait '" + 
                                     entry.trait_name + "' in " + KIND + " '" + node.name + "'");
+                            }
+                            if (expr_contains_self(*assign.value)) {
+                                errors_.error(assign.location,
+                                              "`self` only allowed inside system event handlers");
                             }
                         }
                     }
@@ -1804,6 +1875,15 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
         std::visit(
             [this, &context_name, in_system_handler](auto& s) { // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
+                std::unordered_map<std::string, TypeInfo> self_context_locals;
+                if (in_system_handler) {
+                    self_context_locals["__self_context"] = make_entity_id_type();
+                }
+                auto validate_self_expr = [this, in_system_handler](const ExprNode& expr, const SourceLocation& location) {
+                    if (!in_system_handler && expr_contains_self(expr)) {
+                        errors_.error(location, "`self` only allowed inside system event handlers");
+                    }
+                };
                 if constexpr (std::is_same_v<S, SpawnStmt> ||
                               std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> ||
@@ -1865,14 +1945,14 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                         }
                         if constexpr (std::is_same_v<S, AddTraitStmt>) {
                             if (s.target_expr.has_value()) {
-                                auto t = infer_expr_type(**s.target_expr, {}, {}, nullptr);
+                                auto t = infer_expr_type(**s.target_expr, {}, self_context_locals, nullptr);
                                 if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
                                     errors_.error(s.location, "`to` target must be of type `entity_id`");
                                 }
                             }
                         } else {
                             if (s.target_expr.has_value()) {
-                                auto t = infer_expr_type(**s.target_expr, {}, {}, nullptr);
+                                auto t = infer_expr_type(**s.target_expr, {}, self_context_locals, nullptr);
                                 if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
                                     errors_.error(s.location, "`from` target must be of type `entity_id`");
                                 }
@@ -1881,7 +1961,7 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                     }
                     if constexpr (std::is_same_v<S, DestroyStmt>) {
                         if (s.target_expr.has_value()) {
-                            auto t = infer_expr_type(**s.target_expr, {}, {}, nullptr);
+                            auto t = infer_expr_type(**s.target_expr, {}, self_context_locals, nullptr);
                             if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
                                 errors_.error(s.location, "`destroy` target must be of type `entity_id`");
                             }
@@ -1898,6 +1978,14 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     validate_context_stmts(s.then_body, context_name, in_system_handler);
                     validate_context_stmts(s.else_body, context_name, in_system_handler);
+                } else if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
+                    validate_self_expr(*s.value, s.location);
+                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                    if (s.value.has_value()) {
+                        validate_self_expr(**s.value, s.location);
+                    }
+                } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                    validate_self_expr(*s.expr, s.location);
                 }
             },
             stmt->stmt);

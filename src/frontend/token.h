@@ -39,6 +39,7 @@ enum class TokenType {
     ELSE,
     MATCH,
     RETURN,
+    SELF,
     SPAWN,
     DESTROY,
     LOAD,
@@ -51,7 +52,6 @@ enum class TokenType {
     // Keywords — blocks
     APPLY,
     CONFIG,
-    CHILD,
     FILTER,
     EXCLUDE,
     AFTER,
@@ -166,6 +166,7 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::ELSE: return "ELSE";
         case TokenType::MATCH: return "MATCH";
         case TokenType::RETURN: return "RETURN";
+        case TokenType::SELF: return "SELF";
         case TokenType::SPAWN: return "SPAWN";
         case TokenType::DESTROY: return "DESTROY";
         case TokenType::LOAD: return "LOAD";
@@ -176,7 +177,6 @@ inline const char* token_type_to_string(TokenType t) {
         case TokenType::LATE_TICK: return "LATE_TICK";
         case TokenType::APPLY: return "APPLY";
         case TokenType::CONFIG: return "CONFIG";
-        case TokenType::CHILD: return "CHILD";
         case TokenType::FILTER: return "FILTER";
         case TokenType::EXCLUDE: return "EXCLUDE";
         case TokenType::AFTER: return "AFTER";

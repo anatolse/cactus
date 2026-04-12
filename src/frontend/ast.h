@@ -84,6 +84,10 @@ struct IdentExpr {
     SourceLocation location;
 };
 
+struct SelfExpr {
+    SourceLocation location;
+};
+
 struct BinaryExpr {
     std::string op;  // "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "and", "or"
     std::unique_ptr<ExprNode> left;
@@ -150,7 +154,7 @@ struct ListExpr {
 };
 
 struct ExprNode {
-    using Variant = std::variant<LiteralExpr, IdentExpr, BinaryExpr, UnaryExpr, CallExpr, MemberExpr, LambdaExpr,
+    using Variant = std::variant<LiteralExpr, IdentExpr, SelfExpr, BinaryExpr, UnaryExpr, CallExpr, MemberExpr, LambdaExpr,
                                  PipelineExpr, MatchExpr, IfExpr, ListExpr, SpawnExpr>;
     Variant expr;
     SourceLocation location;
@@ -321,22 +325,10 @@ struct TraitNode {
     SourceLocation location;
 };
 
-struct ChildEntry {
-    std::string type_name;
-    std::string instance_name;
-    SourceLocation location;
-};
-
-struct ChildBlock {
-    std::vector<ChildEntry> children;
-    SourceLocation location;
-};
-
 struct UnitNode {
     std::string name;
     bool is_pub = false;
     std::vector<ArchetypeTraitEntry> traits;
-    std::optional<ChildBlock> child;
     SourceLocation location;
 };
 
@@ -346,7 +338,6 @@ struct TemplateNode {
     std::string name;
     bool is_pub = false;
     std::vector<ArchetypeTraitEntry> traits;
-    std::optional<ChildBlock> child;
     SourceLocation location;
 };
 

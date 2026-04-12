@@ -69,7 +69,6 @@ private:
     ArchetypeTraitEntry parse_archetype_trait_entry();
     std::vector<ArchetypeTraitEntry> parse_archetype_trait_entries();
     std::vector<ArchetypeTraitEntry> parse_archetype_trait_entry_block();
-    ChildBlock parse_child_block();
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();
     std::vector<SortKey> parse_order_by_clause();

@@ -42,33 +42,33 @@ pub trait ThirdPersonCamera:
     var height: float = 2.0
     var smoothing: float = 8.0
 
-# Updates Transform to position the camera behind and above the target entity.
-# TODO: requires entity query mechanism to read target entity's Transform.
+# Updates camera placement to follow the target entity in world space.
+# TODO: requires entity query mechanism to read target entity's WorldTransform.
 # Stubbed until entity-by-id field access is added to the language.
 pub system FollowCameraSystem:
     filter:
         Camera as cam
         FollowCamera as follow
     on late_tick:
-        # TODO: query target entity Transform and lerp camera position toward offset
+        # TODO: query target entity WorldTransform and lerp camera position toward offset
         pass
 
-# Applies pitch/yaw from FirstPersonCamera to the entity's Transform rotation.
-# TODO: requires entity query mechanism for Transform update.
+# Applies pitch/yaw from FirstPersonCamera to the entity's WorldTransform rotation.
+# TODO: requires entity query mechanism for WorldTransform update.
 pub system FirstPersonCameraSystem:
     filter:
         Camera as cam
         FirstPersonCamera as fps
     on late_tick:
-        # TODO: apply pitch and yaw to Transform.rotation as a quaternion
+        # TODO: apply pitch and yaw to WorldTransform.rotation as a quaternion
         pass
 
 # Orbits the camera around the target entity using ThirdPersonCamera parameters.
-# TODO: requires entity query mechanism to read target entity's Transform.
+# TODO: requires entity query mechanism to read target entity's WorldTransform.
 pub system ThirdPersonCameraSystem:
     filter:
         Camera as cam
         ThirdPersonCamera as tps
     on late_tick:
-        # TODO: compute orbit position from target Transform, distance, height
+        # TODO: compute orbit position from target WorldTransform, distance, height
         pass

@@ -2,7 +2,7 @@ module std.render.meshes
 
 # ── 3D Mesh Rendering Traits ──────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
-# No user system is needed. An entity with Transform + Renderer is drawn.
+# No user system is needed. An entity with WorldTransform + Renderer is drawn.
 
 # Renders a 3D mesh at the entity's transform position.
 # mesh:        asset handle for the mesh geometry (immutable after spawn)
@@ -50,12 +50,12 @@ pub trait DirectionalLight:
 
 extern system MeshRenderer:
     filter:
-        std.transform.volume.Transform
+        std.transform.volume.WorldTransform
         Renderer
 
 extern system PointLightSystem:
     filter:
-        std.transform.volume.Transform
+        std.transform.volume.WorldTransform
         PointLight
 
 extern system DirectionalLightSystem:

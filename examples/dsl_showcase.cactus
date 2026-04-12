@@ -1041,22 +1041,22 @@ system ParticleSystem:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Stdlib-known extern system — backend auto-generates the sprite rendering pass
-# because it recognises spr.Renderer + tr_flat.Position as std.render.sprites + std.transform.flat.
+# because it recognises spr.Renderer + tr_flat.WorldTransform as std.render.sprites + std.transform.flat.
 # No C++ to write; no parameters to configure; the `order by:` is honoured by the backend.
 extern system SpriteRenderPass:
     filter:
         spr.Renderer as r
-        tr_flat.Position as pos
+        tr_flat.WorldTransform as pos
     order by:
         r.layer asc
-        pos.pos.y asc
+        pos.position.y asc
     after:
         CollisionSystem
 
 # Stdlib-known extern system — backend auto-generates the 2D physics integration pass
 extern system Physics2DPass:
     filter:
-        tr_flat.Position as pos
+        tr_flat.LocalTransform as pos
         phys_flat.RigidBody as rb
     after:
         GravitySystem

@@ -95,6 +95,41 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
     return syms;
 }
 
+static bool compile_implicit_std_core(const fs::path& build_dir,
+                                      const std::vector<fs::path>& search_paths,
+                                      std::unordered_map<std::string, cactus::DecoratedProgram>& compiled,
+                                      std::vector<fs::path>& artifact_paths) {
+    auto std_core_path = cactus::ModuleResolver::locate_file("std.core", search_paths);
+    if (std_core_path.empty()) {
+        return true;
+    }
+
+    cactus::ErrorReporter std_errors;
+    auto std_prog = lex_and_parse(std_core_path.string(), std_errors);
+    if (!std_prog || std_errors.has_errors()) {
+        print_errors(std_errors);
+        return false;
+    }
+
+    cactus::SemanticAnalyzer analyzer(std_errors);
+    auto dec = analyzer.analyze(*std_prog);
+    if (std_errors.has_errors()) {
+        print_errors(std_errors);
+        return false;
+    }
+
+    cactus::ErrorReporter art_errors;
+    cactus::ModuleArtifact artifact(art_errors);
+    if (!artifact.save(dec, "std.core", build_dir)) {
+        print_errors(art_errors);
+        return false;
+    }
+
+    artifact_paths.push_back(build_dir / "std.core.cmod");
+    compiled["std.core"] = std::move(dec);
+    return true;
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-complexity)
@@ -192,9 +227,21 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
         std::unordered_map<std::string, cactus::DecoratedProgram> compiled;
         std::vector<fs::path> artifact_paths;
 
+        // std.core lifecycle events are implicitly in scope for every module.
+        // Compile and link it up-front when available so semantic analysis and
+        // downstream codegen both see the authoritative declarations.
+        if (!compile_implicit_std_core(build_dir, all_search_paths, compiled, artifact_paths)) {
+            return 1;
+        }
+
         for (auto& mod : modules) {
             // Build ModuleImports from already-compiled dependencies
             cactus::ModuleImports imports;
+            auto std_core_it = compiled.find("std.core");
+            if (std_core_it != compiled.end() && mod.qualified_name != "std.core") {
+                auto syms = extract_pub_symbols("std.core", std_core_it->second);
+                imports.add("std.core", std::move(syms));
+            }
             for (auto& dep_name : mod.dependencies) {
                 auto it = compiled.find(dep_name);
                 if (it != compiled.end()) {

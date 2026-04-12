@@ -4,6 +4,17 @@
 
 namespace cactus {
 
+namespace {
+
+std::string entt_type_to_cpp(const TypeInfo& type) {
+    if (type.kind == TypeKind::EntityId) {
+        return "entt::entity";
+    }
+    return SoaEmitter::type_to_cpp(type);
+}
+
+}  // namespace
+
 std::string EnttEventEmitter::emit_event(const EventNode& event, const DecoratedProgram& program) {
     std::ostringstream out;
     out << "struct " << event.name << "Event {\n";
@@ -23,7 +34,7 @@ std::string EnttEventEmitter::emit_event(const EventNode& event, const Decorated
             type = {.kind = TypeKind::Int, .name = "int"};
         }
 
-        out << "    " << SoaEmitter::type_to_cpp(type) << " " << field.name << ";\n";
+        out << "    " << entt_type_to_cpp(type) << " " << field.name << ";\n";
     }
     out << "};\n";
     return out.str();

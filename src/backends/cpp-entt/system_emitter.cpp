@@ -450,16 +450,16 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
 
     if (is_flat_transform_propagation(sys)) {
         out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
-        out << "    std::unordered_set<entt::entity> __active;\n";
-        out << "    auto __resolve = [&](auto&& self, entt::entity entity) -> void {\n";
-        out << "        if (!registry.valid(entity) || __active.contains(entity)) return;\n";
-        out << "        __active.insert(entity);\n";
+        out << "    std::unordered_set<entt::entity> active_entities;\n";
+        out << "    auto resolve_world_transform = [&](auto&& self, entt::entity entity) -> void {\n";
+        out << "        if (!registry.valid(entity) || active_entities.contains(entity)) return;\n";
+        out << "        active_entities.insert(entity);\n";
         out << "        auto* local_ptr = registry.try_get<LocalTransform>(entity);\n";
         out << "        auto* world_ptr = registry.try_get<WorldTransform>(entity);\n";
-        out << "        if (local_ptr == nullptr || world_ptr == nullptr) { __active.erase(entity); return; }\n";
+        out << "        if (local_ptr == nullptr || world_ptr == nullptr) { active_entities.erase(entity); return; }\n";
         out << "        auto& local = *local_ptr;\n";
         out << "        auto& world = *world_ptr;\n";
-        out << "        bool __copied_local = false;\n";
+        out << "        bool copied_local = false;\n";
         out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr && registry.valid(parent->parent)) {\n";
         out << "            if (auto* parent_world_ptr = registry.try_get<WorldTransform>(parent->parent)) {\n";
         out << "                self(self, parent->parent);\n";
@@ -467,19 +467,19 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         out << "                world.position = {parent_world.position.x + local.position.x, parent_world.position.y + local.position.y};\n";
         out << "                world.rotation = parent_world.rotation + local.rotation;\n";
         out << "                world.scale = {parent_world.scale.x * local.scale.x, parent_world.scale.y * local.scale.y};\n";
-        out << "                __copied_local = true;\n";
+        out << "                copied_local = true;\n";
         out << "            }\n";
         out << "        }\n";
-        out << "        if (!__copied_local) {\n";
+        out << "        if (!copied_local) {\n";
         out << "            world.position = local.position;\n";
         out << "            world.rotation = local.rotation;\n";
         out << "            world.scale = local.scale;\n";
         out << "        }\n";
-        out << "        __active.erase(entity);\n";
+        out << "        active_entities.erase(entity);\n";
         out << "    };\n";
         out << "    auto view = registry.view<LocalTransform, WorldTransform>();\n";
         out << "    view.each([&](entt::entity entity, auto&, auto&) {\n";
-        out << "        __resolve(__resolve, entity);\n";
+        out << "        resolve_world_transform(resolve_world_transform, entity);\n";
         out << "    });\n";
         out << "}\n\n";
 
@@ -537,26 +537,26 @@ std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgra
     }
 
     std::ostringstream out;
-    out << "static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity entity) {\n";
-    out << "    static std::unordered_set<entt::entity> __destroying;\n";
-    out << "    if (!registry.valid(entity) || __destroying.contains(entity)) {\n";
+    out << "[[maybe_unused]] static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity entity) {\n";
+    out << "    static std::unordered_set<entt::entity> destroying_entities;\n";
+    out << "    if (!registry.valid(entity) || destroying_entities.contains(entity)) {\n";
     out << "        return;\n";
     out << "    }\n";
-    out << "    __destroying.insert(entity);\n";
-    out << "    std::vector<entt::entity> __children;\n";
-    out << "    auto __parent_view = registry.view<Parent>();\n";
-    out << "    __parent_view.each([&](entt::entity child, const Parent& rel) {\n";
+    out << "    destroying_entities.insert(entity);\n";
+    out << "    std::vector<entt::entity> child_entities;\n";
+    out << "    auto parent_view = registry.view<Parent>();\n";
+    out << "    parent_view.each([&](entt::entity child, const Parent& rel) {\n";
     out << "        if (rel.parent == entity) {\n";
-    out << "            __children.push_back(child);\n";
+    out << "            child_entities.push_back(child);\n";
     out << "        }\n";
     out << "    });\n";
-    out << "    for (auto child : __children) {\n";
+    out << "    for (auto child : child_entities) {\n";
     out << "        cactus_destroy_entity_recursive(registry, child);\n";
     out << "    }\n";
     out << "    if (registry.valid(entity)) {\n";
     out << "        registry.destroy(entity);\n";
     out << "    }\n";
-    out << "    __destroying.erase(entity);\n";
+    out << "    destroying_entities.erase(entity);\n";
     out << "}\n\n";
     return out.str();
 }

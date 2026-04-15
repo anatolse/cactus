@@ -1,0 +1,59 @@
+module square
+
+use std.input
+
+# ── Input Declarations ────────────────────────────────────────────────────────
+
+input MoveX: axis
+    negative = Key.A
+    positive = Key.D
+
+input MoveY: axis
+    negative = Key.W
+    positive = Key.S
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+const:
+    SPEED = 200.0
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+trait Position:
+    var x: float
+    var y: float
+
+trait MoveInput:
+    var dx: float
+    var dy: float
+
+# ── Unit ──────────────────────────────────────────────────────────────────────
+
+pub unit Square:
+    Position:
+        x = 375.0
+        y = 275.0
+    MoveInput:
+        dx = 0.0
+        dy = 0.0
+
+# ── Systems ───────────────────────────────────────────────────────────────────
+
+# ReadInputSystem: runs every input poll, stores axis values into MoveInput fields
+system ReadInputSystem:
+    filter:
+        MoveInput
+
+    on input:
+        dx = input.axis(MoveX)
+        dy = input.axis(MoveY)
+
+# MoveSystem: applies stored input deltas to position each tick
+system MoveSystem:
+    filter:
+        Position
+        MoveInput
+
+    on tick:
+        x = x + dx * SPEED * tick.dt
+        y = y + dy * SPEED * tick.dt

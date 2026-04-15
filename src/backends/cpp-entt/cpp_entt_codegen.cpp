@@ -5,6 +5,9 @@
 #include "backends/cpp-entt/system_emitter.h"
 #include "backends/cpp-manual/soa_emitter.h"
 
+#include <algorithm>
+#include <cctype>
+#include <optional>
 #include <sstream>
 
 namespace cactus {
@@ -18,6 +21,27 @@ bool has_extern_funcs(const DecoratedProgram& program) {
         }
     }
     return false;
+}
+
+bool has_trait(const DecoratedProgram& program, const std::string& name) {
+    return program.traits.find(name) != program.traits.end();
+}
+
+std::string upper_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return value;
+}
+
+std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
+            if (ident->name == "Key") {
+                return "KEY_" + upper_copy(member->member);
+            }
+        }
+    }
+    return std::nullopt;
 }
 }  // namespace
 
@@ -43,6 +67,88 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "inline Vector2 vec2(float x, float y) {\n";
     out << "    return {x, y};\n";
     out << "}\n\n";
+
+    // Built-in runtime helpers for generated examples
+    out << "struct tickEvent {\n";
+    out << "    float dt;\n";
+    out << "};\n";
+    out << "using TickEvent = tickEvent;\n\n";
+
+    if (program.ast != nullptr) {
+        bool has_axis_input = false;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                has_axis_input = has_axis_input || input->input_kind == InputKind::Axis;
+            }
+        }
+
+        if (has_axis_input) {
+            out << "enum class InputAction {\n";
+            bool first = true;
+            for (const auto& decl : program.ast->declarations) {
+                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                    if (input->input_kind != InputKind::Axis) {
+                        continue;
+                    }
+                    out << (first ? "    " : ",\n    ") << input->name;
+                    first = false;
+                }
+            }
+            out << "\n};\n\n";
+
+            for (const auto& decl : program.ast->declarations) {
+                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                    if (input->input_kind != InputKind::Axis) {
+                        continue;
+                    }
+                    out << "constexpr InputAction " << input->name << " = InputAction::" << input->name << ";\n";
+                }
+            }
+            out << "\n";
+
+            out << "static float cactus_axis(InputAction action) {\n";
+            out << "    switch (action) {\n";
+            for (const auto& decl : program.ast->declarations) {
+                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                    if (input->input_kind != InputKind::Axis) {
+                        continue;
+                    }
+                    std::string negative = "0";
+                    std::string positive = "0";
+                    for (const auto& prop : input->props) {
+                        if (prop.key == "negative") {
+                            if (auto key = raylib_key_constant(*prop.value)) {
+                                negative = "(IsKeyDown(" + *key + ") ? 1.0f : 0.0f)";
+                            }
+                        } else if (prop.key == "positive") {
+                            if (auto key = raylib_key_constant(*prop.value)) {
+                                positive = "(IsKeyDown(" + *key + ") ? 1.0f : 0.0f)";
+                            }
+                        }
+                    }
+                    out << "        case InputAction::" << input->name << ": return " << positive << " - " << negative << ";\n";
+                }
+            }
+            out << "    }\n";
+            out << "    return 0.0f;\n";
+            out << "}\n\n";
+
+            out << "struct inputEvent {\n";
+            out << "    float axis(InputAction action) const { return cactus_axis(action); }\n";
+            out << "};\n\n";
+        }
+    }
+
+    if (program.ast != nullptr) {
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* cb = std::get_if<ConstBlockNode>(&decl)) {
+                for (const auto& ca : cb->assignments) {
+                    out << "constexpr auto " << ca.name << " = " << ManualSystemEmitter::emit_expr(*ca.value) << ";\n";
+                }
+            }
+        }
+        out << "\n";
+    }
 
     // Enums
     for (const auto& [name, e] : program.enums) {
@@ -137,7 +243,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                 out << "entt::entity create_" << unit->name << "(entt::registry& registry) {\n";
                 out << "    auto entity = registry.create();\n";
                 for (const auto& trait : unit->traits) {
-                    out << "    registry.emplace<" << trait.trait_name << ">(entity);\n";
+                    out << "    {\n";
+                    out << "        auto component = " << trait.trait_name << "{};\n";
+                    for (const auto& assignment : trait.assignments) {
+                        out << "        component." << assignment.name << " = "
+                            << ManualSystemEmitter::emit_expr(*assignment.value) << ";\n";
+                    }
+                    out << "        registry.emplace<" << trait.trait_name << ">(entity, component);\n";
+                    out << "    }\n";
                 }
                 out << "    return entity;\n";
                 out << "}\n\n";
@@ -149,6 +262,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     if (program.ast != nullptr) {
         out << "// ── Event Dispatcher ────────────────────────────────────────────────\n\n";
         out << "void setup_dispatcher(entt::dispatcher& dispatcher) {\n";
+        out << "    (void)dispatcher;\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* event = std::get_if<EventNode>(&decl)) {
                 out << "    " << EnttEventEmitter::emit_sink_connection(*event);
@@ -223,13 +337,44 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
         out << "        GetFrameTime();\n\n";
     }
 
+    // Call system input handlers
+    if (program.ast != nullptr) {
+        bool emits_input_handler = false;
+        for (auto& decl : program.ast->declarations) {
+            if (auto* sys = std::get_if<SystemNode>(&decl)) {
+                for (auto& handler : sys->handlers) {
+                    if (handler.event_name == "input") {
+                        emits_input_handler = true;
+                        break;
+                    }
+                }
+            }
+            if (emits_input_handler) {
+                break;
+            }
+        }
+        if (emits_input_handler) {
+            out << "        auto input = inputEvent{};\n";
+            for (auto& decl : program.ast->declarations) {
+                if (auto* sys = std::get_if<SystemNode>(&decl)) {
+                    for (auto& handler : sys->handlers) {
+                        if (handler.event_name == "input") {
+                            out << "        " << sys->name << "_input(registry, input);\n";
+                        }
+                    }
+                }
+            }
+            out << "\n";
+        }
+    }
+
     // Call system tick handlers
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 for (auto& handler : sys->handlers) {
                     if (handler.event_name == "tick") {
-                        out << "        " << sys->name << "_tick(registry, TickEvent{dt});\n";
+                        out << "        " << sys->name << "_tick(registry, tickEvent{dt});\n";
                     }
                 }
             }
@@ -242,6 +387,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "        dispatcher.update();\n\n";
     out << "        BeginDrawing();\n";
     out << "        ClearBackground(RAYWHITE);\n";
+    if (has_trait(program, "Position")) {
+        out << "        {\n";
+        out << "            auto draw_view = registry.view<Position>();\n";
+        out << "            draw_view.each([&](const Position& pos) {\n";
+        out << "                DrawRectangle(static_cast<int>(pos.x), static_cast<int>(pos.y), 50, 50, Color{100, 149, 237, 255});\n";
+        out << "            });\n";
+        out << "        }\n";
+    }
     out << "        EndDrawing();\n";
     out << "    }\n\n";
     out << "    CloseWindow();\n";

@@ -430,6 +430,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
             out << "auto& " << trait_name << "_comp";
         }
         out << ") {\n";
+        out << "        (void)entity;\n";
 
         // Emit body with proper component field access
         for (const auto& stmt : handler.body) {
@@ -510,6 +511,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         out << ", auto& " << trait_name << "_comp";
     }
     out << ") {\n";
+    out << "        (void)entity;\n";
     out << "        " << sys.name << "_update(registry, entity";
     for (const auto& trait_name : sys.filter.trait_names) {
         out << ", " << trait_name << "_comp";

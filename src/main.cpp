@@ -287,6 +287,10 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
             return 1;
         }
         decorated = std::move(*merged);
+        // Preserve the root AST for code generation so top-level declarations
+        // (units, systems, consts, etc.) are still emitted after multi-module
+        // linking. Artifacts intentionally do not serialize AST structure.
+        decorated.ast = root_prog.get();
 
     } else {
         // ── 6.3: Single-file backward-compatible pipeline ─────────────────────

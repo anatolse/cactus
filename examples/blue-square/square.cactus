@@ -1,6 +1,8 @@
 module square
 
 use std.input
+use std.transform.flat
+use std.render.shapes
 
 # ── Input Declarations ────────────────────────────────────────────────────────
 
@@ -19,10 +21,6 @@ const:
 
 # ── Traits ────────────────────────────────────────────────────────────────────
 
-trait Position:
-    var x: float
-    var y: float
-
 trait MoveInput:
     var dx: float
     var dy: float
@@ -30,12 +28,18 @@ trait MoveInput:
 # ── Unit ──────────────────────────────────────────────────────────────────────
 
 pub unit Square:
-    Position:
-        x = 375.0
-        y = 275.0
+    WorldTransform:
+        position = vec2(375.0, 275.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
     MoveInput:
         dx = 0.0
         dy = 0.0
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(50.0, 50.0)
+        color = #6495EDFF
+        visible = true
 
 # ── Systems ───────────────────────────────────────────────────────────────────
 
@@ -51,9 +55,8 @@ system ReadInputSystem:
 # MoveSystem: applies stored input deltas to position each tick
 system MoveSystem:
     filter:
-        Position
+        WorldTransform
         MoveInput
 
     on tick:
-        x = x + dx * SPEED * tick.dt
-        y = y + dy * SPEED * tick.dt
+        position = vec2(position.x + dx * SPEED * tick.dt, position.y + dy * SPEED * tick.dt)

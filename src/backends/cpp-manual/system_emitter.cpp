@@ -108,6 +108,18 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(rea
                 if (e.kind == LiteralExpr::Kind::String) {
                     return "\"" + e.value + "\"";
                 }
+                if (e.kind == LiteralExpr::Kind::HexColor) {
+                    std::string hex = e.value;
+                    if (hex.size() == 6) {
+                        hex += "FF";
+                    }
+                    if (hex.size() == 8) {
+                        auto byte = [&](size_t offset) {
+                            return std::to_string(std::stoi(hex.substr(offset, 2), nullptr, 16));
+                        };
+                        return "Color{" + byte(0) + ", " + byte(2) + ", " + byte(4) + ", " + byte(6) + "}";
+                    }
+                }
                 if (e.kind == LiteralExpr::Kind::Float) {
                     return e.value + "f";
                 }

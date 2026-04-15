@@ -26,9 +26,13 @@ bool filter_has_trait(const FilterLike& filter, const std::string& qualified, co
 }
 
 bool is_flat_transform_propagation(const ExternSystemNode& sys) {
-    return filter_has_trait(sys.filter, "std.core.Parent", "Parent") &&
-           filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "LocalTransform") &&
+    return filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "LocalTransform") &&
            filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform");
+}
+
+bool is_shape_renderer(const ExternSystemNode& sys) {
+    return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "Shape", "Shape");
 }
 
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name,
@@ -486,6 +490,29 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
 
         out << "void " << sys.name
             << "_update(entt::registry& registry, entt::entity entity, LocalTransform& LocalTransform_comp, WorldTransform& WorldTransform_comp);\n\n";
+        return out.str();
+    }
+
+    if (is_shape_renderer(sys)) {
+        out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<WorldTransform, Shape>();\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Shape& Shape_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        if (!Shape_comp.visible) { return; }\n";
+        out << "        switch (Shape_comp.type) {\n";
+        out << "            case ShapeType::Rectangle:\n";
+        out << "                DrawRectangle(\n";
+        out << "                    static_cast<int>(WorldTransform_comp.position.x),\n";
+        out << "                    static_cast<int>(WorldTransform_comp.position.y),\n";
+        out << "                    static_cast<int>(Shape_comp.size.x),\n";
+        out << "                    static_cast<int>(Shape_comp.size.y),\n";
+        out << "                    Shape_comp.color);\n";
+        out << "                break;\n";
+        out << "        }\n";
+        out << "    });\n";
+        out << "}\n\n";
+        out << "void " << sys.name
+            << "_update(entt::registry& registry, entt::entity entity, WorldTransform& WorldTransform_comp, Shape& Shape_comp);\n\n";
         return out.str();
     }
 

@@ -1,0 +1,20 @@
+module std.render.shapes
+
+use std.transform.flat
+
+# ── Simple Primitive Shape Rendering Traits ──────────────────────────────────
+# Passive traits — the backend reads these and renders automatically.
+
+pub enum ShapeType:
+    Rectangle
+
+pub trait Shape:
+    var type: ShapeType
+    var size: vec2
+    var color: color = #FFFFFFFF
+    var visible: bool = true
+
+extern system ShapeRenderer:
+    filter:
+        WorldTransform
+        Shape

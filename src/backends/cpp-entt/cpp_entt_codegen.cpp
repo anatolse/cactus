@@ -23,10 +23,6 @@ bool has_extern_funcs(const DecoratedProgram& program) {
     return false;
 }
 
-bool has_trait(const DecoratedProgram& program, const std::string& name) {
-    return program.traits.find(name) != program.traits.end();
-}
-
 std::string upper_copy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
@@ -368,7 +364,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
         }
     }
 
-    // Call system tick handlers
+    // Call non-render system tick handlers
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
@@ -379,6 +375,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                 }
             }
             if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+                if (sys->name == "ShapeRenderer") {
+                    continue;
+                }
                 out << "        " << sys->name << "_tick(registry);\n";
             }
         }
@@ -387,13 +386,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "        dispatcher.update();\n\n";
     out << "        BeginDrawing();\n";
     out << "        ClearBackground(RAYWHITE);\n";
-    if (has_trait(program, "Position")) {
-        out << "        {\n";
-        out << "            auto draw_view = registry.view<Position>();\n";
-        out << "            draw_view.each([&](const Position& pos) {\n";
-        out << "                DrawRectangle(static_cast<int>(pos.x), static_cast<int>(pos.y), 50, 50, Color{100, 149, 237, 255});\n";
-        out << "            });\n";
-        out << "        }\n";
+    if (program.ast != nullptr) {
+        for (auto& decl : program.ast->declarations) {
+            if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+                if (sys->name == "ShapeRenderer") {
+                    out << "        " << sys->name << "_tick(registry);\n";
+                }
+            }
+        }
     }
     out << "        EndDrawing();\n";
     out << "    }\n\n";

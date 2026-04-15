@@ -805,6 +805,20 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
                         } else if constexpr (std::is_same_v<E, BinaryExpr>) {
                             check_const(*e.left);
                             check_const(*e.right);
+                        } else if constexpr (std::is_same_v<E, CallExpr>) {
+                            bool allowed_ctor = false;
+                            if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                                allowed_ctor = ident->name == "vec2" ||
+                                               ident->name == "vec3" ||
+                                               ident->name == "quat";
+                            }
+                            if (allowed_ctor) {
+                                for (const auto& arg : e.args) {
+                                    check_const(*arg);
+                                }
+                            } else {
+                                constant_ok = false;
+                            }
                         } else if constexpr (std::is_same_v<E, ListExpr>) {
                             for (const auto& el : e.elements) {
                                 check_const(*el);

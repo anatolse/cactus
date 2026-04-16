@@ -193,9 +193,13 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
     }
 
     cactus::DecoratedProgram decorated;
+    std::unique_ptr<cactus::ProgramNode> merged_codegen_prog;
 
     // ── 6.2: Multi-module pipeline ───────────────────────────────────────────
     if (has_use_declarations(*root_prog)) {
+        merged_codegen_prog = std::make_unique<cactus::ProgramNode>();
+        merged_codegen_prog->location = root_prog->location;
+
         // Build directory: sibling of input file, named "build"
         fs::path build_dir = fs::path(input_file).parent_path() / "build";
         {
@@ -275,6 +279,13 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
             }
             artifact_paths.push_back(build_dir / (mod.qualified_name + ".cmod"));
 
+            // Preserve full declaration ASTs for final codegen so imported
+            // units/systems/extern systems from stdlib modules are also emitted.
+            merged_codegen_prog->declarations.insert(
+                merged_codegen_prog->declarations.end(),
+                std::make_move_iterator(mod_prog->declarations.begin()),
+                std::make_move_iterator(mod_prog->declarations.end()));
+
             compiled[mod.qualified_name] = std::move(dec);
         }
 
@@ -287,10 +298,11 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
             return 1;
         }
         decorated = std::move(*merged);
-        // Preserve the root AST for code generation so top-level declarations
-        // (units, systems, consts, etc.) are still emitted after multi-module
-        // linking. Artifacts intentionally do not serialize AST structure.
-        decorated.ast = root_prog.get();
+        // Preserve a merged AST for code generation so imported stdlib/app
+        // declarations (units, systems, extern systems, consts, etc.) are
+        // still emitted after multi-module linking. Artifacts intentionally do
+        // not serialize AST structure.
+        decorated.ast = merged_codegen_prog.get();
 
     } else {
         // ── 6.3: Single-file backward-compatible pipeline ─────────────────────

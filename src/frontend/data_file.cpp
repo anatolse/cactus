@@ -86,7 +86,7 @@ uint64_t DataFileWriter::compute_trait_mask(const std::vector<ArchetypeTraitEntr
     for (const auto& entry : traits) {
         auto it = trait_bit_index_.find(entry.trait_name);
         if (it != trait_bit_index_.end() && it->second < 64) {
-            mask |= (uint64_t(1) << it->second);
+            mask |= (static_cast<uint64_t>(1) << it->second);
         }
     }
     return mask;
@@ -223,8 +223,8 @@ std::optional<FieldValue> DataFileWriter::eval_call(const CallExpr& call) const 
     if (fname == "vec2" && args.size() == 2) {
         FieldValue fv;
         fv.tag = FieldValue::Tag::Vec2;
-        auto x = get_float(args[0]);
-        auto y = get_float(args[1]);
+        auto x = get_float(args.at(0));
+        auto y = get_float(args.at(1));
         if (!x || !y) {
             return std::nullopt;
         }
@@ -236,9 +236,9 @@ std::optional<FieldValue> DataFileWriter::eval_call(const CallExpr& call) const 
     if (fname == "vec3" && args.size() == 3) {
         FieldValue fv;
         fv.tag = FieldValue::Tag::Vec3;
-        auto x = get_float(args[0]);
-        auto y = get_float(args[1]);
-        auto z = get_float(args[2]);
+        auto x = get_float(args.at(0));
+        auto y = get_float(args.at(1));
+        auto z = get_float(args.at(2));
         if (!x || !y || !z) {
             return std::nullopt;
         }

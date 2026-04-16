@@ -4,10 +4,64 @@
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace cactus {
 
 namespace {
+
+std::string snake_case(std::string value) {
+    std::string result;
+    for (const char ch : value) {
+        if (std::isupper(static_cast<unsigned char>(ch)) != 0) {
+            if (!result.empty() && result.back() != '_') {
+                result += '_';
+            }
+            result += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        } else {
+            result += ch;
+        }
+    }
+    return result;
+}
+
+std::string upper_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return value;
+}
+
+std::string system_function_name(const std::string& system_name, const std::string& suffix) {
+    return snake_case(system_name) + "_" + suffix;
+}
+
+std::string event_cpp_type(const std::string& event_name) {
+    if (event_name == "tick") {
+        return "TickEvent";
+    }
+    if (event_name == "input") {
+        return "InputEvent";
+    }
+    return event_name + "Event";
+}
+
+std::string input_action_constant_name(const std::string& input_name) {
+    return "K_" + upper_copy(snake_case(input_name));
+}
+
+bool is_input_action_name(const DecoratedProgram& program, const std::string& name) {
+    if (program.ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+            if (input->input_kind == InputKind::Axis && input->name == name) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 std::string filter_simple_name(const FilterEntry& entry) {
     auto dot = entry.qualified_name.rfind('.');
@@ -170,6 +224,9 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
             } else if constexpr (std::is_same_v<E, SelfExpr>) {
                 return "entity";
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (is_input_action_name(program, e.name)) {
+                    return input_action_constant_name(e.name);
+                }
                 // If it's a known trait field, qualify it
                 if (known_fields.contains(e.name)) {
                     auto comp = find_comp_for_field(e.name, trait_names, program);
@@ -198,6 +255,20 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                     ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
                     return "registry.valid(" +
                            rewrite_expr(*e.args[0], trait_names, program, pointer_aliases) + ")";
+                }
+                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
+                    if (const auto* object = std::get_if<IdentExpr>(&member->object->expr)) {
+                        if (object->name == "input" && member->member == "axis") {
+                            std::string result = "InputEvent::axis(";
+                            for (size_t i = 0; i < e.args.size(); ++i) {
+                                if (i > 0) {
+                                    result += ", ";
+                                }
+                                result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases);
+                            }
+                            return result + ")";
+                        }
+                    }
                 }
                 std::string result = rewrite_expr(*e.callee, trait_names, program, pointer_aliases) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
@@ -307,6 +378,15 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                     // Local variable — use auto for declaration
                     lhs = "auto " + s.name;
                 }
+                if (const auto* call = std::get_if<CallExpr>(&s.value->expr)) {
+                    if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
+                        ident != nullptr && ident->name == "vec2" && call->args.size() == 2) {
+                        const std::string prefix = ind + lhs + " " + s.op + " vec2(";
+                        const std::string continuation(prefix.size(), ' ');
+                        return prefix + rewrite_expr(*call->args[0], trait_names, program, pointer_aliases) + ",\n" +
+                               continuation + rewrite_expr(*call->args[1], trait_names, program, pointer_aliases) + ");\n";
+                    }
+                }
                 return ind + lhs + " " + s.op + " " +
                        rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
@@ -410,10 +490,11 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
     std::ostringstream out;
 
     for (const auto& handler : sys.handlers) {
-        out << "void " << sys.name << "_" << handler.event_name << "(entt::registry& registry";
-        out << ", const " << handler.event_name << "Event& "
+        out << "void " << system_function_name(sys.name, handler.event_name) << "(entt::registry& registry";
+        out << ", const " << event_cpp_type(handler.event_name) << "& "
             << handler.alias.value_or(handler.event_name);
         out << ") {\n";
+        out << "    (void)" << handler.alias.value_or(handler.event_name) << ";\n";
 
         // Build view template args
         emit_sort_call(out, sys);
@@ -454,69 +535,75 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     std::ostringstream out;
 
     if (is_flat_transform_propagation(sys)) {
-        out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    std::unordered_set<entt::entity> active_entities;\n";
         out << "    auto resolve_world_transform = [&](auto&& self, entt::entity entity) -> void {\n";
-        out << "        if (!registry.valid(entity) || active_entities.contains(entity)) return;\n";
+        out << "        if (!registry.valid(entity) || active_entities.contains(entity)) {\n";
+        out << "            return;\n";
+        out << "        }\n";
         out << "        active_entities.insert(entity);\n";
         out << "        auto* local_ptr = registry.try_get<LocalTransform>(entity);\n";
         out << "        auto* world_ptr = registry.try_get<WorldTransform>(entity);\n";
-        out << "        if (local_ptr == nullptr || world_ptr == nullptr) { active_entities.erase(entity); return; }\n";
-        out << "        auto& local = *local_ptr;\n";
-        out << "        auto& world = *world_ptr;\n";
+        out << "        if (local_ptr == nullptr || world_ptr == nullptr) {\n";
+        out << "            active_entities.erase(entity);\n";
+        out << "            return;\n";
+        out << "        }\n";
+        out << "        auto& local       = *local_ptr;\n";
+        out << "        auto& world       = *world_ptr;\n";
         out << "        bool copied_local = false;\n";
         out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr && registry.valid(parent->parent)) {\n";
         out << "            if (auto* parent_world_ptr = registry.try_get<WorldTransform>(parent->parent)) {\n";
         out << "                self(self, parent->parent);\n";
         out << "                auto& parent_world = *parent_world_ptr;\n";
-        out << "                world.position = {parent_world.position.x + local.position.x, parent_world.position.y + local.position.y};\n";
+        out << "                world.position     = Vector2{\n";
+        out << "                    .x = parent_world.position.x + local.position.x,\n";
+        out << "                    .y = parent_world.position.y + local.position.y,\n";
+        out << "                };\n";
         out << "                world.rotation = parent_world.rotation + local.rotation;\n";
-        out << "                world.scale = {parent_world.scale.x * local.scale.x, parent_world.scale.y * local.scale.y};\n";
+        out << "                world.scale    = Vector2{\n";
+        out << "                    .x = parent_world.scale.x * local.scale.x,\n";
+        out << "                    .y = parent_world.scale.y * local.scale.y,\n";
+        out << "                };\n";
         out << "                copied_local = true;\n";
         out << "            }\n";
         out << "        }\n";
         out << "        if (!copied_local) {\n";
         out << "            world.position = local.position;\n";
         out << "            world.rotation = local.rotation;\n";
-        out << "            world.scale = local.scale;\n";
+        out << "            world.scale    = local.scale;\n";
         out << "        }\n";
         out << "        active_entities.erase(entity);\n";
         out << "    };\n";
         out << "    auto view = registry.view<LocalTransform, WorldTransform>();\n";
-        out << "    view.each([&](entt::entity entity, auto&, auto&) {\n";
-        out << "        resolve_world_transform(resolve_world_transform, entity);\n";
-        out << "    });\n";
+        out << "    view.each([&](entt::entity entity, auto&, auto&) { resolve_world_transform(resolve_world_transform, entity); });\n";
         out << "}\n\n";
 
-        out << "void " << sys.name
-            << "_update(entt::registry& registry, entt::entity entity, LocalTransform& LocalTransform_comp, WorldTransform& WorldTransform_comp);\n\n";
         return out.str();
     }
 
     if (is_shape_renderer(sys)) {
-        out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, Shape>();\n";
         out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Shape& Shape_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        if (!Shape_comp.visible) { return; }\n";
+        out << "        if (!Shape_comp.visible) {\n";
+        out << "            return;\n";
+        out << "        }\n";
         out << "        switch (Shape_comp.type) {\n";
         out << "            case ShapeType::Rectangle:\n";
-        out << "                DrawRectangle(\n";
-        out << "                    static_cast<int>(WorldTransform_comp.position.x),\n";
-        out << "                    static_cast<int>(WorldTransform_comp.position.y),\n";
-        out << "                    static_cast<int>(Shape_comp.size.x),\n";
-        out << "                    static_cast<int>(Shape_comp.size.y),\n";
-        out << "                    Shape_comp.color);\n";
+        out << "                DrawRectangle(static_cast<int>(WorldTransform_comp.position.x),\n";
+        out << "                              static_cast<int>(WorldTransform_comp.position.y),\n";
+        out << "                              static_cast<int>(Shape_comp.size.x),\n";
+        out << "                              static_cast<int>(Shape_comp.size.y),\n";
+        out << "                              Shape_comp.color);\n";
         out << "                break;\n";
         out << "        }\n";
         out << "    });\n";
         out << "}\n\n";
-        out << "void " << sys.name
-            << "_update(entt::registry& registry, entt::entity entity, WorldTransform& WorldTransform_comp, Shape& Shape_comp);\n\n";
         return out.str();
     }
 
-    out << "void " << sys.name << "_tick(entt::registry& registry) {\n";
+    out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
     out << "    auto view = registry.view<";
     for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
         if (i > 0) {
@@ -539,7 +626,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     }
     out << ") {\n";
     out << "        (void)entity;\n";
-    out << "        " << sys.name << "_update(registry, entity";
+    out << "        " << system_function_name(sys.name, "update") << "(registry, entity";
     for (const auto& trait_name : sys.filter.trait_names) {
         out << ", " << trait_name << "_comp";
     }
@@ -547,7 +634,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     out << "    });\n";
     out << "}\n\n";
 
-    out << "void " << sys.name << "_update(entt::registry& registry, entt::entity entity";
+    out << "void " << system_function_name(sys.name, "update") << "(entt::registry& registry, entt::entity entity";
     for (const auto& trait_name : sys.filter.trait_names) {
         out << ", " << trait_name << "& " << trait_name << "_comp";
     }

@@ -48,13 +48,16 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 endif()
 
-# ── clang-tidy (auto-fix during build, set before targets so it applies to all) ──
+# ── Optional clang-tidy during build ───────────────────────────────────────────
+option(CACTUS_ENABLE_BUILD_CLANG_TIDY "Run clang-tidy during normal project builds" ON)
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
-if(CLANG_TIDY_EXE)
+if(CLANG_TIDY_EXE AND CACTUS_ENABLE_BUILD_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};--fix;--fix-errors;--fix-notes")
-    message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — fixes will be applied automatically during build")
+    message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — enabled for normal build targets")
+elseif(CLANG_TIDY_EXE)
+    message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — normal build integration disabled")
 else()
-    message(STATUS "clang-tidy not found — automatic fixes disabled")
+    message(STATUS "clang-tidy not found — normal build integration disabled")
 endif()
 
 # ── Common Library ──────────────────────────────────────────────────────────────

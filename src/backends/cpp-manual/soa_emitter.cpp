@@ -62,6 +62,10 @@ std::string SoaEmitter::emit_pod_struct(const ResolvedStruct& s) {
 
 std::string SoaEmitter::emit_enum(const ResolvedEnum& e) {
     std::ostringstream out;
+    if (e.variants.size() == 1) {
+        out << "enum class " << e.name << " : std::uint8_t { " << e.variants.front() << " };\n";
+        return out.str();
+    }
     out << "enum class " << e.name << " : std::uint8_t {\n";
     for (size_t i = 0; i < e.variants.size(); ++i) {
         out << "    " << e.variants[i];

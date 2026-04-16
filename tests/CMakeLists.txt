@@ -11,6 +11,14 @@ find_program(CLANG_FORMAT_EXE
         "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
 )
 
+find_program(CLANG_TIDY_EXE
+    NAMES clang-tidy clang-tidy.exe
+    PATHS
+        "C:/Program Files/LLVM/bin"
+        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+)
+
 if(CLANG_FORMAT_EXE)
     message(STATUS "clang-format found for example compilation checks: ${CLANG_FORMAT_EXE}")
 else()

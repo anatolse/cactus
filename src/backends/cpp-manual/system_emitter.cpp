@@ -117,11 +117,11 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(rea
                         auto byte = [&](size_t offset) {
                             return std::to_string(std::stoi(hex.substr(offset, 2), nullptr, 16));
                         };
-                        return "Color{" + byte(0) + ", " + byte(2) + ", " + byte(4) + ", " + byte(6) + "}";
+                        return "Color{.r = " + byte(0) + ", .g = " + byte(2) + ", .b = " + byte(4) + ", .a = " + byte(6) + "}";
                     }
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "f";
+                    return e.value + "F";
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
@@ -386,7 +386,8 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += "." + s.payload[i].name + " = " + emit_expr_dynamic(*s.payload[i].value, entity_index_var);
+                    const auto& payload = s.payload.at(i);
+                    result += "." + payload.name + " = " + emit_expr_dynamic(*payload.value, entity_index_var);
                 }
                 return result + "});\n";
 

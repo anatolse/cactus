@@ -24,9 +24,32 @@ bool has_extern_funcs(const DecoratedProgram& program) {
 }
 
 std::string upper_copy(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return value;
+}
+
+std::string snake_case(std::string value) {
+    std::string result;
+    for (size_t i = 0; i < value.size(); ++i) {
+        const char ch = value[i];
+        if (std::isupper(static_cast<unsigned char>(ch)) != 0) {
+            if (!result.empty() && result.back() != '_') {
+                result += '_';
+            }
+            result += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        } else {
+            result += ch;
+        }
+    }
+    return result;
+}
+
+std::string system_function_name(const std::string& system_name, const std::string& suffix) {
+    return snake_case(system_name) + "_" + suffix;
+}
+
+std::string input_action_constant_name(const std::string& input_name) {
+    return "K_" + upper_copy(snake_case(input_name));
 }
 
 std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
@@ -38,6 +61,13 @@ std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
         }
     }
     return std::nullopt;
+}
+
+std::string pad_to_width(const std::string& value, std::size_t width) {
+    if (value.size() >= width) {
+        return value;
+    }
+    return value + std::string(width - value.size(), ' ');
 }
 }  // namespace
 
@@ -61,14 +91,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
 
     // Helper: vec2() constructor mapped to Vector2
     out << "inline Vector2 vec2(float x, float y) {\n";
-    out << "    return {x, y};\n";
+    out << "    return Vector2{.x = x, .y = y};\n";
     out << "}\n\n";
 
     // Built-in runtime helpers for generated examples
-    out << "struct tickEvent {\n";
+    out << "struct TickEvent {\n";
     out << "    float dt;\n";
     out << "};\n";
-    out << "using TickEvent = tickEvent;\n\n";
+    out << "\n";
 
     if (program.ast != nullptr) {
         bool has_axis_input = false;
@@ -79,25 +109,26 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
         }
 
         if (has_axis_input) {
-            out << "enum class InputAction {\n";
+            out << "enum class InputAction : std::uint8_t { ";
             bool first = true;
             for (const auto& decl : program.ast->declarations) {
                 if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
                     if (input->input_kind != InputKind::Axis) {
                         continue;
                     }
-                    out << (first ? "    " : ",\n    ") << input->name;
+                    out << (first ? "" : ", ") << input->name;
                     first = false;
                 }
             }
-            out << "\n};\n\n";
+            out << " };\n\n";
 
             for (const auto& decl : program.ast->declarations) {
                 if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
                     if (input->input_kind != InputKind::Axis) {
                         continue;
                     }
-                    out << "constexpr InputAction " << input->name << " = InputAction::" << input->name << ";\n";
+                    out << "constexpr InputAction " << input_action_constant_name(input->name)
+                        << " = InputAction::" << input->name << ";\n";
                 }
             }
             out << "\n";
@@ -114,23 +145,26 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                     for (const auto& prop : input->props) {
                         if (prop.key == "negative") {
                             if (auto key = raylib_key_constant(*prop.value)) {
-                                negative = "(IsKeyDown(" + *key + ") ? 1.0f : 0.0f)";
+                                negative = "(IsKeyDown(" + *key + ") ? 1.0F : 0.0F)";
                             }
                         } else if (prop.key == "positive") {
                             if (auto key = raylib_key_constant(*prop.value)) {
-                                positive = "(IsKeyDown(" + *key + ") ? 1.0f : 0.0f)";
+                                positive = "(IsKeyDown(" + *key + ") ? 1.0F : 0.0F)";
                             }
                         }
                     }
-                    out << "        case InputAction::" << input->name << ": return " << positive << " - " << negative << ";\n";
+                    out << "        case InputAction::" << input->name << ":\n";
+                    out << "            return " << positive << " - " << negative << ";\n";
                 }
             }
             out << "    }\n";
-            out << "    return 0.0f;\n";
+            out << "    return 0.0F;\n";
             out << "}\n\n";
 
-            out << "struct inputEvent {\n";
-            out << "    float axis(InputAction action) const { return cactus_axis(action); }\n";
+            out << "struct InputEvent {\n";
+            out << "    [[nodiscard]] static float axis(InputAction action) {\n";
+            out << "        return cactus_axis(action);\n";
+            out << "    }\n";
             out << "};\n\n";
         }
     }
@@ -139,7 +173,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
         for (const auto& decl : program.ast->declarations) {
             if (const auto* cb = std::get_if<ConstBlockNode>(&decl)) {
                 for (const auto& ca : cb->assignments) {
-                    out << "constexpr auto " << ca.name << " = " << ManualSystemEmitter::emit_expr(*ca.value) << ";\n";
+                    out << "constexpr auto " << upper_copy(ca.name) << " = " << ManualSystemEmitter::emit_expr(*ca.value) << ";\n";
                 }
             }
         }
@@ -236,13 +270,17 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
         out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* unit = std::get_if<UnitNode>(&decl)) {
-                out << "entt::entity create_" << unit->name << "(entt::registry& registry) {\n";
+                out << "entt::entity create_" << snake_case(unit->name) << "(entt::registry& registry) {\n";
                 out << "    auto entity = registry.create();\n";
                 for (const auto& trait : unit->traits) {
                     out << "    {\n";
-                    out << "        auto component = " << trait.trait_name << "{};\n";
+                    std::size_t widest = std::string("auto component").size();
                     for (const auto& assignment : trait.assignments) {
-                        out << "        component." << assignment.name << " = "
+                        widest = std::max(widest, std::string("component.").size() + assignment.name.size());
+                    }
+                    out << "        " << pad_to_width("auto component", widest) << " = " << trait.trait_name << "{};\n";
+                    for (const auto& assignment : trait.assignments) {
+                        out << "        " << pad_to_width("component." + assignment.name, widest) << " = "
                             << ManualSystemEmitter::emit_expr(*assignment.value) << ";\n";
                     }
                     out << "        registry.emplace<" << trait.trait_name << ">(entity, component);\n";
@@ -302,7 +340,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* unit = std::get_if<UnitNode>(&decl)) {
-                out << "    create_" << unit->name << "(registry);\n";
+                out << "    create_" << snake_case(unit->name) << "(registry);\n";
             }
         }
         out << "\n";
@@ -350,12 +388,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             }
         }
         if (emits_input_handler) {
-            out << "        auto input = inputEvent{};\n";
+            out << "        auto input = InputEvent{};\n";
             for (auto& decl : program.ast->declarations) {
                 if (auto* sys = std::get_if<SystemNode>(&decl)) {
                     for (auto& handler : sys->handlers) {
                         if (handler.event_name == "input") {
-                            out << "        " << sys->name << "_input(registry, input);\n";
+                            out << "        " << system_function_name(sys->name, "input") << "(registry, input);\n";
                         }
                     }
                 }
@@ -370,7 +408,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 for (auto& handler : sys->handlers) {
                     if (handler.event_name == "tick") {
-                        out << "        " << sys->name << "_tick(registry, tickEvent{dt});\n";
+                        out << "        " << system_function_name(sys->name, "tick") << "(registry, TickEvent{dt});\n";
                     }
                 }
             }
@@ -378,7 +416,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                 if (sys->name == "ShapeRenderer") {
                     continue;
                 }
-                out << "        " << sys->name << "_tick(registry);\n";
+                out << "        " << system_function_name(sys->name, "tick") << "(registry);\n";
             }
         }
     }
@@ -390,7 +428,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
         for (auto& decl : program.ast->declarations) {
             if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
                 if (sys->name == "ShapeRenderer") {
-                    out << "        " << sys->name << "_tick(registry);\n";
+                    out << "        " << system_function_name(sys->name, "tick") << "(registry);\n";
                 }
             }
         }

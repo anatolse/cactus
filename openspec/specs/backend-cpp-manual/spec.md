@@ -1,3 +1,5 @@
+## Purpose
+Define the required behavior of the manual C++ backend, including code generation, runtime integration, and correctness expectations for generated output.
 ## Requirements
 ### Requirement: SoA storage generation from traits
 The backend SHALL generate C++ Structure-of-Arrays (SoA) storage classes for each trait. Each trait field SHALL become a separate `std::vector` in the storage class, enabling cache-friendly iteration.
@@ -78,6 +80,14 @@ The backend SHALL produce syntactically and semantically valid C++20 code that c
 #### Scenario: Generated code compiles
 - **WHEN** the backend generates code from the cactus shop mini example
 - **THEN** the output compiles without errors using a C++20 compiler with Raylib and standard library available
+
+#### Scenario: Curated example compilation coverage includes blue-square
+- **WHEN** automated example-compilation integration coverage runs for the manual backend path
+- **THEN** generated C++ from `examples/blue-square` compiles successfully using the project's configured C++ toolchain and required dependencies
+
+#### Scenario: Manual backend generated example code passes lint checks without rewriting
+- **WHEN** automated example-compilation integration coverage validates manual-backend generated code for `examples/blue-square`
+- **THEN** the generated C++ passes repository-root `clang-format` and `clang-tidy` checks without requiring tool-applied fixes
 
 ### Requirement: Emit `cactus_runtime.h` include when extern funcs are in scope
 The cpp-manual backend SHALL emit `#include "cactus_runtime.h"` in the generated C++ output when any extern func is present — either declared in the program itself or in any imported module's `ImportedSymbols.funcs` map (where `is_extern = true`).

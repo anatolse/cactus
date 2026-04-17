@@ -1,3 +1,5 @@
+## Purpose
+Define the required behavior of the EnTT-based C++ backend, including registry-oriented code generation, event integration, and correctness expectations for generated output.
 ## Requirements
 ### Requirement: EnTT component struct generation
 The backend SHALL generate EnTT-compatible component structs for each trait. Empty traits SHALL generate empty tag structs.
@@ -92,6 +94,14 @@ The backend SHALL produce valid C++20 code that compiles with EnTT v3.x headers 
 #### Scenario: Generated code compiles
 - **WHEN** the backend generates code from the cactus shop mini example
 - **THEN** the output compiles without errors using a C++20 compiler with EnTT and Raylib available
+
+#### Scenario: Curated example compilation coverage can validate EnTT-targeted examples
+- **WHEN** automated example-compilation integration coverage runs for an example configured for the EnTT backend path
+- **THEN** the generated C++ compiles successfully using the project's configured EnTT-enabled toolchain and required dependencies
+
+#### Scenario: EnTT backend generated example code passes lint checks without rewriting
+- **WHEN** automated example-compilation integration coverage validates EnTT-backend generated code for a curated example
+- **THEN** the generated C++ passes repository-root `clang-format` and `clang-tidy` checks without requiring tool-applied fixes
 
 ### Requirement: Emit `cactus_runtime.h` include when extern funcs are in scope
 The cpp-entt backend SHALL emit `#include "cactus_runtime.h"` in the generated C++ output when any extern func is present — either declared in the program itself or in any imported module's `ImportedSymbols.funcs` map (where `is_extern = true`).

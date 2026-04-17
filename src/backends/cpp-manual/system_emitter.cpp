@@ -35,6 +35,62 @@ bool is_volume_transform_propagation(const ExternSystemNode& sys) {
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform");
 }
 
+std::string filter_trait_simple_name(const FilterEntry& entry) {
+    auto dot = entry.qualified_name.rfind('.');
+    return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+}
+
+std::string resolve_sort_trait_name(const ExternSystemNode& sys, const std::string& alias) {
+    for (const auto& entry : sys.filter.entries) {
+        const auto simple_name = filter_trait_simple_name(entry);
+        if ((entry.alias.has_value() && *entry.alias == alias) || simple_name == alias) {
+            return simple_name;
+        }
+    }
+    for (const auto& trait_name : sys.filter.trait_names) {
+        if (trait_name == alias) {
+            return trait_name;
+        }
+    }
+    return alias;
+}
+
+std::string sort_expr_for_entity(const ExternSystemNode& sys,
+                                 const SortKey& key,
+                                 const std::string& entity_var) {
+    const auto trait_name = resolve_sort_trait_name(sys, key.alias);
+    const auto dot = key.field.find('.');
+    const auto field_name = key.field.substr(0, dot);
+    const auto suffix = dot == std::string::npos ? std::string{} : key.field.substr(dot);
+    return "g_" + trait_name + "_" + field_name + "[" + entity_var + "]" + suffix;
+}
+
+std::string extern_callback_signature(const ExternSystemNode& sys,
+                                      const CodegenContext& ctx,
+                                      const bool declaration_only) {
+    std::ostringstream out;
+    out << "void " << sys.name << "_update(std::size_t entity";
+
+    for (const auto& entry : sys.filter.entries) {
+        const auto trait_name = filter_trait_simple_name(entry);
+        const auto trait_it = ctx.traits.find(trait_name);
+        if (trait_it == ctx.traits.end()) {
+            continue;
+        }
+
+        for (const auto& field : trait_it->second.fields) {
+            out << ", " << SoaEmitter::type_to_cpp(field.type) << "& "
+                << trait_name << "_" << field.name;
+        }
+    }
+
+    out << ")";
+    if (declaration_only) {
+        out << ";\n";
+    }
+    return out.str();
+}
+
 std::string emit_expr_dynamic_impl(const ExprNode& expr,
                                    const std::string& entity_index_var); // NOLINT(misc-no-recursion)
 
@@ -95,6 +151,15 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
 }
 
 }  // namespace
+
+std::string ManualSystemEmitter::emit_extern_system_forward_decl(const ExternSystemNode& sys,
+                                                                 const CodegenContext& ctx) {
+    if (is_flat_transform_propagation(sys) || is_volume_transform_propagation(sys)) {
+        return {};
+    }
+
+    return extern_callback_signature(sys, ctx, true);
+}
 
 std::string ManualSystemEmitter::indent_str(int level) {
     return std::string(static_cast<size_t>(level) * 4, ' '); // NOLINT(modernize-return-braced-init-list)
@@ -596,78 +661,111 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
 }
 
 std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNode& sys, const CodegenContext& ctx) {
-    (void)ctx;
     std::ostringstream out;
 
     if (is_flat_transform_propagation(sys)) {
         out << "static void " << sys.name << "_tick() {\n";
-        out << "    std::vector<uint8_t> _active(entity_count, 0);\n";
-        out << "    auto _resolve = [&](auto&& self, size_t _idx) -> void {\n";
-        out << "        if (_idx >= entity_count || _active[_idx]) return;\n";
-        out << "        _active[_idx] = 1;\n";
-        out << "        bool _copied_local = false;\n";
-        out << "        if ((g_trait_mask[_idx] & TraitBits::Parent) != 0) {\n";
-        out << "            uint32_t _parent = g_Parent_parent[_idx];\n";
-        out << "            if (_parent < entity_count && (g_trait_mask[_parent] & TraitBits::WorldTransform) != 0) {\n";
-        out << "                self(self, _parent);\n";
-        out << "                g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y};\n";
-        out << "                g_WorldTransform_rotation[_idx] = g_WorldTransform_rotation[_parent] + g_LocalTransform_rotation[_idx];\n";
-        out << "                g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y};\n";
-        out << "                _copied_local = true;\n";
+        out << "    cactus::runtime::manual_backend::propagate_hierarchy(\n";
+        out << "        entity_count,\n";
+        out << "        [&](std::size_t _idx) -> std::optional<std::size_t> {\n";
+        out << "            if ((g_trait_mask[_idx] & TraitBits::Parent) == 0) {\n";
+        out << "                return std::nullopt;\n";
         out << "            }\n";
-        out << "        }\n";
-        out << "        if (!_copied_local) {\n";
+        out << "            const auto _parent = static_cast<std::size_t>(g_Parent_parent[_idx]);\n";
+        out << "            if (_parent >= entity_count || (g_trait_mask[_parent] & TraitBits::WorldTransform) == 0) {\n";
+        out << "                return std::nullopt;\n";
+        out << "            }\n";
+        out << "            return _parent;\n";
+        out << "        },\n";
+        out << "        [&](std::size_t _idx) {\n";
         out << "            g_WorldTransform_position[_idx] = g_LocalTransform_position[_idx];\n";
         out << "            g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
         out << "            g_WorldTransform_scale[_idx] = g_LocalTransform_scale[_idx];\n";
-        out << "        }\n";
-        out << "        _active[_idx] = 0;\n";
-        out << "    };\n";
-        out << "    for (size_t i = 0; i < entity_count; ++i) {\n";
-        out << "        if ((g_trait_mask[i] & (TraitBits::LocalTransform | TraitBits::WorldTransform)) == (TraitBits::LocalTransform | TraitBits::WorldTransform)) {\n";
-        out << "            _resolve(_resolve, i);\n";
-        out << "        }\n";
-        out << "    }\n";
+        out << "        },\n";
+        out << "        [&](std::size_t _parent, std::size_t _idx) {\n";
+        out << "            g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y};\n";
+        out << "            g_WorldTransform_rotation[_idx] = g_WorldTransform_rotation[_parent] + g_LocalTransform_rotation[_idx];\n";
+        out << "            g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y};\n";
+        out << "        });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_volume_transform_propagation(sys)) {
         out << "static void " << sys.name << "_tick() {\n";
-        out << "    std::vector<uint8_t> _active(entity_count, 0);\n";
-        out << "    auto _resolve = [&](auto&& self, size_t _idx) -> void {\n";
-        out << "        if (_idx >= entity_count || _active[_idx]) return;\n";
-        out << "        _active[_idx] = 1;\n";
-        out << "        bool _copied_local = false;\n";
-        out << "        if ((g_trait_mask[_idx] & TraitBits::Parent) != 0) {\n";
-        out << "            uint32_t _parent = g_Parent_parent[_idx];\n";
-        out << "            if (_parent < entity_count && (g_trait_mask[_parent] & TraitBits::WorldTransform) != 0) {\n";
-        out << "                self(self, _parent);\n";
-        out << "                g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y, g_WorldTransform_position[_parent].z + g_LocalTransform_position[_idx].z};\n";
-        out << "                g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
-        out << "                g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y, g_WorldTransform_scale[_parent].z * g_LocalTransform_scale[_idx].z};\n";
-        out << "                _copied_local = true;\n";
+        out << "    cactus::runtime::manual_backend::propagate_hierarchy(\n";
+        out << "        entity_count,\n";
+        out << "        [&](std::size_t _idx) -> std::optional<std::size_t> {\n";
+        out << "            if ((g_trait_mask[_idx] & TraitBits::Parent) == 0) {\n";
+        out << "                return std::nullopt;\n";
         out << "            }\n";
-        out << "        }\n";
-        out << "        if (!_copied_local) {\n";
+        out << "            const auto _parent = static_cast<std::size_t>(g_Parent_parent[_idx]);\n";
+        out << "            if (_parent >= entity_count || (g_trait_mask[_parent] & TraitBits::WorldTransform) == 0) {\n";
+        out << "                return std::nullopt;\n";
+        out << "            }\n";
+        out << "            return _parent;\n";
+        out << "        },\n";
+        out << "        [&](std::size_t _idx) {\n";
         out << "            g_WorldTransform_position[_idx] = g_LocalTransform_position[_idx];\n";
         out << "            g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
         out << "            g_WorldTransform_scale[_idx] = g_LocalTransform_scale[_idx];\n";
-        out << "        }\n";
-        out << "        _active[_idx] = 0;\n";
-        out << "    };\n";
-        out << "    for (size_t i = 0; i < entity_count; ++i) {\n";
-        out << "        if ((g_trait_mask[i] & (TraitBits::LocalTransform | TraitBits::WorldTransform)) == (TraitBits::LocalTransform | TraitBits::WorldTransform)) {\n";
-        out << "            _resolve(_resolve, i);\n";
-        out << "        }\n";
-        out << "    }\n";
+        out << "        },\n";
+        out << "        [&](std::size_t _parent, std::size_t _idx) {\n";
+        out << "            g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y, g_WorldTransform_position[_parent].z + g_LocalTransform_position[_idx].z};\n";
+        out << "            g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
+        out << "            g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y, g_WorldTransform_scale[_parent].z * g_LocalTransform_scale[_idx].z};\n";
+        out << "        });\n";
         out << "}\n\n";
         return out.str();
     }
 
     out << "static void " << sys.name << "_tick() {\n";
-    out << "    // generic extern system scaffold\n";
+    const std::string FILTER_MASK = compute_mask_expr(sys.filter, ctx);
+    out << "    std::vector<std::size_t> _matched_entities;\n";
+    out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+    out << "        if ((g_trait_mask[i] & (" << FILTER_MASK << ")) == (" << FILTER_MASK << ")) {\n";
+    out << "            _matched_entities.push_back(i);\n";
+    out << "        }\n";
+    out << "    }\n";
+    if (!sys.order_by.empty()) {
+        out << "    std::stable_sort(_matched_entities.begin(), _matched_entities.end(), [&](std::size_t _lhs, std::size_t _rhs) {\n";
+        for (const auto& key : sys.order_by) {
+            const auto lhs = sort_expr_for_entity(sys, key, "_lhs");
+            const auto rhs = sort_expr_for_entity(sys, key, "_rhs");
+            out << "        if (" << lhs << " != " << rhs << ") {\n";
+            out << "            return " << lhs << (key.descending ? " > " : " < ") << rhs << ";\n";
+            out << "        }\n";
+        }
+        out << "        return false;\n";
+        out << "    });\n";
+    }
+    out << "    for (const auto _idx : _matched_entities) {\n";
+    for (const auto& entry : sys.filter.entries) {
+        const auto trait_name = filter_trait_simple_name(entry);
+        const auto trait_it = ctx.traits.find(trait_name);
+        if (trait_it == ctx.traits.end()) {
+            continue;
+        }
+        for (const auto& field : trait_it->second.fields) {
+            out << "        auto& " << trait_name << "_" << field.name << " = g_"
+                << trait_name << "_" << field.name << "[_idx];\n";
+        }
+    }
+    out << "        " << sys.name << "_update(_idx";
+    for (const auto& entry : sys.filter.entries) {
+        const auto trait_name = filter_trait_simple_name(entry);
+        const auto trait_it = ctx.traits.find(trait_name);
+        if (trait_it == ctx.traits.end()) {
+            continue;
+        }
+        for (const auto& field : trait_it->second.fields) {
+            out << ", " << trait_name << "_" << field.name;
+        }
+    }
+    out << ");\n";
+    out << "    }\n";
     out << "}\n\n";
+    out << extern_callback_signature(sys, ctx, true) << "\n";
     return out.str();
 }
 

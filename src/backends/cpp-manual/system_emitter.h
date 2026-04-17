@@ -53,6 +53,7 @@ public:
     /// Emit all handler functions for one system using the bitmask model (tasks 7.3–7.14).
     static std::string emit_system_dynamic(const SystemNode& sys, const CodegenContext& ctx);
     static std::string emit_extern_system_dynamic(const ExternSystemNode& sys, const CodegenContext& ctx);
+    static std::string emit_extern_system_forward_decl(const ExternSystemNode& sys, const CodegenContext& ctx);
 
     /// Emit forward declarations for all handler functions declared in a system.
     static std::string emit_system_forward_decls(const SystemNode& sys);

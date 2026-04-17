@@ -340,7 +340,7 @@ TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[cod
         "                x = 200.0\n");
 
     CHECK(code.find("spawn_Enemy(") != std::string::npos);
-    CHECK(code.find("200.0f") != std::string::npos);
+    CHECK(code.find("200.0F") != std::string::npos);
 }
 
 // ── Task 7.9: destroy uses swap-and-delete ────────────────────────────────────
@@ -570,8 +570,8 @@ TEST_CASE("Codegen Manual: complete codegen structure", "[codegen-manual][7.15]"
     CHECK(code.find("init_units") != std::string::npos);
     CHECK(code.find("// Unit: Player") != std::string::npos);
 
-    // Main with deferred load check
-    CHECK(code.find("int main()") != std::string::npos);
+    // Runtime glue with deferred load check
+    CHECK(code.find("generated_update_project(float dt)") != std::string::npos);
     CHECK(code.find("perform_load") != std::string::npos);
 }
 
@@ -978,9 +978,11 @@ TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[code
     CHECK(code.find("#include \"raylib.h\"") != std::string::npos);
     // New model: global arrays, not per-trait storage
     CHECK(code.find("g_Pos_x") != std::string::npos);
-    CHECK(code.find("int main()") != std::string::npos);
-    CHECK(code.find("InitWindow") != std::string::npos);
-    CHECK(code.find("CloseWindow") != std::string::npos);
+    CHECK(code.find("generated_project_config() noexcept") != std::string::npos);
+    CHECK(code.find("generated_init_project()") != std::string::npos);
+    CHECK(code.find("generated_update_project(float dt)") != std::string::npos);
+    CHECK(code.find("generated_render_project()") != std::string::npos);
+    CHECK(code.find("int main()") == std::string::npos);
 
     // Persist hooks (task 7.2 — field serialization stubs)
     CHECK(code.find("save_Pos") != std::string::npos);
@@ -1024,7 +1026,7 @@ TEST_CASE("Codegen Manual: flat transform propagation extern system is recognize
         "        std.transform.flat.WorldTransform\n");
 
     CHECK(code.find("static void TransformPropagation_tick()") != std::string::npos);
-    CHECK(code.find("std::vector<uint8_t> _active(entity_count, 0)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::manual_backend::propagate_hierarchy(") != std::string::npos);
     CHECK(code.find("g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x") != std::string::npos);
 }
 
@@ -1046,7 +1048,37 @@ TEST_CASE("Codegen Manual: hierarchy propagation handles stale parents and cycle
         "        std.transform.flat.LocalTransform\n"
         "        std.transform.flat.WorldTransform\n");
 
-    CHECK(code.find("_parent < entity_count") != std::string::npos);
-    CHECK(code.find("_active[_idx]") != std::string::npos);
-    CHECK(code.find("if (!_copied_local)") != std::string::npos);
+    CHECK(code.find("_parent >= entity_count") != std::string::npos);
+    CHECK(code.find("return std::nullopt") != std::string::npos);
+    CHECK(code.find("g_Parent_parent[_idx]") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: extern system emits user-library callback contract", "[codegen-manual][extern-system]") {
+    auto code = generate(
+        "trait Position:\n"
+        "    var x: float\n"
+        "trait Velocity:\n"
+        "    var dx: float\n"
+        "extern system ParticleSystem:\n"
+        "    filter:\n"
+        "        Position\n"
+        "        Velocity\n");
+
+    CHECK(code.find("void ParticleSystem_update(std::size_t entity, float& Position_x, float& Velocity_dx);") != std::string::npos);
+    CHECK(code.find("std::vector<std::size_t> _matched_entities") != std::string::npos);
+    CHECK(code.find("ParticleSystem_update(_idx, Position_x, Velocity_dx);") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: extern system order by sorts invocation order", "[codegen-manual][extern-system]") {
+    auto code = generate(
+        "trait Position:\n"
+        "    var y: float\n"
+        "extern system SortedRenderer:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    order by:\n"
+        "        Position.y desc\n");
+
+    CHECK(code.find("std::stable_sort(_matched_entities.begin(), _matched_entities.end()") != std::string::npos);
+    CHECK(code.find("g_Position_y[_lhs] > g_Position_y[_rhs]") != std::string::npos);
 }

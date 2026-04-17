@@ -30,13 +30,17 @@ file(MAKE_DIRECTORY "${CACTUS_GENERATED_EXAMPLES_DIR}")
 
 set(BLUE_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/blue-square.generated.cpp")
 if(NOT EXISTS "${BLUE_SQUARE_GENERATED_CPP}")
-    file(WRITE "${BLUE_SQUARE_GENERATED_CPP}" "int main() { return 0; }\n")
+    file(WRITE "${BLUE_SQUARE_GENERATED_CPP}" "#include \"backends/cpp-entt/runtime.h\"\nnamespace cactus::runtime::entt_backend {\nProjectConfig generated_project_config() noexcept { return {800, 600, \"Blue Square\", 60}; }\nvoid generated_setup_dispatcher(entt::dispatcher&) {}\nvoid generated_init_project(entt::registry&) {}\nvoid generated_update_project(entt::registry&, entt::dispatcher&, float) {}\nvoid generated_render_project(entt::registry&, entt::dispatcher&) {}\n}\n")
 endif()
 
-add_executable(example_blue_square_generated EXCLUDE_FROM_ALL "${BLUE_SQUARE_GENERATED_CPP}")
+add_executable(example_blue_square_generated EXCLUDE_FROM_ALL
+    "${CMAKE_SOURCE_DIR}/examples/blue-square/game/main.cpp"
+    "${BLUE_SQUARE_GENERATED_CPP}"
+)
 set_source_files_properties("${BLUE_SQUARE_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
 target_compile_features(example_blue_square_generated PRIVATE cxx_std_20)
 target_link_libraries(example_blue_square_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
+target_include_directories(example_blue_square_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
 set_property(TARGET example_blue_square_generated PROPERTY CXX_CLANG_TIDY "")
 
 # Lexer tests

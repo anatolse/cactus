@@ -36,7 +36,7 @@ endif()
 add_executable(example_blue_square_generated EXCLUDE_FROM_ALL "${BLUE_SQUARE_GENERATED_CPP}")
 set_source_files_properties("${BLUE_SQUARE_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
 target_compile_features(example_blue_square_generated PRIVATE cxx_std_20)
-target_link_libraries(example_blue_square_generated PRIVATE raylib EnTT::EnTT)
+target_link_libraries(example_blue_square_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
 set_property(TARGET example_blue_square_generated PROPERTY CXX_CLANG_TIDY "")
 
 # Lexer tests

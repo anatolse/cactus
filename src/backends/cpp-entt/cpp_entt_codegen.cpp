@@ -63,6 +63,17 @@ std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
     return std::nullopt;
 }
 
+std::optional<std::string> raylib_mouse_constant(const ExprNode& expr) {
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
+            if (ident->name == "MouseButton") {
+                return "MOUSE_BUTTON_" + upper_copy(snake_case(member->member));
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 std::string pad_to_width(const std::string& value, std::size_t width) {
     if (value.size() >= width) {
         return value;
@@ -104,14 +115,69 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
 
     if (program.ast != nullptr) {
         bool has_axis_input = false;
+        bool has_button_input = false;
         for (const auto& decl : program.ast->declarations) {
             if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
                 has_axis_input = has_axis_input || input->input_kind == InputKind::Axis;
+                has_button_input = has_button_input || input->input_kind == InputKind::Button;
             }
         }
 
+        if (has_button_input) {
+            out << "using InputButton = std::uint8_t;\n";
+            std::uint8_t button_index = 0;
+            for (const auto& decl : program.ast->declarations) {
+                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                    if (input->input_kind != InputKind::Button) {
+                        continue;
+                    }
+                    out << "constexpr InputButton " << input_action_constant_name(input->name)
+                        << " = static_cast<InputButton>(" << static_cast<int>(button_index++) << ");\n";
+                }
+            }
+            out << "\n";
+
+            out << "static int cactus_input_button_key(InputButton button) {\n";
+            out << "    switch (button) {\n";
+            button_index = 0;
+            for (const auto& decl : program.ast->declarations) {
+                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                    if (input->input_kind != InputKind::Button) {
+                        continue;
+                    }
+                    std::string key = "0";
+                    for (const auto& prop : input->props) {
+                        if (prop.key == "key") {
+                            if (auto maybe_key = raylib_key_constant(*prop.value)) {
+                                key = *maybe_key;
+                            } else if (auto maybe_mouse = raylib_mouse_constant(*prop.value)) {
+                                key = *maybe_mouse;
+                            }
+                        }
+                    }
+                    out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return " << key << ";\n";
+                }
+            }
+            out << "    }\n";
+            out << "    return 0;\n";
+            out << "}  // namespace cactus::runtime::entt_backend\n\n";
+
+            out << "namespace cactus::runtime::entt_backend {\n";
+            out << "[[nodiscard]] bool pressed(InputButton button) noexcept {\n";
+            out << "    return IsKeyPressed(cactus_input_button_key(button));\n";
+            out << "}\n";
+            out << "[[nodiscard]] bool down(InputButton button) noexcept {\n";
+            out << "    return IsKeyDown(cactus_input_button_key(button));\n";
+            out << "}\n";
+            out << "[[nodiscard]] bool released(InputButton button) noexcept {\n";
+            out << "    return IsKeyReleased(cactus_input_button_key(button));\n";
+            out << "}\n";
+            out << "}  // namespace cactus::runtime::entt_backend\n\n";
+        }
+
         if (has_axis_input) {
-            out << "enum class InputAction : std::uint8_t { ";
+            out << "using InputAxis = std::uint8_t;\n";
+            out << "enum class CactusInputAxisTag : std::uint8_t { ";
             bool first = true;
             for (const auto& decl : program.ast->declarations) {
                 if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
@@ -129,13 +195,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                     if (input->input_kind != InputKind::Axis) {
                         continue;
                     }
-                    out << "constexpr InputAction " << input_action_constant_name(input->name)
-                        << " = InputAction::" << input->name << ";\n";
+                    out << "constexpr InputAxis " << input_action_constant_name(input->name)
+                        << " = static_cast<InputAxis>(CactusInputAxisTag::" << input->name << ");\n";
                 }
             }
             out << "\n";
 
-            out << "static float cactus_axis(InputAction action) {\n";
+            out << "static float cactus_axis(InputAxis action) {\n";
             out << "    switch (action) {\n";
             for (const auto& decl : program.ast->declarations) {
                 if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
@@ -155,18 +221,32 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                             }
                         }
                     }
-                    out << "        case InputAction::" << input->name << ":\n";
+                    out << "        case static_cast<InputAxis>(CactusInputAxisTag::" << input->name << "):\n";
                     out << "            return " << positive << " - " << negative << ";\n";
                 }
             }
+            out << "        default:\n";
+            out << "            return 0.0F;\n";
             out << "    }\n";
-            out << "    return 0.0F;\n";
             out << "}\n\n";
 
+            out << "namespace cactus::runtime::entt_backend {\n";
+            out << "[[nodiscard]] float axis(InputAxis action) noexcept {\n";
+            out << "    return cactus_axis(action);\n";
+            out << "}\n";
+            out << "[[nodiscard]] Vector2 axis2(InputAxis x, InputAxis y) noexcept {\n";
+            out << "    return Vector2{.x = axis(x), .y = axis(y)};\n";
+            out << "}\n";
+            out << "}  // namespace cactus::runtime::entt_backend\n\n";
+        }
+
+        if (has_axis_input || has_button_input) {
             out << "struct InputEvent {\n";
-            out << "    [[nodiscard]] static float axis(InputAction action) {\n";
-            out << "        return cactus_axis(action);\n";
-            out << "    }\n";
+            if (has_axis_input) {
+                out << "    [[nodiscard]] static float axis(InputAxis action) {\n";
+                out << "        return cactus::runtime::entt_backend::axis(action);\n";
+                out << "    }\n";
+            }
             out << "};\n\n";
         }
     }

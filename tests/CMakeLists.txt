@@ -103,6 +103,11 @@ add_executable(test_data_file test_data_file.cpp)
 target_link_libraries(test_data_file PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME DataFileTests COMMAND test_data_file)
 
+# Shared/backend runtime stdlib tests
+add_executable(test_runtime_stdlib test_runtime_stdlib.cpp)
+target_link_libraries(test_runtime_stdlib PRIVATE cactus_runtime_common cactus_runtime_cpp_manual Catch2::Catch2WithMain)
+add_test(NAME RuntimeStdlibTests COMMAND test_runtime_stdlib)
+
 # Example C++ compilation integration tests
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)

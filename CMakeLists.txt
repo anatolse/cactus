@@ -51,6 +51,13 @@ endif()
 # ── Optional clang-tidy during build ───────────────────────────────────────────
 option(CACTUS_ENABLE_BUILD_CLANG_TIDY "Run clang-tidy during normal project builds" ON)
 find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+find_program(CACTUS_CLANG_FORMAT_EXE
+    NAMES clang-format clang-format.exe
+    PATHS
+        "C:/Program Files/LLVM/bin"
+        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+)
 if(CLANG_TIDY_EXE AND CACTUS_ENABLE_BUILD_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};--fix;--fix-errors;--fix-notes")
     message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — enabled for normal build targets")
@@ -146,6 +153,7 @@ target_link_libraries(cactus PRIVATE
 # Stdlib directory is baked in at compile time so the compiler can always find std.core
 target_compile_definitions(cactus PRIVATE
     CACTUS_STDLIB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/stdlib"
+    CACTUS_CLANG_FORMAT_EXE_PATH="${CACTUS_CLANG_FORMAT_EXE}"
 )
 
 # ── Tests ───────────────────────────────────────────────────────────────────────

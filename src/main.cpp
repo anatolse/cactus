@@ -9,6 +9,7 @@
 #include "frontend/semantic_analyzer.h"
 
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -337,6 +338,21 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
             return 1;
         }
         ofs << generated;
+        ofs.close();
+
+        #ifdef CACTUS_CLANG_FORMAT_EXE_PATH
+        if (std::strlen(CACTUS_CLANG_FORMAT_EXE_PATH) > 0) {
+            std::string clang_format_path = CACTUS_CLANG_FORMAT_EXE_PATH;
+            if (!clang_format_path.empty() && clang_format_path.front() == '"' && clang_format_path.back() == '"') {
+                clang_format_path = clang_format_path.substr(1, clang_format_path.size() - 2);
+            }
+
+            const std::string format_command = std::string{"\""} + clang_format_path +
+                                               "\" -i \"" + output_file + "\"";
+            (void)std::system(format_command.c_str());
+        }
+        #endif
+
         std::cerr << "Generated " << output_file << " (" << backend << " backend)\n";
     }
 

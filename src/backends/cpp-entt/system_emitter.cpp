@@ -38,6 +38,9 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.math.quat") {
         return "cactus::runtime::stdlib::math::quat";
     }
+    if (module_name == "std.input") {
+        return "cactus::runtime::entt_backend";
+    }
     return {};
 }
 
@@ -61,6 +64,10 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
         return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
                func_name == "forward" || func_name == "right" || func_name == "up" || func_name == "rotate" ||
                func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
+    }
+    if (module_name == "std.input") {
+        return func_name == "pressed" || func_name == "down" || func_name == "released" ||
+               func_name == "axis" || func_name == "axis2";
     }
     return false;
 }
@@ -161,7 +168,7 @@ bool is_input_action_name(const DecoratedProgram& program, const std::string& na
     }
     for (const auto& decl : program.ast->declarations) {
         if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-            if (input->input_kind == InputKind::Axis && input->name == name) {
+            if (input->name == name) {
                 return true;
             }
         }
@@ -187,7 +194,16 @@ bool filter_has_trait(const FilterLike& filter, const std::string& qualified, co
 
 bool is_flat_transform_propagation(const ExternSystemNode& sys) {
     return filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "LocalTransform") &&
-           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform");
+           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+           !filter_has_trait(sys.filter, "std.transform.volume.LocalTransform", "__never_match__") &&
+           !filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "__never_match__");
+}
+
+bool is_volume_transform_propagation(const ExternSystemNode& sys) {
+    return filter_has_trait(sys.filter, "std.transform.volume.LocalTransform", "LocalTransform") &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           !filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "__never_match__") &&
+           !filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "__never_match__");
 }
 
 bool is_shape_renderer(const ExternSystemNode& sys) {
@@ -664,46 +680,79 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
 
     if (is_flat_transform_propagation(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    std::unordered_set<entt::entity> active_entities;\n";
-        out << "    auto resolve_world_transform = [&](auto&& self, entt::entity entity) -> void {\n";
-        out << "        if (!registry.valid(entity) || active_entities.contains(entity)) {\n";
-        out << "            return;\n";
-        out << "        }\n";
-        out << "        active_entities.insert(entity);\n";
-        out << "        auto* local_ptr = registry.try_get<LocalTransform>(entity);\n";
-        out << "        auto* world_ptr = registry.try_get<WorldTransform>(entity);\n";
-        out << "        if (local_ptr == nullptr || world_ptr == nullptr) {\n";
-        out << "            active_entities.erase(entity);\n";
-        out << "            return;\n";
-        out << "        }\n";
-        out << "        auto& local       = *local_ptr;\n";
-        out << "        auto& world       = *world_ptr;\n";
-        out << "        bool copied_local = false;\n";
-        out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr && registry.valid(parent->parent)) {\n";
-        out << "            if (auto* parent_world_ptr = registry.try_get<WorldTransform>(parent->parent)) {\n";
-        out << "                self(self, parent->parent);\n";
-        out << "                auto& parent_world = *parent_world_ptr;\n";
-        out << "                world.position     = Vector2{\n";
-        out << "                    .x = parent_world.position.x + local.position.x,\n";
-        out << "                    .y = parent_world.position.y + local.position.y,\n";
-        out << "                };\n";
-        out << "                world.rotation = parent_world.rotation + local.rotation;\n";
-        out << "                world.scale    = Vector2{\n";
-        out << "                    .x = parent_world.scale.x * local.scale.x,\n";
-        out << "                    .y = parent_world.scale.y * local.scale.y,\n";
-        out << "                };\n";
-        out << "                copied_local = true;\n";
-        out << "            }\n";
-        out << "        }\n";
-        out << "        if (!copied_local) {\n";
-        out << "            world.position = local.position;\n";
-        out << "            world.rotation = local.rotation;\n";
-        out << "            world.scale    = local.scale;\n";
-        out << "        }\n";
-        out << "        active_entities.erase(entity);\n";
+        out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
+        out << "        return registry.all_of<LocalTransform, WorldTransform>(entity);\n";
         out << "    };\n";
-        out << "    auto view = registry.view<LocalTransform, WorldTransform>();\n";
-        out << "    view.each([&](entt::entity entity, auto&, auto&) { resolve_world_transform(resolve_world_transform, entity); });\n";
+        out << "    const auto GET_PARENT = [&](entt::entity entity) {\n";
+        out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr) {\n";
+        out << "            return parent->parent;\n";
+        out << "        }\n";
+        out << "        return entt::entity{entt::null};\n";
+        out << "    };\n";
+        out << "    const auto COPY_LOCAL = [&](entt::entity entity) {\n";
+        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
+        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
+        out << "        world.position = local.position;\n";
+        out << "        world.rotation = local.rotation;\n";
+        out << "        world.scale = local.scale;\n";
+        out << "    };\n";
+        out << "    const auto ACCUMULATE_FROM_PARENT = [&](entt::entity parent_entity, entt::entity entity) {\n";
+        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
+        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
+        out << "        const auto& parent_world = registry.get<WorldTransform>(parent_entity);\n";
+        out << "        world.position = Vector2{\n";
+        out << "            .x = parent_world.position.x + local.position.x,\n";
+        out << "            .y = parent_world.position.y + local.position.y,\n";
+        out << "        };\n";
+        out << "        world.rotation = parent_world.rotation + local.rotation;\n";
+        out << "        world.scale = Vector2{\n";
+        out << "            .x = parent_world.scale.x * local.scale.x,\n";
+        out << "            .y = parent_world.scale.y * local.scale.y,\n";
+        out << "        };\n";
+        out << "    };\n";
+        out << "    cactus::runtime::entt_backend::propagate_hierarchy(\n";
+        out << "        registry, HAS_LOCAL_WORLD, GET_PARENT, COPY_LOCAL, ACCUMULATE_FROM_PARENT);\n";
+        out << "}\n\n";
+
+        return out.str();
+    }
+
+    if (is_volume_transform_propagation(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
+        out << "        return registry.all_of<LocalTransform, WorldTransform>(entity);\n";
+        out << "    };\n";
+        out << "    const auto GET_PARENT = [&](entt::entity entity) {\n";
+        out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr) {\n";
+        out << "            return parent->parent;\n";
+        out << "        }\n";
+        out << "        return entt::entity{entt::null};\n";
+        out << "    };\n";
+        out << "    const auto COPY_LOCAL = [&](entt::entity entity) {\n";
+        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
+        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
+        out << "        world.position = local.position;\n";
+        out << "        world.rotation = local.rotation;\n";
+        out << "        world.scale = local.scale;\n";
+        out << "    };\n";
+        out << "    const auto ACCUMULATE_FROM_PARENT = [&](entt::entity parent_entity, entt::entity entity) {\n";
+        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
+        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
+        out << "        const auto& parent_world = registry.get<WorldTransform>(parent_entity);\n";
+        out << "        world.position = Vector3{\n";
+        out << "            .x = parent_world.position.x + local.position.x,\n";
+        out << "            .y = parent_world.position.y + local.position.y,\n";
+        out << "            .z = parent_world.position.z + local.position.z,\n";
+        out << "        };\n";
+        out << "        world.rotation = cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, local.rotation);\n";
+        out << "        world.scale = Vector3{\n";
+        out << "            .x = parent_world.scale.x * local.scale.x,\n";
+        out << "            .y = parent_world.scale.y * local.scale.y,\n";
+        out << "            .z = parent_world.scale.z * local.scale.z,\n";
+        out << "        };\n";
+        out << "    };\n";
+        out << "    cactus::runtime::entt_backend::propagate_hierarchy(\n";
+        out << "        registry, HAS_LOCAL_WORLD, GET_PARENT, COPY_LOCAL, ACCUMULATE_FROM_PARENT);\n";
         out << "}\n\n";
 
         return out.str();
@@ -782,25 +831,15 @@ std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgra
 
     std::ostringstream out;
     out << "[[maybe_unused]] static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity entity) {\n";
-    out << "    static std::unordered_set<entt::entity> destroying_entities;\n";
-    out << "    if (!registry.valid(entity) || destroying_entities.contains(entity)) {\n";
-    out << "        return;\n";
-    out << "    }\n";
-    out << "    destroying_entities.insert(entity);\n";
-    out << "    std::vector<entt::entity> child_entities;\n";
-    out << "    auto parent_view = registry.view<Parent>();\n";
-    out << "    parent_view.each([&](entt::entity child, const Parent& rel) {\n";
-    out << "        if (rel.parent == entity) {\n";
-    out << "            child_entities.push_back(child);\n";
-    out << "        }\n";
-    out << "    });\n";
-    out << "    for (auto child : child_entities) {\n";
-    out << "        cactus_destroy_entity_recursive(registry, child);\n";
-    out << "    }\n";
-    out << "    if (registry.valid(entity)) {\n";
-    out << "        registry.destroy(entity);\n";
-    out << "    }\n";
-    out << "    destroying_entities.erase(entity);\n";
+    out << "    cactus::runtime::entt_backend::destroy_entity_recursive(\n";
+    out << "        registry, entity, [&](entt::entity parent, const auto& visitor) {\n";
+    out << "            auto parent_view = registry.view<Parent>();\n";
+    out << "            parent_view.each([&](entt::entity child, const Parent& rel) {\n";
+    out << "                if (rel.parent == parent) {\n";
+    out << "                    visitor(child);\n";
+    out << "                }\n";
+    out << "            });\n";
+    out << "        });\n";
     out << "}\n\n";
     return out.str();
 }

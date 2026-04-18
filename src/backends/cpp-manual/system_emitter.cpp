@@ -36,6 +36,9 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.math.quat") {
         return "cactus::runtime::stdlib::math::quat";
     }
+    if (module_name == "std.input") {
+        return "cactus::runtime::manual_backend";
+    }
     return {};
 }
 
@@ -59,6 +62,10 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
         return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
                func_name == "forward" || func_name == "right" || func_name == "up" || func_name == "rotate" ||
                func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
+    }
+    if (module_name == "std.input") {
+        return func_name == "pressed" || func_name == "down" || func_name == "released" ||
+               func_name == "axis" || func_name == "axis2";
     }
     return false;
 }
@@ -151,6 +158,45 @@ std::string filter_trait_simple_name(const FilterEntry& entry) {
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
 }
 
+std::string upper_copy(std::string value) {
+    std::ranges::transform(value, value.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return value;
+}
+
+std::string snake_case(std::string value) {
+    std::string result;
+    for (const char ch : value) {
+        if (std::isupper(static_cast<unsigned char>(ch)) != 0) {
+            if (!result.empty() && result.back() != '_') {
+                result += '_';
+            }
+            result += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        } else {
+            result += ch;
+        }
+    }
+    return result;
+}
+
+std::string input_action_constant_name(const std::string& input_name) {
+    return "K_" + upper_copy(snake_case(input_name));
+}
+
+bool is_input_action_name(const ProgramNode* ast, const std::string& name) {
+    if (ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : ast->declarations) {
+        if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+            if (input->name == name) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 std::string resolve_sort_trait_name(const ExternSystemNode& sys, const std::string& alias) {
     for (const auto& entry : sys.filter.entries) {
         const auto simple_name = filter_trait_simple_name(entry);
@@ -224,6 +270,9 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (is_input_action_name(ast, e.name)) {
+                    return input_action_constant_name(e.name);
+                }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
                 std::string op = e.op;
@@ -318,6 +367,9 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNo
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (is_input_action_name(ast, e.name)) {
+                    return input_action_constant_name(e.name);
+                }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
                 std::string op = e.op;
@@ -509,7 +561,7 @@ std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
 }
 
 std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(readability-function-cognitive-complexity)
-                                                   const CodegenContext& ctx) {
+                                                 const CodegenContext& ctx) {
     auto tmpl_it = ctx.template_ast.find(s.template_name);
     if (tmpl_it == ctx.template_ast.end()) {
         return "/* spawn " + s.template_name + " — template not found */";
@@ -520,7 +572,7 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(r
     std::unordered_map<std::string, std::string> overrides;
     for (const auto& trait : s.overrides) {
         for (const auto& arg : trait.assignments) {
-            overrides[arg.name] = emit_expr(*arg.value, ctx.ast);
+            overrides[arg.name] = ManualSystemEmitter::emit_expr(*arg.value, ctx.ast);
         }
     }
 
@@ -865,7 +917,8 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
 
     out << "static void " << sys.name << "_tick() {\n";
     const std::string FILTER_MASK = compute_mask_expr(sys.filter, ctx);
-    out << "    std::vector<std::size_t> _matched_entities;\n";
+    out << "    std::pmr::monotonic_buffer_resource _matched_entities_resource;\n";
+    out << "    std::pmr::vector<std::size_t> _matched_entities{&_matched_entities_resource};\n";
     out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
     out << "        if ((g_trait_mask[i] & (" << FILTER_MASK << ")) == (" << FILTER_MASK << ")) {\n";
     out << "            _matched_entities.push_back(i);\n";

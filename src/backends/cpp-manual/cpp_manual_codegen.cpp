@@ -5,6 +5,7 @@
 #include "backends/cpp-manual/system_emitter.h"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -21,6 +22,41 @@ bool has_extern_funcs(const DecoratedProgram& program) {
         }
     }
     return false;
+}
+
+std::string upper_copy(std::string value) {
+    std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return value;
+}
+
+std::string snake_case(std::string value) {
+    std::string result;
+    for (const char ch : value) {
+        if (std::isupper(static_cast<unsigned char>(ch)) != 0) {
+            if (!result.empty() && result.back() != '_') {
+                result += '_';
+            }
+            result += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        } else {
+            result += ch;
+        }
+    }
+    return result;
+}
+
+std::string input_action_constant_name(const std::string& input_name) {
+    return "K_" + upper_copy(snake_case(input_name));
+}
+
+std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
+            if (ident->name == "Key") {
+                return "KEY_" + upper_copy(member->member);
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 // ── Build CodegenContext from a DecoratedProgram ────────────────────────────
@@ -250,6 +286,103 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     }
     for (const auto& [name, s] : program.structs) {
         out << SoaEmitter::emit_pod_struct(s) << "\n";
+    }
+
+    bool has_axis_input = false;
+    bool has_button_input = false;
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+            has_axis_input = has_axis_input || input->input_kind == InputKind::Axis;
+            has_button_input = has_button_input || input->input_kind == InputKind::Button;
+        }
+    }
+
+    if (has_button_input) {
+        out << "using InputButton = std::uint8_t;\n";
+        std::uint8_t button_index = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Button) {
+                    continue;
+                }
+                out << "constexpr InputButton " << input_action_constant_name(input->name)
+                    << " = static_cast<InputButton>(" << static_cast<int>(button_index++) << ");\n";
+            }
+        }
+        out << "\n";
+        out << "static int cactus_input_button_key(InputButton button) {\n";
+        out << "    switch (button) {\n";
+        button_index = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Button) {
+                    continue;
+                }
+                std::string key = "0";
+                for (const auto& prop : input->props) {
+                    if (prop.key == "key") {
+                        if (auto maybe_key = raylib_key_constant(*prop.value)) {
+                            key = *maybe_key;
+                        }
+                    }
+                }
+                out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return " << key << ";\n";
+            }
+        }
+        out << "    }\n";
+        out << "    return 0;\n";
+        out << "}\n\n";
+        out << "namespace cactus::runtime::manual_backend {\n";
+        out << "[[nodiscard]] bool pressed(InputButton button) noexcept { return IsKeyPressed(cactus_input_button_key(button)); }\n";
+        out << "[[nodiscard]] bool down(InputButton button) noexcept { return IsKeyDown(cactus_input_button_key(button)); }\n";
+        out << "[[nodiscard]] bool released(InputButton button) noexcept { return IsKeyReleased(cactus_input_button_key(button)); }\n";
+        out << "}\n\n";
+    }
+
+    if (has_axis_input) {
+        out << "using InputAxis = std::uint8_t;\n";
+        std::uint8_t axis_index = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Axis) {
+                    continue;
+                }
+                out << "constexpr InputAxis " << input_action_constant_name(input->name)
+                    << " = static_cast<InputAxis>(" << static_cast<int>(axis_index++) << ");\n";
+            }
+        }
+        out << "\n";
+        out << "static float cactus_axis(InputAxis action) {\n";
+        out << "    switch (action) {\n";
+        axis_index = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Axis) {
+                    continue;
+                }
+                std::string negative = "0";
+                std::string positive = "0";
+                for (const auto& prop : input->props) {
+                    if (prop.key == "negative") {
+                        if (auto key = raylib_key_constant(*prop.value)) {
+                            negative = "(IsKeyDown(" + *key + ") ? 1.0F : 0.0F)";
+                        }
+                    } else if (prop.key == "positive") {
+                        if (auto key = raylib_key_constant(*prop.value)) {
+                            positive = "(IsKeyDown(" + *key + ") ? 1.0F : 0.0F)";
+                        }
+                    }
+                }
+                out << "        case static_cast<InputAxis>(" << static_cast<int>(axis_index++) << "): return " << positive << " - " << negative << ";\n";
+            }
+        }
+        out << "    }\n";
+        out << "    return 0.0F;\n";
+        out << "}\n\n";
+        out << "namespace cactus::runtime::manual_backend {\n";
+        out << "[[nodiscard]] float axis(InputAxis action) noexcept { return cactus_axis(action); }\n";
+        out << "[[nodiscard]] Vector2 axis2(InputAxis x, InputAxis y) noexcept { return Vector2{axis(x), axis(y)}; }\n";
+        out << "}\n\n";
     }
 
     // ── Step 5: TraitBits (task 7.1) ───────────────────────────────────────

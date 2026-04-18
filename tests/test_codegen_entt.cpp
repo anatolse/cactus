@@ -204,6 +204,43 @@ TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime name
     CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespace", "[codegen-entt][extern-func][stdlib][input]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "use std.input\n"
+        "input Jump: button\n"
+        "    key = Key.Space\n"
+        "trait Controller:\n"
+        "    var active: bool = false\n"
+        "system Demo:\n"
+        "    filter:\n"
+        "        Controller\n"
+        "    on tick:\n"
+        "        active = down(Jump)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::down(K_JUMP)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "system Cleanup:\n"
+        "    on tick:\n"
+        "        destroy self\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::destroy_entity_recursive(") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -636,7 +673,7 @@ TEST_CASE("Codegen EnTT: flat transform propagation extern system is recognized"
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::unordered_set<entt::entity> active_entities") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::propagate_hierarchy(") != std::string::npos);
     CHECK(code.find("parent_world.position.x + local.position.x") != std::string::npos);
     CHECK(code.find("if (auto* parent = registry.try_get<Parent>(entity)") != std::string::npos);
 }
@@ -662,7 +699,34 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("registry.valid(parent->parent)") != std::string::npos);
-    CHECK(code.find("active_entities.contains(entity)") != std::string::npos);
-    CHECK(code.find("if (!copied_local)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::propagate_hierarchy(") != std::string::npos);
+    CHECK(code.find("return entt::entity{entt::null};") != std::string::npos);
+    CHECK(code.find("registry.all_of<LocalTransform, WorldTransform>(entity)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: volume transform propagation extern system is recognized", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait LocalTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "extern system TransformPropagation:\n"
+        "    filter:\n"
+        "        std.core.Parent\n"
+        "        std.transform.volume.LocalTransform\n"
+        "        std.transform.volume.WorldTransform\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("world.position = Vector3{") != std::string::npos);
+    CHECK(code.find("parent_world.position.x + local.position.x") != std::string::npos);
+    CHECK(code.find("cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, local.rotation)") != std::string::npos);
+    CHECK(code.find("parent_world.scale.z * local.scale.z") != std::string::npos);
 }

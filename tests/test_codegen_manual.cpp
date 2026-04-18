@@ -1006,6 +1006,34 @@ TEST_CASE("Codegen Manual: unqualified imported stdlib func lowers to runtime na
     CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
 }
 
+TEST_CASE("Codegen Manual: std.input extern calls lower to backend runtime namespace", "[codegen-manual][extern-func][stdlib][input]") {
+    auto code = generate(
+        "use std.input\n" +
+        STDLIB_EVENTS +
+        "input MoveX: axis\n"
+        "    negative = Key.A\n"
+        "    positive = Key.D\n"
+        "system Demo:\n"
+        "    on tick:\n"
+        "        let x = axis(MoveX)\n");
+
+    CHECK(code.find("cactus::runtime::manual_backend::axis(K_MOVE_X)") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: hierarchy destroy helper delegates to runtime library", "[codegen-manual][hierarchy]") {
+    auto code = generate(
+        STDLIB_EVENTS +
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "system Cleanup:\n"
+        "    on tick:\n"
+        "        destroy self\n");
+
+    CHECK(code.find("cactus::runtime::manual_backend::destroy_entity_recursive(") != std::string::npos);
+}
+
 // ── Full pipeline structure tests ─────────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[codegen-manual]") {
@@ -1099,6 +1127,19 @@ TEST_CASE("Codegen Manual: hierarchy propagation handles stale parents and cycle
     CHECK(code.find("_parent >= entity_count") != std::string::npos);
     CHECK(code.find("return std::nullopt") != std::string::npos);
     CHECK(code.find("g_Parent_parent[_idx]") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: extern system scratch entity list uses pmr storage", "[codegen-manual][extern-system][pmr]") {
+    auto code = generate(
+        STDLIB_EVENTS +
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "extern system ParticleSystem:\n"
+        "    filter:\n"
+        "        Position\n");
+
+    CHECK(code.find("std::pmr::monotonic_buffer_resource _matched_entities_resource") != std::string::npos);
+    CHECK(code.find("std::pmr::vector<std::size_t> _matched_entities") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: extern system emits user-library callback contract", "[codegen-manual][extern-system]") {

@@ -24,11 +24,21 @@ struct GeneratedProjectInfo {
 
 namespace stdlib::math {
 
-[[nodiscard]] constexpr float lerp(float a, float b, float t) noexcept;
-[[nodiscard]] constexpr float clamp(float x, float lo, float hi) noexcept;
-[[nodiscard]] constexpr float abs(float v) noexcept;
-[[nodiscard]] constexpr float min(float a, float b) noexcept;
-[[nodiscard]] constexpr float max(float a, float b) noexcept;
+[[nodiscard]] constexpr float lerp(float a, float b, float t) noexcept {
+    return a + ((b - a) * t);
+}
+[[nodiscard]] constexpr float clamp(float x, float lo, float hi) noexcept {
+    return (x < lo) ? lo : ((x > hi) ? hi : x);
+}
+[[nodiscard]] constexpr float abs(float v) noexcept {
+    return (v < 0.0F) ? -v : v;
+}
+[[nodiscard]] constexpr float min(float a, float b) noexcept {
+    return (a < b) ? a : b;
+}
+[[nodiscard]] constexpr float max(float a, float b) noexcept {
+    return (a > b) ? a : b;
+}
 [[nodiscard]] float sqrt(float v) noexcept;
 [[nodiscard]] float sin(float a) noexcept;
 [[nodiscard]] float cos(float a) noexcept;
@@ -41,8 +51,12 @@ namespace stdlib::math {
 namespace vec2 {
 [[nodiscard]] float length(Vector2 v) noexcept;
 [[nodiscard]] Vector2 normalize(Vector2 v) noexcept;
-[[nodiscard]] constexpr float dot(Vector2 a, Vector2 b) noexcept;
-[[nodiscard]] constexpr Vector2 lerp(Vector2 a, Vector2 b, float t) noexcept;
+[[nodiscard]] constexpr float dot(Vector2 a, Vector2 b) noexcept {
+    return (a.x * b.x) + (a.y * b.y);
+}
+[[nodiscard]] constexpr Vector2 lerp(Vector2 a, Vector2 b, float t) noexcept {
+    return Vector2{.x = stdlib::math::lerp(a.x, b.x, t), .y = stdlib::math::lerp(a.y, b.y, t)};
+}
 [[nodiscard]] float distance(Vector2 a, Vector2 b) noexcept;
 [[nodiscard]] float angle(Vector2 v) noexcept;
 }  // namespace vec2
@@ -50,15 +64,38 @@ namespace vec2 {
 namespace vec3 {
 [[nodiscard]] float length(Vector3 v) noexcept;
 [[nodiscard]] Vector3 normalize(Vector3 v) noexcept;
-[[nodiscard]] constexpr float dot(Vector3 a, Vector3 b) noexcept;
-[[nodiscard]] constexpr Vector3 cross(Vector3 a, Vector3 b) noexcept;
-[[nodiscard]] constexpr Vector3 lerp(Vector3 a, Vector3 b, float t) noexcept;
+[[nodiscard]] constexpr float dot(Vector3 a, Vector3 b) noexcept {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
+}
+[[nodiscard]] constexpr Vector3 cross(Vector3 a, Vector3 b) noexcept {
+    return Vector3{
+        .x = (a.y * b.z) - (a.z * b.y),
+        .y = (a.z * b.x) - (a.x * b.z),
+        .z = (a.x * b.y) - (a.y * b.x),
+    };
+}
+[[nodiscard]] constexpr Vector3 lerp(Vector3 a, Vector3 b, float t) noexcept {
+    return Vector3{
+        .x = stdlib::math::lerp(a.x, b.x, t),
+        .y = stdlib::math::lerp(a.y, b.y, t),
+        .z = stdlib::math::lerp(a.z, b.z, t),
+    };
+}
 [[nodiscard]] float distance(Vector3 a, Vector3 b) noexcept;
-[[nodiscard]] constexpr Vector3 reflect(Vector3 v, Vector3 normal) noexcept;
+[[nodiscard]] constexpr Vector3 reflect(Vector3 v, Vector3 normal) noexcept {
+    const float scale = 2.0F * dot(v, normal);
+    return Vector3{
+        .x = v.x - (scale * normal.x),
+        .y = v.y - (scale * normal.y),
+        .z = v.z - (scale * normal.z),
+    };
+}
 }  // namespace vec3
 
 namespace quat {
-[[nodiscard]] constexpr Quat identity() noexcept;
+[[nodiscard]] constexpr Quat identity() noexcept {
+    return Quat{0.0F, 0.0F, 0.0F, 1.0F};
+}
 [[nodiscard]] Quat from_euler(float pitch, float yaw, float roll) noexcept;
 [[nodiscard]] Quat from_axis_angle(Vector3 axis, float angle) noexcept;
 [[nodiscard]] Vector3 forward(Quat q) noexcept;
@@ -66,7 +103,14 @@ namespace quat {
 [[nodiscard]] Vector3 up(Quat q) noexcept;
 [[nodiscard]] Vector3 rotate(Quat q, Vector3 v) noexcept;
 [[nodiscard]] Quat slerp(Quat a, Quat b, float t) noexcept;
-[[nodiscard]] constexpr Quat multiply(Quat a, Quat b) noexcept;
+[[nodiscard]] constexpr Quat multiply(Quat a, Quat b) noexcept {
+    return Quat{
+        .x = (a.w * b.x) + (a.x * b.w) + (a.y * b.z) - (a.z * b.y),
+        .y = (a.w * b.y) - (a.x * b.z) + (a.y * b.w) + (a.z * b.x),
+        .z = (a.w * b.z) + (a.x * b.y) - (a.y * b.x) + (a.z * b.w),
+        .w = (a.w * b.w) - (a.x * b.x) - (a.y * b.y) - (a.z * b.z),
+    };
+}
 [[nodiscard]] Quat inverse(Quat q) noexcept;
 }  // namespace quat
 

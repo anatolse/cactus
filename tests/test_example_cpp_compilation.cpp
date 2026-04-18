@@ -177,6 +177,13 @@ TEST_CASE("integration: curated examples generate compilable C++ with lint-clean
 
             require_success(
                 example,
+                "clang-format-fix",
+                repo_root(),
+                quote(fs::path(CACTUS_CLANG_FORMAT_PATH)) +
+                    " -i " + quote(example.generated_cpp));
+
+            require_success(
+                example,
                 "clang-format",
                 repo_root(),
                 quote(fs::path(CACTUS_CLANG_FORMAT_PATH)) +

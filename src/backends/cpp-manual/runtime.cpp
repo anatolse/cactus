@@ -1,6 +1,9 @@
 #include "backends/cpp-manual/runtime.h"
 
+#include <memory_resource>
 #include <vector>
+
+#include <raylib.h>
 
 namespace cactus::runtime::manual_backend {
 
@@ -12,7 +15,9 @@ void propagate_hierarchy(std::size_t entity_count,
                          const ParentResolver& resolve_parent,
                          const CopyLocalTransformFn& copy_local,
                          const AccumulateTransformFn& accumulate_from_parent) {
-    std::vector<std::uint8_t> active(entity_count, 0);
+    std::pmr::monotonic_buffer_resource scratch_resource;
+    std::pmr::vector<std::uint8_t> active(&scratch_resource);
+    active.resize(entity_count, 0U);
 
     const auto resolve = [&](const auto& self, std::size_t entity) -> void {
         if (entity >= entity_count || active[entity] != 0U) {
@@ -44,7 +49,8 @@ void destroy_entity_recursive(std::size_t entity,
                               const IsValidEntityFn& is_valid,
                               const VisitChildrenFn& visit_children,
                               const RemoveEntityFn& remove_entity) {
-    static std::vector<std::size_t> destroying_entities;
+    static std::pmr::unsynchronized_pool_resource destroying_resource;
+    static std::pmr::vector<std::size_t> destroying_entities{&destroying_resource};
 
     for (const auto active_entity : destroying_entities) {
         if (active_entity == entity) {

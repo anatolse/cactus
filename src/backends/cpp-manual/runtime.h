@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory_resource>
 #include <optional>
 
 namespace cactus::runtime::manual_backend {
@@ -38,6 +39,12 @@ void destroy_entity_recursive(std::size_t entity,
                               const IsValidEntityFn& is_valid,
                               const VisitChildrenFn& visit_children,
                               const RemoveEntityFn& remove_entity);
+
+[[nodiscard]] bool pressed(std::uint8_t button) noexcept;
+[[nodiscard]] bool down(std::uint8_t button) noexcept;
+[[nodiscard]] bool released(std::uint8_t button) noexcept;
+[[nodiscard]] float axis(std::uint8_t axis) noexcept;
+[[nodiscard]] Vector2 axis2(std::uint8_t x_axis, std::uint8_t y_axis) noexcept;
 
 void generated_init_project();
 void generated_update_project(float dt);

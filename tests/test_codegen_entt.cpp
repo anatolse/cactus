@@ -535,7 +535,8 @@ TEST_CASE("Codegen EnTT: full pipeline includes extern system tick call", "[code
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("void sprite_renderer_tick(entt::registry& registry)") != std::string::npos);
     CHECK(code.find("sprite_renderer_update(registry, entity, Position_comp)") != std::string::npos);
-    CHECK(code.find("void cactus::runtime::entt_backend::generated_render_project") != std::string::npos);
+    CHECK(code.find("namespace cactus::runtime::entt_backend") != std::string::npos);
+    CHECK(code.find("void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher)") != std::string::npos);
     CHECK(code.find("sprite_renderer_tick(registry);") != std::string::npos);
 }
 

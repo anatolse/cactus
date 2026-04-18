@@ -958,6 +958,54 @@ TEST_CASE("Codegen Manual: runtime header placed after standard includes", "[cod
     CHECK(runtime_pos > raylib_pos);
 }
 
+TEST_CASE("Codegen Manual: imported stdlib math alias lowers to runtime namespace", "[codegen-manual][extern-func][stdlib]") {
+    auto code = generate(
+        "use std.math as math\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Value:\n"
+        "    var x: float = 0.0\n"
+        "system Demo:\n"
+        "    filter:\n"
+        "        Value\n"
+        "    on tick:\n"
+        "        x = math.lerp(0.0, 10.0, 0.5)\n");
+
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: imported stdlib vec2 alias lowers to runtime namespace", "[codegen-manual][extern-func][stdlib]") {
+    auto code = generate(
+        "use std.math.vec2 as v2\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Value:\n"
+        "    var x: float = 0.0\n"
+        "system Demo:\n"
+        "    filter:\n"
+        "        Value\n"
+        "    on tick:\n"
+        "        x = v2.length(vec2(3.0, 4.0))\n");
+
+    CHECK(code.find("cactus::runtime::stdlib::math::vec2::length(vec2(3.0f, 4.0f))") != std::string::npos);
+}
+
+TEST_CASE("Codegen Manual: unqualified imported stdlib func lowers to runtime namespace", "[codegen-manual][extern-func][stdlib]") {
+    auto code = generate(
+        "use std.math\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Value:\n"
+        "    var x: float = 0.0\n"
+        "system Demo:\n"
+        "    filter:\n"
+        "        Value\n"
+        "    on tick:\n"
+        "        x = lerp(0.0, 10.0, 0.5)\n");
+
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+}
+
 // ── Full pipeline structure tests ─────────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[codegen-manual]") {

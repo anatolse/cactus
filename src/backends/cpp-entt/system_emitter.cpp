@@ -10,6 +10,112 @@ namespace cactus {
 
 namespace {
 
+std::string imported_module_name(const ProgramNode* ast, const std::string& qualifier) {
+    if (ast == nullptr) {
+        return qualifier;
+    }
+    for (const auto& decl : ast->declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
+            if ((use->alias.has_value() && *use->alias == qualifier) || use->module_name == qualifier) {
+                return use->module_name;
+            }
+        }
+    }
+    return qualifier;
+}
+
+std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qualifier) {
+    const std::string module_name = imported_module_name(ast, qualifier);
+    if (module_name == "std.math") {
+        return "cactus::runtime::stdlib::math";
+    }
+    if (module_name == "std.math.vec2") {
+        return "cactus::runtime::stdlib::math::vec2";
+    }
+    if (module_name == "std.math.vec3") {
+        return "cactus::runtime::stdlib::math::vec3";
+    }
+    if (module_name == "std.math.quat") {
+        return "cactus::runtime::stdlib::math::quat";
+    }
+    return {};
+}
+
+bool module_exports_stdlib_func(const std::string& module_name, const std::string& func_name) {
+    if (module_name == "std.math") {
+        return func_name == "lerp" || func_name == "clamp" || func_name == "abs" || func_name == "min" ||
+               func_name == "max" || func_name == "sqrt" || func_name == "sin" || func_name == "cos" ||
+               func_name == "atan2" || func_name == "floor" || func_name == "ceil" || func_name == "round" ||
+               func_name == "pow";
+    }
+    if (module_name == "std.math.vec2") {
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
+               func_name == "lerp" || func_name == "distance" || func_name == "angle";
+    }
+    if (module_name == "std.math.vec3") {
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
+               func_name == "cross" || func_name == "lerp" || func_name == "distance" ||
+               func_name == "reflect";
+    }
+    if (module_name == "std.math.quat") {
+        return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
+               func_name == "forward" || func_name == "right" || func_name == "up" || func_name == "rotate" ||
+               func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
+    }
+    return false;
+}
+
+std::string lower_unqualified_stdlib_func(const DecoratedProgram& program,
+                                          const std::string& func_name,
+                                          const auto& emit_arg) {
+    (void)emit_arg;
+    if (program.ast == nullptr) {
+        return {};
+    }
+    for (const auto& decl : program.ast->declarations) {
+        const auto* use = std::get_if<UseNode>(&decl);
+        if (use == nullptr || use->alias.has_value()) {
+            continue;
+        }
+        if (!module_exports_stdlib_func(use->module_name, func_name)) {
+            continue;
+        }
+        const std::string prefix = stdlib_runtime_prefix(program.ast, use->module_name);
+        if (prefix.empty()) {
+            continue;
+        }
+        return prefix + "::" + func_name;
+    }
+    return {};
+}
+
+std::string lower_stdlib_member_call(const MemberExpr& member,
+                                     const std::vector<std::unique_ptr<ExprNode>>& args,
+                                     const DecoratedProgram& program,
+                                     const std::unordered_set<std::string>& pointer_aliases,
+                                     const auto& emit_arg,
+                                     const std::vector<std::string>& trait_names) {
+    (void)pointer_aliases;
+    (void)trait_names;
+    const auto* object = std::get_if<IdentExpr>(&member.object->expr);
+    if (object == nullptr) {
+        return {};
+    }
+    const std::string prefix = stdlib_runtime_prefix(program.ast, object->name);
+    if (prefix.empty()) {
+        return {};
+    }
+    std::string result = prefix + "::" + member.member + "(";
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += emit_arg(*args[i]);
+    }
+    result += ")";
+    return result;
+}
+
 std::string snake_case(std::string value) {
     std::string result;
     for (const char ch : value) {
@@ -256,7 +362,29 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                     return "registry.valid(" +
                            rewrite_expr(*e.args[0], trait_names, program, pointer_aliases) + ")";
                 }
+                if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                    if (const auto lowered_name = lower_unqualified_stdlib_func(
+                            program, ident->name,
+                            [&](const ExprNode& arg) { return rewrite_expr(arg, trait_names, program, pointer_aliases); });
+                        !lowered_name.empty()) {
+                        std::string result = lowered_name + "(";
+                        for (size_t i = 0; i < e.args.size(); ++i) {
+                            if (i > 0) {
+                                result += ", ";
+                            }
+                            result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases);
+                        }
+                        return result + ")";
+                    }
+                }
                 if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
+                    if (const auto lowered = lower_stdlib_member_call(
+                            *member, e.args, program, pointer_aliases,
+                            [&](const ExprNode& arg) { return rewrite_expr(arg, trait_names, program, pointer_aliases); },
+                            trait_names);
+                        !lowered.empty()) {
+                        return lowered;
+                    }
                     if (const auto* object = std::get_if<IdentExpr>(&member->object->expr)) {
                         if (object->name == "input" && member->member == "axis") {
                             std::string result = "InputEvent::axis(";

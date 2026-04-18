@@ -166,6 +166,44 @@ TEST_CASE("Codegen EnTT: extern func body is not emitted", "[codegen-entt][exter
     CHECK(code.find("float sin(") == std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace", "[codegen-entt][extern-func][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.math as math\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Value:\n"
+        "    var x: float\n"
+        "system Demo:\n"
+        "    filter:\n"
+        "        Value\n"
+        "    on tick:\n"
+        "        x = math.lerp(0.0, 10.0, 0.5)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime namespace", "[codegen-entt][extern-func][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.math\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Value:\n"
+        "    var x: float\n"
+        "system Demo:\n"
+        "    filter:\n"
+        "        Value\n"
+        "    on tick:\n"
+        "        x = lerp(0.0, 10.0, 0.5)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(

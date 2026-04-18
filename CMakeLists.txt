@@ -72,7 +72,7 @@ add_library(cactus_runtime_common STATIC
     src/common/cactus_runtime.cpp
 )
 target_include_directories(cactus_runtime_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(cactus_runtime_common PUBLIC cactus_common)
+target_link_libraries(cactus_runtime_common PUBLIC cactus_common raylib)
 
 add_library(cactus_runtime_cpp_manual STATIC
     src/backends/cpp-manual/runtime.cpp

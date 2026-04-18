@@ -71,8 +71,10 @@ public:
     static std::string compute_mask_expr(const FilterClause& clause,
                                          const CodegenContext& ctx);
 
-    static std::string emit_expr(const ExprNode& expr);
-    static std::string emit_expr_dynamic(const ExprNode& expr, const std::string& entity_index_var = "i");
+    static std::string emit_expr(const ExprNode& expr, const ProgramNode* ast = nullptr);
+    static std::string emit_expr_dynamic(const ExprNode& expr,
+                                         const std::string& entity_index_var = "i",
+                                         const ProgramNode* ast = nullptr);
     static std::string indent_str(int level);
 
 private:

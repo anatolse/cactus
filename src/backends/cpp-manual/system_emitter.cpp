@@ -8,6 +8,117 @@ namespace cactus {
 
 namespace {
 
+std::string imported_module_name(const ProgramNode* ast, const std::string& qualifier) {
+    if (ast == nullptr) {
+        return qualifier;
+    }
+    for (const auto& decl : ast->declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
+            if ((use->alias.has_value() && *use->alias == qualifier) || use->module_name == qualifier) {
+                return use->module_name;
+            }
+        }
+    }
+    return qualifier;
+}
+
+std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qualifier) {
+    const std::string module_name = imported_module_name(ast, qualifier);
+    if (module_name == "std.math") {
+        return "cactus::runtime::stdlib::math";
+    }
+    if (module_name == "std.math.vec2") {
+        return "cactus::runtime::stdlib::math::vec2";
+    }
+    if (module_name == "std.math.vec3") {
+        return "cactus::runtime::stdlib::math::vec3";
+    }
+    if (module_name == "std.math.quat") {
+        return "cactus::runtime::stdlib::math::quat";
+    }
+    return {};
+}
+
+bool module_exports_stdlib_func(const std::string& module_name, const std::string& func_name) {
+    if (module_name == "std.math") {
+        return func_name == "lerp" || func_name == "clamp" || func_name == "abs" || func_name == "min" ||
+               func_name == "max" || func_name == "sqrt" || func_name == "sin" || func_name == "cos" ||
+               func_name == "atan2" || func_name == "floor" || func_name == "ceil" || func_name == "round" ||
+               func_name == "pow";
+    }
+    if (module_name == "std.math.vec2") {
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
+               func_name == "lerp" || func_name == "distance" || func_name == "angle";
+    }
+    if (module_name == "std.math.vec3") {
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
+               func_name == "cross" || func_name == "lerp" || func_name == "distance" ||
+               func_name == "reflect";
+    }
+    if (module_name == "std.math.quat") {
+        return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
+               func_name == "forward" || func_name == "right" || func_name == "up" || func_name == "rotate" ||
+               func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
+    }
+    return false;
+}
+
+std::string lower_unqualified_stdlib_func(const ProgramNode* ast,
+                                          const std::string& func_name,
+                                          const auto& emit_args,
+                                          const std::vector<std::unique_ptr<ExprNode>>& args) {
+    if (ast == nullptr) {
+        return {};
+    }
+    for (const auto& decl : ast->declarations) {
+        const auto* use = std::get_if<UseNode>(&decl);
+        if (use == nullptr || use->alias.has_value()) {
+            continue;
+        }
+        if (!module_exports_stdlib_func(use->module_name, func_name)) {
+            continue;
+        }
+        const std::string prefix = stdlib_runtime_prefix(ast, use->module_name);
+        if (prefix.empty()) {
+            continue;
+        }
+        std::string result = prefix + "::" + func_name + "(";
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i > 0) {
+                result += ", ";
+            }
+            result += emit_args(*args[i]);
+        }
+        result += ")";
+        return result;
+    }
+    return {};
+}
+
+std::string lower_stdlib_member_call(const MemberExpr& member,
+                                     const std::vector<std::unique_ptr<ExprNode>>& args,
+                                     const ProgramNode* ast,
+                                     const auto& emit_arg) {
+    const auto* object_ident = std::get_if<IdentExpr>(&member.object->expr);
+    if (object_ident == nullptr) {
+        return {};
+    }
+    const std::string prefix = stdlib_runtime_prefix(ast, object_ident->name);
+    if (prefix.empty()) {
+        return {};
+    }
+
+    std::string result = prefix + "::" + member.member + "(";
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += emit_arg(*args[i]);
+    }
+    result += ")";
+    return result;
+}
+
 bool expr_is_self(const ExprNode& expr) {
     return std::holds_alternative<SelfExpr>(expr.expr);
 }
@@ -92,11 +203,13 @@ std::string extern_callback_signature(const ExternSystemNode& sys,
 }
 
 std::string emit_expr_dynamic_impl(const ExprNode& expr,
-                                   const std::string& entity_index_var); // NOLINT(misc-no-recursion)
+                                   const std::string& entity_index_var,
+                                   const ProgramNode* ast); // NOLINT(misc-no-recursion)
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
 std::string emit_expr_dynamic_impl(const ExprNode& expr,
-                                   const std::string& entity_index_var) {
+                                   const std::string& entity_index_var,
+                                   const ProgramNode* ast) {
     return std::visit(
         [&](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using E = std::decay_t<decltype(e)>;
@@ -119,21 +232,36 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
                 } else if (op == "or") {
                     op = "||";
                 }
-                return "(" + emit_expr_dynamic_impl(*e.left, entity_index_var) + " " + op + " " +
-                       emit_expr_dynamic_impl(*e.right, entity_index_var) + ")";
+                return "(" + emit_expr_dynamic_impl(*e.left, entity_index_var, ast) + " " + op + " " +
+                       emit_expr_dynamic_impl(*e.right, entity_index_var, ast) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
                 if (op == "not") {
                     op = "!";
                 }
-                return op + emit_expr_dynamic_impl(*e.operand, entity_index_var);
+                return op + emit_expr_dynamic_impl(*e.operand, entity_index_var, ast);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
-                std::string result = emit_expr_dynamic_impl(*e.callee, entity_index_var) + "(";
+                if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                    if (const auto lowered = lower_unqualified_stdlib_func(ast, ident->name,
+                            [&](const ExprNode& arg) { return emit_expr_dynamic_impl(arg, entity_index_var, ast); },
+                            e.args);
+                        !lowered.empty()) {
+                        return lowered;
+                    }
+                }
+                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
+                    if (const auto lowered = lower_stdlib_member_call(*member, e.args, ast,
+                            [&](const ExprNode& arg) { return emit_expr_dynamic_impl(arg, entity_index_var, ast); });
+                        !lowered.empty()) {
+                        return lowered;
+                    }
+                }
+                std::string result = emit_expr_dynamic_impl(*e.callee, entity_index_var, ast) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += emit_expr_dynamic_impl(*e.args[i], entity_index_var);
+                    result += emit_expr_dynamic_impl(*e.args[i], entity_index_var, ast);
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
@@ -142,9 +270,9 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
                         return ident->name + "::" + e.member;
                     }
                 }
-                return emit_expr_dynamic_impl(*e.object, entity_index_var) + "." + e.member;
+                return emit_expr_dynamic_impl(*e.object, entity_index_var, ast) + "." + e.member;
             } else {
-                return ManualSystemEmitter::emit_expr(expr);
+                return ManualSystemEmitter::emit_expr(expr, ast);
             }
         },
         expr.expr);
@@ -165,9 +293,9 @@ std::string ManualSystemEmitter::indent_str(int level) {
     return std::string(static_cast<size_t>(level) * 4, ' '); // NOLINT(modernize-return-braced-init-list)
 }
 
-std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(readability-function-cognitive-complexity)
+std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNode* ast) { // NOLINT(readability-function-cognitive-complexity)
     return std::visit(
-        [](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
+        [&](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
                 if (e.kind == LiteralExpr::Kind::String) {
@@ -198,20 +326,35 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(rea
                 } else if (op == "or") {
                     op = "||";
                 }
-                return "(" + emit_expr(*e.left) + " " + op + " " + emit_expr(*e.right) + ")";
+                return "(" + emit_expr(*e.left, ast) + " " + op + " " + emit_expr(*e.right, ast) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
                 if (op == "not") {
                     op = "!";
                 }
-                return op + emit_expr(*e.operand);
+                return op + emit_expr(*e.operand, ast);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
-                std::string result = emit_expr(*e.callee) + "(";
+                if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                    if (const auto lowered = lower_unqualified_stdlib_func(ast, ident->name,
+                            [&](const ExprNode& arg) { return emit_expr(arg, ast); },
+                            e.args);
+                        !lowered.empty()) {
+                        return lowered;
+                    }
+                }
+                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
+                    if (const auto lowered = lower_stdlib_member_call(*member, e.args, ast,
+                            [&](const ExprNode& arg) { return emit_expr(arg, ast); });
+                        !lowered.empty()) {
+                        return lowered;
+                    }
+                }
+                std::string result = emit_expr(*e.callee, ast) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += emit_expr(*e.args[i]);
+                    result += emit_expr(*e.args[i], ast);
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
@@ -221,7 +364,7 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(rea
                         return ident->name + "::" + e.member;
                     }
                 }
-                return emit_expr(*e.object) + "." + e.member;
+                return emit_expr(*e.object, ast) + "." + e.member;
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 return "/* spawn expr */";
             } else {
@@ -232,8 +375,9 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr) { // NOLINT(rea
 }
 
 std::string ManualSystemEmitter::emit_expr_dynamic(const ExprNode& expr,
-                                                   const std::string& entity_index_var) {
-    return emit_expr_dynamic_impl(expr, entity_index_var);
+                                                   const std::string& entity_index_var,
+                                                   const ProgramNode* ast) {
+    return emit_expr_dynamic_impl(expr, entity_index_var, ast);
 }
 
 // ── Legacy emit_stmt (indexed model) ──────────────────────────────────────
@@ -245,27 +389,27 @@ std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) { /
             std::string ind = indent_str(indent);
             if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string op = s.op;
-                return ind + s.name + "[i] " + op + " " + emit_expr(*s.value) + ";\n";
+                return ind + s.name + "[i] " + op + " " + emit_expr(*s.value, nullptr) + ";\n";
             } else if constexpr (std::is_same_v<S, LetStmt>) {
-                return ind + "auto " + s.name + " = " + emit_expr(*s.value) + ";\n";
+                return ind + "auto " + s.name + " = " + emit_expr(*s.value, nullptr) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
                 for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += "." + s.payload[i].name + " = " + emit_expr(*s.payload[i].value);
+                    result += "." + s.payload[i].name + " = " + emit_expr(*s.payload[i].value, nullptr);
                 }
                 return result + "});\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
-                    return ind + "return " + emit_expr(**s.value) + ";\n";
+                    return ind + "return " + emit_expr(**s.value, nullptr) + ";\n";
                 }
                 return ind + "return;\n";
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                return ind + emit_expr(*s.expr) + ";\n";
+                return ind + emit_expr(*s.expr, nullptr) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                std::string result = ind + "if (" + emit_expr(*s.condition) + ") {\n";
+                std::string result = ind + "if (" + emit_expr(*s.condition, nullptr) + ") {\n";
                 for (auto& inner : s.then_body) {
                     result += emit_stmt(*inner, indent + 1);
                 }
@@ -376,7 +520,7 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(r
     std::unordered_map<std::string, std::string> overrides;
     for (const auto& trait : s.overrides) {
         for (const auto& arg : trait.assignments) {
-            overrides[arg.name] = emit_expr(*arg.value);
+            overrides[arg.name] = emit_expr(*arg.value, ctx.ast);
         }
     }
 
@@ -400,7 +544,7 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(r
                 bool found_default = false;
                 for (const auto& assign : entry.assignments) {
                     if (assign.name == field.name) {
-                        args << ManualSystemEmitter::emit_expr(*assign.value);
+                        args << ManualSystemEmitter::emit_expr(*assign.value, ctx.ast);
                         found_default = true;
                         break;
                     }
@@ -440,10 +584,10 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
             if constexpr (std::is_same_v<S, VarAssign>) {
                 // In the dynamic model, fields are local references — no [i] suffix
                 std::string op = s.op;
-                return ind + s.name + " " + op + " " + emit_expr_dynamic(*s.value, entity_index_var) + ";\n";
+                return ind + s.name + " " + op + " " + emit_expr_dynamic(*s.value, entity_index_var, ctx.ast) + ";\n";
 
             } else if constexpr (std::is_same_v<S, LetStmt>) {
-                return ind + "auto " + s.name + " = " + emit_expr_dynamic(*s.value, entity_index_var) + ";\n";
+                return ind + "auto " + s.name + " = " + emit_expr_dynamic(*s.value, entity_index_var, ctx.ast) + ";\n";
 
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string result = ind + s.event_name + "_buffer.push_back({";
@@ -452,14 +596,14 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                         result += ", ";
                     }
                     const auto& payload = s.payload.at(i);
-                    result += "." + payload.name + " = " + emit_expr_dynamic(*payload.value, entity_index_var);
+                    result += "." + payload.name + " = " + emit_expr_dynamic(*payload.value, entity_index_var, ctx.ast);
                 }
                 return result + "});\n";
 
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 // task 7.9: swap-and-delete
                 if (s.target_expr.has_value()) {
-                    return ind + "cactus_entity_remove_recursive(" + emit_expr_dynamic(**s.target_expr, entity_index_var) + ");\n";
+                    return ind + "cactus_entity_remove_recursive(" + emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast) + ");\n";
                 }
                 if (in_loop) {
                     return ind + "cactus_entity_remove_recursive(" + entity_index_var + "); __destroyed = true;\n";
@@ -477,7 +621,7 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                        ind + "g_load_pending = true;\n";
 
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var) : entity_index_var;
+                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast) : entity_index_var;
                 std::ostringstream result;
                 result << ind << "if ((g_trait_mask[" << target << "] & TraitBits::" << s.trait_name << ") == 0) {\n";
                 auto td_it = ctx.trait_defaults.find(s.trait_name);
@@ -498,26 +642,26 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                 result << ind << "}\n";
                 for (const auto& arg : s.args) {
                     result << ind << "g_" << s.trait_name << "_" << arg.name << "[" << target << "] = "
-                           << emit_expr_dynamic(*arg.value, entity_index_var) << ";\n";
+                           << emit_expr_dynamic(*arg.value, entity_index_var, ctx.ast) << ";\n";
                 }
                 result << ind << "g_trait_mask[" << target << "] |= TraitBits::" << s.trait_name << ";\n";
                 return result.str();
 
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var) : entity_index_var;
+                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast) : entity_index_var;
                 return ind + "g_trait_mask[" + target + "] &= ~TraitBits::" + s.trait_name + ";\n";
 
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
-                    return ind + "return " + emit_expr_dynamic(**s.value, entity_index_var) + ";\n";
+                    return ind + "return " + emit_expr_dynamic(**s.value, entity_index_var, ctx.ast) + ";\n";
                 }
                 return ind + "return;\n";
 
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                return ind + emit_expr_dynamic(*s.expr, entity_index_var) + ";\n";
+                return ind + emit_expr_dynamic(*s.expr, entity_index_var, ctx.ast) + ";\n";
 
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                std::string result = ind + "if (" + emit_expr_dynamic(*s.condition, entity_index_var) + ") {\n";
+                std::string result = ind + "if (" + emit_expr_dynamic(*s.condition, entity_index_var, ctx.ast) + ") {\n";
                 for (auto& inner : s.then_body) {
                     result += emit_stmt_dynamic(*inner, indent + 1, ctx, entity_index_var, in_loop);
                 }

@@ -82,26 +82,22 @@ The backend SHALL generate network replication stubs for fields marked with `syn
 - **THEN** the backend generates code that iterates the Position view to collect/apply network deltas
 
 ### Requirement: Raylib integration in generated code
-The backend SHALL generate a main game loop using Raylib API calls by default, with EnTT registry and dispatcher initialized before the loop.
+The backend SHALL support a standard runtime-driven game loop for EnTT projects, with EnTT registry and dispatcher initialized before frame execution. The default compiled-project integration SHALL be realized through generated project glue linked against the standard Cactus EnTT backend/runtime library rather than requiring the generated output to embed a complete standalone `main()` implementation.
 
-#### Scenario: Generated main with EnTT and Raylib
-- **WHEN** the full pipeline runs on a complete `.cactus` program with EnTT backend selected
-- **THEN** the generated code includes Raylib and EnTT headers, creates a registry and dispatcher, and runs the standard game loop
+#### Scenario: Linked EnTT runtime integration
+- **WHEN** the full pipeline runs on a complete `.cactus` program with the EnTT backend selected
+- **THEN** the generated project-specific output links against the standard Cactus EnTT backend/runtime library, which provides the reusable runtime/game-loop integration for the project
 
 ### Requirement: Compilable C++20 output with EnTT
-The backend SHALL produce valid C++20 code that compiles with EnTT v3.x headers and Raylib linked.
+The backend SHALL produce valid C++20 generated project glue that compiles and links successfully with EnTT v3.x headers, Raylib, and the standard Cactus EnTT backend/runtime library.
 
-#### Scenario: Generated code compiles
-- **WHEN** the backend generates code from the cactus shop mini example
-- **THEN** the output compiles without errors using a C++20 compiler with EnTT and Raylib available
+#### Scenario: Generated EnTT project links successfully
+- **WHEN** the backend generates C++ from a supported example or authored project
+- **THEN** the generated project-specific C++ compiles without errors and links successfully when combined with the standard Cactus EnTT backend/runtime library and required dependencies
 
-#### Scenario: Curated example compilation coverage can validate EnTT-targeted examples
+#### Scenario: Curated example compilation coverage validates linked EnTT projects
 - **WHEN** automated example-compilation integration coverage runs for an example configured for the EnTT backend path
-- **THEN** the generated C++ compiles successfully using the project's configured EnTT-enabled toolchain and required dependencies
-
-#### Scenario: EnTT backend generated example code passes lint checks without rewriting
-- **WHEN** automated example-compilation integration coverage validates EnTT-backend generated code for a curated example
-- **THEN** the generated C++ passes repository-root `clang-format` and `clang-tidy` checks without requiring tool-applied fixes
+- **THEN** the generated C++ project glue compiles successfully and links against the project's configured EnTT-enabled toolchain and the standard Cactus EnTT backend/runtime library
 
 ### Requirement: Emit `cactus_runtime.h` include when extern funcs are in scope
 The cpp-entt backend SHALL emit `#include "cactus_runtime.h"` in the generated C++ output when any extern func is present — either declared in the program itself or in any imported module's `ImportedSymbols.funcs` map (where `is_extern = true`).
@@ -124,9 +120,9 @@ The cpp-entt backend SHALL NOT emit a C++ function definition for any `FuncNode`
 - **THEN** the generated C++ does NOT contain a definition `float lerp(float a, float b, float t) { ... }`
 
 ### Requirement: Stdlib extern system codegen — known patterns
-The EnTT backend SHALL have built-in optimized implementations for `extern system` declarations that match known stdlib trait filter patterns. When an `extern system`'s filter contains a recognized stdlib trait, the backend generates a complete, optimized system body rather than a user-callback scaffold.
+The EnTT backend SHALL treat recognized stdlib `extern system` declarations as backend-library-provided behavior. When an `extern system`'s filter contains a recognized stdlib trait pattern, generated project output SHALL bind to the corresponding implementation in the standard Cactus EnTT backend/runtime library rather than emitting a project-local inline implementation body.
 
-The recognized stdlib patterns and their generated implementations:
+The recognized stdlib patterns and their generated implementations remain:
 
 | Extern system filter includes | Generated implementation |
 |---|---|
@@ -140,51 +136,30 @@ The recognized stdlib patterns and their generated implementations:
 
 The backend recognizes these patterns by the **fully qualified trait names** (module path + trait name) from the filter clause.
 
-#### Scenario: Stdlib SpriteRenderer generates batched render
-- **WHEN** `extern system SpriteRenderer: filter: Position as pos, Renderer as r` is compiled (where both are stdlib traits)
-- **THEN** the backend generates an optimized batched sprite rendering loop, not a per-entity callback
+#### Scenario: Stdlib SpriteRenderer binds to backend library implementation
+- **WHEN** `extern system SpriteRenderer: filter: Position as pos, Renderer as r` is compiled and the filter matches a recognized stdlib pattern
+- **THEN** the generated EnTT project output binds to the standard Cactus EnTT backend/runtime library implementation for sprite rendering rather than emitting a project-local renderer body
 
-#### Scenario: hierarchy propagation recognized as known pattern
+#### Scenario: hierarchy propagation binds to backend library implementation
 - **WHEN** the stdlib propagation extern system references `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
-- **THEN** the backend generates built-in hierarchy propagation code rather than a user callback scaffold
+- **THEN** the generated EnTT project output binds to the standard Cactus EnTT backend/runtime library implementation for hierarchy propagation
 
-#### Scenario: Non-stdlib traits do not trigger known-pattern generation
-- **WHEN** `extern system MySystem: filter: Position as pos, MyCustomTrait as c` is compiled (where `MyCustomTrait` is user-defined)
-- **THEN** the backend generates a C++ scaffold, not a known-pattern implementation
+#### Scenario: Non-stdlib traits do not use backend-library stdlib binding
+- **WHEN** `extern system MySystem: filter: Position as pos, MyCustomTrait as c` is compiled and `MyCustomTrait` is user-defined
+- **THEN** the backend does not treat the system as a stdlib backend-library implementation
 
 ### Requirement: User-defined extern system codegen — C++ scaffold
-For `extern system` declarations with user-defined (non-stdlib) traits, the EnTT backend SHALL generate:
-1. A C++ header file declaring the user callback with typed component references
-2. The iteration infrastructure (view creation, sort if `order by:` present, iteration loop)
-3. A call to the user callback for each matched entity (or batch form at backend's discretion)
+For `extern system` declarations with user-defined (non-stdlib) traits, the EnTT backend SHALL generate typed declarations and scheduling glue that call user-provided callback implementations from the project’s user library. The backend SHALL generate the iteration infrastructure (including `order by:` support when present), and the final linked project SHALL obtain the callback implementation from the user library rather than from a generated implementation body.
 
-The callback name convention is `<SystemName>_update`. The signature includes typed references to all filter components.
+The callback name convention remains `<SystemName>_update`. The signature includes typed references to all filter components.
 
-```cpp
-// Generated header (game_generated.h):
-void MyParticleSystem_update(entt::registry& registry,
-                              entt::entity entity,
-                              Position& pos,
-                              ParticleEmitter& pe);
-
-// Generated implementation scaffold (game_generated.cpp):
-void MyParticleSystem_tick(entt::registry& registry) {
-    auto view = registry.view<Position, ParticleEmitter>();
-    for (auto entity : view) {
-        auto& pos = view.get<Position>(entity);
-        auto& pe = view.get<ParticleEmitter>(entity);
-        MyParticleSystem_update(registry, entity, pos, pe);
-    }
-}
-```
-
-#### Scenario: User extern system generates C++ scaffold
+#### Scenario: User extern system generates library-facing declaration
 - **WHEN** `extern system MyParticleSystem: filter: Position as pos, ParticleEmitter as pe` is compiled
-- **THEN** a typed `MyParticleSystem_update(...)` callback declaration is generated in the output header
+- **THEN** the generated EnTT project output declares a typed `MyParticleSystem_update(...)` callback contract and emits scheduling glue that expects the implementation to be supplied by the user library
 
-#### Scenario: order by in user extern system generates sort call
-- **WHEN** user `extern system` has `order by: pos.pos.y asc`
-- **THEN** the generated scaffold includes a `registry.sort<Position>(...)` call before the iteration loop
+#### Scenario: order by in user extern system still generates sort call
+- **WHEN** a user `extern system` has `order by: pos.pos.y asc`
+- **THEN** the generated EnTT scheduling glue includes a `registry.sort<Position>(...)` call before invoking the user-library callback for each matched entity
 
 ### Requirement: Stdlib extern systems are auto-included in the program output
 When a program imports a stdlib module containing `extern system` declarations (e.g., `use std.render.sprites`), the backend SHALL include those extern systems in the generated output automatically. The author does not need to explicitly include them.

@@ -33,7 +33,7 @@ extern_system_decl = "extern" "system" IDENTIFIER ":"
 - **THEN** the semantic analyzer SHALL report: "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)"
 
 ### Requirement: Stdlib extern systems run automatically from module import
-When a module imports a stdlib module that declares `extern system` declarations (e.g., `use std.render.sprites`), those extern systems are automatically included in the program's system schedule. Authors do NOT need to re-declare them; applying the relevant traits to entities is sufficient.
+When a module imports a stdlib module that declares `extern system` declarations (e.g., `use std.render.sprites`), those extern systems SHALL be automatically included in the program's system schedule. Authors do NOT need to re-declare them; applying the relevant traits to entities is sufficient.
 
 #### Scenario: SpriteRenderer runs automatically
 - **WHEN** a program imports `std.render.sprites` and applies `std.render.sprites.Renderer` to an entity
@@ -44,7 +44,7 @@ When a module imports a stdlib module that declares `extern system` declarations
 - **THEN** `SpriteRenderer` is not included in the generated system schedule (the filter matches zero entities; the backend MAY omit the system entirely as an optimization)
 
 ### Requirement: User-defined extern systems generate typed C++ scaffold
-When an `extern system` declaration references only non-stdlib traits, the backend generates a C++ header with a typed callback function that the user must implement. The callback signature is determined by the backend based on the filter traits. The function name follows the convention `<SystemName>_update`.
+When an `extern system` declaration references only non-stdlib traits, the backend SHALL generate a C++ header with a typed callback function that the user must implement. The callback signature is determined by the backend based on the filter traits. The function name follows the convention `<SystemName>_update`.
 
 #### Scenario: User extern system generates C++ header
 - **WHEN** `extern system MyParticleSystem:` with `filter: Position as pos, ParticleEmitter as pe` is compiled
@@ -55,7 +55,7 @@ When an `extern system` declaration references only non-stdlib traits, the backe
 - **THEN** the linker reports an undefined reference to `<SystemName>_update`
 
 ### Requirement: `extern system` participates in the system ordering graph
-An `extern system` MAY declare `after:` constraints naming other systems (regular or extern). The compiler validates that no cycles exist. The backend schedules extern systems in the same phase graph as regular systems.
+An `extern system` MAY declare `after:` constraints naming other systems (regular or extern). The compiler SHALL validate that no cycles exist. The backend SHALL schedule extern systems in the same phase graph as regular systems.
 
 #### Scenario: extern system after regular system
 - **WHEN** `extern system MeshRenderer: after: TransformSystem` is declared

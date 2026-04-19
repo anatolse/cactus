@@ -211,6 +211,36 @@ bool is_shape_renderer(const ExternSystemNode& sys) {
            filter_has_trait(sys.filter, "Shape", "Shape");
 }
 
+bool is_sprite_renderer(const ExternSystemNode& sys) {
+    return sys.name == "SpriteRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "Renderer", "Renderer");
+}
+
+bool is_animated_sprite_system(const ExternSystemNode& sys) {
+    return sys.name == "AnimatedSpriteSystem" && filter_has_trait(sys.filter, "AnimatedSprite", "AnimatedSprite");
+}
+
+bool is_mesh_renderer(const ExternSystemNode& sys) {
+    return sys.name == "MeshRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "Renderer", "Renderer");
+}
+
+bool is_billboard_renderer(const ExternSystemNode& sys) {
+    return sys.name == "BillboardRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "BillboardRenderer", "BillboardRenderer");
+}
+
+bool is_point_light_system(const ExternSystemNode& sys) {
+    return sys.name == "PointLightSystem" && filter_has_trait(sys.filter, "PointLight", "PointLight");
+}
+
+bool is_directional_light_system(const ExternSystemNode& sys) {
+    return sys.name == "DirectionalLightSystem" && filter_has_trait(sys.filter, "DirectionalLight", "DirectionalLight");
+}
+
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name,
                          const SystemNode& sys) {
     auto alias_to_trait = [&]() -> std::string {
@@ -775,6 +805,73 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         out << "                              Shape_comp.color);\n";
         out << "                break;\n";
         out << "        }\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_sprite_renderer(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& Renderer_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        cactus::runtime::entt_backend::submit_sprite(WorldTransform_comp.position, Renderer_comp.size, Renderer_comp.color, Renderer_comp.texture, Renderer_comp.visible);\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_animated_sprite_system(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<AnimatedSprite>();\n";
+        out << "    view.each([&](entt::entity entity, AnimatedSprite& AnimatedSprite_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
+        out << "        cactus::runtime::entt_backend::advance_animated_sprite(AnimatedSprite_comp.texture, AnimatedSprite_comp.frame, AnimatedSprite_comp.frame_count, AnimatedSprite_comp.fps, AnimatedSprite_comp.playing, kFixedDt);\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_mesh_renderer(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& Renderer_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        cactus::runtime::entt_backend::submit_mesh(WorldTransform_comp.position, WorldTransform_comp.rotation, WorldTransform_comp.scale, Renderer_comp.mesh, Renderer_comp.material, Renderer_comp.visible, Renderer_comp.cast_shadow);\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_billboard_renderer(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<WorldTransform, BillboardRenderer>();\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const BillboardRenderer& BillboardRenderer_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        cactus::runtime::entt_backend::submit_billboard(WorldTransform_comp.position, BillboardRenderer_comp.size, BillboardRenderer_comp.color, BillboardRenderer_comp.texture, BillboardRenderer_comp.visible);\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_point_light_system(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<WorldTransform, PointLight>();\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const PointLight& PointLight_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        cactus::runtime::entt_backend::register_point_light(WorldTransform_comp.position, PointLight_comp.color, PointLight_comp.intensity, PointLight_comp.range, PointLight_comp.enabled);\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_directional_light_system(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<DirectionalLight>();\n";
+        out << "    view.each([&](entt::entity entity, const DirectionalLight& DirectionalLight_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        cactus::runtime::entt_backend::register_directional_light(DirectionalLight_comp.direction, DirectionalLight_comp.color, DirectionalLight_comp.intensity, DirectionalLight_comp.enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();

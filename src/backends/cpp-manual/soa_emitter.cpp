@@ -13,6 +13,9 @@ std::string SoaEmitter::type_to_cpp(const TypeInfo& type) {
         case TypeKind::Quat: return "Quat";
         case TypeKind::Color: return "Color";
         case TypeKind::EntityId: return "uint32_t";
+        case TypeKind::MeshId:
+        case TypeKind::TextureId:
+        case TypeKind::MaterialId: return "std::uint32_t";
         case TypeKind::InputButton: return "std::uint8_t";
         case TypeKind::InputAxis: return "std::uint8_t";
         case TypeKind::Struct:
@@ -132,6 +135,9 @@ std::string SoaEmitter::default_cpp_value(const TypeInfo& type) {
         case TypeKind::Quat: return "{0.0f, 0.0f, 0.0f, 1.0f}";
         case TypeKind::Color: return "{0, 0, 0, 255}";
         case TypeKind::EntityId: return "0u";
+        case TypeKind::MeshId:
+        case TypeKind::TextureId:
+        case TypeKind::MaterialId: return "0u";
         case TypeKind::InputButton: return "0";
         case TypeKind::InputAxis: return "0";
         default: return "{}";

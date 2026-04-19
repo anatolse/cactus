@@ -2,11 +2,103 @@
 
 #include <raylib.h>
 
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace cactus::runtime {
 
 using Quat = Quaternion;
+using AssetHandle = std::uint32_t;
+
+enum class AssetKind : std::uint8_t {
+    Texture,
+    Mesh,
+    Material,
+};
+
+enum class AssetStatus : std::uint8_t {
+    Missing,
+    Registered,
+    Materialized,
+};
+
+struct AssetRecord {
+    AssetHandle handle{};
+    AssetKind kind{AssetKind::Texture};
+    std::string asset_id;
+    int runtime_id{-1};
+    bool materialized{false};
+};
+
+struct AssetResolution {
+    AssetHandle handle{};
+    AssetKind kind{AssetKind::Texture};
+    AssetStatus status{AssetStatus::Missing};
+    int runtime_id{-1};
+
+    [[nodiscard]] constexpr bool valid() const noexcept {
+        return status != AssetStatus::Missing;
+    }
+
+    [[nodiscard]] constexpr bool ready() const noexcept {
+        return status == AssetStatus::Materialized;
+    }
+};
+
+class AssetRegistry {
+public:
+    using LazyResolver = std::function<std::optional<AssetRecord>(AssetHandle)>;
+
+    void clear();
+    void clear_diagnostics();
+
+    void register_asset(AssetKind kind,
+                        AssetHandle handle,
+                        std::string asset_id,
+                        int runtime_id,
+                        bool materialized = true);
+    void register_texture(AssetHandle handle,
+                          std::string asset_id,
+                          int runtime_id,
+                          bool materialized = true);
+    void register_mesh(AssetHandle handle,
+                       std::string asset_id,
+                       int runtime_id,
+                       bool materialized = true);
+    void register_material(AssetHandle handle,
+                           std::string asset_id,
+                           int runtime_id,
+                           bool materialized = true);
+
+    void set_lazy_resolver(AssetKind kind, LazyResolver resolver);
+    [[nodiscard]] AssetResolution resolve(AssetKind kind, AssetHandle handle);
+
+    [[nodiscard]] std::size_t missing_count() const noexcept { return missing_count_; }
+    [[nodiscard]] const std::vector<std::string>& diagnostics() const noexcept { return diagnostics_; }
+
+private:
+    using AssetMap = std::unordered_map<AssetHandle, AssetRecord>;
+
+    [[nodiscard]] AssetMap& map_for(AssetKind kind) noexcept;
+    [[nodiscard]] const AssetMap& map_for(AssetKind kind) const noexcept;
+    [[nodiscard]] LazyResolver& resolver_for(AssetKind kind) noexcept;
+
+    AssetMap textures_;
+    AssetMap meshes_;
+    AssetMap materials_;
+    LazyResolver texture_resolver_;
+    LazyResolver mesh_resolver_;
+    LazyResolver material_resolver_;
+    std::vector<std::string> diagnostics_;
+    std::size_t missing_count_{0};
+};
+
+[[nodiscard]] AssetRegistry& shared_asset_registry() noexcept;
 
 struct GeneratedProjectInfo {
     std::string_view backend;

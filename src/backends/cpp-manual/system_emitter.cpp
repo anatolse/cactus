@@ -158,6 +158,36 @@ bool is_shape_renderer(const ExternSystemNode& sys) {
            filter_has_trait(sys.filter, "Shape", "Shape");
 }
 
+bool is_sprite_renderer(const ExternSystemNode& sys) {
+    return sys.name == "SpriteRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "Renderer", "Renderer");
+}
+
+bool is_animated_sprite_system(const ExternSystemNode& sys) {
+    return sys.name == "AnimatedSpriteSystem" && filter_has_trait(sys.filter, "AnimatedSprite", "AnimatedSprite");
+}
+
+bool is_mesh_renderer(const ExternSystemNode& sys) {
+    return sys.name == "MeshRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "Renderer", "Renderer");
+}
+
+bool is_billboard_renderer(const ExternSystemNode& sys) {
+    return sys.name == "BillboardRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "BillboardRenderer", "BillboardRenderer");
+}
+
+bool is_point_light_system(const ExternSystemNode& sys) {
+    return sys.name == "PointLightSystem" && filter_has_trait(sys.filter, "PointLight", "PointLight");
+}
+
+bool is_directional_light_system(const ExternSystemNode& sys) {
+    return sys.name == "DirectionalLightSystem" && filter_has_trait(sys.filter, "DirectionalLight", "DirectionalLight");
+}
+
 std::string filter_trait_simple_name(const FilterEntry& entry) {
     auto dot = entry.qualified_name.rfind('.');
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
@@ -336,7 +366,9 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
 
 std::string ManualSystemEmitter::emit_extern_system_forward_decl(const ExternSystemNode& sys,
                                                                  const CodegenContext& ctx) {
-    if (is_flat_transform_propagation(sys) || is_volume_transform_propagation(sys) || is_shape_renderer(sys)) {
+    if (is_flat_transform_propagation(sys) || is_volume_transform_propagation(sys) || is_shape_renderer(sys) ||
+        is_sprite_renderer(sys) || is_animated_sprite_system(sys) || is_mesh_renderer(sys) ||
+        is_billboard_renderer(sys) || is_point_light_system(sys) || is_directional_light_system(sys)) {
         return {};
     }
 
@@ -938,6 +970,67 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "                              g_Shape_color[i]);\n";
         out << "                break;\n";
         out << "        }\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_sprite_renderer(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != (TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
+        out << "        cactus::runtime::manual_backend::submit_sprite(g_WorldTransform_position[i], g_Renderer_size[i], g_Renderer_color[i], g_Renderer_texture[i], g_Renderer_visible[i]);\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_animated_sprite_system(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    constexpr float kFixedDt = 1.0F / 60.0F;\n";
+        out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & TraitBits::AnimatedSprite) == 0) continue;\n";
+        out << "        cactus::runtime::manual_backend::advance_animated_sprite(g_AnimatedSprite_texture[i], g_AnimatedSprite_frame[i], g_AnimatedSprite_frame_count[i], g_AnimatedSprite_fps[i], g_AnimatedSprite_playing[i], kFixedDt);\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_mesh_renderer(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != (TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
+        out << "        cactus::runtime::manual_backend::submit_mesh(g_WorldTransform_position[i], g_WorldTransform_rotation[i], g_WorldTransform_scale[i], g_Renderer_mesh[i], g_Renderer_material[i], g_Renderer_visible[i], g_Renderer_cast_shadow[i]);\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_billboard_renderer(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::BillboardRenderer)) != (TraitBits::WorldTransform | TraitBits::BillboardRenderer)) continue;\n";
+        out << "        cactus::runtime::manual_backend::submit_billboard(g_WorldTransform_position[i], g_BillboardRenderer_size[i], g_BillboardRenderer_color[i], g_BillboardRenderer_texture[i], g_BillboardRenderer_visible[i]);\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_point_light_system(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::PointLight)) != (TraitBits::WorldTransform | TraitBits::PointLight)) continue;\n";
+        out << "        cactus::runtime::manual_backend::register_point_light(g_WorldTransform_position[i], g_PointLight_color[i], g_PointLight_intensity[i], g_PointLight_range[i], g_PointLight_enabled[i]);\n";
+        out << "    }\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_directional_light_system(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & TraitBits::DirectionalLight) == 0) continue;\n";
+        out << "        cactus::runtime::manual_backend::register_directional_light(g_DirectionalLight_direction[i], g_DirectionalLight_color[i], g_DirectionalLight_intensity[i], g_DirectionalLight_enabled[i]);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();

@@ -48,6 +48,11 @@ std::string input_action_constant_name(const std::string& input_name) {
     return "K_" + upper_copy(snake_case(input_name));
 }
 
+bool is_render_phase_extern(const ExternSystemNode& sys) {
+    return sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" || sys.name == "MeshRenderer" ||
+           sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem";
+}
+
 std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
         if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
@@ -644,7 +649,9 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
         }
     }
     for (const auto* sys : extern_systems) {
-        out << "    " << sys->name << "_tick();\n";
+        if (!is_render_phase_extern(*sys)) {
+            out << "    " << sys->name << "_tick();\n";
+        }
     }
 
     // End-of-frame deferred load (task 8.1)
@@ -664,6 +671,11 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     out << "void cactus::runtime::manual_backend::generated_render_project() {\n";
     out << "    BeginDrawing();\n";
     out << "    ClearBackground(RAYWHITE);\n";
+    for (const auto* sys : extern_systems) {
+        if (is_render_phase_extern(*sys)) {
+            out << "    " << sys->name << "_tick();\n";
+        }
+    }
     out << "    EndDrawing();\n";
     out << "}\n";
 

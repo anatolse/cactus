@@ -159,3 +159,46 @@ TEST_CASE("Runtime stdlib: manual hierarchy propagation and recursive destroy wo
     CHECK(std::find(removed.begin(), removed.end(), 1) != removed.end());
     CHECK(std::find(removed.begin(), removed.end(), 2) != removed.end());
 }
+
+TEST_CASE("Runtime stdlib: shared asset registry supports eager and lazy resolution", "[runtime][assets]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+
+    registry.register_texture(1U, "hero", 101);
+    const auto eager = registry.resolve(AssetKind::Texture, 1U);
+    CHECK(eager.ready());
+    CHECK(eager.runtime_id == 101);
+
+    registry.set_lazy_resolver(AssetKind::Mesh, [](AssetHandle handle) -> std::optional<AssetRecord> {
+        if (handle != 2U) {
+            return std::nullopt;
+        }
+        return AssetRecord{.handle = handle, .kind = AssetKind::Mesh, .asset_id = "enemy", .runtime_id = 202, .materialized = true};
+    });
+    const auto lazy = registry.resolve(AssetKind::Mesh, 2U);
+    CHECK(lazy.ready());
+    CHECK(lazy.runtime_id == 202);
+
+    const auto missing = registry.resolve(AssetKind::Material, 99U);
+    CHECK_FALSE(missing.valid());
+    CHECK(registry.missing_count() >= 1);
+}
+
+TEST_CASE("Runtime stdlib: manual backend asset adapters record submissions and misses", "[runtime][assets][manual]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_texture(11U, "sprite", 1);
+    registry.register_mesh(12U, "mesh", 2);
+    registry.register_material(13U, "mat", 3);
+
+    cactus::runtime::manual_backend::reset_render_debug_state();
+    cactus::runtime::manual_backend::submit_sprite(Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F}, WHITE, 11U, true);
+    cactus::runtime::manual_backend::submit_mesh(Vector3{0.0F, 0.0F, 0.0F}, stdlib::math::quat::identity(), Vector3{1.0F, 1.0F, 1.0F}, 12U, 13U, true, true);
+    cactus::runtime::manual_backend::register_point_light(Vector3{0.0F, 1.0F, 0.0F}, WHITE, 1.0F, 10.0F, true);
+    CHECK(cactus::runtime::manual_backend::render_debug_state().submitted_sprites == 1);
+    CHECK(cactus::runtime::manual_backend::render_debug_state().submitted_meshes == 1);
+    CHECK(cactus::runtime::manual_backend::render_debug_state().registered_point_lights == 1);
+
+    cactus::runtime::manual_backend::submit_sprite(Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F}, WHITE, 999U, true);
+    CHECK(cactus::runtime::manual_backend::render_debug_state().missing_assets >= 1);
+}

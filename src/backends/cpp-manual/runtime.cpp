@@ -7,28 +7,117 @@
 
 namespace cactus::runtime::manual_backend {
 
+namespace {
+RenderDebugState g_render_debug_state;
+
+void note_missing_asset() noexcept {
+    ++g_render_debug_state.missing_assets;
+}
+}  // namespace
+
 RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept {
     return RuntimeBinding{project};
 }
 
-bool pressed(std::uint8_t button) noexcept {
-    return IsKeyPressed(cactus_input_button_key(button));
+void reset_render_debug_state() noexcept {
+    g_render_debug_state = {};
+    shared_asset_registry().clear_diagnostics();
 }
 
-bool down(std::uint8_t button) noexcept {
-    return IsKeyDown(cactus_input_button_key(button));
+const RenderDebugState& render_debug_state() noexcept {
+    return g_render_debug_state;
 }
 
-bool released(std::uint8_t button) noexcept {
-    return IsKeyReleased(cactus_input_button_key(button));
+void submit_sprite(const Vector2 /*position*/,
+                   const Vector2 /*size*/,
+                   const Color /*color*/,
+                   const AssetHandle texture,
+                   const bool visible) noexcept {
+    if (!visible) {
+        return;
+    }
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, texture);
+    if (!resolved.ready()) {
+        note_missing_asset();
+        return;
+    }
+    ++g_render_debug_state.submitted_sprites;
 }
 
-float axis(std::uint8_t action) noexcept {
-    return cactus_input_axis_value(action);
+void advance_animated_sprite(const AssetHandle texture,
+                             int& frame,
+                             const int frame_count,
+                             const float fps,
+                             const bool playing,
+                             const float dt) noexcept {
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, texture);
+    if (!resolved.valid()) {
+        note_missing_asset();
+        return;
+    }
+    if (!playing || frame_count <= 0 || fps <= 0.0F) {
+        return;
+    }
+    const auto step = static_cast<int>(dt * fps);
+    if (step <= 0) {
+        return;
+    }
+    frame = (frame + step) % frame_count;
+    ++g_render_debug_state.advanced_animated_sprites;
 }
 
-Vector2 axis2(std::uint8_t x_action, std::uint8_t y_action) noexcept {
-    return Vector2{.x = axis(x_action), .y = axis(y_action)};
+void submit_mesh(const Vector3 /*position*/,
+                 const Quat /*rotation*/,
+                 const Vector3 /*scale*/,
+                 const AssetHandle mesh,
+                 const AssetHandle material,
+                 const bool visible,
+                 const bool /*cast_shadow*/) noexcept {
+    if (!visible) {
+        return;
+    }
+    const auto mesh_resolved = shared_asset_registry().resolve(AssetKind::Mesh, mesh);
+    const auto material_resolved = shared_asset_registry().resolve(AssetKind::Material, material);
+    if (!mesh_resolved.ready() || !material_resolved.ready()) {
+        note_missing_asset();
+        return;
+    }
+    ++g_render_debug_state.submitted_meshes;
+}
+
+void submit_billboard(const Vector3 /*position*/,
+                      const Vector2 /*size*/,
+                      const Color /*color*/,
+                      const AssetHandle texture,
+                      const bool visible) noexcept {
+    if (!visible) {
+        return;
+    }
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, texture);
+    if (!resolved.ready()) {
+        note_missing_asset();
+        return;
+    }
+    ++g_render_debug_state.submitted_billboards;
+}
+
+void register_point_light(const Vector3 /*position*/,
+                          const Color /*color*/,
+                          const float /*intensity*/,
+                          const float /*range*/,
+                          const bool enabled) noexcept {
+    if (enabled) {
+        ++g_render_debug_state.registered_point_lights;
+    }
+}
+
+void register_directional_light(const Vector3 /*direction*/,
+                                const Color /*color*/,
+                                const float /*intensity*/,
+                                const bool enabled) noexcept {
+    if (enabled) {
+        ++g_render_debug_state.registered_directional_lights;
+    }
 }
 
 void propagate_hierarchy(std::size_t entity_count,

@@ -52,6 +52,15 @@ std::string input_action_constant_name(const std::string& input_name) {
     return "K_" + upper_copy(snake_case(input_name));
 }
 
+bool is_render_phase_extern(const ExternSystemNode& sys) {
+    return sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" || sys.name == "MeshRenderer" ||
+           sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem";
+}
+
+bool is_update_phase_extern(const ExternSystemNode& sys) {
+    return !is_render_phase_extern(sys);
+}
+
 std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
         if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
@@ -478,7 +487,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                 }
             }
             if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-                if (sys->name == "ShapeRenderer") {
+                if (!is_update_phase_extern(*sys)) {
                     continue;
                 }
                 out << "    " << system_function_name(sys->name, "tick") << "(registry);\n";
@@ -494,7 +503,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-                if (sys->name == "ShapeRenderer") {
+                if (is_render_phase_extern(*sys)) {
                     out << "    " << system_function_name(sys->name, "tick") << "(registry);\n";
                 }
             }

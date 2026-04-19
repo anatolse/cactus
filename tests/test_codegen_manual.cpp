@@ -260,6 +260,28 @@ TEST_CASE("Codegen Manual: add emits trait bit set", "[codegen-manual][dynamic-t
     CHECK(code.find("g_trait_mask[i]") != std::string::npos);
 }
 
+TEST_CASE("Codegen Manual: render extern systems bind to backend asset adapters", "[codegen-manual][assets]") {
+    auto code = generate(
+        STDLIB_EVENTS +
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait Renderer:\n"
+        "    let texture: texture_id\n"
+        "    var size: vec2\n"
+        "    var color: color\n"
+        "    var visible: bool\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "        Renderer\n");
+
+    CHECK(code.find("cactus::runtime::manual_backend::submit_sprite(") != std::string::npos);
+    CHECK(code.find("void cactus::runtime::manual_backend::generated_render_project()") != std::string::npos);
+    CHECK(code.find("SpriteRenderer_tick();") != std::string::npos);
+}
+
 TEST_CASE("Codegen Manual: remove emits trait bit clear", "[codegen-manual][dynamic-traits]") {
     auto code = generate(
         STDLIB_EVENTS + 

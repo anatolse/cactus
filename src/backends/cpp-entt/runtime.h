@@ -7,6 +7,9 @@
 
 namespace cactus::runtime::entt_backend {
 
+int cactus_input_button_key(std::uint8_t button) noexcept;
+float cactus_input_axis_value(std::uint8_t action) noexcept;
+
 struct RuntimeBinding {
     GeneratedProjectInfo project;
 };

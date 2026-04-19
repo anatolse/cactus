@@ -153,6 +153,11 @@ bool is_volume_transform_propagation(const ExternSystemNode& sys) {
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform");
 }
 
+bool is_shape_renderer(const ExternSystemNode& sys) {
+    return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "Shape", "Shape");
+}
+
 std::string filter_trait_simple_name(const FilterEntry& entry) {
     auto dot = entry.qualified_name.rfind('.');
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
@@ -331,7 +336,7 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
 
 std::string ManualSystemEmitter::emit_extern_system_forward_decl(const ExternSystemNode& sys,
                                                                  const CodegenContext& ctx) {
-    if (is_flat_transform_propagation(sys) || is_volume_transform_propagation(sys)) {
+    if (is_flat_transform_propagation(sys) || is_volume_transform_propagation(sys) || is_shape_renderer(sys)) {
         return {};
     }
 
@@ -911,6 +916,29 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "            g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
         out << "            g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y, g_WorldTransform_scale[_parent].z * g_LocalTransform_scale[_idx].z};\n";
         out << "        });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_shape_renderer(sys)) {
+        out << "static void " << sys.name << "_tick() {\n";
+        out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Shape)) != (TraitBits::WorldTransform | TraitBits::Shape)) {\n";
+        out << "            continue;\n";
+        out << "        }\n";
+        out << "        if (!g_Shape_visible[i]) {\n";
+        out << "            continue;\n";
+        out << "        }\n";
+        out << "        switch (g_Shape_type[i]) {\n";
+        out << "            case ShapeType::Rectangle:\n";
+        out << "                DrawRectangle(static_cast<int>(g_WorldTransform_position[i].x),\n";
+        out << "                              static_cast<int>(g_WorldTransform_position[i].y),\n";
+        out << "                              static_cast<int>(g_Shape_size[i].x),\n";
+        out << "                              static_cast<int>(g_Shape_size[i].y),\n";
+        out << "                              g_Shape_color[i]);\n";
+        out << "                break;\n";
+        out << "        }\n";
+        out << "    }\n";
         out << "}\n\n";
         return out.str();
     }

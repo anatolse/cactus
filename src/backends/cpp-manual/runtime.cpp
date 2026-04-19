@@ -11,6 +11,26 @@ RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept {
     return RuntimeBinding{project};
 }
 
+bool pressed(std::uint8_t button) noexcept {
+    return IsKeyPressed(cactus_input_button_key(button));
+}
+
+bool down(std::uint8_t button) noexcept {
+    return IsKeyDown(cactus_input_button_key(button));
+}
+
+bool released(std::uint8_t button) noexcept {
+    return IsKeyReleased(cactus_input_button_key(button));
+}
+
+float axis(std::uint8_t action) noexcept {
+    return cactus_input_axis_value(action);
+}
+
+Vector2 axis2(std::uint8_t x_action, std::uint8_t y_action) noexcept {
+    return Vector2{.x = axis(x_action), .y = axis(y_action)};
+}
+
 void propagate_hierarchy(std::size_t entity_count,
                          const ParentResolver& resolve_parent,
                          const CopyLocalTransformFn& copy_local,

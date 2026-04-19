@@ -1106,6 +1106,31 @@ TEST_CASE("Codegen Manual: flat transform propagation extern system is recognize
     CHECK(code.find("g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x") != std::string::npos);
 }
 
+TEST_CASE("Codegen Manual: shape renderer extern system is recognized", "[codegen-manual][render]") {
+    auto code = generate(
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "enum ShapeType:\n"
+        "    Rectangle\n"
+        "trait Shape:\n"
+        "    var type: ShapeType\n"
+        "    var size: vec2\n"
+        "    var color: color = #FFFFFFFF\n"
+        "    var visible: bool = true\n"
+        "extern system ShapeRenderer:\n"
+        "    filter:\n"
+        "        std.transform.flat.WorldTransform\n"
+        "        Shape\n");
+
+    CHECK(code.find("static void ShapeRenderer_tick()") != std::string::npos);
+    CHECK(code.find("DrawRectangle(static_cast<int>(g_WorldTransform_position[i].x)") != std::string::npos);
+    CHECK(code.find("g_Shape_visible[i]") != std::string::npos);
+    CHECK(code.find("g_Shape_type[i]") != std::string::npos);
+    CHECK(code.find("void ShapeRenderer_update(") == std::string::npos);
+}
+
 TEST_CASE("Codegen Manual: hierarchy propagation handles stale parents and cycles safely", "[codegen-manual][hierarchy]") {
     auto code = generate(
         "trait Parent:\n"
@@ -1154,7 +1179,7 @@ TEST_CASE("Codegen Manual: extern system emits user-library callback contract", 
         "        Velocity\n");
 
     CHECK(code.find("void ParticleSystem_update(std::size_t entity, float& Position_x, float& Velocity_dx);") != std::string::npos);
-    CHECK(code.find("std::vector<std::size_t> _matched_entities") != std::string::npos);
+    CHECK(code.find("std::pmr::vector<std::size_t> _matched_entities") != std::string::npos);
     CHECK(code.find("ParticleSystem_update(_idx, Position_x, Velocity_dx);") != std::string::npos);
 }
 

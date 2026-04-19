@@ -28,7 +28,8 @@ struct CommandResult {
 
 class ScopedCurrentPath {
   public:
-    explicit ScopedCurrentPath(const fs::path& next) : previous_(fs::current_path()) {
+    explicit ScopedCurrentPath(const fs::path& next)
+        : previous_(fs::current_path()) {
         fs::current_path(next);
     }
 

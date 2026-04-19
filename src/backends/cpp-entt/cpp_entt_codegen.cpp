@@ -137,7 +137,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             }
             out << "\n";
 
-            out << "static int cactus_input_button_key(InputButton button) {\n";
+            out << "namespace cactus::runtime::entt_backend {\n";
+            out << "int cactus_input_button_key(std::uint8_t button) noexcept {\n";
             out << "    switch (button) {\n";
             button_index = 0;
             for (const auto& decl : program.ast->declarations) {
@@ -160,18 +161,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             }
             out << "    }\n";
             out << "    return 0;\n";
-            out << "}  // namespace cactus::runtime::entt_backend\n\n";
-
-            out << "namespace cactus::runtime::entt_backend {\n";
-            out << "[[nodiscard]] bool pressed(InputButton button) noexcept {\n";
-            out << "    return IsKeyPressed(cactus_input_button_key(button));\n";
-            out << "}\n";
-            out << "[[nodiscard]] bool down(InputButton button) noexcept {\n";
-            out << "    return IsKeyDown(cactus_input_button_key(button));\n";
-            out << "}\n";
-            out << "[[nodiscard]] bool released(InputButton button) noexcept {\n";
-            out << "    return IsKeyReleased(cactus_input_button_key(button));\n";
-            out << "}\n";
             out << "}  // namespace cactus::runtime::entt_backend\n\n";
         }
 
@@ -201,7 +190,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             }
             out << "\n";
 
-            out << "static float cactus_axis(InputAxis action) {\n";
+            out << "namespace cactus::runtime::entt_backend {\n";
+            out << "float cactus_input_axis_value(std::uint8_t action) noexcept {\n";
             out << "    switch (action) {\n";
             for (const auto& decl : program.ast->declarations) {
                 if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
@@ -229,14 +219,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             out << "            return 0.0F;\n";
             out << "    }\n";
             out << "}\n\n";
-
-            out << "namespace cactus::runtime::entt_backend {\n";
-            out << "[[nodiscard]] float axis(InputAxis action) noexcept {\n";
-            out << "    return cactus_axis(action);\n";
-            out << "}\n";
-            out << "[[nodiscard]] Vector2 axis2(InputAxis x, InputAxis y) noexcept {\n";
-            out << "    return Vector2{.x = axis(x), .y = axis(y)};\n";
-            out << "}\n";
             out << "}  // namespace cactus::runtime::entt_backend\n\n";
         }
 

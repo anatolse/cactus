@@ -19,6 +19,7 @@ struct CodegenContext {
     std::unordered_map<std::string, ResolvedTrait> traits;
     /// full AST (non-owning pointer — valid for lifetime of generate() call)
     ProgramNode* ast = nullptr;
+    const DecoratedProgram* decorated = nullptr;
     /// trait names in declaration order (defines bit assignments)
     std::vector<std::string> trait_names_ordered;
 

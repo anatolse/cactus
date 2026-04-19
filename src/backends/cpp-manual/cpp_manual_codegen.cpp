@@ -48,9 +48,63 @@ std::string input_action_constant_name(const std::string& input_name) {
     return "K_" + upper_copy(snake_case(input_name));
 }
 
-bool is_render_phase_extern(const ExternSystemNode& sys) {
-    return sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" || sys.name == "MeshRenderer" ||
-           sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem";
+std::string filter_simple_name(const FilterEntry& entry) {
+    auto dot = entry.qualified_name.rfind('.');
+    return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+}
+
+bool filter_has_trait(const FilterClause& filter, const std::string& qualified, const std::string& simple) {
+    for (const auto& entry : filter.entries) {
+        if (entry.qualified_name == qualified || filter_simple_name(entry) == simple) {
+            return true;
+        }
+    }
+    return std::ranges::find(filter.trait_names, simple) != filter.trait_names.end();
+}
+
+bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
+    if (sys.is_stdlib) {
+        return true;
+    }
+    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" ||
+        sys.name == "SpriteRenderer" || sys.name == "AnimatedSpriteSystem" ||
+        sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
+        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
+        return true;
+    }
+    return std::ranges::any_of(sys.filter.entries,
+                               [](const auto& entry) { return entry.qualified_name.rfind("std.", 0) == 0; });
+}
+
+bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram& program) {
+    (void)program;
+    if (!uses_stdlib_extern_contract(sys)) {
+        return false;
+    }
+    if (sys.name == "ShapeRenderer") {
+        return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "std.render.shapes.Shape", "Shape");
+    }
+    if (sys.name == "SpriteRenderer") {
+        return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "std.render.sprites.Renderer", "Renderer");
+    }
+    if (sys.name == "MeshRenderer") {
+        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "std.render.meshes.Renderer", "Renderer");
+    }
+    if (sys.name == "BillboardRenderer") {
+        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "std.render.meshes.BillboardRenderer", "BillboardRenderer");
+    }
+    if (sys.name == "PointLightSystem") {
+        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "std.render.meshes.PointLight", "PointLight");
+    }
+    if (sys.name == "DirectionalLightSystem") {
+        return filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
+    }
+    return false;
 }
 
 std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
@@ -70,6 +124,7 @@ CodegenContext build_context(const DecoratedProgram& program, // NOLINT(readabil
                               const std::vector<std::string>& trait_names_ordered) {
     CodegenContext ctx;
     ctx.ast = program.ast;
+    ctx.decorated = &program;
     ctx.traits = program.traits;
     ctx.trait_names_ordered = trait_names_ordered;
     for (size_t i = 0; i < trait_names_ordered.size(); ++i) {
@@ -649,7 +704,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
         }
     }
     for (const auto* sys : extern_systems) {
-        if (!is_render_phase_extern(*sys)) {
+        if (!is_render_phase_extern(*sys, program)) {
             out << "    " << sys->name << "_tick();\n";
         }
     }
@@ -672,7 +727,7 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     out << "    BeginDrawing();\n";
     out << "    ClearBackground(RAYWHITE);\n";
     for (const auto* sys : extern_systems) {
-        if (is_render_phase_extern(*sys)) {
+        if (is_render_phase_extern(*sys, program)) {
             out << "    " << sys->name << "_tick();\n";
         }
     }

@@ -34,6 +34,7 @@ struct ResolvedFunc {
     std::string name;
     bool is_pub = false;
     bool is_extern = false;
+    bool is_stdlib = false;
     std::vector<ResolvedParam> params;
     std::optional<TypeInfo> return_type;
 };
@@ -42,6 +43,7 @@ struct ResolvedTrait {
     std::string name;
     std::vector<ResolvedField> fields;
     bool is_pub = false;
+    bool is_stdlib = false;
 };
 
 struct ResolvedStruct {
@@ -214,6 +216,7 @@ private:
     ErrorReporter& errors_;
     DecoratedProgram result_;
     ModuleImports imports_;
+    bool current_module_is_stdlib_ = false;
 
     // Known type names (populated during Phase 1)
     std::unordered_set<std::string> struct_names_;

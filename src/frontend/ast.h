@@ -320,6 +320,7 @@ struct EnumNode {
 struct TraitNode {
     std::string name;
     bool is_pub = false;
+    bool is_stdlib = false;
     std::vector<FieldNode> fields;
     // Note: handlers intentionally removed — traits are data-only; logic belongs in systems.
     SourceLocation location;
@@ -362,6 +363,7 @@ struct SortKey {
 
 struct SystemNode {
     std::string name;
+    bool is_stdlib = false;
     FilterClause filter;                    // empty entries = no filter (match all)
     FilterClause exclude;                   // empty entries = no exclude
     std::vector<SortKey> order_by;
@@ -373,6 +375,7 @@ struct SystemNode {
 
 struct ExternSystemNode {
     std::string name;
+    bool is_stdlib = false;
     FilterClause filter;
     FilterClause exclude;
     std::vector<SortKey> order_by;
@@ -406,6 +409,7 @@ struct FuncNode {
     std::string name;
     bool is_pub = false;
     bool is_extern = false;
+    bool is_stdlib = false;
     std::vector<FuncParam> params;
     std::optional<TypeRef> return_type;
     std::vector<std::unique_ptr<StmtNode>> body;

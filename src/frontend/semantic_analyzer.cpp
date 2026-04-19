@@ -9,6 +9,19 @@ namespace cactus {
 
 namespace {
 
+bool module_name_is_stdlib(const std::string& module_name) {
+    return module_name == "std" || module_name.rfind("std.", 0) == 0;
+}
+
+bool program_is_stdlib_module(const ProgramNode& program) {
+    for (const auto& decl : program.declarations) {
+        if (const auto* module = std::get_if<ModuleNode>(&decl)) {
+            return module_name_is_stdlib(module->name);
+        }
+    }
+    return false;
+}
+
 const std::unordered_set<std::string>& builtin_types() {
     static const std::unordered_set<std::string> TYPES = {"int",
                                                           "float",
@@ -221,6 +234,7 @@ SemanticAnalyzer::SemanticAnalyzer(ErrorReporter& errors) : errors_(errors) {}
 DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
                                             const ModuleImports& imports) {
     imports_ = imports;
+    current_module_is_stdlib_ = program_is_stdlib_module(program);
     result_.ast = &program;
 
     // Phase 1: Collect all type declarations
@@ -284,6 +298,7 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                     }
                     result_.enums[node.name] = std::move(re);
                 } else if constexpr (std::is_same_v<T, TraitNode>) {
+                    node.is_stdlib = current_module_is_stdlib_;
                     if (trait_names_.contains(node.name)) {
                         errors_.error(node.location, "duplicate trait '" + node.name + "'");
                     }
@@ -309,8 +324,10 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                         result_.pub_events.insert(node.name);
                     }
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
+                    node.is_stdlib = current_module_is_stdlib_;
                     func_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
+                    node.is_stdlib = current_module_is_stdlib_;
                     if (system_names_.contains(node.name)) {
                         errors_.error(node.location, "duplicate system '" + node.name + "'");
                     }
@@ -373,6 +390,7 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                     ResolvedTrait rt;
                     rt.name = node.name;
                     rt.is_pub = node.is_pub;
+                    rt.is_stdlib = node.is_stdlib;
                     for (auto& f : node.fields) {
                         ResolvedField rf;
                         rf.name = f.name;
@@ -392,6 +410,7 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                     rf.name = node.name;
                     rf.is_pub = node.is_pub;
                     rf.is_extern = node.is_extern;
+                    rf.is_stdlib = node.is_stdlib;
                     for (auto& p : node.params) {
                         ResolvedParam rp;
                         rp.name = p.name;

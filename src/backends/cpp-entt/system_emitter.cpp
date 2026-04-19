@@ -192,53 +192,163 @@ bool filter_has_trait(const FilterLike& filter, const std::string& qualified, co
                        [&](const auto& name) { return name == simple; });
 }
 
-bool is_flat_transform_propagation(const ExternSystemNode& sys) {
-    return filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "LocalTransform") &&
-           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-           !filter_has_trait(sys.filter, "std.transform.volume.LocalTransform", "__never_match__") &&
-           !filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "__never_match__");
+template <typename FilterLike>
+bool filter_has_exact_trait(const FilterLike& filter, const std::string& qualified) {
+    return std::any_of(filter.entries.begin(), filter.entries.end(),
+                       [&](const auto& entry) {
+                           return entry.qualified_name == qualified;
+                       });
 }
 
-bool is_volume_transform_propagation(const ExternSystemNode& sys) {
-    return filter_has_trait(sys.filter, "std.transform.volume.LocalTransform", "LocalTransform") &&
-           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           !filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "__never_match__") &&
-           !filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "__never_match__");
+template <typename FilterLike>
+bool filter_has_simple_trait(const FilterLike& filter, const std::string& simple) {
+    return std::any_of(filter.entries.begin(), filter.entries.end(),
+                       [&](const auto& entry) {
+                           return filter_simple_name(entry) == simple;
+                       }) ||
+           std::any_of(filter.trait_names.begin(), filter.trait_names.end(),
+                       [&](const auto& name) { return name == simple; });
+}
+
+enum class TransformFlavor {
+    Unknown,
+    Flat,
+    Volume,
+};
+
+const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::string& name) {
+    auto it = program.traits.find(name);
+    if (it == program.traits.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& field_name) {
+    if (trait == nullptr) {
+        return nullptr;
+    }
+    auto it = std::find_if(trait->fields.begin(), trait->fields.end(),
+                           [&](const auto& field) {
+                               return field.name == field_name;
+                           });
+    if (it == trait->fields.end()) {
+        return nullptr;
+    }
+    return &*it;
+}
+
+TransformFlavor transform_flavor_for_trait(const ResolvedTrait* trait) {
+    const auto* position = find_field(trait, "position");
+    const auto* rotation = find_field(trait, "rotation");
+    const auto* scale = find_field(trait, "scale");
+    if (position == nullptr || rotation == nullptr || scale == nullptr) {
+        return TransformFlavor::Unknown;
+    }
+
+    if (position->type.kind == TypeKind::Vec2 &&
+        rotation->type.kind == TypeKind::Float &&
+        scale->type.kind == TypeKind::Vec2) {
+        return TransformFlavor::Flat;
+    }
+    if (position->type.kind == TypeKind::Vec3 &&
+        rotation->type.kind == TypeKind::Quat &&
+        scale->type.kind == TypeKind::Vec3) {
+        return TransformFlavor::Volume;
+    }
+    return TransformFlavor::Unknown;
+}
+
+TransformFlavor infer_transform_propagation_flavor(const ExternSystemNode& sys,
+                                                   const DecoratedProgram& program) {
+    const bool has_flat_qualified =
+        filter_has_exact_trait(sys.filter, "std.transform.flat.LocalTransform") ||
+        filter_has_exact_trait(sys.filter, "std.transform.flat.WorldTransform");
+    const bool has_volume_qualified =
+        filter_has_exact_trait(sys.filter, "std.transform.volume.LocalTransform") ||
+        filter_has_exact_trait(sys.filter, "std.transform.volume.WorldTransform");
+
+    if (has_flat_qualified != has_volume_qualified) {
+        return has_flat_qualified ? TransformFlavor::Flat : TransformFlavor::Volume;
+    }
+
+    if (!filter_has_simple_trait(sys.filter, "LocalTransform") ||
+        !filter_has_simple_trait(sys.filter, "WorldTransform")) {
+        return TransformFlavor::Unknown;
+    }
+
+    const auto local_flavor = transform_flavor_for_trait(find_trait(program, "LocalTransform"));
+    const auto world_flavor = transform_flavor_for_trait(find_trait(program, "WorldTransform"));
+
+    if (local_flavor != TransformFlavor::Unknown) {
+        return local_flavor;
+    }
+    return world_flavor;
+}
+
+bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
+    if (sys.is_stdlib) {
+        return true;
+    }
+    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" ||
+        sys.name == "SpriteRenderer" || sys.name == "AnimatedSpriteSystem" ||
+        sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
+        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
+        return true;
+    }
+    return std::any_of(sys.filter.entries.begin(), sys.filter.entries.end(), [](const auto& entry) {
+        return entry.qualified_name.rfind("std.", 0) == 0;
+    });
+}
+
+bool is_flat_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "TransformPropagation" &&
+           infer_transform_propagation_flavor(sys, program) == TransformFlavor::Flat;
+}
+
+bool is_volume_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "TransformPropagation" &&
+           infer_transform_propagation_flavor(sys, program) == TransformFlavor::Volume;
 }
 
 bool is_shape_renderer(const ExternSystemNode& sys) {
-    return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "Shape", "Shape");
+    return uses_stdlib_extern_contract(sys) && sys.name == "ShapeRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "std.render.shapes.Shape", "Shape");
 }
 
 bool is_sprite_renderer(const ExternSystemNode& sys) {
-    return sys.name == "SpriteRenderer" &&
+    return uses_stdlib_extern_contract(sys) && sys.name == "SpriteRenderer" &&
            filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "Renderer", "Renderer");
+           filter_has_trait(sys.filter, "std.render.sprites.Renderer", "Renderer");
 }
 
 bool is_animated_sprite_system(const ExternSystemNode& sys) {
-    return sys.name == "AnimatedSpriteSystem" && filter_has_trait(sys.filter, "AnimatedSprite", "AnimatedSprite");
+    return uses_stdlib_extern_contract(sys) && sys.name == "AnimatedSpriteSystem" &&
+           filter_has_trait(sys.filter, "std.render.sprites.AnimatedSprite", "AnimatedSprite");
 }
 
 bool is_mesh_renderer(const ExternSystemNode& sys) {
-    return sys.name == "MeshRenderer" &&
+    return uses_stdlib_extern_contract(sys) && sys.name == "MeshRenderer" &&
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "Renderer", "Renderer");
+           filter_has_trait(sys.filter, "std.render.meshes.Renderer", "Renderer");
 }
 
 bool is_billboard_renderer(const ExternSystemNode& sys) {
-    return sys.name == "BillboardRenderer" &&
+    return uses_stdlib_extern_contract(sys) && sys.name == "BillboardRenderer" &&
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "BillboardRenderer", "BillboardRenderer");
+           filter_has_trait(sys.filter, "std.render.meshes.BillboardRenderer", "BillboardRenderer");
 }
 
 bool is_point_light_system(const ExternSystemNode& sys) {
-    return sys.name == "PointLightSystem" && filter_has_trait(sys.filter, "PointLight", "PointLight");
+    return uses_stdlib_extern_contract(sys) && sys.name == "PointLightSystem" &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "std.render.meshes.PointLight", "PointLight");
 }
 
 bool is_directional_light_system(const ExternSystemNode& sys) {
-    return sys.name == "DirectionalLightSystem" && filter_has_trait(sys.filter, "DirectionalLight", "DirectionalLight");
+    return uses_stdlib_extern_contract(sys) && sys.name == "DirectionalLightSystem" &&
+           filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
 }
 
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name,
@@ -708,7 +818,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     (void)program;
     std::ostringstream out;
 
-    if (is_flat_transform_propagation(sys)) {
+    if (is_flat_transform_propagation(sys, program)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
         out << "        return registry.all_of<LocalTransform, WorldTransform>(entity);\n";
@@ -747,7 +857,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         return out.str();
     }
 
-    if (is_volume_transform_propagation(sys)) {
+    if (is_volume_transform_propagation(sys, program)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
         out << "        return registry.all_of<LocalTransform, WorldTransform>(entity);\n";

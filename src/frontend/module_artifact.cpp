@@ -73,6 +73,7 @@ void ModuleArtifact::write_traits(
     for (const auto& [name, trait] : traits) {
         write_str(out, trait.name);
         write_bool(out, trait.is_pub);
+        write_bool(out, trait.is_stdlib);
         write_u32(out, static_cast<uint32_t>(trait.fields.size()));
         for (const auto& field : trait.fields) {
             write_str(out, field.name);
@@ -126,6 +127,7 @@ void ModuleArtifact::write_funcs(
         write_str(out, func.name);
         write_bool(out, func.is_pub);
         write_bool(out, func.is_extern);
+        write_bool(out, func.is_stdlib);
         write_u32(out, static_cast<uint32_t>(func.params.size()));
         for (const auto& p : func.params) {
             write_str(out, p.name);
@@ -235,6 +237,7 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
         ResolvedTrait trait;
         trait.name = read_str(in);
         trait.is_pub = read_bool(in);
+        trait.is_stdlib = read_bool(in);
         uint32_t field_count = read_u32(in);
         trait.fields.reserve(field_count);
         for (uint32_t j = 0; j < field_count; ++j) {
@@ -301,6 +304,7 @@ std::unordered_map<std::string, ResolvedFunc> ModuleArtifact::read_funcs(std::is
         func.name = read_str(in);
         func.is_pub = read_bool(in);
         func.is_extern = read_bool(in);
+        func.is_stdlib = read_bool(in);
         uint32_t param_count = read_u32(in);
         func.params.reserve(param_count);
         for (uint32_t j = 0; j < param_count; ++j) {

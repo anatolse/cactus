@@ -143,49 +143,165 @@ bool filter_has_trait(const FilterClause& filter, const std::string& qualified, 
            std::ranges::find(filter.trait_names, simple) != filter.trait_names.end();
 }
 
-bool is_flat_transform_propagation(const ExternSystemNode& sys) {
-    return filter_has_trait(sys.filter, "std.transform.flat.LocalTransform", "LocalTransform") &&
-           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform");
+bool filter_has_exact_trait(const FilterClause& filter, const std::string& qualified) {
+    return std::ranges::any_of(filter.entries,
+                               [&](const auto& entry) {
+                                   return entry.qualified_name == qualified;
+                               });
 }
 
-bool is_volume_transform_propagation(const ExternSystemNode& sys) {
-    return filter_has_trait(sys.filter, "std.transform.volume.LocalTransform", "LocalTransform") &&
-           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform");
+bool filter_has_simple_trait(const FilterClause& filter, const std::string& simple) {
+    return std::ranges::any_of(filter.entries,
+                               [&](const auto& entry) {
+                                   return filter_simple_name(entry) == simple;
+                               }) ||
+           std::ranges::find(filter.trait_names, simple) != filter.trait_names.end();
 }
 
-bool is_shape_renderer(const ExternSystemNode& sys) {
-    return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "Shape", "Shape");
+enum class TransformFlavor {
+    Unknown,
+    Flat,
+    Volume,
+};
+
+const ResolvedTrait* find_trait(const CodegenContext& ctx, const std::string& name) {
+    auto it = ctx.traits.find(name);
+    if (it == ctx.traits.end()) {
+        return nullptr;
+    }
+    return &it->second;
 }
 
-bool is_sprite_renderer(const ExternSystemNode& sys) {
-    return sys.name == "SpriteRenderer" &&
+const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& field_name) {
+    if (trait == nullptr) {
+        return nullptr;
+    }
+    auto it = std::ranges::find_if(trait->fields,
+                                   [&](const auto& field) {
+                                       return field.name == field_name;
+                                   });
+    if (it == trait->fields.end()) {
+        return nullptr;
+    }
+    return &*it;
+}
+
+TransformFlavor transform_flavor_for_trait(const ResolvedTrait* trait) {
+    const auto* position = find_field(trait, "position");
+    const auto* rotation = find_field(trait, "rotation");
+    const auto* scale = find_field(trait, "scale");
+    if (position == nullptr || rotation == nullptr || scale == nullptr) {
+        return TransformFlavor::Unknown;
+    }
+
+    if (position->type.kind == TypeKind::Vec2 &&
+        rotation->type.kind == TypeKind::Float &&
+        scale->type.kind == TypeKind::Vec2) {
+        return TransformFlavor::Flat;
+    }
+    if (position->type.kind == TypeKind::Vec3 &&
+        rotation->type.kind == TypeKind::Quat &&
+        scale->type.kind == TypeKind::Vec3) {
+        return TransformFlavor::Volume;
+    }
+    return TransformFlavor::Unknown;
+}
+
+TransformFlavor infer_transform_propagation_flavor(const FilterClause& filter, const CodegenContext& ctx) {
+    const bool has_flat_qualified =
+        filter_has_exact_trait(filter, "std.transform.flat.LocalTransform") ||
+        filter_has_exact_trait(filter, "std.transform.flat.WorldTransform");
+    const bool has_volume_qualified =
+        filter_has_exact_trait(filter, "std.transform.volume.LocalTransform") ||
+        filter_has_exact_trait(filter, "std.transform.volume.WorldTransform");
+
+    if (has_flat_qualified != has_volume_qualified) {
+        return has_flat_qualified ? TransformFlavor::Flat : TransformFlavor::Volume;
+    }
+
+    if (!filter_has_simple_trait(filter, "LocalTransform") ||
+        !filter_has_simple_trait(filter, "WorldTransform")) {
+        return TransformFlavor::Unknown;
+    }
+
+    const auto local_flavor = transform_flavor_for_trait(find_trait(ctx, "LocalTransform"));
+    const auto world_flavor = transform_flavor_for_trait(find_trait(ctx, "WorldTransform"));
+
+    if (local_flavor != TransformFlavor::Unknown) {
+        return local_flavor;
+    }
+    return world_flavor;
+}
+
+bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
+    if (sys.is_stdlib) {
+        return true;
+    }
+    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" ||
+        sys.name == "SpriteRenderer" || sys.name == "AnimatedSpriteSystem" ||
+        sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
+        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
+        return true;
+    }
+    return std::ranges::any_of(sys.filter.entries,
+                               [](const auto& entry) { return entry.qualified_name.rfind("std.", 0) == 0; });
+}
+
+bool is_flat_transform_propagation(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "TransformPropagation" &&
+           infer_transform_propagation_flavor(sys.filter, ctx) == TransformFlavor::Flat;
+}
+
+bool is_volume_transform_propagation(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "TransformPropagation" &&
+           infer_transform_propagation_flavor(sys.filter, ctx) == TransformFlavor::Volume;
+}
+
+bool is_shape_renderer(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    return uses_stdlib_extern_contract(sys) && sys.name == "ShapeRenderer" &&
            filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "Renderer", "Renderer");
+           filter_has_trait(sys.filter, "std.render.shapes.Shape", "Shape");
 }
 
-bool is_animated_sprite_system(const ExternSystemNode& sys) {
-    return sys.name == "AnimatedSpriteSystem" && filter_has_trait(sys.filter, "AnimatedSprite", "AnimatedSprite");
+bool is_sprite_renderer(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    return uses_stdlib_extern_contract(sys) && sys.name == "SpriteRenderer" &&
+           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "std.render.sprites.Renderer", "Renderer");
 }
 
-bool is_mesh_renderer(const ExternSystemNode& sys) {
-    return sys.name == "MeshRenderer" &&
+bool is_animated_sprite_system(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    return uses_stdlib_extern_contract(sys) && sys.name == "AnimatedSpriteSystem" &&
+           filter_has_trait(sys.filter, "std.render.sprites.AnimatedSprite", "AnimatedSprite");
+}
+
+bool is_mesh_renderer(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    return uses_stdlib_extern_contract(sys) && sys.name == "MeshRenderer" &&
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "Renderer", "Renderer");
+           filter_has_trait(sys.filter, "std.render.meshes.Renderer", "Renderer");
 }
 
-bool is_billboard_renderer(const ExternSystemNode& sys) {
-    return sys.name == "BillboardRenderer" &&
+bool is_billboard_renderer(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    return uses_stdlib_extern_contract(sys) && sys.name == "BillboardRenderer" &&
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "BillboardRenderer", "BillboardRenderer");
+           filter_has_trait(sys.filter, "std.render.meshes.BillboardRenderer", "BillboardRenderer");
 }
 
-bool is_point_light_system(const ExternSystemNode& sys) {
-    return sys.name == "PointLightSystem" && filter_has_trait(sys.filter, "PointLight", "PointLight");
+bool is_point_light_system(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    return uses_stdlib_extern_contract(sys) && sys.name == "PointLightSystem" &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "std.render.meshes.PointLight", "PointLight");
 }
 
-bool is_directional_light_system(const ExternSystemNode& sys) {
-    return sys.name == "DirectionalLightSystem" && filter_has_trait(sys.filter, "DirectionalLight", "DirectionalLight");
+bool is_directional_light_system(const ExternSystemNode& sys, const CodegenContext& ctx) {
+    (void)ctx;
+    return uses_stdlib_extern_contract(sys) && sys.name == "DirectionalLightSystem" &&
+           filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
 }
 
 std::string filter_trait_simple_name(const FilterEntry& entry) {
@@ -366,9 +482,9 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
 
 std::string ManualSystemEmitter::emit_extern_system_forward_decl(const ExternSystemNode& sys,
                                                                  const CodegenContext& ctx) {
-    if (is_flat_transform_propagation(sys) || is_volume_transform_propagation(sys) || is_shape_renderer(sys) ||
-        is_sprite_renderer(sys) || is_animated_sprite_system(sys) || is_mesh_renderer(sys) ||
-        is_billboard_renderer(sys) || is_point_light_system(sys) || is_directional_light_system(sys)) {
+    if (is_flat_transform_propagation(sys, ctx) || is_volume_transform_propagation(sys, ctx) || is_shape_renderer(sys, ctx) ||
+        is_sprite_renderer(sys, ctx) || is_animated_sprite_system(sys, ctx) || is_mesh_renderer(sys, ctx) ||
+        is_billboard_renderer(sys, ctx) || is_point_light_system(sys, ctx) || is_directional_light_system(sys, ctx)) {
         return {};
     }
 
@@ -896,7 +1012,7 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
 std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNode& sys, const CodegenContext& ctx) {
     std::ostringstream out;
 
-    if (is_flat_transform_propagation(sys)) {
+    if (is_flat_transform_propagation(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    cactus::runtime::manual_backend::propagate_hierarchy(\n";
         out << "        entity_count,\n";
@@ -924,7 +1040,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_volume_transform_propagation(sys)) {
+    if (is_volume_transform_propagation(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    cactus::runtime::manual_backend::propagate_hierarchy(\n";
         out << "        entity_count,\n";
@@ -952,7 +1068,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_shape_renderer(sys)) {
+    if (is_shape_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Shape)) != (TraitBits::WorldTransform | TraitBits::Shape)) {\n";
@@ -975,7 +1091,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_sprite_renderer(sys)) {
+    if (is_sprite_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != (TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
@@ -985,7 +1101,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_animated_sprite_system(sys)) {
+    if (is_animated_sprite_system(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    constexpr float kFixedDt = 1.0F / 60.0F;\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
@@ -996,7 +1112,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_mesh_renderer(sys)) {
+    if (is_mesh_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != (TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
@@ -1006,7 +1122,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_billboard_renderer(sys)) {
+    if (is_billboard_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::BillboardRenderer)) != (TraitBits::WorldTransform | TraitBits::BillboardRenderer)) continue;\n";
@@ -1016,7 +1132,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_point_light_system(sys)) {
+    if (is_point_light_system(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::PointLight)) != (TraitBits::WorldTransform | TraitBits::PointLight)) continue;\n";
@@ -1026,7 +1142,7 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         return out.str();
     }
 
-    if (is_directional_light_system(sys)) {
+    if (is_directional_light_system(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & TraitBits::DirectionalLight) == 0) continue;\n";

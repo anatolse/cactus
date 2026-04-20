@@ -52,3 +52,41 @@ An entity MAY use any combination of render and transform sub-modules. `std.rend
 #### Scenario: Meshes require volume Transform
 - **WHEN** an entity has `std.render.meshes.Renderer` but no Transform applied
 - **THEN** the backend renders the mesh at world origin (no transform = no position)
+
+### Requirement: stdlib passive render extern systems are concretely backend-backed
+Declared stdlib passive render extern systems that are not blocked on missing language/runtime features SHALL correspond to concrete backend-library behavior rather than declaration-only symbols or generic user-extern scaffolding. Render/light systems that depend on texture, mesh, material, billboard, animation-frame, or light-registration infrastructure SHALL be considered supportable only once the required asset runtime infrastructure and backend adapter APIs exist.
+
+#### Scenario: SpriteRenderer is backend-backed
+- **WHEN** a program imports `std.render.sprites` and the recognized `SpriteRenderer` extern system is scheduled
+- **THEN** generated output binds to backend-library sprite rendering behavior for entities with `std.transform.flat.WorldTransform` and `Renderer`
+- **AND** that backend behavior resolves sprite texture handles through the asset runtime infrastructure
+
+#### Scenario: AnimatedSpriteSystem is backend-backed
+- **WHEN** a program imports `std.render.sprites` and the recognized `AnimatedSpriteSystem` extern system is scheduled
+- **THEN** generated output binds to backend-library animation advancement behavior for entities with `AnimatedSprite`
+- **AND** any required texture/sprite-sheet lookup uses the asset runtime infrastructure
+
+#### Scenario: MeshRenderer is backend-backed
+- **WHEN** a program imports `std.render.meshes` and the recognized `MeshRenderer` extern system is scheduled
+- **THEN** generated output binds to backend-library 3D mesh submission behavior for entities with `std.transform.volume.WorldTransform` and mesh `Renderer`
+- **AND** mesh/material handles resolve through the asset runtime infrastructure
+
+#### Scenario: Lighting systems are backend-backed
+- **WHEN** a program imports `std.render.meshes` and recognized `PointLightSystem` or `DirectionalLightSystem` extern systems are scheduled
+- **THEN** generated output binds to backend-library light registration behavior rather than generic extern scaffolding
+- **AND** any dependent render/light runtime state is routed through explicit backend/runtime infrastructure rather than implicit generated behavior
+
+### Requirement: stdlib passive render extern systems are behaviorally verified
+Recognized stdlib render extern systems SHALL be covered by tests that verify backend binding and observable runtime behavior for representative entities, including the use of asset runtime infrastructure where asset-backed traits are involved.
+
+#### Scenario: Sprite rendering path is verified
+- **WHEN** backend tests run for the 2D render surface
+- **THEN** they verify that visible sprite entities are submitted through the recognized backend render path, invisible entities are skipped, and required sprite assets resolve through the asset runtime infrastructure
+
+#### Scenario: Animated sprite advancement is verified
+- **WHEN** backend tests run for sprite animation
+- **THEN** they verify frame advancement, pause behavior, and frame wrapping semantics against asset-backed animated sprite state
+
+#### Scenario: Mesh and lighting paths are verified
+- **WHEN** backend tests run for the 3D render surface
+- **THEN** they verify mesh submission and light registration behavior for representative entities using the recognized stdlib traits and asset/runtime-backed dependencies

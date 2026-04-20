@@ -2,7 +2,8 @@ module std.math
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-pub const PI = 3.14159265
+const:
+    PI = 3.14159265
 
 # ── Scalar Pure Functions ─────────────────────────────────────────────────────
 # Implementations provided by the backend. These declarations are symbol

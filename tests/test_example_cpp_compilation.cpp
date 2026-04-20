@@ -122,6 +122,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_BLUE_SQUARE_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_BLUE_SQUARE_TARGET,
         },
+        ExampleCase{
+            .name           = "stdlib-extern-entt",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_STDLIB_EXTERN_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_TARGET,
+        },
     };
 }
 

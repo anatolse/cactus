@@ -356,3 +356,24 @@ if (registry.valid(c_other)) {
 - **WHEN** `match c_other:` is compiled and `c_other` is stale at runtime
 - **THEN** neither trait arms nor the wildcard arm execute
 
+### Requirement: EnTT backend recognizes the full supported stdlib extern system set
+The cpp-entt backend SHALL recognize supported stdlib extern system patterns and bind them to backend-library implementations rather than treating them as generic user extern systems.
+
+The supported recognized set SHALL include, at minimum, the stdlib extern system patterns whose required language/runtime features are already implemented, such as hierarchy propagation, cascade deletion, primitive shape rendering, and the render/light systems that become supportable once asset runtime infrastructure and EnTT backend asset/render adapter APIs exist.
+
+#### Scenario: Supported stdlib renderer binds to backend library
+- **WHEN** a recognized stdlib render extern system is compiled with cpp-entt
+- **THEN** generated output binds to the corresponding cpp-entt backend-library implementation rather than user-library callback scaffolding
+- **AND** asset-backed render systems rely on explicit asset runtime infrastructure and EnTT adapter APIs
+
+#### Scenario: Supported hierarchy behavior binds to backend library
+- **WHEN** a recognized stdlib hierarchy extern system is compiled with cpp-entt
+- **THEN** generated output binds to the corresponding cpp-entt backend-library implementation rather than project-local traversal logic
+
+### Requirement: EnTT backend stdlib coverage is tested behaviorally
+The cpp-entt backend SHALL include tests that verify stdlib extern function correctness, recognized extern system binding, and representative runtime behavior for supported stdlib backend features.
+
+#### Scenario: Recognized render/light extern system behavior is tested
+- **WHEN** the cpp-entt backend test suite runs after asset runtime infrastructure is available
+- **THEN** it includes tests covering recognized sprite, animation, mesh, and lighting extern system binding or runtime behavior through the EnTT backend asset/runtime path
+

@@ -134,3 +134,24 @@ For external behavior that is not provided by the standard Cactus manual backend
 - **WHEN** a manual-backend project contains user-defined extern integration points
 - **THEN** the generated output declares those integration points and the final linked project resolves them from the user library
 
+### Requirement: manual backend recognizes the full supported stdlib extern system set
+The cpp-manual backend SHALL recognize supported stdlib extern system patterns and bind them to backend-library implementations rather than treating them as generic user extern systems.
+
+The supported recognized set SHALL include, at minimum, the stdlib extern system patterns whose required language/runtime features are already implemented, such as hierarchy propagation, cascade deletion, primitive shape rendering, and the render/light systems that become supportable once asset runtime infrastructure and manual backend asset/render adapter APIs exist.
+
+#### Scenario: Supported stdlib renderer binds to backend library
+- **WHEN** a recognized stdlib render extern system is compiled with cpp-manual
+- **THEN** generated output binds to the corresponding cpp-manual backend-library implementation rather than user-library callback scaffolding
+- **AND** asset-backed render systems rely on explicit asset runtime infrastructure and manual backend adapter APIs
+
+#### Scenario: Supported hierarchy behavior binds to backend library
+- **WHEN** a recognized stdlib hierarchy extern system is compiled with cpp-manual
+- **THEN** generated output binds to the corresponding cpp-manual backend-library implementation rather than project-local traversal logic
+
+### Requirement: manual backend stdlib coverage is tested behaviorally
+The cpp-manual backend SHALL include tests that verify stdlib extern function correctness, recognized extern system binding, and representative runtime behavior for supported stdlib backend features.
+
+#### Scenario: Recognized render/light extern system behavior is tested
+- **WHEN** the cpp-manual backend test suite runs after asset runtime infrastructure is available
+- **THEN** it includes tests covering recognized sprite, animation, mesh, and lighting extern system binding or runtime behavior through the manual backend asset/runtime path
+

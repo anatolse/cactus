@@ -553,6 +553,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "}\n\n";
 
     out << "void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher) {\n";
+    out << "    (void)registry;\n";
     out << "    (void)dispatcher;\n";
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {

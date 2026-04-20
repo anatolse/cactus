@@ -5,10 +5,49 @@
 #include "common/cactus_runtime.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
 #include <vector>
 
 using namespace cactus::runtime;
+
+namespace fs = std::filesystem;
+
+namespace {
+
+constexpr auto kConstexprScalarLerp = stdlib::math::lerp(0.0F, 10.0F, 0.5F);
+constexpr auto kConstexprVec2Lerp = stdlib::math::vec2::lerp(Vector2{0.0F, 0.0F}, Vector2{10.0F, 20.0F}, 0.25F);
+constexpr auto kConstexprVec3Cross = stdlib::math::vec3::cross(Vector3{1.0F, 0.0F, 0.0F}, Vector3{0.0F, 1.0F, 0.0F});
+constexpr auto kConstexprQuatIdentity = stdlib::math::quat::identity();
+constexpr auto kConstexprQuatMultiply = stdlib::math::quat::multiply(kConstexprQuatIdentity, kConstexprQuatIdentity);
+
+static_assert(kConstexprScalarLerp == 5.0F);
+static_assert(kConstexprVec2Lerp.x == 2.5F);
+static_assert(kConstexprVec2Lerp.y == 5.0F);
+static_assert(kConstexprVec3Cross.z == 1.0F);
+static_assert(kConstexprQuatMultiply.w == 1.0F);
+static_assert(noexcept(stdlib::math::lerp(0.0F, 1.0F, 0.5F)));
+static_assert(noexcept(stdlib::math::clamp(0.0F, 0.0F, 1.0F)));
+static_assert(noexcept(stdlib::math::vec2::dot(Vector2{1.0F, 0.0F}, Vector2{0.0F, 1.0F})));
+static_assert(noexcept(stdlib::math::vec3::cross(Vector3{1.0F, 0.0F, 0.0F}, Vector3{0.0F, 1.0F, 0.0F})));
+static_assert(noexcept(stdlib::math::vec3::reflect(Vector3{1.0F, -1.0F, 0.0F}, Vector3{0.0F, 1.0F, 0.0F})));
+static_assert(noexcept(stdlib::math::quat::identity()));
+static_assert(noexcept(stdlib::math::quat::multiply(kConstexprQuatIdentity, kConstexprQuatIdentity)));
+
+fs::path repo_root() {
+    return {CACTUS_TEST_SOURCE_DIR};
+}
+
+std::string read_text_file(const fs::path& path) {
+    std::ifstream ifs(path);
+    std::ostringstream buffer;
+    buffer << ifs.rdbuf();
+    return buffer.str();
+}
+
+}  // namespace
 
 namespace cactus::runtime::manual_backend {
 
@@ -106,6 +145,19 @@ TEST_CASE("Runtime stdlib: quaternion helpers behave correctly", "[runtime][stdl
     CHECK(inv.w == Catch::Approx(1.0F));
 }
 
+TEST_CASE("Runtime stdlib: allocation-free helper contracts stay constexpr and noexcept", "[runtime][stdlib][contract]") {
+    CHECK(kConstexprScalarLerp == Catch::Approx(5.0F));
+    CHECK(kConstexprVec2Lerp.x == Catch::Approx(2.5F));
+    CHECK(kConstexprVec2Lerp.y == Catch::Approx(5.0F));
+    CHECK(kConstexprVec3Cross.z == Catch::Approx(1.0F));
+    CHECK(kConstexprQuatMultiply.w == Catch::Approx(1.0F));
+    CHECK(noexcept(stdlib::math::lerp(0.0F, 1.0F, 0.5F)));
+    CHECK(noexcept(stdlib::math::vec2::lerp(Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F}, 0.5F)));
+    CHECK(noexcept(stdlib::math::vec3::cross(Vector3{1.0F, 0.0F, 0.0F}, Vector3{0.0F, 1.0F, 0.0F})));
+    CHECK(noexcept(stdlib::math::quat::identity()));
+    CHECK(noexcept(stdlib::math::quat::multiply(stdlib::math::quat::identity(), stdlib::math::quat::identity())));
+}
+
 TEST_CASE("Runtime stdlib: manual hierarchy propagation and recursive destroy work", "[runtime][hierarchy][manual]") {
     struct Transform2D {
         Vector2 position{};
@@ -158,6 +210,24 @@ TEST_CASE("Runtime stdlib: manual hierarchy propagation and recursive destroy wo
     CHECK(std::find(removed.begin(), removed.end(), 0) != removed.end());
     CHECK(std::find(removed.begin(), removed.end(), 1) != removed.end());
     CHECK(std::find(removed.begin(), removed.end(), 2) != removed.end());
+}
+
+TEST_CASE("Runtime stdlib: backend hierarchy runtime sources enforce pmr allocator discipline", "[runtime][hierarchy][pmr][review]") {
+    const auto entt_runtime = read_text_file(repo_root() / "src/backends/cpp-entt/runtime.cpp");
+    const auto manual_runtime = read_text_file(repo_root() / "src/backends/cpp-manual/runtime.cpp");
+
+    REQUIRE_FALSE(entt_runtime.empty());
+    REQUIRE_FALSE(manual_runtime.empty());
+
+    CHECK(entt_runtime.find("std::pmr::monotonic_buffer_resource scratch_resource") != std::string::npos);
+    CHECK(entt_runtime.find("std::pmr::vector<entt::entity> active_entities") != std::string::npos);
+    CHECK(entt_runtime.find("std::pmr::unsynchronized_pool_resource destroying_resource") != std::string::npos);
+    CHECK(entt_runtime.find("std::pmr::vector<entt::entity> child_entities") != std::string::npos);
+
+    CHECK(manual_runtime.find("std::pmr::monotonic_buffer_resource scratch_resource") != std::string::npos);
+    CHECK(manual_runtime.find("std::pmr::vector<std::uint8_t> active") != std::string::npos);
+    CHECK(manual_runtime.find("std::pmr::unsynchronized_pool_resource destroying_resource") != std::string::npos);
+    CHECK(manual_runtime.find("std::pmr::vector<std::size_t> destroying_entities") != std::string::npos);
 }
 
 TEST_CASE("Runtime stdlib: shared asset registry supports eager and lazy resolution", "[runtime][assets]") {

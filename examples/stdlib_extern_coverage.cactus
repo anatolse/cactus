@@ -1,0 +1,22 @@
+module stdlib_extern_coverage
+
+use std.input
+use std.math.vec2 as v2
+
+input MoveX: axis
+    negative = Key.A
+    positive = Key.D
+
+trait Motion:
+    var x: float = 0.0
+
+pub unit ExternSurface:
+    Motion:
+        x = 0.0
+
+system Demo:
+    filter:
+        Motion
+
+    on tick:
+        x = v2.length(vec2(axis(MoveX), axis(MoveX)))

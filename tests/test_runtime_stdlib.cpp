@@ -311,3 +311,44 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
         true);
     CHECK(cactus::runtime::entt_backend::render_debug_state().missing_assets >= 1);
 }
+
+TEST_CASE("Runtime stdlib: EnTT sprite submissions preserve layer ordering and default 2D camera fallback", "[runtime][assets][entt]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_texture(31U, "back", 31);
+    registry.register_texture(32U, "front", 32);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_sprite(Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F}, WHITE, 32U, true, 5);
+    cactus::runtime::entt_backend::submit_sprite(Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F}, WHITE, 31U, true, 1);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_sprites == 2);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_2d_camera);
+    REQUIRE(cactus::runtime::entt_backend::render_debug_state().drawn_sprite_layers.size() == 2);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().drawn_sprite_layers[0] == 1);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().drawn_sprite_layers[1] == 5);
+}
+
+TEST_CASE("Runtime stdlib: EnTT render frame marks default 3D camera for queued meshes", "[runtime][assets][entt]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_mesh(41U, "mesh", 41);
+    registry.register_material(42U, "mat", 42);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_mesh(
+        Vector3{0.0F, 0.0F, 0.0F},
+        stdlib::math::quat::identity(),
+        Vector3{1.0F, 1.0F, 1.0F},
+        41U,
+        42U,
+        true,
+        true);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_3d_camera);
+}

@@ -925,7 +925,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
         out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& Renderer_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_sprite(WorldTransform_comp.position, Renderer_comp.size, Renderer_comp.color, Renderer_comp.texture, Renderer_comp.visible);\n";
+        out << "        cactus::runtime::entt_backend::submit_sprite(WorldTransform_comp.position, Renderer_comp.size, Renderer_comp.color, Renderer_comp.texture, Renderer_comp.visible, Renderer_comp.layer);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();

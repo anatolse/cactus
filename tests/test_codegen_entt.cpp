@@ -253,6 +253,7 @@ TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runti
         "    var size: vec2\n"
         "    var color: color\n"
         "    var visible: bool\n"
+        "    var layer: int\n"
         "trait AnimatedSprite:\n"
         "    let texture: texture_id\n"
         "    var frame: int\n"
@@ -270,7 +271,33 @@ TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runti
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("cactus::runtime::entt_backend::submit_sprite(") != std::string::npos);
+    CHECK(code.find("Renderer_comp.layer") != std::string::npos);
     CHECK(code.find("cactus::runtime::entt_backend::advance_animated_sprite(") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: render glue brackets render extern systems with frame calls", "[codegen-entt][assets]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait Renderer:\n"
+        "    let texture: texture_id\n"
+        "    var size: vec2\n"
+        "    var color: color\n"
+        "    var visible: bool\n"
+        "    var layer: int\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "        Renderer\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::begin_render_frame();") != std::string::npos);
+    CHECK(code.find("sprite_renderer_tick(registry);") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::end_render_frame();") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime without user callback", "[codegen-entt][assets]") {

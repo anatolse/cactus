@@ -22,6 +22,9 @@ struct RenderDebugState {
     int registered_point_lights{0};
     int registered_directional_lights{0};
     int missing_assets{0};
+    bool used_default_2d_camera{false};
+    bool used_default_3d_camera{false};
+    std::vector<int> drawn_sprite_layers{};
 };
 
 struct ProjectConfig {
@@ -34,12 +37,15 @@ struct ProjectConfig {
 [[nodiscard]] RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept;
 void reset_render_debug_state() noexcept;
 [[nodiscard]] const RenderDebugState& render_debug_state() noexcept;
+void begin_render_frame() noexcept;
+void end_render_frame() noexcept;
 
 void submit_sprite(Vector2 position,
                    Vector2 size,
                    Color color,
                    AssetHandle texture,
-                   bool visible) noexcept;
+                   bool visible,
+                   int layer) noexcept;
 void advance_animated_sprite(AssetHandle texture,
                              int& frame,
                              int frame_count,

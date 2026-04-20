@@ -587,8 +587,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "}\n\n";
 
     out << "void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher) {\n";
-    out << "    (void)registry;\n";
     out << "    (void)dispatcher;\n";
+    out << "    cactus::runtime::entt_backend::begin_render_frame();\n";
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
@@ -598,6 +598,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             }
         }
     }
+    out << "    cactus::runtime::entt_backend::end_render_frame();\n";
     out << "}\n";
     out << "\n}  // namespace cactus::runtime::entt_backend\n";
 

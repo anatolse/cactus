@@ -1,5 +1,7 @@
 module std.render.meshes
 
+use std.transform.volume
+
 # ── 3D Mesh Rendering Traits ──────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
 # No user system is needed. An entity with WorldTransform + Renderer is drawn.

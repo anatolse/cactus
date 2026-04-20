@@ -273,6 +273,29 @@ TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runti
     CHECK(code.find("cactus::runtime::entt_backend::advance_animated_sprite(") != std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime without user callback", "[codegen-entt][assets]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait Renderer:\n"
+        "    let mesh: mesh_id\n"
+        "    let material: material_id\n"
+        "    var visible: bool\n"
+        "    var cast_shadow: bool\n"
+        "extern system MeshRenderer:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "        Renderer\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::submit_mesh(") != std::string::npos);
+    CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(

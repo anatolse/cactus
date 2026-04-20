@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include "backends/cpp-entt/runtime.h"
 #include "backends/cpp-manual/runtime.h"
 #include "common/cactus_runtime.h"
 
@@ -271,4 +272,42 @@ TEST_CASE("Runtime stdlib: manual backend asset adapters record submissions and 
 
     cactus::runtime::manual_backend::submit_sprite(Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F}, WHITE, 999U, true);
     CHECK(cactus::runtime::manual_backend::render_debug_state().missing_assets >= 1);
+}
+
+TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing assets", "[runtime][assets][entt]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_mesh(21U, "mesh", 7);
+    registry.register_material(22U, "mat", 8);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    cactus::runtime::entt_backend::submit_mesh(
+        Vector3{0.0F, 0.0F, 0.0F},
+        stdlib::math::quat::identity(),
+        Vector3{1.0F, 1.0F, 1.0F},
+        21U,
+        22U,
+        true,
+        true);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
+
+    cactus::runtime::entt_backend::submit_mesh(
+        Vector3{1.0F, 2.0F, 3.0F},
+        stdlib::math::quat::identity(),
+        Vector3{1.0F, 1.0F, 1.0F},
+        21U,
+        22U,
+        false,
+        true);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
+
+    cactus::runtime::entt_backend::submit_mesh(
+        Vector3{0.0F, 0.0F, 0.0F},
+        stdlib::math::quat::identity(),
+        Vector3{1.0F, 1.0F, 1.0F},
+        999U,
+        22U,
+        true,
+        true);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().missing_assets >= 1);
 }

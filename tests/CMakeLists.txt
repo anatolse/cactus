@@ -73,6 +73,21 @@ target_link_libraries(example_stdlib_extern_manual_generated PRIVATE cactus_runt
 target_include_directories(example_stdlib_extern_manual_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
 set_property(TARGET example_stdlib_extern_manual_generated PROPERTY CXX_CLANG_TIDY "")
 
+set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.generated.cpp")
+if(NOT EXISTS "${MESH_RENDERER_GENERATED_CPP}")
+    file(WRITE "${MESH_RENDERER_GENERATED_CPP}" "#include \"backends/cpp-entt/runtime.h\"\nnamespace cactus::runtime::entt_backend {\nProjectConfig generated_project_config() noexcept { return {800, 600, \"Mesh Renderer\", 60}; }\nvoid generated_setup_dispatcher(entt::dispatcher&) {}\nvoid generated_init_project(entt::registry&) {}\nvoid generated_update_project(entt::registry&, entt::dispatcher&, float) {}\nvoid generated_render_project(entt::registry&, entt::dispatcher&) {}\n}\n")
+endif()
+
+add_executable(example_mesh_renderer_generated EXCLUDE_FROM_ALL
+    "${CMAKE_SOURCE_DIR}/examples/blue-square/game/main.cpp"
+    "${MESH_RENDERER_GENERATED_CPP}"
+)
+set_source_files_properties("${MESH_RENDERER_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
+target_compile_features(example_mesh_renderer_generated PRIVATE cxx_std_20)
+target_link_libraries(example_mesh_renderer_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
+target_include_directories(example_mesh_renderer_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
+set_property(TARGET example_mesh_renderer_generated PROPERTY CXX_CLANG_TIDY "")
+
 # Lexer tests
 add_executable(test_lexer test_lexer.cpp)
 target_link_libraries(test_lexer PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -136,6 +151,7 @@ add_test(NAME DataFileTests COMMAND test_data_file)
 # Shared/backend runtime stdlib tests
 add_executable(test_runtime_stdlib test_runtime_stdlib.cpp)
 target_link_libraries(test_runtime_stdlib PRIVATE cactus_runtime_common cactus_runtime_cpp_manual Catch2::Catch2WithMain)
+target_link_libraries(test_runtime_stdlib PRIVATE cactus_runtime_cpp_entt)
 target_compile_definitions(test_runtime_stdlib PRIVATE
     CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
@@ -175,6 +191,9 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_TARGET="example_stdlib_extern_entt_generated"
     CACTUS_EXAMPLE_STDLIB_EXTERN_MANUAL_GENERATED_CPP="${STDLIB_EXTERN_MANUAL_GENERATED_CPP}"
     CACTUS_EXAMPLE_STDLIB_EXTERN_MANUAL_TARGET="example_stdlib_extern_manual_generated"
+    CACTUS_EXAMPLE_MESH_RENDERER_SOURCE="examples/mesh-renderer/main.cactus"
+    CACTUS_EXAMPLE_MESH_RENDERER_GENERATED_CPP="${MESH_RENDERER_GENERATED_CPP}"
+    CACTUS_EXAMPLE_MESH_RENDERER_TARGET="example_mesh_renderer_generated"
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)

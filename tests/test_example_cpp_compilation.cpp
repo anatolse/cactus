@@ -129,6 +129,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_TARGET,
         },
+        ExampleCase{
+            .name           = "mesh-renderer",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_MESH_RENDERER_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_MESH_RENDERER_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_MESH_RENDERER_TARGET,
+        },
     };
 }
 

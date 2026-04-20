@@ -1,0 +1,24 @@
+module mesh_renderer
+
+use std.transform.volume
+use std.render.meshes
+
+const:
+    WINDOW_WIDTH = 960
+    WINDOW_HEIGHT = 540
+    WINDOW_TITLE = "Mesh Renderer Example"
+    TARGET_FPS = 60
+
+asset DemoMesh: mesh = "models/demo_mesh.glb"
+asset DemoMaterial: material = "materials/demo.mat"
+
+pub unit DemoMeshEntity:
+    WorldTransform:
+        position = vec3(0.0, 0.0, 0.0)
+        rotation = quat(0.0, 0.0, 0.0, 1.0)
+        scale = vec3(1.0, 1.0, 1.0)
+    Renderer:
+        mesh = DemoMesh
+        material = DemoMaterial
+        visible = true
+        cast_shadow = true

@@ -865,9 +865,9 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
 
     if (dot != std::string::npos) {
         // ── Qualified: "module.Trait" or "alias.Trait" ──────────────────────
-        auto qualifier  = qname.substr(0, dot);
-        auto trait_name = qname.substr(dot + 1);
         auto last_dot = qname.rfind('.');
+        auto qualifier  = qname.substr(0, last_dot);
+        auto trait_name = qname.substr(last_dot + 1);
         auto simple_trait_name = (last_dot != std::string::npos)
             ? qname.substr(last_dot + 1)
             : trait_name;

@@ -54,3 +54,25 @@ The stdlib SHALL provide an external system or equivalent backend-recognized hie
 #### Scenario: direct child is deleted with parent
 - **WHEN** a parent entity is destroyed and another entity references it through `Parent.parent`
 - **THEN** the child entity is destroyed as part of the same cascade
+
+### Requirement: recognized hierarchy extern systems bind to backend-library implementations
+Recognized stdlib hierarchy extern systems SHALL bind to concrete backend-library implementations on supported backend/runtime paths rather than emitting incomplete inline project-local behavior. This requirement applies to hierarchy propagation and recursive descendant deletion behavior described by the stdlib transform and parent contracts.
+
+#### Scenario: Flat hierarchy propagation binds to backend library
+- **WHEN** a recognized flat transform propagation extern system is compiled for a supported backend
+- **THEN** generated output binds to backend-library hierarchy propagation behavior for `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
+
+#### Scenario: Volume hierarchy propagation binds to backend library
+- **WHEN** a recognized volume transform propagation extern system is compiled for a supported backend
+- **THEN** generated output binds to backend-library hierarchy propagation behavior for `Parent`, `std.transform.volume.LocalTransform`, and `std.transform.volume.WorldTransform`
+
+#### Scenario: Cascade deletion binds to backend library
+- **WHEN** hierarchy-backed descendant deletion is required for entities related by `Parent.parent`
+- **THEN** the supported backend uses backend-library recursive deletion behavior rather than ad hoc project-local traversal logic
+
+### Requirement: hierarchy runtime scratch storage follows backend allocator discipline
+When performance-critical generated runtime hierarchy behavior requires dynamic scratch storage, the implementation SHALL use `std::pmr` containers/resources rather than default-allocator standard containers.
+
+#### Scenario: Recursive destroy scratch storage uses pmr
+- **WHEN** the backend runtime needs temporary storage to track active recursive destroy state
+- **THEN** that storage is implemented with `std::pmr` resources/containers or an allocation-free equivalent

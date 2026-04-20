@@ -85,6 +85,19 @@ The backend SHALL produce syntactically and semantically valid C++20 generated p
 - **WHEN** automated example-compilation integration coverage runs for the manual backend path
 - **THEN** generated C++ project glue compiles successfully and links against the configured C++ toolchain and the standard Cactus manual backend/runtime library
 
+### Requirement: manual backend provides complete stdlib extern function coverage
+The cpp-manual backend and its linked runtime/library SHALL provide concrete implementations or binding paths for stdlib-declared extern functions that are part of the supported stdlib surface and are not blocked by missing language/runtime features, including scalar math, vec2/vec3 helpers, quaternion helpers, and input query functions.
+
+Pure helpers that do not depend on runtime state SHALL use allocation-free implementations and SHALL be declared `constexpr` and `noexcept` where permitted by the underlying C++ operations.
+
+#### Scenario: Math extern declarations resolve through runtime library
+- **WHEN** a program imports stdlib modules that declare supported math/vector/quaternion extern functions and is compiled with cpp-manual
+- **THEN** the generated project links successfully and the extern calls resolve through concrete cpp-manual/shared runtime-library implementations
+
+#### Scenario: Input extern declarations resolve through manual runtime adapter
+- **WHEN** a program imports `std.input` and is compiled with cpp-manual
+- **THEN** the generated project links successfully and the input extern calls resolve through concrete cpp-manual runtime adapter implementations
+
 ### Requirement: Emit `cactus_runtime.h` include when extern funcs are in scope
 The cpp-manual backend SHALL emit `#include "cactus_runtime.h"` in the generated C++ output when any extern func is present — either declared in the program itself or in any imported module's `ImportedSymbols.funcs` map (where `is_extern = true`).
 
@@ -137,21 +150,31 @@ For external behavior that is not provided by the standard Cactus manual backend
 ### Requirement: manual backend recognizes the full supported stdlib extern system set
 The cpp-manual backend SHALL recognize supported stdlib extern system patterns and bind them to backend-library implementations rather than treating them as generic user extern systems.
 
-The supported recognized set SHALL include, at minimum, the stdlib extern system patterns whose required language/runtime features are already implemented, such as hierarchy propagation, cascade deletion, primitive shape rendering, and the render/light systems that become supportable once asset runtime infrastructure and manual backend asset/render adapter APIs exist.
+The supported recognized set SHALL include, at minimum, the stdlib extern system patterns whose required language/runtime features are already implemented, such as hierarchy propagation, cascade deletion, sprite rendering, animated sprite advancement, mesh rendering, point-light registration, and directional-light registration where applicable.
 
 #### Scenario: Supported stdlib renderer binds to backend library
 - **WHEN** a recognized stdlib render extern system is compiled with cpp-manual
 - **THEN** generated output binds to the corresponding cpp-manual backend-library implementation rather than user-library callback scaffolding
-- **AND** asset-backed render systems rely on explicit asset runtime infrastructure and manual backend adapter APIs
 
 #### Scenario: Supported hierarchy behavior binds to backend library
 - **WHEN** a recognized stdlib hierarchy extern system is compiled with cpp-manual
 - **THEN** generated output binds to the corresponding cpp-manual backend-library implementation rather than project-local traversal logic
 
+### Requirement: manual backend runtime-owned dynamic storage uses pmr containers
+When the cpp-manual backend/runtime requires dynamic storage for performance-critical generated runtime behavior, it SHALL use `std::pmr` containers/resources rather than default-allocator standard containers, unless the implementation is allocation-free.
+
+#### Scenario: Temporary backend-owned collections use pmr
+- **WHEN** cpp-manual runtime/library code creates dynamic scratch collections for stdlib-owned backend behavior
+- **THEN** those collections use `std::pmr` storage or an allocation-free equivalent
+
 ### Requirement: manual backend stdlib coverage is tested behaviorally
 The cpp-manual backend SHALL include tests that verify stdlib extern function correctness, recognized extern system binding, and representative runtime behavior for supported stdlib backend features.
 
-#### Scenario: Recognized render/light extern system behavior is tested
-- **WHEN** the cpp-manual backend test suite runs after asset runtime infrastructure is available
-- **THEN** it includes tests covering recognized sprite, animation, mesh, and lighting extern system binding or runtime behavior through the manual backend asset/runtime path
+#### Scenario: Extern function behavior is tested
+- **WHEN** the cpp-manual backend test suite runs
+- **THEN** it includes behavioral tests for supported stdlib math/vector/quaternion/input extern functions
+
+#### Scenario: Recognized extern system behavior is tested
+- **WHEN** the cpp-manual backend test suite runs
+- **THEN** it includes tests covering recognized hierarchy and render extern system behavior or binding outcomes
 

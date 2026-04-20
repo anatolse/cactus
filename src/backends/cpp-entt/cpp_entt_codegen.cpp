@@ -165,9 +165,20 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     }
     out << "\n";
 
-    // Helper: vec2() constructor mapped to Vector2
+    out << "using Quat = cactus::runtime::Quat;\n";
+    out << "\n";
+
+    // Helper constructors for generated DSL built-ins
     out << "inline Vector2 vec2(float x, float y) {\n";
     out << "    return Vector2{.x = x, .y = y};\n";
+    out << "}\n\n";
+
+    out << "inline Vector3 vec3(float x, float y, float z) {\n";
+    out << "    return Vector3{.x = x, .y = y, .z = z};\n";
+    out << "}\n\n";
+
+    out << "inline cactus::runtime::Quat quat(float x, float y, float z, float w) {\n";
+    out << "    return cactus::runtime::Quat{.x = x, .y = y, .z = z, .w = w};\n";
     out << "}\n\n";
 
     // Built-in runtime helpers for generated examples
@@ -300,11 +311,34 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
         for (const auto& decl : program.ast->declarations) {
             if (const auto* cb = std::get_if<ConstBlockNode>(&decl)) {
                 for (const auto& ca : cb->assignments) {
-                    out << "constexpr auto " << upper_copy(ca.name) << " = " << ManualSystemEmitter::emit_expr(*ca.value) << ";\n";
+                    if (ca.name == "WINDOW_WIDTH" || ca.name == "WINDOW_HEIGHT" ||
+                        ca.name == "WINDOW_TITLE" || ca.name == "TARGET_FPS") {
+                        continue;
+                    }
+                    out << "[[maybe_unused]] constexpr auto " << upper_copy(ca.name) << " = "
+                        << ManualSystemEmitter::emit_expr(*ca.value) << ";\n";
                 }
             }
         }
         out << "\n";
+    }
+
+    if (program.ast != nullptr) {
+        std::uint32_t next_asset_handle = 1U;
+        bool emitted_asset_constants = false;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* asset = std::get_if<AssetDeclNode>(&decl)) {
+                if (!emitted_asset_constants) {
+                    out << "// ── Asset Handles ──────────────────────────────────────────────────\n\n";
+                    emitted_asset_constants = true;
+                }
+                out << "constexpr cactus::runtime::AssetHandle " << asset->name << " = "
+                    << next_asset_handle++ << "U; // NOLINT(readability-identifier-naming)\n";
+            }
+        }
+        if (emitted_asset_constants) {
+            out << "\n";
+        }
     }
 
     // Enums

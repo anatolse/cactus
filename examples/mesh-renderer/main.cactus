@@ -1,5 +1,7 @@
 module mesh_renderer
 
+use std.input
+use std.math.quat as quat
 use std.transform.volume
 use std.render.meshes
 
@@ -8,17 +10,75 @@ const:
     WINDOW_HEIGHT = 540
     WINDOW_TITLE = "Mesh Renderer Example"
     TARGET_FPS = 60
+    ROTATION_SPEED = 1.75
 
-asset DemoMesh: mesh = "models/demo_mesh.glb"
-asset DemoMaterial: material = "materials/demo.mat"
+asset BlueCubeMesh: mesh = "models/blue_cube.mesh"
+asset BlueCubeMaterial: material = "materials/blue_cube.mat"
 
-pub unit DemoMeshEntity:
+input RotateHorizontal: axis
+    negative = Key.A
+    positive = Key.D
+
+input RotateVertical: axis
+    negative = Key.S
+    positive = Key.W
+
+trait RotationInput:
+    var horizontal: float = 0.0
+    var vertical: float = 0.0
+
+pub unit BlueCube:
     WorldTransform:
         position = vec3(0.0, 0.0, 0.0)
-        rotation = quat(0.0, 0.0, 0.0, 1.0)
-        scale = vec3(1.0, 1.0, 1.0)
+        rotation = quat.identity()
+        scale = vec3(1.5, 1.5, 1.5)
+    RotationInput:
+        horizontal = 0.0
+        vertical = 0.0
     Renderer:
-        mesh = DemoMesh
-        material = DemoMaterial
+        mesh = BlueCubeMesh
+        material = BlueCubeMaterial
         visible = true
         cast_shadow = true
+
+pub unit LeftPointLight:
+    WorldTransform:
+        position = vec3(-2.0, 1.5, 2.5)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #FFE0B3FF
+        intensity = 1.4
+        range = 8.0
+        enabled = true
+
+pub unit RightPointLight:
+    WorldTransform:
+        position = vec3(2.0, 1.25, 2.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #B3D9FFFF
+        intensity = 1.2
+        range = 8.0
+        enabled = true
+
+system ReadRotationInput:
+    filter:
+        RotationInput
+
+    on input:
+        horizontal = input.axis(RotateHorizontal)
+        vertical = input.axis(RotateVertical)
+
+system ApplyScreenSpaceRotation:
+    filter:
+        WorldTransform
+        RotationInput
+
+    on tick:
+        let yaw_axis = quat.up(rotation)
+        let pitch_axis = quat.right(rotation)
+        let yaw_delta = quat.from_axis_angle(yaw_axis, horizontal * ROTATION_SPEED * tick.dt)
+        let pitch_delta = quat.from_axis_angle(pitch_axis, vertical * ROTATION_SPEED * tick.dt)
+        rotation = quat.multiply(pitch_delta, quat.multiply(yaw_delta, rotation))

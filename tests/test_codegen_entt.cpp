@@ -323,6 +323,21 @@ TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime wi
     CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "asset BlueCubeMesh: mesh = \"models/blue_cube.mesh\"\n"
+        "asset BlueCubeMaterial: material = \"materials/blue_cube.mat\"\n"
+        "trait Marker\n"
+        "unit Cube:\n"
+        "    Marker\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("shared_asset_registry().register_mesh(BlueCubeMesh, \"models/blue_cube.mesh\", static_cast<int>(BlueCubeMesh));") != std::string::npos);
+    CHECK(code.find("shared_asset_registry().register_material(BlueCubeMaterial, \"materials/blue_cube.mat\", static_cast<int>(BlueCubeMaterial));") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(

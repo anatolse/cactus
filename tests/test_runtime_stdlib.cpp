@@ -352,3 +352,30 @@ TEST_CASE("Runtime stdlib: EnTT render frame marks default 3D camera for queued 
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_3d_camera);
 }
+
+TEST_CASE("Runtime stdlib: EnTT point lights participate in lit mesh frame state", "[runtime][assets][entt]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_mesh(51U, "blue_cube", 51);
+    registry.register_material(52U, "blue_material", 52);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_mesh(
+        Vector3{0.0F, 0.0F, 0.0F},
+        stdlib::math::quat::identity(),
+        Vector3{1.0F, 1.0F, 1.0F},
+        51U,
+        52U,
+        true,
+        true);
+    cactus::runtime::entt_backend::register_point_light(Vector3{-2.0F, 1.0F, 2.0F}, ORANGE, 1.4F, 8.0F, true);
+    cactus::runtime::entt_backend::register_point_light(Vector3{2.0F, 1.0F, 2.0F}, SKYBLUE, 1.2F, 8.0F, true);
+    cactus::runtime::entt_backend::register_point_light(Vector3{0.0F, 3.0F, 0.0F}, WHITE, 0.5F, 8.0F, false);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    CHECK(cactus::runtime::entt_backend::render_debug_state().registered_point_lights == 2);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().active_point_lights == 2);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().used_lit_mesh_shader);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_3d_camera);
+}

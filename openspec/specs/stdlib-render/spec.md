@@ -30,12 +30,16 @@ The shipped `std.render.sprites` module SHALL declare the currently implemented 
 
 #### Scenario: Flat-world sprite rendering is backend-backed
 - **WHEN** a program imports `std.render.sprites` and the recognized `SpriteRenderer` extern system is scheduled
-- **THEN** generated output binds to backend-library sprite submission behavior for entities with `std.transform.flat.WorldTransform` and `Renderer`
-- **AND** that backend behavior resolves sprite texture handles through the asset runtime infrastructure before counting a submission
+- **THEN** generated output binds to backend-library sprite rendering behavior for entities with `std.transform.flat.WorldTransform` and `Renderer`
+- **AND** that backend behavior resolves sprite texture handles through the asset/runtime infrastructure before drawing visible sprites in the backend-owned 2D render pass
 
-#### Scenario: Invisible sprite skips submission
+#### Scenario: Invisible sprite skips drawing
 - **WHEN** sprite submission is invoked with `Renderer.visible = false`
-- **THEN** the backend does not record a sprite submission for that entity
+- **THEN** the backend does not draw that entity in the sprite pass
+
+#### Scenario: Sprite layer controls draw order
+- **WHEN** two visible sprites are drawn in the same frame with different `Renderer.layer` values on the cpp-entt-backed sprite path
+- **THEN** the cpp-entt backend-owned sprite path draws the lower layer before the higher layer
 
 #### Scenario: Animated sprite advancement follows current helper semantics
 - **WHEN** the recognized `AnimatedSpriteSystem` extern system is scheduled for an `AnimatedSprite`
@@ -88,8 +92,12 @@ The shipped `std.render.meshes` module SHALL declare the currently implemented s
 
 #### Scenario: Mesh rendering is backend-backed
 - **WHEN** a program imports `std.render.meshes` and the recognized `MeshRenderer` extern system is scheduled
-- **THEN** generated output binds to backend-library 3D mesh submission behavior for entities with `std.transform.volume.WorldTransform` and mesh `Renderer`
-- **AND** mesh/material handles resolve through the asset runtime infrastructure before counting a submission
+- **THEN** generated output binds to backend-library 3D mesh rendering behavior for entities with `std.transform.volume.WorldTransform` and mesh `Renderer`
+- **AND** mesh/material handles resolve through the asset/runtime infrastructure before drawing visible meshes in the cpp-entt backend-owned 3D render pass
+
+#### Scenario: Invisible mesh skips drawing
+- **WHEN** mesh rendering is invoked with `Renderer.visible = false`
+- **THEN** the backend does not draw that entity in the mesh pass
 
 #### Scenario: Point lights are backend-backed
 - **WHEN** a program imports `std.render.meshes` and the recognized `PointLightSystem` extern system is scheduled

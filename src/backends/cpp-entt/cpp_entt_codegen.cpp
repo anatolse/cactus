@@ -52,6 +52,41 @@ std::string input_action_constant_name(const std::string& input_name) {
     return "K_" + upper_copy(snake_case(input_name));
 }
 
+std::string cpp_string_literal(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (const char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(ch); break;
+        }
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+std::string asset_register_call(const AssetDeclNode& asset) {
+    const auto path_literal = cpp_string_literal(asset.path);
+    switch (asset.asset_kind) {
+        case AssetKind::Mesh:
+            return "shared_asset_registry().register_mesh(" + asset.name + ", " + path_literal + ", static_cast<int>(" + asset.name + "));";
+        case AssetKind::Texture:
+            return "shared_asset_registry().register_texture(" + asset.name + ", " + path_literal + ", static_cast<int>(" + asset.name + "));";
+        case AssetKind::Material:
+            return "shared_asset_registry().register_material(" + asset.name + ", " + path_literal + ", static_cast<int>(" + asset.name + "));";
+        case AssetKind::Sound:
+        case AssetKind::Music:
+        case AssetKind::Font:
+            return {};
+    }
+    return {};
+}
+
 std::string filter_simple_name(const FilterEntry& entry) {
     auto dot = entry.qualified_name.rfind('.');
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
@@ -316,7 +351,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                         continue;
                     }
                     out << "[[maybe_unused]] constexpr auto " << upper_copy(ca.name) << " = "
-                        << ManualSystemEmitter::emit_expr(*ca.value) << ";\n";
+                        << ManualSystemEmitter::emit_expr(*ca.value, program.ast) << ";\n";
                 }
             }
         }
@@ -442,7 +477,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
                     out << "        " << pad_to_width("auto component", widest) << " = " << trait.trait_name << "{};\n";
                     for (const auto& assignment : trait.assignments) {
                         out << "        " << pad_to_width("component." + assignment.name, widest) << " = "
-                            << ManualSystemEmitter::emit_expr(*assignment.value) << ";\n";
+                            << ManualSystemEmitter::emit_expr(*assignment.value, program.ast) << ";\n";
                     }
                     out << "        registry.emplace<" << trait.trait_name << ">(entity, component);\n";
                     out << "    }\n";
@@ -477,13 +512,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
             if (auto* cb = std::get_if<ConstBlockNode>(&decl)) {
                 for (auto& ca : cb->assignments) {
                     if (ca.name == "WINDOW_WIDTH") {
-                        win_width = ManualSystemEmitter::emit_expr(*ca.value);
+                        win_width = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
                     } else if (ca.name == "WINDOW_HEIGHT") {
-                        win_height = ManualSystemEmitter::emit_expr(*ca.value);
+                        win_height = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
                     } else if (ca.name == "WINDOW_TITLE") {
-                        win_title = ManualSystemEmitter::emit_expr(*ca.value);
+                        win_title = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
                     } else if (ca.name == "TARGET_FPS") {
-                        win_fps = ManualSystemEmitter::emit_expr(*ca.value);
+                        win_fps = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
                     }
                 }
             }
@@ -499,7 +534,16 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "}\n\n";
 
     out << "void generated_init_project(entt::registry& registry) {\n";
+    out << "    (void)registry;\n";
     if (program.ast != nullptr) {
+        for (auto& decl : program.ast->declarations) {
+            if (auto* asset = std::get_if<AssetDeclNode>(&decl)) {
+                const auto registration = asset_register_call(*asset);
+                if (!registration.empty()) {
+                    out << "    " << registration << "\n";
+                }
+            }
+        }
         for (auto& decl : program.ast->declarations) {
             if (auto* unit = std::get_if<UnitNode>(&decl)) {
                 out << "    create_" << snake_case(unit->name) << "(registry);\n";
@@ -587,6 +631,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) { // NOLIN
     out << "}\n\n";
 
     out << "void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher) {\n";
+    out << "    (void)registry;\n";
     out << "    (void)dispatcher;\n";
     out << "    cactus::runtime::entt_backend::begin_render_frame();\n";
     if (program.ast != nullptr) {

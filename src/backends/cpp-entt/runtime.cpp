@@ -3,6 +3,7 @@
 #include <raylib.h>
 
 #include <algorithm>
+#include <array>
 #include <memory_resource>
 #include <unordered_map>
 
@@ -29,6 +30,13 @@ struct MeshSubmission {
     int material_runtime_id{-1};
 };
 
+struct PointLightSubmission {
+    Vector3 position{};
+    Color color{};
+    float intensity{1.0F};
+    float range{10.0F};
+};
+
 struct TextureResourceEntry {
     Texture2D texture{};
     bool loaded{false};
@@ -50,9 +58,198 @@ struct MaterialResourceEntry {
 std::pmr::unsynchronized_pool_resource g_render_queue_resource;
 std::pmr::vector<SpriteSubmission> g_sprite_queue{&g_render_queue_resource};
 std::pmr::vector<MeshSubmission> g_mesh_queue{&g_render_queue_resource};
+std::pmr::vector<PointLightSubmission> g_point_light_queue{&g_render_queue_resource};
 std::unordered_map<int, TextureResourceEntry> g_textures;
 std::unordered_map<int, MeshResourceEntry> g_meshes;
 std::unordered_map<int, MaterialResourceEntry> g_materials;
+
+constexpr int kMaxMeshLights = 4;
+constexpr int kPointLightType = 1;
+
+constexpr char kLightingVertexShader[] = R"(#version 330
+
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec3 vertexNormal;
+in vec4 vertexColor;
+
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
+
+out vec3 fragPosition;
+out vec2 fragTexCoord;
+out vec4 fragColor;
+out vec3 fragNormal;
+
+void main()
+{
+    fragPosition = vec3(matModel*vec4(vertexPosition, 1.0));
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal, 1.0)));
+    gl_Position = mvp*vec4(vertexPosition, 1.0);
+}
+)";
+
+constexpr char kLightingFragmentShader[] = R"(#version 330
+
+in vec3 fragPosition;
+in vec2 fragTexCoord;
+in vec3 fragNormal;
+
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+
+out vec4 finalColor;
+
+#define MAX_LIGHTS 4
+#define LIGHT_POINT 1
+
+struct Light {
+    int enabled;
+    int type;
+    vec3 position;
+    vec3 target;
+    vec4 color;
+};
+
+uniform Light lights[MAX_LIGHTS];
+uniform vec4 ambient;
+uniform vec3 viewPos;
+
+void main()
+{
+    vec4 texelColor = texture(texture0, fragTexCoord);
+    vec3 lightDot = vec3(0.0);
+    vec3 normal = normalize(fragNormal);
+    vec3 viewD = normalize(viewPos - fragPosition);
+    vec3 specular = vec3(0.0);
+
+    for (int i = 0; i < MAX_LIGHTS; i++)
+    {
+        if (lights[i].enabled == 1 && lights[i].type == LIGHT_POINT)
+        {
+            vec3 light = normalize(lights[i].position - fragPosition);
+            float NdotL = max(dot(normal, light), 0.0);
+            lightDot += lights[i].color.rgb*NdotL;
+
+            float specCo = 0.0;
+            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0);
+            specular += specCo*lights[i].color.rgb;
+        }
+    }
+
+    finalColor = texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0));
+    finalColor += texelColor*(ambient/10.0)*colDiffuse;
+    finalColor = pow(finalColor, vec4(1.0/2.2));
+}
+)";
+
+struct LightingShaderState {
+    Shader shader{};
+    bool loaded{false};
+    int ambient_loc{-1};
+    int view_pos_loc{-1};
+    std::array<int, kMaxMeshLights> enabled_locs{};
+    std::array<int, kMaxMeshLights> type_locs{};
+    std::array<int, kMaxMeshLights> position_locs{};
+    std::array<int, kMaxMeshLights> target_locs{};
+    std::array<int, kMaxMeshLights> color_locs{};
+};
+
+LightingShaderState g_lighting_shader_state{};
+
+void reset_lighting_shader_state() noexcept {
+    g_lighting_shader_state = {};
+    g_lighting_shader_state.enabled_locs.fill(-1);
+    g_lighting_shader_state.type_locs.fill(-1);
+    g_lighting_shader_state.position_locs.fill(-1);
+    g_lighting_shader_state.target_locs.fill(-1);
+    g_lighting_shader_state.color_locs.fill(-1);
+}
+
+Shader* ensure_lighting_shader() {
+    if (g_lighting_shader_state.loaded) {
+        return &g_lighting_shader_state.shader;
+    }
+    if (!IsWindowReady()) {
+        return nullptr;
+    }
+
+    reset_lighting_shader_state();
+    g_lighting_shader_state.shader = LoadShaderFromMemory(kLightingVertexShader, kLightingFragmentShader);
+    if (!IsShaderReady(g_lighting_shader_state.shader)) {
+        reset_lighting_shader_state();
+        return nullptr;
+    }
+
+    g_lighting_shader_state.loaded = true;
+    g_lighting_shader_state.shader.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(g_lighting_shader_state.shader, "matModel");
+    g_lighting_shader_state.shader.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(g_lighting_shader_state.shader, "matNormal");
+    g_lighting_shader_state.shader.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(g_lighting_shader_state.shader, "viewPos");
+    g_lighting_shader_state.ambient_loc = GetShaderLocation(g_lighting_shader_state.shader, "ambient");
+    g_lighting_shader_state.view_pos_loc = GetShaderLocation(g_lighting_shader_state.shader, "viewPos");
+
+    for (int i = 0; i < kMaxMeshLights; ++i) {
+        g_lighting_shader_state.enabled_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].enabled", i));
+        g_lighting_shader_state.type_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].type", i));
+        g_lighting_shader_state.position_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].position", i));
+        g_lighting_shader_state.target_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].target", i));
+        g_lighting_shader_state.color_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].color", i));
+    }
+
+    return &g_lighting_shader_state.shader;
+}
+
+void clear_lighting_shader() noexcept {
+    if (g_lighting_shader_state.loaded && IsWindowReady()) {
+        UnloadShader(g_lighting_shader_state.shader);
+    }
+    reset_lighting_shader_state();
+}
+
+void apply_point_lights(const Camera3D& camera) {
+    Shader* shader = ensure_lighting_shader();
+    if (shader == nullptr) {
+        return;
+    }
+
+    const float ambient[4] = {0.22F, 0.22F, 0.28F, 1.0F};
+    const float view_pos[3] = {camera.position.x, camera.position.y, camera.position.z};
+    SetShaderValue(*shader, g_lighting_shader_state.ambient_loc, ambient, SHADER_UNIFORM_VEC4);
+    SetShaderValue(*shader, g_lighting_shader_state.view_pos_loc, view_pos, SHADER_UNIFORM_VEC3);
+
+    const int active_lights = std::min(static_cast<int>(g_point_light_queue.size()), kMaxMeshLights);
+    g_render_debug_state.active_point_lights = active_lights;
+    g_render_debug_state.used_lit_mesh_shader = active_lights > 0;
+
+    for (int i = 0; i < kMaxMeshLights; ++i) {
+        const int enabled = i < active_lights ? 1 : 0;
+        const int type = kPointLightType;
+        const auto zero = Vector3{0.0F, 0.0F, 0.0F};
+        float position[3] = {zero.x, zero.y, zero.z};
+        float target[3] = {zero.x, zero.y, zero.z};
+        float color[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+
+        if (i < active_lights) {
+            const auto& light = g_point_light_queue[static_cast<std::size_t>(i)];
+            position[0] = light.position.x;
+            position[1] = light.position.y;
+            position[2] = light.position.z;
+            color[0] = (static_cast<float>(light.color.r) / 255.0F) * light.intensity;
+            color[1] = (static_cast<float>(light.color.g) / 255.0F) * light.intensity;
+            color[2] = (static_cast<float>(light.color.b) / 255.0F) * light.intensity;
+            color[3] = static_cast<float>(light.color.a) / 255.0F;
+        }
+
+        SetShaderValue(*shader, g_lighting_shader_state.enabled_locs[static_cast<std::size_t>(i)], &enabled, SHADER_UNIFORM_INT);
+        SetShaderValue(*shader, g_lighting_shader_state.type_locs[static_cast<std::size_t>(i)], &type, SHADER_UNIFORM_INT);
+        SetShaderValue(*shader, g_lighting_shader_state.position_locs[static_cast<std::size_t>(i)], position, SHADER_UNIFORM_VEC3);
+        SetShaderValue(*shader, g_lighting_shader_state.target_locs[static_cast<std::size_t>(i)], target, SHADER_UNIFORM_VEC3);
+        SetShaderValue(*shader, g_lighting_shader_state.color_locs[static_cast<std::size_t>(i)], color, SHADER_UNIFORM_VEC4);
+    }
+}
 
 void note_missing_asset() noexcept {
     ++g_render_debug_state.missing_assets;
@@ -136,6 +333,10 @@ Material* ensure_material_resource(const int runtime_id) {
         entry.loaded = true;
         entry.owned = true;
     }
+    if (Shader* shader = ensure_lighting_shader(); shader != nullptr) {
+        entry.material.shader = *shader;
+    }
+    entry.material.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
     return &entry.material;
 }
 
@@ -152,6 +353,8 @@ void flush_mesh_queue() noexcept {
     }
 
     g_render_debug_state.used_default_3d_camera = true;
+    g_render_debug_state.active_point_lights = std::min(static_cast<int>(g_point_light_queue.size()), kMaxMeshLights);
+    g_render_debug_state.used_lit_mesh_shader = g_render_debug_state.active_point_lights > 0;
     if (!IsWindowReady()) {
         return;
     }
@@ -162,6 +365,8 @@ void flush_mesh_queue() noexcept {
     camera.up = Vector3{0.0F, 1.0F, 0.0F};
     camera.fovy = 45.0F;
     camera.projection = CAMERA_PERSPECTIVE;
+
+    apply_point_lights(camera);
 
     BeginMode3D(camera);
     for (const auto& submission : g_mesh_queue) {
@@ -221,9 +426,11 @@ void reset_render_debug_state() noexcept {
     g_render_debug_state = {};
     g_sprite_queue.clear();
     g_mesh_queue.clear();
+    g_point_light_queue.clear();
     clear_texture_store();
     clear_mesh_store();
     clear_material_store();
+    clear_lighting_shader();
     shared_asset_registry().clear_diagnostics();
 }
 
@@ -234,8 +441,11 @@ const RenderDebugState& render_debug_state() noexcept {
 void begin_render_frame() noexcept {
     g_sprite_queue.clear();
     g_mesh_queue.clear();
+    g_point_light_queue.clear();
     g_render_debug_state.used_default_2d_camera = false;
     g_render_debug_state.used_default_3d_camera = false;
+    g_render_debug_state.active_point_lights = 0;
+    g_render_debug_state.used_lit_mesh_shader = false;
     g_render_debug_state.drawn_sprite_layers.clear();
 }
 
@@ -244,6 +454,7 @@ void end_render_frame() noexcept {
     flush_sprite_queue();
     g_mesh_queue.clear();
     g_sprite_queue.clear();
+    g_point_light_queue.clear();
 }
 
 void submit_sprite(const Vector2 position,
@@ -334,12 +545,18 @@ void submit_billboard(const Vector3 /*position*/,
     ++g_render_debug_state.submitted_billboards;
 }
 
-void register_point_light(const Vector3 /*position*/,
-                          const Color /*color*/,
-                          const float /*intensity*/,
-                          const float /*range*/,
+void register_point_light(const Vector3 position,
+                          const Color color,
+                          const float intensity,
+                          const float range,
                           const bool enabled) noexcept {
     if (enabled) {
+        g_point_light_queue.push_back(PointLightSubmission{
+            .position = position,
+            .color = color,
+            .intensity = intensity,
+            .range = range,
+        });
         ++g_render_debug_state.registered_point_lights;
     }
 }

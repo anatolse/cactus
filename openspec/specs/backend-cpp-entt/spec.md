@@ -161,6 +161,28 @@ The backend recognizes these patterns by the **fully qualified trait names** (mo
 - **WHEN** `extern system MySystem: filter: Position as pos, MyCustomTrait as c` is compiled and `MyCustomTrait` is user-defined
 - **THEN** the backend does not treat the system as a stdlib backend-library implementation
 
+### Requirement: EnTT backend runtime adapters realize sprite and mesh rendering through Raylib-backed frame passes
+The cpp-entt backend SHALL upgrade recognized stdlib sprite and mesh render-system bindings from submission-only/debug-accounting behavior to real Raylib-backed runtime rendering behavior. Recognized `SpriteRenderer` and `MeshRenderer` output SHALL flow through backend-owned render-frame passes rather than stopping at asset validation and debug counters.
+
+#### Scenario: Sprite renderer participates in backend-owned 2D Raylib rendering
+- **WHEN** a program importing `std.render.sprites` is compiled with `cpp-entt` and the recognized `SpriteRenderer` extern system runs for a visible entity with a resolvable texture asset
+- **THEN** the generated/runtime path queues or submits sprite draw work into the standard cpp-entt Raylib-backed 2D render pass
+
+#### Scenario: Mesh renderer participates in backend-owned 3D Raylib rendering
+- **WHEN** a program importing `std.render.meshes` is compiled with `cpp-entt` and the recognized `MeshRenderer` extern system runs for a visible entity with resolvable mesh/material assets
+- **THEN** the generated/runtime path queues or submits mesh draw work into the standard cpp-entt Raylib-backed 3D render pass
+
+### Requirement: EnTT render runtime provides deterministic default cameras for backend-owned render passes
+The cpp-entt backend SHALL provide deterministic default camera behavior for its backend-owned 2D and 3D render passes so simple renderable programs remain viewable without authored camera setup. Active `std.camera.*` trait consumption is out of scope for this change.
+
+#### Scenario: 2D render path falls back to default camera
+- **WHEN** sprite rendering occurs in a cpp-entt program
+- **THEN** the backend still renders using its default 2D camera configuration
+
+#### Scenario: 3D render path falls back to default camera
+- **WHEN** mesh rendering occurs in a cpp-entt program
+- **THEN** the backend still renders using its default 3D camera configuration
+
 ### Requirement: User-defined extern system codegen — C++ scaffold
 For `extern system` declarations with user-defined (non-stdlib) traits, the EnTT backend SHALL generate typed declarations and scheduling glue that call user-provided callback implementations from the project’s user library. The backend SHALL generate the iteration infrastructure (including `order by:` support when present), and the final linked project SHALL obtain the callback implementation from the user library rather than from a generated implementation body.
 

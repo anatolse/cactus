@@ -1,96 +1,118 @@
 # Cactus DSL Language Specification
 
-**Version:** 0.3.0
+**Version:** 0.4.0  
 **Status:** Draft
 
 ## 1. Overview
 
-Cactus DSL is a declarative, data-oriented language designed for game development. It targets kids (grades 1-5) with simple indentation-based syntax, but is powerful enough for complex 3D simulations. The language follows ECS (Entity Component System) architecture: data is defined in **traits** and **structs**, logic lives in **systems**, and entities are composed as **units**.
+Cactus DSL is a declarative, data-oriented gameplay language that compiles to an engine backend. Its primary purpose is to express **gameplay**: entities, state, reactions, spawning, scene flow, and action-game logic.
+
+The language is intentionally centered on a **gameplay-core profile** that is sufficient for authoring things like:
+
+- platformers: movement, gravity, jumping, collectibles, enemies, camera follow
+- shooters: fire input, projectile spawning, hit/damage flow, cleanup, enemy defeat
+
+Cactus is **not** specified as a general-purpose engine scripting language. Rendering, audio playback plumbing, physics integration, UI rendering, and similar engine-facing concerns belong to stdlib/backend layers unless explicitly elevated into the language surface by a separate accepted change.
+
+### 1.1 Layered Language Story
+
+The language should be understood in layers:
+
+```text
+┌──────────────────────────────────────────────┐
+│ Gameplay core                               │
+│ modules, traits, units, templates, systems, │
+│ events, inputs, assets, spawn, destroy,     │
+│ add/remove, scene flow                      │
+└──────────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────────┐
+│ Stdlib / backend-facing surface             │
+│ std.input, rendering, camera, physics,      │
+│ audio, extern funcs, extern systems         │
+└──────────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────────┐
+│ Deferred / unsupported ideas                │
+│ not part of the current normative profile   │
+└──────────────────────────────────────────────┘
+```
+
+### 1.2 Current Core Commitments
+
+The current gameplay-core profile includes:
+
+- `module`, `use`, `const`
+- `struct`, `enum`, `trait`
+- `unit`, `template`
+- `system`, `event`, `func`, `extern func`
+- `asset`, `input`
+- handlers: `on input:`, `on fixed_tick:`, `on tick:`, `on late_tick:`, `on spawn:`, `on destroy:`, `on load:`, `on unload:`
+- statements: `let`, `var`, assignment, `if`, `emit`, `spawn`, `destroy`, `load`, `add`, `remove`, `return`
+
+### 1.3 Deferred / Non-Normative Items
+
+The following are **not part of the current normative gameplay-core profile**:
+
+- `view`
+- `interface`
+- legacy `apply:` / `config:` archetype syntax
+- legacy `enable` / `disable` trait toggling as the documented runtime mutation model
+
+If older notes or examples mention them, treat those references as migration history or future work rather than active grammar.
 
 ## 2. Lexical Structure
 
 ### 2.1 Character Set
 
-Source files are UTF-8 encoded. Only ASCII characters are valid in identifiers and keywords. Non-ASCII characters are allowed only inside string literals.
+Source files are UTF-8 encoded. Identifiers and keywords are ASCII. Non-ASCII text is allowed inside string literals.
 
 ### 2.2 Indentation
 
-Cactus uses significant indentation (spaces only). Tabs are rejected with an error. Each indentation level is 4 spaces. The lexer maintains an indent stack and emits explicit `INDENT` and `DEDENT` tokens.
+Cactus uses significant indentation with spaces only. Tabs are rejected. The lexer emits explicit `INDENT` and `DEDENT` tokens.
 
-```
-trait Player:        # TRAIT IDENTIFIER COLON NEWLINE INDENT
-    var health: int  # VAR IDENTIFIER COLON IDENTIFIER NEWLINE DEDENT
+```cactus
+trait Player:
+    var health: int
 ```
 
 ### 2.3 Comments
 
-Single-line comments start with `#` (when not followed by hex digits forming a color literal) and extend to end of line.
-
-```
-# This is a comment
-var x: int  # Inline comment
-```
+Single-line comments start with `#` and extend to the end of the line.
 
 ### 2.4 Keywords
 
-```
-module  use     const   struct  enum    trait   unit    system
-event   func    extern
+```text
+module  use     const   struct  enum    trait   unit    template
+system  event   func    extern  asset   input
 let     var     persist sync    pub
 on      emit    if      else    match   return
-filter  exclude
-map     reduce  true    false   as      and     or      not
-template  spawn   destroy load    unload
-enable  disable  disabled
-asset   input   fixed_tick  late_tick
+filter  exclude order   by      after   as
+spawn   destroy load    add     remove  to      from    self
+true    false   and     or      not
+fixed_tick late_tick
 ```
 
-### 2.5 Operators and Punctuation
+### 2.5 Literals
 
-| Token | Symbol | Token | Symbol |
-|-------|--------|-------|--------|
-| COLON | `:` | COMMA | `,` |
-| DOT | `.` | ARROW | `->` |
-| FAT_ARROW | `=>` | ASSIGN | `=` |
-| LPAREN | `(` | RPAREN | `)` |
-| LBRACKET | `[` | RBRACKET | `]` |
-| LBRACE | `{` | RBRACE | `}` |
-| PLUS | `+` | MINUS | `-` |
-| STAR | `*` | SLASH | `/` |
-| PERCENT | `%` | AMPERSAND | `&` |
-| PIPE | `\|` | CARET | `^` |
-| TILDE | `~` | EQUALS | `==` |
-| NOT_EQUALS | `!=` | LESS | `<` |
-| GREATER | `>` | LESS_EQ | `<=` |
-| GREATER_EQ | `>=` | PLUS_ASSIGN | `+=` |
-| MINUS_ASSIGN | `-=` | | |
+- integers: `0`, `42`
+- floats: `3.14`, `0.5`
+- strings: `"Hello"`
+- hex colors: `#FF0000`, `#FF000080`
+- booleans: `true`, `false`
 
-### 2.6 Literals
-
-#### Integer Literals
-Sequence of decimal digits: `0`, `42`, `1000`
-
-#### Float Literals
-Decimal digits with a decimal point: `3.14`, `0.5`, `100.0`
-
-#### String Literals
-Double-quoted UTF-8 strings: `"Hello World"`. Only valid inside `const` blocks (see §6.1).
-
-#### Hex Color Literals
-`#` followed by 6 (RGB) or 8 (RGBA) hex digits: `#FF0000`, `#FF000080`
-
-#### Boolean Literals
-`true`, `false`
-
-## 3. Grammar (EBNF)
+## 3. Grammar
 
 ### 3.1 Program Structure
 
 ```ebnf
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
-                | enum_decl | trait_decl | unit_decl | template_decl | system_decl
-                | event_decl | func_decl | extern_func_decl | asset_decl | input_decl ;
+                | enum_decl | trait_decl | unit_decl | template_decl
+                | system_decl | extern_system_decl | event_decl
+                | func_decl | extern_func_decl | asset_decl | input_decl ;
 ```
 
 ### 3.2 Module and Imports
@@ -101,16 +123,14 @@ use_decl        = "use" dotted_name [ "as" IDENTIFIER ] NEWLINE ;
 dotted_name     = IDENTIFIER { "." IDENTIFIER } ;
 ```
 
-Module names use dot notation mapping to folder structure:
-
-```
-module enemies.walker        # file must be enemies/walker.cactus
-use phys.body                # imports all pub symbols from phys/body.cactus
-use phys.body as b           # alias: access as b.RigidBody instead of phys.body.RigidBody
-use player                   # simple (single file): player.cactus
+```cactus
+module enemies.walker
+use std.input
+use std.math.vec2 as v2
+use gameplay.player as player
 ```
 
-### 3.3 Const Block
+### 3.3 Const Blocks
 
 ```ebnf
 const_block     = "const" ":" NEWLINE INDENT
@@ -120,230 +140,208 @@ const_assign    = IDENTIFIER "=" const_value NEWLINE ;
 const_value     = STRING_LITERAL | INT_LITERAL | FLOAT_LITERAL | HEX_COLOR ;
 ```
 
-### 3.4 Struct
+### 3.4 Structs
 
 ```ebnf
 struct_decl     = "struct" IDENTIFIER ":" NEWLINE INDENT
-                  { field_decl }
+                  { struct_field }
                   DEDENT ;
 ```
 
-### 3.5 Enum
+Structs are value objects used for grouped data.
+
+### 3.5 Enums
 
 ```ebnf
 enum_decl       = "enum" IDENTIFIER ":" NEWLINE INDENT
                   { enum_variant }
                   DEDENT ;
-enum_variant    = IDENTIFIER [ "=" INT_LITERAL ] NEWLINE ;
 ```
 
-### 3.6 Trait
+Enums are used for named gameplay states.
 
-Traits may have a body (data traits) or no body (marker traits). Marker traits are zero-cost tag components used purely for filtering.
+### 3.6 Traits
+
+Traits are data-only. They represent ECS-style gameplay state attached to entities.
 
 ```ebnf
 trait_decl      = [ "pub" ] "trait" IDENTIFIER
                   [ ":" NEWLINE INDENT
                     { field_decl }
                     DEDENT ] ;
-```
 
-Traits are **data-only** — event handlers and `func` declarations are not allowed inside a trait body. Logic belongs in `system` declarations.
-
-**Marker traits** (no colon, no body):
-```cactus
-trait Persistent        # no fields — zero-cost marker
-trait Frozen
-pub trait Dead
-```
-
-**Data traits** (colon + body):
-```cactus
-trait Health:
-    var health: int = 100
-    let max_health: int = 100
-```
-
-### 3.7 Fields
-
-```ebnf
 field_decl      = field_modifiers ( "let" | "var" ) IDENTIFIER ":" type_ref
                   [ "=" expression ] NEWLINE ;
 field_modifiers = { "persist" | "sync" | "pub" } ;
 ```
 
-### 3.8 Unit
+Marker traits have no body:
 
-A `unit` declares a singleton entity archetype — exactly one instance, instantiated at program start (root module) or when the module is `load`ed. Each trait in `apply:` may carry a `: disabled` annotation to start inactive.
+```cactus
+trait Frozen
+pub trait PlayerTag
+```
+
+Data traits carry fields:
+
+```cactus
+trait Health:
+    let max_health: int = 100
+    persist sync var health: int = 100
+```
+
+### 3.7 Units and Templates
+
+`unit` declares an entity archetype that is instantiated automatically for the owning module/scene. `template` declares a reusable blueprint that is instantiated later by `spawn`.
+
+Both use nested trait entries.
 
 ```ebnf
 unit_decl       = [ "pub" ] "unit" IDENTIFIER ":" NEWLINE INDENT
-                  apply_block
-                  [ config_block ]
+                  { archetype_trait_entry }
                   DEDENT ;
-apply_block     = "apply" ":" NEWLINE INDENT
-                  { apply_entry }
-                  DEDENT ;
-apply_entry     = dotted_name [ "as" IDENTIFIER ] [ ":" "disabled" ] NEWLINE ;
-config_block    = "config" ":" NEWLINE INDENT
-                  { config_assign }
-                  DEDENT ;
-config_assign   = config_key "=" expression NEWLINE ;
-config_key      = IDENTIFIER [ "." IDENTIFIER ] ;
-```
 
-> **Note:** The `child:` block was removed in v0.2. To compose entities with sub-entities, use `spawn` in `on spawn()` handlers and `destroy entity_id` in `on destroy()` handlers. See §9.1 for the pattern.
-
-### 3.8a Template
-
-A `template` is a reusable multi-instance entity blueprint — **not** auto-instantiated. Instances are created at runtime with the `spawn` statement/expression. Template syntax is identical to `unit` except it uses the `template` keyword.
-
-```ebnf
 template_decl   = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
-                  apply_block
-                  [ config_block ]
+                  { archetype_trait_entry }
                   DEDENT ;
+
+archetype_trait_entry = IDENTIFIER NEWLINE
+                      | IDENTIFIER ":" NEWLINE INDENT
+                        { field_assignment }
+                        DEDENT ;
+
+field_assignment = IDENTIFIER "=" expression NEWLINE ;
 ```
 
 ```cactus
-template WalkerEnemy:
-    apply:
-        Position
-        EnemyAI
-        Frozen: disabled     # present but starts inactive
-    config:
-        patrol_speed = PATROL_SPEED
-        direction = 1.0
+pub unit Player:
+    Position:
+        pos = vec2(100.0, 300.0)
+        velocity = vec2(0.0, 0.0)
+    Health:
+        health = 3
+    PlayerTag
+
+template Bullet:
+    Position:
+        velocity = vec2(24.0, 0.0)
+    Bullet:
+        damage = 1
+        lifetime = 1.0
 ```
 
-### 3.9 System
+### 3.8 Systems
 
-Both `filter:` and `exclude:` are optional. A system with no `filter:` matches **all entities** (filter_mask = 0). Each `filter:` entry may declare an optional `as` alias for field access. The trait name is the implicit alias when no `as` is given.
+Systems contain gameplay logic over filtered entities.
 
 ```ebnf
 system_decl     = "system" IDENTIFIER ":" NEWLINE INDENT
                   [ filter_clause ]
                   [ exclude_clause ]
+                  [ order_by_clause ]
                   [ after_clause ]
                   { event_handler }
                   DEDENT ;
+
 filter_clause   = "filter" ":" NEWLINE INDENT
                   { filter_entry }
                   DEDENT ;
+
 filter_entry    = dotted_name [ "as" IDENTIFIER ] NEWLINE ;
+
 exclude_clause  = "exclude" ":" NEWLINE INDENT
                   { dotted_name NEWLINE }
                   DEDENT ;
+
+order_by_clause = "order" "by" ":" NEWLINE INDENT
+                  { sort_key NEWLINE }
+                  DEDENT ;
+
 after_clause    = "after" ":" NEWLINE INDENT
                   { IDENTIFIER NEWLINE }
                   DEDENT ;
 ```
 
-The optional `after:` clause declares explicit execution ordering: this system must run after all named systems within the same execution phase. `after:` is validated by the compiler — all named systems must exist and cycles (A after B, B after A) are a compile error.
-
 ```cactus
-# Render pass ordering: scene → UI → debug overlay
-system SceneRenderSystem:
-    filter:
-        Renderer as r
-    on tick(dt: float):
-        draw_scene(r)
-
-system UIRenderSystem:
-    filter:
-        UIRenderer as ui
-    after:
-        SceneRenderSystem
-    on tick(dt: float):
-        draw_ui(ui)
-
-system DebugOverlaySystem:
-    after:
-        SceneRenderSystem
-        UIRenderSystem
-    on tick(dt: float):
-        draw_debug()
-```
-
-```cactus
-# System with filter, exclude, and aliases
 system PatrolSystem:
     filter:
         Position as pos
         EnemyAI as ai
     exclude:
         Frozen
-        Dead
 
-    on tick(dt: float):
-        pos.pos = pos.pos + vec2(ai.patrol_speed * ai.direction * dt, 0.0)
-
-# System with no filter (matches all entities, no field access)
-system SceneCleanup:
-    exclude:
-        Persistent
-
-    on unload():
-        destroy
+    on tick:
+        pos.pos = pos.pos + vec2(ai.patrol_speed * ai.direction * tick.dt, 0.0)
 ```
 
-### 3.10 Event Handler
+### 3.9 Event Handlers
 
-Event handlers respond to named events or one of the built-in lifecycle events. Lifecycle handlers have fixed parameter signatures. **User-defined event handlers have empty parameter lists** — the event payload is accessed via the implicit `event` object (see §6.8).
+Handlers are parameter-free in the current profile. Handler-local event data is accessed through the lifecycle/event binding itself or through an explicit alias.
 
 ```ebnf
-event_handler   = "on" event_name "(" [ param_list ] ")" ":" NEWLINE INDENT
+event_handler   = "on" event_name [ "as" IDENTIFIER ] ":" NEWLINE INDENT
                   { statement }
                   DEDENT ;
-event_name      = IDENTIFIER | "spawn" | "destroy" | "load" | "unload"
-                | "tick" | "fixed_tick" | "late_tick" | "input" ;
-param_list      = param { "," param } ;
-param           = IDENTIFIER ":" type_ref ;
+
+event_name      = IDENTIFIER | "input" | "fixed_tick" | "tick" | "late_tick"
+                | "spawn" | "destroy" | "load" | "unload" ;
 ```
 
-**Built-in lifecycle handlers and their required signatures:**
+```cactus
+on tick:
+    pos.pos = pos.pos + vel.value * tick.dt
 
-| Handler | Parameters | Phase | Description |
-|---------|-----------|-------|-------------|
-| `on input()` | none | Input | Input snapshot ready. Write intent traits. |
-| `on fixed_tick(dt: float)` | `dt: float` | Physics | Fixed timestep. May run 0–N times per frame. |
-| `on tick(dt: float)` | `dt: float` | General | Runs once per rendered frame. |
-| `on late_tick(dt: float)` | `dt: float` | Post | After tick. Camera follow, dependent transforms. |
-| `on spawn()` | none | Entity | Fires after a new entity matching the filter is created. |
-| `on destroy()` | none | Entity | Fires before a matching entity is removed. |
-| `on unload()` | none | Scene | Fires **before** new entities are created (Phase 1). |
-| `on load()` | none | Scene | Fires **after** all new entities are created (Phase 3). |
+on fixed_tick as ft:
+    vel.value = vel.value + gravity.value * ft.dt
 
-**User event handlers** use the implicit `event` object:
+on PlayerDamaged:
+    hp.health = hp.health - PlayerDamaged.amount
+
+on PlayerDamaged as dmg:
+    hp.health = hp.health - dmg.amount
+```
+
+### 3.10 Extern Systems
+
+`extern system` is an advanced backend-facing declaration. It declares a filtered/ordered pass whose implementation is provided by the backend.
+
+```ebnf
+extern_system_decl = "extern" "system" IDENTIFIER ":" NEWLINE INDENT
+                     [ filter_clause ]
+                     [ exclude_clause ]
+                     [ order_by_clause ]
+                     [ after_clause ]
+                     DEDENT ;
+```
+
+### 3.11 Events
+
+Events are typed gameplay messages.
+
+```ebnf
+event_decl       = [ "pub" ] "event" IDENTIFIER
+                   [ ":" NEWLINE INDENT
+                     { event_field_decl }
+                     DEDENT ] ;
+
+event_field_decl = IDENTIFIER ":" type_ref NEWLINE ;
+```
+
 ```cactus
 event PlayerDamaged:
-    var amount: int
+    amount: int
 
-system HealthSystem:
-    filter:
-        Health as h
-
-    on PlayerDamaged():              # empty param list
-        h.health -= event.amount     # event.field access
-        if h.health <= 0:
-            destroy
+pub event spawn
 ```
 
-### 3.11 Event Declaration
+### 3.12 Functions
+
+Regular `func` declarations are pure. `extern func` declarations are runtime/backend-provided.
 
 ```ebnf
-event_decl      = "event" IDENTIFIER ":" NEWLINE INDENT
-                  { field_decl }
-                  DEDENT ;
-```
-
-### 3.12 Func
-
-Regular `func` declarations are pure and must have a body. `extern func` declarations are body-less and mark functions whose implementation is provided by the backend runtime (the `cactus_runtime.h` header). The return type follows the closing `)` directly — the `->` arrow token is **not used** in function declarations.
-
-```ebnf
-func_decl        = [ "pub" ] "func" IDENTIFIER "(" [ param_list ] ")"
-                   [ type_ref ] ":" NEWLINE INDENT
+func_decl        = [ "pub" ] "func" IDENTIFIER
+                   "(" [ param_list ] ")" [ type_ref ]
+                   ":" NEWLINE INDENT
                    { statement }
                    DEDENT ;
 
@@ -351,38 +349,45 @@ extern_func_decl = [ "pub" ] "extern" "func" IDENTIFIER
                    "(" [ param_list ] ")" [ type_ref ] NEWLINE ;
 ```
 
-**`extern func` rules:**
-- No colon and no body after the signature.
-- Exempt from purity enforcement (§6.2) and recursion detection (§6.3).
-- When `pub`, the function is exported in the module's `ImportedSymbols.funcs` map and visible to importers.
-- When any `extern func` is in scope (locally or via `use`), C++ backends emit `#include "cactus_runtime.h"` in the generated file.
+### 3.13 Assets and Inputs
 
-```cactus
-# In std/math.cactus — backend provides the implementation:
-pub extern func lerp(a: float, b: float, t: float) float
-pub extern func sqrt(v: float) float
+```ebnf
+asset_decl  = [ "pub" ] "asset" IDENTIFIER ":" asset_type "=" STRING_LITERAL NEWLINE ;
+asset_type  = "mesh" | "texture" | "sound" | "music" | "font" | "material" ;
 
-# In game code:
-use std.math
-
-system Smooth:
-    filter:
-        Position as pos
-        Target as tgt
-    on tick(dt: float):
-        pos.x = std.math.lerp(pos.x, tgt.x, 0.1)
+input_decl  = [ "pub" ] "input" IDENTIFIER ":" ( "button" | "axis" ) NEWLINE INDENT
+              { input_prop }
+              DEDENT ;
+input_prop  = IDENTIFIER "=" expression NEWLINE ;
 ```
 
-### 3.13 Types
+```cactus
+asset PlayerSprite: texture = "sprites/player.png"
+
+input MoveX: axis
+    negative = Key.A
+    positive = Key.D
+
+input Fire: button
+    mouse = MouseButton.Left
+```
+
+### 3.14 Types
 
 ```ebnf
 type_ref        = IDENTIFIER [ "[" type_ref "]" ] ;
 ```
 
-Built-in type names: `int`, `float`, `bool`, `string`, `vec2`, `vec3`, `quat`, `color`, `entity_id`.
-Parameterized: `list[T]` where `T` is any type.
+Built-in types include:
 
-### 3.14 Expressions
+- `int`, `float`, `bool`, `string`
+- `vec2`, `vec3`, `quat`, `color`
+- `entity_id`
+- asset handles: `mesh_id`, `texture_id`, `sound_id`, `music_id`, `font_id`, `material_id`
+- input handles: `InputButton`, `InputAxis`
+- `list[T]`
+
+### 3.15 Expressions
 
 ```ebnf
 expression      = or_expr ;
@@ -394,1168 +399,314 @@ additive_expr   = multiplicative_expr { ( "+" | "-" ) multiplicative_expr } ;
 multiplicative_expr = unary_expr { ( "*" | "/" | "%" ) unary_expr } ;
 unary_expr      = ( "not" | "-" ) unary_expr | postfix_expr ;
 postfix_expr    = primary_expr { "." IDENTIFIER [ "(" [ arg_list ] ")" ] } ;
-primary_expr    = INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | HEX_COLOR
-                | BOOL_LITERAL | IDENTIFIER | "(" expression ")"
+primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
                 | lambda_expr | match_expr | if_expr | list_literal | spawn_expr ;
-lambda_expr     = IDENTIFIER "=>" expression ;
-match_expr      = "match" expression ":" NEWLINE INDENT
-                  { match_arm }
-                  DEDENT ;
-match_arm       = pattern "=>" expression NEWLINE ;
-pattern         = IDENTIFIER | INT_LITERAL | "_" ;
-if_expr         = "if" expression ":" expression "else" ":" expression ;
-list_literal    = "[" [ expression { "," expression } ] "]" ;
-arg_list        = expression { "," expression } ;
-spawn_expr      = "spawn" IDENTIFIER "(" [ spawn_arg_list ] ")" ;
 ```
 
-`spawn_expr` is an expression that creates a new entity and returns its `entity_id`. See §9.1.
-
-### 3.15 Statements
+`spawn` is both an expression and a statement surface:
 
 ```ebnf
-statement       = let_decl | var_decl | var_assign
-                | emit_stmt | spawn_expr NEWLINE | destroy_stmt | load_stmt
-                | enable_stmt | disable_stmt | return_stmt | expr_stmt | if_stmt ;
+spawn_expr      = "spawn" IDENTIFIER ":" NEWLINE INDENT
+                  { archetype_trait_entry }
+                  DEDENT ;
+```
+
+### 3.16 Statements
+
+```ebnf
+statement       = let_decl | var_decl | var_assign | emit_stmt | destroy_stmt
+                | load_stmt | add_stmt | remove_stmt | return_stmt
+                | expr_stmt | if_stmt | trait_match_stmt ;
+
 let_decl        = "let" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 var_decl        = "var" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 var_assign      = IDENTIFIER ( "=" | "+=" | "-=" ) expression NEWLINE ;
-emit_stmt       = "emit" IDENTIFIER "(" [ arg_list ] ")" [ "to" expression ] NEWLINE ;
-spawn_arg_list  = spawn_arg { "," spawn_arg } ;
-spawn_arg       = IDENTIFIER "=" expression ;
+
+emit_stmt       = "emit" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
+                  { field_assignment }
+                  DEDENT ;
+
 destroy_stmt    = "destroy" [ expression ] NEWLINE ;
 load_stmt       = "load" dotted_name NEWLINE ;
-enable_stmt     = "enable" dotted_name NEWLINE ;
-disable_stmt    = "disable" dotted_name NEWLINE ;
+
+add_stmt        = "add" IDENTIFIER [ "to" expression ] NEWLINE
+                | "add" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
+                  { field_assignment }
+                  DEDENT ;
+
+remove_stmt     = "remove" IDENTIFIER [ "from" expression ] NEWLINE ;
+
 return_stmt     = "return" [ expression ] NEWLINE ;
 expr_stmt       = expression NEWLINE ;
-if_stmt         = "if" expression ":" NEWLINE INDENT
-                  { statement }
-                  DEDENT
-                  [ "else" ":" NEWLINE INDENT
-                    { statement }
-                    DEDENT ] ;
 ```
 
-**`let` / `var`** declare local variables scoped to the current handler body:
 ```cactus
-let speed = math.length(pos.velocity)    # immutable local
-var count: int = 0                        # mutable local with explicit type
-count += 1
-```
+let speed = 5.0
+var timer: float = 0.0
 
-**`spawn`** creates a new entity from a template and returns its `entity_id`. When used as a statement, the return value is discarded:
-```cactus
-spawn WalkerEnemy(pos = vec2(400.0, 568.0), patrol_min_x = 350.0)  # discard id
-let enemy = spawn WalkerEnemy(pos = vec2(400.0, 568.0))             # capture id
-```
+emit PlayerJumped:
+    position = p.pos
+    jumps_remaining = phys.jumps_remaining
 
-**`destroy`** removes an entity. With no argument, removes the current entity. With an `entity_id` expression, removes that specific entity:
-```cactus
-if Health.health <= 0:
-    destroy                          # remove current entity
+let bullet = spawn PlayerBullet:
+    Position:
+        pos = p.pos
+        velocity = vec2(24.0, 0.0)
 
-destroy PlayerComposition.gun        # remove a stored child entity
-```
+add Invincible:
+    duration = 1.5
 
-**`load`** transitions to a new module-as-scene (deferred to end of frame):
-```cactus
+remove Frozen
+destroy bullet
 load levels.level2
 ```
 
-**`emit`** dispatches an event. Without `to`, it is broadcast. With `to entity_id`, it is targeted to one entity:
-```cactus
-emit PlayerJumped()                          # broadcast
-emit Damage(amount = 10) to EnemyAI.target  # targeted
-```
+### 3.17 Trait Match Statements
 
-**`enable`** / **`disable`** toggle a trait's active state on the current entity:
-```cactus
-enable Frozen
-disable EnemyAI
-```
-
-### 3.16 Asset Declarations
-
-Asset declarations bind a compile-time identifier to a typed external resource file path. They are only valid at module top level. The declared name resolves to a built-in opaque ID type (see §5.1).
-
-```ebnf
-asset_decl  = [ "pub" ] "asset" IDENTIFIER ":" asset_type "=" STRING_LITERAL NEWLINE ;
-asset_type  = "mesh" | "texture" | "sound" | "music" | "font" | "material" ;
-```
-
-Each asset type maps to a built-in opaque handle:
-
-| Declaration type | Resolved type |
-|-----------------|---------------|
-| `mesh`          | `mesh_id`     |
-| `texture`       | `texture_id`  |
-| `sound`         | `sound_id`    |
-| `music`         | `music_id`    |
-| `font`          | `font_id`     |
-| `material`      | `material_id` |
-
-String literals in `asset` declarations are the **only** exception to the const-string rule (see §6.1).
+Trait-pattern matching is an advanced gameplay statement used on `entity_id` values.
 
 ```cactus
-asset PlayerMesh:  mesh    = "models/player.glb"
-asset ShotSound:   sound   = "audio/shot.wav"
-asset MainTheme:   music   = "audio/theme.ogg"
-asset HudFont:     font    = "fonts/hud.ttf"
-
-pub asset SharedTex: texture = "sprites/shared.png"   # visible to importers
-
-trait MeshRenderer:
-    let mesh: mesh_id
-    var visible: bool = true
-
-unit Player:
-    apply:
-        Transform
-        MeshRenderer
-    config:
-        mesh = PlayerMesh
+match collision.other:
+    PlayerTag =>
+        emit PlayerDamaged:
+            amount = 1
+    Collectible as col =>
+        let points = col.point_value
+    _ =>
+        let ignored = 0
 ```
 
-### 3.17 Input Declarations
+## 4. Semantic Model
 
-Input declarations bind a compile-time identifier to a logical input action of kind `button` or `axis`. They are only valid at module top level. Properties reference enum constants from `std.input`.
+### 4.1 Core Data Model
 
-```ebnf
-input_decl = [ "pub" ] "input" IDENTIFIER ":" ( "button" | "axis" ) NEWLINE INDENT
-             { input_prop }
-             DEDENT ;
-input_prop = IDENTIFIER "=" expression NEWLINE ;
-```
+- **traits** define entity data
+- **units** define pre-existing entities
+- **templates** define spawnable blueprints
+- **systems** define logic over filtered entities
+- **events** define typed gameplay messages
 
-**Valid property keys:**
+### 4.2 Field Access and Handler Bindings
 
-| Kind | Valid keys |
-|------|-----------|
-| `button` | `key`, `mouse`, `gamepad` |
-| `axis` | `negative`, `positive`, `gamepad`, `mouse_delta_x`, `mouse_delta_y`, `invert` |
+Trait fields in systems are accessed through:
 
-Property values reference `std.input` enum constants: `Key.A`, `Key.Space`, `MouseButton.Left`, `GamepadButton.South`, `GamepadAxis.LeftX`, etc.
+- `alias.field` if a filter alias is declared
+- `TraitName.field` if no alias is declared
 
-A `button` input declaration name resolves to type `InputButton`. An `axis` declaration name resolves to type `InputAxis`.
+Lifecycle and event payloads are accessed through:
 
-Query functions defined in `std.input` (must `use std.input`):
+- `input`, `fixed_tick`, `tick`, `late_tick`, `spawn`, `destroy`, `load`, `unload`
+- or a handler alias declared with `on ... as alias:`
+- or the user event name itself / its alias
 
 ```cactus
-pub func pressed(b: InputButton) -> bool    # true on first press frame
-pub func down(b: InputButton) -> bool       # true while held
-pub func released(b: InputButton) -> bool   # true on first release frame
-pub func axis(a: InputAxis) -> float        # -1.0 to 1.0
-pub func axis2(x: InputAxis, y: InputAxis) -> vec2
-```
-
-```cactus
-use std.input
-
-input MoveX: axis
-    negative = Key.A
-    positive = Key.D
-    gamepad  = GamepadAxis.LeftX
-
-input Jump: button
-    key     = Key.Space
-    gamepad = GamepadButton.South
-
-trait MoveIntent:
-    var axis: vec2 = vec2(0.0, 0.0)
-    var jump_pressed: bool = false
-
-system ReadPlayerInput:
-    filter:
-        MoveIntent as move
-        PlayerTag
-
-    on input():
-        move.axis         = input.axis2(MoveX, MoveY)
-        move.jump_pressed = input.pressed(Jump)
-```
-
-## 4. Operator Precedence
-
-From lowest to highest:
-
-| Precedence | Operators | Associativity |
-|------------|-----------|---------------|
-| 1 (lowest) | `or` | Left |
-| 2 | `and` | Left |
-| 3 | `==`, `!=` | Left |
-| 4 | `<`, `>`, `<=`, `>=` | Left |
-| 5 | `+`, `-` | Left |
-| 6 | `*`, `/`, `%` | Left |
-| 7 (highest) | `not`, `-` (unary) | Right (prefix) |
-| 8 | `.` (member access), `()` (call) | Left (postfix) |
-
-## 5. Type System
-
-### 5.1 Primitive Types
-
-| Type | Description | Size |
-|------|-------------|------|
-| `int` | 32-bit signed integer | 4 bytes |
-| `float` | 64-bit floating point | 8 bytes |
-| `bool` | Boolean | 1 byte |
-| `string` | UTF-8 immutable string (rvalue only) | pool ID |
-| `vec2` | `{ x: float, y: float }` | 16 bytes |
-| `vec3` | `{ x: float, y: float, z: float }` | 24 bytes |
-| `quat` | `{ x: float, y: float, z: float, w: float }` | 32 bytes |
-| `color` | RGBA color from hex literal | 4 bytes |
-| `entity_id` | Opaque handle to a live entity. Always valid when held in an active trait field — there is no null sentinel. The "no relationship" state is modeled via trait presence/absence (enable/disable). Stale handles (referencing destroyed entities) are runtime-invalid; the EnTT backend's generation IDs detect them transparently. | 8 bytes |
-| `mesh_id` | Opaque handle to a loaded mesh resource. Only obtained from an `asset ... : mesh` declaration. | opaque |
-| `texture_id` | Opaque handle to a loaded texture resource. Only obtained from an `asset ... : texture` declaration. | opaque |
-| `sound_id` | Opaque handle to a loaded sound (short, one-shot) resource. Only obtained from an `asset ... : sound` declaration. | opaque |
-| `music_id` | Opaque handle to a loaded music (streaming) resource. Only obtained from an `asset ... : music` declaration. | opaque |
-| `font_id` | Opaque handle to a loaded font resource. Only obtained from an `asset ... : font` declaration. | opaque |
-| `material_id` | Opaque handle to a loaded material resource. Only obtained from an `asset ... : material` declaration. | opaque |
-| `InputButton` | Named button action handle. Only obtained from an `input ... : button` declaration. | opaque |
-| `InputAxis` | Named axis action handle. Only obtained from an `input ... : axis` declaration. | opaque |
-
-### 5.2 Composite Types
-
-- **`struct Name:`** — Value object. Fields only. Passed by value. No identity. No methods.
-- **`enum Name:`** — Named set of integer constants. Used for state machines.
-- **`list[T]`** — Ordered collection supporting `map`, `filter`, `reduce`. Functional stream.
-
-### 5.3 Field Modifiers
-
-| Modifier | Meaning | Constraint |
-|----------|---------|------------|
-| `let` | Immutable. Set once at creation. | Cannot be reassigned. |
-| `var` | Mutable. Can be changed by systems. | Default mutability. |
-| `persist` | Marks field for serialization. | Only on `var` fields. |
-| `sync` | Marks field for network replication. | Only on `var` fields. |
-| `pub` | Public visibility outside module. | On fields, traits, units, funcs. |
-
-### 5.4 Type Inference
-
-- Lambda parameters are inferred from context (e.g., `items.map(i => i.price)` infers `i: Item`)
-- Binary operation results follow standard promotion rules
-- Function call return types are resolved from declarations
-- `let` / `var` local declarations infer type from the initializer expression when no explicit type annotation is given
-- `spawn_expr` always has type `entity_id`
-
-## 6. Semantic Constraints
-
-### 6.1 Const-String Rule
-
-String literals (`"..."`) are **forbidden** outside `const` blocks. All string references in logic must go through `const` identifiers. This ensures compile-time string interning and prevents accidental allocations in hot loops.
-
-**Exception:** String literals are permitted as the resource path value inside `asset` declarations (see §3.16). They are not permitted in any other position outside `const` blocks.
-
-```
-# VALID
-const:
-    SHOP_TITLE = "Cactus Shop"
-
-asset PlayerMesh: mesh = "models/player.glb"   # VALID — asset path exception
-
-# INVALID — string literal in system body
-system UI:
-    on tick(dt: float):
-        set_title("Bad")  # ERROR: string literal outside const block or asset declaration
-```
-
-### 6.2 Func Purity
-
-Functions declared with `func` (non-extern) are **pure**:
-- No `emit` statements allowed
-- No mutation of external state
-- No `world` access
-- Return value only
-- No side effects
-
-`extern func` declarations are **exempt** from purity checks. Their bodies live in the backend runtime and may have arbitrary side effects (e.g., playing audio, drawing). The purity rule applies only to user-defined Cactus func bodies.
-
-```cactus
-# VALID user func
-func distance(a: vec3, b: vec3) float:
-    return ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z))
-
-# INVALID user func
-func bad() int:
-    emit SomeEvent()  # ERROR: emit in func
-    return 0
-
-# VALID — extern func: purity not enforced
-pub extern func play_sfx(id: sound_id)
-```
-
-### 6.3 No Recursion
-
-Recursive function calls (direct or indirect) are forbidden in user-defined `func` declarations. This is required for GPU safety and deterministic execution.
-
-`extern func` declarations are **excluded from the call graph** — calling an extern func from a user func does not create a call-graph edge for the extern func, and the extern func itself is never checked for recursion.
-
-### 6.4 No Imperative Loops
-
-There are no `for`, `while`, or `do` loops. All iteration is via functional collection operations:
-- `collection.map(f)` — Transform each element
-- `collection.filter(pred)` — Keep elements matching predicate
-- `collection.reduce(init, accumulator)` — Fold to single value
-
-### 6.5 Persist/Sync Validation
-
-- `persist` modifier is only valid on `var` fields (not `let`)
-- `sync` modifier is only valid on `var` fields (not `let`)
-- Both `persist` and `sync` can be combined on the same field
-
-```
-# VALID
-trait Player:
-    persist sync var health: int = 100
-    persist var score: int = 0
-    let max_health: int = 100
-
-# INVALID
-trait Bad:
-    persist let name: string  # ERROR: persist on let field
-    sync let id: int          # ERROR: sync on let field
-```
-
-### 6.6 System Filter Validation
-
-- All trait names in a system's `filter:` clause must reference declared traits
-- All trait names in a system's `exclude:` clause must reference declared traits
-
-### 6.7 Event Validation
-
-- `emit` statements must reference declared events
-- User event handler parameter lists must be empty; access event fields via the implicit `event` object
-- The `to` expression in a targeted `emit ... to expr` must evaluate to type `entity_id`
-
-### 6.8 Field Access Rules in System Handlers
-
-Inside a system event handler body, identifier resolution follows this order:
-
-1. **Handler parameters** — lifecycle handlers declare explicit parameters (e.g., `dt` in `on tick(dt: float):`). These are always in scope.
-
-2. **`event` object** — in user-defined event handlers only, `event.fieldname` accesses the event payload. The `event` identifier is reserved in this context. It is read-only; `event.x = ...` is an error.
-
-3. **Local variables** — declared with `let` (immutable) or `var` (mutable) in the current handler body. Re-declaring an existing local in the same scope is an error.
-
-4. **Trait fields via alias** — accessed as `alias.field` or `TraitName.field`. The alias is either:
-   - The explicit `as` name declared in the `filter:` entry, OR
-   - The trait name itself (implicit alias when no `as` is given)
-
-**Bare unqualified identifiers that resolve to trait fields are forbidden.** Always use `alias.field` or `TraitName.field`.
-
-```cactus
-system Movement:
-    filter:
-        Position as pos      # explicit alias
-        Velocity             # no alias; use Velocity.dx, Velocity.dy
-
-    on tick(dt: float):
-        let step = dt * 60.0             # local binding
-        pos.x += Velocity.dx * step      # alias.field and TraitName.field — both OK
-        pos.y += Velocity.dy * step
-        # dx += 1.0  # ERROR: bare 'dx' is not allowed
-```
-
-```cactus
-system DamageSystem:
-    filter:
-        Health as h
-
-    on PlayerDamaged():         # user event handler
-        h.health -= event.amount   # event.field is valid here
-        if h.health <= 0:
-            destroy
-```
-
-### 6.9 Event Dispatch Semantics
-
-**Dispatch timing:** Events are dispatched same-frame (within the frame they are emitted), up to a configurable cascade depth.
-
-**Max cascade depth:** Each frame, events are processed in rounds. Round 0 is all tick-phase handlers. Events emitted in round N are processed in round N+1. If `N+1 > max_cascade_depth`, those events are deferred to the next frame. The default `max_cascade_depth` is **1** (configurable per-project).
-
-```
-Frame execution with max_cascade_depth = 1:
-
-  Round 0:  on input(), on fixed_tick(), on tick(), on late_tick()
-            → emits go into depth-1 queue
-  Round 1:  process depth-1 events
-            → emits at this level deferred to next frame
-```
-
-**Handler ordering:**
-- Within a module: systems execute in declaration order, subject to `after:` constraints
-- Across modules: systems execute in import order (of the root module)
-- Multiple systems handling the same event: each runs in system declaration order
-- `after:` constraints create explicit ordering edges: a system with `after: X` always runs after system `X` within the same phase, regardless of declaration order
-- The compiler performs topological sort (DFS) over declaration order + `after:` edges and detects cycles at compile time; a cycle is a compile error
-
-**System ordering example:**
-```cactus
-system Physics:    on tick(dt: float): ...    # runs first (no after:)
-system Render:     after: Physics             # runs after Physics
-system DebugHUD:   after: Render             # runs after Render
-```
-
-**Queue semantics:** Multiple instances of the same event type are queued FIFO and each processed in turn.
-
-**Targeted events:** `emit Event(...) to entity_id` delivers the event only to the specific entity. The system's `filter:` clause still applies — the entity must match the filter for the handler to fire.
-
-**No event object in lifecycle handlers:** The `event` implicit object is only available in user-defined event handlers, not in `on tick()`, `on input()`, etc.
-
-## 7. Execution Model
-
-### 7.1 ECS Architecture
-
-- **Traits** define data schemas (components in ECS terminology)
-- **Units** compose traits into entity archetypes
-- **Systems** contain logic that operates on entities matching trait filters
-- **Events** enable decoupled communication between systems
-
-### 7.2 Frame Execution Model
-
-Each rendered frame executes in four ordered phases. Systems participate in a phase by declaring the corresponding handler. A system may declare handlers for multiple phases.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  on input()                                                     │
-│    Input device snapshot is fresh. Intent-writing systems run.  │
-│    No dt parameter.                                             │
-│  → Event phase (cascade up to max_cascade_depth)               │
-├─────────────────────────────────────────────────────────────────┤
-│  on fixed_tick(dt: float)                                       │
-│    Fixed timestep accumulator model. May run 0, 1, or N times  │
-│    per rendered frame depending on elapsed time vs step size.   │
-│    Use for: physics, collision, deterministic simulation.        │
-│  → Event phase (cascade up to max_cascade_depth, per step)     │
-├─────────────────────────────────────────────────────────────────┤
-│  on tick(dt: float)                                             │
-│    Runs once per rendered frame. dt varies with frame time.     │
-│    Use for: AI decisions, animation, timers, general gameplay.  │
-│  → Event phase (cascade up to max_cascade_depth)               │
-├─────────────────────────────────────────────────────────────────┤
-│  on late_tick(dt: float)                                        │
-│    Runs after tick. Player/entity positions are settled.        │
-│    Use for: camera follow, dependent transforms, trail updates. │
-│  → Events emitted here deferred to next frame                  │
-├─────────────────────────────────────────────────────────────────┤
-│  RENDER  (backend — not user code)                              │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**fixed_tick accumulator:**
-```
-accumulator += frame_delta_time
-while accumulator >= FIXED_STEP:
-    run on fixed_tick(FIXED_STEP) for all systems
-    process fixed_tick event phase
-    accumulator -= FIXED_STEP
-```
-
-### 7.3 Presentation
-
-Raylib is the default rendering/presentation API. Generated code uses Raylib for window management, rendering, input, and audio. Alternative libraries (SDL, etc.) can be supported via backend configuration.
-
-## 8. Module System
-
-### 8.1 One Module = One File
-
-Each `.cactus` source file is exactly one module. The module's identity is derived from its filesystem path relative to the project root, using dot notation:
-
-| File path | Module name |
-|-----------|-------------|
-| `player.cactus` | `player` |
-| `enemies/walker.cactus` | `enemies.walker` |
-| `lib/physics.cactus` | `lib.physics` |
-
-The optional `module` declaration, if present, must match the filesystem-derived name. Files in different folders with the same filename are distinct modules.
-
-### 8.2 Pub Visibility
-
-Top-level declarations can be marked `pub` to make them accessible from other modules. Without `pub`, declarations are module-private.
-
-```cactus
-pub trait Position:          # visible to other modules
-    var x: float = 0.0
-    var y: float = 0.0
-
-trait PlayerPhysics:         # private to this module
-    var velocity: vec2
-```
-
-The `pub` modifier is valid on: `trait`, `struct`, `enum`, `event`, `unit`, `func`, and individual fields.
-
-### 8.3 Importing Modules
-
-```cactus
-use player                   # import player.cactus
-use enemies.walker           # import enemies/walker.cactus
-use phys.body as b           # import with alias
-```
-
-All `pub` symbols from the imported module become available.
-
-### 8.4 Qualified Access
-
-Imported symbols are accessed through their module name or alias. In system `filter:` clauses, use block form with optional `as` aliases:
-
-```cactus
-use player
-use phys.body as b
-
-system Movement:
-    filter:
-        player.Position as pos
-        b.RigidBody as rb
-    on tick(dt: float):
-        pos.x += rb.velocity_x * dt
-```
-
-### 8.5 Field Access — Always Qualified
-
-Inside system handler bodies, trait fields are **always** accessed via `alias.field` or `TraitName.field`. Unqualified field access is not allowed (see §6.8).
-
-When you import a module and use its traits in a filter clause, declare an alias:
-
-```cactus
-use player
-
-system Movement:
-    filter:
-        player.Position as pos    # alias shortens qualified access
-        Velocity                  # no alias; use Velocity.dx etc.
-
-    on tick(dt: float):
-        pos.x += Velocity.dx * dt
-        pos.y += Velocity.dy * dt
-```
-
-### 8.6 Filter Clause Aliases
-
-System `filter:` clauses use block form. Aliases declared with `as` shorten field access. When omitted, the trait name (or qualified name's last segment) is the implicit access path:
-
-```cactus
-system Render:
-    filter:
-        phys.Body as b
-        render.Sprite as s
-    on tick(dt: float):
-        draw(b.x, b.y, s.width, s.height)
-```
-
-```cactus
-system Simple:
-    filter:
-        Position as pos
-        Velocity as vel
-    on tick(dt: float):
-        pos.x += vel.dx * dt
-```
-
-### 8.7 Trait Field Access via Alias
-
-With the mandatory alias.field model (§6.8), field access is always explicit through the alias:
-
-```cactus
-# Both Body and Sprite may have 'x' — but with aliases, always clear
-system Render:
-    filter:
-        Body as b
-        Sprite as s
-    on tick(dt: float):
-        draw(b.x, b.y, s.x, s.y)     # explicit via alias — no ambiguity
-
-# Position and Velocity have distinct fields — still use alias.field
 system Move:
     filter:
         Position as pos
         Velocity as vel
-    on tick(dt: float):
-        pos.x += vel.dx * dt
-        pos.y += vel.dy * dt
-```
 
-If two modules export symbols with the same name, use qualified access or aliases in `use` declarations:
+    on tick:
+        pos.pos = pos.pos + vel.value * tick.dt
 
-```cactus
-use module_a as ma
-use module_b as mb
-
-system Example:
+system Damage:
     filter:
-        ma.Config as cfg_a
-        mb.Config as cfg_b
-    on tick(dt: float):
-        cfg_a.value = cfg_b.value
+        Health as hp
+
+    on PlayerDamaged as dmg:
+        hp.health = hp.health - dmg.amount
 ```
 
-### 8.8 Module Resolution Order
+Bare unqualified trait-field access is not part of the current profile.
 
-When resolving `use` declarations, the compiler searches for `.cactus` files in this order:
+### 4.3 `entity_id` Semantics
 
-1. Root file's directory
-2. Directories from `--module-path` flags (left to right)
+`entity_id` is an opaque handle. There is no null sentinel in the language surface. Operations using `entity_id` are total: stale handles produce safe no-ops or no-match behavior rather than forcing author-side null checks.
 
-Dotted module names map to folder paths: `use enemies.walker` → searches for `enemies/walker.cactus`.
+### 4.4 Runtime Trait Mutation
 
-### 8.9 Circular Dependencies
+The canonical documented runtime trait mutation model is:
 
-Circular module dependencies are forbidden. The compiler detects cycles and reports the full path:
+- `add TraitName`
+- `add TraitName:` with block initialization
+- `remove TraitName`
 
+This is the preferred model for temporary gameplay states such as freeze, stun, invincibility, targeting, and similar state transitions.
+
+### 4.5 Purity and Recursion
+
+- user `func` declarations are pure
+- user `func` declarations cannot recurse
+- `extern func` declarations are runtime/backend-provided and are exempt from purity enforcement
+
+### 4.6 Strings
+
+String literals are only allowed in:
+
+- `const:` blocks
+- asset declaration paths
+
+### 4.7 Ordering and Filtering
+
+- `filter:` selects entities
+- `exclude:` removes entities from consideration
+- `after:` constrains system order within a phase
+- `order by:` constrains iteration order for a system pass
+
+## 5. Execution Model
+
+### 5.1 Frame Phases
+
+Each rendered frame executes in this order:
+
+```text
+input
+fixed_tick (0..N times)
+tick
+late_tick
+render
 ```
-ERROR: circular dependency: A → B → C → A
-```
 
-### 8.10 Compilation Model
+Events cascade between these phases according to the runtime's configured cascade depth.
 
-Modules are compiled in topological order (dependencies first). Each compiled module produces a binary `.cmod` artifact in the `build/` folder containing its `DecoratedProgram` and public symbol table. Dependent modules load only the public symbols from `.cmod` files — not the full AST — keeping memory usage bounded. After all modules compile, the linker merges all artifacts into a single `DecoratedProgram` for code generation.
+### 5.2 Scene Loading
 
-### 8.11 Module Data File (`_data.bin`)
+`load module.name` transitions to another module-as-scene. Conceptually:
 
-Each compiled module also produces a `<module_name>_data.bin` flat binary file alongside the generated `.cpp`. This file contains all `unit` instance configurations — field values and initial trait active states — serialized for fast runtime loading.
+1. unload old scene entities
+2. instantiate new scene units
+3. fire `on load:` handlers for the new scene
 
-**Format:**
-```
-[magic: 4 bytes "CDAT"] [version: uint16] [entity_count: uint32]
-[entity_0: name_len(uint16) + name_bytes + field_values(packed) + trait_mask(uint64)]
-[entity_1: ...]
-...
-```
+### 5.3 Structural Changes
 
-- Field values are packed in declaration order with no padding between fields
-- `trait_mask` is a `uint64` bitmask where each bit corresponds to a trait's compile-time index (1 = active, 0 = inactive/disabled)
-- No offset table — the file is loaded as a single sequential read
-- `template` declarations produce **no** entries in `_data.bin`
-- At runtime, `load module.name` reads `module_name_data.bin` to instantiate the module's entities
+The gameplay model relies on explicit structural changes:
 
-**Version mismatch**: if the file's version header does not match the compiler's current format version, the runtime rejects the file with an error.
+- `spawn` creates entities from templates
+- `destroy` removes entities
+- `add` attaches gameplay state traits
+- `remove` detaches gameplay state traits
 
-## 9. Dynamic ECS
+## 6. Gameplay-Core Examples
 
-### 9.1 Templates and Spawn
-
-`template` is symmetric with `unit` but defines a **multi-instance blueprint**. Instances are created at runtime with `spawn`, which is an expression returning `entity_id`:
-
-| Declaration | Instantiation |
-|-------------|---------------|
-| `event Foo:` | `emit Foo(...)` |
-| `template Foo:` | `let id = spawn Foo(...)` |
-| `unit Foo:` | (auto-instantiated on load) |
+### 6.1 Platformer Loop
 
 ```cactus
-template Enemy:
-    apply:
-        Position
-        EnemyAI
-        Frozen: disabled
-    config:
-        patrol_speed = PATROL_SPEED
+input MoveX: axis
+input Jump: button
 
-# In a system handler:
-let enemy = spawn Enemy(pos = vec2(400.0, 568.0), patrol_min_x = 350.0)
-emit AssignZone(min_x = 300.0, max_x = 500.0) to enemy
-```
+trait MoveIntent:
+    var axis_x: float = 0.0
+    var jump_pressed: bool = false
 
-**`spawn` field rules:**
-- Any field from the template's applied traits can be overridden
-- Fields not provided use the template's `config:` default
-- Fields with no default and not provided at spawn → compile error
-- `spawn` always returns `entity_id`
-
-**`destroy` removes an entity:**
-```cactus
-system DeathSystem:
+system ReadInput:
     filter:
-        Health as h
+        MoveIntent as move
 
-    on tick(dt: float):
-        if h.health <= 0:
+    on input:
+        move.axis_x = input.axis(MoveX)
+        move.jump_pressed = input.pressed(Jump)
+
+system JumpSystem:
+    filter:
+        Position as p
+        PlayerPhysics as phys
+        MoveIntent as move
+
+    on fixed_tick:
+        if move.jump_pressed and phys.jumps_remaining > 0:
+            p.velocity = vec2(p.velocity.x, phys.jump_force * -1.0)
+            phys.jumps_remaining = phys.jumps_remaining - 1
+            emit PlayerJumped:
+                position = p.pos
+```
+
+### 6.2 Shooter Loop
+
+```cactus
+input Fire: button
+
+template Bullet:
+    Position:
+        velocity = vec2(24.0, 0.0)
+    Bullet:
+        damage = 1
+        lifetime = 1.0
+
+system FireSystem:
+    filter:
+        Position as p
+        Shooter as shooter
+        PlayerInput as input_state
+
+    on tick:
+        if input_state.fire_pressed and shooter.cooldown <= 0.0:
+            let bullet = spawn Bullet:
+                Position:
+                    pos = p.pos
+                    velocity = vec2(24.0, 0.0)
+            shooter.cooldown = 0.15
+            emit ShotFired:
+                origin = p.pos
+
+system BulletHitSystem:
+    filter:
+        Bullet as bullet
+
+    on tick:
+        if bullet.lifetime <= 0.0:
             destroy
 ```
 
-With an `entity_id` expression, removes a specific entity:
-```cactus
-trait PlayerComposition:
-    var gun: entity_id
-    var camera: entity_id
-
-unit Player:
-    apply:
-        Transform
-        PlayerTag
-        PlayerComposition
-
-    on spawn():
-        PlayerComposition.gun    = spawn Weapon()
-        PlayerComposition.camera = spawn CameraRig()
-
-    on destroy():
-        destroy PlayerComposition.gun
-        destroy PlayerComposition.camera
-```
-
-`destroy` uses **swap-and-delete**: the last entity in the SoA arrays fills the deleted slot, keeping arrays packed. Entity ordering is not preserved.
-
-### 9.2 Trait Enable/Disable
+The shooter loop uses the same core constructs as the platformer loop: inputs, systems, templates, spawning, events, and cleanup.
 
-Each entity has a `uint64` **trait active bitmask**. Every trait is assigned a unique bit at compile time. `enable` and `disable` flip bits without changing field data:
-
-```cactus
-# Freeze an enemy (stop patrol, start frozen visual)
-system FreezeSystem:
-    filter:
-        Position
-        EnemyAI
-
-    on FreezeEvent():
-        disable EnemyAI    # PatrolSystem won't process this entity
-        enable Frozen      # FrozenSystem will now process it
-```
-
-System filters are compiled to bitmask predicates:
-- `filter:` → `filter_mask` — entity must have all these bits set
-- `exclude:` → `exclude_mask` — entity must have none of these bits set
-- Loop condition: `(trait_mask & filter_mask) == filter_mask && (trait_mask & exclude_mask) == 0`
-- **No filter** (`filter_mask = 0`): condition is always true — matches all entities
-
-**Modeling absent relationships without null:**
-Rather than storing a `entity_id` field that might be "null," use trait presence:
-
-```cactus
-# Instead of:  var target: entity_id = 0  (no null!)
-# Do this:
-trait Targeting:
-    var target: entity_id     # always valid when trait is active
-
-# enable Targeting and set target when the enemy acquires one
-# disable Targeting when it loses its target
-```
-
-### 9.3 Scene Loading
+## 7. Stdlib and Backend Surface
 
-A **module is a scene**. The `load` statement transitions to a new module-as-scene, deferred to end-of-frame. The runtime performs three phases:
-
-```
-Phase 1 — UNLOAD:  emit on unload()  → teardown systems run (e.g., SceneCleanup destroys entities)
-Phase 2 — INSTANTIATE: read _data.bin → spawn unit entities → emit on spawn() per entity
-Phase 3 — LOAD:    emit on load()    → setup systems run (e.g., spawn template instances)
-```
-
-**Key rules:**
-- Only one `load` call per frame; a second `load` in the same frame is a runtime error
-- `load` is valid in any system event handler
-- Root module `unit` declarations are always present (never unloaded)
-- Non-root module entities are created by `load` and torn down by the next `load` or shutdown
-
-**Complete scene transition example:**
-```cactus
-use std.core
-use levels.level1
-use levels.level2
-
-system GameManager:
-    filter:
-        GameState as gs
-
-    on LevelComplete():
-        load levels.level2
-
-    on PlayerDied():
-        if gs.lives <= 0:
-            load ui.game_over
-        else:
-            load levels.level1
-
-# In levels/level1.cactus:
-system LevelSetup:
-    filter:
-        LevelState as ls
-
-    on load():
-        let e1 = spawn Enemy(pos = vec2(400.0, 568.0), patrol_min_x = 350.0, patrol_max_x = 550.0)
-        let e2 = spawn Enemy(pos = vec2(800.0, 568.0), patrol_min_x = 700.0, patrol_max_x = 1000.0)
-```
+The gameplay core is extended by stdlib modules and backend-provided declarations.
 
-### 9.4 Standard Library
+### 7.1 Common Stdlib Responsibilities
 
-All standard library modules ship with the compiler and must be explicitly imported with `use`. Each module is a normal `.cactus` file processed by the same compiler pipeline; `extern func` declarations in stdlib modules are resolved against `cactus_runtime.h` at link time.
+- `std.input` for logical input actions
+- rendering stdlib for sprites, meshes, billboards, lights, HUD helpers
+- physics stdlib for collision and movement helpers
+- camera stdlib for 2D/3D camera behavior
+- audio stdlib for sound/music playback surfaces
 
-#### `std.core`
+### 7.2 Extern Functions
 
-```cactus
-use std.core
-```
+`extern func` provides engine/runtime functionality such as math helpers, rendering calls, camera setters, collision helpers, and input helpers.
 
-**`pub trait Persistent`** — marker trait; entity survives `load` transitions when `std.core.SceneCleanup` is active.
+### 7.3 Extern Systems
 
-**`pub system SceneCleanup`** — no-filter system that destroys all non-persistent entities on scene unload:
+`extern system` is used when the backend supplies the full implementation of a filtered pass, such as a renderer or a backend-driven transform/physics pass.
 
-```cactus
-# std/core.cactus
-module std.core
+These surfaces are active, but they are **not the minimal gameplay-core language story**.
 
-pub trait Persistent
+## 8. Deferred and Migration Notes
 
-pub system SceneCleanup:
-    exclude:
-        Persistent
-    on unload():
-        destroy
-```
+### 8.1 Deferred Features
 
-**Usage:**
-```cactus
-use std.core
+The following are deferred from the current profile:
 
-pub unit Player:
-    apply:
-        Persistent
-        Position
-        Health
-    config:
-        health = 100
-```
+- `view`
+- `interface`
+- any UI-specific retained-tree syntax without an accepted capability and runtime story
 
-Without `use std.core`, no automatic cleanup occurs on `load` — the developer is responsible for custom teardown.
+### 8.2 Legacy Syntax to Migrate Away From
 
----
+The following older forms are not normative in the current profile:
 
-#### `std.math`
+- `apply:` / `config:` archetype syntax
+- `enable` / `disable` as the documented runtime trait mutation model
+- parenthesized `emit Event(...)` as the main documented event form
+- flat `spawn Foo(...)` override syntax as the main documented spawn form
+- parameterized lifecycle handler forms such as `on tick(dt: float):`
 
-Scalar math utilities. All functions are `extern func` — backend-provided.
+Prefer:
 
-```cactus
-use std.math
+- nested trait blocks in `unit`, `template`, and `spawn`
+- `emit EventName:` with payload block syntax
+- `on tick:` / `tick.dt`
+- `add` / `remove`
 
-const:
-    HALF_PI = std.math.PI    # pub const PI = 3.14159265
-```
+### 8.3 Example Hygiene
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `lerp` | `(a, b, t: float) float` | Linear interpolation |
-| `clamp` | `(x, lo, hi: float) float` | Clamp to range |
-| `abs` | `(v: float) float` | Absolute value |
-| `min` | `(a, b: float) float` | Minimum |
-| `max` | `(a, b: float) float` | Maximum |
-| `sqrt` | `(v: float) float` | Square root |
-| `sin` | `(a: float) float` | Sine (radians) |
-| `cos` | `(a: float) float` | Cosine (radians) |
-| `atan2` | `(y, x: float) float` | Arc-tangent y/x |
-| `floor` | `(v: float) int` | Floor |
-| `ceil` | `(v: float) int` | Ceiling |
-| `round` | `(v: float) int` | Round |
-| `pow` | `(base, exp: float) float` | Exponentiation |
-
-Also exports `pub const PI = 3.14159265`.
-
----
-
-#### `std.math.vec2`
-
-2D vector math. All functions are `extern func`.
-
-```cactus
-use std.math.vec2
-```
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `length` | `(v: vec2) float` | Magnitude |
-| `normalize` | `(v: vec2) vec2` | Unit vector |
-| `dot` | `(a, b: vec2) float` | Dot product |
-| `lerp` | `(a, b: vec2, t: float) vec2` | Interpolate |
-| `distance` | `(a, b: vec2) float` | Euclidean distance |
-| `angle` | `(v: vec2) float` | Angle from +X axis (radians) |
-
----
-
-#### `std.math.vec3`
-
-3D vector math. All functions are `extern func`.
-
-```cactus
-use std.math.vec3
-```
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `length` | `(v: vec3) float` | Magnitude |
-| `normalize` | `(v: vec3) vec3` | Unit vector |
-| `dot` | `(a, b: vec3) float` | Dot product |
-| `cross` | `(a, b: vec3) vec3` | Cross product |
-| `lerp` | `(a, b: vec3, t: float) vec3` | Interpolate |
-| `distance` | `(a, b: vec3) float` | Euclidean distance |
-| `reflect` | `(v, normal: vec3) vec3` | Reflect about normal |
-
----
-
-#### `std.math.quat`
-
-Quaternion math. All functions are `extern func`.
-
-```cactus
-use std.math.quat
-```
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `identity` | `() quat` | Identity rotation |
-| `from_euler` | `(pitch, yaw, roll: float) quat` | From Euler angles (radians) |
-| `from_axis_angle` | `(axis: vec3, angle: float) quat` | From axis + angle |
-| `forward` | `(q: quat) vec3` | Local −Z direction |
-| `right` | `(q: quat) vec3` | Local +X direction |
-| `up` | `(q: quat) vec3` | Local +Y direction |
-| `rotate` | `(q: quat, v: vec3) vec3` | Rotate vector |
-| `slerp` | `(a, b: quat, t: float) quat` | Spherical interpolation |
-| `multiply` | `(a, b: quat) quat` | Compose rotations |
-| `inverse` | `(q: quat) quat` | Inverse (unit quat) |
-
----
-
-#### `std.input`
-
-Input query functions and enum constants. Already described in §3.17. Summary:
-
-```cactus
-use std.input
-```
-
-Exports enums `Key`, `MouseButton`, `GamepadButton`, `GamepadAxis` and the following `extern func` query functions:
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `pressed` | `(b: InputButton) bool` | True on first press frame |
-| `down` | `(b: InputButton) bool` | True while held |
-| `released` | `(b: InputButton) bool` | True on first release frame |
-| `axis` | `(a: InputAxis) float` | Axis value −1.0 … 1.0 |
-| `axis2` | `(x, y: InputAxis) vec2` | 2D axis vector |
-
----
-
-#### `std.audio`
-
-Audio traits and events for sound effects and music.
-
-```cactus
-use std.audio
-```
-
-**Events:**
-
-| Declaration | Description |
-|-------------|-------------|
-| `pub event PlaySound` | Fire-and-forget one-shot sound effect |
-
-`PlaySound` fields: `sound: sound_id`, `volume: float`, `pitch: float`.
-
-**Traits:**
-
-| Trait | Description |
-|-------|-------------|
-| `pub trait AudioSource` | Persistent looping/one-shot sound emitter |
-| `pub trait MusicTrack` | Streaming music player attached to an entity |
-| `pub trait AudioSettings` | Global master/music/sfx volume controls |
-
-`AudioSource` fields: `sound: sound_id`, `playing: bool`, `looping: bool`, `volume: float`, `pitch: float`, `radius: float`.
-
-`MusicTrack` fields: `music: music_id`, `playing: bool`, `looping: bool`, `volume: float`.
-
-`AudioSettings` fields: `master_volume: float`, `music_volume: float`, `sfx_volume: float`.
-
-```cactus
-use std.audio
-
-asset ShootSfx: sound = "audio/shoot.wav"
-
-system PlayerShoot:
-    filter:
-        PlayerTag
-
-    on ShootButton():
-        emit PlaySound(sound = ShootSfx, volume = 1.0, pitch = 1.0)
-```
-
----
-
-#### `std.transform.flat`
-
-2D spatial transform.
-
-```cactus
-use std.transform.flat
-```
-
-**`pub trait Transform`** — standard 2D transform. Fields: `position: vec2`, `rotation: float` (radians, CCW), `scale: vec2`.
-
-Defaults: `position = vec2(0.0, 0.0)`, `rotation = 0.0`, `scale = vec2(1.0, 1.0)`.
-
----
-
-#### `std.transform.volume`
-
-3D spatial transform.
-
-```cactus
-use std.transform.volume
-```
-
-**`pub trait Transform`** — standard 3D transform. Fields: `position: vec3`, `rotation: quat`, `scale: vec3`.
-
-Defaults: `position = vec3(0.0, 0.0, 0.0)`, `rotation = quat(0.0, 0.0, 0.0, 1.0)`, `scale = vec3(1.0, 1.0, 1.0)`.
-
----
-
-#### `std.render.sprites`
-
-2D sprite rendering traits. Passive — the backend reads these and renders automatically. No user system required. An entity with `std.transform.flat.Transform` + one of these traits is drawn.
-
-```cactus
-use std.render.sprites
-```
-
-| Trait | Description |
-|-------|-------------|
-| `pub trait Renderer` | Static texture at entity transform |
-| `pub trait AnimatedSprite` | Sprite-sheet animation |
-| `pub trait Canvas2D` | Solid-color screen fill |
-
-`Renderer` fields: `texture: texture_id` (let), `size: vec2`, `color: color`, `visible: bool`, `layer: int`.
-
-`AnimatedSprite` fields: `texture: texture_id` (let), `frame: int`, `frame_count: int`, `fps: float`, `playing: bool`.
-
-`Canvas2D` fields: `color: color`, `visible: bool`.
-
----
-
-#### `std.render.meshes`
-
-3D mesh rendering traits. Passive — the backend renders automatically.
-
-```cactus
-use std.render.meshes
-```
-
-| Trait | Description |
-|-------|-------------|
-| `pub trait Renderer` | 3D mesh + material |
-| `pub trait BillboardRenderer` | Camera-facing textured quad |
-| `pub trait PointLight` | Point light emitter |
-| `pub trait DirectionalLight` | Directional (sun-like) light |
-
-`Renderer` fields: `mesh: mesh_id` (let), `material: material_id` (let), `visible: bool`, `cast_shadow: bool`.
-
-`BillboardRenderer` fields: `texture: texture_id` (let), `size: vec2`, `color: color`, `visible: bool`.
-
-`PointLight` fields: `color: color`, `intensity: float`, `range: float`, `enabled: bool`.
-
-`DirectionalLight` fields: `direction: vec3`, `color: color`, `intensity: float`, `enabled: bool`.
-
----
-
-#### `std.physics.flat`
-
-2D kinematic physics. Passive — the backend simulates automatically.
-
-```cactus
-use std.physics.flat
-```
-
-| Declaration | Description |
-|-------------|-------------|
-| `pub trait CharacterBody` | Kinematic 2D character controller |
-| `pub trait Collider` | AABB 2D collider |
-| `pub event CollisionEnter` | Fired on first contact with another collider |
-
-`CharacterBody` fields: `velocity: vec2`, `grounded: bool`, `gravity: float`.
-
-`Collider` fields: `width: float`, `height: float`, `layer: int`, `mask: int`.
-
-`CollisionEnter` fields: `other: entity_id`, `overlap: vec2`.
-
-```cactus
-use std.physics.flat
-
-system PlayerMove:
-    filter:
-        CharacterBody as body
-        PlayerTag
-
-    on tick(dt: float):
-        body.velocity.x = move_input * MOVE_SPEED
-
-    on CollisionEnter():
-        # event.other holds the entity_id of the colliding entity
-        pass
-```
-
----
-
-#### `std.physics.volume`
-
-3D kinematic physics. Passive — the backend simulates automatically.
-
-```cactus
-use std.physics.volume
-```
-
-| Declaration | Description |
-|-------------|-------------|
-| `pub trait CharacterBody` | Kinematic 3D character controller |
-| `pub trait Collider` | 3D collider |
-| `pub event CollisionEnter` | Fired on first 3D contact |
-
-`CharacterBody` fields: `velocity: vec3`, `grounded: bool`, `ground_normal: vec3`, `step_height: float`.
-
-`Collider` fields: `layer: int`, `mask: int`.
-
-`CollisionEnter` fields: `other: entity_id`, `point: vec3`, `normal: vec3`.
-
----
-
-#### `std.camera.flat`
-
-2D orthographic camera traits and follow system.
-
-```cactus
-use std.camera.flat
-```
-
-| Declaration | Description |
-|-------------|-------------|
-| `pub trait Camera` | Orthographic camera config |
-| `pub trait FollowCamera` | Smooth-follow target entity |
-| `pub system FollowCameraSystem` | Updates `Camera.offset` to track target |
-
-`Camera` fields: `zoom: float`, `offset: vec2`, `rotation: float`, `active: bool`.
-
-`FollowCamera` fields: `target: entity_id`, `offset: vec2`, `smoothing: float`.
-
-Only the entity with `active = true` is used for rendering.
-
----
-
-#### `std.camera.volume`
-
-3D perspective camera traits and follow/FPS/third-person systems.
-
-```cactus
-use std.camera.volume
-```
-
-| Declaration | Description |
-|-------------|-------------|
-| `pub trait Camera` | Perspective camera config |
-| `pub trait FollowCamera` | Smooth 3D follow |
-| `pub trait FirstPersonCamera` | Pitch/yaw look |
-| `pub trait ThirdPersonCamera` | Orbit around target |
-| `pub system FollowCameraSystem` | Smooth-follow update |
-| `pub system FirstPersonCameraSystem` | Pitch/yaw → Transform update |
-| `pub system ThirdPersonCameraSystem` | Orbit position update |
-
-`Camera` fields: `fov_y: float`, `near: float`, `far: float`, `active: bool`.
-
-`FollowCamera` fields: `target: entity_id`, `offset: vec3`, `smoothing: float`.
-
-`FirstPersonCamera` fields: `pitch: float`, `yaw: float`, `sensitivity: float`.
-
-`ThirdPersonCamera` fields: `target: entity_id`, `distance: float`, `height: float`, `smoothing: float`.
+Maintained examples should avoid placeholder-only syntax and stale migration comments. If an example relies on a backend helper, it should present that helper as a backend/runtime concern rather than as an unfinished core-language feature.

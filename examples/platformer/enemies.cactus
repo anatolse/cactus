@@ -126,7 +126,7 @@ system EnemyTraitMatchDemo:
             Collectible as col =>
                 let ignored_points = col.point_value
             _ =>
-                pass
+                let ignored_collision = 0
 
 system EnemyRenderer:
     filter:

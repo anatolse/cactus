@@ -75,7 +75,7 @@ system MovementSystem:
         if ctrl.state == PlayerState.Shopping:
             return
 
-        let input_x = get_input_axis_x()   # TODO: replace with input.axis once std.input is available
+        let input_x = get_input_axis_x()
         let input_z = get_input_axis_z()
 
         if input_x != 0.0 or input_z != 0.0:

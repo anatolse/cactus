@@ -3,7 +3,6 @@ module ui
 use player
 use collectibles
 
-# Note: 'view' declarations are deferred from v0.2.
 # HUD rendering is backend-driven: the backend reads Health and Score traits
 # directly each frame and draws the health bar, score counter, and lives display.
 # HUDSystem below notifies the backend to refresh the display.

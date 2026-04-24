@@ -51,27 +51,36 @@ event ItemPurchased:
 pub unit CactusShop:
     Position:
         position = vec3(10.0, 0.0, 5.0)
+        rotation = quat(0.0, 0.0, 0.0, 1.0)
     ShopKeeper:
         is_open = true
         interact_distance = INTERACT_DISTANCE
 
 pub unit SmallCactus:
-    Position
+    Position:
+        position = vec3(8.0, 0.0, 4.0)
+        rotation = quat(0.0, 0.0, 0.0, 1.0)
     Purchasable:
         item = ShopItem(CACTUS_SMALL_PRICE, CACTUS_SMALL_PRICE, ItemRarity.Common, 0.5)
 
 pub unit MediumCactus:
-    Position
+    Position:
+        position = vec3(9.0, 0.0, 4.5)
+        rotation = quat(0.0, 0.0, 0.0, 1.0)
     Purchasable:
         item = ShopItem(CACTUS_MEDIUM_PRICE, CACTUS_MEDIUM_PRICE, ItemRarity.Uncommon, 1.0)
 
 pub unit LargeCactus:
-    Position
+    Position:
+        position = vec3(11.0, 0.0, 4.5)
+        rotation = quat(0.0, 0.0, 0.0, 1.0)
     Purchasable:
         item = ShopItem(CACTUS_LARGE_PRICE, CACTUS_LARGE_PRICE, ItemRarity.Rare, 1.5)
 
 pub unit GoldenCactus:
-    Position
+    Position:
+        position = vec3(12.0, 0.0, 5.0)
+        rotation = quat(0.0, 0.0, 0.0, 1.0)
     Purchasable:
         item = ShopItem(GOLDEN_CACTUS_PRICE, GOLDEN_CACTUS_PRICE, ItemRarity.Legendary, 2.0)
 
@@ -91,7 +100,7 @@ system ShopInteraction:
         let dist = distance_2d(p.position, player_pos)
 
         if dist < shop.interact_distance and shop.is_open:
-            if is_interact_pressed():   # TODO: replace with input.pressed once std.input is available
+            if is_interact_pressed():
                 emit ShopOpened:
                     shop_entity = get_self_entity()
 

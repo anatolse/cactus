@@ -3,7 +3,6 @@ module ui
 use player
 use shop
 
-# Note: 'view' declarations are deferred from v0.2.
 # HUD and shop UI rendering is backend-driven: the backend reads trait fields
 # and renders them each frame. Systems below update the backend's display state.
 

@@ -2,8 +2,8 @@
 # Cactus DSL — Comprehensive Feature Showcase
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# This single file demonstrates every syntactic and semantic feature of the
-# Cactus DSL as defined in the openspec/specs directory and pending changes.
+# This single file demonstrates a broad slice of the currently supported
+# Cactus gameplay surface, plus selected backend-facing declarations.
 #
 # Language identity:
 #   Cactus is a declarative, data-oriented gameplay description language that
@@ -63,28 +63,9 @@
 #   21. Expressions — binary ops, unary, member access, function calls,
 #       lambda (map), bool literals, vec2/vec3/quat constructors
 #
-# ─────────────────────────────────────────────────────────────────────────────
-# ASPIRATIONAL vs. CURRENT IMPLEMENTATION GAPS
-#
-# Most of this file demonstrates the INTENDED authoring pattern as specified.
-# The following sections contain KNOWN GAPS where the authoring surface is not
-# yet fully declarative:
-#
-#   · draw_rect / draw_text calls  (SceneRenderSystem, BossRenderSystem,
-#     UIRenderSystem, DebugOverlaySystem, ParticleSystem)
-#     → KNOWN GAP: explicit rendering calls are NOT the intended pattern.
-#       The intended pattern is `extern system SpriteRenderPass` (Section 19).
-#       `draw_rect` calls exist here only to illustrate system handler syntax
-#       while the stdlib rendering layer is still pending.
-#       Tracked by: dsl-extern-system (tasks 6.x, stdlib updates).
-#
-#   · play_particle_effect extern func call  (ParticleSystem)
-#     → KNOWN GAP: particle effects should be driven by a trait + extern system.
-#       Tracked by: dsl-declarative-audio (future change).
-#
-# Section 19 (extern system) shows the CORRECT declarative pattern that will
-# replace all direct draw_* calls once the stdlib rendering layer is in place.
-# ─────────────────────────────────────────────────────────────────────────────
+# The file includes some backend-facing examples (such as rendering helpers and
+# extern systems) in addition to the gameplay core. Treat the gameplay sections
+# as the language-first path and the backend-facing sections as advanced usage.
 
 # ── 1. Module declaration & imports ───────────────────────────────────────────
 

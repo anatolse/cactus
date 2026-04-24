@@ -26,9 +26,7 @@ trait SideScrollCamera:
     var parallax_mid: float
 
 pub unit CameraUnit:
-    apply:
-        SideScrollCamera
-    config:
+    SideScrollCamera:
         cam_x = 0.0
         cam_y = 0.0
         offset_x = CAMERA_OFFSET_X

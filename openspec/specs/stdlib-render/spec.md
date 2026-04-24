@@ -1,3 +1,8 @@
+# stdlib-render Specification
+
+## Purpose
+Define the shipped stdlib rendering surface and the current backend-backed runtime behavior for sprite, mesh, and light-related rendering features.
+
 ## Requirements
 
 ### Requirement: std.render.sprites exposes the shipped sprite trait surface
@@ -95,9 +100,13 @@ The shipped `std.render.meshes` module SHALL declare the currently implemented s
 - **THEN** generated output binds to backend-library 3D mesh rendering behavior for entities with `std.transform.volume.WorldTransform` and mesh `Renderer`
 - **AND** mesh/material handles resolve through the asset/runtime infrastructure before drawing visible meshes in the cpp-entt backend-owned 3D render pass
 
+#### Scenario: Visible mesh is submitted
+- **WHEN** a supported backend schedules `MeshRenderer` for an entity with `std.transform.volume.WorldTransform`, `Renderer.visible = true`, and resolvable mesh/material handles
+- **THEN** the backend records one mesh submission for that entity using the entity's world transform and renderer asset handles
+
 #### Scenario: Invisible mesh skips drawing
 - **WHEN** mesh rendering is invoked with `Renderer.visible = false`
-- **THEN** the backend does not draw that entity in the mesh pass
+- **THEN** the backend does not draw that entity in the mesh pass or record a mesh submission for it
 
 #### Scenario: Point lights are backend-backed
 - **WHEN** a program imports `std.render.meshes` and the recognized `PointLightSystem` extern system is scheduled
@@ -108,6 +117,24 @@ The shipped `std.render.meshes` module SHALL declare the currently implemented s
 - **WHEN** a program imports `std.render.meshes` and the recognized `DirectionalLightSystem` extern system is scheduled
 - **THEN** generated output binds to backend-library directional-light registration behavior for entities with `DirectionalLight`
 - **AND** enabled directional lights contribute a registration event through the backend runtime adapter
+
+### Requirement: Backend-backed point lights contribute to backend-backed mesh shading
+For supported backend-owned 3D render paths, recognized `std.render.meshes.PointLightSystem` behavior SHALL provide per-frame point-light inputs consumed by backend-backed mesh rendering rather than only non-visual registration accounting.
+
+#### Scenario: Enabled point lights affect mesh-rendering inputs
+- **WHEN** a supported backend schedules `PointLightSystem` and `MeshRenderer` in the same frame for enabled lights and visible meshes
+- **THEN** the backend-backed mesh rendering path receives point-light data from the registered lights for that frame
+
+#### Scenario: Disabled point lights do not affect mesh-rendering inputs
+- **WHEN** a `std.render.meshes.PointLight` has `enabled = false`
+- **THEN** the backend does not contribute that light to the frame's mesh-lighting inputs
+
+### Requirement: std.render.meshes point-light behavior supports representative multi-light scenes
+The shipped `std.render.meshes.PointLight` surface SHALL be sufficient for representative multi-light scenes where at least two enabled point lights contribute to the same backend-backed mesh render frame.
+
+#### Scenario: Two point lights can coexist in one frame
+- **WHEN** two enabled `PointLight` entities are present in a supported backend-backed mesh scene
+- **THEN** both lights are eligible to contribute to that frame's mesh-lighting behavior
 
 ---
 

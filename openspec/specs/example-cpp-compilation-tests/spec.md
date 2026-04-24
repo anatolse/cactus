@@ -10,6 +10,10 @@ The system SHALL provide automated integration coverage that runs the compiler o
 - **WHEN** the integration coverage runs for the curated example set
 - **THEN** it includes `examples/blue-square` as a required example case
 
+#### Scenario: Mesh renderer example is validated
+- **WHEN** the integration coverage runs for the curated example set
+- **THEN** it includes `examples/mesh-renderer/main.cactus` as a required cpp-entt example case
+
 #### Scenario: Generated output is compiled after code generation
 - **WHEN** an example is selected for integration validation
 - **THEN** the coverage first generates C++ from the example's `.cactus` input and then invokes a C++ compilation step on that generated source
@@ -50,10 +54,21 @@ Automated compilation/integration coverage SHALL include curated cases that exer
 - **WHEN** example-compilation integration coverage runs
 - **THEN** it includes at least one curated case that exercises recognized stdlib extern systems such as hierarchy propagation or rendering-backed behavior
 
+#### Scenario: Mesh renderer coverage example is compiled
+- **WHEN** example-compilation integration coverage runs
+- **THEN** it includes a curated cpp-entt case that imports `std.render.meshes` and exercises the recognized `MeshRenderer` extern system
+
 ### Requirement: compilation coverage catches unresolved stdlib backend symbols
 The example-compilation integration workflow SHALL fail if generated output for a curated stdlib extern coverage case does not link because a required stdlib backend symbol or binding path is missing.
 
 #### Scenario: Missing stdlib backend symbol fails integration
 - **WHEN** a curated example references a stdlib extern function or recognized stdlib extern system whose backend binding is absent
 - **THEN** the compilation/integration workflow fails and identifies the affected example case
+
+### Requirement: Mesh renderer example remains a named curated compilation case
+Automated example-compilation integration coverage SHALL include the mesh renderer example as a named curated `cpp-entt` case so changes to its authored controls or backend-owned lighting path continue to receive generation-and-compilation coverage.
+
+#### Scenario: Curated example list includes the mesh renderer example
+- **WHEN** example-compilation integration coverage runs
+- **THEN** it includes `examples/mesh-renderer/main.cactus` as a named curated example case for the `cpp-entt` backend
 

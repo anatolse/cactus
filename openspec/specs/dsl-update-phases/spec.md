@@ -37,7 +37,7 @@ RENDER              [backend, not user code]
 - **THEN** both handlers execute each frame, tick before late_tick, using the same filter
 
 ### Requirement: `on input` handler is parameter-free
-The `on input:` handler SHALL use the parameter-free lifecycle-handler form. Input-phase data is accessed through the lifecycle event binding (`input`) or through an explicit alias declared with `on input as <alias>:`.
+The `on input:` handler SHALL use the parameter-free lifecycle-handler form. Input-phase data is accessed through the lifecycle event binding (`input`) or an explicit handler alias.
 
 #### Scenario: on input handler uses parameter-free form
 - **WHEN** `on input:` appears in a system body

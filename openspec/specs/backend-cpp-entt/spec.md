@@ -153,6 +153,11 @@ The backend recognizes these patterns by the **fully qualified trait names** (mo
 - **WHEN** `extern system SpriteRenderer: filter: Position as pos, Renderer as r` is compiled and the filter matches a recognized stdlib pattern
 - **THEN** the generated EnTT project output binds to the standard Cactus EnTT backend/runtime library implementation for sprite rendering rather than emitting a project-local renderer body
 
+#### Scenario: Stdlib MeshRenderer binds to backend library implementation
+- **WHEN** a program importing `std.render.meshes` is compiled with `cpp-entt` and the recognized `MeshRenderer` extern system filter matches fully qualified `std.transform.volume.WorldTransform` plus `std.render.meshes.Renderer`
+- **THEN** the generated EnTT project output binds to the standard cpp-entt mesh-submission implementation rather than generic user-extern callback scaffolding
+- **AND** it does not declare or require a user-provided `MeshRenderer_update(...)` implementation
+
 #### Scenario: hierarchy propagation binds to backend library implementation
 - **WHEN** the stdlib propagation extern system references `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
 - **THEN** the generated EnTT project output binds to the standard Cactus EnTT backend/runtime library implementation for hierarchy propagation
@@ -202,6 +207,10 @@ When a program imports a stdlib module containing `extern system` declarations (
 #### Scenario: SpriteRenderer included from module import
 - **WHEN** a program uses `use std.render.sprites` and applies `Renderer` to any entity
 - **THEN** the backend includes `SpriteRenderer` in the generated system schedule automatically
+
+#### Scenario: MeshRenderer included from module import
+- **WHEN** a program uses `use std.render.meshes` and applies `std.render.meshes.Renderer` together with `std.transform.volume.WorldTransform`
+- **THEN** the backend includes the recognized `MeshRenderer` system in the generated system schedule automatically without requiring the author to redeclare it locally
 
 ### Requirement: Code generation for `order by:` clause
 When a `SystemNode` has a non-empty `order_by` field, the EnTT backend SHALL emit a `registry.sort<T>(comparator)` call before the view iteration loop for each handler. `T` is the component type corresponding to the first sort key's alias. The comparator lambda implements the full multi-key lexicographic comparison.
@@ -421,4 +430,22 @@ The cpp-entt backend SHALL include tests that verify stdlib extern function corr
 #### Scenario: Recognized extern system behavior is tested
 - **WHEN** the cpp-entt backend test suite runs
 - **THEN** it includes tests covering recognized hierarchy and render extern system behavior or binding outcomes
+
+### Requirement: EnTT mesh render pass applies registered point lights to mesh shading
+The cpp-entt backend SHALL treat recognized stdlib point-light registration as render-pass input for backend-owned mesh shading rather than debug-only accounting. During a render frame, enabled point lights registered through the recognized `std.render.meshes.PointLightSystem` binding SHALL contribute lighting data consumed by the backend-owned mesh pass.
+
+#### Scenario: Enabled point light participates in the mesh pass
+- **WHEN** a cpp-entt program registers an enabled `std.render.meshes.PointLight` and also submits a visible mesh in the same render frame
+- **THEN** the backend-owned mesh pass retains that light as active lighting input for the frame
+
+#### Scenario: Disabled point light does not contribute shading input
+- **WHEN** a registered `std.render.meshes.PointLight` has `enabled = false`
+- **THEN** the backend does not add that light to the active lighting inputs used for mesh shading in that frame
+
+### Requirement: EnTT runtime supports at least two simultaneous point lights for stdlib mesh rendering
+The cpp-entt backend-owned mesh render path SHALL support at least two enabled point lights contributing in the same frame so curated multi-light mesh examples render through the standard runtime path.
+
+#### Scenario: Two active point lights are retained in one frame
+- **WHEN** two enabled recognized stdlib point lights are registered before the mesh pass flushes
+- **THEN** the cpp-entt runtime retains both lights for the frame instead of dropping to a single-light debug path
 

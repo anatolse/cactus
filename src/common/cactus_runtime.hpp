@@ -12,7 +12,7 @@
 
 namespace cactus::runtime {
 
-using Quat = Quaternion;
+using Quat        = Quaternion;
 using AssetHandle = std::uint32_t;
 
 enum class AssetKind : std::uint8_t {
@@ -57,29 +57,21 @@ public:
     void clear();
     void clear_diagnostics();
 
-    void register_asset(AssetKind kind,
-                        AssetHandle handle,
-                        std::string asset_id,
-                        int runtime_id,
-                        bool materialized = true);
-    void register_texture(AssetHandle handle,
-                          std::string asset_id,
-                          int runtime_id,
-                          bool materialized = true);
-    void register_mesh(AssetHandle handle,
-                       std::string asset_id,
-                       int runtime_id,
-                       bool materialized = true);
-    void register_material(AssetHandle handle,
-                           std::string asset_id,
-                           int runtime_id,
-                           bool materialized = true);
+    void register_asset(
+        AssetKind kind, AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
+    void register_texture(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
+    void register_mesh(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
+    void register_material(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
 
     void set_lazy_resolver(AssetKind kind, LazyResolver resolver);
     [[nodiscard]] AssetResolution resolve(AssetKind kind, AssetHandle handle);
 
-    [[nodiscard]] std::size_t missing_count() const noexcept { return missing_count_; }
-    [[nodiscard]] const std::vector<std::string>& diagnostics() const noexcept { return diagnostics_; }
+    [[nodiscard]] std::size_t missing_count() const noexcept {
+        return missing_count_;
+    }
+    [[nodiscard]] const std::vector<std::string>& diagnostics() const noexcept {
+        return diagnostics_;
+    }
 
 private:
     using AssetMap = std::unordered_map<AssetHandle, AssetRecord>;

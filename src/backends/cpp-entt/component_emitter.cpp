@@ -1,4 +1,4 @@
-#include "backends/cpp-entt/component_emitter.h"
+#include "backends/cpp-entt/component_emitter.hpp"
 
 #include <sstream>
 

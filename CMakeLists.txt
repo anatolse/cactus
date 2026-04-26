@@ -49,7 +49,7 @@ else()
 endif()
 
 # ── Optional clang-tidy during build ───────────────────────────────────────────
-option(CACTUS_ENABLE_BUILD_CLANG_TIDY "Run clang-tidy during normal project builds" ON)
+option(CACTUS_ENABLE_BUILD_CLANG_TIDY "Run clang-tidy during normal project builds" OFF)
 find_program(CLANG_FORMAT_EXE
     NAMES clang-format clang-format.exe
     PATHS

@@ -395,7 +395,7 @@ func is_in_range(value: float, lo: float, hi: float) bool:
 
 # ── 11. Extern func declarations ───────────────────────────────────────────────
 # No body, no colon, no purity/recursion checks.
-# Backend provides the implementation (e.g. from cactus_runtime.h).
+# Backend provides the implementation (e.g. from cactus_runtime.hpp).
 
 pub extern func lerp(a: float, b: float, t: float) float
 pub extern func sin_f(angle: float) float

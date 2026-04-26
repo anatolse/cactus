@@ -58,15 +58,15 @@ When a module declares `pub extern func` declarations, those functions SHALL be 
 - **THEN** the function SHALL NOT appear in the module's `ImportedSymbols.funcs` map
 
 ### Requirement: Extern func triggers runtime header include in backend output
-When the `DecoratedProgram` contains any extern func (in the module itself or in any imported module), the C++ backends SHALL emit `#include "cactus_runtime.h"` in the generated file.
+When the `DecoratedProgram` contains any extern func (in the module itself or in any imported module), the C++ backends SHALL emit `#include "cactus_runtime.hpp"` in the generated file.
 
 #### Scenario: Runtime header emitted when extern func present
 - **WHEN** a module imports `std.math` (which contains extern funcs) and the program is compiled to C++
-- **THEN** the generated C++ file contains `#include "cactus_runtime.h"` near the top
+- **THEN** the generated C++ file contains `#include "cactus_runtime.hpp"` near the top
 
 #### Scenario: Runtime header not emitted when no extern func present
 - **WHEN** a module contains only traits, units, and systems — no extern funcs in scope
-- **THEN** the generated C++ file does NOT contain `#include "cactus_runtime.h"`
+- **THEN** the generated C++ file does NOT contain `#include "cactus_runtime.hpp"`
 
 ### Requirement: `EXTERN` is a reserved keyword
 The lexer SHALL recognize `extern` as a reserved keyword (`EXTERN` token). It SHALL NOT be usable as an identifier.

@@ -1,4 +1,4 @@
-#include "backends/cpp-manual/event_emitter.h"
+#include "backends/cpp-manual/event_emitter.hpp"
 
 #include <sstream>
 

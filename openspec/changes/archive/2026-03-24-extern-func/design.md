@@ -12,11 +12,11 @@ Neither backend emits any output for `FuncNode` today. `DecoratedProgram` tracks
 - Add `extern func` syntax: a top-level function declaration with no body, semantically meaning "implementation is provided by the backend runtime"
 - Fix all stdlib math/input free functions to use `extern func`
 - Propagate extern funcs through the full pipeline: AST → semantic → artifact → both backends
-- Backends emit `#include "cactus_runtime.h"` when extern funcs are present in scope
+- Backends emit `#include "cactus_runtime.hpp"` when extern funcs are present in scope
 - Maintain full backward compatibility for user-defined `func` (body required, purity enforced)
 
 **Non-Goals:**
-- `cactus_runtime.h` implementation (backend runtime authoring is separate work)
+- `cactus_runtime.hpp` implementation (backend runtime authoring is separate work)
 - Extern for other declaration kinds (traits, events, units)
 - FFI beyond the backend runtime contract (no arbitrary C symbol linking)
 - Recursion or purity analysis for extern funcs (trivially inapplicable — no body)
@@ -45,9 +45,9 @@ Neither backend emits any output for `FuncNode` today. `DecoratedProgram` tracks
 
 ---
 
-### D3: Backend emits `#include "cactus_runtime.h"` when extern funcs are present
+### D3: Backend emits `#include "cactus_runtime.hpp"` when extern funcs are present
 
-**Decision:** Both cpp-entt and cpp-manual backends inspect `program.funcs` (and imported module funcs via `program.ast`'s `use` declarations). If any extern func is in scope, they emit `#include "cactus_runtime.h"` at the top of the generated file.
+**Decision:** Both cpp-entt and cpp-manual backends inspect `program.funcs` (and imported module funcs via `program.ast`'s `use` declarations). If any extern func is in scope, they emit `#include "cactus_runtime.hpp"` at the top of the generated file.
 
 **Rationale:** A single runtime header per backend is the simplest contract. The backend author writes the header; the compiler ensures it is included when needed. This avoids per-function `extern "C"` declarations in generated code, which would require the compiler to know the C++ name mangling.
 
@@ -73,8 +73,8 @@ Neither backend emits any output for `FuncNode` today. `DecoratedProgram` tracks
 
 ## Risks / Trade-offs
 
-**[Risk] `cactus_runtime.h` header doesn't exist yet**
-→ Mitigation: The compiler correctly generates `#include "cactus_runtime.h"` as a forward reference. Generated code will fail to compile until the runtime header is authored. This is expected — the change ships the compiler side; runtime authoring is a follow-on task documented in the proposal.
+**[Risk] `cactus_runtime.hpp` header doesn't exist yet**
+→ Mitigation: The compiler correctly generates `#include "cactus_runtime.hpp"` as a forward reference. Generated code will fail to compile until the runtime header is authored. This is expected — the change ships the compiler side; runtime authoring is a follow-on task documented in the proposal.
 
 **[Risk] `.cmod` version bump invalidates all cached artifacts**
 → Mitigation: During this stage of the project, cached artifacts are rebuilds from source. The bump is correct and necessary. Document in release notes.
@@ -109,5 +109,5 @@ pub extern func sin(x: float) float
 
 ## Open Questions
 
-- **What does `cactus_runtime.h` look like for the Raylib backend?** Needs to be scoped separately. At minimum it provides `lerp`, `clamp`, `abs`, `min`, `max`, `sqrt`, `sin`, `cos`, `atan2`, `floor`, `ceil`, `round`, `pow`, `pressed`, `down`, `released`, `axis`, `axis2`, and the vec2/vec3/quat function set.
+- **What does `cactus_runtime.hpp` look like for the Raylib backend?** Needs to be scoped separately. At minimum it provides `lerp`, `clamp`, `abs`, `min`, `max`, `sqrt`, `sin`, `cos`, `atan2`, `floor`, `ceil`, `round`, `pow`, `pressed`, `down`, `released`, `axis`, `axis2`, and the vec2/vec3/quat function set.
 - **Should `extern func` be restricted to stdlib modules only?** Currently no restriction — any module can declare `extern func`. This is intentional for user C++ interop. If abuse is a concern, a future attribute or module-level `extern` block could restrict it.

@@ -72,7 +72,7 @@ The change touches every layer of the compiler:
 **Backends** — when the `DecoratedProgram` contains any extern func (i.e., `program.funcs` is non-empty or any imported module's funcs are extern), the backend emits:
 
 ```cpp
-#include "cactus_runtime.h"   // provides all extern func implementations
+#include "cactus_runtime.hpp"   // provides all extern func implementations
 ```
 
 The backend does **not** emit a C++ function body for extern funcs — the runtime header is hand-authored per backend and provides the actual implementations (e.g., wrapping Raylib math, `IsKeyDown`, etc.).
@@ -108,7 +108,7 @@ Added to `DecoratedProgram`, `ImportedSymbols`, and `ModuleArtifact` serializati
 - `dsl-parser`: `extern func` declaration parsing; `FuncNode.is_extern` flag; body-less parse path
 - `dsl-semantic-analysis`: skip purity/recursion checks for extern funcs; populate `DecoratedProgram.funcs`
 - `module-artifact`: new `funcs` section in `.cmod` format
-- `backend-cpp-entt`: emit `#include "cactus_runtime.h"` when extern funcs are present; skip body emission for extern funcs
+- `backend-cpp-entt`: emit `#include "cactus_runtime.hpp"` when extern funcs are present; skip body emission for extern funcs
 - `backend-cpp-manual`: same as cpp-entt
 
 ### Modified stdlib files
@@ -124,5 +124,5 @@ Added to `DecoratedProgram`, `ImportedSymbols`, and `ModuleArtifact` serializati
 - **No game-code changes required** — call sites like `m.lerp(a, b, t)` are unaffected; the change is in how the declaration is written in stdlib, not how it is called
 - **Breaking: `std.input` dummy bodies removed** — any code that somehow depended on `pressed()` returning `false` at compile time is affected, but that was always incorrect behavior
 - **Parser is backward-compatible** — `func` without `extern` still requires a body (no change to existing user-defined functions)
-- **`cactus_runtime.h` must be authored per backend** — this is a backend responsibility; the compiler change just ensures the `#include` is emitted when needed
+- **`cactus_runtime.hpp` must be authored per backend** — this is a backend responsibility; the compiler change just ensures the `#include` is emitted when needed
 - **`.cmod` format version bump** — the new `funcs` section requires bumping `CURRENT_VERSION` in `ModuleArtifact`

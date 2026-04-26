@@ -206,7 +206,10 @@ std::string emit_backend_main() {
     out << "    while (!WindowShouldClose()) {\n";
     out << "        const float dt = GetFrameTime();\n";
     out << "        cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);\n";
+    out << "        BeginDrawing();\n";
+    out << "        ClearBackground(RAYWHITE);\n";
     out << "        cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);\n";
+    out << "        EndDrawing();\n";
     out << "    }\n\n";
     out << "    CloseWindow();\n";
     out << "    return 0;\n";

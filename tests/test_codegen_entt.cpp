@@ -134,8 +134,11 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("cactus::runtime::entt_backend::generated_init_project(registry);") != std::string::npos);
     CHECK(code.find("cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);") !=
           std::string::npos);
+    CHECK(code.find("BeginDrawing();") != std::string::npos);
+    CHECK(code.find("ClearBackground(RAYWHITE);") != std::string::npos);
     CHECK(code.find("cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);") !=
           std::string::npos);
+    CHECK(code.find("EndDrawing();") != std::string::npos);
 
     // Persist hooks
     CHECK(code.find("save_Pos") != std::string::npos);

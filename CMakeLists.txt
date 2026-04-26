@@ -50,14 +50,22 @@ endif()
 
 # ── Optional clang-tidy during build ───────────────────────────────────────────
 option(CACTUS_ENABLE_BUILD_CLANG_TIDY "Run clang-tidy during normal project builds" ON)
-find_program(CLANG_TIDY_EXE NAMES clang-tidy)
-find_program(CACTUS_CLANG_FORMAT_EXE
+find_program(CLANG_FORMAT_EXE
     NAMES clang-format clang-format.exe
     PATHS
         "C:/Program Files/LLVM/bin"
         "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
         "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
 )
+
+find_program(CLANG_TIDY_EXE
+    NAMES clang-tidy clang-tidy.exe
+    PATHS
+        "C:/Program Files/LLVM/bin"
+        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+)
+
 if(CLANG_TIDY_EXE AND CACTUS_ENABLE_BUILD_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};--fix;--fix-errors;--fix-notes")
     message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — enabled for normal build targets")

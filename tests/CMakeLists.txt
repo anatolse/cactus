@@ -3,22 +3,6 @@
 # Test fixture directory available as compile definition
 add_compile_definitions(CACTUS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
-find_program(CLANG_FORMAT_EXE
-    NAMES clang-format
-    PATHS
-        "C:/Program Files/LLVM/bin"
-        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
-)
-
-find_program(CLANG_TIDY_EXE
-    NAMES clang-tidy clang-tidy.exe
-    PATHS
-        "C:/Program Files/LLVM/bin"
-        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
-)
-
 if(CLANG_FORMAT_EXE)
     message(STATUS "clang-format found for example compilation checks: ${CLANG_FORMAT_EXE}")
 else()
@@ -87,6 +71,21 @@ target_compile_features(example_mesh_renderer_generated PRIVATE cxx_std_20)
 target_link_libraries(example_mesh_renderer_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
 target_include_directories(example_mesh_renderer_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
 set_property(TARGET example_mesh_renderer_generated PROPERTY CXX_CLANG_TIDY "")
+
+set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
+if(NOT EXISTS "${PLATFORMER_GENERATED_CPP}")
+    file(WRITE "${PLATFORMER_GENERATED_CPP}" "#include \"backends/cpp-entt/runtime.h\"\nnamespace cactus::runtime::entt_backend {\nProjectConfig generated_project_config() noexcept { return {1280, 720, \"Cactus Platformer\", 60}; }\nvoid generated_setup_dispatcher(entt::dispatcher&) {}\nvoid generated_init_project(entt::registry&) {}\nvoid generated_update_project(entt::registry&, entt::dispatcher&, float) {}\nvoid generated_render_project(entt::registry&, entt::dispatcher&) {}\n}\n")
+endif()
+
+add_executable(example_platformer_generated EXCLUDE_FROM_ALL
+    "${CMAKE_SOURCE_DIR}/examples/blue-square/game/main.cpp"
+    "${PLATFORMER_GENERATED_CPP}"
+)
+set_source_files_properties("${PLATFORMER_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
+target_compile_features(example_platformer_generated PRIVATE cxx_std_20)
+target_link_libraries(example_platformer_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
+target_include_directories(example_platformer_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
+set_property(TARGET example_platformer_generated PROPERTY CXX_CLANG_TIDY "")
 
 # Lexer tests
 add_executable(test_lexer test_lexer.cpp)
@@ -194,6 +193,9 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_MESH_RENDERER_SOURCE="examples/mesh-renderer/main.cactus"
     CACTUS_EXAMPLE_MESH_RENDERER_GENERATED_CPP="${MESH_RENDERER_GENERATED_CPP}"
     CACTUS_EXAMPLE_MESH_RENDERER_TARGET="example_mesh_renderer_generated"
+    CACTUS_EXAMPLE_PLATFORMER_SOURCE="examples/platformer/platformer.cactus"
+    CACTUS_EXAMPLE_PLATFORMER_GENERATED_CPP="${PLATFORMER_GENERATED_CPP}"
+    CACTUS_EXAMPLE_PLATFORMER_TARGET="example_platformer_generated"
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)

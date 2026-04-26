@@ -1,7 +1,8 @@
 module platformer
 
-use std.core
 use std.input
+use std.transform.flat
+use std.render.shapes
 
 # ── Input Action Declarations ─────────────────────────────────────────────────
 
@@ -19,16 +20,6 @@ input MoveY: axis
 input Jump: button
     key     = Key.Space
     gamepad = GamepadButton.South
-
-input Fire: button
-    mouse   = MouseButton.Left
-    gamepad = GamepadButton.R1
-
-# ── Asset Declarations ────────────────────────────────────────────────────────
-
-asset PlayerSprite:  texture = "assets/sprites/player.png"
-asset EnemySprite:   texture = "assets/sprites/enemy.png"
-asset GemSprite:     texture = "assets/sprites/gem.png"
 
 const:
     WINDOW_TITLE = "Cactus Platformer"
@@ -49,32 +40,15 @@ const:
     GROUND_HEIGHT = 40.0
     GROUND_COLOR = #5B8C3E
     PLATFORM_COLOR = #8B6914
-    WALL_COLOR = #6B6B6B
     PATROL_SPEED = 2.0
     ENEMY_WIDTH = 32.0
     ENEMY_HEIGHT = 32.0
     ENEMY_COLOR = #CC3333
-    DAMAGE_AMOUNT = 1
     GEM_SIZE = 16.0
     GEM_COLOR_BLUE = #4488FF
     GEM_COLOR_GOLD = #FFD700
     BLUE_GEM_POINTS = 10
     GOLD_GEM_POINTS = 100
-    CAMERA_OFFSET_X = 640.0
-    CAMERA_OFFSET_Y = 360.0
-    CAMERA_SMOOTHING = 5.0
-    CAMERA_MIN_X = 0.0
-    CAMERA_MAX_X = 3720.0
-    PARALLAX_FAR = 0.2
-    PARALLAX_MID = 0.5
-    HUD_PADDING = 10
-    HUD_FONT_SIZE = 20
-    HEALTH_BAR_WIDTH = 150
-    HEALTH_BAR_HEIGHT = 16
-    HEALTH_COLOR = #00CC44
-    HEALTH_BG_COLOR = #333333
-    SCORE_COLOR = #FFD700
-    LIVES_COLOR = #FF6666
 
 # ── Enums ────────────────────────────────────────────────────────────────────────
 
@@ -86,16 +60,6 @@ enum JumpState:
     Grounded
     Jumping
     Falling
-    WallSliding
-
-enum PlatformType:
-    Ground
-    Floating
-    Wall
-
-enum EnemyType:
-    Walker
-    Flyer
 
 enum GemType:
     Blue
@@ -103,24 +67,20 @@ enum GemType:
 
 # ── Traits ───────────────────────────────────────────────────────────────────────
 
-trait Position:
-    persist sync var pos: vec2
+trait PlayerMotion:
     var velocity: vec2
-
-trait PlayerPhysics:
     var gravity: float
     var jump_force: float
-    var is_grounded: bool
+    var grounded: bool
     var jumps_remaining: int
     var max_jumps: int
-    var wall_slide_speed: float
-
-trait PlayerController:
     var move_speed: float
     var facing: FacingDirection
     var jump_state: JumpState
     var width: float
     var height: float
+    var move_axis: float
+    var jump_requested: bool
 
 trait Health:
     persist sync var health: int
@@ -128,202 +88,169 @@ trait Health:
     let max_health: int = 3
     var invincible_timer: float
 
-trait Platform:
-    let plat_pos: vec2
-    let plat_size: vec2
-    let platform_type: PlatformType
-    let plat_color: color
-
-trait EnemyAI:
+trait PatrolMotion:
     var patrol_min_x: float
     var patrol_max_x: float
     var patrol_speed: float
     var direction: float
-    var enemy_type: EnemyType
-    let enemy_color: color
-    let enemy_width: float
-    let enemy_height: float
 
 trait Collectible:
     let point_value: int
     let gem_type: GemType
-    let gem_color: color
-    let gem_size: float
     var collected: bool
-
-trait Score:
-    persist var score: int
-    persist var gems_collected: int
-
-trait SideScrollCamera:
-    var cam_x: float
-    var cam_y: float
-    var offset_x: float
-    var offset_y: float
-    var smoothing: float
-    var min_x: float
-    var max_x: float
-    var parallax_far: float
-    var parallax_mid: float
-
-# ── Events ───────────────────────────────────────────────────────────────────────
-
-event PlayerJumped:
-    position: vec2
-    jumps_remaining: int
-
-event PlayerLanded:
-    position: vec2
-
-event PlayerDamaged:
-    amount: int
-
-event PlayerDied:
-    lives_remaining: int
-
-event PlatformCollision:
-    entity: entity_id
-    platform_pos: vec2
-    platform_size: vec2
-    overlap_x: float
-    overlap_y: float
-
-event EnemyDefeated:
-    position: vec2
-
-event GemCollected:
-    point_value: int
-    gem_type: GemType
-    position: vec2
 
 # ── Units ────────────────────────────────────────────────────────────────────────
 
 pub unit Player:
-    Position:
-        pos = vec2(100.0, 300.0)
+    WorldTransform:
+        position = vec2(100.0, 300.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(PLAYER_WIDTH, PLAYER_HEIGHT)
+        color = #44AAFFFF
+        visible = true
+    PlayerMotion:
         velocity = vec2(0.0, 0.0)
-    PlayerPhysics:
         gravity = GRAVITY
         jump_force = JUMP_FORCE
-        is_grounded = false
+        grounded = false
         jumps_remaining = MAX_JUMPS
         max_jumps = MAX_JUMPS
-        wall_slide_speed = WALL_SLIDE_SPEED
-    PlayerController:
         move_speed = MOVE_SPEED
         facing = FacingDirection.Right
         jump_state = JumpState.Falling
         width = PLAYER_WIDTH
         height = PLAYER_HEIGHT
+        move_axis = 0.0
+        jump_requested = false
     Health:
         health = START_HEALTH
         lives = START_LIVES
         invincible_timer = 0.0
-    Score:
-        score = 0
-        gems_collected = 0
     Persistent
 
 pub unit GroundPlatform:
-    Platform:
-        plat_pos = vec2(0.0, GROUND_Y)
-        plat_size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
-        platform_type = PlatformType.Ground
-        plat_color = GROUND_COLOR
+    WorldTransform:
+        position = vec2(0.0, GROUND_Y)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
+        color = GROUND_COLOR
+        visible = true
 
 pub unit FloatingPlatform1:
-    Platform:
-        plat_pos = vec2(300.0, 450.0)
-        plat_size = vec2(200.0, 20.0)
-        platform_type = PlatformType.Floating
-        plat_color = PLATFORM_COLOR
+    WorldTransform:
+        position = vec2(300.0, 450.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(200.0, 20.0)
+        color = PLATFORM_COLOR
+        visible = true
 
 pub unit FloatingPlatform2:
-    Platform:
-        plat_pos = vec2(600.0, 350.0)
-        plat_size = vec2(150.0, 20.0)
-        platform_type = PlatformType.Floating
-        plat_color = PLATFORM_COLOR
+    WorldTransform:
+        position = vec2(600.0, 350.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(150.0, 20.0)
+        color = PLATFORM_COLOR
+        visible = true
 
 pub unit FloatingPlatform3:
-    Platform:
-        plat_pos = vec2(950.0, 280.0)
-        plat_size = vec2(180.0, 20.0)
-        platform_type = PlatformType.Floating
-        plat_color = PLATFORM_COLOR
+    WorldTransform:
+        position = vec2(950.0, 280.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(180.0, 20.0)
+        color = PLATFORM_COLOR
+        visible = true
 
 pub unit WalkerEnemy1:
-    Position:
-        pos = vec2(400.0, 568.0)
-        velocity = vec2(0.0, 0.0)
-    EnemyAI:
+    WorldTransform:
+        position = vec2(400.0, 568.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
+        color = ENEMY_COLOR
+        visible = true
+    PatrolMotion:
         patrol_min_x = 350.0
         patrol_max_x = 550.0
         patrol_speed = PATROL_SPEED
         direction = 1.0
-        enemy_type = EnemyType.Walker
-        enemy_color = ENEMY_COLOR
-        enemy_width = ENEMY_WIDTH
-        enemy_height = ENEMY_HEIGHT
 
 pub unit WalkerEnemy2:
-    Position:
-        pos = vec2(800.0, 568.0)
-        velocity = vec2(0.0, 0.0)
-    EnemyAI:
+    WorldTransform:
+        position = vec2(800.0, 568.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
+        color = ENEMY_COLOR
+        visible = true
+    PatrolMotion:
         patrol_min_x = 700.0
         patrol_max_x = 1000.0
         patrol_speed = PATROL_SPEED
         direction = 1.0
-        enemy_type = EnemyType.Walker
-        enemy_color = ENEMY_COLOR
-        enemy_width = ENEMY_WIDTH
-        enemy_height = ENEMY_HEIGHT
 
 pub unit BlueGem1:
-    Position:
-        pos = vec2(250.0, 560.0)
-        velocity = vec2(0.0, 0.0)
+    WorldTransform:
+        position = vec2(250.0, 560.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(GEM_SIZE, GEM_SIZE)
+        color = GEM_COLOR_BLUE
+        visible = true
     Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
-        gem_color = GEM_COLOR_BLUE
-        gem_size = GEM_SIZE
         collected = false
 
 pub unit BlueGem2:
-    Position:
-        pos = vec2(350.0, 410.0)
-        velocity = vec2(0.0, 0.0)
+    WorldTransform:
+        position = vec2(350.0, 410.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(GEM_SIZE, GEM_SIZE)
+        color = GEM_COLOR_BLUE
+        visible = true
     Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
-        gem_color = GEM_COLOR_BLUE
-        gem_size = GEM_SIZE
         collected = false
 
 pub unit GoldGem1:
-    Position:
-        pos = vec2(1000.0, 240.0)
-        velocity = vec2(0.0, 0.0)
+    WorldTransform:
+        position = vec2(1000.0, 240.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(GEM_SIZE, GEM_SIZE)
+        color = GEM_COLOR_GOLD
+        visible = true
     Collectible:
         point_value = GOLD_GEM_POINTS
         gem_type = GemType.Gold
-        gem_color = GEM_COLOR_GOLD
-        gem_size = GEM_SIZE
         collected = false
-
-pub unit CameraUnit:
-    SideScrollCamera:
-        cam_x = 0.0
-        cam_y = 0.0
-        offset_x = CAMERA_OFFSET_X
-        offset_y = CAMERA_OFFSET_Y
-        smoothing = CAMERA_SMOOTHING
-        min_x = CAMERA_MIN_X
-        max_x = CAMERA_MAX_X
-        parallax_far = PARALLAX_FAR
-        parallax_mid = PARALLAX_MID
 
 # ── Pure Functions ───────────────────────────────────────────────────────────────
 
@@ -341,61 +268,48 @@ func abs_f(v: float) float:
 
 # ── Systems ──────────────────────────────────────────────────────────────────────
 
+system ReadPlayerInput:
+    filter:
+        PlayerMotion
+
+    on input:
+        move_axis = axis(MoveX)
+        jump_requested = pressed(Jump)
+
 system MovementSystem:
     filter:
-        Position
-        PlayerController
+        WorldTransform
+        PlayerMotion
 
     on tick:
-        input_x = get_input_axis_x()
-
-        if input_x > 0.0:
+        if move_axis > 0.0:
             facing = FacingDirection.Right
-        if input_x < 0.0:
+        if move_axis < 0.0:
             facing = FacingDirection.Left
 
-        velocity = vec2(input_x * move_speed, velocity.y)
-        pos = pos + vec2(velocity.x * tick.dt, 0.0)
-
-system GravitySystem:
-    filter:
-        Position
-        PlayerPhysics
-
-    on tick:
-        if is_grounded == false:
-            if jump_state == JumpState.WallSliding:
-                velocity = vec2(velocity.x, wall_slide_speed)
-            else:
-                velocity = vec2(velocity.x, velocity.y + gravity * tick.dt)
-
-        pos = pos + vec2(0.0, velocity.y * tick.dt)
-
-system JumpSystem:
-    filter:
-        Position
-        PlayerPhysics
-        PlayerController
-
-    on tick:
-        if is_jump_pressed():
+        velocity = vec2(move_axis * move_speed, velocity.y)
+        if jump_requested:
             if jumps_remaining > 0:
                 velocity = vec2(velocity.x, jump_force * -1.0)
                 jumps_remaining = jumps_remaining - 1
-                is_grounded = false
+                grounded = false
                 jump_state = JumpState.Jumping
-                emit PlayerJumped:
-                    position = pos
-                    jumps_remaining = jumps_remaining
+        jump_requested = false
+
+        if grounded == false:
+            velocity = vec2(velocity.x, velocity.y + gravity * tick.dt)
+
+        position = vec2(position.x + velocity.x * tick.dt, position.y + velocity.y * tick.dt)
 
         if velocity.y > 0.0 and jump_state == JumpState.Jumping:
             jump_state = JumpState.Falling
 
-    on PlayerLanded:
-        is_grounded = true
-        jumps_remaining = max_jumps
-        jump_state = JumpState.Grounded
-        velocity = vec2(velocity.x, 0.0)
+        if position.y > GROUND_Y - PLAYER_HEIGHT:
+            position = vec2(position.x, GROUND_Y - PLAYER_HEIGHT)
+            velocity = vec2(velocity.x, 0.0)
+            grounded = true
+            jumps_remaining = max_jumps
+            jump_state = JumpState.Grounded
 
 system InvincibilitySystem:
     filter:
@@ -405,96 +319,29 @@ system InvincibilitySystem:
         if invincible_timer > 0.0:
             invincible_timer = invincible_timer - tick.dt
 
-    on PlayerDamaged:
-        if invincible_timer <= 0.0:
-            health = health - PlayerDamaged.amount
-            invincible_timer = 1.5
-            if health <= 0:
-                lives = lives - 1
-                health = max_health
-                emit PlayerDied:
-                    lives_remaining = lives
-
 system PatrolSystem:
     filter:
-        Position
-        EnemyAI
+        WorldTransform
+        PatrolMotion
 
     on tick:
-        pos = pos + vec2(patrol_speed * direction * tick.dt, 0.0)
+        position = vec2(position.x + patrol_speed * direction * tick.dt, position.y)
 
-        if pos.x >= patrol_max_x:
+        if position.x >= patrol_max_x:
             direction = -1.0
-            pos = vec2(patrol_max_x, pos.y)
+            position = vec2(patrol_max_x, position.y)
 
-        if pos.x <= patrol_min_x:
+        if position.x <= patrol_min_x:
             direction = 1.0
-            pos = vec2(patrol_min_x, pos.y)
+            position = vec2(patrol_min_x, position.y)
 
 system CollectionSystem:
     filter:
-        Position
         Collectible
+        Shape
 
     on tick:
         if collected == false:
-            player_pos = get_player_position()
-            player_w = get_player_width()
-            player_h = get_player_height()
-
-            if abs_f(pos.x - player_pos.x) < gem_size + player_w:
-                if abs_f(pos.y - player_pos.y) < gem_size + player_h:
-                    collected = true
-                    emit GemCollected:
-                        point_value = point_value
-                        gem_type = gem_type
-                        position = pos
-
-system ScoreSystem:
-    filter:
-        Score
-
-    on GemCollected:
-        score = score + GemCollected.point_value
-        gems_collected = gems_collected + 1
-
-system CameraFollowSystem:
-    filter:
-        SideScrollCamera
-
-    on tick:
-        player_pos = get_player_position()
-        target_x = player_pos.x - offset_x
-
-        t = smoothing * tick.dt
-        if t > 1.0:
-            t = 1.0
-
-        cam_x = lerp(cam_x, target_x, t)
-        cam_x = clamp_f(cam_x, min_x, max_x)
-
-        set_camera_2d(cam_x, cam_y)
-
-system PlatformRenderer:
-    filter:
-        Platform
-
-    on tick:
-        draw_rect(plat_pos, plat_size, plat_color)
-
-system EnemyRenderer:
-    filter:
-        Position
-        EnemyAI
-
-    on tick:
-        draw_rect(pos, vec2(enemy_width, enemy_height), enemy_color)
-
-system CollectibleRenderer:
-    filter:
-        Position
-        Collectible
-
-    on tick:
-        if collected == false:
-            draw_rect(pos, vec2(gem_size, gem_size), gem_color)
+            visible = true
+        else:
+            visible = false

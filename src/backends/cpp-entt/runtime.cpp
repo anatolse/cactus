@@ -223,7 +223,7 @@ Shader* ensure_lighting_shader() {
 
     reset_lighting_shader_state();
     state.shader = LoadShaderFromMemory(kLightingVertexShader, kLightingFragmentShader);
-    if (!IsShaderReady(state.shader)) {
+    if (!IsShaderValid(state.shader)) {
         reset_lighting_shader_state();
         return nullptr;
     }
@@ -602,8 +602,11 @@ void submit_billboard(const Vector3 /*position*/,
     ++render_debug_state_storage().submitted_billboards;
 }
 
-void register_point_light(
-    const Vector3 position, const Color color, const float intensity, const float range, const bool enabled) noexcept {
+void register_point_light(const Vector3 position,
+                          const Color color,
+                          const float intensity,
+                          const float range,
+                          const bool enabled) noexcept {
     if (enabled) {
         point_light_queue().push_back(PointLightSubmission{
             .position  = position,

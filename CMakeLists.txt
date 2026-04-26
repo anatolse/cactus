@@ -26,7 +26,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     EnTT
     GIT_REPOSITORY https://github.com/skypjack/entt.git
-    GIT_TAG        v3.13.1
+    GIT_TAG        v3.16.0
     GIT_SHALLOW    TRUE
 )
 
@@ -34,7 +34,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     raylib
     GIT_REPOSITORY https://github.com/raysan5/raylib.git
-    GIT_TAG        5.0
+    GIT_TAG        6.0
     GIT_SHALLOW    TRUE
 )
 
@@ -45,25 +45,27 @@ FetchContent_MakeAvailable(Catch2 EnTT raylib)
 if(MSVC)
     add_compile_options(/W4 /WX /permissive-)
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+    add_compile_options(
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+        -Wno-missing-field-initializers
+        -Wno-c2y-extensions
+        #-Wno-deprecated-literal-operator
+        #-Wno-incompatible-pointer-types
+        #-Wno-tautological-compare
+    )
 endif()
 
 # ── Optional clang-tidy during build ───────────────────────────────────────────
 option(CACTUS_ENABLE_BUILD_CLANG_TIDY "Run clang-tidy during normal project builds" OFF)
 find_program(CLANG_FORMAT_EXE
-    NAMES clang-format clang-format.exe
-    PATHS
-        "C:/Program Files/LLVM/bin"
-        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+    NAMES clang-format 
 )
 
 find_program(CLANG_TIDY_EXE
-    NAMES clang-tidy clang-tidy.exe
-    PATHS
-        "C:/Program Files/LLVM/bin"
-        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+    NAMES clang-tidy
 )
 
 if(CLANG_TIDY_EXE AND CACTUS_ENABLE_BUILD_CLANG_TIDY)

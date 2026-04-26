@@ -126,13 +126,6 @@ TypeKind asset_kind_to_type_kind(AssetKind ak) {
     return TypeKind::Unknown;
 }
 
-TypeInfo make_named_type(TypeKind kind, std::string name) {
-    TypeInfo info;
-    info.kind = kind;
-    info.name = std::move(name);
-    return info;
-}
-
 template <typename FieldContainer>
 TypeInfo find_field_type_in(const FieldContainer& fields, const std::string& member) {
     for (const auto& field : fields) {
@@ -1396,7 +1389,7 @@ void SemanticAnalyzer::validate_trait_match_stmt(
 
 void SemanticAnalyzer::build_dependency_graph(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    auto add_dep_from_filter = [this](const auto& sys, SystemDependency& dep) {
+    auto add_dep_from_filter = [](const auto& sys, SystemDependency& dep) {
         if (!sys.filter.entries.empty()) {
             for (auto& entry : sys.filter.entries) {
                 auto dot    = entry.qualified_name.find('.');
@@ -2067,25 +2060,10 @@ void SemanticAnalyzer::check_no_field_access(const std::vector<std::unique_ptr<S
 
 void SemanticAnalyzer::validate_trait_modifier_rules(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    auto validate_exclude_clause = [this](const auto& node) {
-        if (!node.exclude.entries.empty()) {
-            for (auto& entry : node.exclude.entries) {
-                if (!is_trait_declared(entry.qualified_name)) {
-                    errors_.error(entry.location, "undeclared trait '" + entry.qualified_name + "' in exclude clause");
-                }
-            }
-        } else {
-            for (auto& trait_name : node.exclude.trait_names) {
-                if (!is_trait_declared(trait_name)) {
-                    errors_.error(node.exclude.location, "undeclared trait '" + trait_name + "' in exclude clause");
-                }
-            }
-        }
-    };
 
     for (auto& decl : program.declarations) {
         std::visit(
-            [this, &validate_exclude_clause](auto& node) {
+            [this](auto& node) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
                     if (!node.exclude.entries.empty() || !node.exclude.trait_names.empty()) {
@@ -2094,6 +2072,22 @@ void SemanticAnalyzer::validate_trait_modifier_rules(
                 }
             },
             decl);
+    }
+}
+
+void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
+    if (!node.exclude.entries.empty()) {
+        for (auto& entry : node.exclude.entries) {
+            if (!is_trait_declared(entry.qualified_name)) {
+                errors_.error(entry.location, "undeclared trait '" + entry.qualified_name + "' in exclude clause");
+            }
+        }
+    } else {
+        for (auto& trait_name : node.exclude.trait_names) {
+            if (!is_trait_declared(trait_name)) {
+                errors_.error(node.exclude.location, "undeclared trait '" + trait_name + "' in exclude clause");
+            }
+        }
     }
 }
 

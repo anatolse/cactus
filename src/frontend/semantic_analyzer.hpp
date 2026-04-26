@@ -170,6 +170,7 @@ private:
     void validate_spawn_sites(ProgramNode& program);
     void validate_stmt_contexts(ProgramNode& program);
     void validate_trait_modifier_rules(ProgramNode& program);
+    void validate_exclude_clause(const auto& node);
 
     // task 11.12: field access not allowed in systems with no filter clause
     void check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& sys_name);

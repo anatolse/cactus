@@ -130,10 +130,6 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
     return result;
 }
 
-bool expr_is_self(const ExprNode& expr) {
-    return std::holds_alternative<SelfExpr>(expr.expr);
-}
-
 std::string filter_simple_name(const FilterEntry& entry) {
     auto dot = entry.qualified_name.rfind('.');
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
@@ -769,8 +765,11 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, const Codeg
 // ── emit_stmt_dynamic ──────────────────────────────────────────────────────
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-std::string ManualSystemEmitter::emit_stmt_dynamic(
-    const StmtNode& stmt, int indent, const CodegenContext& ctx, const std::string& entity_index_var, bool in_loop) {
+std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt,
+                                                   int indent,
+                                                   const CodegenContext& ctx,
+                                                   const std::string& entity_index_var,
+                                                   bool in_loop) {
     return std::visit(
         // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         [indent, &ctx, &entity_index_var, in_loop](auto& s) -> std::string {

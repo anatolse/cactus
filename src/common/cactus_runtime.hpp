@@ -57,8 +57,11 @@ public:
     void clear();
     void clear_diagnostics();
 
-    void register_asset(
-        AssetKind kind, AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
+    void register_asset(AssetKind kind,
+                        AssetHandle handle,
+                        std::string asset_id,
+                        int runtime_id,
+                        bool materialized = true);
     void register_texture(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
     void register_mesh(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
     void register_material(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);

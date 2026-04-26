@@ -45,8 +45,12 @@ void reset_render_debug_state() noexcept;
 [[nodiscard]] const RenderDebugState& render_debug_state() noexcept;
 
 void submit_sprite(Vector2 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
-void advance_animated_sprite(
-    AssetHandle texture, int& frame, int frame_count, float fps, bool playing, float dt) noexcept;
+void advance_animated_sprite(AssetHandle texture,
+                             int& frame,
+                             int frame_count,
+                             float fps,
+                             bool playing,
+                             float dt) noexcept;
 void submit_mesh(Vector3 position,
                  Quat rotation,
                  Vector3 scale,

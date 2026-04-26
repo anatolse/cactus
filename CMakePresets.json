@@ -54,6 +54,19 @@
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
                 "CMAKE_CXX_COMPILER": "clang++"
             }
+        },
+        {
+            "name": "clang-o3-release",
+            "displayName": "Clang O3 (Release)",
+            "description": "Release build using Clang compiler with explicit -O3 optimization",
+            "binaryDir": "${sourceDir}/build-clang-o3-release",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG"
+            }
         }
     ],
     "buildPresets": [
@@ -64,6 +77,10 @@
         {
             "name": "release",
             "configurePreset": "release"
+        },
+        {
+            "name": "clang-o3-release",
+            "configurePreset": "clang-o3-release"
         }
     ],
     "testPresets": [

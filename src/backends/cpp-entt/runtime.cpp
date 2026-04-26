@@ -97,6 +97,87 @@ std::unordered_map<int, MaterialResourceEntry>& materials() noexcept {
 constexpr int kMaxMeshLights  = 4;
 constexpr int kPointLightType = 1;
 
+#if defined(__EMSCRIPTEN__) || defined(PLATFORM_WEB)
+constexpr const char* kLightingVertexShader = R"(#version 100
+
+attribute vec3 vertexPosition;
+attribute vec2 vertexTexCoord;
+attribute vec3 vertexNormal;
+attribute vec4 vertexColor;
+
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
+
+varying vec3 fragPosition;
+varying vec2 fragTexCoord;
+varying vec4 fragColor;
+varying vec3 fragNormal;
+
+void main()
+{
+    fragPosition = vec3(matModel*vec4(vertexPosition, 1.0));
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal, 1.0)));
+    gl_Position = mvp*vec4(vertexPosition, 1.0);
+}
+)";
+
+constexpr const char* kLightingFragmentShader = R"(#version 100
+
+precision mediump float;
+
+varying vec3 fragPosition;
+varying vec2 fragTexCoord;
+varying vec3 fragNormal;
+
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+
+#define MAX_LIGHTS 4
+#define LIGHT_POINT 1
+
+struct Light {
+    int enabled;
+    int type;
+    vec3 position;
+    vec3 target;
+    vec4 color;
+};
+
+uniform Light lights[MAX_LIGHTS];
+uniform vec4 ambient;
+uniform vec3 viewPos;
+
+void main()
+{
+    vec4 texelColor = texture2D(texture0, fragTexCoord);
+    vec3 lightDot = vec3(0.0);
+    vec3 normal = normalize(fragNormal);
+    vec3 viewD = normalize(viewPos - fragPosition);
+    vec3 specular = vec3(0.0);
+
+    for (int i = 0; i < MAX_LIGHTS; i++)
+    {
+        if (lights[i].enabled == 1 && lights[i].type == LIGHT_POINT)
+        {
+            vec3 light = normalize(lights[i].position - fragPosition);
+            float NdotL = max(dot(normal, light), 0.0);
+            lightDot += lights[i].color.rgb*NdotL;
+
+            float specCo = 0.0;
+            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0);
+            specular += specCo*lights[i].color.rgb;
+        }
+    }
+
+    vec4 finalColor = texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0));
+    finalColor += texelColor*(ambient/10.0)*colDiffuse;
+    gl_FragColor = pow(finalColor, vec4(1.0/2.2));
+}
+)";
+#else
 constexpr const char* kLightingVertexShader = R"(#version 330
 
 in vec3 vertexPosition;
@@ -176,6 +257,7 @@ void main()
     finalColor = pow(finalColor, vec4(1.0/2.2));
 }
 )";
+#endif
 
 struct LightingShaderState {
     Shader shader{};

@@ -41,13 +41,27 @@ pub unit BlueCube:
         visible = true
         cast_shadow = true
 
+pub unit BlueCube2:
+    WorldTransform:
+        position = vec3(3.0, 1.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(3.5, 3.5, 3.5)
+    RotationInput:
+        horizontal = 0.0
+        vertical = 0.0
+    Renderer:
+        mesh = BlueCubeMesh
+        material = BlueCubeMaterial
+        visible = true
+        cast_shadow = true
+
 pub unit LeftPointLight:
     WorldTransform:
         position = vec3(-2.0, 1.5, 2.5)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
     PointLight:
-        color = #FFE0B3FF
+        color = #b3ffd5
         intensity = 1.4
         range = 8.0
         enabled = true
@@ -58,7 +72,7 @@ pub unit RightPointLight:
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
     PointLight:
-        color = #B3D9FFFF
+        color = #ffb3e8
         intensity = 1.2
         range = 8.0
         enabled = true

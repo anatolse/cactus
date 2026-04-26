@@ -1,7 +1,8 @@
 #pragma once
 
-#include "backends/cpp-manual/soa_emitter.h"
-#include "frontend/semantic_analyzer.h"
+#include "frontend/semantic_analyzer.hpp"
+
+#include "backends/cpp-manual/soa_emitter.hpp"
 
 #include <string>
 

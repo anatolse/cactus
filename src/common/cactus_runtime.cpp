@@ -1,10 +1,9 @@
-#include "common/cactus_runtime.h"
+#include "common/cactus_runtime.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <sstream>
-
 #include <raymath.h>
+#include <sstream>
 
 namespace cactus::runtime {
 
@@ -21,9 +20,12 @@ namespace {
 
 std::string asset_kind_name(const AssetKind kind) {
     switch (kind) {
-        case AssetKind::Texture: return "texture";
-        case AssetKind::Mesh: return "mesh";
-        case AssetKind::Material: return "material";
+        case AssetKind::Texture:
+            return "texture";
+        case AssetKind::Mesh:
+            return "mesh";
+        case AssetKind::Material:
+            return "material";
     }
     return "asset";
 }
@@ -33,8 +35,8 @@ void AssetRegistry::clear() {
     textures_.clear();
     meshes_.clear();
     materials_.clear();
-    texture_resolver_ = {};
-    mesh_resolver_ = {};
+    texture_resolver_  = {};
+    mesh_resolver_     = {};
     material_resolver_ = {};
     clear_diagnostics();
 }
@@ -50,10 +52,10 @@ void AssetRegistry::register_asset(const AssetKind kind,
                                    const int runtime_id,
                                    const bool materialized) {
     map_for(kind)[handle] = AssetRecord{
-        .handle = handle,
-        .kind = kind,
-        .asset_id = std::move(asset_id),
-        .runtime_id = runtime_id,
+        .handle       = handle,
+        .kind         = kind,
+        .asset_id     = std::move(asset_id),
+        .runtime_id   = runtime_id,
         .materialized = materialized,
     };
 }
@@ -87,9 +89,9 @@ AssetResolution AssetRegistry::resolve(const AssetKind kind, const AssetHandle h
     auto& assets = map_for(kind);
     if (const auto it = assets.find(handle); it != assets.end()) {
         return AssetResolution{
-            .handle = handle,
-            .kind = kind,
-            .status = it->second.materialized ? AssetStatus::Materialized : AssetStatus::Registered,
+            .handle     = handle,
+            .kind       = kind,
+            .status     = it->second.materialized ? AssetStatus::Materialized : AssetStatus::Registered,
             .runtime_id = it->second.runtime_id,
         };
     }
@@ -98,13 +100,13 @@ AssetResolution AssetRegistry::resolve(const AssetKind kind, const AssetHandle h
     if (resolver) {
         if (auto loaded = resolver(handle); loaded.has_value()) {
             AssetRecord record = std::move(*loaded);
-            record.handle = handle;
-            record.kind = kind;
+            record.handle      = handle;
+            record.kind        = kind;
             assets.emplace(handle, record);
             return AssetResolution{
-                .handle = handle,
-                .kind = kind,
-                .status = record.materialized ? AssetStatus::Materialized : AssetStatus::Registered,
+                .handle     = handle,
+                .kind       = kind,
+                .status     = record.materialized ? AssetStatus::Materialized : AssetStatus::Registered,
                 .runtime_id = record.runtime_id,
             };
         }
@@ -119,27 +121,36 @@ AssetResolution AssetRegistry::resolve(const AssetKind kind, const AssetHandle h
 
 AssetRegistry::AssetMap& AssetRegistry::map_for(const AssetKind kind) noexcept {
     switch (kind) {
-        case AssetKind::Texture: return textures_;
-        case AssetKind::Mesh: return meshes_;
-        case AssetKind::Material: return materials_;
+        case AssetKind::Texture:
+            return textures_;
+        case AssetKind::Mesh:
+            return meshes_;
+        case AssetKind::Material:
+            return materials_;
     }
     return textures_;
 }
 
 const AssetRegistry::AssetMap& AssetRegistry::map_for(const AssetKind kind) const noexcept {
     switch (kind) {
-        case AssetKind::Texture: return textures_;
-        case AssetKind::Mesh: return meshes_;
-        case AssetKind::Material: return materials_;
+        case AssetKind::Texture:
+            return textures_;
+        case AssetKind::Mesh:
+            return meshes_;
+        case AssetKind::Material:
+            return materials_;
     }
     return textures_;
 }
 
 AssetRegistry::LazyResolver& AssetRegistry::resolver_for(const AssetKind kind) noexcept {
     switch (kind) {
-        case AssetKind::Texture: return texture_resolver_;
-        case AssetKind::Mesh: return mesh_resolver_;
-        case AssetKind::Material: return material_resolver_;
+        case AssetKind::Texture:
+            return texture_resolver_;
+        case AssetKind::Mesh:
+            return mesh_resolver_;
+        case AssetKind::Material:
+            return material_resolver_;
     }
     return texture_resolver_;
 }
@@ -192,14 +203,14 @@ float length(Vector2 v) noexcept {
 Vector2 normalize(Vector2 v) noexcept {
     const float len_sq = length_squared(v);
     if (len_sq <= 0.0F) {
-        return Vector2{0.0F, 0.0F};
+        return Vector2{.x = 0.0F, .y = 0.0F};
     }
     const float inv_len = 1.0F / std::sqrt(len_sq);
-    return Vector2{v.x * inv_len, v.y * inv_len};
+    return Vector2{.x = v.x * inv_len, .y = v.y * inv_len};
 }
 
 float distance(Vector2 a, Vector2 b) noexcept {
-    return length(Vector2{a.x - b.x, a.y - b.y});
+    return length(Vector2{.x = a.x - b.x, .y = a.y - b.y});
 }
 
 float angle(Vector2 v) noexcept {
@@ -217,14 +228,14 @@ float length(Vector3 v) noexcept {
 Vector3 normalize(Vector3 v) noexcept {
     const float len_sq = length_squared(v);
     if (len_sq <= 0.0F) {
-        return Vector3{0.0F, 0.0F, 0.0F};
+        return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     }
     const float inv_len = 1.0F / std::sqrt(len_sq);
-    return Vector3{v.x * inv_len, v.y * inv_len, v.z * inv_len};
+    return Vector3{.x = v.x * inv_len, .y = v.y * inv_len, .z = v.z * inv_len};
 }
 
 float distance(Vector3 a, Vector3 b) noexcept {
-    return length(Vector3{a.x - b.x, a.y - b.y, a.z - b.z});
+    return length(Vector3{.x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z});
 }
 
 }  // namespace vec3
@@ -240,15 +251,15 @@ Quat from_axis_angle(Vector3 axis, float angle) noexcept {
 }
 
 Vector3 forward(Quat q) noexcept {
-    return Vector3RotateByQuaternion(Vector3{0.0F, 0.0F, -1.0F}, q);
+    return Vector3RotateByQuaternion(Vector3{.x = 0.0F, .y = 0.0F, .z = -1.0F}, q);
 }
 
 Vector3 right(Quat q) noexcept {
-    return Vector3RotateByQuaternion(Vector3{1.0F, 0.0F, 0.0F}, q);
+    return Vector3RotateByQuaternion(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, q);
 }
 
 Vector3 up(Quat q) noexcept {
-    return Vector3RotateByQuaternion(Vector3{0.0F, 1.0F, 0.0F}, q);
+    return Vector3RotateByQuaternion(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, q);
 }
 
 Vector3 rotate(Quat q, Vector3 v) noexcept {

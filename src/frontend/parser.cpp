@@ -1,11 +1,12 @@
-#include "frontend/parser.h"
+#include "frontend/parser.hpp"
 
 #include <stdexcept>
 
 namespace cactus {
 
 Parser::Parser(std::vector<Token> tokens, ErrorReporter& errors)
-    : tokens_(std::move(tokens)), errors_(errors) {}
+    : tokens_(std::move(tokens))
+    , errors_(errors) {}
 
 // ── Token Navigation ────────────────────────────────────────────────────────
 
@@ -143,7 +144,7 @@ ProgramNode Parser::parse_program() {
     return program;
 }
 
-Declaration Parser::parse_declaration() { // NOLINT(readability-function-cognitive-complexity)
+Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognitive-complexity)
     skip_newlines();
     const auto& tok = peek();
 
@@ -193,7 +194,7 @@ Declaration Parser::parse_declaration() { // NOLINT(readability-function-cogniti
         advance();
         skip_newlines();
         if (check(TokenType::TRAIT)) {
-            auto t = parse_trait();
+            auto t   = parse_trait();
             t.is_pub = true;
             return t;
         }
@@ -228,7 +229,9 @@ Declaration Parser::parse_declaration() { // NOLINT(readability-function-cogniti
         if (check(TokenType::STRUCT)) {
             return parse_struct();
         }
-        errors_.error(peek().location, "expected trait, unit, template, func, extern func, asset, input, event, enum, or struct after 'pub'");
+        errors_.error(
+            peek().location,
+            "expected trait, unit, template, func, extern func, asset, input, event, enum, or struct after 'pub'");
     }
 
     if (tok.type == TokenType::UNIT) {
@@ -244,7 +247,9 @@ Declaration Parser::parse_declaration() { // NOLINT(readability-function-cogniti
         return parse_extern_func(false);
     }
 
-    errors_.error(tok.location, "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, extern, interface, asset, input)");
+    errors_.error(tok.location,
+                  "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, "
+                  "extern, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{.name = "<error>", .location = tok.location};
 }
@@ -260,9 +265,8 @@ std::string Parser::parse_dotted_name() {
         }
         // Accept any keyword whose value is non-empty (e.g. INPUT -> "input")
         const auto& t = peek();
-        if (t.type != TokenType::NEWLINE && t.type != TokenType::EOF_TOKEN &&
-            t.type != TokenType::DOT && t.type != TokenType::COLON &&
-            t.type != TokenType::INDENT && t.type != TokenType::DEDENT &&
+        if (t.type != TokenType::NEWLINE && t.type != TokenType::EOF_TOKEN && t.type != TokenType::DOT &&
+            t.type != TokenType::COLON && t.type != TokenType::INDENT && t.type != TokenType::DEDENT &&
             !t.value.empty()) {
             return advance().value;
         }
@@ -319,8 +323,8 @@ ConstBlockNode Parser::parse_const_block() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto assign_loc = peek().location;
-        auto name = consume(TokenType::IDENTIFIER, "expected constant name").value;
+        auto assign_loc         = peek().location;
+        auto name               = consume(TokenType::IDENTIFIER, "expected constant name").value;
         consume(TokenType::ASSIGN, "expected '='");
         auto value = parse_expression();
         expect_newline();
@@ -329,8 +333,8 @@ ConstBlockNode Parser::parse_const_block() {
             continue;
         }
         ConstAssignment assign;
-        assign.name = name;
-        assign.value = std::move(value);
+        assign.name     = name;
+        assign.value    = std::move(value);
         assign.location = assign_loc;
         node.assignments.push_back(std::move(assign));
     }
@@ -350,7 +354,7 @@ StructNode Parser::parse_struct() {
     expect_indent();
 
     StructNode node;
-    node.name = name;
+    node.name     = name;
     node.location = loc;
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
@@ -360,7 +364,7 @@ StructNode Parser::parse_struct() {
         }
         auto error_count_before = errors_.error_count();
         // Struct fields: name: type (no let/var modifiers)
-        auto field_loc = peek().location;
+        auto field_loc  = peek().location;
         auto field_name = consume(TokenType::IDENTIFIER, "expected field name").value;
         consume(TokenType::COLON, "expected ':'");
         auto type = parse_type_ref();
@@ -370,8 +374,8 @@ StructNode Parser::parse_struct() {
             continue;
         }
         FieldNode field;
-        field.name = field_name;
-        field.type = std::move(type);
+        field.name     = field_name;
+        field.type     = std::move(type);
         field.location = field_loc;
         node.fields.push_back(std::move(field));
     }
@@ -391,7 +395,7 @@ EnumNode Parser::parse_enum() {
     expect_indent();
 
     EnumNode node;
-    node.name = name;
+    node.name     = name;
     node.location = loc;
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
@@ -400,8 +404,8 @@ EnumNode Parser::parse_enum() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto var_loc = peek().location;
-        auto var_name = consume(TokenType::IDENTIFIER, "expected variant name").value;
+        auto var_loc            = peek().location;
+        auto var_name           = consume(TokenType::IDENTIFIER, "expected variant name").value;
         std::optional<int> val;
         if (match(TokenType::ASSIGN)) {
             val = std::stoi(consume(TokenType::INT_LITERAL, "expected integer value").value);
@@ -426,7 +430,7 @@ TraitNode Parser::parse_trait() {
     auto name = consume(TokenType::IDENTIFIER, "expected trait name").value;
 
     TraitNode node;
-    node.name = name;
+    node.name     = name;
     node.location = loc;
 
     // Marker trait: no colon, no body (e.g., `trait Persistent`)
@@ -446,12 +450,11 @@ TraitNode Parser::parse_trait() {
         }
         auto error_count_before = errors_.error_count();
         if (check(TokenType::ON)) {
-            errors_.error(peek().location,
-                "event handlers are not allowed in trait bodies; declare a system instead");
+            errors_.error(peek().location, "event handlers are not allowed in trait bodies; declare a system instead");
             parse_event_handler();  // consume to avoid cascading errors
         } else if (check(TokenType::FUNC)) {
             errors_.error(peek().location,
-                "func declarations are not allowed in trait bodies; use a top-level func instead");
+                          "func declarations are not allowed in trait bodies; use a top-level func instead");
             parse_func(false);  // consume to avoid cascading errors
         } else {
             node.fields.push_back(parse_field());
@@ -473,12 +476,10 @@ FieldModifiers Parser::parse_field_modifiers() {
         if (check(TokenType::PERSIST)) {
             advance();
             mods.is_persist = true;
-        }
-        else if (check(TokenType::SYNC)) {
+        } else if (check(TokenType::SYNC)) {
             advance();
             mods.is_sync = true;
-        }
-        else if (check(TokenType::PUB)) {
+        } else if (check(TokenType::PUB)) {
             advance();
             mods.is_pub = true;
         } else {
@@ -489,12 +490,18 @@ FieldModifiers Parser::parse_field_modifiers() {
 }
 
 FieldNode Parser::parse_field() {
-    auto loc = peek().location;
+    auto loc  = peek().location;
     auto mods = parse_field_modifiers();
 
-    if (check(TokenType::LET)) { advance(); mods.is_let = true; }
-    else if (check(TokenType::VAR)) { advance(); mods.is_var = true; }
-    else { errors_.error(peek().location, "expected 'let' or 'var'"); }
+    if (check(TokenType::LET)) {
+        advance();
+        mods.is_let = true;
+    } else if (check(TokenType::VAR)) {
+        advance();
+        mods.is_var = true;
+    } else {
+        errors_.error(peek().location, "expected 'let' or 'var'");
+    }
 
     auto name = consume(TokenType::IDENTIFIER, "expected field name").value;
     consume(TokenType::COLON, "expected ':'");
@@ -507,11 +514,11 @@ FieldNode Parser::parse_field() {
     expect_newline();
 
     FieldNode field;
-    field.modifiers = mods;
-    field.name = name;
-    field.type = std::move(type);
+    field.modifiers     = mods;
+    field.name          = name;
+    field.type          = std::move(type);
     field.default_value = std::move(default_val);
-    field.location = loc;
+    field.location      = loc;
     return field;
 }
 
@@ -532,18 +539,38 @@ bool is_event_field_modifier_token(TokenType type) {
 
 // ── Lifecycle Event Name Helper ─────────────────────────────────────────────
 
-// Task 4.10: Accept keyword tokens as lifecycle event names
-// (spawn/destroy/load/unload/fixed_tick/late_tick/input are keywords, not identifiers)
 std::string Parser::parse_lifecycle_event_name() {
     switch (peek().type) {
-        case TokenType::SPAWN:      { auto v = advance().value; return v; }
-        case TokenType::DESTROY:    { auto v = advance().value; return v; }
-        case TokenType::LOAD:       { auto v = advance().value; return v; }
-        case TokenType::UNLOAD:     { auto v = advance().value; return v; }
-        case TokenType::FIXED_TICK: { auto v = advance().value; return v; }
-        case TokenType::LATE_TICK:  { auto v = advance().value; return v; }
-        case TokenType::INPUT:      { auto v = advance().value; return v; }
-        case TokenType::IDENTIFIER: return advance().value;
+        case TokenType::SPAWN: {
+            auto v = advance().value;
+            return v;
+        }
+        case TokenType::DESTROY: {
+            auto v = advance().value;
+            return v;
+        }
+        case TokenType::LOAD: {
+            auto v = advance().value;
+            return v;
+        }
+        case TokenType::UNLOAD: {
+            auto v = advance().value;
+            return v;
+        }
+        case TokenType::FIXED_TICK: {
+            auto v = advance().value;
+            return v;
+        }
+        case TokenType::LATE_TICK: {
+            auto v = advance().value;
+            return v;
+        }
+        case TokenType::INPUT: {
+            auto v = advance().value;
+            return v;
+        }
+        case TokenType::IDENTIFIER:
+            return advance().value;
         default:
             errors_.error(peek().location, "expected event name");
             return "<error>";
@@ -571,19 +598,19 @@ EventHandlerNode Parser::parse_event_handler() {
 
     EventHandlerNode handler;
     handler.event_name = event_name;
-    handler.alias = alias;
-    handler.body = std::move(body);
-    handler.location = loc;
+    handler.alias      = alias;
+    handler.body       = std::move(body);
+    handler.location   = loc;
     return handler;
 }
 
 // ── Type Reference ──────────────────────────────────────────────────────────
 
 TypeRef Parser::parse_type_ref() {
-    auto loc = peek().location;
+    auto loc  = peek().location;
     auto name = consume(TokenType::IDENTIFIER, "expected type name").value;
     TypeRef ref;
-    ref.name = name;
+    ref.name     = name;
     ref.location = loc;
     if (match(TokenType::LBRACKET)) {
         ref.param = std::make_unique<TypeRef>(parse_type_ref());
@@ -595,7 +622,7 @@ TypeRef Parser::parse_type_ref() {
 // ── Parameters ──────────────────────────────────────────────────────────────
 
 FuncParam Parser::parse_param() {
-    auto loc = peek().location;
+    auto loc  = peek().location;
     auto name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
     consume(TokenType::COLON, "expected ':'");
     auto type = parse_type_ref();
@@ -614,14 +641,14 @@ std::vector<FuncParam> Parser::parse_param_list() {
 }
 
 FieldAssignment Parser::parse_field_assignment() {
-    auto loc = peek().location;
+    auto loc  = peek().location;
     auto name = consume(TokenType::IDENTIFIER, "expected field name").value;
     consume(TokenType::ASSIGN, "expected '='");
     auto value = parse_expression();
     expect_newline();
     FieldAssignment assign;
-    assign.name = name;
-    assign.value = std::move(value);
+    assign.name     = name;
+    assign.value    = std::move(value);
     assign.location = loc;
     return assign;
 }
@@ -636,7 +663,7 @@ std::vector<FieldAssignment> Parser::parse_field_assignment_block() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto assignment = parse_field_assignment();
+        auto assignment         = parse_field_assignment();
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -648,12 +675,12 @@ std::vector<FieldAssignment> Parser::parse_field_assignment_block() {
 }
 
 ArchetypeTraitEntry Parser::parse_archetype_trait_entry() {
-    auto loc = peek().location;
+    auto loc        = peek().location;
     auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
 
     ArchetypeTraitEntry entry;
     entry.trait_name = trait_name;
-    entry.location = loc;
+    entry.location   = loc;
 
     if (check(TokenType::COLON)) {
         advance();
@@ -673,7 +700,7 @@ std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto entry = parse_archetype_trait_entry();
+        auto entry              = parse_archetype_trait_entry();
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -702,8 +729,8 @@ UnitNode Parser::parse_unit(bool is_pub) {
     expect_indent();
 
     UnitNode node;
-    node.name = name;
-    node.is_pub = is_pub;
+    node.name     = name;
+    node.is_pub   = is_pub;
     node.location = loc;
 
     node.traits = parse_archetype_trait_entries();
@@ -723,8 +750,8 @@ TemplateNode Parser::parse_template(bool is_pub) {
     expect_indent();
 
     TemplateNode node;
-    node.name = name;
-    node.is_pub = is_pub;
+    node.name     = name;
+    node.is_pub   = is_pub;
     node.location = loc;
 
     node.traits = parse_archetype_trait_entries();
@@ -736,7 +763,7 @@ TemplateNode Parser::parse_template(bool is_pub) {
 
 // ── System ──────────────────────────────────────────────────────────────────
 
-SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-complexity)
+SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
     consume(TokenType::SYSTEM, "expected 'system'");
     auto name = consume(TokenType::IDENTIFIER, "expected system name").value;
@@ -745,13 +772,13 @@ SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-com
     expect_indent();
 
     SystemNode node;
-    node.name = name;
+    node.name     = name;
     node.location = loc;
 
     skip_newlines();
     if (check(TokenType::FILTER)) {
         auto error_count_before = errors_.error_count();
-        node.filter = parse_filter_clause();
+        node.filter             = parse_filter_clause();
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -761,17 +788,17 @@ SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-com
     skip_newlines();
     if (check(TokenType::EXCLUDE)) {
         auto error_count_before = errors_.error_count();
-        node.exclude = parse_exclude_clause();
+        node.exclude            = parse_exclude_clause();
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
     }
 
     skip_newlines();
-    if (check(TokenType::IDENTIFIER) && peek().value == "order" &&
-        peek_next().type == TokenType::IDENTIFIER && peek_next().value == "by") {
+    if (check(TokenType::IDENTIFIER) && peek().value == "order" && peek_next().type == TokenType::IDENTIFIER &&
+        peek_next().value == "by") {
         auto error_count_before = errors_.error_count();
-        node.order_by = parse_order_by_clause();
+        node.order_by           = parse_order_by_clause();
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -780,7 +807,7 @@ SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-com
     // Parse optional after: clause (block format: AFTER COLON NEWLINE INDENT { IDENT NEWLINE } DEDENT)
     skip_newlines();
     if (check(TokenType::AFTER)) {
-        auto after_loc = peek().location;
+        auto after_loc          = peek().location;
         auto error_count_before = errors_.error_count();
         advance();  // consume 'after'
         consume(TokenType::COLON, "expected ':'");
@@ -792,8 +819,7 @@ SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-com
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
-            node.after_systems.push_back(
-                consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
+            node.after_systems.push_back(consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
             expect_newline();
             any = true;
             if (errors_.error_count() > error_count_before) {
@@ -824,7 +850,7 @@ SystemNode Parser::parse_system() { // NOLINT(readability-function-cognitive-com
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto handler = parse_event_handler();
+        auto handler            = parse_event_handler();
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -853,8 +879,8 @@ FilterClause Parser::parse_filter_clause() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto entry_loc = peek().location;
-        auto qname = parse_dotted_name();
+        auto entry_loc          = peek().location;
+        auto qname              = parse_dotted_name();
         std::optional<std::string> alias;
         if (match(TokenType::AS)) {
             alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
@@ -872,7 +898,7 @@ FilterClause Parser::parse_filter_clause() {
 }
 
 std::vector<SortKey> Parser::parse_order_by_clause() {
-    auto loc = peek().location;
+    auto loc      = peek().location;
     auto order_kw = consume(TokenType::IDENTIFIER, "expected 'order'");
     if (order_kw.value != "order") {
         errors_.error(order_kw.location, "expected 'order by:'");
@@ -893,7 +919,7 @@ std::vector<SortKey> Parser::parse_order_by_clause() {
         }
 
         auto key_loc = peek().location;
-        auto alias = consume(TokenType::IDENTIFIER, "expected sort key alias").value;
+        auto alias   = consume(TokenType::IDENTIFIER, "expected sort key alias").value;
         consume(TokenType::DOT, "expected '.' after sort key alias");
         auto field = consume(TokenType::IDENTIFIER, "expected sort key field").value;
         while (match(TokenType::DOT)) {
@@ -937,8 +963,8 @@ ViewNode Parser::parse_view() {
     expect_indent();
 
     ViewNode node;
-    node.name = name;
-    node.params = std::move(params);
+    node.name     = name;
+    node.params   = std::move(params);
     node.location = loc;
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
@@ -947,7 +973,7 @@ ViewNode Parser::parse_view() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto element = parse_view_element();
+        auto element            = parse_view_element();
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -992,26 +1018,26 @@ ViewElement Parser::parse_view_element() {
             } else {
                 current_ = saved;
                 // It's a property: name = expr
-                auto prop_loc = peek().location;
+                auto prop_loc  = peek().location;
                 auto prop_name = advance().value;
                 consume(TokenType::ASSIGN, "expected '='");
                 auto value = parse_expression();
                 expect_newline();
                 FieldAssignment prop;
-                prop.name = prop_name;
-                prop.value = std::move(value);
+                prop.name     = prop_name;
+                prop.value    = std::move(value);
                 prop.location = prop_loc;
                 elem.props.push_back(std::move(prop));
             }
         } else if (check(TokenType::IDENTIFIER) && peek_next().type == TokenType::ASSIGN) {
-            auto prop_loc = peek().location;
+            auto prop_loc  = peek().location;
             auto prop_name = advance().value;
             consume(TokenType::ASSIGN, "expected '='");
             auto value = parse_expression();
             expect_newline();
             FieldAssignment prop;
-            prop.name = prop_name;
-            prop.value = std::move(value);
+            prop.name     = prop_name;
+            prop.value    = std::move(value);
             prop.location = prop_loc;
             elem.props.push_back(std::move(prop));
         } else {
@@ -1036,8 +1062,8 @@ EventNode Parser::parse_event(bool is_pub) {
     auto name = parse_lifecycle_event_name();
 
     EventNode node;
-    node.name = name;
-    node.is_pub = is_pub;
+    node.name     = name;
+    node.is_pub   = is_pub;
     node.location = loc;
 
     // Marker event: no colon, no body (e.g., `pub event spawn`)
@@ -1056,10 +1082,11 @@ EventNode Parser::parse_event(bool is_pub) {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto field_loc = peek().location;
+        auto field_loc          = peek().location;
         if (is_event_field_modifier_token(peek().type)) {
             errors_.error(peek().location,
-                          "event fields use bare `name: type` syntax; trait field modifiers are not allowed in event declarations");
+                          "event fields use bare `name: type` syntax; trait field modifiers are not allowed in event "
+                          "declarations");
             while (is_event_field_modifier_token(peek().type)) {
                 advance();
             }
@@ -1080,10 +1107,10 @@ EventNode Parser::parse_event(bool is_pub) {
             continue;
         }
         FieldNode field;
-        field.name = field_name;
-        field.type = std::move(field_type);
+        field.name          = field_name;
+        field.type          = std::move(field_type);
         field.default_value = std::move(default_val);
-        field.location = field_loc;
+        field.location      = field_loc;
         node.fields.push_back(std::move(field));
     }
 
@@ -1118,12 +1145,12 @@ FuncNode Parser::parse_func(bool is_pub) {
     auto body = parse_block();
 
     FuncNode node;
-    node.name = name;
-    node.is_pub = is_pub;
-    node.params = std::move(params);
+    node.name        = name;
+    node.is_pub      = is_pub;
+    node.params      = std::move(params);
     node.return_type = std::move(return_type);
-    node.body = std::move(body);
-    node.location = loc;
+    node.body        = std::move(body);
+    node.location    = loc;
     return node;
 }
 
@@ -1151,10 +1178,10 @@ FuncNode Parser::parse_extern_func(bool is_pub) {
     expect_newline();
 
     FuncNode node;
-    node.name = name;
-    node.is_pub = is_pub;
-    node.is_extern = true;
-    node.params = std::move(params);
+    node.name        = name;
+    node.is_pub      = is_pub;
+    node.is_extern   = true;
+    node.params      = std::move(params);
     node.return_type = std::move(return_type);
     // body intentionally empty for extern
     node.location = loc;
@@ -1172,7 +1199,7 @@ InterfaceNode Parser::parse_interface() {
     expect_indent();
 
     InterfaceNode node;
-    node.name = name;
+    node.name     = name;
     node.location = loc;
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
@@ -1181,7 +1208,7 @@ InterfaceNode Parser::parse_interface() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto sig_loc = peek().location;
+        auto sig_loc            = peek().location;
         consume(TokenType::FUNC, "expected 'func'");
         auto sig_name = consume(TokenType::IDENTIFIER, "expected method name").value;
         consume(TokenType::LPAREN, "expected '('");
@@ -1215,7 +1242,7 @@ std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto stmt = parse_statement();
+        auto stmt               = parse_statement();
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
@@ -1233,7 +1260,7 @@ AddTraitStmt Parser::parse_add_trait_stmt() {
 
     AddTraitStmt stmt;
     stmt.trait_name = trait_name;
-    stmt.location = loc;
+    stmt.location   = loc;
 
     if (match(TokenType::TO)) {
         stmt.target_expr = parse_expression();
@@ -1256,7 +1283,7 @@ RemoveTraitStmt Parser::parse_remove_trait_stmt() {
 
     RemoveTraitStmt stmt;
     stmt.trait_name = trait_name;
-    stmt.location = loc;
+    stmt.location   = loc;
 
     if (match(TokenType::FROM)) {
         stmt.target_expr = parse_expression();
@@ -1272,7 +1299,7 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
 
     TraitMatchStmt stmt;
     stmt.location = loc;
-    stmt.subject = parse_expression();
+    stmt.subject  = parse_expression();
 
     consume(TokenType::COLON, "expected ':' after match subject");
     expect_newline();
@@ -1292,8 +1319,8 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
 
             WildcardMatchArm wildcard;
             wildcard.location = arm_loc;
-            wildcard.body = parse_block();
-            stmt.wildcard = std::move(wildcard);
+            wildcard.body     = parse_block();
+            stmt.wildcard     = std::move(wildcard);
             skip_newlines();
             if (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
                 errors_.error(peek().location, "wildcard arm `_ =>` must be the last arm in a trait match");
@@ -1302,7 +1329,7 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
         }
 
         TraitMatchArm arm;
-        arm.location = arm_loc;
+        arm.location   = arm_loc;
         arm.trait_name = consume(TokenType::IDENTIFIER, "expected trait name or '_' in match arm").value;
         if (match(TokenType::AS)) {
             arm.alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
@@ -1317,7 +1344,7 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
     return stmt;
 }
 
-std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-function-cognitive-complexity)
+std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
 
     if (check(TokenType::LET)) {
@@ -1327,8 +1354,8 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         auto value = parse_expression();
         expect_newline();
         LetStmt let_stmt;
-        let_stmt.name = name;
-        let_stmt.value = std::move(value);
+        let_stmt.name     = name;
+        let_stmt.value    = std::move(value);
         let_stmt.location = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(let_stmt)}, loc);
     }
@@ -1344,9 +1371,9 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         consume(TokenType::COLON, "expected ':'");
         EmitStmt emit;
         emit.event_name = event_name;
-        emit.target = std::move(target);
-        emit.payload = parse_field_assignment_block();
-        emit.location = loc;
+        emit.target     = std::move(target);
+        emit.payload    = parse_field_assignment_block();
+        emit.location   = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(emit)}, loc);
     }
 
@@ -1359,7 +1386,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         }
         expect_newline();
         ReturnStmt ret;
-        ret.value = std::move(value);
+        ret.value    = std::move(value);
         ret.location = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(ret)}, loc);
     }
@@ -1385,7 +1412,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
             if_stmt.condition = std::move(condition);
             if_stmt.then_body = std::move(then_body);
             if_stmt.else_body = std::move(else_body);
-            if_stmt.location = loc;
+            if_stmt.location  = loc;
             return std::make_unique<StmtNode>(StmtNode::Variant{std::move(if_stmt)}, loc);
         }
         // Inline if: if cond: stmt
@@ -1410,7 +1437,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         auto template_name = consume(TokenType::IDENTIFIER, "expected template name").value;
         SpawnStmt spawn_stmt;
         spawn_stmt.template_name = template_name;
-        spawn_stmt.location = loc;
+        spawn_stmt.location      = loc;
         consume(TokenType::COLON, "expected ':'");
         spawn_stmt.overrides = parse_archetype_trait_entry_block();
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(spawn_stmt)}, loc);
@@ -1435,7 +1462,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
         expect_newline();
         LoadStmt load;
         load.module_name = module_name;
-        load.location = loc;
+        load.location    = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(load)}, loc);
     }
 
@@ -1454,14 +1481,14 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
     if (check(TokenType::IDENTIFIER) &&
         (peek_next().type == TokenType::ASSIGN || peek_next().type == TokenType::PLUS_ASSIGN ||
          peek_next().type == TokenType::MINUS_ASSIGN)) {
-        auto name = advance().value;
-        auto op = advance().value;
+        auto name  = advance().value;
+        auto op    = advance().value;
         auto value = parse_expression();
         expect_newline();
         VarAssign assign;
-        assign.name = name;
-        assign.op = op;
-        assign.value = std::move(value);
+        assign.name     = name;
+        assign.op       = op;
+        assign.value    = std::move(value);
         assign.location = loc;
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(assign)}, loc);
     }
@@ -1470,7 +1497,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() { // NOLINT(readability-func
     auto expr = parse_expression();
     expect_newline();
     ExprStmt expr_stmt;
-    expr_stmt.expr = std::move(expr);
+    expr_stmt.expr     = std::move(expr);
     expr_stmt.location = loc;
     return std::make_unique<StmtNode>(StmtNode::Variant{std::move(expr_stmt)}, loc);
 }
@@ -1488,11 +1515,11 @@ std::unique_ptr<ExprNode> Parser::parse_or_expr() {
         advance();
         auto right = parse_and_expr();
         BinaryExpr bin;
-        bin.op = "or";
-        bin.left = std::move(left);
-        bin.right = std::move(right);
+        bin.op       = "or";
+        bin.left     = std::move(left);
+        bin.right    = std::move(right);
         bin.location = loc;
-        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+        left         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
     }
     return left;
 }
@@ -1504,11 +1531,11 @@ std::unique_ptr<ExprNode> Parser::parse_and_expr() {
         advance();
         auto right = parse_equality_expr();
         BinaryExpr bin;
-        bin.op = "and";
-        bin.left = std::move(left);
-        bin.right = std::move(right);
+        bin.op       = "and";
+        bin.left     = std::move(left);
+        bin.right    = std::move(right);
         bin.location = loc;
-        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+        left         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
     }
     return left;
 }
@@ -1516,15 +1543,15 @@ std::unique_ptr<ExprNode> Parser::parse_and_expr() {
 std::unique_ptr<ExprNode> Parser::parse_equality_expr() {
     auto left = parse_comparison_expr();
     while (check(TokenType::EQUALS) || check(TokenType::NOT_EQUALS)) {
-        auto loc = peek().location;
-        auto op = advance().value;
+        auto loc   = peek().location;
+        auto op    = advance().value;
         auto right = parse_comparison_expr();
         BinaryExpr bin;
-        bin.op = op;
-        bin.left = std::move(left);
-        bin.right = std::move(right);
+        bin.op       = op;
+        bin.left     = std::move(left);
+        bin.right    = std::move(right);
         bin.location = loc;
-        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+        left         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
     }
     return left;
 }
@@ -1533,15 +1560,15 @@ std::unique_ptr<ExprNode> Parser::parse_comparison_expr() {
     auto left = parse_additive_expr();
     while (check(TokenType::LESS) || check(TokenType::GREATER) || check(TokenType::LESS_EQ) ||
            check(TokenType::GREATER_EQ)) {
-        auto loc = peek().location;
-        auto op = advance().value;
+        auto loc   = peek().location;
+        auto op    = advance().value;
         auto right = parse_additive_expr();
         BinaryExpr bin;
-        bin.op = op;
-        bin.left = std::move(left);
-        bin.right = std::move(right);
+        bin.op       = op;
+        bin.left     = std::move(left);
+        bin.right    = std::move(right);
         bin.location = loc;
-        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+        left         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
     }
     return left;
 }
@@ -1549,15 +1576,15 @@ std::unique_ptr<ExprNode> Parser::parse_comparison_expr() {
 std::unique_ptr<ExprNode> Parser::parse_additive_expr() {
     auto left = parse_multiplicative_expr();
     while (check(TokenType::PLUS) || check(TokenType::MINUS)) {
-        auto loc = peek().location;
-        auto op = advance().value;
+        auto loc   = peek().location;
+        auto op    = advance().value;
         auto right = parse_multiplicative_expr();
         BinaryExpr bin;
-        bin.op = op;
-        bin.left = std::move(left);
-        bin.right = std::move(right);
+        bin.op       = op;
+        bin.left     = std::move(left);
+        bin.right    = std::move(right);
         bin.location = loc;
-        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+        left         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
     }
     return left;
 }
@@ -1565,15 +1592,15 @@ std::unique_ptr<ExprNode> Parser::parse_additive_expr() {
 std::unique_ptr<ExprNode> Parser::parse_multiplicative_expr() {
     auto left = parse_unary_expr();
     while (check(TokenType::STAR) || check(TokenType::SLASH) || check(TokenType::PERCENT)) {
-        auto loc = peek().location;
-        auto op = advance().value;
+        auto loc   = peek().location;
+        auto op    = advance().value;
         auto right = parse_unary_expr();
         BinaryExpr bin;
-        bin.op = op;
-        bin.left = std::move(left);
-        bin.right = std::move(right);
+        bin.op       = op;
+        bin.left     = std::move(left);
+        bin.right    = std::move(right);
         bin.location = loc;
-        left = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
+        left         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(bin)}, loc);
     }
     return left;
 }
@@ -1584,8 +1611,8 @@ std::unique_ptr<ExprNode> Parser::parse_unary_expr() {
         advance();
         auto operand = parse_unary_expr();
         UnaryExpr un;
-        un.op = "not";
-        un.operand = std::move(operand);
+        un.op       = "not";
+        un.operand  = std::move(operand);
         un.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(un)}, loc);
     }
@@ -1594,8 +1621,8 @@ std::unique_ptr<ExprNode> Parser::parse_unary_expr() {
         advance();
         auto operand = parse_unary_expr();
         UnaryExpr un;
-        un.op = "-";
-        un.operand = std::move(operand);
+        un.op       = "-";
+        un.operand  = std::move(operand);
         un.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(un)}, loc);
     }
@@ -1624,19 +1651,19 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                 consume(TokenType::RPAREN, "expected ')'");
                 CallExpr call;
                 MemberExpr mem;
-                mem.object = std::move(expr);
-                mem.member = member;
-                mem.location = loc;
-                call.callee = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
-                call.args = std::move(args);
+                mem.object    = std::move(expr);
+                mem.member    = member;
+                mem.location  = loc;
+                call.callee   = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
+                call.args     = std::move(args);
                 call.location = loc;
-                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
+                expr          = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
             } else {
                 MemberExpr mem;
-                mem.object = std::move(expr);
-                mem.member = member;
+                mem.object   = std::move(expr);
+                mem.member   = member;
                 mem.location = loc;
-                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
+                expr         = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
             }
         } else if (check(TokenType::LPAREN)) {
             auto loc = peek().location;
@@ -1650,10 +1677,10 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
             }
             consume(TokenType::RPAREN, "expected ')'");
             CallExpr call;
-            call.callee = std::move(expr);
-            call.args = std::move(args);
+            call.callee   = std::move(expr);
+            call.args     = std::move(args);
             call.location = loc;
-            expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
+            expr          = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
         } else {
             break;
         }
@@ -1662,7 +1689,7 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
     return expr;
 }
 
-std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-function-cognitive-complexity)
+std::unique_ptr<ExprNode> Parser::parse_primary_expr() {  // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
 
     if (check(TokenType::SPAWN)) {
@@ -1671,8 +1698,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
         consume(TokenType::COLON, "expected ':'");
         SpawnExpr spawn;
         spawn.template_name = template_name;
-        spawn.overrides = parse_archetype_trait_entry_block();
-        spawn.location = loc;
+        spawn.overrides     = parse_archetype_trait_entry_block();
+        spawn.location      = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(spawn)}, loc);
     }
 
@@ -1680,8 +1707,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
     if (check(TokenType::INT_LITERAL)) {
         auto val = advance().value;
         LiteralExpr lit;
-        lit.kind = LiteralExpr::Kind::Int;
-        lit.value = val;
+        lit.kind     = LiteralExpr::Kind::Int;
+        lit.value    = val;
         lit.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
     }
@@ -1690,8 +1717,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
     if (check(TokenType::FLOAT_LITERAL)) {
         auto val = advance().value;
         LiteralExpr lit;
-        lit.kind = LiteralExpr::Kind::Float;
-        lit.value = val;
+        lit.kind     = LiteralExpr::Kind::Float;
+        lit.value    = val;
         lit.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
     }
@@ -1700,8 +1727,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
     if (check(TokenType::STRING_LITERAL)) {
         auto val = advance().value;
         LiteralExpr lit;
-        lit.kind = LiteralExpr::Kind::String;
-        lit.value = val;
+        lit.kind     = LiteralExpr::Kind::String;
+        lit.value    = val;
         lit.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
     }
@@ -1710,8 +1737,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
     if (check(TokenType::HEX_COLOR)) {
         auto val = advance().value;
         LiteralExpr lit;
-        lit.kind = LiteralExpr::Kind::HexColor;
-        lit.value = val;
+        lit.kind     = LiteralExpr::Kind::HexColor;
+        lit.value    = val;
         lit.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
     }
@@ -1720,16 +1747,16 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
     if (check(TokenType::TRUE_LIT)) {
         advance();
         LiteralExpr lit;
-        lit.kind = LiteralExpr::Kind::Bool;
-        lit.value = "true";
+        lit.kind     = LiteralExpr::Kind::Bool;
+        lit.value    = "true";
         lit.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
     }
     if (check(TokenType::FALSE_LIT)) {
         advance();
         LiteralExpr lit;
-        lit.kind = LiteralExpr::Kind::Bool;
-        lit.value = "false";
+        lit.kind     = LiteralExpr::Kind::Bool;
+        lit.value    = "false";
         lit.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lit)}, loc);
     }
@@ -1761,7 +1788,7 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
     if (check(TokenType::INPUT)) {
         auto name = advance().value;  // "input"
         IdentExpr ident;
-        ident.name = name;
+        ident.name     = name;
         ident.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(ident)}, loc);
     }
@@ -1782,14 +1809,14 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
             advance();
             auto body = parse_expression();
             LambdaExpr lambda;
-            lambda.params = {name};
-            lambda.body = std::move(body);
+            lambda.params   = {name};
+            lambda.body     = std::move(body);
             lambda.location = loc;
             return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lambda)}, loc);
         }
 
         IdentExpr ident;
-        ident.name = name;
+        ident.name     = name;
         ident.location = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(ident)}, loc);
     }
@@ -1803,7 +1830,7 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
         expect_indent();
 
         MatchExpr match_expr;
-        match_expr.subject = std::move(subject);
+        match_expr.subject  = std::move(subject);
         match_expr.location = loc;
 
         while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
@@ -1812,8 +1839,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
                 break;
             }
             auto error_count_before = errors_.error_count();
-            auto arm_loc = peek().location;
-            auto pattern = parse_expression();
+            auto arm_loc            = peek().location;
+            auto pattern            = parse_expression();
             consume(TokenType::FAT_ARROW, "expected '=>'");
             auto body = parse_expression();
             expect_newline();
@@ -1822,8 +1849,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
                 continue;
             }
             MatchArm arm;
-            arm.pattern = std::move(pattern);
-            arm.body = std::move(body);
+            arm.pattern  = std::move(pattern);
+            arm.body     = std::move(body);
             arm.location = arm_loc;
             match_expr.arms.push_back(std::move(arm));
         }
@@ -1845,18 +1872,17 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() { // NOLINT(readability-f
         if_expr.condition = std::move(condition);
         if_expr.then_expr = std::move(then_expr);
         if_expr.else_expr = std::move(else_expr);
-        if_expr.location = loc;
+        if_expr.location  = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(if_expr)}, loc);
     }
 
     errors_.error(loc, "expected expression");
     // Advance past the unrecognised token to prevent infinite error loops
-    if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) &&
-        !check(TokenType::EOF_TOKEN)) {
+    if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         advance();
     }
     IdentExpr err;
-    err.name = "<error>";
+    err.name     = "<error>";
     err.location = loc;
     return std::make_unique<ExprNode>(ExprNode::Variant{std::move(err)}, loc);
 }
@@ -1880,8 +1906,8 @@ FilterClause Parser::parse_exclude_clause() {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto entry_loc = peek().location;
-        auto name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+        auto entry_loc          = peek().location;
+        auto name               = consume(TokenType::IDENTIFIER, "expected trait name").value;
         clause.trait_names.push_back(name);
         clause.entries.push_back({.qualified_name = name, .alias = std::nullopt, .location = entry_loc});
         expect_newline();
@@ -1894,7 +1920,7 @@ FilterClause Parser::parse_exclude_clause() {
     return clause;
 }
 
-ExternSystemNode Parser::parse_extern_system() { // NOLINT(readability-function-cognitive-complexity)
+ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
     consume(TokenType::EXTERN, "expected 'extern'");
     consume(TokenType::SYSTEM, "expected 'system' after 'extern'");
@@ -1904,13 +1930,13 @@ ExternSystemNode Parser::parse_extern_system() { // NOLINT(readability-function-
     expect_indent();
 
     ExternSystemNode node;
-    node.name = name;
+    node.name     = name;
     node.location = loc;
 
     skip_newlines();
     if (check(TokenType::FILTER)) {
         auto error_count_before = errors_.error_count();
-        node.filter = parse_filter_clause();
+        node.filter             = parse_filter_clause();
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1919,17 +1945,17 @@ ExternSystemNode Parser::parse_extern_system() { // NOLINT(readability-function-
     skip_newlines();
     if (check(TokenType::EXCLUDE)) {
         auto error_count_before = errors_.error_count();
-        node.exclude = parse_exclude_clause();
+        node.exclude            = parse_exclude_clause();
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
     }
 
     skip_newlines();
-    if (check(TokenType::IDENTIFIER) && peek().value == "order" &&
-        peek_next().type == TokenType::IDENTIFIER && peek_next().value == "by") {
+    if (check(TokenType::IDENTIFIER) && peek().value == "order" && peek_next().type == TokenType::IDENTIFIER &&
+        peek_next().value == "by") {
         auto error_count_before = errors_.error_count();
-        node.order_by = parse_order_by_clause();
+        node.order_by           = parse_order_by_clause();
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1937,7 +1963,7 @@ ExternSystemNode Parser::parse_extern_system() { // NOLINT(readability-function-
 
     skip_newlines();
     if (check(TokenType::AFTER)) {
-        auto after_loc = peek().location;
+        auto after_loc          = peek().location;
         auto error_count_before = errors_.error_count();
         advance();
         consume(TokenType::COLON, "expected ':'");
@@ -1949,8 +1975,7 @@ ExternSystemNode Parser::parse_extern_system() { // NOLINT(readability-function-
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
-            node.after_systems.push_back(
-                consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
+            node.after_systems.push_back(consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
             expect_newline();
             any = true;
             if (errors_.error_count() > error_count_before) {
@@ -1981,13 +2006,11 @@ ExternSystemNode Parser::parse_extern_system() { // NOLINT(readability-function-
             break;
         }
         if (check(TokenType::ON)) {
-            errors_.error(peek().location,
-                "`extern system` cannot have event handlers; use `system` instead");
+            errors_.error(peek().location, "`extern system` cannot have event handlers; use `system` instead");
             parse_event_handler();
             continue;
         }
-        errors_.error(peek().location,
-            "expected extern system clause (filter, exclude, order by, after, target)");
+        errors_.error(peek().location, "expected extern system clause (filter, exclude, order by, after, target)");
         synchronize();
     }
 
@@ -2007,15 +2030,27 @@ AssetDeclNode Parser::parse_asset_decl(bool is_pub) {
     AssetKind kind = AssetKind::Mesh;
     if (check(TokenType::IDENTIFIER)) {
         auto type_val = peek().value;
-        if      (type_val == "mesh")     { advance(); kind = AssetKind::Mesh; }
-        else if (type_val == "texture")  { advance(); kind = AssetKind::Texture; }
-        else if (type_val == "sound")    { advance(); kind = AssetKind::Sound; }
-        else if (type_val == "music")    { advance(); kind = AssetKind::Music; }
-        else if (type_val == "font")     { advance(); kind = AssetKind::Font; }
-        else if (type_val == "material") { advance(); kind = AssetKind::Material; }
-        else {
+        if (type_val == "mesh") {
+            advance();
+            kind = AssetKind::Mesh;
+        } else if (type_val == "texture") {
+            advance();
+            kind = AssetKind::Texture;
+        } else if (type_val == "sound") {
+            advance();
+            kind = AssetKind::Sound;
+        } else if (type_val == "music") {
+            advance();
+            kind = AssetKind::Music;
+        } else if (type_val == "font") {
+            advance();
+            kind = AssetKind::Font;
+        } else if (type_val == "material") {
+            advance();
+            kind = AssetKind::Material;
+        } else {
             errors_.error(peek().location,
-                "expected asset type (mesh, texture, sound, music, font, material), got '" + type_val + "'");
+                          "expected asset type (mesh, texture, sound, music, font, material), got '" + type_val + "'");
             advance();
         }
     } else {
@@ -2028,11 +2063,11 @@ AssetDeclNode Parser::parse_asset_decl(bool is_pub) {
     expect_newline();
 
     AssetDeclNode node;
-    node.name = name;
-    node.is_pub = is_pub;
+    node.name       = name;
+    node.is_pub     = is_pub;
     node.asset_kind = kind;
-    node.path = path_tok.value;
-    node.location = loc;
+    node.path       = path_tok.value;
+    node.location   = loc;
     return node;
 }
 
@@ -2048,11 +2083,14 @@ InputDeclNode Parser::parse_input_decl(bool is_pub) {
     InputKind kind = InputKind::Button;
     if (check(TokenType::IDENTIFIER)) {
         auto kind_val = peek().value;
-        if (kind_val == "button")     { advance(); kind = InputKind::Button; }
-        else if (kind_val == "axis")  { advance(); kind = InputKind::Axis; }
-        else {
-            errors_.error(peek().location,
-                "expected 'button' or 'axis' after ':', got '" + kind_val + "'");
+        if (kind_val == "button") {
+            advance();
+            kind = InputKind::Button;
+        } else if (kind_val == "axis") {
+            advance();
+            kind = InputKind::Axis;
+        } else {
+            errors_.error(peek().location, "expected 'button' or 'axis' after ':', got '" + kind_val + "'");
             advance();
         }
     } else {
@@ -2063,10 +2101,10 @@ InputDeclNode Parser::parse_input_decl(bool is_pub) {
 
     // Parse indented property block (optional — may be empty)
     InputDeclNode node;
-    node.name = name;
-    node.is_pub = is_pub;
+    node.name       = name;
+    node.is_pub     = is_pub;
     node.input_kind = kind;
-    node.location = loc;
+    node.location   = loc;
 
     // Check if there's an indented body
     skip_newlines();
@@ -2078,8 +2116,8 @@ InputDeclNode Parser::parse_input_decl(bool is_pub) {
                 break;
             }
             auto error_count_before = errors_.error_count();
-            auto prop_loc = peek().location;
-            auto key = consume(TokenType::IDENTIFIER, "expected property key").value;
+            auto prop_loc           = peek().location;
+            auto key                = consume(TokenType::IDENTIFIER, "expected property key").value;
             consume(TokenType::ASSIGN, "expected '='");
             auto value = parse_expression();
             expect_newline();
@@ -2088,8 +2126,8 @@ InputDeclNode Parser::parse_input_decl(bool is_pub) {
                 continue;
             }
             InputPropNode prop;
-            prop.key = key;
-            prop.value = std::move(value);
+            prop.key      = key;
+            prop.value    = std::move(value);
             prop.location = prop_loc;
             node.props.push_back(std::move(prop));
         }

@@ -1,15 +1,17 @@
-#include "frontend/program_linker.h"
+#include "frontend/program_linker.hpp"
 
-#include "frontend/module_artifact.h"
+#include "frontend/module_artifact.hpp"
 
 namespace cactus {
 
-ProgramLinker::ProgramLinker(ErrorReporter& errors) : errors_(errors) {}
+ProgramLinker::ProgramLinker(ErrorReporter& errors)
+    : errors_(errors) {}
 
 // ── 5.2: Incremental merge ───────────────────────────────────────────────────
 
-bool ProgramLinker::merge_into(DecoratedProgram& target, const DecoratedProgram& src,
-                                const std::string& src_module_name) {
+bool ProgramLinker::merge_into(DecoratedProgram& target,
+                               const DecoratedProgram& src,
+                               const std::string& src_module_name) {
     bool ok = true;
 
     // ── Merge traits ─────────────────────────────────────────────────────────
@@ -50,7 +52,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target, const DecoratedProgram&
             continue;
         }
         symbol_origins_[name] = src_module_name;
-        target.structs[name] = strct;
+        target.structs[name]  = strct;
     }
 
     // ── Merge enums ──────────────────────────────────────────────────────────
@@ -69,7 +71,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target, const DecoratedProgram&
             continue;
         }
         symbol_origins_[name] = src_module_name;
-        target.enums[name] = enm;
+        target.enums[name]    = enm;
     }
 
     // ── 5.4 + 5.2: Merge dependency graph (append) ──────────────────────────
@@ -99,8 +101,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target, const DecoratedProgram&
 
 // ── 5.1: Link from artifact files ───────────────────────────────────────────
 
-std::optional<DecoratedProgram> ProgramLinker::link(
-    const std::vector<std::filesystem::path>& artifact_paths) {
+std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::filesystem::path>& artifact_paths) {
     DecoratedProgram merged;
     merged.ast = nullptr;  // AST is not preserved in artifacts
 

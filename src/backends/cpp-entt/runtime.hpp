@@ -1,9 +1,10 @@
 #pragma once
 
-#include "common/cactus_runtime.h"
+#include "common/cactus_runtime.hpp"
+
+#include <entt/entt.hpp>
 
 #include <array>
-#include <entt/entt.hpp>
 #include <functional>
 
 namespace cactus::runtime::entt_backend {
@@ -27,7 +28,7 @@ struct RenderDebugState {
     bool used_default_2d_camera{false};
     bool used_default_3d_camera{false};
     bool used_lit_mesh_shader{false};
-    std::vector<int> drawn_sprite_layers{};
+    std::vector<int> drawn_sprite_layers;
 };
 
 struct ProjectConfig {
@@ -43,18 +44,9 @@ void reset_render_debug_state() noexcept;
 void begin_render_frame() noexcept;
 void end_render_frame() noexcept;
 
-void submit_sprite(Vector2 position,
-                   Vector2 size,
-                   Color color,
-                   AssetHandle texture,
-                   bool visible,
-                   int layer) noexcept;
-void advance_animated_sprite(AssetHandle texture,
-                             int& frame,
-                             int frame_count,
-                             float fps,
-                             bool playing,
-                             float dt) noexcept;
+void submit_sprite(Vector2 position, Vector2 size, Color color, AssetHandle texture, bool visible, int layer) noexcept;
+void advance_animated_sprite(
+    AssetHandle texture, int& frame, int frame_count, float fps, bool playing, float dt) noexcept;
 void submit_mesh(Vector3 position,
                  Quat rotation,
                  Vector3 scale,
@@ -62,20 +54,9 @@ void submit_mesh(Vector3 position,
                  AssetHandle material,
                  bool visible,
                  bool cast_shadow) noexcept;
-void submit_billboard(Vector3 position,
-                      Vector2 size,
-                      Color color,
-                      AssetHandle texture,
-                      bool visible) noexcept;
-void register_point_light(Vector3 position,
-                          Color color,
-                          float intensity,
-                          float range,
-                          bool enabled) noexcept;
-void register_directional_light(Vector3 direction,
-                                Color color,
-                                float intensity,
-                                bool enabled) noexcept;
+void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
+void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
+void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
 
 void propagate_hierarchy(entt::registry& registry,
                          const std::function<bool(entt::entity)>& has_local_world,
@@ -83,9 +64,10 @@ void propagate_hierarchy(entt::registry& registry,
                          const std::function<void(entt::entity)>& copy_local,
                          const std::function<void(entt::entity, entt::entity)>& accumulate_from_parent);
 
-void destroy_entity_recursive(entt::registry& registry,
-                              entt::entity entity,
-                              const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children);
+void destroy_entity_recursive(
+    entt::registry& registry,
+    entt::entity entity,
+    const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children);
 
 [[nodiscard]] inline bool pressed(std::uint8_t button) noexcept {
     return IsKeyPressed(cactus_input_button_key(button));

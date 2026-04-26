@@ -1,8 +1,10 @@
-#include "common/error_reporter.h"
-#include "frontend/ast.h"
-#include "frontend/lexer.h"
-#include "frontend/module_resolver.h"
-#include "frontend/parser.h"
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/ast.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/module_resolver.hpp"
+#include "frontend/parser.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -194,3 +196,4 @@ TEST_CASE("ModuleResolver: module not found error", "[resolver]") {
     auto path = cactus::ModuleResolver::locate_file("nonexistent", {FIXTURES});
     CHECK(path.empty());
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/source_location.h"
-#include "common/types.h"
+#include "common/source_location.hpp"
+#include "common/types.hpp"
 
 #include <memory>
 #include <optional>
@@ -19,7 +19,7 @@ struct ArchetypeTraitEntry;
 // ── Type Reference (unresolved, from parser) ────────────────────────────────
 
 struct TypeRef {
-    std::string name;                          // e.g. "int", "vec3", "list", "Item"
+    std::string name;                               // e.g. "int", "vec3", "list", "Item"
     std::optional<std::unique_ptr<TypeRef>> param;  // for list[T]
     SourceLocation location;
 };
@@ -27,11 +27,11 @@ struct TypeRef {
 // ── Field Modifiers ─────────────────────────────────────────────────────────
 
 struct FieldModifiers {
-    bool is_let = false;
-    bool is_var = false;
+    bool is_let     = false;
+    bool is_var     = false;
     bool is_persist = false;
-    bool is_sync = false;
-    bool is_pub = false;
+    bool is_sync    = false;
+    bool is_pub     = false;
 };
 
 // ── Field Declaration ───────────────────────────────────────────────────────
@@ -154,13 +154,26 @@ struct ListExpr {
 };
 
 struct ExprNode {
-    using Variant = std::variant<LiteralExpr, IdentExpr, SelfExpr, BinaryExpr, UnaryExpr, CallExpr, MemberExpr, LambdaExpr,
-                                 PipelineExpr, MatchExpr, IfExpr, ListExpr, SpawnExpr>;
+    using Variant = std::variant<LiteralExpr,
+                                 IdentExpr,
+                                 SelfExpr,
+                                 BinaryExpr,
+                                 UnaryExpr,
+                                 CallExpr,
+                                 MemberExpr,
+                                 LambdaExpr,
+                                 PipelineExpr,
+                                 MatchExpr,
+                                 IfExpr,
+                                 ListExpr,
+                                 SpawnExpr>;
     Variant expr;
     SourceLocation location;
 
     ExprNode() = default;
-    explicit ExprNode(Variant v, SourceLocation loc) : expr(std::move(v)), location(std::move(loc)) {}
+    explicit ExprNode(Variant v, SourceLocation loc)
+        : expr(std::move(v))
+        , location(std::move(loc)) {}
 };
 
 // ── Statement Nodes ─────────────────────────────────────────────────────────
@@ -256,14 +269,25 @@ struct RemoveTraitStmt {
 };
 
 struct StmtNode {
-    using Variant = std::variant<LetStmt, VarAssign, EmitStmt, SpawnStmt, DestroyStmt, LoadStmt,
-                                 AddTraitStmt, RemoveTraitStmt, ReturnStmt, ExprStmt, IfStmt,
+    using Variant = std::variant<LetStmt,
+                                 VarAssign,
+                                 EmitStmt,
+                                 SpawnStmt,
+                                 DestroyStmt,
+                                 LoadStmt,
+                                 AddTraitStmt,
+                                 RemoveTraitStmt,
+                                 ReturnStmt,
+                                 ExprStmt,
+                                 IfStmt,
                                  TraitMatchStmt>;
     Variant stmt;
     SourceLocation location;
 
     StmtNode() = default;
-    explicit StmtNode(Variant v, SourceLocation loc) : stmt(std::move(v)), location(std::move(loc)) {}
+    explicit StmtNode(Variant v, SourceLocation loc)
+        : stmt(std::move(v))
+        , location(std::move(loc)) {}
 };
 
 // ── Event Handler ───────────────────────────────────────────────────────────
@@ -319,10 +343,9 @@ struct EnumNode {
 
 struct TraitNode {
     std::string name;
-    bool is_pub = false;
+    bool is_pub    = false;
     bool is_stdlib = false;
     std::vector<FieldNode> fields;
-    // Note: handlers intentionally removed — traits are data-only; logic belongs in systems.
     SourceLocation location;
 };
 
@@ -343,14 +366,14 @@ struct TemplateNode {
 };
 
 struct FilterEntry {
-    std::string qualified_name;                 // "phys.Body" or "Body" — full dotted path as parsed
-    std::optional<std::string> alias;           // "b" from "as b"
+    std::string qualified_name;        // "phys.Body" or "Body" — full dotted path as parsed
+    std::optional<std::string> alias;  // "b" from "as b"
     SourceLocation location;
 };
 
 struct FilterClause {
-    std::vector<FilterEntry> entries;           // full parsed info (qualified names + aliases)
-    std::vector<std::string> trait_names;       // simple trait names (last component) — backward compat
+    std::vector<FilterEntry> entries;      // full parsed info (qualified names + aliases)
+    std::vector<std::string> trait_names;  // simple trait names (last component) — backward compat
     SourceLocation location;
 };
 
@@ -364,11 +387,11 @@ struct SortKey {
 struct SystemNode {
     std::string name;
     bool is_stdlib = false;
-    FilterClause filter;                    // empty entries = no filter (match all)
-    FilterClause exclude;                   // empty entries = no exclude
+    FilterClause filter;   // empty entries = no filter (match all)
+    FilterClause exclude;  // empty entries = no exclude
     std::vector<SortKey> order_by;
-    std::vector<std::string> after_systems; // explicit ordering: this system runs after these
-    std::optional<std::string> target;      // "cpu" or "gpu"
+    std::vector<std::string> after_systems;  // explicit ordering: this system runs after these
+    std::optional<std::string> target;       // "cpu" or "gpu"
     std::vector<EventHandlerNode> handlers;
     SourceLocation location;
 };
@@ -407,7 +430,7 @@ struct EventNode {
 
 struct FuncNode {
     std::string name;
-    bool is_pub = false;
+    bool is_pub    = false;
     bool is_extern = false;
     bool is_stdlib = false;
     std::vector<FuncParam> params;
@@ -437,7 +460,7 @@ enum class AssetKind { Mesh, Texture, Sound, Music, Font, Material };
 /// asset [pub] Name: asset_type = "path"
 struct AssetDeclNode {
     std::string name;
-    bool is_pub = false;
+    bool is_pub          = false;
     AssetKind asset_kind = AssetKind::Mesh;
     std::string path;  // resource path string literal
     SourceLocation location;
@@ -458,7 +481,7 @@ struct InputPropNode {
 /// input [pub] Name: button|axis  INDENT { key = expr } DEDENT
 struct InputDeclNode {
     std::string name;
-    bool is_pub = false;
+    bool is_pub          = false;
     InputKind input_kind = InputKind::Button;
     std::vector<InputPropNode> props;
     SourceLocation location;
@@ -466,9 +489,22 @@ struct InputDeclNode {
 
 // ── Program (AST Root) ─────────────────────────────────────────────────────
 
-using Declaration = std::variant<ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode,
-                                 TemplateNode, SystemNode, ExternSystemNode, ViewNode, EventNode, FuncNode, InterfaceNode,
-                                 AssetDeclNode, InputDeclNode>;
+using Declaration = std::variant<ModuleNode,
+                                 UseNode,
+                                 ConstBlockNode,
+                                 StructNode,
+                                 EnumNode,
+                                 TraitNode,
+                                 UnitNode,
+                                 TemplateNode,
+                                 SystemNode,
+                                 ExternSystemNode,
+                                 ViewNode,
+                                 EventNode,
+                                 FuncNode,
+                                 InterfaceNode,
+                                 AssetDeclNode,
+                                 InputDeclNode>;
 
 struct ProgramNode {
     std::vector<Declaration> declarations;

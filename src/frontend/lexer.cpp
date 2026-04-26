@@ -1,4 +1,4 @@
-#include "frontend/lexer.h"
+#include "frontend/lexer.hpp"
 
 #include <cctype>
 #include <unordered_map>
@@ -70,7 +70,9 @@ bool is_hex_digit(char c) {
 }  // namespace
 
 Lexer::Lexer(std::string source, std::string filename, ErrorReporter& errors)
-    : source_(std::move(source)), filename_(std::move(filename)), errors_(errors) {}
+    : source_(std::move(source))
+    , filename_(std::move(filename))
+    , errors_(errors) {}
 
 char Lexer::peek_char() const {
     if (is_at_end()) {
@@ -112,7 +114,7 @@ Token Lexer::read_identifier() {
         value += advance_char();
     }
     const auto& kw = keyword_map();
-    auto it = kw.find(value);
+    auto it        = kw.find(value);
     if (it != kw.end()) {
         return {it->second, value, loc};
     }
@@ -203,7 +205,7 @@ void Lexer::process_line_start(std::vector<Token>& tokens) {
     }
 }
 
-std::vector<Token> Lexer::tokenize() { // NOLINT(readability-function-cognitive-complexity)
+std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive-complexity)
     std::vector<Token> tokens;
 
     while (!is_at_end()) {

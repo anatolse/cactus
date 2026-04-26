@@ -1,15 +1,16 @@
-#include "backends/cpp-entt/cpp_entt_codegen.h"
-#include "backends/cpp-manual/cpp_manual_codegen.h"
-#include "common/error_reporter.h"
-#include "frontend/lexer.h"
-#include "frontend/module_artifact.h"
-#include "frontend/module_resolver.h"
-#include "frontend/parser.h"
-#include "frontend/program_linker.h"
-#include "frontend/semantic_analyzer.h"
+#include "common/error_reporter.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/module_artifact.hpp"
+#include "frontend/module_resolver.hpp"
+#include "frontend/parser.hpp"
+#include "frontend/program_linker.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
-#include <cstring>
+#include "backends/cpp-entt/cpp_entt_codegen.hpp"
+#include "backends/cpp-manual/cpp_manual_codegen.hpp"
+
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -33,15 +34,13 @@ static void print_usage(const char* program) {
 
 static void print_errors(const cactus::ErrorReporter& errors) {
     for (const auto& d : errors.diagnostics()) {
-        std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column
-                  << ": " << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning")
-                  << ": " << d.message << "\n";
+        std::cerr << d.location.filename << ":" << d.location.line << ":" << d.location.column << ": "
+                  << (d.level == cactus::DiagnosticLevel::Error ? "error" : "warning") << ": " << d.message << "\n";
     }
 }
 
 /// Read, lex, and parse a source file. Returns nullptr on error.
-static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& path,
-                                                            cactus::ErrorReporter& errors) {
+static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& path, cactus::ErrorReporter& errors) {
     std::ifstream ifs(path);
     if (!ifs.is_open()) {
         errors.error({}, "cannot open file '" + path + "'");
@@ -67,7 +66,7 @@ static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& pat
 
 /// Returns true if program has any `use` declarations.
 static bool has_use_declarations(const cactus::ProgramNode& prog) {
-    for (const auto& decl : prog.declarations) { // NOLINT(readability-use-anyofallof)
+    for (const auto& decl : prog.declarations) {  // NOLINT(readability-use-anyofallof)
         if (std::holds_alternative<cactus::UseNode>(decl)) {
             return true;
         }
@@ -77,7 +76,7 @@ static bool has_use_declarations(const cactus::ProgramNode& prog) {
 
 /// Build ImportedSymbols (pub only) from a compiled DecoratedProgram.
 static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_name,
-                                                     const cactus::DecoratedProgram& prog) {
+                                                   const cactus::DecoratedProgram& prog) {
     cactus::ImportedSymbols syms;
     syms.module_name = module_name;
     for (const auto& [name, trait] : prog.traits) {
@@ -138,7 +137,7 @@ static bool compile_implicit_std_core(const fs::path& build_dir,
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-complexity)
+int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-complexity)
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;
@@ -203,7 +202,7 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
 
     // ── 6.2: Multi-module pipeline ───────────────────────────────────────────
     if (has_use_declarations(*root_prog)) {
-        merged_codegen_prog = std::make_unique<cactus::ProgramNode>();
+        merged_codegen_prog           = std::make_unique<cactus::ProgramNode>();
         merged_codegen_prog->location = root_prog->location;
 
         // Build directory: sibling of input file, named "build"
@@ -212,7 +211,8 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
             std::error_code ec;
             fs::create_directories(build_dir, ec);
             if (ec) {
-                std::cerr << "error: cannot create build directory '" << build_dir.string() << "': " << ec.message() << "\n";
+                std::cerr << "error: cannot create build directory '" << build_dir.string() << "': " << ec.message()
+                          << "\n";
                 return 1;
             }
         }
@@ -287,10 +287,9 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
 
             // Preserve full declaration ASTs for final codegen so imported
             // units/systems/extern systems from stdlib modules are also emitted.
-            merged_codegen_prog->declarations.insert(
-                merged_codegen_prog->declarations.end(),
-                std::make_move_iterator(mod_prog->declarations.begin()),
-                std::make_move_iterator(mod_prog->declarations.end()));
+            merged_codegen_prog->declarations.insert(merged_codegen_prog->declarations.end(),
+                                                     std::make_move_iterator(mod_prog->declarations.begin()),
+                                                     std::make_move_iterator(mod_prog->declarations.end()));
 
             compiled[mod.qualified_name] = std::move(dec);
         }
@@ -340,18 +339,18 @@ int main(int argc, char* argv[]) { // NOLINT(readability-function-cognitive-comp
         ofs << generated;
         ofs.close();
 
-        #ifdef CACTUS_CLANG_FORMAT_EXE_PATH
+#ifdef CACTUS_CLANG_FORMAT_EXE_PATH
         if (std::strlen(CACTUS_CLANG_FORMAT_EXE_PATH) > 0) {
-            std::string clang_format_path = CACTUS_CLANG_FORMAT_EXE_PATH;
+            std::string clang_format_path;
             if (!clang_format_path.empty() && clang_format_path.front() == '"' && clang_format_path.back() == '"') {
                 clang_format_path = clang_format_path.substr(1, clang_format_path.size() - 2);
             }
 
-            const std::string format_command = std::string{"\""} + clang_format_path +
-                                               "\" -i \"" + output_file + "\"";
+            const std::string format_command = std::string{"\""} + clang_format_path + "\" -i \"" + output_file + "\"";
+            // NOLINTNEXTLINE(bugprone-command-processor)
             (void)std::system(format_command.c_str());
         }
-        #endif
+#endif
 
         std::cerr << "Generated " << output_file << " (" << backend << " backend)\n";
     }

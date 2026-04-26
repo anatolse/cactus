@@ -1,11 +1,14 @@
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/data_file.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/parser.hpp"
+#include "frontend/semantic_analyzer.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
-#include "common/error_reporter.h"
-#include "frontend/data_file.h"
-#include "frontend/lexer.h"
-#include "frontend/parser.h"
-#include "frontend/semantic_analyzer.h"
-
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -292,8 +295,8 @@ TEST_CASE("DataFile: version mismatch error", "[datafile]") {
     {
         std::fstream f(data_path, std::ios::in | std::ios::out | std::ios::binary);
         f.seekp(4);  // After "CDAT" magic
-        uint8_t bad_version[2] = { 0xFF, 0xFF };
-        f.write(reinterpret_cast<const char*>(bad_version), 2);
+        std::array<const char, 2> bad_version = {static_cast<char>(0xFF), static_cast<char>(0xFF)};
+        f.write(bad_version.data(), bad_version.size());
     }
 
     // Should reject with version mismatch error
@@ -310,3 +313,4 @@ TEST_CASE("DataFile: data_filename helper", "[datafile]") {
     CHECK(DataFileWriter::data_filename("levels.level1").string() == "levels.level1_data.bin");
     CHECK(DataFileWriter::data_filename("mini_shop").string() == "mini_shop_data.bin");
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

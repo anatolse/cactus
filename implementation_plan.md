@@ -80,42 +80,42 @@ Complete file listing for the Cactus DSL compiler project.
 - `examples/cactus_shop/ui.cactus` — HUD and shop UI views
 
 **Common (shared utilities):**
-- `src/common/source_location.h` — Source file/line/column tracking
-- `src/common/error_reporter.h` — Error/warning reporting interface
+- `src/common/source_location.hpp` — Source file/line/column tracking
+- `src/common/error_reporter.hpp` — Error/warning reporting interface
 - `src/common/error_reporter.cpp` — Error reporter implementation
-- `src/common/string_pool.h` — Interned string table (compile-time string→ID mapping)
+- `src/common/string_pool.hpp` — Interned string table (compile-time string→ID mapping)
 - `src/common/string_pool.cpp` — String pool implementation
-- `src/common/types.h` — TypeKind enum, TypeInfo struct, built-in type definitions
+- `src/common/types.hpp` — TypeKind enum, TypeInfo struct, built-in type definitions
 
 **Frontend (Lexer → Parser → Semantic Analyzer → Decorated AST):**
-- `src/frontend/token.h` — Token types enum and Token struct
-- `src/frontend/lexer.h` — Lexer class declaration
+- `src/frontend/token.hpp` — Token types enum and Token struct
+- `src/frontend/lexer.hpp` — Lexer class declaration
 - `src/frontend/lexer.cpp` — Indentation-sensitive tokenizer implementation
-- `src/frontend/ast.h` — All AST node types (undecorated)
-- `src/frontend/parser.h` — Parser class declaration
+- `src/frontend/ast.hpp` — All AST node types (undecorated)
+- `src/frontend/parser.hpp` — Parser class declaration
 - `src/frontend/parser.cpp` — Recursive descent parser implementation
-- `src/frontend/semantic_analyzer.h` — Semantic analysis pass declaration
+- `src/frontend/semantic_analyzer.hpp` — Semantic analysis pass declaration
 - `src/frontend/semantic_analyzer.cpp` — Type checking, scope resolution, constraint enforcement
-- `src/frontend/decorated_ast.h` — Decorated AST nodes (with resolved types, scopes, dependency info)
+- `src/frontend/decorated_ast.hpp` — Decorated AST nodes (with resolved types, scopes, dependency info)
 
 **C++ Backend — Manual SoA:**
-- `src/backend_cpp_manual/cpp_manual_codegen.h` — Manual SoA code generator declaration
+- `src/backend_cpp_manual/cpp_manual_codegen.hpp` — Manual SoA code generator declaration
 - `src/backend_cpp_manual/cpp_manual_codegen.cpp` — Generates hand-rolled SoA structs, system loops, event buffers
-- `src/backend_cpp_manual/soa_emitter.h` — SoA struct generation helpers
+- `src/backend_cpp_manual/soa_emitter.hpp` — SoA struct generation helpers
 - `src/backend_cpp_manual/soa_emitter.cpp` — Implementation
-- `src/backend_cpp_manual/system_emitter.h` — System function generation helpers
+- `src/backend_cpp_manual/system_emitter.hpp` — System function generation helpers
 - `src/backend_cpp_manual/system_emitter.cpp` — Implementation
-- `src/backend_cpp_manual/event_emitter.h` — Event buffer generation helpers
+- `src/backend_cpp_manual/event_emitter.hpp` — Event buffer generation helpers
 - `src/backend_cpp_manual/event_emitter.cpp` — Implementation
 
 **C++ Backend — EnTT:**
-- `src/backend_cpp_entt/cpp_entt_codegen.h` — EnTT-based code generator declaration
+- `src/backend_cpp_entt/cpp_entt_codegen.hpp` — EnTT-based code generator declaration
 - `src/backend_cpp_entt/cpp_entt_codegen.cpp` — Generates EnTT registry usage, component structs, system views
-- `src/backend_cpp_entt/component_emitter.h` — EnTT component struct generation
+- `src/backend_cpp_entt/component_emitter.hpp` — EnTT component struct generation
 - `src/backend_cpp_entt/component_emitter.cpp` — Implementation
-- `src/backend_cpp_entt/system_emitter.h` — EnTT system/view generation
+- `src/backend_cpp_entt/system_emitter.hpp` — EnTT system/view generation
 - `src/backend_cpp_entt/system_emitter.cpp` — Implementation
-- `src/backend_cpp_entt/event_emitter.h` — EnTT event dispatcher generation
+- `src/backend_cpp_entt/event_emitter.hpp` — EnTT event dispatcher generation
 - `src/backend_cpp_entt/event_emitter.cpp` — Implementation
 
 **CLI Entry Point:**
@@ -142,7 +142,7 @@ Complete file listing for the Cactus DSL compiler project.
 [Functions]
 Key functions across the compiler pipeline.
 
-### Lexer (`src/frontend/lexer.h/.cpp`)
+### Lexer (`src/frontend/lexer.hpp/.cpp`)
 - `Lexer::Lexer(std::string source, std::string filename)` — Constructor, initializes source and indent stack
 - `Lexer::tokenize() -> std::vector<Token>` — Main entry: produces token stream with INDENT/DEDENT
 - `Lexer::process_indentation(std::vector<Token>&) -> void` — Handles indent stack push/pop, emits INDENT/DEDENT tokens
@@ -154,7 +154,7 @@ Key functions across the compiler pipeline.
 - `Lexer::peek_char() -> char` — Look ahead without consuming
 - `Lexer::advance_char() -> char` — Consume and return current character
 
-### Parser (`src/frontend/parser.h/.cpp`)
+### Parser (`src/frontend/parser.hpp/.cpp`)
 - `Parser::Parser(std::vector<Token> tokens)` — Constructor
 - `Parser::parse_program() -> ProgramNode` — Top-level: parses sequence of declarations
 - `Parser::parse_module() -> ModuleNode` — Parses `module name`
@@ -180,7 +180,7 @@ Key functions across the compiler pipeline.
 - `Parser::peek() -> Token` — Look ahead
 - `Parser::advance() -> Token` — Consume current token
 
-### Semantic Analyzer (`src/frontend/semantic_analyzer.h/.cpp`)
+### Semantic Analyzer (`src/frontend/semantic_analyzer.hpp/.cpp`)
 - `SemanticAnalyzer::SemanticAnalyzer(ProgramNode& ast)` — Constructor
 - `SemanticAnalyzer::analyze() -> DecoratedProgram` — Main entry: runs all passes
 - `SemanticAnalyzer::resolve_modules() -> void` — Resolves `use` imports, builds module graph
@@ -194,12 +194,12 @@ Key functions across the compiler pipeline.
 - `SemanticAnalyzer::validate_system_filters() -> void` — Ensures filter traits exist and are compatible
 - `SemanticAnalyzer::validate_event_usage() -> void` — Ensures emitted events are declared, handlers match signatures
 
-### String Pool (`src/common/string_pool.h/.cpp`)
+### String Pool (`src/common/string_pool.hpp/.cpp`)
 - `StringPool::intern(std::string_view str) -> uint64_t` — Returns hash ID for string, stores in pool
 - `StringPool::lookup(uint64_t id) -> std::string_view` — Reverse lookup
 - `StringPool::contains(std::string_view str) -> bool` — Check if string is already interned
 
-### Error Reporter (`src/common/error_reporter.h/.cpp`)
+### Error Reporter (`src/common/error_reporter.hpp/.cpp`)
 - `ErrorReporter::error(SourceLocation loc, std::string msg) -> void` — Report error with location
 - `ErrorReporter::warning(SourceLocation loc, std::string msg) -> void` — Report warning
 - `ErrorReporter::has_errors() -> bool` — Check if any errors were reported
@@ -241,23 +241,23 @@ Key classes in the compiler architecture.
 
 ### Frontend Classes
 
-**`Token`** (`src/frontend/token.h`)
+**`Token`** (`src/frontend/token.hpp`)
 - Struct with: `TokenType type`, `std::string value`, `SourceLocation location`
 - TokenType enum includes: MODULE, USE, CONST, STRUCT, ENUM, TRAIT, UNIT, SYSTEM, VIEW, EVENT, FUNC, INTERFACE, LET, VAR, PERSIST, SYNC, PUB, ON, EMIT, IF, ELSE, MATCH, RETURN, APPLY, CONFIG, CHILD, FILTER, TARGET, MAP, FILTER_OP, REDUCE, IDENTIFIER, INT_LITERAL, FLOAT_LITERAL, STRING_LITERAL, HEX_COLOR, BOOL_LITERAL, COLON, COMMA, DOT, ARROW, FAT_ARROW, LPAREN, RPAREN, LBRACKET, RBRACKET, LBRACE, RBRACE, PLUS, MINUS, STAR, SLASH, PERCENT, AMPERSAND, PIPE, CARET, TILDE, EQUALS, NOT_EQUALS, LESS, GREATER, LESS_EQ, GREATER_EQ, AND, OR, NOT, ASSIGN, PLUS_ASSIGN, MINUS_ASSIGN, INDENT, DEDENT, NEWLINE, EOF_TOKEN
 
-**`Lexer`** (`src/frontend/lexer.h/.cpp`)
+**`Lexer`** (`src/frontend/lexer.hpp/.cpp`)
 - Members: `std::string source_`, `std::string filename_`, `size_t pos_`, `int line_`, `int col_`, `std::vector<int> indent_stack_`, `ErrorReporter& errors_`
 - Produces vector of Token with proper INDENT/DEDENT handling
 
-**`Parser`** (`src/frontend/parser.h/.cpp`)
+**`Parser`** (`src/frontend/parser.hpp/.cpp`)
 - Members: `std::vector<Token> tokens_`, `size_t current_`, `ErrorReporter& errors_`
 - Produces undecorated AST (ProgramNode as root)
 
-**`SemanticAnalyzer`** (`src/frontend/semantic_analyzer.h/.cpp`)
+**`SemanticAnalyzer`** (`src/frontend/semantic_analyzer.hpp/.cpp`)
 - Members: `ProgramNode& ast_`, `ErrorReporter& errors_`, `StringPool& string_pool_`, `std::unordered_map<std::string, ModuleScope> modules_`, `DependencyGraph dep_graph_`
 - Produces DecoratedProgram with resolved types, scopes, and dependency information
 
-### AST Node Classes (`src/frontend/ast.h`)
+### AST Node Classes (`src/frontend/ast.hpp`)
 All nodes inherit from `ASTNode` base with `SourceLocation location` field.
 
 - `ProgramNode` — Root. Contains: `std::vector<std::unique_ptr<ASTNode>> declarations`
@@ -278,29 +278,29 @@ All nodes inherit from `ASTNode` base with `SourceLocation location` field.
 - `ExprNode` — Variant: `BinaryExpr | UnaryExpr | CallExpr | MemberExpr | LambdaExpr | PipelineExpr | MatchExpr | IfExpr | LiteralExpr | IdentExpr | ListExpr`
 - `StmtNode` — Variant: `VarAssign | EmitStmt | ReturnStmt | ExprStmt | IfStmt`
 
-### Decorated AST (`src/frontend/decorated_ast.h`)
+### Decorated AST (`src/frontend/decorated_ast.hpp`)
 - `DecoratedProgram` — Contains: resolved module graph, all decorated nodes, dependency graph, string pool snapshot
 - Each decorated node wraps the original AST node plus: `TypeInfo resolved_type`, `ScopeId scope`, `std::optional<uint64_t> const_string_id` (for string pool references)
 
 ### Backend Classes
 
-**`CppManualCodegen`** (`src/backend_cpp_manual/cpp_manual_codegen.h/.cpp`)
+**`CppManualCodegen`** (`src/backend_cpp_manual/cpp_manual_codegen.hpp/.cpp`)
 - Members: `DecoratedProgram& program_`, `std::stringstream output_`
 - Generates: POD structs, SoA storage classes, system functions, event buffers, main game loop
 
-**`CppEnttCodegen`** (`src/backend_cpp_entt/cpp_entt_codegen.h/.cpp`)
+**`CppEnttCodegen`** (`src/backend_cpp_entt/cpp_entt_codegen.hpp/.cpp`)
 - Members: `DecoratedProgram& program_`, `std::stringstream output_`
 - Generates: EnTT component structs, registry setup, system functions using `registry.view<>()`, dispatcher setup
 
 ### Utility Classes
 
-**`StringPool`** (`src/common/string_pool.h/.cpp`)
+**`StringPool`** (`src/common/string_pool.hpp/.cpp`)
 - Members: `std::unordered_map<std::string, uint64_t> str_to_id_`, `std::unordered_map<uint64_t, std::string> id_to_str_`, `uint64_t next_id_`
 
-**`ErrorReporter`** (`src/common/error_reporter.h/.cpp`)
+**`ErrorReporter`** (`src/common/error_reporter.hpp/.cpp`)
 - Members: `std::vector<Diagnostic> diagnostics_`, `int error_count_`, `int warning_count_`
 
-**`SourceLocation`** (`src/common/source_location.h`)
+**`SourceLocation`** (`src/common/source_location.hpp`)
 - Struct: `std::string filename`, `int line`, `int column`
 
 [Dependencies]
@@ -394,7 +394,7 @@ Logical sequence of implementation steps to minimize conflicts and ensure increm
 
 5. **Lexer**: Implement indentation-sensitive tokenizer. Write Catch2 tests. This is the foundation — everything depends on correct tokenization.
 
-6. **AST node types**: Define all AST node structs/classes in `ast.h`. No implementation needed — just data structures.
+6. **AST node types**: Define all AST node structs/classes in `ast.hpp`. No implementation needed — just data structures.
 
 7. **Parser**: Implement recursive descent parser producing AST from token stream. Write Catch2 tests for each construct. Start with `module`, `const`, `struct`, `trait`, then `unit`, `system`, `func`, `event`, `view`.
 

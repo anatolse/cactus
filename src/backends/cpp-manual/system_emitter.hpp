@@ -1,8 +1,9 @@
 #pragma once
 
-#include "backends/cpp-manual/soa_emitter.h"
-#include "frontend/ast.h"
-#include "frontend/semantic_analyzer.h"
+#include "frontend/ast.hpp"
+#include "frontend/semantic_analyzer.hpp"
+
+#include "backends/cpp-manual/soa_emitter.hpp"
 
 #include <string>
 #include <unordered_map>
@@ -18,23 +19,21 @@ struct CodegenContext {
     /// all resolved traits (field names + types)
     std::unordered_map<std::string, ResolvedTrait> traits;
     /// full AST (non-owning pointer — valid for lifetime of generate() call)
-    ProgramNode* ast = nullptr;
+    ProgramNode* ast                  = nullptr;
     const DecoratedProgram* decorated = nullptr;
     /// trait names in declaration order (defines bit assignments)
     std::vector<std::string> trait_names_ordered;
 
     // ── AST lookup maps (populated from ast during generate()) ──────────────
-    std::unordered_map<std::string, const TraitNode*>    trait_ast;
+    std::unordered_map<std::string, const TraitNode*> trait_ast;
     std::unordered_map<std::string, const TemplateNode*> template_ast;
-    std::unordered_map<std::string, const UnitNode*>     unit_ast;
+    std::unordered_map<std::string, const UnitNode*> unit_ast;
 
     /// template_name → (field_name → C++ expression string for config default)
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, std::string>> template_config;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> template_config;
 
     /// trait_name → (field_name → C++ expression string for field default value)
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, std::string>> trait_defaults;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> trait_defaults;
 };
 
 // ── System emitter ─────────────────────────────────────────────────────────
@@ -62,20 +61,20 @@ public:
     /// Emit a statement for the dynamic ECS model.
     /// entity_index_var: C++ variable holding the current entity slot index.
     /// in_loop: true when inside a loop handler (enables __destroyed flag idiom).
-    static std::string emit_stmt_dynamic(const StmtNode& stmt, int indent,
+    static std::string emit_stmt_dynamic(const StmtNode& stmt,
+                                         int indent,
                                          const CodegenContext& ctx,
                                          const std::string& entity_index_var = "i",
-                                         bool in_loop = true);
+                                         bool in_loop                        = true);
 
     /// Compute the C++ bitmask expression (e.g. "TraitBits::A | TraitBits::B")
     /// for a filter or exclude clause.  Returns "0ULL" for empty clauses.
-    static std::string compute_mask_expr(const FilterClause& clause,
-                                         const CodegenContext& ctx);
+    static std::string compute_mask_expr(const FilterClause& clause, const CodegenContext& ctx);
 
     static std::string emit_expr(const ExprNode& expr, const ProgramNode* ast = nullptr);
     static std::string emit_expr_dynamic(const ExprNode& expr,
                                          const std::string& entity_index_var = "i",
-                                         const ProgramNode* ast = nullptr);
+                                         const ProgramNode* ast              = nullptr);
     static std::string indent_str(int level);
 
 private:

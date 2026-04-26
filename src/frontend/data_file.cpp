@@ -1,4 +1,4 @@
-#include "frontend/data_file.h"
+#include "frontend/data_file.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,24 +14,32 @@ namespace cactus {
 size_t FieldValue::byte_size() const {
     switch (tag) {
         case Tag::Int:
-        case Tag::Float:    return 4;
-        case Tag::Bool:     return 1;
-        case Tag::Color:    return 4;
-        case Tag::Vec2:     return 8;
-        case Tag::Vec3:     return 12;
-        case Tag::Quat:     return 16;
+        case Tag::Float:
+            return 4;
+        case Tag::Bool:
+            return 1;
+        case Tag::Color:
+            return 4;
+        case Tag::Vec2:
+            return 8;
+        case Tag::Vec3:
+            return 12;
+        case Tag::Quat:
+            return 16;
         case Tag::EntityId:
-        case Tag::Enum:     return 4;
-        default:            return 0;
+        case Tag::Enum:
+            return 4;
+        default:
+            return 0;
     }
 }
 
 // ── DataFileWriter ───────────────────────────────────────────────────────────
 
-DataFileWriter::DataFileWriter(const ProgramNode& ast,
-                               const DecoratedProgram& decorated,
-                               ErrorReporter& errors)
-    : ast_(ast), decorated_(decorated), errors_(errors) {}
+DataFileWriter::DataFileWriter(const ProgramNode& ast, const DecoratedProgram& decorated, ErrorReporter& errors)
+    : ast_(ast)
+    , decorated_(decorated)
+    , errors_(errors) {}
 
 std::filesystem::path DataFileWriter::data_filename(const std::string& module_name) {
     return {module_name + "_data.bin"};
@@ -138,9 +146,9 @@ std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
         case LiteralExpr::Kind::Int:
             fv.tag = FieldValue::Tag::Int;
             {
-                const auto* begin = lit.value.data();
-                const auto* end   = begin + lit.value.size();
-                int parsed = 0;
+                const auto* begin    = lit.value.data();
+                const auto* end      = begin + lit.value.size();
+                int parsed           = 0;
                 const auto [ptr, ec] = std::from_chars(begin, end, parsed);
                 if (ec != std::errc{}) {
                     return std::nullopt;
@@ -151,9 +159,9 @@ std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
         case LiteralExpr::Kind::Float:
             fv.tag = FieldValue::Tag::Float;
             {
-                const auto* begin = lit.value.data();
-                const auto* end   = begin + lit.value.size();
-                float parsed = 0.0F;
+                const auto* begin    = lit.value.data();
+                const auto* end      = begin + lit.value.size();
+                float parsed         = 0.0F;
                 const auto [ptr, ec] = std::from_chars(begin, end, parsed);
                 if (ec != std::errc{}) {
                     return std::nullopt;
@@ -163,11 +171,11 @@ std::optional<FieldValue> DataFileWriter::eval_literal(const LiteralExpr& lit) {
             return fv;
         case LiteralExpr::Kind::Bool:
             fv.tag = FieldValue::Tag::Bool;
-            fv.b = (lit.value == "true");
+            fv.b   = (lit.value == "true");
             return fv;
         case LiteralExpr::Kind::HexColor: {
             // The lexer stores value WITHOUT the leading '#' — e.g. "FF8800" (6 chars)
-            fv.tag = FieldValue::Tag::Color;
+            fv.tag        = FieldValue::Tag::Color;
             const auto& s = lit.value;
             if (s.size() >= 6) {
                 fv.color.r  = parse_hex_byte(s, 0);
@@ -298,11 +306,20 @@ std::optional<FieldValue> DataFileWriter::eval_unary(const UnaryExpr& un) const 
     }
 
     if (un.op == "-") {
-        if (val->tag == FieldValue::Tag::Float) { val->f32 = -val->f32; return val; }
-        if (val->tag == FieldValue::Tag::Int)   { val->i32 = -val->i32; return val; }
+        if (val->tag == FieldValue::Tag::Float) {
+            val->f32 = -val->f32;
+            return val;
+        }
+        if (val->tag == FieldValue::Tag::Int) {
+            val->i32 = -val->i32;
+            return val;
+        }
     }
     if (un.op == "not") {
-        if (val->tag == FieldValue::Tag::Bool) { val->b = !val->b; return val; }
+        if (val->tag == FieldValue::Tag::Bool) {
+            val->b = !val->b;
+            return val;
+        }
     }
     return std::nullopt;
 }
@@ -312,20 +329,46 @@ std::optional<FieldValue> DataFileWriter::eval_unary(const UnaryExpr& un) const 
 static FieldValue default_for_type(TypeKind kind) {
     FieldValue fv;
     switch (kind) {
-        case TypeKind::Int:      fv.tag = FieldValue::Tag::Int;   fv.i32 = 0;     break;
-        case TypeKind::Float:    fv.tag = FieldValue::Tag::Float;
-            fv.f32                      = 0.0F;
+        case TypeKind::Int:
+            fv.tag = FieldValue::Tag::Int;
+            fv.i32 = 0;
             break;
-        case TypeKind::Bool:     fv.tag = FieldValue::Tag::Bool;  fv.b = false;   break;
-        case TypeKind::Color:    fv.tag = FieldValue::Tag::Color;                 break;
-        case TypeKind::Vec2:     fv.tag = FieldValue::Tag::Vec2;                  break;
-        case TypeKind::Vec3:     fv.tag = FieldValue::Tag::Vec3;                  break;
-        case TypeKind::Quat:     fv.tag = FieldValue::Tag::Quat;                  break;
-        case TypeKind::EntityId: fv.tag = FieldValue::Tag::EntityId; fv.entity_id = 0; break;
-        case TypeKind::Enum:     fv.tag = FieldValue::Tag::Enum;  fv.enum_idx = 0; break;
-        case TypeKind::List:     fv.tag = FieldValue::Tag::List;                  break;
-        case TypeKind::Struct:   fv.tag = FieldValue::Tag::Struct;                break;
-        default:                                                                   break;
+        case TypeKind::Float:
+            fv.tag = FieldValue::Tag::Float;
+            fv.f32 = 0.0F;
+            break;
+        case TypeKind::Bool:
+            fv.tag = FieldValue::Tag::Bool;
+            fv.b   = false;
+            break;
+        case TypeKind::Color:
+            fv.tag = FieldValue::Tag::Color;
+            break;
+        case TypeKind::Vec2:
+            fv.tag = FieldValue::Tag::Vec2;
+            break;
+        case TypeKind::Vec3:
+            fv.tag = FieldValue::Tag::Vec3;
+            break;
+        case TypeKind::Quat:
+            fv.tag = FieldValue::Tag::Quat;
+            break;
+        case TypeKind::EntityId:
+            fv.tag       = FieldValue::Tag::EntityId;
+            fv.entity_id = 0;
+            break;
+        case TypeKind::Enum:
+            fv.tag      = FieldValue::Tag::Enum;
+            fv.enum_idx = 0;
+            break;
+        case TypeKind::List:
+            fv.tag = FieldValue::Tag::List;
+            break;
+        case TypeKind::Struct:
+            fv.tag = FieldValue::Tag::Struct;
+            break;
+        default:
+            break;
     }
     return fv;
 }
@@ -340,7 +383,7 @@ FieldValue DataFileWriter::make_field_value(const ResolvedField& field, const st
 
 // ── Build entity records ─────────────────────────────────────────────────────
 
-std::vector<EntityInstanceData> DataFileWriter::build_records() { // NOLINT(readability-function-cognitive-complexity)
+std::vector<EntityInstanceData> DataFileWriter::build_records() {  // NOLINT(readability-function-cognitive-complexity)
     // Prepare evaluation tables
     collect_constants();
     collect_enums();
@@ -351,7 +394,7 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() { // NOLINT(read
     for (const auto& decl : ast_.declarations) {
         if (const auto* unit = std::get_if<UnitNode>(&decl)) {
             EntityInstanceData rec;
-            rec.name = unit->name;
+            rec.name       = unit->name;
             rec.trait_mask = compute_trait_mask(unit->traits);
 
             // Build config map from nested trait assignments: field_name → evaluated value
@@ -497,7 +540,7 @@ void DataFileWriter::write_field_value(std::ostream& out, const FieldValue& fv) 
 // ── Write to disk ────────────────────────────────────────────────────────────
 
 std::vector<EntityInstanceData> DataFileWriter::write(const std::filesystem::path& build_dir,
-                                                       const std::string& module_name) {
+                                                      const std::string& module_name) {
     auto records = build_records();
 
     std::filesystem::create_directories(build_dir);
@@ -531,7 +574,8 @@ std::vector<EntityInstanceData> DataFileWriter::write(const std::filesystem::pat
 
 // ── DataFileReader ───────────────────────────────────────────────────────────
 
-DataFileReader::DataFileReader(ErrorReporter& errors) : errors_(errors) {}
+DataFileReader::DataFileReader(ErrorReporter& errors)
+    : errors_(errors) {}
 
 uint8_t DataFileReader::read_u8(std::istream& in) {
     return static_cast<uint8_t>(in.get());
@@ -638,8 +682,8 @@ std::vector<EntityInstanceData> DataFileReader::load(const std::filesystem::path
 
     // Read and verify magic
     std::array<char, 4> magic = {};
-    in.read(magic.data(), 4);
-    if (!in || std::strncmp(magic.data(), DataFileWriter::MAGIC, 4) != 0) {
+    in.read(magic.data(), magic.size());
+    if (!in || std::strncmp(magic.data(), DataFileWriter::MAGIC, magic.size()) != 0) {
         errors_.error({}, "invalid data file magic in: " + path.string());
         return {};
     }
@@ -647,8 +691,8 @@ std::vector<EntityInstanceData> DataFileReader::load(const std::filesystem::path
     // Read and check version (task 6.6)
     uint16_t version = read_u16(in);
     if (version != DataFileWriter::CURRENT_VERSION) {
-        errors_.error({}, "data file version mismatch: expected " +
-                          std::to_string(DataFileWriter::CURRENT_VERSION) +
+        errors_.error({},
+                      "data file version mismatch: expected " + std::to_string(DataFileWriter::CURRENT_VERSION) +
                           ", got " + std::to_string(version) + " in: " + path.string());
         return {};
     }
@@ -659,14 +703,14 @@ std::vector<EntityInstanceData> DataFileReader::load(const std::filesystem::path
 
     for (uint32_t i = 0; i < entity_count; ++i) {
         EntityInstanceData rec;
-        rec.name = read_str_short(in);
+        rec.name             = read_str_short(in);
         uint32_t field_count = read_u32(in);
         rec.fields.reserve(field_count);
 
         for (uint32_t j = 0; j < field_count; ++j) {
             std::string fname = read_str_short(in);
-            auto tag = static_cast<FieldValue::Tag>(read_u8(in));
-            FieldValue fv = read_field_value(in, tag);
+            auto tag          = static_cast<FieldValue::Tag>(read_u8(in));
+            FieldValue fv     = read_field_value(in, tag);
             rec.fields.emplace_back(fname, fv);
         }
 

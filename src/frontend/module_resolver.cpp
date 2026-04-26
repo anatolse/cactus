@@ -1,7 +1,7 @@
-#include "frontend/module_resolver.h"
+#include "frontend/module_resolver.hpp"
 
-#include "frontend/lexer.h"
-#include "frontend/parser.h"
+#include "frontend/lexer.hpp"
+#include "frontend/parser.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -13,7 +13,8 @@ namespace cactus {
 
 namespace fs = std::filesystem;
 
-ModuleResolver::ModuleResolver(ErrorReporter& errors) : errors_(errors) {}
+ModuleResolver::ModuleResolver(ErrorReporter& errors)
+    : errors_(errors) {}
 
 // ── Dependency Discovery ────────────────────────────────────────────────────
 
@@ -48,8 +49,7 @@ fs::path ModuleResolver::locate_file(const std::string& module_name, const std::
 
 // ── Module Name Inference ───────────────────────────────────────────────────
 
-std::string ModuleResolver::infer_module_name(const fs::path& search_root,
-                                               const fs::path& file_path) {
+std::string ModuleResolver::infer_module_name(const fs::path& search_root, const fs::path& file_path) {
     auto rel = fs::relative(file_path, search_root);
     auto str = rel.generic_string();  // use forward slashes
 
@@ -67,14 +67,14 @@ std::string ModuleResolver::infer_module_name(const fs::path& search_root,
 // ── Module Name Validation ──────────────────────────────────────────────────
 
 bool ModuleResolver::validate_module_name(const ProgramNode& program,
-                                           const std::string& inferred_name,
-                                           const fs::path& file_path) {
+                                          const std::string& inferred_name,
+                                          const fs::path& file_path) {
     for (const auto& decl : program.declarations) {
         if (const auto* mod = std::get_if<ModuleNode>(&decl)) {
             if (mod->name != inferred_name) {
                 errors_.error(mod->location,
-                              "module name '" + mod->name + "' does not match filename '" +
-                                  inferred_name + "' (from " + file_path.filename().string() + ")");
+                              "module name '" + mod->name + "' does not match filename '" + inferred_name + "' (from " +
+                                  file_path.filename().string() + ")");
                 return false;
             }
             return true;
@@ -87,8 +87,8 @@ bool ModuleResolver::validate_module_name(const ProgramNode& program,
 // ── Recursive Resolution ────────────────────────────────────────────────────
 
 bool ModuleResolver::resolve_module(const std::string& module_name,
-                                     const std::vector<fs::path>& search_dirs,
-                                     std::vector<std::string>& visiting_stack) {
+                                    const std::vector<fs::path>& search_dirs,
+                                    std::vector<std::string>& visiting_stack) {
     // Already fully resolved?
     auto vit = visited_.find(module_name);
     if (vit != visited_.end()) {
@@ -186,9 +186,9 @@ bool ModuleResolver::resolve_module(const std::string& module_name,
 
     // Store module info
     ModuleInfo info;
-    info.qualified_name = module_name;
-    info.file_path = file_path;
-    info.dependencies = std::move(deps);
+    info.qualified_name   = module_name;
+    info.file_path        = file_path;
+    info.dependencies     = std::move(deps);
     modules_[module_name] = std::move(info);
 
     // Mark as fully resolved
@@ -257,8 +257,7 @@ std::vector<std::string> ModuleResolver::topological_sort() const {
 
 // ── Main Resolution Entry Point ─────────────────────────────────────────────
 
-std::vector<ModuleInfo> ModuleResolver::resolve(const fs::path& root_file,
-                                                 const std::vector<fs::path>& search_paths) {
+std::vector<ModuleInfo> ModuleResolver::resolve(const fs::path& root_file, const std::vector<fs::path>& search_paths) {
     modules_.clear();
     visited_.clear();
 
@@ -268,7 +267,7 @@ std::vector<ModuleInfo> ModuleResolver::resolve(const fs::path& root_file,
     }
 
     auto canonical_root = fs::canonical(root_file);
-    auto root_dir = canonical_root.parent_path();
+    auto root_dir       = canonical_root.parent_path();
 
     // Build search dirs: root dir first, then additional paths
     std::vector<fs::path> search_dirs;
@@ -317,8 +316,8 @@ std::vector<ModuleInfo> ModuleResolver::resolve(const fs::path& root_file,
     auto deps = extract_dependencies(program);
     ModuleInfo root_info;
     root_info.qualified_name = root_name;
-    root_info.file_path = canonical_root;
-    root_info.dependencies = deps;
+    root_info.file_path      = canonical_root;
+    root_info.dependencies   = deps;
 
     visited_[root_name] = false;
 

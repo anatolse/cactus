@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/error_reporter.h"
-#include "frontend/token.h"
+#include "common/error_reporter.hpp"
+#include "frontend/token.hpp"
 
 #include <string>
 #include <vector>
@@ -36,8 +36,8 @@ private:
     std::string filename_;
     ErrorReporter& errors_;
     size_t pos_ = 0;
-    int line_ = 1;
-    int col_ = 1;
+    int line_   = 1;
+    int col_    = 1;
     std::vector<int> indent_stack_{0};
     bool at_line_start_ = true;
 };

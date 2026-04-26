@@ -1,18 +1,22 @@
-#include "backends/cpp-entt/runtime.h"
+#include "backends/cpp-entt/runtime.hpp"
 
 #include <raylib.h>
 
 #include <algorithm>
 #include <array>
 #include <memory_resource>
-#include <unordered_map>
-
 #include <raymath.h>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 
 namespace cactus::runtime::entt_backend {
 
 namespace {
-RenderDebugState g_render_debug_state;
+RenderDebugState& render_debug_state_storage() noexcept {
+    static RenderDebugState state;
+    return state;
+}
 
 struct SpriteSubmission {
     Vector2 position{};
@@ -55,18 +59,45 @@ struct MaterialResourceEntry {
     bool owned{false};
 };
 
-std::pmr::unsynchronized_pool_resource g_render_queue_resource;
-std::pmr::vector<SpriteSubmission> g_sprite_queue{&g_render_queue_resource};
-std::pmr::vector<MeshSubmission> g_mesh_queue{&g_render_queue_resource};
-std::pmr::vector<PointLightSubmission> g_point_light_queue{&g_render_queue_resource};
-std::unordered_map<int, TextureResourceEntry> g_textures;
-std::unordered_map<int, MeshResourceEntry> g_meshes;
-std::unordered_map<int, MaterialResourceEntry> g_materials;
+std::pmr::unsynchronized_pool_resource& render_queue_resource() noexcept {
+    static std::pmr::unsynchronized_pool_resource resource;
+    return resource;
+}
 
-constexpr int kMaxMeshLights = 4;
+std::pmr::vector<SpriteSubmission>& sprite_queue() noexcept {
+    static std::pmr::vector<SpriteSubmission> queue{&render_queue_resource()};
+    return queue;
+}
+
+std::pmr::vector<MeshSubmission>& mesh_queue() noexcept {
+    static std::pmr::vector<MeshSubmission> queue{&render_queue_resource()};
+    return queue;
+}
+
+std::pmr::vector<PointLightSubmission>& point_light_queue() noexcept {
+    static std::pmr::vector<PointLightSubmission> queue{&render_queue_resource()};
+    return queue;
+}
+
+std::unordered_map<int, TextureResourceEntry>& textures() noexcept {
+    static std::unordered_map<int, TextureResourceEntry> entries;
+    return entries;
+}
+
+std::unordered_map<int, MeshResourceEntry>& meshes() noexcept {
+    static std::unordered_map<int, MeshResourceEntry> entries;
+    return entries;
+}
+
+std::unordered_map<int, MaterialResourceEntry>& materials() noexcept {
+    static std::unordered_map<int, MaterialResourceEntry> entries;
+    return entries;
+}
+
+constexpr int kMaxMeshLights  = 4;
 constexpr int kPointLightType = 1;
 
-constexpr char kLightingVertexShader[] = R"(#version 330
+constexpr const char* kLightingVertexShader = R"(#version 330
 
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
@@ -92,7 +123,7 @@ void main()
 }
 )";
 
-constexpr char kLightingFragmentShader[] = R"(#version 330
+constexpr const char* kLightingFragmentShader = R"(#version 330
 
 in vec3 fragPosition;
 in vec2 fragTexCoord;
@@ -158,53 +189,72 @@ struct LightingShaderState {
     std::array<int, kMaxMeshLights> color_locs{};
 };
 
-LightingShaderState g_lighting_shader_state{};
+LightingShaderState& lighting_shader_state() noexcept {
+    static LightingShaderState state{};
+    return state;
+}
+
+std::string light_uniform_name(const int index, const std::string_view field) {
+    std::string result{"lights["};
+    result += std::to_string(index);
+    result += "].";
+    result += field;
+    return result;
+}
 
 void reset_lighting_shader_state() noexcept {
-    g_lighting_shader_state = {};
-    g_lighting_shader_state.enabled_locs.fill(-1);
-    g_lighting_shader_state.type_locs.fill(-1);
-    g_lighting_shader_state.position_locs.fill(-1);
-    g_lighting_shader_state.target_locs.fill(-1);
-    g_lighting_shader_state.color_locs.fill(-1);
+    auto& state = lighting_shader_state();
+    state       = {};
+    state.enabled_locs.fill(-1);
+    state.type_locs.fill(-1);
+    state.position_locs.fill(-1);
+    state.target_locs.fill(-1);
+    state.color_locs.fill(-1);
 }
 
 Shader* ensure_lighting_shader() {
-    if (g_lighting_shader_state.loaded) {
-        return &g_lighting_shader_state.shader;
+    auto& state = lighting_shader_state();
+    if (state.loaded) {
+        return &state.shader;
     }
     if (!IsWindowReady()) {
         return nullptr;
     }
 
     reset_lighting_shader_state();
-    g_lighting_shader_state.shader = LoadShaderFromMemory(kLightingVertexShader, kLightingFragmentShader);
-    if (!IsShaderReady(g_lighting_shader_state.shader)) {
+    state.shader = LoadShaderFromMemory(kLightingVertexShader, kLightingFragmentShader);
+    if (!IsShaderReady(state.shader)) {
         reset_lighting_shader_state();
         return nullptr;
     }
 
-    g_lighting_shader_state.loaded = true;
-    g_lighting_shader_state.shader.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(g_lighting_shader_state.shader, "matModel");
-    g_lighting_shader_state.shader.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(g_lighting_shader_state.shader, "matNormal");
-    g_lighting_shader_state.shader.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(g_lighting_shader_state.shader, "viewPos");
-    g_lighting_shader_state.ambient_loc = GetShaderLocation(g_lighting_shader_state.shader, "ambient");
-    g_lighting_shader_state.view_pos_loc = GetShaderLocation(g_lighting_shader_state.shader, "viewPos");
+    state.loaded                                = true;
+    state.shader.locs[SHADER_LOC_MATRIX_MODEL]  = GetShaderLocation(state.shader, "matModel");
+    state.shader.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(state.shader, "matNormal");
+    state.shader.locs[SHADER_LOC_VECTOR_VIEW]   = GetShaderLocation(state.shader, "viewPos");
+    state.ambient_loc                           = GetShaderLocation(state.shader, "ambient");
+    state.view_pos_loc                          = GetShaderLocation(state.shader, "viewPos");
 
     for (int i = 0; i < kMaxMeshLights; ++i) {
-        g_lighting_shader_state.enabled_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].enabled", i));
-        g_lighting_shader_state.type_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].type", i));
-        g_lighting_shader_state.position_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].position", i));
-        g_lighting_shader_state.target_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].target", i));
-        g_lighting_shader_state.color_locs[static_cast<std::size_t>(i)] = GetShaderLocation(g_lighting_shader_state.shader, TextFormat("lights[%i].color", i));
+        const auto index    = static_cast<std::size_t>(i);
+        const auto location = [&](const std::string_view field) {
+            const std::string uniform = light_uniform_name(i, field);
+            return GetShaderLocation(state.shader, uniform.c_str());
+        };
+        state.enabled_locs[index]  = location("enabled");
+        state.type_locs[index]     = location("type");
+        state.position_locs[index] = location("position");
+        state.target_locs[index]   = location("target");
+        state.color_locs[index]    = location("color");
     }
 
-    return &g_lighting_shader_state.shader;
+    return &state.shader;
 }
 
 void clear_lighting_shader() noexcept {
-    if (g_lighting_shader_state.loaded && IsWindowReady()) {
-        UnloadShader(g_lighting_shader_state.shader);
+    auto& state = lighting_shader_state();
+    if (state.loaded && IsWindowReady()) {
+        UnloadShader(state.shader);
     }
     reset_lighting_shader_state();
 }
@@ -215,90 +265,92 @@ void apply_point_lights(const Camera3D& camera) {
         return;
     }
 
-    const float ambient[4] = {0.22F, 0.22F, 0.28F, 1.0F};
-    const float view_pos[3] = {camera.position.x, camera.position.y, camera.position.z};
-    SetShaderValue(*shader, g_lighting_shader_state.ambient_loc, ambient, SHADER_UNIFORM_VEC4);
-    SetShaderValue(*shader, g_lighting_shader_state.view_pos_loc, view_pos, SHADER_UNIFORM_VEC3);
+    auto& shader_state = lighting_shader_state();
+    const std::array<float, 4> ambient{0.22F, 0.22F, 0.28F, 1.0F};
+    const std::array<float, 3> view_pos{camera.position.x, camera.position.y, camera.position.z};
+    SetShaderValue(*shader, shader_state.ambient_loc, ambient.data(), SHADER_UNIFORM_VEC4);
+    SetShaderValue(*shader, shader_state.view_pos_loc, view_pos.data(), SHADER_UNIFORM_VEC3);
 
-    const int active_lights = std::min(static_cast<int>(g_point_light_queue.size()), kMaxMeshLights);
-    g_render_debug_state.active_point_lights = active_lights;
-    g_render_debug_state.used_lit_mesh_shader = active_lights > 0;
+    const int active_lights = std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
+    render_debug_state_storage().active_point_lights  = active_lights;
+    render_debug_state_storage().used_lit_mesh_shader = active_lights > 0;
 
     for (int i = 0; i < kMaxMeshLights; ++i) {
         const int enabled = i < active_lights ? 1 : 0;
-        const int type = kPointLightType;
-        const auto zero = Vector3{0.0F, 0.0F, 0.0F};
-        float position[3] = {zero.x, zero.y, zero.z};
-        float target[3] = {zero.x, zero.y, zero.z};
-        float color[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+        const int type    = kPointLightType;
+        const auto zero   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+        std::array<float, 3> position{zero.x, zero.y, zero.z};
+        std::array<float, 3> target{zero.x, zero.y, zero.z};
+        std::array<float, 4> color{0.0F, 0.0F, 0.0F, 1.0F};
 
         if (i < active_lights) {
-            const auto& light = g_point_light_queue[static_cast<std::size_t>(i)];
-            position[0] = light.position.x;
-            position[1] = light.position.y;
-            position[2] = light.position.z;
-            color[0] = (static_cast<float>(light.color.r) / 255.0F) * light.intensity;
-            color[1] = (static_cast<float>(light.color.g) / 255.0F) * light.intensity;
-            color[2] = (static_cast<float>(light.color.b) / 255.0F) * light.intensity;
-            color[3] = static_cast<float>(light.color.a) / 255.0F;
+            const auto& light = point_light_queue()[static_cast<std::size_t>(i)];
+            position[0]       = light.position.x;
+            position[1]       = light.position.y;
+            position[2]       = light.position.z;
+            color[0]          = (static_cast<float>(light.color.r) / 255.0F) * light.intensity;
+            color[1]          = (static_cast<float>(light.color.g) / 255.0F) * light.intensity;
+            color[2]          = (static_cast<float>(light.color.b) / 255.0F) * light.intensity;
+            color[3]          = static_cast<float>(light.color.a) / 255.0F;
         }
 
-        SetShaderValue(*shader, g_lighting_shader_state.enabled_locs[static_cast<std::size_t>(i)], &enabled, SHADER_UNIFORM_INT);
-        SetShaderValue(*shader, g_lighting_shader_state.type_locs[static_cast<std::size_t>(i)], &type, SHADER_UNIFORM_INT);
-        SetShaderValue(*shader, g_lighting_shader_state.position_locs[static_cast<std::size_t>(i)], position, SHADER_UNIFORM_VEC3);
-        SetShaderValue(*shader, g_lighting_shader_state.target_locs[static_cast<std::size_t>(i)], target, SHADER_UNIFORM_VEC3);
-        SetShaderValue(*shader, g_lighting_shader_state.color_locs[static_cast<std::size_t>(i)], color, SHADER_UNIFORM_VEC4);
+        const auto index = static_cast<std::size_t>(i);
+        SetShaderValue(*shader, shader_state.enabled_locs[index], &enabled, SHADER_UNIFORM_INT);
+        SetShaderValue(*shader, shader_state.type_locs[index], &type, SHADER_UNIFORM_INT);
+        SetShaderValue(*shader, shader_state.position_locs[index], position.data(), SHADER_UNIFORM_VEC3);
+        SetShaderValue(*shader, shader_state.target_locs[index], target.data(), SHADER_UNIFORM_VEC3);
+        SetShaderValue(*shader, shader_state.color_locs[index], color.data(), SHADER_UNIFORM_VEC4);
     }
 }
 
 void note_missing_asset() noexcept {
-    ++g_render_debug_state.missing_assets;
+    ++render_debug_state_storage().missing_assets;
 }
 
 void clear_texture_store() noexcept {
-    for (auto& [runtime_id, entry] : g_textures) {
+    for (auto& [runtime_id, entry] : textures()) {
         (void)runtime_id;
         if (entry.loaded && entry.owned && IsWindowReady()) {
             UnloadTexture(entry.texture);
         }
     }
-    g_textures.clear();
+    textures().clear();
 }
 
 void clear_mesh_store() noexcept {
-    for (auto& [runtime_id, entry] : g_meshes) {
+    for (auto& [runtime_id, entry] : meshes()) {
         (void)runtime_id;
         if (entry.loaded && entry.owned && IsWindowReady()) {
             UnloadMesh(entry.mesh);
         }
     }
-    g_meshes.clear();
+    meshes().clear();
 }
 
 void clear_material_store() noexcept {
-    for (auto& [runtime_id, entry] : g_materials) {
+    for (auto& [runtime_id, entry] : materials()) {
         (void)runtime_id;
         if (entry.loaded && entry.owned && IsWindowReady()) {
             UnloadMaterial(entry.material);
         }
     }
-    g_materials.clear();
+    materials().clear();
 }
 
 Texture2D* ensure_texture_resource(const int runtime_id) {
     if (runtime_id < 0) {
         return nullptr;
     }
-    auto& entry = g_textures[runtime_id];
+    auto& entry = textures()[runtime_id];
     if (!entry.loaded) {
         if (!IsWindowReady()) {
             return nullptr;
         }
-        Image image = GenImageColor(1, 1, WHITE);
+        Image image   = GenImageColor(1, 1, WHITE);
         entry.texture = LoadTextureFromImage(image);
         UnloadImage(image);
         entry.loaded = true;
-        entry.owned = true;
+        entry.owned  = true;
     }
     return &entry.texture;
 }
@@ -307,7 +359,7 @@ Mesh* ensure_mesh_resource(const int runtime_id) {
     if (runtime_id < 0) {
         return nullptr;
     }
-    auto& entry = g_meshes[runtime_id];
+    auto& entry = meshes()[runtime_id];
     if (!entry.loaded) {
         if (!IsWindowReady()) {
             return nullptr;
@@ -315,7 +367,7 @@ Mesh* ensure_mesh_resource(const int runtime_id) {
         entry.mesh = GenMeshCube(1.0F, 1.0F, 1.0F);
         UploadMesh(&entry.mesh, false);
         entry.loaded = true;
-        entry.owned = true;
+        entry.owned  = true;
     }
     return &entry.mesh;
 }
@@ -324,14 +376,14 @@ Material* ensure_material_resource(const int runtime_id) {
     if (runtime_id < 0) {
         return nullptr;
     }
-    auto& entry = g_materials[runtime_id];
+    auto& entry = materials()[runtime_id];
     if (!entry.loaded) {
         if (!IsWindowReady()) {
             return nullptr;
         }
         entry.material = LoadMaterialDefault();
-        entry.loaded = true;
-        entry.owned = true;
+        entry.loaded   = true;
+        entry.owned    = true;
     }
     if (Shader* shader = ensure_lighting_shader(); shader != nullptr) {
         entry.material.shader = *shader;
@@ -341,36 +393,37 @@ Material* ensure_material_resource(const int runtime_id) {
 }
 
 Matrix mesh_transform_matrix(const MeshSubmission& submission) noexcept {
-    const Matrix scale = MatrixScale(submission.scale.x, submission.scale.y, submission.scale.z);
-    const Matrix rotation = QuaternionToMatrix(submission.rotation);
+    const Matrix scale       = MatrixScale(submission.scale.x, submission.scale.y, submission.scale.z);
+    const Matrix rotation    = QuaternionToMatrix(submission.rotation);
     const Matrix translation = MatrixTranslate(submission.position.x, submission.position.y, submission.position.z);
     return MatrixMultiply(MatrixMultiply(scale, rotation), translation);
 }
 
 void flush_mesh_queue() noexcept {
-    if (g_mesh_queue.empty()) {
+    if (mesh_queue().empty()) {
         return;
     }
 
-    g_render_debug_state.used_default_3d_camera = true;
-    g_render_debug_state.active_point_lights = std::min(static_cast<int>(g_point_light_queue.size()), kMaxMeshLights);
-    g_render_debug_state.used_lit_mesh_shader = g_render_debug_state.active_point_lights > 0;
+    render_debug_state_storage().used_default_3d_camera = true;
+    render_debug_state_storage().active_point_lights =
+        std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
+    render_debug_state_storage().used_lit_mesh_shader = render_debug_state_storage().active_point_lights > 0;
     if (!IsWindowReady()) {
         return;
     }
 
     Camera3D camera{};
-    camera.position = Vector3{6.0F, 6.0F, 6.0F};
-    camera.target = Vector3{0.0F, 0.0F, 0.0F};
-    camera.up = Vector3{0.0F, 1.0F, 0.0F};
-    camera.fovy = 45.0F;
+    camera.position   = Vector3{.x = 6.0F, .y = 6.0F, .z = 6.0F};
+    camera.target     = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    camera.up         = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F};
+    camera.fovy       = 45.0F;
     camera.projection = CAMERA_PERSPECTIVE;
 
     apply_point_lights(camera);
 
     BeginMode3D(camera);
-    for (const auto& submission : g_mesh_queue) {
-        Mesh* mesh = ensure_mesh_resource(submission.mesh_runtime_id);
+    for (const auto& submission : mesh_queue()) {
+        Mesh* mesh         = ensure_mesh_resource(submission.mesh_runtime_id);
         Material* material = ensure_material_resource(submission.material_runtime_id);
         if (mesh == nullptr || material == nullptr) {
             continue;
@@ -381,17 +434,15 @@ void flush_mesh_queue() noexcept {
 }
 
 void flush_sprite_queue() noexcept {
-    if (g_sprite_queue.empty()) {
+    if (sprite_queue().empty()) {
         return;
     }
 
-    std::stable_sort(g_sprite_queue.begin(), g_sprite_queue.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.layer < rhs.layer;
-    });
-    g_render_debug_state.used_default_2d_camera = true;
-    g_render_debug_state.drawn_sprite_layers.clear();
-    for (const auto& submission : g_sprite_queue) {
-        g_render_debug_state.drawn_sprite_layers.push_back(submission.layer);
+    std::ranges::stable_sort(sprite_queue(), [](const auto& lhs, const auto& rhs) { return lhs.layer < rhs.layer; });
+    render_debug_state_storage().used_default_2d_camera = true;
+    render_debug_state_storage().drawn_sprite_layers.clear();
+    for (const auto& submission : sprite_queue()) {
+        render_debug_state_storage().drawn_sprite_layers.push_back(submission.layer);
     }
 
     if (!IsWindowReady()) {
@@ -399,20 +450,26 @@ void flush_sprite_queue() noexcept {
     }
 
     Camera2D camera{};
-    camera.offset = Vector2{0.0F, 0.0F};
-    camera.target = Vector2{0.0F, 0.0F};
+    camera.offset   = Vector2{.x = 0.0F, .y = 0.0F};
+    camera.target   = Vector2{.x = 0.0F, .y = 0.0F};
     camera.rotation = 0.0F;
-    camera.zoom = 1.0F;
+    camera.zoom     = 1.0F;
 
     BeginMode2D(camera);
-    for (const auto& submission : g_sprite_queue) {
+    for (const auto& submission : sprite_queue()) {
         Texture2D* texture = ensure_texture_resource(submission.runtime_id);
         if (texture == nullptr) {
             continue;
         }
-        const Rectangle src{0.0F, 0.0F, static_cast<float>(texture->width), static_cast<float>(texture->height)};
-        const Rectangle dst{submission.position.x, submission.position.y, submission.size.x, submission.size.y};
-        DrawTexturePro(*texture, src, dst, Vector2{0.0F, 0.0F}, 0.0F, submission.color);
+        const Rectangle src{.x      = 0.0F,
+                            .y      = 0.0F,
+                            .width  = static_cast<float>(texture->width),
+                            .height = static_cast<float>(texture->height)};
+        const Rectangle dst{.x      = submission.position.x,
+                            .y      = submission.position.y,
+                            .width  = submission.size.x,
+                            .height = submission.size.y};
+        DrawTexturePro(*texture, src, dst, Vector2{.x = 0.0F, .y = 0.0F}, 0.0F, submission.color);
     }
     EndMode2D();
 }
@@ -423,10 +480,10 @@ RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept {
 }
 
 void reset_render_debug_state() noexcept {
-    g_render_debug_state = {};
-    g_sprite_queue.clear();
-    g_mesh_queue.clear();
-    g_point_light_queue.clear();
+    render_debug_state_storage() = {};
+    sprite_queue().clear();
+    mesh_queue().clear();
+    point_light_queue().clear();
     clear_texture_store();
     clear_mesh_store();
     clear_material_store();
@@ -435,26 +492,26 @@ void reset_render_debug_state() noexcept {
 }
 
 const RenderDebugState& render_debug_state() noexcept {
-    return g_render_debug_state;
+    return render_debug_state_storage();
 }
 
 void begin_render_frame() noexcept {
-    g_sprite_queue.clear();
-    g_mesh_queue.clear();
-    g_point_light_queue.clear();
-    g_render_debug_state.used_default_2d_camera = false;
-    g_render_debug_state.used_default_3d_camera = false;
-    g_render_debug_state.active_point_lights = 0;
-    g_render_debug_state.used_lit_mesh_shader = false;
-    g_render_debug_state.drawn_sprite_layers.clear();
+    sprite_queue().clear();
+    mesh_queue().clear();
+    point_light_queue().clear();
+    render_debug_state_storage().used_default_2d_camera = false;
+    render_debug_state_storage().used_default_3d_camera = false;
+    render_debug_state_storage().active_point_lights    = 0;
+    render_debug_state_storage().used_lit_mesh_shader   = false;
+    render_debug_state_storage().drawn_sprite_layers.clear();
 }
 
 void end_render_frame() noexcept {
     flush_mesh_queue();
     flush_sprite_queue();
-    g_mesh_queue.clear();
-    g_sprite_queue.clear();
-    g_point_light_queue.clear();
+    mesh_queue().clear();
+    sprite_queue().clear();
+    point_light_queue().clear();
 }
 
 void submit_sprite(const Vector2 position,
@@ -471,14 +528,14 @@ void submit_sprite(const Vector2 position,
         note_missing_asset();
         return;
     }
-    g_sprite_queue.push_back(SpriteSubmission{
-        .position = position,
-        .size = size,
-        .color = color,
+    sprite_queue().push_back(SpriteSubmission{
+        .position   = position,
+        .size       = size,
+        .color      = color,
         .runtime_id = resolved.runtime_id,
-        .layer = layer,
+        .layer      = layer,
     });
-    ++g_render_debug_state.submitted_sprites;
+    ++render_debug_state_storage().submitted_sprites;
 }
 
 void advance_animated_sprite(const AssetHandle texture,
@@ -500,7 +557,7 @@ void advance_animated_sprite(const AssetHandle texture,
         return;
     }
     frame = (frame + step) % frame_count;
-    ++g_render_debug_state.advanced_animated_sprites;
+    ++render_debug_state_storage().advanced_animated_sprites;
 }
 
 void submit_mesh(const Vector3 position,
@@ -513,20 +570,20 @@ void submit_mesh(const Vector3 position,
     if (!visible) {
         return;
     }
-    const auto mesh_resolved = shared_asset_registry().resolve(AssetKind::Mesh, mesh);
+    const auto mesh_resolved     = shared_asset_registry().resolve(AssetKind::Mesh, mesh);
     const auto material_resolved = shared_asset_registry().resolve(AssetKind::Material, material);
     if (!mesh_resolved.ready() || !material_resolved.ready()) {
         note_missing_asset();
         return;
     }
-    g_mesh_queue.push_back(MeshSubmission{
-        .position = position,
-        .rotation = rotation,
-        .scale = scale,
-        .mesh_runtime_id = mesh_resolved.runtime_id,
+    mesh_queue().push_back(MeshSubmission{
+        .position            = position,
+        .rotation            = rotation,
+        .scale               = scale,
+        .mesh_runtime_id     = mesh_resolved.runtime_id,
         .material_runtime_id = material_resolved.runtime_id,
     });
-    ++g_render_debug_state.submitted_meshes;
+    ++render_debug_state_storage().submitted_meshes;
 }
 
 void submit_billboard(const Vector3 /*position*/,
@@ -542,22 +599,19 @@ void submit_billboard(const Vector3 /*position*/,
         note_missing_asset();
         return;
     }
-    ++g_render_debug_state.submitted_billboards;
+    ++render_debug_state_storage().submitted_billboards;
 }
 
-void register_point_light(const Vector3 position,
-                          const Color color,
-                          const float intensity,
-                          const float range,
-                          const bool enabled) noexcept {
+void register_point_light(
+    const Vector3 position, const Color color, const float intensity, const float range, const bool enabled) noexcept {
     if (enabled) {
-        g_point_light_queue.push_back(PointLightSubmission{
-            .position = position,
-            .color = color,
+        point_light_queue().push_back(PointLightSubmission{
+            .position  = position,
+            .color     = color,
             .intensity = intensity,
-            .range = range,
+            .range     = range,
         });
-        ++g_render_debug_state.registered_point_lights;
+        ++render_debug_state_storage().registered_point_lights;
     }
 }
 
@@ -566,7 +620,7 @@ void register_directional_light(const Vector3 /*direction*/,
                                 const float /*intensity*/,
                                 const bool enabled) noexcept {
     if (enabled) {
-        ++g_render_debug_state.registered_directional_lights;
+        ++render_debug_state_storage().registered_directional_lights;
     }
 }
 
@@ -580,13 +634,13 @@ void propagate_hierarchy(entt::registry& registry,
 
     std::function<void(entt::entity)> resolve;
     resolve = [&](entt::entity entity) -> void {
-        const bool already_active = std::find(active_entities.begin(), active_entities.end(), entity) != active_entities.end();
+        const bool already_active = std::ranges::find(active_entities, entity) != active_entities.end();
         if (!registry.valid(entity) || already_active || !has_local_world(entity)) {
             return;
         }
 
         active_entities.push_back(entity);
-        bool copied_local = false;
+        bool copied_local         = false;
         const entt::entity parent = get_parent(entity);
         if (parent != entt::null && registry.valid(parent) && has_local_world(parent)) {
             resolve(parent);
@@ -609,12 +663,13 @@ void propagate_hierarchy(entt::registry& registry,
     }
 }
 
-void destroy_entity_recursive(entt::registry& registry,
-                              entt::entity entity,
-                              const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children) {
+void destroy_entity_recursive(
+    entt::registry& registry,
+    entt::entity entity,
+    const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children) {
     static std::pmr::unsynchronized_pool_resource destroying_resource;
     static std::pmr::vector<entt::entity> destroying_entities{&destroying_resource};
-    const bool already_destroying = std::find(destroying_entities.begin(), destroying_entities.end(), entity) != destroying_entities.end();
+    const bool already_destroying = std::ranges::find(destroying_entities, entity) != destroying_entities.end();
     if (!registry.valid(entity) || already_destroying) {
         return;
     }

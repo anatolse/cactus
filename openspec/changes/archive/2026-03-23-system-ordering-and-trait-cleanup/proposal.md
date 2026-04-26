@@ -24,9 +24,9 @@ The `trait` declaration currently allows event handlers and functions in its bod
 
 ## Impact
 
-- **`ast.h`** — `TraitNode.handlers` field removed.
-- **`ast.h`** — `SystemNode` gains `std::vector<std::string> after_systems`.
-- **`ast.h`** — `ApplyEntry` gains `std::optional<std::string> alias`; `ConfigAssignment` key changes from `std::string` to support dotted form.
+- **`ast.hpp`** — `TraitNode.handlers` field removed.
+- **`ast.hpp`** — `SystemNode` gains `std::vector<std::string> after_systems`.
+- **`ast.hpp`** — `ApplyEntry` gains `std::optional<std::string> alias`; `ConfigAssignment` key changes from `std::string` to support dotted form.
 - **`parser.cpp`** — trait body restricted; system gains `after:` parsing; `apply:` gains optional `as alias`; `config:` and `spawn` args gain `TraitName.field` key parsing.
 - **`semantic_analyzer.cpp`** — trait handler validation removed; `after:` name/cycle validation added; qualified config/spawn key resolution and ambiguity detection added.
 - **`spec/cactus_dsl_spec.md`** — §3.6, §3.8, §3.8a, §3.9 updated.

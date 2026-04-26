@@ -1,6 +1,6 @@
 #pragma once
 
-#include "frontend/semantic_analyzer.h"
+#include "frontend/semantic_analyzer.hpp"
 
 #include <sstream>
 #include <string>
@@ -33,9 +33,8 @@ public:
     static std::string emit_global_entity_pool();
 
     /// Emit flat global SoA field arrays: g_TraitName_fieldName[MAX_ENTITIES] (task 7.2).
-    static std::string emit_global_field_arrays(
-        const std::unordered_map<std::string, ResolvedTrait>& traits,
-        const std::vector<std::string>& trait_names_ordered);
+    static std::string emit_global_field_arrays(const std::unordered_map<std::string, ResolvedTrait>& traits,
+                                                const std::vector<std::string>& trait_names_ordered);
 
     /// Emit a C++ zero-value literal for the given type.
     static std::string default_cpp_value(const TypeInfo& type);

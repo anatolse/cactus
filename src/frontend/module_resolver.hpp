@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/error_reporter.h"
-#include "frontend/ast.h"
+#include "common/error_reporter.hpp"
+#include "frontend/ast.hpp"
 
 #include <filesystem>
 #include <string>
@@ -12,8 +12,8 @@ namespace cactus {
 
 /// Information about a resolved module.
 struct ModuleInfo {
-    std::string qualified_name;       // e.g. "enemies.walker"
-    std::filesystem::path file_path;  // canonical path to .cactus file
+    std::string qualified_name;             // e.g. "enemies.walker"
+    std::filesystem::path file_path;        // canonical path to .cactus file
     std::vector<std::string> dependencies;  // qualified names of modules this one depends on
 };
 

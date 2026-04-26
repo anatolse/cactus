@@ -1,4 +1,4 @@
-#include "frontend/module_artifact.h"
+#include "frontend/module_artifact.hpp"
 
 #include <array>
 #include <cstring>
@@ -9,7 +9,8 @@ namespace cactus {
 
 namespace fs = std::filesystem;
 
-ModuleArtifact::ModuleArtifact(ErrorReporter& errors) : errors_(errors) {}
+ModuleArtifact::ModuleArtifact(ErrorReporter& errors)
+    : errors_(errors) {}
 
 // ── Artifact filename ───────────────────────────────────────────────────────
 
@@ -66,9 +67,7 @@ void ModuleArtifact::write_type_info(std::ostream& out, const TypeInfo& t) {
     }
 }
 
-void ModuleArtifact::write_traits(
-    std::ostream& out,
-    const std::unordered_map<std::string, ResolvedTrait>& traits) {
+void ModuleArtifact::write_traits(std::ostream& out, const std::unordered_map<std::string, ResolvedTrait>& traits) {
     write_u32(out, static_cast<uint32_t>(traits.size()));
     for (const auto& [name, trait] : traits) {
         write_str(out, trait.name);
@@ -87,9 +86,7 @@ void ModuleArtifact::write_traits(
     }
 }
 
-void ModuleArtifact::write_structs(
-    std::ostream& out,
-    const std::unordered_map<std::string, ResolvedStruct>& structs) {
+void ModuleArtifact::write_structs(std::ostream& out, const std::unordered_map<std::string, ResolvedStruct>& structs) {
     write_u32(out, static_cast<uint32_t>(structs.size()));
     for (const auto& [name, strct] : structs) {
         write_str(out, strct.name);
@@ -106,9 +103,7 @@ void ModuleArtifact::write_structs(
     }
 }
 
-void ModuleArtifact::write_enums(
-    std::ostream& out,
-    const std::unordered_map<std::string, ResolvedEnum>& enums) {
+void ModuleArtifact::write_enums(std::ostream& out, const std::unordered_map<std::string, ResolvedEnum>& enums) {
     write_u32(out, static_cast<uint32_t>(enums.size()));
     for (const auto& [name, enm] : enums) {
         write_str(out, enm.name);
@@ -119,9 +114,7 @@ void ModuleArtifact::write_enums(
     }
 }
 
-void ModuleArtifact::write_funcs(
-    std::ostream& out,
-    const std::unordered_map<std::string, ResolvedFunc>& funcs) {
+void ModuleArtifact::write_funcs(std::ostream& out, const std::unordered_map<std::string, ResolvedFunc>& funcs) {
     write_u32(out, static_cast<uint32_t>(funcs.size()));
     for (const auto& [name, func] : funcs) {
         write_str(out, func.name);
@@ -141,8 +134,7 @@ void ModuleArtifact::write_funcs(
     }
 }
 
-void ModuleArtifact::write_dep_graph(std::ostream& out,
-                                      const std::vector<SystemDependency>& graph) {
+void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph) {
     write_u32(out, static_cast<uint32_t>(graph.size()));
     for (const auto& dep : graph) {
         write_str(out, dep.system_name);
@@ -204,12 +196,12 @@ std::string ModuleArtifact::read_str(std::istream& in) {
 
 TypeInfo ModuleArtifact::read_type_info(std::istream& in) {
     TypeInfo t;
-    t.kind = static_cast<TypeKind>(read_u8(in));
-    t.name = read_str(in);
-    t.is_let = read_bool(in);
+    t.kind       = static_cast<TypeKind>(read_u8(in));
+    t.name       = read_str(in);
+    t.is_let     = read_bool(in);
     t.is_persist = read_bool(in);
-    t.is_sync = read_bool(in);
-    t.is_pub = read_bool(in);
+    t.is_sync    = read_bool(in);
+    t.is_pub     = read_bool(in);
 
     bool has_element = read_bool(in);
     if (has_element) {
@@ -235,20 +227,20 @@ std::unordered_map<std::string, ResolvedTrait> ModuleArtifact::read_traits(std::
     uint32_t count = read_u32(in);
     for (uint32_t i = 0; i < count; ++i) {
         ResolvedTrait trait;
-        trait.name = read_str(in);
-        trait.is_pub = read_bool(in);
-        trait.is_stdlib = read_bool(in);
+        trait.name           = read_str(in);
+        trait.is_pub         = read_bool(in);
+        trait.is_stdlib      = read_bool(in);
         uint32_t field_count = read_u32(in);
         trait.fields.reserve(field_count);
         for (uint32_t j = 0; j < field_count; ++j) {
             ResolvedField field;
-            field.name = read_str(in);
-            field.is_let = read_bool(in);
-            field.is_var = read_bool(in);
+            field.name       = read_str(in);
+            field.is_let     = read_bool(in);
+            field.is_var     = read_bool(in);
             field.is_persist = read_bool(in);
-            field.is_sync = read_bool(in);
-            field.is_pub = read_bool(in);
-            field.type = read_type_info(in);
+            field.is_sync    = read_bool(in);
+            field.is_pub     = read_bool(in);
+            field.type       = read_type_info(in);
             trait.fields.push_back(std::move(field));
         }
         traits[trait.name] = std::move(trait);
@@ -261,18 +253,18 @@ std::unordered_map<std::string, ResolvedStruct> ModuleArtifact::read_structs(std
     uint32_t count = read_u32(in);
     for (uint32_t i = 0; i < count; ++i) {
         ResolvedStruct strct;
-        strct.name = read_str(in);
+        strct.name           = read_str(in);
         uint32_t field_count = read_u32(in);
         strct.fields.reserve(field_count);
         for (uint32_t j = 0; j < field_count; ++j) {
             ResolvedField field;
-            field.name = read_str(in);
-            field.is_let = read_bool(in);
-            field.is_var = read_bool(in);
+            field.name       = read_str(in);
+            field.is_let     = read_bool(in);
+            field.is_var     = read_bool(in);
             field.is_persist = read_bool(in);
-            field.is_sync = read_bool(in);
-            field.is_pub = read_bool(in);
-            field.type = read_type_info(in);
+            field.is_sync    = read_bool(in);
+            field.is_pub     = read_bool(in);
+            field.type       = read_type_info(in);
             strct.fields.push_back(std::move(field));
         }
         structs[strct.name] = std::move(strct);
@@ -285,7 +277,7 @@ std::unordered_map<std::string, ResolvedEnum> ModuleArtifact::read_enums(std::is
     uint32_t count = read_u32(in);
     for (uint32_t i = 0; i < count; ++i) {
         ResolvedEnum enm;
-        enm.name = read_str(in);
+        enm.name           = read_str(in);
         uint32_t var_count = read_u32(in);
         enm.variants.reserve(var_count);
         for (uint32_t j = 0; j < var_count; ++j) {
@@ -301,10 +293,10 @@ std::unordered_map<std::string, ResolvedFunc> ModuleArtifact::read_funcs(std::is
     uint32_t count = read_u32(in);
     for (uint32_t i = 0; i < count; ++i) {
         ResolvedFunc func;
-        func.name = read_str(in);
-        func.is_pub = read_bool(in);
-        func.is_extern = read_bool(in);
-        func.is_stdlib = read_bool(in);
+        func.name            = read_str(in);
+        func.is_pub          = read_bool(in);
+        func.is_extern       = read_bool(in);
+        func.is_stdlib       = read_bool(in);
         uint32_t param_count = read_u32(in);
         func.params.reserve(param_count);
         for (uint32_t j = 0; j < param_count; ++j) {
@@ -363,9 +355,9 @@ StringPool ModuleArtifact::read_string_pool(std::istream& in) {
 // ── Save ─────────────────────────────────────────────────────────────────────
 
 bool ModuleArtifact::save(const DecoratedProgram& program,
-                           const std::string& module_name,
-                           const fs::path& build_dir,
-                           bool create_dir) {
+                          const std::string& module_name,
+                          const fs::path& build_dir,
+                          bool create_dir) {
     if (create_dir && !fs::exists(build_dir)) {
         std::error_code ec;
         fs::create_directories(build_dir, ec);
@@ -401,8 +393,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
 
 // ── Load ─────────────────────────────────────────────────────────────────────
 
-std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path,
-                                                       std::string& module_name_out) {
+std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::string& module_name_out) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         errors_.error({}, "cannot read artifact: " + path.string());
@@ -420,21 +411,21 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path,
     // Validate version
     uint8_t version = read_u8(in);
     if (version != CURRENT_VERSION) {
-        errors_.error({}, "incompatible module artifact version in '" +
-                              path.filename().string() + "'; please recompile");
+        errors_.error({},
+                      "incompatible module artifact version in '" + path.filename().string() + "'; please recompile");
         return std::nullopt;
     }
 
     module_name_out = read_str(in);
 
     DecoratedProgram program;
-    program.traits = read_traits(in);
-    program.structs = read_structs(in);
-    program.enums = read_enums(in);
-    program.funcs = read_funcs(in);
+    program.traits           = read_traits(in);
+    program.structs          = read_structs(in);
+    program.enums            = read_enums(in);
+    program.funcs            = read_funcs(in);
     program.dependency_graph = read_dep_graph(in);
-    program.string_pool = read_string_pool(in);
-    program.ast = nullptr;  // not serialized
+    program.string_pool      = read_string_pool(in);
+    program.ast              = nullptr;  // not serialized
 
     if (!in.good()) {
         errors_.error({}, "truncated artifact: " + path.string());

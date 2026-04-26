@@ -1,32 +1,46 @@
-#include "backends/cpp-manual/soa_emitter.h"
+#include "backends/cpp-manual/soa_emitter.hpp"
 
 namespace cactus {
 
 std::string SoaEmitter::type_to_cpp(const TypeInfo& type) {
     switch (type.kind) {
-        case TypeKind::Int: return "int";
-        case TypeKind::Float: return "float";
-        case TypeKind::Bool: return "bool";
-        case TypeKind::String: return "std::string";
-        case TypeKind::Vec2: return "Vector2";
-        case TypeKind::Vec3: return "Vector3";
-        case TypeKind::Quat: return "Quat";
-        case TypeKind::Color: return "Color";
-        case TypeKind::EntityId: return "uint32_t";
+        case TypeKind::Int:
+            return "int";
+        case TypeKind::Float:
+            return "float";
+        case TypeKind::Bool:
+            return "bool";
+        case TypeKind::String:
+            return "std::string";
+        case TypeKind::Vec2:
+            return "Vector2";
+        case TypeKind::Vec3:
+            return "Vector3";
+        case TypeKind::Quat:
+            return "Quat";
+        case TypeKind::Color:
+            return "Color";
+        case TypeKind::EntityId:
+            return "uint32_t";
         case TypeKind::MeshId:
         case TypeKind::TextureId:
-        case TypeKind::MaterialId: return "std::uint32_t";
-        case TypeKind::InputButton: return "std::uint8_t";
-        case TypeKind::InputAxis: return "std::uint8_t";
+        case TypeKind::MaterialId:
+            return "std::uint32_t";
+        case TypeKind::InputButton:
+        case TypeKind::InputAxis:
+            return "std::uint8_t";
         case TypeKind::Struct:
-        case TypeKind::Enum: return type.name;
+        case TypeKind::Enum:
+            return type.name;
         case TypeKind::List:
             if (type.element) {
                 return "std::vector<" + type_to_cpp(*type.element) + ">";
             }
             return "std::vector<int>";
-        case TypeKind::Void: return "void";
-        default: return "/* unknown */";
+        case TypeKind::Void:
+            return "void";
+        default:
+            return "/* unknown */";
     }
 }
 
@@ -90,8 +104,7 @@ std::string SoaEmitter::emit_trait_bits(const std::vector<std::string>& trait_na
     out << "// ── TraitBits ────────────────────────────────────────────────────────\n";
     out << "namespace TraitBits {\n";
     for (size_t i = 0; i < trait_names_ordered.size(); ++i) {
-        out << "    constexpr uint64_t " << trait_names_ordered[i]
-            << " = 1ULL << " << i << ";\n";
+        out << "    constexpr uint64_t " << trait_names_ordered[i] << " = 1ULL << " << i << ";\n";
     }
     out << "}\n";
     return out.str();
@@ -106,9 +119,8 @@ std::string SoaEmitter::emit_global_entity_pool() {
     return out.str();
 }
 
-std::string SoaEmitter::emit_global_field_arrays(
-    const std::unordered_map<std::string, ResolvedTrait>& traits,
-    const std::vector<std::string>& trait_names_ordered) {
+std::string SoaEmitter::emit_global_field_arrays(const std::unordered_map<std::string, ResolvedTrait>& traits,
+                                                 const std::vector<std::string>& trait_names_ordered) {
     std::ostringstream out;
     out << "// ── Field Arrays (SoA) ───────────────────────────────────────────────\n";
     for (const auto& name : trait_names_ordered) {
@@ -117,8 +129,7 @@ std::string SoaEmitter::emit_global_field_arrays(
             continue;
         }
         for (const auto& field : it->second.fields) {
-            out << "static " << type_to_cpp(field.type) << " g_" << name << "_"
-                << field.name << "[MAX_ENTITIES];\n";
+            out << "static " << type_to_cpp(field.type) << " g_" << name << "_" << field.name << "[MAX_ENTITIES];\n";
         }
     }
     return out.str();
@@ -126,21 +137,32 @@ std::string SoaEmitter::emit_global_field_arrays(
 
 std::string SoaEmitter::default_cpp_value(const TypeInfo& type) {
     switch (type.kind) {
-        case TypeKind::Int: return "0";
-        case TypeKind::Float: return "0.0f";
-        case TypeKind::Bool: return "false";
-        case TypeKind::String: return "\"\"";
-        case TypeKind::Vec2: return "{0.0f, 0.0f}";
-        case TypeKind::Vec3: return "{0.0f, 0.0f, 0.0f}";
-        case TypeKind::Quat: return "{0.0f, 0.0f, 0.0f, 1.0f}";
-        case TypeKind::Color: return "{0, 0, 0, 255}";
-        case TypeKind::EntityId: return "0u";
+        case TypeKind::Int:
+            return "0";
+        case TypeKind::Float:
+            return "0.0f";
+        case TypeKind::Bool:
+            return "false";
+        case TypeKind::String:
+            return "\"\"";
+        case TypeKind::Vec2:
+            return "{0.0f, 0.0f}";
+        case TypeKind::Vec3:
+            return "{0.0f, 0.0f, 0.0f}";
+        case TypeKind::Quat:
+            return "{0.0f, 0.0f, 0.0f, 1.0f}";
+        case TypeKind::Color:
+            return "{0, 0, 0, 255}";
+        case TypeKind::EntityId:
         case TypeKind::MeshId:
         case TypeKind::TextureId:
-        case TypeKind::MaterialId: return "0u";
-        case TypeKind::InputButton: return "0";
-        case TypeKind::InputAxis: return "0";
-        default: return "{}";
+        case TypeKind::MaterialId:
+            return "0u";
+        case TypeKind::InputButton:
+        case TypeKind::InputAxis:
+            return "0";
+        default:
+            return "{}";
     }
 }
 

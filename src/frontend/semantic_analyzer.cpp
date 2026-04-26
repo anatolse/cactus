@@ -1,4 +1,4 @@
-#include "frontend/semantic_analyzer.h"
+#include "frontend/semantic_analyzer.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -10,7 +10,7 @@ namespace cactus {
 namespace {
 
 bool module_name_is_stdlib(const std::string& module_name) {
-    return module_name == "std" || module_name.rfind("std.", 0) == 0;
+    return module_name == "std" || module_name.starts_with("std.");
 }
 
 bool program_is_stdlib_module(const ProgramNode& program) {
@@ -110,12 +110,18 @@ TypeKind type_kind_from_name(const std::string& name) {
 /// Map AssetKind → TypeKind for the resulting opaque ID
 TypeKind asset_kind_to_type_kind(AssetKind ak) {
     switch (ak) {
-        case AssetKind::Mesh:     return TypeKind::MeshId;
-        case AssetKind::Texture:  return TypeKind::TextureId;
-        case AssetKind::Sound:    return TypeKind::SoundId;
-        case AssetKind::Music:    return TypeKind::MusicId;
-        case AssetKind::Font:     return TypeKind::FontId;
-        case AssetKind::Material: return TypeKind::MaterialId;
+        case AssetKind::Mesh:
+            return TypeKind::MeshId;
+        case AssetKind::Texture:
+            return TypeKind::TextureId;
+        case AssetKind::Sound:
+            return TypeKind::SoundId;
+        case AssetKind::Music:
+            return TypeKind::MusicId;
+        case AssetKind::Font:
+            return TypeKind::FontId;
+        case AssetKind::Material:
+            return TypeKind::MaterialId;
     }
     return TypeKind::Unknown;
 }
@@ -142,9 +148,7 @@ bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignme
 
 template <typename ExprContainer>
 bool any_expr_contains_self(const ExprContainer& expressions) {
-    return std::ranges::any_of(expressions, [](const auto& expr) {
-        return expr_contains_self(*expr);
-    });
+    return std::ranges::any_of(expressions, [](const auto& expr) { return expr_contains_self(*expr); });
 }
 
 bool expr_contains_self(const ExprNode& expr) {
@@ -164,13 +168,11 @@ bool expr_contains_self(const ExprNode& expr) {
             } else if constexpr (std::is_same_v<E, LambdaExpr>) {
                 return expr_contains_self(*e.body);
             } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                return expr_contains_self(*e.source) ||
-                       std::ranges::any_of(e.operations, [](const auto& op) {
+                return expr_contains_self(*e.source) || std::ranges::any_of(e.operations, [](const auto& op) {
                            return any_expr_contains_self(op.args);
                        });
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                return expr_contains_self(*e.subject) ||
-                       std::ranges::any_of(e.arms, [](const auto& arm) {
+                return expr_contains_self(*e.subject) || std::ranges::any_of(e.arms, [](const auto& arm) {
                            return expr_contains_self(*arm.pattern) || expr_contains_self(*arm.body);
                        });
             } else if constexpr (std::is_same_v<E, IfExpr>) {
@@ -179,9 +181,8 @@ bool expr_contains_self(const ExprNode& expr) {
             } else if constexpr (std::is_same_v<E, ListExpr>) {
                 return any_expr_contains_self(e.elements);
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                return std::ranges::any_of(e.overrides, [](const auto& trait) {
-                    return field_assignments_contain_self(trait.assignments);
-                });
+                return std::ranges::any_of(
+                    e.overrides, [](const auto& trait) { return field_assignments_contain_self(trait.assignments); });
             } else {
                 return false;
             }
@@ -190,16 +191,15 @@ bool expr_contains_self(const ExprNode& expr) {
 }
 
 bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments) {
-    return std::ranges::any_of(assignments, [](const auto& field) {
-        return expr_contains_self(*field.value);
-    });
+    return std::ranges::any_of(assignments, [](const auto& field) { return expr_contains_self(*field.value); });
 }
 
 }  // namespace
 
 // ── ModuleImports::add ──────────────────────────────────────────────────────
 
-void ModuleImports::add(const std::string& qualifier, ImportedSymbols pub_syms,
+void ModuleImports::add(const std::string& qualifier,
+                        ImportedSymbols pub_syms,
                         std::unordered_set<std::string> non_pub) {
     // Build global uniqueness providers index
     for (auto& [name, _] : pub_syms.traits) {
@@ -229,13 +229,13 @@ void ModuleImports::add(const std::string& qualifier, ImportedSymbols pub_syms,
 
 // ── SemanticAnalyzer ────────────────────────────────────────────────────────
 
-SemanticAnalyzer::SemanticAnalyzer(ErrorReporter& errors) : errors_(errors) {}
+SemanticAnalyzer::SemanticAnalyzer(ErrorReporter& errors)
+    : errors_(errors) {}
 
-DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
-                                            const ModuleImports& imports) {
-    imports_ = imports;
+DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImports& imports) {
+    imports_                  = imports;
     current_module_is_stdlib_ = program_is_stdlib_module(program);
-    result_.ast = &program;
+    result_.ast               = &program;
 
     // Phase 1: Collect all type declarations
     collect_types(program);
@@ -269,7 +269,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program,
 
 // ── Phase 1: Collect Types ──────────────────────────────────────────────────
 
-void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     // Seed event_names_ from imported modules (e.g. std.core lifecycle events)
     for (const auto& [qualifier, syms] : imports_.modules) {
         for (const auto& ev_name : syms.events) {
@@ -279,7 +279,7 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
 
     for (auto& decl : program.declarations) {
         std::visit(
-            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
+            [this](auto& node) {  // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, StructNode>) {
                     if (struct_names_.contains(node.name)) {
@@ -309,13 +309,13 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                     rs.name = node.name;
                     for (auto& f : node.fields) {
                         ResolvedField rf;
-                        rf.name = f.name;
-                        rf.type = resolve_type_ref(f.type);
-                        rf.is_let = true;
-                        rf.is_var = false;
-                        rf.is_persist = f.modifiers.is_persist;
-                        rf.is_sync = f.modifiers.is_sync;
-                        rf.is_pub = f.modifiers.is_pub;
+                        rf.name        = f.name;
+                        rf.type        = resolve_type_ref(f.type);
+                        rf.is_let      = true;
+                        rf.is_var      = false;
+                        rf.is_persist  = f.modifiers.is_persist;
+                        rf.is_sync     = f.modifiers.is_sync;
+                        rf.is_pub      = f.modifiers.is_pub;
                         rf.has_default = f.default_value.has_value();
                         rs.fields.push_back(std::move(rf));
                     }
@@ -355,13 +355,11 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) { // NOLINT(readabili
                     }
                 } else if constexpr (std::is_same_v<T, AssetDeclNode>) {
                     // Register asset name → opaque ID TypeKind (task 6.1)
-                    TypeKind tk = asset_kind_to_type_kind(node.asset_kind);
+                    TypeKind tk                  = asset_kind_to_type_kind(node.asset_kind);
                     asset_decl_types_[node.name] = tk;
                 } else if constexpr (std::is_same_v<T, InputDeclNode>) {
                     // Register input name → InputButton or InputAxis (task 6.4)
-                    TypeKind tk = (node.input_kind == InputKind::Button)
-                                       ? TypeKind::InputButton
-                                       : TypeKind::InputAxis;
+                    TypeKind tk = (node.input_kind == InputKind::Button) ? TypeKind::InputButton : TypeKind::InputAxis;
                     input_decl_types_[node.name] = tk;
                 }
             },
@@ -388,18 +386,18 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                     result_.structs[node.name] = std::move(rs);
                 } else if constexpr (std::is_same_v<T, TraitNode>) {
                     ResolvedTrait rt;
-                    rt.name = node.name;
-                    rt.is_pub = node.is_pub;
+                    rt.name      = node.name;
+                    rt.is_pub    = node.is_pub;
                     rt.is_stdlib = node.is_stdlib;
                     for (auto& f : node.fields) {
                         ResolvedField rf;
-                        rf.name = f.name;
-                        rf.type = resolve_type_ref(f.type);
-                        rf.is_let = f.modifiers.is_let;
-                        rf.is_var = f.modifiers.is_var;
-                        rf.is_persist = f.modifiers.is_persist;
-                        rf.is_sync = f.modifiers.is_sync;
-                        rf.is_pub = f.modifiers.is_pub;
+                        rf.name        = f.name;
+                        rf.type        = resolve_type_ref(f.type);
+                        rf.is_let      = f.modifiers.is_let;
+                        rf.is_var      = f.modifiers.is_var;
+                        rf.is_persist  = f.modifiers.is_persist;
+                        rf.is_sync     = f.modifiers.is_sync;
+                        rf.is_pub      = f.modifiers.is_pub;
                         rf.has_default = f.default_value.has_value();
                         rt.fields.push_back(std::move(rf));
                     }
@@ -407,8 +405,8 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
                     // Task 4.4: Resolve func parameter types and return type
                     ResolvedFunc rf;
-                    rf.name = node.name;
-                    rf.is_pub = node.is_pub;
+                    rf.name      = node.name;
+                    rf.is_pub    = node.is_pub;
                     rf.is_extern = node.is_extern;
                     rf.is_stdlib = node.is_stdlib;
                     for (auto& p : node.params) {
@@ -481,8 +479,8 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
 // ── Task 4.2: Qualified type resolution ────────────────────────────────────
 
 TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
-                                                   const std::string& sym_name,
-                                                   const SourceLocation& loc) {
+                                                  const std::string& sym_name,
+                                                  const SourceLocation& loc) {
     auto it = imports_.modules.find(qualifier);
     if (it == imports_.modules.end()) {
         errors_.error(loc, "unknown module qualifier '" + qualifier + "'");
@@ -508,10 +506,10 @@ TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
 
     // ── Task 4.6: Non-pub helpful error ─────────────────────────────────────
     auto np_it = imports_.non_pub_trait_names.find(qualifier);
-    if (np_it != imports_.non_pub_trait_names.end() &&
-        np_it->second.contains(sym_name)) {
-        errors_.error(loc, "trait '" + sym_name + "' is not public in module '" + qualifier +
-                               "'; did you mean to mark it as 'pub'?");
+    if (np_it != imports_.non_pub_trait_names.end() && np_it->second.contains(sym_name)) {
+        errors_.error(
+            loc,
+            "trait '" + sym_name + "' is not public in module '" + qualifier + "'; did you mean to mark it as 'pub'?");
         return make_unknown_type();
     }
 
@@ -521,13 +519,12 @@ TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
 
 // ── Task 4.3: Unqualified import lookup ────────────────────────────────────
 
-TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name,
-                                                   const SourceLocation& loc) {
+TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name, const SourceLocation& loc) {
     auto struct_it = imports_.struct_providers.find(name);
     auto enum_it   = imports_.enum_providers.find(name);
 
     size_t struct_count = (struct_it != imports_.struct_providers.end()) ? struct_it->second.size() : 0;
-    size_t enum_count   = (enum_it   != imports_.enum_providers.end())   ? enum_it->second.size()   : 0;
+    size_t enum_count   = (enum_it != imports_.enum_providers.end()) ? enum_it->second.size() : 0;
     size_t total        = struct_count + enum_count;
 
     if (total == 0) {
@@ -539,7 +536,7 @@ TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name,
         // Build a helpful ambiguity message (task 4.3 requirement)
         std::ostringstream msg;
         msg << "ambiguous reference '" << name << "': defined in";
-        bool first = true;
+        bool first  = true;
         auto append = [&](const std::vector<std::string>& quals) {
             for (const auto& q : quals) {
                 msg << (first ? " module '" : " and module '") << q << "'";
@@ -571,18 +568,16 @@ TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name,
 }
 
 bool SemanticAnalyzer::is_known_type(const std::string& name) const {
-    return (builtin_types().contains(name)) ||
-           (struct_names_.contains(name)) ||
-           (enum_names_.contains(name));
+    return (builtin_types().contains(name)) || (struct_names_.contains(name)) || (enum_names_.contains(name));
 }
 
 // ── Phase 3a: Const String Check ────────────────────────────────────────────
 
-void SemanticAnalyzer::check_const_strings(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::check_const_strings(ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         std::visit(
-            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
+            [this](auto& node) {  // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, ConstBlockNode>) {
                     for (auto& a : node.assignments) {
@@ -734,7 +729,7 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
 
 // ── Phase 3c: No Recursion ──────────────────────────────────────────────────
 
-void SemanticAnalyzer::check_no_recursion(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& [func, callees] : call_graph_) {
         std::unordered_set<std::string> visited;
         std::vector<std::string> stack = {func};
@@ -754,7 +749,8 @@ void SemanticAnalyzer::check_no_recursion(ProgramNode& program) { // NOLINT(read
                     for (auto& decl : program.declarations) {
                         if (auto* fn = std::get_if<FuncNode>(&decl)) {
                             if (fn->name == func) {
-                                errors_.error(fn->location, "func '" + func + "' is recursive (recursion is not allowed)");
+                                errors_.error(fn->location,
+                                              "func '" + func + "' is recursive (recursion is not allowed)");
                                 break;
                             }
                         }
@@ -788,7 +784,8 @@ void SemanticAnalyzer::check_persist_sync(ProgramNode& program) {
                 if (field.modifiers.is_let || field.modifiers.is_var || field.modifiers.is_persist ||
                     field.modifiers.is_sync || field.modifiers.is_pub) {
                     errors_.error(field.location,
-                                  "event fields use bare `name: type` syntax; trait field modifiers are not allowed in event declarations");
+                                  "event fields use bare `name: type` syntax; trait field modifiers are not allowed in "
+                                  "event declarations");
                 }
             }
         }
@@ -806,46 +803,47 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
                 }
 
                 auto expected = resolve_type_ref(field.type);
-                auto actual = infer_expr_type(**field.default_value, {}, empty_locals, nullptr);
+                auto actual   = infer_expr_type(**field.default_value, {}, empty_locals, nullptr);
                 if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                     actual.kind != expected.kind) {
-                    errors_.error(field.location,
-                                  "default value type '" + actual.name + "' does not match field type '" +
-                                      expected.name + "'");
+                    errors_.error(
+                        field.location,
+                        "default value type '" + actual.name + "' does not match field type '" + expected.name + "'");
                 }
 
-                bool constant_ok = true;
+                bool constant_ok                                 = true;
                 std::function<void(const ExprNode&)> check_const = [&](const ExprNode& expr) {
-                    std::visit([&](const auto& e) {
-                        using E = std::decay_t<decltype(e)>;
-                        if constexpr (std::is_same_v<E, LiteralExpr>) {
-                        } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                            check_const(*e.operand);
-                        } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                            check_const(*e.left);
-                            check_const(*e.right);
-                        } else if constexpr (std::is_same_v<E, CallExpr>) {
-                            bool allowed_ctor = false;
-                            if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                                allowed_ctor = ident->name == "vec2" ||
-                                               ident->name == "vec3" ||
-                                               ident->name == "quat";
-                            }
-                            if (allowed_ctor) {
-                                for (const auto& arg : e.args) {
-                                    check_const(*arg);
+                    std::visit(
+                        [&](const auto& e) {
+                            using E = std::decay_t<decltype(e)>;
+                            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                                check_const(*e.operand);
+                            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                                check_const(*e.left);
+                                check_const(*e.right);
+                            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                                bool allowed_ctor = false;
+                                if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                                    allowed_ctor =
+                                        ident->name == "vec2" || ident->name == "vec3" || ident->name == "quat";
+                                }
+                                if (allowed_ctor) {
+                                    for (const auto& arg : e.args) {
+                                        check_const(*arg);
+                                    }
+                                } else {
+                                    constant_ok = false;
+                                }
+                            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                                for (const auto& el : e.elements) {
+                                    check_const(*el);
                                 }
                             } else {
                                 constant_ok = false;
                             }
-                        } else if constexpr (std::is_same_v<E, ListExpr>) {
-                            for (const auto& el : e.elements) {
-                                check_const(*el);
-                            }
-                        } else {
-                            constant_ok = false;
-                        }
-                    }, expr.expr);
+                        },
+                        expr.expr);
                 };
                 check_const(**field.default_value);
                 if (!constant_ok) {
@@ -858,19 +856,16 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
 
 // ── Phase 3e: System Filter Validation (tasks 4.2, 4.4, 4.5, 4.6) ──────────
 
-bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
-                                              std::string& out_simple_name) {
+bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::string& out_simple_name) {
     const auto& qname = entry.qualified_name;
-    auto dot = qname.find('.');
+    auto dot          = qname.find('.');
 
     if (dot != std::string::npos) {
         // ── Qualified: "module.Trait" or "alias.Trait" ──────────────────────
-        auto last_dot = qname.rfind('.');
-        auto qualifier  = qname.substr(0, last_dot);
-        auto trait_name = qname.substr(last_dot + 1);
-        auto simple_trait_name = (last_dot != std::string::npos)
-            ? qname.substr(last_dot + 1)
-            : trait_name;
+        auto last_dot          = qname.rfind('.');
+        auto qualifier         = qname.substr(0, last_dot);
+        auto trait_name        = qname.substr(last_dot + 1);
+        auto simple_trait_name = (last_dot != std::string::npos) ? qname.substr(last_dot + 1) : trait_name;
 
         // Allow qualified references to resolve to a local trait when the simple
         // name exists in the current module. This keeps codegen-oriented tests
@@ -883,23 +878,21 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
 
         auto it = imports_.modules.find(qualifier);
         if (it == imports_.modules.end()) {
-            errors_.error(entry.location,
-                          "unknown module qualifier '" + qualifier + "' in filter");
+            errors_.error(entry.location, "unknown module qualifier '" + qualifier + "' in filter");
             return false;
         }
         if (!it->second.traits.contains(trait_name)) {
             // Trait not found in pub traits — check for non-pub helpful error
             // ── Task 4.6: Non-pub helpful error ──────────────────────────────
             auto np_it = imports_.non_pub_trait_names.find(qualifier);
-            if (np_it != imports_.non_pub_trait_names.end() &&
-                (np_it->second.contains(trait_name))) {
+            if (np_it != imports_.non_pub_trait_names.end() && (np_it->second.contains(trait_name))) {
                 errors_.error(entry.location,
-                              "trait '" + trait_name + "' is not public in module '" +
-                                  qualifier + "'; did you mean to mark it as 'pub'?");
+                              "trait '" + trait_name + "' is not public in module '" + qualifier +
+                                  "'; did you mean to mark it as 'pub'?");
             } else {
-                errors_.error(entry.location,
-                              "system filter references unknown trait '" + trait_name +
-                                  "' in module '" + qualifier + "'");
+                errors_.error(
+                    entry.location,
+                    "system filter references unknown trait '" + trait_name + "' in module '" + qualifier + "'");
             }
             return false;
         }
@@ -919,8 +912,8 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
         if (it != imports_.trait_providers.end()) {
             if (it->second.size() > 1) {
                 std::ostringstream msg;
-                msg << "ambiguous trait '" << qname << "' in filter: found in module '"
-                    << it->second[0] << "' and module '" << it->second[1] << "'";
+                msg << "ambiguous trait '" << qname << "' in filter: found in module '" << it->second[0]
+                    << "' and module '" << it->second[1] << "'";
                 if (it->second.size() > 2) {
                     msg << " (and others)";
                 }
@@ -937,7 +930,8 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry,
     return false;
 }
 
-void SemanticAnalyzer::validateOrderByClause(const SystemNode& system) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validateOrderByClause(
+    const SystemNode& system) {  // NOLINT(readability-function-cognitive-complexity)
     if (system.order_by.empty()) {
         return;
     }
@@ -950,8 +944,8 @@ void SemanticAnalyzer::validateOrderByClause(const SystemNode& system) { // NOLI
 
     std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
     for (const auto& entry : system.filter.entries) {
-        auto dot = entry.qualified_name.rfind('.');
-        auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+        auto dot          = entry.qualified_name.rfind('.');
+        auto simple       = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
         const auto* trait = find_resolved_trait(simple);
         if (trait != nullptr) {
             filter_bindings[simple] = trait;
@@ -970,21 +964,20 @@ void SemanticAnalyzer::validateOrderByClause(const SystemNode& system) { // NOLI
     for (const auto& key : system.order_by) {
         auto binding_it = filter_bindings.find(key.alias);
         if (binding_it == filter_bindings.end() || binding_it->second == nullptr) {
-            errors_.error(key.location,
-                          "order by alias '" + key.alias + "' is not declared in system filter");
+            errors_.error(key.location, "order by alias '" + key.alias + "' is not declared in system filter");
             continue;
         }
 
         TypeInfo current;
-        bool resolved_any = false;
+        bool resolved_any         = false;
         const auto* current_trait = binding_it->second;
-        size_t start = 0;
+        size_t start              = 0;
         while (start < key.field.size()) {
-            size_t dot = key.field.find('.', start);
+            size_t dot         = key.field.find('.', start);
             std::string member = key.field.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
 
             if (!resolved_any) {
-                current = find_field_type_in(current_trait->fields, member);
+                current      = find_field_type_in(current_trait->fields, member);
                 resolved_any = true;
             } else if (current.kind == TypeKind::Vec2 || current.kind == TypeKind::Vec3) {
                 if (member == "x" || member == "y" || (current.kind == TypeKind::Vec3 && member == "z")) {
@@ -1027,17 +1020,18 @@ void SemanticAnalyzer::validateOrderByClause(const ExternSystemNode& system) {
     }
 
     SystemNode proxy;
-    proxy.name = system.name;
-    proxy.filter = system.filter;
-    proxy.exclude = system.exclude;
-    proxy.order_by = system.order_by;
+    proxy.name          = system.name;
+    proxy.filter        = system.filter;
+    proxy.exclude       = system.exclude;
+    proxy.order_by      = system.order_by;
     proxy.after_systems = system.after_systems;
-    proxy.target = system.target;
-    proxy.location = system.location;
+    proxy.target        = system.target;
+    proxy.location      = system.location;
     validateOrderByClause(proxy);
 }
 
-void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_system_filters(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             if (!sys->filter.entries.empty()) {
@@ -1063,8 +1057,7 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
                     }
                     if (!found) {
                         errors_.error(sys->filter.location,
-                                      "system '" + sys->name + "' filters on unknown trait '" +
-                                          trait_name + "'");
+                                      "system '" + sys->name + "' filters on unknown trait '" + trait_name + "'");
                     }
                 }
             }
@@ -1083,8 +1076,9 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
             bool has_filter = !sys->filter.entries.empty() || !sys->filter.trait_names.empty();
             if (!has_filter) {
-                errors_.error(sys->location,
-                              "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
+                errors_.error(
+                    sys->location,
+                    "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
             }
 
             if (!sys->filter.entries.empty()) {
@@ -1105,9 +1099,9 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
                         }
                     }
                     if (!found) {
-                        errors_.error(sys->filter.location,
-                                      "extern system '" + sys->name + "' filters on unknown trait '" +
-                                          trait_name + "'");
+                        errors_.error(
+                            sys->filter.location,
+                            "extern system '" + sys->name + "' filters on unknown trait '" + trait_name + "'");
                     }
                 }
             }
@@ -1119,16 +1113,15 @@ void SemanticAnalyzer::validate_system_filters(ProgramNode& program) { // NOLINT
 
 // ── Phase 3f: Event Usage Validation ────────────────────────────────────────
 
-void SemanticAnalyzer::validate_event_usage(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_event_usage(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             // Build set of filter-bound names (trait names and their aliases) for alias conflict check
             std::unordered_set<std::string> filter_bound;
             for (const auto& entry : sys->filter.entries) {
-                auto dot = entry.qualified_name.rfind('.');
-                auto simple = (dot != std::string::npos)
-                    ? entry.qualified_name.substr(dot + 1)
-                    : entry.qualified_name;
+                auto dot    = entry.qualified_name.rfind('.');
+                auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
                 filter_bound.insert(simple);
                 if (entry.alias.has_value()) {
                     filter_bound.insert(*entry.alias);
@@ -1142,9 +1135,8 @@ void SemanticAnalyzer::validate_event_usage(ProgramNode& program) { // NOLINT(re
                 std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
                 for (const auto& entry : sys->filter.entries) {
                     auto dot = entry.qualified_name.rfind('.');
-                    auto simple = (dot != std::string::npos)
-                        ? entry.qualified_name.substr(dot + 1)
-                        : entry.qualified_name;
+                    auto simple =
+                        (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
                     const auto* trait = find_resolved_trait(simple);
                     if (trait != nullptr) {
                         filter_bindings[simple] = trait;
@@ -1163,15 +1155,13 @@ void SemanticAnalyzer::validate_event_usage(ProgramNode& program) { // NOLINT(re
                 // Validate event is declared (must be in event_names_ — either local or imported from std.core)
                 if (!event_names_.contains(handler.event_name)) {
                     errors_.error(handler.location,
-                                  "system '" + sys->name + "' handles unknown event '" +
-                                      handler.event_name + "'");
+                                  "system '" + sys->name + "' handles unknown event '" + handler.event_name + "'");
                 }
                 // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
                 if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
                     errors_.error(handler.location,
-                                  "handler alias '" + *handler.alias +
-                                      "' conflicts with filter alias '" + *handler.alias +
-                                      "' already in scope");
+                                  "handler alias '" + *handler.alias + "' conflicts with filter alias '" +
+                                      *handler.alias + "' already in scope");
                 }
 
                 const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
@@ -1217,8 +1207,7 @@ void SemanticAnalyzer::validate_event_stmts(
         for (const auto& field : emit.payload) {
             if (event != nullptr && !event_fields.contains(field.name)) {
                 errors_.error(field.location,
-                              "unknown event field '" + field.name + "' for event '" +
-                                  emit.event_name + "'");
+                              "unknown event field '" + field.name + "' for event '" + emit.event_name + "'");
             }
         }
 
@@ -1228,8 +1217,7 @@ void SemanticAnalyzer::validate_event_stmts(
 
         auto target_type = infer_expr_type(**emit.target, filter_bindings, locals, handler_event);
         if (target_type.kind != TypeKind::EntityId && target_type.kind != TypeKind::Unknown) {
-            errors_.error(emit.location,
-                          "emit target must be of type entity_id, got " + target_type.name);
+            errors_.error(emit.location, "emit target must be of type entity_id, got " + target_type.name);
         }
     };
 
@@ -1257,12 +1245,11 @@ void SemanticAnalyzer::validate_event_stmts(
             supplied.insert(arg.name);
             auto it = fields_by_name.find(arg.name);
             if (it == fields_by_name.end()) {
-                errors_.error(arg.location,
-                              "unknown field '" + arg.name + "' in `add " + add.trait_name + "`");
+                errors_.error(arg.location, "unknown field '" + arg.name + "' in `add " + add.trait_name + "`");
                 continue;
             }
 
-            auto actual = infer_expr_type(*arg.value, filter_bindings, locals, handler_event);
+            auto actual          = infer_expr_type(*arg.value, filter_bindings, locals, handler_event);
             const auto& expected = it->second->type;
             if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                 actual.kind != expected.kind) {
@@ -1335,8 +1322,8 @@ void SemanticAnalyzer::validate_event_stmts(
             continue;
         }
         if (const auto* trait_match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
-            validate_trait_match_stmt(*trait_match, filter_bindings, locals, handler_event, system_name,
-                                      in_system_handler);
+            validate_trait_match_stmt(
+                *trait_match, filter_bindings, locals, handler_event, system_name, in_system_handler);
             continue;
         }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
@@ -1355,14 +1342,14 @@ void SemanticAnalyzer::validate_trait_match_stmt(
     const std::string& system_name,
     bool in_system_handler) {
     if (!in_system_handler) {
-        errors_.error(stmt.location,
-                      "statement-level `match entity_id` only allowed inside system event handlers");
+        errors_.error(stmt.location, "statement-level `match entity_id` only allowed inside system event handlers");
     }
 
     auto subject_type = infer_expr_type(*stmt.subject, filter_bindings, local_bindings, handler_event);
     if (subject_type.kind != TypeKind::EntityId && subject_type.kind != TypeKind::Unknown) {
         errors_.error(stmt.location,
-                      "statement-level `match` subject must be of type `entity_id`; use expression-level match for value dispatch");
+                      "statement-level `match` subject must be of type `entity_id`; use expression-level match for "
+                      "value dispatch");
     }
 
     std::unordered_set<std::string> in_scope_names;
@@ -1382,17 +1369,16 @@ void SemanticAnalyzer::validate_trait_match_stmt(
 
         const bool IS_MARKER = trait->fields.empty();
         if (IS_MARKER && arm.alias.has_value()) {
-            errors_.error(arm.location,
-                          "marker trait '" + arm.trait_name + "' has no fields; alias 'as " +
-                              *arm.alias + "' is not allowed");
+            errors_.error(
+                arm.location,
+                "marker trait '" + arm.trait_name + "' has no fields; alias 'as " + *arm.alias + "' is not allowed");
         }
 
         auto arm_locals = local_bindings;
         if (arm.alias.has_value()) {
             if (in_scope_names.contains(*arm.alias)) {
                 errors_.error(arm.location,
-                              "match arm alias '" + *arm.alias + "' conflicts with filter alias '" +
-                                  *arm.alias + "'");
+                              "match arm alias '" + *arm.alias + "' conflicts with filter alias '" + *arm.alias + "'");
             } else {
                 arm_locals[*arm.alias] = TypeInfo{.kind = TypeKind::Struct, .name = trait->name};
             }
@@ -1408,14 +1394,13 @@ void SemanticAnalyzer::validate_trait_match_stmt(
 
 // ── Phase 4: Dependency Graph ───────────────────────────────────────────────
 
-void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::build_dependency_graph(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     auto add_dep_from_filter = [this](const auto& sys, SystemDependency& dep) {
         if (!sys.filter.entries.empty()) {
             for (auto& entry : sys.filter.entries) {
-                auto dot = entry.qualified_name.find('.');
-                auto simple = (dot != std::string::npos)
-                                  ? entry.qualified_name.substr(dot + 1)
-                                  : entry.qualified_name;
+                auto dot    = entry.qualified_name.find('.');
+                auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
                 dep.reads.insert(simple);
             }
         } else {
@@ -1447,8 +1432,7 @@ void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) { // NOLINT(
     }
 }
 
-void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts,
-                                            SystemDependency& dep) {
+void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep) {
     for (const auto& stmt : stmts) {
         std::visit(
             [this, &dep](auto& s) {
@@ -1522,18 +1506,22 @@ const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& n
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TypeInfo SemanticAnalyzer::infer_expr_type(
-    const ExprNode& expr,
-    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
-    const std::unordered_map<std::string, TypeInfo>& local_bindings,
-    const ResolvedStruct* handler_event) const {
+TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
+                                           const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                           const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                           const ResolvedStruct* handler_event) const {
     if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
         switch (literal->kind) {
-            case LiteralExpr::Kind::Int: return make_int_type();
-            case LiteralExpr::Kind::Float: return make_float_type();
-            case LiteralExpr::Kind::String: return make_string_type();
-            case LiteralExpr::Kind::HexColor: return make_color_type();
-            case LiteralExpr::Kind::Bool: return make_bool_type();
+            case LiteralExpr::Kind::Int:
+                return make_int_type();
+            case LiteralExpr::Kind::Float:
+                return make_float_type();
+            case LiteralExpr::Kind::String:
+                return make_string_type();
+            case LiteralExpr::Kind::HexColor:
+                return make_color_type();
+            case LiteralExpr::Kind::Bool:
+                return make_bool_type();
         }
     }
 
@@ -1543,18 +1531,24 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
         }
         if (auto asset_it = asset_decl_types_.find(ident->name); asset_it != asset_decl_types_.end()) {
             switch (asset_it->second) {
-                case TypeKind::MeshId: return make_mesh_id_type();
-                case TypeKind::TextureId: return make_texture_id_type();
-                case TypeKind::SoundId: return make_sound_id_type();
-                case TypeKind::MusicId: return make_music_id_type();
-                case TypeKind::FontId: return make_font_id_type();
-                case TypeKind::MaterialId: return make_material_id_type();
-                default: break;
+                case TypeKind::MeshId:
+                    return make_mesh_id_type();
+                case TypeKind::TextureId:
+                    return make_texture_id_type();
+                case TypeKind::SoundId:
+                    return make_sound_id_type();
+                case TypeKind::MusicId:
+                    return make_music_id_type();
+                case TypeKind::FontId:
+                    return make_font_id_type();
+                case TypeKind::MaterialId:
+                    return make_material_id_type();
+                default:
+                    break;
             }
         }
         if (auto input_it = input_decl_types_.find(ident->name); input_it != input_decl_types_.end()) {
-            return input_it->second == TypeKind::InputAxis ? make_input_axis_type()
-                                                           : make_input_button_type();
+            return input_it->second == TypeKind::InputAxis ? make_input_axis_type() : make_input_button_type();
         }
         return make_unknown_type();
     }
@@ -1581,12 +1575,10 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
         }
         if (auto local_it = local_bindings.find(owner->name);
             local_it != local_bindings.end() && local_it->second.kind == TypeKind::Struct) {
-            if (auto struct_it = result_.structs.find(local_it->second.name);
-                struct_it != result_.structs.end()) {
+            if (auto struct_it = result_.structs.find(local_it->second.name); struct_it != result_.structs.end()) {
                 return find_field_type_in(struct_it->second.fields, member->member);
             }
-            if (auto event_it = event_structs_.find(local_it->second.name);
-                event_it != event_structs_.end()) {
+            if (auto event_it = event_structs_.find(local_it->second.name); event_it != event_structs_.end()) {
                 return find_field_type_in(event_it->second.fields, member->member);
             }
         }
@@ -1597,8 +1589,7 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
         return make_entity_id_type();
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
-        if (auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
-            ident != nullptr && ident->name == "exists") {
+        if (auto* ident = std::get_if<IdentExpr>(&call->callee->expr); ident != nullptr && ident->name == "exists") {
             if (handler_event == nullptr) {
                 errors_.error(expr.location,
                               "`exists()` requires world access; only allowed inside system event handlers");
@@ -1618,16 +1609,17 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
         return infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event);
     }
     if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
-        auto left = infer_expr_type(*binary->left, filter_bindings, local_bindings, handler_event);
+        auto left  = infer_expr_type(*binary->left, filter_bindings, local_bindings, handler_event);
         auto right = infer_expr_type(*binary->right, filter_bindings, local_bindings, handler_event);
         if ((binary->op == "==" || binary->op == "!=") &&
             ((left.kind == TypeKind::EntityId && right.kind == TypeKind::Int) ||
              (right.kind == TypeKind::EntityId && left.kind == TypeKind::Int))) {
             errors_.error(expr.location,
-                          "entity_id has no null literal; use `exists(id)` to test handle validity or `add`/`remove` to model absent relationships via trait presence");
+                          "entity_id has no null literal; use `exists(id)` to test handle validity or `add`/`remove` "
+                          "to model absent relationships via trait presence");
         }
-        if (binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == ">" ||
-            binary->op == "<=" || binary->op == ">=" || binary->op == "and" || binary->op == "or") {
+        if (binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == ">" || binary->op == "<=" ||
+            binary->op == ">=" || binary->op == "and" || binary->op == "or") {
             return make_bool_type();
         }
         if (left.kind == TypeKind::Float || right.kind == TypeKind::Float) {
@@ -1645,14 +1637,13 @@ TypeInfo SemanticAnalyzer::infer_expr_type(
         if (list->elements.empty()) {
             return make_list_type(make_unknown_type());
         }
-        return make_list_type(
-            infer_expr_type(*list->elements.front(), filter_bindings, local_bindings, handler_event));
+        return make_list_type(infer_expr_type(*list->elements.front(), filter_bindings, local_bindings, handler_event));
     }
     return make_unknown_type();
 }
 
-std::unordered_set<std::string>
-SemanticAnalyzer::get_archetype_fields(const std::vector<ArchetypeTraitEntry>& traits) const {
+std::unordered_set<std::string> SemanticAnalyzer::get_archetype_fields(
+    const std::vector<ArchetypeTraitEntry>& traits) const {
     std::unordered_set<std::string> fields;
     for (const auto& entry : traits) {
         if (const auto* trait = find_resolved_trait(entry.trait_name)) {
@@ -1666,13 +1657,13 @@ SemanticAnalyzer::get_archetype_fields(const std::vector<ArchetypeTraitEntry>& t
 
 // ── Task 5.1, 5.2: Validate template and unit declarations ──────────────────
 
-void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_template_unit_declarations(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
         std::visit(
-            [this](auto& node) { // NOLINT(readability-function-cognitive-complexity)
+            [this](auto& node) {  // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, TemplateNode> ||
-                              std::is_same_v<T, UnitNode>) {
+                if constexpr (std::is_same_v<T, TemplateNode> || std::is_same_v<T, UnitNode>) {
                     const std::string KIND = std::is_same_v<T, TemplateNode> ? "template" : "unit";
 
                     // 5.1: Validate all traits in nested trait blocks are declared
@@ -1695,17 +1686,15 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                         for (const auto& f : trait->fields) {
                             trait_fields.insert(f.name);
                         }
-                        
+
                         for (auto& assign : entry.assignments) {
                             if (!trait_fields.contains(assign.name)) {
-                                errors_.error(
-                                    assign.location,
-                                    "unknown field '" + assign.name + "' for trait '" + 
-                                    entry.trait_name + "' in " + KIND + " '" + node.name + "'");
+                                errors_.error(assign.location,
+                                              "unknown field '" + assign.name + "' for trait '" + entry.trait_name +
+                                                  "' in " + KIND + " '" + node.name + "'");
                             }
                             if (expr_contains_self(*assign.value)) {
-                                errors_.error(assign.location,
-                                              "`self` only allowed inside system event handlers");
+                                errors_.error(assign.location, "`self` only allowed inside system event handlers");
                             }
                         }
                     }
@@ -1719,7 +1708,7 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
                                 provided.insert(assign.name);
                             }
                         }
-                        
+
                         std::unordered_set<std::string> required;
                         for (auto& entry : node.traits) {
                             const auto* trait = find_resolved_trait(entry.trait_name);
@@ -1743,27 +1732,25 @@ void SemanticAnalyzer::validate_template_unit_declarations(ProgramNode& program)
 
 // ── Task 5.3, 5.4: Validate spawn sites ─────────────────────────────────────
 
-void SemanticAnalyzer::validate_spawn_stmts( // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cognitive-complexity)
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::string& context_name) {
     for (const auto& stmt : stmts) {
         std::visit(
-            [this, &context_name](auto& s) { // NOLINT(readability-function-cognitive-complexity)
+            [this, &context_name](auto& s) {  // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, SpawnStmt>) {
                     // 5.4: Reject spawn of a unit
                     if (unit_names_.contains(s.template_name)) {
-                        errors_.error(
-                            s.location,
-                            "'" + s.template_name +
-                                "' is a unit, not a template; use `spawn` only with "
-                                "`template` declarations");
+                        errors_.error(s.location,
+                                      "'" + s.template_name +
+                                          "' is a unit, not a template; use `spawn` only with "
+                                          "`template` declarations");
                         return;
                     }
                     // 5.3: Reject spawn of unknown template
                     if (!template_names_.contains(s.template_name)) {
-                        errors_.error(s.location,
-                                      "undefined template '" + s.template_name + "'");
+                        errors_.error(s.location, "undefined template '" + s.template_name + "'");
                         return;
                     }
                     // 5.3: Validate override trait blocks
@@ -1774,27 +1761,25 @@ void SemanticAnalyzer::validate_spawn_stmts( // NOLINT(readability-function-cogn
                             const auto* trait = find_resolved_trait(override.trait_name);
                             if (!trait) {
                                 errors_.error(override.location,
-                                             "undeclared trait '" + override.trait_name +
-                                             "' in spawn override");
+                                              "undeclared trait '" + override.trait_name + "' in spawn override");
                                 continue;
                             }
-                            
+
                             // Validate field assignments belong to the trait
                             std::unordered_set<std::string> trait_fields;
                             for (const auto& f : trait->fields) {
                                 trait_fields.insert(f.name);
                             }
-                            
+
                             for (auto& assign : override.assignments) {
                                 if (!trait_fields.contains(assign.name)) {
                                     errors_.error(assign.location,
-                                                 "unknown field '" + assign.name +
-                                                 "' for trait '" + override.trait_name +
-                                                 "' in spawn override");
+                                                  "unknown field '" + assign.name + "' for trait '" +
+                                                      override.trait_name + "' in spawn override");
                                 }
                             }
                         }
-                        
+
                         // 5.3: Check required fields are provided
                         auto req_it = template_required_fields_.find(s.template_name);
                         if (req_it != template_required_fields_.end()) {
@@ -1808,9 +1793,7 @@ void SemanticAnalyzer::validate_spawn_stmts( // NOLINT(readability-function-cogn
                                 if (!provided.contains(req)) {
                                     errors_.error(
                                         s.location,
-                                        "required field '" + req +
-                                            "' not set for template '" + s.template_name +
-                                            "'");
+                                        "required field '" + req + "' not set for template '" + s.template_name + "'");
                                 }
                             }
                         }
@@ -1826,9 +1809,9 @@ void SemanticAnalyzer::validate_spawn_stmts( // NOLINT(readability-function-cogn
 
 void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location) {
     if (unit_names_.contains(spawn.template_name)) {
-        errors_.error(location,
-                      "'" + spawn.template_name +
-                          "' is a unit, not a template; use `spawn` only with `template` declarations");
+        errors_.error(
+            location,
+            "'" + spawn.template_name + "' is a unit, not a template; use `spawn` only with `template` declarations");
         return;
     }
     if (!template_names_.contains(spawn.template_name)) {
@@ -1859,19 +1842,17 @@ void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceL
             provided.insert(assign.name);
             if (!trait_fields.contains(assign.name)) {
                 errors_.error(assign.location,
-                              "unknown field '" + assign.name + "' for trait '" +
-                                  override_entry.trait_name + "' in spawn override");
+                              "unknown field '" + assign.name + "' for trait '" + override_entry.trait_name +
+                                  "' in spawn override");
             }
         }
     }
 
-    if (auto req_it = template_required_fields_.find(spawn.template_name);
-        req_it != template_required_fields_.end()) {
+    if (auto req_it = template_required_fields_.find(spawn.template_name); req_it != template_required_fields_.end()) {
         for (const auto& req : req_it->second) {
             if (!provided.contains(req)) {
                 errors_.error(location,
-                              "required field '" + req + "' not set for template '" +
-                                  spawn.template_name + "'");
+                              "required field '" + req + "' not set for template '" + spawn.template_name + "'");
             }
         }
     }
@@ -1913,29 +1894,27 @@ void SemanticAnalyzer::validate_spawn_sites(ProgramNode& program) {
 
 // ── Task 5.5, 5.6, 5.7: Statement context validation ────────────────────────
 
-void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-cognitive-complexity)
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::string& context_name,
     bool in_system_handler) {
     for (const auto& stmt : stmts) {
         std::visit(
-            [this, &context_name, in_system_handler](auto& s) { // NOLINT(readability-function-cognitive-complexity)
+            [this, &context_name, in_system_handler](auto& s) {  // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
                 std::unordered_map<std::string, TypeInfo> self_context_locals;
                 if (in_system_handler) {
                     self_context_locals["__self_context"] = make_entity_id_type();
                 }
-                auto validate_self_expr = [this, in_system_handler](const ExprNode& expr, const SourceLocation& location) {
+                auto validate_self_expr = [this, in_system_handler](const ExprNode& expr,
+                                                                    const SourceLocation& location) {
                     if (!in_system_handler && expr_contains_self(expr)) {
                         errors_.error(location, "`self` only allowed inside system event handlers");
                     }
                 };
-                if constexpr (std::is_same_v<S, SpawnStmt> ||
-                              std::is_same_v<S, DestroyStmt> ||
-                              std::is_same_v<S, LoadStmt> ||
-                              std::is_same_v<S, AddTraitStmt> ||
-                              std::is_same_v<S, RemoveTraitStmt> ||
-                              std::is_same_v<S, TraitMatchStmt>) {
+                if constexpr (std::is_same_v<S, SpawnStmt> || std::is_same_v<S, DestroyStmt> ||
+                              std::is_same_v<S, LoadStmt> || std::is_same_v<S, AddTraitStmt> ||
+                              std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, TraitMatchStmt>) {
                     if (!in_system_handler) {
                         // Determine which keyword is used
                         std::string kw;
@@ -1952,9 +1931,7 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                         } else {
                             kw = "remove";
                         }
-                        errors_.error(
-                            s.location,
-                            "`" + kw + "` only allowed inside system event handlers");
+                        errors_.error(s.location, "`" + kw + "` only allowed inside system event handlers");
                     }
                     // 5.6: For LoadStmt, validate module name is reachable via `use`
                     if constexpr (std::is_same_v<S, LoadStmt>) {
@@ -1962,27 +1939,23 @@ void SemanticAnalyzer::validate_context_stmts( // NOLINT(readability-function-co
                             // Check prefix match (e.g. use levels allows load levels.level1)
                             bool found = false;
                             for (const auto& use_name : use_names_) {
-                                if (s.module_name == use_name ||
-                                    s.module_name.substr(0, use_name.size()) == use_name) {
+                                if (s.module_name == use_name || s.module_name.substr(0, use_name.size()) == use_name) {
                                     found = true;
                                     break;
                                 }
                             }
                             if (!found) {
-                                errors_.error(
-                                    s.location,
-                                    "unknown module '" + s.module_name +
-                                        "'; add `use " + s.module_name +
-                                        "` to import it");
+                                errors_.error(s.location,
+                                              "unknown module '" + s.module_name + "'; add `use " + s.module_name +
+                                                  "` to import it");
                             }
                         }
                     }
-                    if constexpr (std::is_same_v<S, AddTraitStmt> ||
-                                  std::is_same_v<S, RemoveTraitStmt>) {
+                    if constexpr (std::is_same_v<S, AddTraitStmt> || std::is_same_v<S, RemoveTraitStmt>) {
                         const std::string& tname = s.trait_name;
                         if (!is_trait_declared(tname)) {
                             const std::string KW = std::is_same_v<S, AddTraitStmt> ? "add" : "remove";
-                            std::string msg = "undeclared trait '";
+                            std::string msg      = "undeclared trait '";
                             msg += tname;
                             msg += "' in `";
                             msg += KW;
@@ -2053,8 +2026,9 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
                     }
                 } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
                     if (node.filter.entries.empty() && node.filter.trait_names.empty()) {
-                        errors_.error(node.location,
-                                      "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
+                        errors_.error(
+                            node.location,
+                            "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
                     }
                 }
             },
@@ -2068,9 +2042,8 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
 
 // ── Task 11.12: Check no field access in no-filter system bodies ─────────────
 
-void SemanticAnalyzer::check_no_field_access(
-    const std::vector<std::unique_ptr<StmtNode>>& stmts,
-    const std::string& sys_name) {
+void SemanticAnalyzer::check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                             const std::string& sys_name) {
     for (const auto& stmt : stmts) {
         std::visit(
             [this, &sys_name](const auto& s) {
@@ -2080,8 +2053,7 @@ void SemanticAnalyzer::check_no_field_access(
                 } else if constexpr (std::is_same_v<S, VarAssign>) {
                     // All VarAssign statements in system handlers are trait-field accesses
                     errors_.error(s.location,
-                                  "trait field '" + s.name +
-                                      "' is not accessible in system '" + sys_name +
+                                  "trait field '" + s.name + "' is not accessible in system '" + sys_name +
                                       "': no filter clause declares this trait");
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     check_no_field_access(s.then_body, sys_name);
@@ -2093,22 +2065,19 @@ void SemanticAnalyzer::check_no_field_access(
     }
 }
 
-void SemanticAnalyzer::validate_trait_modifier_rules(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_trait_modifier_rules(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     auto validate_exclude_clause = [this](const auto& node) {
         if (!node.exclude.entries.empty()) {
             for (auto& entry : node.exclude.entries) {
                 if (!is_trait_declared(entry.qualified_name)) {
-                    errors_.error(entry.location,
-                                  "undeclared trait '" + entry.qualified_name +
-                                      "' in exclude clause");
+                    errors_.error(entry.location, "undeclared trait '" + entry.qualified_name + "' in exclude clause");
                 }
             }
         } else {
             for (auto& trait_name : node.exclude.trait_names) {
                 if (!is_trait_declared(trait_name)) {
-                    errors_.error(node.exclude.location,
-                                  "undeclared trait '" + trait_name +
-                                      "' in exclude clause");
+                    errors_.error(node.exclude.location, "undeclared trait '" + trait_name + "' in exclude clause");
                 }
             }
         }
@@ -2130,7 +2099,8 @@ void SemanticAnalyzer::validate_trait_modifier_rules(ProgramNode& program) { // 
 
 // ── Phase 5a: after: clause validation and cycle detection ─────────────────
 
-void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) { // NOLINT(readability-function-cognitive-complexity)
+void SemanticAnalyzer::validate_after_clauses(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     // Collect all system names
     std::unordered_set<std::string> all_system_names;
     for (auto& decl : program.declarations) {
@@ -2147,22 +2117,18 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) { // NOLINT(
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             for (auto& after_name : sys->after_systems) {
                 if (!all_system_names.contains(after_name)) {
-                    errors_.error(sys->location,
-                                  "unknown system '" + after_name + "' in after clause");
+                    errors_.error(sys->location, "unknown system '" + after_name + "' in after clause");
                 } else if (after_name == sys->name) {
-                    errors_.error(sys->location,
-                                  "system '" + sys->name + "' cannot list itself in after:");
+                    errors_.error(sys->location, "system '" + sys->name + "' cannot list itself in after:");
                 }
             }
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
             for (auto& after_name : sys->after_systems) {
                 if (!all_system_names.contains(after_name)) {
-                    errors_.error(sys->location,
-                                  "unknown system '" + after_name + "' in after clause");
+                    errors_.error(sys->location, "unknown system '" + after_name + "' in after clause");
                 } else if (after_name == sys->name) {
-                    errors_.error(sys->location,
-                                  "system '" + sys->name + "' cannot list itself in after:");
+                    errors_.error(sys->location, "system '" + sys->name + "' cannot list itself in after:");
                 }
             }
         }
@@ -2187,7 +2153,8 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) { // NOLINT(
     }
 
     std::function<bool(const std::string&, std::vector<std::string>&)> dfs =
-        [&](const std::string& node, std::vector<std::string>& path) -> bool { // NOLINT(readability-function-cognitive-complexity)
+        [&](const std::string& node,
+            std::vector<std::string>& path) -> bool {  // NOLINT(readability-function-cognitive-complexity)
         color[node] = Color::Gray;
         path.push_back(node);
         auto it = after_graph.find(node);

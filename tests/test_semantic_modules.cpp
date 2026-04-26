@@ -1,8 +1,10 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "common/types.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
-#include "common/error_reporter.h"
-#include "common/types.h"
-#include "frontend/semantic_analyzer.h"
+#include <catch2/catch_test_macros.hpp>
 
 using namespace cactus;
 
@@ -11,15 +13,15 @@ using namespace cactus;
 /// Build a minimal ProgramNode containing a single trait with a field
 /// whose type is the given TypeRef name.
 static ProgramNode make_program_with_trait_field(const std::string& trait_name,
-                                                   const std::string& field_name,
-                                                   const std::string& field_type_name) {
+                                                 const std::string& field_name,
+                                                 const std::string& field_type_name) {
     ProgramNode prog;
     TraitNode trait;
-    trait.name = trait_name;
+    trait.name   = trait_name;
     trait.is_pub = false;
     FieldNode field;
-    field.name = field_name;
-    field.type.name = field_type_name;
+    field.name             = field_name;
+    field.type.name        = field_type_name;
     field.modifiers.is_var = true;
     trait.fields.push_back(std::move(field));
     prog.declarations.emplace_back(std::move(trait));
@@ -27,41 +29,38 @@ static ProgramNode make_program_with_trait_field(const std::string& trait_name,
 }
 
 /// Build a ProgramNode with a system that has filter entries.
-static ProgramNode make_program_with_system(const std::string& sys_name,
-                                              const std::vector<FilterEntry>& entries) {
+static ProgramNode make_program_with_system(const std::string& sys_name, const std::vector<FilterEntry>& entries) {
     ProgramNode prog;
     SystemNode sys;
-    sys.name = sys_name;
+    sys.name           = sys_name;
     sys.filter.entries = entries;
     for (const auto& e : entries) {
         // Also populate backward-compat trait_names with the last component
         auto dot = e.qualified_name.find('.');
-        sys.filter.trait_names.push_back(
-            dot != std::string::npos ? e.qualified_name.substr(dot + 1) : e.qualified_name);
+        sys.filter.trait_names.push_back(dot != std::string::npos ? e.qualified_name.substr(dot + 1)
+                                                                  : e.qualified_name);
     }
     prog.declarations.emplace_back(std::move(sys));
     return prog;
 }
 
 /// Build an ImportedSymbols with a single pub struct.
-static ImportedSymbols make_module_with_struct(const std::string& module_name,
-                                                 const std::string& struct_name) {
+static ImportedSymbols make_module_with_struct(const std::string& module_name, const std::string& struct_name) {
     ImportedSymbols syms;
     syms.module_name = module_name;
     ResolvedStruct rs;
-    rs.name = struct_name;
+    rs.name                   = struct_name;
     syms.structs[struct_name] = rs;
     return syms;
 }
 
 /// Build an ImportedSymbols with a single pub trait.
-static ImportedSymbols make_module_with_trait(const std::string& module_name,
-                                               const std::string& trait_name) {
+static ImportedSymbols make_module_with_trait(const std::string& module_name, const std::string& trait_name) {
     ImportedSymbols syms;
     syms.module_name = module_name;
     ResolvedTrait rt;
-    rt.name = trait_name;
-    rt.is_pub = true;
+    rt.name                 = trait_name;
+    rt.is_pub               = true;
     syms.traits[trait_name] = rt;
     return syms;
 }
@@ -75,7 +74,7 @@ TEST_CASE("semantic_modules: qualified struct type resolved", "[semantic][module
     ImportedSymbols player_syms;
     player_syms.module_name = "player";
     ResolvedStruct rs;
-    rs.name = "Vec2Pos";
+    rs.name                        = "Vec2Pos";
     player_syms.structs["Vec2Pos"] = rs;
 
     ModuleImports imports;
@@ -99,8 +98,8 @@ TEST_CASE("semantic_modules: qualified enum type resolved", "[semantic][modules]
     ImportedSymbols phys_syms;
     phys_syms.module_name = "physics";
     ResolvedEnum re;
-    re.name = "Direction";
-    re.variants = {"Up", "Down"};
+    re.name                      = "Direction";
+    re.variants                  = {"Up", "Down"};
     phys_syms.enums["Direction"] = re;
 
     ModuleImports imports;
@@ -123,7 +122,7 @@ TEST_CASE("semantic_modules: alias resolution (use player as p)", "[semantic][mo
     ImportedSymbols player_syms;
     player_syms.module_name = "player";
     ResolvedStruct rs;
-    rs.name = "Vec2Pos";
+    rs.name                        = "Vec2Pos";
     player_syms.structs["Vec2Pos"] = rs;
 
     ModuleImports imports;
@@ -178,11 +177,11 @@ TEST_CASE("semantic_modules: unqualified ambiguous type reports error", "[semant
     auto prog = make_program_with_trait_field("Service", "cfg", "Config");
 
     ImportedSymbols syms_a;
-    syms_a.module_name = "modA";
+    syms_a.module_name       = "modA";
     syms_a.structs["Config"] = ResolvedStruct{.name = "Config", .fields = {}};
 
     ImportedSymbols syms_b;
-    syms_b.module_name = "modB";
+    syms_b.module_name       = "modB";
     syms_b.structs["Config"] = ResolvedStruct{.name = "Config", .fields = {}};
 
     ModuleImports imports;
@@ -204,7 +203,7 @@ TEST_CASE("semantic_modules: unqualified ambiguous type reports error", "[semant
 TEST_CASE("semantic_modules: filter entry with qualified trait resolved", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "player.Position";
-    auto prog = make_program_with_system("MoveSystem", {entry});
+    auto prog            = make_program_with_system("MoveSystem", {entry});
 
     auto syms = make_module_with_trait("player", "Position");
     ModuleImports imports;
@@ -220,8 +219,8 @@ TEST_CASE("semantic_modules: filter entry with qualified trait resolved", "[sema
 TEST_CASE("semantic_modules: filter entry with alias resolves trait", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "p.Position";  // module registered as "p"
-    entry.alias = "pos";
-    auto prog = make_program_with_system("MoveSystem", {entry});
+    entry.alias          = "pos";
+    auto prog            = make_program_with_system("MoveSystem", {entry});
 
     auto syms = make_module_with_trait("player", "Position");
     ModuleImports imports;
@@ -237,7 +236,7 @@ TEST_CASE("semantic_modules: filter entry with alias resolves trait", "[semantic
 TEST_CASE("semantic_modules: filter entry with unqualified trait from import", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "Position";  // unqualified, unique in imports
-    auto prog = make_program_with_system("MoveSystem", {entry});
+    auto prog            = make_program_with_system("MoveSystem", {entry});
 
     auto syms = make_module_with_trait("player", "Position");
     ModuleImports imports;
@@ -253,7 +252,7 @@ TEST_CASE("semantic_modules: filter entry with unqualified trait from import", "
 TEST_CASE("semantic_modules: ambiguous unqualified trait in filter", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "Config";
-    auto prog = make_program_with_system("Worker", {entry});
+    auto prog            = make_program_with_system("Worker", {entry});
 
     auto syms_a = make_module_with_trait("modA", "Config");
     auto syms_b = make_module_with_trait("modB", "Config");
@@ -297,7 +296,7 @@ TEST_CASE("semantic_modules: non-pub type reference suggests adding pub", "[sema
 TEST_CASE("semantic_modules: non-pub filter trait suggests adding pub", "[semantic][modules][4.6]") {
     FilterEntry entry;
     entry.qualified_name = "player.Secret";
-    auto prog = make_program_with_system("Worker", {entry});
+    auto prog            = make_program_with_system("Worker", {entry});
 
     ImportedSymbols player_syms;
     player_syms.module_name = "player";
@@ -321,8 +320,8 @@ TEST_CASE("semantic_modules: backward compat — no imports works as before", "[
     TraitNode trait;
     trait.name = "Position";
     FieldNode f;
-    f.name = "x";
-    f.type.name = "float";
+    f.name             = "x";
+    f.type.name        = "float";
     f.modifiers.is_var = true;
     trait.fields.push_back(std::move(f));
     prog.declarations.emplace_back(std::move(trait));
@@ -344,7 +343,7 @@ TEST_CASE("semantic_modules: backward compat — local filter trait still works"
     prog.declarations.emplace_back(std::move(trait));
 
     SystemNode sys;
-    sys.name = "HealSystem";
+    sys.name               = "HealSystem";
     sys.filter.trait_names = {"Health"};
     // entries is empty — backward-compat path
     prog.declarations.emplace_back(std::move(sys));
@@ -355,3 +354,4 @@ TEST_CASE("semantic_modules: backward compat — local filter trait still works"
 
     CHECK_FALSE(errors.has_errors());
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

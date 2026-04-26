@@ -1,8 +1,10 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/token.hpp"
 
-#include "common/error_reporter.h"
-#include "frontend/lexer.h"
-#include "frontend/token.h"
+#include <catch2/catch_test_macros.hpp>
 
 using namespace cactus;
 
@@ -34,7 +36,7 @@ static std::vector<TokenType> token_types(const std::vector<Token>& tokens) {
 
 TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
     auto tokens = lex("module use const struct enum trait unit system view event func interface");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 12);
     CHECK(types[0] == TokenType::MODULE);
     CHECK(types[1] == TokenType::USE);
@@ -52,7 +54,7 @@ TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
 
 TEST_CASE("Lexer: modifier keywords", "[lexer]") {
     auto tokens = lex("let var persist sync pub");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 5);
     CHECK(types[0] == TokenType::LET);
     CHECK(types[1] == TokenType::VAR);
@@ -63,7 +65,7 @@ TEST_CASE("Lexer: modifier keywords", "[lexer]") {
 
 TEST_CASE("Lexer: keyword vs identifier", "[lexer]") {
     auto tokens = lex("system system_name");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 2);
     CHECK(types[0] == TokenType::SYSTEM);
     CHECK(types[1] == TokenType::IDENTIFIER);
@@ -72,7 +74,7 @@ TEST_CASE("Lexer: keyword vs identifier", "[lexer]") {
 
 TEST_CASE("Lexer: apply and config are identifiers", "[lexer]") {
     auto tokens = lex("apply config");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 2);
     CHECK(types[0] == TokenType::IDENTIFIER);
     CHECK(types[1] == TokenType::IDENTIFIER);
@@ -82,7 +84,7 @@ TEST_CASE("Lexer: apply and config are identifiers", "[lexer]") {
 
 TEST_CASE("Lexer: integer literal", "[lexer]") {
     auto tokens = lex("42");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::INT_LITERAL);
     CHECK(tokens[0].value == "42");
@@ -90,7 +92,7 @@ TEST_CASE("Lexer: integer literal", "[lexer]") {
 
 TEST_CASE("Lexer: float literal", "[lexer]") {
     auto tokens = lex("3.14");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::FLOAT_LITERAL);
     CHECK(tokens[0].value == "3.14");
@@ -98,7 +100,7 @@ TEST_CASE("Lexer: float literal", "[lexer]") {
 
 TEST_CASE("Lexer: string literal", "[lexer]") {
     auto tokens = lex("\"Hello World\"");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::STRING_LITERAL);
     CHECK(tokens[0].value == "Hello World");
@@ -106,7 +108,7 @@ TEST_CASE("Lexer: string literal", "[lexer]") {
 
 TEST_CASE("Lexer: hex color RGB", "[lexer]") {
     auto tokens = lex("#FF0000");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::HEX_COLOR);
     CHECK(tokens[0].value == "FF0000");
@@ -114,7 +116,7 @@ TEST_CASE("Lexer: hex color RGB", "[lexer]") {
 
 TEST_CASE("Lexer: hex color RGBA", "[lexer]") {
     auto tokens = lex("#FF000080");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::HEX_COLOR);
     CHECK(tokens[0].value == "FF000080");
@@ -122,14 +124,14 @@ TEST_CASE("Lexer: hex color RGBA", "[lexer]") {
 
 TEST_CASE("Lexer: comment skipping", "[lexer]") {
     auto tokens = lex("# this is a comment\nvar x: int");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     CHECK(types[0] == TokenType::VAR);
     CHECK(types[1] == TokenType::IDENTIFIER);
 }
 
 TEST_CASE("Lexer: inline comment", "[lexer]") {
     auto tokens = lex("var x: int  # inline comment");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 4);
     CHECK(types[0] == TokenType::VAR);
     CHECK(types[1] == TokenType::IDENTIFIER);
@@ -139,7 +141,7 @@ TEST_CASE("Lexer: inline comment", "[lexer]") {
 
 TEST_CASE("Lexer: operators", "[lexer]") {
     auto tokens = lex("-> => == != <= >= += -=");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 8);
     CHECK(types[0] == TokenType::ARROW);
     CHECK(types[1] == TokenType::FAT_ARROW);
@@ -153,7 +155,7 @@ TEST_CASE("Lexer: operators", "[lexer]") {
 
 TEST_CASE("Lexer: single-char punctuation", "[lexer]") {
     auto tokens = lex(": , . ( ) [ ] + - * / %");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 12);
     CHECK(types[0] == TokenType::COLON);
     CHECK(types[1] == TokenType::COMMA);
@@ -187,8 +189,8 @@ TEST_CASE("Lexer: INDENT and DEDENT", "[lexer]") {
 }
 
 TEST_CASE("Lexer: multiple dedent levels", "[lexer]") {
-    std::string src = "a:\n    b:\n        c\nd\n";
-    auto tokens = lex(src);
+    std::string src  = "a:\n    b:\n        c\nd\n";
+    auto tokens      = lex(src);
     int dedent_count = 0;
     for (auto& t : tokens) {
         if (t.type == TokenType::DEDENT) {
@@ -212,7 +214,7 @@ TEST_CASE("Lexer: unterminated string", "[lexer]") {
 
 TEST_CASE("Lexer: boolean literals", "[lexer]") {
     auto tokens = lex("true false");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 2);
     CHECK(types[0] == TokenType::TRUE_LIT);
     CHECK(types[1] == TokenType::FALSE_LIT);
@@ -220,7 +222,7 @@ TEST_CASE("Lexer: boolean literals", "[lexer]") {
 
 TEST_CASE("Lexer: logical operators as keywords", "[lexer]") {
     auto tokens = lex("and or not");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 3);
     CHECK(types[0] == TokenType::AND);
     CHECK(types[1] == TokenType::OR);
@@ -242,14 +244,14 @@ TEST_CASE("Lexer: EOF token at end", "[lexer]") {
 
 TEST_CASE("Lexer: new declaration keyword template", "[lexer][dynamic-ecs]") {
     auto tokens = lex("template");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::TEMPLATE);
 }
 
 TEST_CASE("Lexer: new action keywords spawn destroy load unload", "[lexer][dynamic-ecs]") {
     auto tokens = lex("spawn destroy load unload");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 4);
     CHECK(types[0] == TokenType::SPAWN);
     CHECK(types[1] == TokenType::DESTROY);
@@ -259,7 +261,7 @@ TEST_CASE("Lexer: new action keywords spawn destroy load unload", "[lexer][dynam
 
 TEST_CASE("Lexer: self is reserved and child is no longer reserved", "[lexer][hierarchy]") {
     auto tokens = lex("self child");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 2);
     CHECK(types[0] == TokenType::SELF);
     CHECK(types[1] == TokenType::IDENTIFIER);
@@ -267,7 +269,7 @@ TEST_CASE("Lexer: self is reserved and child is no longer reserved", "[lexer][hi
 
 TEST_CASE("Lexer: new action keywords add remove to from", "[lexer][dynamic-ecs]") {
     auto tokens = lex("add remove to from");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 4);
     CHECK(types[0] == TokenType::ADD);
     CHECK(types[1] == TokenType::REMOVE);
@@ -277,7 +279,7 @@ TEST_CASE("Lexer: new action keywords add remove to from", "[lexer][dynamic-ecs]
 
 TEST_CASE("Lexer: new block keyword exclude", "[lexer][dynamic-ecs]") {
     auto tokens = lex("exclude");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::EXCLUDE);
 }
@@ -285,18 +287,18 @@ TEST_CASE("Lexer: new block keyword exclude", "[lexer][dynamic-ecs]") {
 TEST_CASE("Lexer: new keywords are distinct from identifiers with similar names", "[lexer][dynamic-ecs]") {
     // Keywords used as standalone tokens
     auto tokens = lex("spawn spawner spawnable");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 3);
-    CHECK(types[0] == TokenType::SPAWN);      // keyword
-    CHECK(types[1] == TokenType::IDENTIFIER); // spawner — not a keyword
-    CHECK(types[2] == TokenType::IDENTIFIER); // spawnable — not a keyword
+    CHECK(types[0] == TokenType::SPAWN);       // keyword
+    CHECK(types[1] == TokenType::IDENTIFIER);  // spawner — not a keyword
+    CHECK(types[2] == TokenType::IDENTIFIER);  // spawnable — not a keyword
 }
 
 TEST_CASE("Lexer: new keywords rejected as identifiers — template", "[lexer][dynamic-ecs]") {
     // 'template' when used where an identifier is expected should lex as TEMPLATE (keyword)
     // Parser would reject its use as an identifier name — here we just verify the token type
     auto tokens = lex("template");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     CHECK(types[0] == TokenType::TEMPLATE);
     // Value still holds the keyword text
     CHECK(tokens[0].value == "template");
@@ -315,7 +317,7 @@ TEST_CASE("Lexer: new keywords have correct string representations", "[lexer][dy
 
 TEST_CASE("Lexer: all dynamic ECS keywords in one string", "[lexer][dynamic-ecs]") {
     auto tokens = lex("template spawn destroy load unload add remove to from exclude");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 10);
     CHECK(types[0] == TokenType::TEMPLATE);
     CHECK(types[1] == TokenType::SPAWN);
@@ -333,7 +335,7 @@ TEST_CASE("Lexer: all dynamic ECS keywords in one string", "[lexer][dynamic-ecs]
 
 TEST_CASE("Lexer: new keyword asset", "[lexer][dsl-spec-new-features]") {
     auto tokens = lex("asset");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::ASSET);
     CHECK(tokens[0].value == "asset");
@@ -341,7 +343,7 @@ TEST_CASE("Lexer: new keyword asset", "[lexer][dsl-spec-new-features]") {
 
 TEST_CASE("Lexer: new keyword input", "[lexer][dsl-spec-new-features]") {
     auto tokens = lex("input");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::INPUT);
     CHECK(tokens[0].value == "input");
@@ -349,7 +351,7 @@ TEST_CASE("Lexer: new keyword input", "[lexer][dsl-spec-new-features]") {
 
 TEST_CASE("Lexer: new keyword fixed_tick", "[lexer][dsl-spec-new-features]") {
     auto tokens = lex("fixed_tick");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::FIXED_TICK);
     CHECK(tokens[0].value == "fixed_tick");
@@ -357,7 +359,7 @@ TEST_CASE("Lexer: new keyword fixed_tick", "[lexer][dsl-spec-new-features]") {
 
 TEST_CASE("Lexer: new keyword late_tick", "[lexer][dsl-spec-new-features]") {
     auto tokens = lex("late_tick");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::LATE_TICK);
     CHECK(tokens[0].value == "late_tick");
@@ -365,7 +367,7 @@ TEST_CASE("Lexer: new keyword late_tick", "[lexer][dsl-spec-new-features]") {
 
 TEST_CASE("Lexer: all 4 new dsl-spec-new-features keywords", "[lexer][dsl-spec-new-features]") {
     auto tokens = lex("asset input fixed_tick late_tick");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 4);
     CHECK(types[0] == TokenType::ASSET);
     CHECK(types[1] == TokenType::INPUT);
@@ -375,7 +377,7 @@ TEST_CASE("Lexer: all 4 new dsl-spec-new-features keywords", "[lexer][dsl-spec-n
 
 TEST_CASE("Lexer: new keywords distinct from identifier prefixes", "[lexer][dsl-spec-new-features]") {
     auto tokens = lex("asset assets input inputs fixed_tick fixed_ticks late_tick late_ticks");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 8);
     CHECK(types[0] == TokenType::ASSET);
     CHECK(types[1] == TokenType::IDENTIFIER);  // "assets" not a keyword
@@ -398,7 +400,7 @@ TEST_CASE("Lexer: new keyword string representations", "[lexer][dsl-spec-new-fea
 
 TEST_CASE("Lexer: extern keyword", "[lexer][extern-func]") {
     auto tokens = lex("extern");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::EXTERN);
     CHECK(tokens[0].value == "extern");
@@ -406,7 +408,7 @@ TEST_CASE("Lexer: extern keyword", "[lexer][extern-func]") {
 
 TEST_CASE("Lexer: extern_value tokenizes as IDENTIFIER", "[lexer][extern-func]") {
     auto tokens = lex("extern_value");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 1);
     CHECK(types[0] == TokenType::IDENTIFIER);
     CHECK(tokens[0].value == "extern_value");
@@ -418,9 +420,10 @@ TEST_CASE("Lexer: extern string representation", "[lexer][extern-func]") {
 
 TEST_CASE("Lexer: extern keyword distinct from identifier prefixes", "[lexer][extern-func]") {
     auto tokens = lex("extern externals external_data");
-    auto types = token_types(tokens);
+    auto types  = token_types(tokens);
     REQUIRE(types.size() == 3);
     CHECK(types[0] == TokenType::EXTERN);      // keyword
     CHECK(types[1] == TokenType::IDENTIFIER);  // "externals" — not a keyword
     CHECK(types[2] == TokenType::IDENTIFIER);  // "external_data" — not a keyword
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

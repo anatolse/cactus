@@ -1,9 +1,9 @@
 #pragma once
 
-#include "common/error_reporter.h"
-#include "common/string_pool.h"
-#include "common/types.h"
-#include "frontend/ast.h"
+#include "common/error_reporter.hpp"
+#include "common/string_pool.hpp"
+#include "common/types.hpp"
+#include "frontend/ast.hpp"
 
 #include <string>
 #include <unordered_map>
@@ -17,11 +17,11 @@ namespace cactus {
 struct ResolvedField {
     std::string name;
     TypeInfo type;
-    bool is_let = false;
-    bool is_var = false;
-    bool is_persist = false;
-    bool is_sync = false;
-    bool is_pub = false;
+    bool is_let      = false;
+    bool is_var      = false;
+    bool is_persist  = false;
+    bool is_sync     = false;
+    bool is_pub      = false;
     bool has_default = false;  // true if field has a default value in trait definition
 };
 
@@ -32,7 +32,7 @@ struct ResolvedParam {
 
 struct ResolvedFunc {
     std::string name;
-    bool is_pub = false;
+    bool is_pub    = false;
     bool is_extern = false;
     bool is_stdlib = false;
     std::vector<ResolvedParam> params;
@@ -42,7 +42,7 @@ struct ResolvedFunc {
 struct ResolvedTrait {
     std::string name;
     std::vector<ResolvedField> fields;
-    bool is_pub = false;
+    bool is_pub    = false;
     bool is_stdlib = false;
 };
 
@@ -82,11 +82,11 @@ struct DecoratedProgram {
 struct ImportedSymbols {
     std::string module_name;  // qualified name of the source module
 
-    std::unordered_map<std::string, ResolvedTrait>  traits;   // pub traits
+    std::unordered_map<std::string, ResolvedTrait> traits;    // pub traits
     std::unordered_map<std::string, ResolvedStruct> structs;  // pub structs
-    std::unordered_map<std::string, ResolvedEnum>   enums;    // pub enums
-    std::unordered_map<std::string, ResolvedFunc>   funcs;    // pub extern funcs
-    std::unordered_set<std::string>                 events;   // pub event names
+    std::unordered_map<std::string, ResolvedEnum> enums;      // pub enums
+    std::unordered_map<std::string, ResolvedFunc> funcs;      // pub extern funcs
+    std::unordered_set<std::string> events;                   // pub event names
 };
 
 // ── Module Imports (aggregate for one compilation unit) ────────────────────
@@ -108,12 +108,13 @@ struct ModuleImports {
     std::unordered_map<std::string, std::vector<std::string>> enum_providers;
     std::unordered_map<std::string, std::vector<std::string>> func_providers;
 
-    [[nodiscard]] bool empty() const { return modules.empty(); }
+    [[nodiscard]] bool empty() const {
+        return modules.empty();
+    }
 
     /// Add one module's pub symbols under the given qualifier (module name or alias).
     /// non_pub: non-pub trait names in this module, for helpful error diagnostics.
-    void add(const std::string& qualifier, ImportedSymbols pub_syms,
-             std::unordered_set<std::string> non_pub = {});
+    void add(const std::string& qualifier, ImportedSymbols pub_syms, std::unordered_set<std::string> non_pub = {});
 };
 
 // ── Semantic Analyzer ───────────────────────────────────────────────────────
@@ -124,8 +125,7 @@ public:
 
     /// Analyze a program with optional multi-module imported symbols.
     /// Omit imports (or pass ModuleImports{}) for single-file backward-compatible mode.
-    DecoratedProgram analyze(ProgramNode& program,
-                             const ModuleImports& imports = ModuleImports{});
+    DecoratedProgram analyze(ProgramNode& program, const ModuleImports& imports = ModuleImports{});
 
 private:
     // Phase 1: Collect type declarations
@@ -172,36 +172,28 @@ private:
     void validate_trait_modifier_rules(ProgramNode& program);
 
     // task 11.12: field access not allowed in systems with no filter clause
-    void check_no_field_access(
-        const std::vector<std::unique_ptr<StmtNode>>& stmts,
-        const std::string& sys_name);
+    void check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& sys_name);
 
     // Dynamic ECS helpers
     bool is_trait_declared(const std::string& name) const;
-    std::unordered_set<std::string> get_archetype_fields(
-        const std::vector<ArchetypeTraitEntry>& traits) const;
+    std::unordered_set<std::string> get_archetype_fields(const std::vector<ArchetypeTraitEntry>& traits) const;
     const ResolvedTrait* find_resolved_trait(const std::string& name) const;
     const ResolvedStruct* find_resolved_event(const std::string& name) const;
     TypeInfo infer_expr_type(const ExprNode& expr,
                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                              const std::unordered_map<std::string, TypeInfo>& local_bindings,
                              const ResolvedStruct* handler_event) const;
-    void validate_spawn_stmts(
-        const std::vector<std::unique_ptr<StmtNode>>& stmts,
-        const std::string& context_name);
-    void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts,
-                              const std::string& context_name);
+    void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
+    void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);
-    void validate_context_stmts(
-        const std::vector<std::unique_ptr<StmtNode>>& stmts,
-        const std::string& context_name,
-        bool in_system_handler);
+    void validate_context_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                const std::string& context_name,
+                                bool in_system_handler);
     void validate_trait_default_values(ProgramNode& program);
 
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);
-    void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts,
-                             SystemDependency& dep);
+    void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep);
 
     // Phase 5: after: validation
     void validate_after_clauses(ProgramNode& program);

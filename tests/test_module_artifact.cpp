@@ -1,9 +1,11 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "common/types.hpp"
+#include "frontend/module_artifact.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
-#include "common/error_reporter.h"
-#include "common/types.h"
-#include "frontend/module_artifact.h"
-#include "frontend/semantic_analyzer.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -22,44 +24,44 @@ static DecoratedProgram make_test_program() {
 
     // Trait: Position (pub)
     ResolvedTrait pos;
-    pos.name = "Position";
+    pos.name   = "Position";
     pos.is_pub = true;
     ResolvedField fx;
-    fx.name = "x";
-    fx.type = make_float_type();
-    fx.is_var = true;
+    fx.name       = "x";
+    fx.type       = make_float_type();
+    fx.is_var     = true;
     fx.is_persist = true;
-    fx.is_sync = true;
+    fx.is_sync    = true;
     ResolvedField fy;
-    fy.name = "y";
-    fy.type = make_float_type();
-    fy.is_var = true;
-    pos.fields = {fx, fy};
+    fy.name                 = "y";
+    fy.type                 = make_float_type();
+    fy.is_var               = true;
+    pos.fields              = {fx, fy};
     prog.traits["Position"] = pos;
 
     // Trait: PlayerPhysics (non-pub)
     ResolvedTrait phys;
-    phys.name = "PlayerPhysics";
+    phys.name   = "PlayerPhysics";
     phys.is_pub = false;
     ResolvedField fmass;
-    fmass.name = "mass";
-    fmass.type = make_float_type();
-    fmass.is_var = true;
-    phys.fields = {fmass};
+    fmass.name                   = "mass";
+    fmass.type                   = make_float_type();
+    fmass.is_var                 = true;
+    phys.fields                  = {fmass};
     prog.traits["PlayerPhysics"] = phys;
 
     // Enum: Direction
     ResolvedEnum dir;
-    dir.name = "Direction";
-    dir.variants = {"Up", "Down", "Left", "Right"};
+    dir.name                = "Direction";
+    dir.variants            = {"Up", "Down", "Left", "Right"};
     prog.enums["Direction"] = dir;
 
     // System dependency
     SystemDependency dep;
     dep.system_name = "MoveSystem";
-    dep.reads = {"Position"};
-    dep.writes = {"Position"};
-    dep.emits = {};
+    dep.reads       = {"Position"};
+    dep.writes      = {"Position"};
+    dep.emits       = {};
     prog.dependency_graph.push_back(dep);
 
     prog.ast = nullptr;
@@ -151,7 +153,7 @@ TEST_CASE("ModuleArtifact: extract_pub_symbols only returns pub traits", "[artif
     artifact.save(program, "player", build_dir);
     REQUIRE_FALSE(errors.has_errors());
 
-    auto path = build_dir / "player.cmod";
+    auto path    = build_dir / "player.cmod";
     auto symbols = artifact.extract_pub_symbols(path);
     REQUIRE_FALSE(errors.has_errors());
     REQUIRE(symbols.has_value());
@@ -159,8 +161,8 @@ TEST_CASE("ModuleArtifact: extract_pub_symbols only returns pub traits", "[artif
     CHECK(symbols->module_name == "player");
     // Only pub trait "Position" should be extracted
     CHECK(symbols->traits.size() == 1);
-    REQUIRE(symbols->traits.count("Position") == 1);
-    CHECK(symbols->traits.count("PlayerPhysics") == 0);
+    REQUIRE(symbols->traits.contains("Position"));
+    CHECK_FALSE(symbols->traits.contains("PlayerPhysics"));
 
     // Enum should be present
     CHECK(symbols->enums.size() == 1);
@@ -202,13 +204,13 @@ TEST_CASE("ModuleArtifact: overwrites existing artifact", "[artifact]") {
 
     // Save once
     artifact.save(program, "player", build_dir);
-    auto path = build_dir / "player.cmod";
+    auto path  = build_dir / "player.cmod";
     auto size1 = fs::file_size(path);
 
     // Add another trait and save again
     ResolvedTrait extra;
-    extra.name = "Extra";
-    extra.is_pub = true;
+    extra.name              = "Extra";
+    extra.is_pub            = true;
     program.traits["Extra"] = extra;
 
     artifact.save(program, "player", build_dir);
@@ -241,8 +243,8 @@ TEST_CASE("ModuleArtifact: version mismatch error", "[artifact]") {
     {
         std::ofstream out(path, std::ios::binary);
         out.write("CMOD", 4);
-        uint8_t bad_version = 99;
-        out.write(reinterpret_cast<const char*>(&bad_version), 1);
+        const char bad_version = 99;
+        out.write(&bad_version, 1);
         // rest is garbage
     }
 
@@ -269,20 +271,29 @@ TEST_CASE("ModuleArtifact: extern func round-trips through save/load", "[artifac
 
     // Add an extern func
     ResolvedFunc lerp;
-    lerp.name = "lerp";
-    lerp.is_pub = true;
+    lerp.name      = "lerp";
+    lerp.is_pub    = true;
     lerp.is_extern = true;
-    ResolvedParam pa; pa.name = "a"; pa.type = make_float_type(); lerp.params.push_back(pa);
-    ResolvedParam pb; pb.name = "b"; pb.type = make_float_type(); lerp.params.push_back(pb);
-    ResolvedParam pt; pt.name = "t"; pt.type = make_float_type(); lerp.params.push_back(pt);
-    lerp.return_type = make_float_type();
+    ResolvedParam pa;
+    pa.name = "a";
+    pa.type = make_float_type();
+    lerp.params.push_back(pa);
+    ResolvedParam pb;
+    pb.name = "b";
+    pb.type = make_float_type();
+    lerp.params.push_back(pb);
+    ResolvedParam pt;
+    pt.name = "t";
+    pt.type = make_float_type();
+    lerp.params.push_back(pt);
+    lerp.return_type   = make_float_type();
     prog.funcs["lerp"] = lerp;
 
     // Also add a non-pub func
     ResolvedFunc helper;
-    helper.name = "internal_helper";
-    helper.is_pub = false;
-    helper.is_extern = true;
+    helper.name                   = "internal_helper";
+    helper.is_pub                 = false;
+    helper.is_extern              = true;
     prog.funcs["internal_helper"] = helper;
 
     artifact.save(prog, "mathlib", build_dir);
@@ -295,7 +306,7 @@ TEST_CASE("ModuleArtifact: extern func round-trips through save/load", "[artifac
     REQUIRE(loaded.has_value());
 
     CHECK(name == "mathlib");
-    REQUIRE(loaded->funcs.count("lerp") == 1);
+    REQUIRE(loaded->funcs.contains("lerp"));
     auto& lf = loaded->funcs.at("lerp");
     CHECK(lf.name == "lerp");
     CHECK(lf.is_pub);
@@ -307,7 +318,7 @@ TEST_CASE("ModuleArtifact: extern func round-trips through save/load", "[artifac
     CHECK(lf.return_type->kind == TypeKind::Float);
 
     // Non-pub func also round-trips
-    REQUIRE(loaded->funcs.count("internal_helper") == 1);
+    REQUIRE(loaded->funcs.contains("internal_helper"));
 
     fs::remove_all(build_dir, ec);
 }
@@ -323,30 +334,30 @@ TEST_CASE("ModuleArtifact: extract_pub_symbols returns pub extern funcs only", "
 
     // Add pub extern func
     ResolvedFunc pub_func;
-    pub_func.name = "lerp";
-    pub_func.is_pub = true;
+    pub_func.name      = "lerp";
+    pub_func.is_pub    = true;
     pub_func.is_extern = true;
     prog.funcs["lerp"] = pub_func;
 
     // Add non-pub extern func
     ResolvedFunc priv_func;
-    priv_func.name = "internal";
-    priv_func.is_pub = false;
-    priv_func.is_extern = true;
+    priv_func.name         = "internal";
+    priv_func.is_pub       = false;
+    priv_func.is_extern    = true;
     prog.funcs["internal"] = priv_func;
 
     artifact.save(prog, "testmod", build_dir);
     REQUIRE_FALSE(errors.has_errors());
 
-    auto path = build_dir / "testmod.cmod";
+    auto path    = build_dir / "testmod.cmod";
     auto symbols = artifact.extract_pub_symbols(path);
     REQUIRE_FALSE(errors.has_errors());
     REQUIRE(symbols.has_value());
 
     // Only pub func should be in symbols
     CHECK(symbols->funcs.size() == 1);
-    REQUIRE(symbols->funcs.count("lerp") == 1);
-    CHECK(symbols->funcs.count("internal") == 0);
+    REQUIRE(symbols->funcs.contains("lerp"));
+    CHECK_FALSE(symbols->funcs.contains("internal"));
     CHECK(symbols->funcs.at("lerp").is_pub);
     CHECK(symbols->funcs.at("lerp").is_extern);
 
@@ -366,8 +377,8 @@ TEST_CASE("ModuleArtifact: version-1 artifact rejected with error", "[artifact][
     {
         std::ofstream out(path, std::ios::binary);
         out.write("CMOD", 4);
-        uint8_t v1 = 1;
-        out.write(reinterpret_cast<const char*>(&v1), 1);
+        const char v1 = 1;
+        out.write(&v1, 1);
         // rest doesn't matter
     }
 
@@ -404,3 +415,4 @@ TEST_CASE("ModuleArtifact: invalid magic rejected", "[artifact]") {
 
     fs::remove_all(build_dir, ec);
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

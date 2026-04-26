@@ -11,14 +11,14 @@
 
 ## 2. Lexer — New Keywords
 
-- [x] 2.1 Add `TEMPLATE`, `SPAWN`, `DESTROY`, `LOAD`, `UNLOAD`, `ENABLE`, `DISABLE`, `EXCLUDE`, `DISABLED` token types to `token.h`
+- [x] 2.1 Add `TEMPLATE`, `SPAWN`, `DESTROY`, `LOAD`, `UNLOAD`, `ENABLE`, `DISABLE`, `EXCLUDE`, `DISABLED` token types to `token.hpp`
 - [x] 2.2 Register all 9 new keywords in `lexer.cpp` keyword map
 - [x] 2.3 Add lexer tests for each new keyword tokenizing correctly
 - [x] 2.4 Add lexer tests verifying new keywords are rejected as identifiers
 
 ## 3. AST — New Node Types
 
-- [x] 3.1 Add `TemplateDecl` AST node to `ast.h` (mirrors `UnitDecl`, adds no extra fields)
+- [x] 3.1 Add `TemplateDecl` AST node to `ast.hpp` (mirrors `UnitDecl`, adds no extra fields)
 - [x] 3.2 Extend `ApplyEntry` AST node to include `initially_active: bool` (default `true`)
 - [x] 3.3 Add `SpawnStmt` AST node: `template_name`, `overrides: list<(field_name, expr)>`
 - [x] 3.4 Add `DestroyStmt` AST node (no fields)

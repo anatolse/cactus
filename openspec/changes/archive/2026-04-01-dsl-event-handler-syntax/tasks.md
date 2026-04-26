@@ -1,6 +1,6 @@
 ## 1. AST Changes
 
-- [x] 1.1 Update `EventHandlerNode` in `src/frontend/ast.h`: remove `params` field, add `alias: optional<string>` field
+- [x] 1.1 Update `EventHandlerNode` in `src/frontend/ast.hpp`: remove `params` field, add `alias: optional<string>` field
 
 ## 2. Parser
 

@@ -1,9 +1,11 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/ast.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/parser.hpp"
 
-#include "common/error_reporter.h"
-#include "frontend/ast.h"
-#include "frontend/lexer.h"
-#include "frontend/parser.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -45,15 +47,13 @@ static ErrorReporter parse_expect_errors(const std::string& source, const std::s
 }
 
 static ErrorReporter parse_fixture_expect_errors_with_timeout(const std::string& fixture_name) {
-    auto future = std::async(std::launch::async, [fixture_name]() {
-        return parse_expect_errors(read_fixture(fixture_name), fixture_name);
-    });
+    auto future = std::async(
+        std::launch::async, [fixture_name]() { return parse_expect_errors(read_fixture(fixture_name), fixture_name); });
 
     auto future_status = future.wait_for(std::chrono::seconds(5));
     REQUIRE(future_status == std::future_status::ready);
     return future.get();
 }
-
 
 TEST_CASE("Parser: module declaration", "[parser]") {
     auto prog = parse("module player\n");
@@ -71,7 +71,7 @@ TEST_CASE("Parser: use declaration", "[parser]") {
 }
 
 TEST_CASE("Parser: use with alias", "[parser]") {
-    auto prog = parse("use world as w\n");
+    auto prog  = parse("use world as w\n");
     auto& decl = std::get<UseNode>(prog.declarations[0]);
     CHECK(decl.module_name == "world");
     REQUIRE(decl.alias.has_value());
@@ -263,7 +263,7 @@ TEST_CASE("Parser: expression — member access", "[parser]") {
         "const:\n"
         "    X = a.b\n");
     auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
-    auto* mem = std::get_if<MemberExpr>(&decl.assignments[0].value->expr);
+    auto* mem  = std::get_if<MemberExpr>(&decl.assignments[0].value->expr);
     REQUIRE(mem != nullptr);
     CHECK(mem->member == "b");
 }
@@ -273,7 +273,7 @@ TEST_CASE("Parser: expression — unary not", "[parser]") {
         "const:\n"
         "    X = not true\n");
     auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
-    auto* un = std::get_if<UnaryExpr>(&decl.assignments[0].value->expr);
+    auto* un   = std::get_if<UnaryExpr>(&decl.assignments[0].value->expr);
     REQUIRE(un != nullptr);
     CHECK(un->op == "not");
 }
@@ -368,20 +368,20 @@ TEST_CASE("Parser: dotted module declaration", "[parser][modules]") {
 }
 
 TEST_CASE("Parser: deeply dotted module declaration", "[parser][modules]") {
-    auto prog = parse("module lib.physics.rigid\n");
+    auto prog  = parse("module lib.physics.rigid\n");
     auto& decl = std::get<ModuleNode>(prog.declarations[0]);
     CHECK(decl.name == "lib.physics.rigid");
 }
 
 TEST_CASE("Parser: use with dotted path", "[parser][modules]") {
-    auto prog = parse("use enemies.walker\n");
+    auto prog  = parse("use enemies.walker\n");
     auto& decl = std::get<UseNode>(prog.declarations[0]);
     CHECK(decl.module_name == "enemies.walker");
     CHECK_FALSE(decl.alias.has_value());
 }
 
 TEST_CASE("Parser: use with dotted path and alias", "[parser][modules]") {
-    auto prog = parse("use phys.body as b\n");
+    auto prog  = parse("use phys.body as b\n");
     auto& decl = std::get<UseNode>(prog.declarations[0]);
     CHECK(decl.module_name == "phys.body");
     REQUIRE(decl.alias.has_value());
@@ -545,7 +545,7 @@ TEST_CASE("Parser: system with exclude clause", "[parser][dynamic-ecs]") {
         "    on unload:\n"
         "        x = 0\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
-    CHECK(sys.filter.entries.empty());   // no filter
+    CHECK(sys.filter.entries.empty());  // no filter
     REQUIRE(sys.exclude.trait_names.size() == 1);
     CHECK(sys.exclude.trait_names[0] == "Persistent");
     REQUIRE(sys.handlers.size() == 1);
@@ -564,7 +564,7 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
         "                pos = 0.0\n"
         "            EnemyAI:\n"
         "                patrol_speed = 2.0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys     = std::get<SystemNode>(prog.declarations[0]);
     auto& handler = sys.handlers[0];
     REQUIRE(handler.body.size() == 1);
     auto* spawn = std::get_if<SpawnStmt>(&handler.body[0]->stmt);
@@ -587,7 +587,7 @@ TEST_CASE("Parser: destroy statement", "[parser][dynamic-ecs]") {
         "        Health\n"
         "    on tick:\n"
         "        destroy\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys     = std::get<SystemNode>(prog.declarations[0]);
     auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(destroy != nullptr);
 }
@@ -599,7 +599,7 @@ TEST_CASE("Parser: destroy targeted entity statement", "[parser][dynamic-ecs]") 
         "system Cleanup:\n"
         "    on Collision as c:\n"
         "        destroy c.other\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[1]);
+    auto& sys     = std::get<SystemNode>(prog.declarations[1]);
     auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(destroy != nullptr);
     REQUIRE(destroy->target_expr.has_value());
@@ -610,7 +610,7 @@ TEST_CASE("Parser: self parsed as destroy target", "[parser][hierarchy]") {
         "system Cleanup:\n"
         "    on tick:\n"
         "        destroy self\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys     = std::get<SystemNode>(prog.declarations[0]);
     auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(destroy != nullptr);
     REQUIRE(destroy->target_expr.has_value());
@@ -645,7 +645,7 @@ TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
         "        GameState\n"
         "    on tick:\n"
         "        load levels.level1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys  = std::get<SystemNode>(prog.declarations[0]);
     auto* load = std::get_if<LoadStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(load != nullptr);
     CHECK(load->module_name == "levels.level1");
@@ -661,7 +661,7 @@ TEST_CASE("Parser: add and remove statements", "[parser][dynamic-ecs]") {
         "        remove EnemyAI\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 2);
-    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* add    = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[1]->stmt);
     REQUIRE(add != nullptr);
     CHECK(add->trait_name == "Frozen");
@@ -693,7 +693,7 @@ TEST_CASE("Parser: remove statement with target", "[parser][dynamic-ecs]") {
         "        Position\n"
         "    on tick:\n"
         "        remove Frozen from target_id\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys    = std::get<SystemNode>(prog.declarations[0]);
     auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(remove != nullptr);
     CHECK(remove->trait_name == "Frozen");
@@ -711,7 +711,7 @@ TEST_CASE("Parser: marker trait without body", "[parser][dynamic-ecs]") {
 }
 
 TEST_CASE("Parser: pub marker trait", "[parser][dynamic-ecs]") {
-    auto prog = parse("pub trait Frozen\n");
+    auto prog   = parse("pub trait Frozen\n");
     auto& trait = std::get<TraitNode>(prog.declarations[0]);
     CHECK(trait.name == "Frozen");
     CHECK(trait.is_pub);
@@ -742,25 +742,25 @@ TEST_CASE("Parser: pub asset declaration texture type", "[parser][dsl-spec-new-f
 }
 
 TEST_CASE("Parser: asset declaration sound type", "[parser][dsl-spec-new-features]") {
-    auto prog = parse("asset ShotSfx: sound = \"audio/shot.wav\"\n");
+    auto prog  = parse("asset ShotSfx: sound = \"audio/shot.wav\"\n");
     auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
     CHECK(node.asset_kind == AssetKind::Sound);
 }
 
 TEST_CASE("Parser: asset declaration music type", "[parser][dsl-spec-new-features]") {
-    auto prog = parse("asset Theme: music = \"audio/theme.ogg\"\n");
+    auto prog  = parse("asset Theme: music = \"audio/theme.ogg\"\n");
     auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
     CHECK(node.asset_kind == AssetKind::Music);
 }
 
 TEST_CASE("Parser: asset declaration font type", "[parser][dsl-spec-new-features]") {
-    auto prog = parse("asset HudFont: font = \"fonts/hud.ttf\"\n");
+    auto prog  = parse("asset HudFont: font = \"fonts/hud.ttf\"\n");
     auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
     CHECK(node.asset_kind == AssetKind::Font);
 }
 
 TEST_CASE("Parser: asset declaration material type", "[parser][dsl-spec-new-features]") {
-    auto prog = parse("asset StoneMat: material = \"materials/stone.mat\"\n");
+    auto prog  = parse("asset StoneMat: material = \"materials/stone.mat\"\n");
     auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
     CHECK(node.asset_kind == AssetKind::Material);
 }
@@ -770,8 +770,7 @@ TEST_CASE("Parser: input declaration button with properties", "[parser][dsl-spec
     auto prog = parse(
         "input Jump: button\n"
         "    key     = Key.Space\n"
-        "    gamepad = GamepadButton.South\n"
-    );
+        "    gamepad = GamepadButton.South\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& node = std::get<InputDeclNode>(prog.declarations[0]);
     CHECK(node.name == "Jump");
@@ -787,8 +786,7 @@ TEST_CASE("Parser: pub input declaration axis type", "[parser][dsl-spec-new-feat
         "pub input MoveX: axis\n"
         "    negative = Key.A\n"
         "    positive = Key.D\n"
-        "    gamepad  = GamepadAxis.LeftX\n"
-    );
+        "    gamepad  = GamepadAxis.LeftX\n");
     REQUIRE(prog.declarations.size() == 1);
     auto& node = std::get<InputDeclNode>(prog.declarations[0]);
     CHECK(node.name == "MoveX");
@@ -805,8 +803,7 @@ TEST_CASE("Parser: input declaration axis with invert property", "[parser][dsl-s
         "input MoveY: axis\n"
         "    negative = Key.S\n"
         "    positive = Key.W\n"
-        "    invert   = true\n"
-    );
+        "    invert   = true\n");
     auto& node = std::get<InputDeclNode>(prog.declarations[0]);
     CHECK(node.input_kind == InputKind::Axis);
     CHECK(node.props.size() == 3);
@@ -818,8 +815,7 @@ TEST_CASE("Parser: on input handler with no parameters", "[parser][dsl-spec-new-
     auto prog = parse(
         "system InputSys:\n"
         "    on input:\n"
-        "        x = 1\n"
-    );
+        "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "input");
@@ -829,8 +825,7 @@ TEST_CASE("Parser: on fixed_tick handler with dt parameter", "[parser][dsl-spec-
     auto prog = parse(
         "system PhysSys:\n"
         "    on fixed_tick:\n"
-        "        x = 1\n"
-    );
+        "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "fixed_tick");
@@ -840,8 +835,7 @@ TEST_CASE("Parser: on late_tick handler with dt parameter", "[parser][dsl-spec-n
     auto prog = parse(
         "system CamSys:\n"
         "    on late_tick:\n"
-        "        x = 1\n"
-    );
+        "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "late_tick");
@@ -855,8 +849,7 @@ TEST_CASE("Parser: system with multiple lifecycle handlers", "[parser][dsl-spec-
         "    on fixed_tick:\n"
         "        y = 2\n"
         "    on late_tick:\n"
-        "        z = 3\n"
-    );
+        "        z = 3\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 3);
     CHECK(sys.handlers[0].event_name == "input");
@@ -912,8 +905,7 @@ TEST_CASE("Parser: consecutive extern funcs parse cleanly", "[parser][extern-fun
     auto prog = parse(
         "pub extern func sin(a: float) float\n"
         "pub extern func cos(a: float) float\n"
-        "pub extern func sqrt(v: float) float\n"
-    );
+        "pub extern func sqrt(v: float) float\n");
     REQUIRE(prog.declarations.size() == 3);
     CHECK(std::get<FuncNode>(prog.declarations[0]).name == "sin");
     CHECK(std::get<FuncNode>(prog.declarations[1]).name == "cos");
@@ -955,7 +947,9 @@ TEST_CASE("Parser: func with arrow return type produces error", "[parser][extern
     ErrorReporter errors;
     Lexer lexer(
         "func add(a: int, b: int) -> int:\n"
-        "    return a + b\n", "test.cactus", errors);
+        "    return a + b\n",
+        "test.cactus",
+        errors);
     auto tokens = lexer.tokenize();
     REQUIRE_FALSE(errors.has_errors());  // lexing should be fine
     Parser parser(std::move(tokens), errors);
@@ -972,7 +966,9 @@ TEST_CASE("Parser: trait body with on handler produces error", "[parser][trait-c
         "trait Bad:\n"
         "    var x: int\n"
         "    on tick(dt: float):\n"
-        "        x = 1\n", "test.cactus", errors);
+        "        x = 1\n",
+        "test.cactus",
+        errors);
     auto tokens = lexer.tokenize();
     Parser parser(std::move(tokens), errors);
     parser.parse_program();
@@ -990,8 +986,7 @@ TEST_CASE("Parser: system after: block parsed correctly", "[parser][system-order
         "    after:\n"
         "        SceneRender\n"
         "    on tick:\n"
-        "        y = 2\n"
-    );
+        "        y = 2\n");
     REQUIRE(prog.declarations.size() == 2);
     auto& ui = std::get<SystemNode>(prog.declarations[1]);
     CHECK(ui.name == "UIRender");
@@ -1005,8 +1000,7 @@ TEST_CASE("Parser: system after: block parsed correctly", "[parser][system-order
 TEST_CASE("Parser: marker trait entry in unit", "[parser][config-qualification]") {
     auto prog = parse(
         "unit Player:\n"
-        "    Position\n"
-    );
+        "    Position\n");
     auto& unit = std::get<UnitNode>(prog.declarations[0]);
     REQUIRE(unit.traits.size() == 1);
     CHECK(unit.traits[0].trait_name == "Position");
@@ -1019,8 +1013,7 @@ TEST_CASE("Parser: nested trait field assignment parsed correctly", "[parser][co
         "    var health: int = 100\n"
         "unit Player:\n"
         "    Health:\n"
-        "        health = 50\n"
-    );
+        "        health = 50\n");
     auto& unit = std::get<UnitNode>(prog.declarations[1]);
     REQUIRE(unit.traits.size() == 1);
     CHECK(unit.traits[0].trait_name == "Health");
@@ -1161,7 +1154,7 @@ TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait
         "        match c.other:\n"
         "            Boss as b =>\n"
         "                let x = b.phase\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[1]);
+    auto& sys        = std::get<SystemNode>(prog.declarations[1]);
     auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match_stmt != nullptr);
     REQUIRE(match_stmt->arms.size() == 1);
@@ -1183,7 +1176,7 @@ TEST_CASE("Parser: trait match statement multiple arms and wildcard", "[parser][
         "                pass\n"
         "            _ =>\n"
         "                pass\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[1]);
+    auto& sys        = std::get<SystemNode>(prog.declarations[1]);
     auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match_stmt != nullptr);
     REQUIRE(match_stmt->arms.size() == 2);
@@ -1217,7 +1210,7 @@ TEST_CASE("Parser: add and remove statements with cross-entity targets parsed", 
         "        remove Frozen from target_id\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 2);
-    auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* add    = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[1]->stmt);
     REQUIRE(add != nullptr);
     REQUIRE(remove != nullptr);
@@ -1232,8 +1225,7 @@ TEST_CASE("Parser: system with multiple after: entries", "[parser][system-orderi
         "        SceneRender\n"
         "        UIRender\n"
         "    on tick:\n"
-        "        x = 1\n"
-    );
+        "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.after_systems.size() == 2);
     CHECK(sys.after_systems[0] == "SceneRender");
@@ -1248,8 +1240,7 @@ TEST_CASE("Parser: on tick with alias parsed", "[parser][dsl-event-handler-synta
         "    filter:\n"
         "        Position\n"
         "    on tick as t:\n"
-        "        x = 1\n"
-    );
+        "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "tick");
@@ -1261,8 +1252,7 @@ TEST_CASE("Parser: on user event with alias parsed", "[parser][dsl-event-handler
     auto prog = parse(
         "system Combat:\n"
         "    on PlayerDamaged as dmg:\n"
-        "        x = 1\n"
-    );
+        "        x = 1\n");
     auto& sys = std::get<SystemNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "PlayerDamaged");
@@ -1336,3 +1326,4 @@ TEST_CASE("Parser: synchronization limits spurious cascade errors", "[parser][re
     CHECK(errors.error_count() >= 2);
     CHECK(errors.error_count() <= 8);
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "frontend/semantic_analyzer.h"
+#include "frontend/semantic_analyzer.hpp"
 
 #include <string>
 

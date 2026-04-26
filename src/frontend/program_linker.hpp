@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/error_reporter.h"
-#include "frontend/semantic_analyzer.h"
+#include "common/error_reporter.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -30,14 +30,12 @@ public:
     /// Load and merge the given .cmod artifact files in order.
     /// Returns the merged DecoratedProgram on success, or nullopt on error.
     /// artifact_paths should be in dependency order (leaves first).
-    std::optional<DecoratedProgram> link(
-        const std::vector<std::filesystem::path>& artifact_paths);
+    std::optional<DecoratedProgram> link(const std::vector<std::filesystem::path>& artifact_paths);
 
     /// Merge src into target.
     /// src_module_name is used in error messages for duplicate symbols.
     /// Returns false if a duplicate symbol was detected.
-    bool merge_into(DecoratedProgram& target, const DecoratedProgram& src,
-                    const std::string& src_module_name);
+    bool merge_into(DecoratedProgram& target, const DecoratedProgram& src, const std::string& src_module_name);
 
 private:
     ErrorReporter& errors_;

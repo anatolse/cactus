@@ -1,6 +1,8 @@
-#include "backends/cpp-entt/system_emitter.h"
+#include "backends/cpp-entt/system_emitter.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -52,13 +54,12 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
                func_name == "pow";
     }
     if (module_name == "std.math.vec2") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
-               func_name == "lerp" || func_name == "distance" || func_name == "angle";
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "lerp" ||
+               func_name == "distance" || func_name == "angle";
     }
     if (module_name == "std.math.vec3") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
-               func_name == "cross" || func_name == "lerp" || func_name == "distance" ||
-               func_name == "reflect";
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "cross" ||
+               func_name == "lerp" || func_name == "distance" || func_name == "reflect";
     }
     if (module_name == "std.math.quat") {
         return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
@@ -66,8 +67,8 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
                func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
     }
     if (module_name == "std.input") {
-        return func_name == "pressed" || func_name == "down" || func_name == "released" ||
-               func_name == "axis" || func_name == "axis2";
+        return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
+               func_name == "axis2";
     }
     return false;
 }
@@ -91,7 +92,10 @@ std::string lower_unqualified_stdlib_func(const DecoratedProgram& program,
         if (prefix.empty()) {
             continue;
         }
-        return prefix + "::" + func_name;
+        std::string result;
+        result.reserve(prefix.size() + func_name.size() + 2U);
+        result.append(prefix).append("::").append(func_name);
+        return result;
     }
     return {};
 }
@@ -112,7 +116,9 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
     if (prefix.empty()) {
         return {};
     }
-    std::string result = prefix + "::" + member.member + "(";
+    std::string result;
+    result.reserve(prefix.size() + member.member.size() + 3U);
+    result.append(prefix).append("::").append(member.member).push_back('(');
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
             result += ", ";
@@ -123,7 +129,7 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
     return result;
 }
 
-std::string snake_case(std::string value) {
+std::string snake_case(const std::string& value) {
     std::string result;
     for (const char ch : value) {
         if (std::isupper(static_cast<unsigned char>(ch)) != 0) {
@@ -139,8 +145,7 @@ std::string snake_case(std::string value) {
 }
 
 std::string upper_copy(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return value;
 }
 
@@ -188,29 +193,27 @@ bool filter_has_trait(const FilterLike& filter, const std::string& qualified, co
             return true;
         }
     }
-    return std::any_of(filter.trait_names.begin(), filter.trait_names.end(),
-                       [&](const auto& name) { return name == simple; });
+    return std::any_of(
+        filter.trait_names.begin(), filter.trait_names.end(), [&](const auto& name) { return name == simple; });
 }
 
 template <typename FilterLike>
 bool filter_has_exact_trait(const FilterLike& filter, const std::string& qualified) {
-    return std::any_of(filter.entries.begin(), filter.entries.end(),
-                       [&](const auto& entry) {
-                           return entry.qualified_name == qualified;
-                       });
+    return std::any_of(filter.entries.begin(), filter.entries.end(), [&](const auto& entry) {
+        return entry.qualified_name == qualified;
+    });
 }
 
 template <typename FilterLike>
 bool filter_has_simple_trait(const FilterLike& filter, const std::string& simple) {
-    return std::any_of(filter.entries.begin(), filter.entries.end(),
-                       [&](const auto& entry) {
-                           return filter_simple_name(entry) == simple;
-                       }) ||
-           std::any_of(filter.trait_names.begin(), filter.trait_names.end(),
-                       [&](const auto& name) { return name == simple; });
+    return std::any_of(filter.entries.begin(),
+                       filter.entries.end(),
+                       [&](const auto& entry) { return filter_simple_name(entry) == simple; }) ||
+           std::any_of(
+               filter.trait_names.begin(), filter.trait_names.end(), [&](const auto& name) { return name == simple; });
 }
 
-enum class TransformFlavor {
+enum class TransformFlavor : std::uint8_t {
     Unknown,
     Flat,
     Volume,
@@ -228,10 +231,7 @@ const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& f
     if (trait == nullptr) {
         return nullptr;
     }
-    auto it = std::find_if(trait->fields.begin(), trait->fields.end(),
-                           [&](const auto& field) {
-                               return field.name == field_name;
-                           });
+    auto it = std::ranges::find_if(trait->fields, [&](const auto& field) { return field.name == field_name; });
     if (it == trait->fields.end()) {
         return nullptr;
     }
@@ -241,32 +241,27 @@ const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& f
 TransformFlavor transform_flavor_for_trait(const ResolvedTrait* trait) {
     const auto* position = find_field(trait, "position");
     const auto* rotation = find_field(trait, "rotation");
-    const auto* scale = find_field(trait, "scale");
+    const auto* scale    = find_field(trait, "scale");
     if (position == nullptr || rotation == nullptr || scale == nullptr) {
         return TransformFlavor::Unknown;
     }
 
-    if (position->type.kind == TypeKind::Vec2 &&
-        rotation->type.kind == TypeKind::Float &&
+    if (position->type.kind == TypeKind::Vec2 && rotation->type.kind == TypeKind::Float &&
         scale->type.kind == TypeKind::Vec2) {
         return TransformFlavor::Flat;
     }
-    if (position->type.kind == TypeKind::Vec3 &&
-        rotation->type.kind == TypeKind::Quat &&
+    if (position->type.kind == TypeKind::Vec3 && rotation->type.kind == TypeKind::Quat &&
         scale->type.kind == TypeKind::Vec3) {
         return TransformFlavor::Volume;
     }
     return TransformFlavor::Unknown;
 }
 
-TransformFlavor infer_transform_propagation_flavor(const ExternSystemNode& sys,
-                                                   const DecoratedProgram& program) {
-    const bool has_flat_qualified =
-        filter_has_exact_trait(sys.filter, "std.transform.flat.LocalTransform") ||
-        filter_has_exact_trait(sys.filter, "std.transform.flat.WorldTransform");
-    const bool has_volume_qualified =
-        filter_has_exact_trait(sys.filter, "std.transform.volume.LocalTransform") ||
-        filter_has_exact_trait(sys.filter, "std.transform.volume.WorldTransform");
+TransformFlavor infer_transform_propagation_flavor(const ExternSystemNode& sys, const DecoratedProgram& program) {
+    const bool has_flat_qualified   = filter_has_exact_trait(sys.filter, "std.transform.flat.LocalTransform") ||
+                                      filter_has_exact_trait(sys.filter, "std.transform.flat.WorldTransform");
+    const bool has_volume_qualified = filter_has_exact_trait(sys.filter, "std.transform.volume.LocalTransform") ||
+                                      filter_has_exact_trait(sys.filter, "std.transform.volume.WorldTransform");
 
     if (has_flat_qualified != has_volume_qualified) {
         return has_flat_qualified ? TransformFlavor::Flat : TransformFlavor::Volume;
@@ -290,15 +285,13 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     if (sys.is_stdlib) {
         return true;
     }
-    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" ||
-        sys.name == "SpriteRenderer" || sys.name == "AnimatedSpriteSystem" ||
-        sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
+    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
+        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
         sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
         return true;
     }
-    return std::any_of(sys.filter.entries.begin(), sys.filter.entries.end(), [](const auto& entry) {
-        return entry.qualified_name.rfind("std.", 0) == 0;
-    });
+    return std::ranges::any_of(sys.filter.entries,
+                               [](const auto& entry) { return entry.qualified_name.rfind("std.", 0) == 0; });
 }
 
 bool is_flat_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
@@ -351,11 +344,10 @@ bool is_directional_light_system(const ExternSystemNode& sys) {
            filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
 }
 
-std::string sort_key_expr(const SortKey& key, const std::string& entity_name,
-                         const SystemNode& sys) {
+std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const SystemNode& sys) {
     auto alias_to_trait = [&]() -> std::string {
         for (const auto& entry : sys.filter.entries) {
-            auto dot = entry.qualified_name.rfind('.');
+            auto dot    = entry.qualified_name.rfind('.');
             auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
             if (entry.alias.has_value() && *entry.alias == key.alias) {
                 return simple;
@@ -380,7 +372,7 @@ std::string sort_key_expr(const SortKey& key, const std::string& entity_name,
 
 std::string primary_sort_trait(const SortKey& key, const SystemNode& sys) {
     for (const auto& entry : sys.filter.entries) {
-        auto dot = entry.qualified_name.rfind('.');
+        auto dot    = entry.qualified_name.rfind('.');
         auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
         if ((entry.alias.has_value() && *entry.alias == key.alias) || simple == key.alias) {
             return simple;
@@ -399,12 +391,13 @@ void emit_sort_call(std::ostringstream& out, const SystemNode& sys) {
         return;
     }
 
-    out << "    registry.sort<" << primary_sort_trait(sys.order_by.front(), sys) << ">([&](entt::entity a, entt::entity b) {\n";
+    out << "    registry.sort<" << primary_sort_trait(sys.order_by.front(), sys)
+        << ">([&](entt::entity a, entt::entity b) {\n";
     for (const auto& key : sys.order_by) {
-        auto left = sort_key_expr(key, "a", sys);
+        auto left  = sort_key_expr(key, "a", sys);
         auto right = sort_key_expr(key, "b", sys);
-        out << "        if (" << left << " != " << right << ") return "
-            << left << (key.descending ? " > " : " < ") << right << ";\n";
+        out << "        if (" << left << " != " << right << ") return " << left << (key.descending ? " > " : " < ")
+            << right << ";\n";
     }
     out << "        return false;\n";
     out << "    });\n";
@@ -415,8 +408,8 @@ void emit_sort_call(std::ostringstream& out, const SystemNode& sys) {
 // ── Helper: resolve which component a field belongs to ──────────────────────
 
 static std::string find_comp_for_field(const std::string& field_name,
-                                        const std::vector<std::string>& trait_names,
-                                        const DecoratedProgram& program) {
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program) {
     for (const auto& tn : trait_names) {
         auto it = program.traits.find(tn);
         if (it != program.traits.end()) {
@@ -432,9 +425,8 @@ static std::string find_comp_for_field(const std::string& field_name,
 
 // ── Helper: collect all field names from filter traits ───────────────────────
 
-static std::unordered_set<std::string> collect_trait_fields(
-    const std::vector<std::string>& trait_names,
-    const DecoratedProgram& program) {
+static std::unordered_set<std::string> collect_trait_fields(const std::vector<std::string>& trait_names,
+                                                            const DecoratedProgram& program) {
     std::unordered_set<std::string> fields;
     for (const auto& tn : trait_names) {
         auto it = program.traits.find(tn);
@@ -450,15 +442,15 @@ static std::unordered_set<std::string> collect_trait_fields(
 // ── Rewrite expression: replace bare field names with comp.field ─────────────
 
 static std::string rewrite_expr(const ExprNode& expr,
-                                 const std::vector<std::string>& trait_names,
-                                 const DecoratedProgram& program,
-                                 const std::unordered_set<std::string>& pointer_aliases = {});
+                                const std::vector<std::string>& trait_names,
+                                const DecoratedProgram& program,
+                                const std::unordered_set<std::string>& pointer_aliases = {});
 
 static std::string rewrite_stmt(const StmtNode& stmt,
-                                 int indent,
-                                 const std::vector<std::string>& trait_names,
-                                 const DecoratedProgram& program,
-                                 const std::unordered_set<std::string>& pointer_aliases = {});
+                                int indent,
+                                const std::vector<std::string>& trait_names,
+                                const DecoratedProgram& program,
+                                const std::unordered_set<std::string>& pointer_aliases = {});
 
 static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          int indent,
@@ -466,14 +458,14 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          const DecoratedProgram& program,
                                          const std::unordered_set<std::string>& pointer_aliases = {});
 
-static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-function-cognitive-complexity)
-                                 const std::vector<std::string>& trait_names,
-                                  const DecoratedProgram& program,
-                                  const std::unordered_set<std::string>& pointer_aliases) {
+static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-function-cognitive-complexity)
+                                const std::vector<std::string>& trait_names,
+                                const DecoratedProgram& program,
+                                const std::unordered_set<std::string>& pointer_aliases) {
     auto known_fields = collect_trait_fields(trait_names, program);
 
     return std::visit(
-        [&](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
+        [&](auto& e) -> std::string {  // NOLINT(readability-function-cognitive-complexity)
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
                 if (e.kind == LiteralExpr::Kind::String) {
@@ -515,13 +507,15 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
-                    return "registry.valid(" +
-                           rewrite_expr(*e.args[0], trait_names, program, pointer_aliases) + ")";
+                    return "registry.valid(" + rewrite_expr(*e.args[0], trait_names, program, pointer_aliases) + ")";
                 }
                 if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                     if (const auto lowered_name = lower_unqualified_stdlib_func(
-                            program, ident->name,
-                            [&](const ExprNode& arg) { return rewrite_expr(arg, trait_names, program, pointer_aliases); });
+                            program,
+                            ident->name,
+                            [&](const ExprNode& arg) {
+                                return rewrite_expr(arg, trait_names, program, pointer_aliases);
+                            });
                         !lowered_name.empty()) {
                         std::string result = lowered_name + "(";
                         for (size_t i = 0; i < e.args.size(); ++i) {
@@ -535,8 +529,13 @@ static std::string rewrite_expr(const ExprNode& expr, // NOLINT(readability-func
                 }
                 if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
                     if (const auto lowered = lower_stdlib_member_call(
-                            *member, e.args, program, pointer_aliases,
-                            [&](const ExprNode& arg) { return rewrite_expr(arg, trait_names, program, pointer_aliases); },
+                            *member,
+                            e.args,
+                            program,
+                            pointer_aliases,
+                            [&](const ExprNode& arg) {
+                                return rewrite_expr(arg, trait_names, program, pointer_aliases);
+                            },
                             trait_names);
                         !lowered.empty()) {
                         return lowered;
@@ -595,8 +594,9 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     std::ostringstream out;
 
     out << ind << "{\n";
-    out << ind << "    auto __match_entity = "
-        << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases) << ";\n";
+    out << ind
+        << "    auto __match_entity = " << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases)
+        << ";\n";
     out << ind << "    if (registry.valid(__match_entity)) {\n";
 
     bool first = true;
@@ -637,18 +637,22 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     return out.str();
 }
 
-static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(readability-function-cognitive-complexity)
-                                 const std::vector<std::string>& trait_names,
-                                 const DecoratedProgram& program,
-                                 const std::unordered_set<std::string>& pointer_aliases) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+static std::string rewrite_stmt(const StmtNode& stmt,
+                                int indent,
+                                const std::vector<std::string>& trait_names,
+                                const DecoratedProgram& program,
+                                const std::unordered_set<std::string>& pointer_aliases) {
     auto known_fields = collect_trait_fields(trait_names, program);
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
     return std::visit(
-        [&](auto& s) -> std::string { // NOLINT(readability-function-cognitive-complexity)
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+        [&](auto& s) -> std::string {
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, LetStmt>) {
-                return ind + "auto " + s.name + " = " + rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
+                return ind + "auto " + s.name + " = " + rewrite_expr(*s.value, trait_names, program, pointer_aliases) +
+                       ";\n";
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
                 if (known_fields.contains(s.name)) {
@@ -668,18 +672,20 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                         const std::string prefix = ind + lhs + " " + s.op + " vec2(";
                         const std::string continuation(prefix.size(), ' ');
                         return prefix + rewrite_expr(*call->args[0], trait_names, program, pointer_aliases) + ",\n" +
-                               continuation + rewrite_expr(*call->args[1], trait_names, program, pointer_aliases) + ");\n";
+                               continuation + rewrite_expr(*call->args[1], trait_names, program, pointer_aliases) +
+                               ");\n";
                     }
                 }
-                return ind + lhs + " " + s.op + " " +
-                       rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
+                return ind + lhs + " " + s.op + " " + rewrite_expr(*s.value, trait_names, program, pointer_aliases) +
+                       ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string emit_call = s.event_name + "_buffer.push_back({";
                 for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
                         emit_call += ", ";
                     }
-                    emit_call += "." + s.payload[i].name + " = " + rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases);
+                    emit_call += "." + s.payload[i].name + " = " +
+                                 rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases);
                 }
                 emit_call += "});";
                 if (s.target.has_value()) {
@@ -690,14 +696,13 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                 return ind + emit_call + "\n";
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                 std::string target = s.target_expr.has_value()
-                    ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
-                    : "entity";
+                                         ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
+                                         : "entity";
                 const bool GUARDED = s.target_expr.has_value();
                 if (s.args.empty()) {
                     if (GUARDED) {
-                        return ind + "if (registry.valid(" + target + ")) {\n" +
-                               ind + "    registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n" +
-                               ind + "}\n";
+                        return ind + "if (registry.valid(" + target + ")) {\n" + ind +
+                               "    registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n" + ind + "}\n";
                     }
                     return ind + "registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n";
                 }
@@ -724,20 +729,18 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
                 return result.str();
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
                 std::string target = s.target_expr.has_value()
-                    ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
-                    : "entity";
+                                         ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
+                                         : "entity";
                 if (s.target_expr.has_value()) {
-                    return ind + "if (registry.valid(" + target + ")) {\n" +
-                           ind + "    registry.remove<" + s.trait_name + ">(" + target + ");\n" +
-                           ind + "}\n";
+                    return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    registry.remove<" +
+                           s.trait_name + ">(" + target + ");\n" + ind + "}\n";
                 }
                 return ind + "registry.remove<" + s.trait_name + ">(" + target + ");\n";
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 if (s.target_expr.has_value()) {
                     std::string target = rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases);
-                    return ind + "if (registry.valid(" + target + ")) {\n" +
-                           ind + "    cactus_destroy_entity_recursive(registry, " + target + ");\n" +
-                           ind + "}\n";
+                    return ind + "if (registry.valid(" + target + ")) {\n" + ind +
+                           "    cactus_destroy_entity_recursive(registry, " + target + ");\n" + ind + "}\n";
                 }
                 return ind + "cactus_destroy_entity_recursive(registry, entity);\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
@@ -748,7 +751,8 @@ static std::string rewrite_stmt(const StmtNode& stmt, int indent, // NOLINT(read
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
                 return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                std::string result = ind + "if (" + rewrite_expr(*s.condition, trait_names, program, pointer_aliases) + ") {\n";
+                std::string result =
+                    ind + "if (" + rewrite_expr(*s.condition, trait_names, program, pointer_aliases) + ") {\n";
                 for (auto& inner : s.then_body) {
                     result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
                 }
@@ -775,8 +779,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
 
     for (const auto& handler : sys.handlers) {
         out << "void " << system_function_name(sys.name, handler.event_name) << "(entt::registry& registry";
-        out << ", const " << event_cpp_type(handler.event_name) << "& "
-            << handler.alias.value_or(handler.event_name);
+        out << ", const " << event_cpp_type(handler.event_name) << "& " << handler.alias.value_or(handler.event_name);
         out << ") {\n";
         out << "    (void)" << handler.alias.value_or(handler.event_name) << ";\n";
 
@@ -813,8 +816,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
     return out.str();
 }
 
-std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
-                                                  const DecoratedProgram& program) {
+std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, const DecoratedProgram& program) {
     (void)program;
     std::ostringstream out;
 
@@ -884,7 +886,8 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         out << "            .y = parent_world.position.y + local.position.y,\n";
         out << "            .z = parent_world.position.z + local.position.z,\n";
         out << "        };\n";
-        out << "        world.rotation = cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, local.rotation);\n";
+        out << "        world.rotation = cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, "
+               "local.rotation);\n";
         out << "        world.scale = Vector3{\n";
         out << "            .x = parent_world.scale.x * local.scale.x,\n";
         out << "            .y = parent_world.scale.y * local.scale.y,\n";
@@ -901,7 +904,8 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     if (is_shape_renderer(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, Shape>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Shape& Shape_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Shape& "
+               "Shape_comp) {\n";
         out << "        (void)entity;\n";
         out << "        if (!Shape_comp.visible) {\n";
         out << "            return;\n";
@@ -923,9 +927,11 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     if (is_sprite_renderer(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& Renderer_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& "
+               "Renderer_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_sprite(WorldTransform_comp.position, Renderer_comp.size, Renderer_comp.color, Renderer_comp.texture, Renderer_comp.visible, Renderer_comp.layer);\n";
+        out << "        cactus::runtime::entt_backend::submit_sprite(WorldTransform_comp.position, Renderer_comp.size, "
+               "Renderer_comp.color, Renderer_comp.texture, Renderer_comp.visible, Renderer_comp.layer);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -937,7 +943,9 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         out << "    view.each([&](entt::entity entity, AnimatedSprite& AnimatedSprite_comp) {\n";
         out << "        (void)entity;\n";
         out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
-        out << "        cactus::runtime::entt_backend::advance_animated_sprite(AnimatedSprite_comp.texture, AnimatedSprite_comp.frame, AnimatedSprite_comp.frame_count, AnimatedSprite_comp.fps, AnimatedSprite_comp.playing, kFixedDt);\n";
+        out << "        cactus::runtime::entt_backend::advance_animated_sprite(AnimatedSprite_comp.texture, "
+               "AnimatedSprite_comp.frame, AnimatedSprite_comp.frame_count, AnimatedSprite_comp.fps, "
+               "AnimatedSprite_comp.playing, kFixedDt);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -946,9 +954,12 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     if (is_mesh_renderer(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& Renderer_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& "
+               "Renderer_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_mesh(WorldTransform_comp.position, WorldTransform_comp.rotation, WorldTransform_comp.scale, Renderer_comp.mesh, Renderer_comp.material, Renderer_comp.visible, Renderer_comp.cast_shadow);\n";
+        out << "        cactus::runtime::entt_backend::submit_mesh(WorldTransform_comp.position, "
+               "WorldTransform_comp.rotation, WorldTransform_comp.scale, Renderer_comp.mesh, Renderer_comp.material, "
+               "Renderer_comp.visible, Renderer_comp.cast_shadow);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -957,9 +968,12 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     if (is_billboard_renderer(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, BillboardRenderer>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const BillboardRenderer& BillboardRenderer_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const "
+               "BillboardRenderer& BillboardRenderer_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_billboard(WorldTransform_comp.position, BillboardRenderer_comp.size, BillboardRenderer_comp.color, BillboardRenderer_comp.texture, BillboardRenderer_comp.visible);\n";
+        out << "        cactus::runtime::entt_backend::submit_billboard(WorldTransform_comp.position, "
+               "BillboardRenderer_comp.size, BillboardRenderer_comp.color, BillboardRenderer_comp.texture, "
+               "BillboardRenderer_comp.visible);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -968,9 +982,11 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
     if (is_point_light_system(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, PointLight>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const PointLight& PointLight_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const PointLight& "
+               "PointLight_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::register_point_light(WorldTransform_comp.position, PointLight_comp.color, PointLight_comp.intensity, PointLight_comp.range, PointLight_comp.enabled);\n";
+        out << "        cactus::runtime::entt_backend::register_point_light(WorldTransform_comp.position, "
+               "PointLight_comp.color, PointLight_comp.intensity, PointLight_comp.range, PointLight_comp.enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -981,7 +997,8 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys,
         out << "    auto view = registry.view<DirectionalLight>();\n";
         out << "    view.each([&](entt::entity entity, const DirectionalLight& DirectionalLight_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::register_directional_light(DirectionalLight_comp.direction, DirectionalLight_comp.color, DirectionalLight_comp.intensity, DirectionalLight_comp.enabled);\n";
+        out << "        cactus::runtime::entt_backend::register_directional_light(DirectionalLight_comp.direction, "
+               "DirectionalLight_comp.color, DirectionalLight_comp.intensity, DirectionalLight_comp.enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -1037,7 +1054,8 @@ std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgra
     }
 
     std::ostringstream out;
-    out << "[[maybe_unused]] static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity entity) {\n";
+    out << "[[maybe_unused]] static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity "
+           "entity) {\n";
     out << "    cactus::runtime::entt_backend::destroy_entity_recursive(\n";
     out << "        registry, entity, [&](entt::entity parent, const auto& visitor) {\n";
     out << "            auto parent_view = registry.view<Parent>();\n";

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/cactus_runtime.h"
+#include "common/cactus_runtime.hpp"
 
 #include <cstddef>
 #include <functional>
@@ -33,29 +33,20 @@ struct ProjectConfig {
     int target_fps;
 };
 
-using ParentResolver = std::function<std::optional<std::size_t>(std::size_t)>;
-using CopyLocalTransformFn = std::function<void(std::size_t)>;
+using ParentResolver        = std::function<std::optional<std::size_t>(std::size_t)>;
+using CopyLocalTransformFn  = std::function<void(std::size_t)>;
 using AccumulateTransformFn = std::function<void(std::size_t parent, std::size_t child)>;
-using IsValidEntityFn = std::function<bool(std::size_t)>;
-using VisitChildrenFn = std::function<void(std::size_t parent,
-                                           const std::function<void(std::size_t child)>& visitor)>;
-using RemoveEntityFn = std::function<void(std::size_t)>;
+using IsValidEntityFn       = std::function<bool(std::size_t)>;
+using VisitChildrenFn = std::function<void(std::size_t parent, const std::function<void(std::size_t child)>& visitor)>;
+using RemoveEntityFn  = std::function<void(std::size_t)>;
 
 [[nodiscard]] RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept;
 void reset_render_debug_state() noexcept;
 [[nodiscard]] const RenderDebugState& render_debug_state() noexcept;
 
-void submit_sprite(Vector2 position,
-                   Vector2 size,
-                   Color color,
-                   AssetHandle texture,
-                   bool visible) noexcept;
-void advance_animated_sprite(AssetHandle texture,
-                             int& frame,
-                             int frame_count,
-                             float fps,
-                             bool playing,
-                             float dt) noexcept;
+void submit_sprite(Vector2 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
+void advance_animated_sprite(
+    AssetHandle texture, int& frame, int frame_count, float fps, bool playing, float dt) noexcept;
 void submit_mesh(Vector3 position,
                  Quat rotation,
                  Vector3 scale,
@@ -63,20 +54,9 @@ void submit_mesh(Vector3 position,
                  AssetHandle material,
                  bool visible,
                  bool cast_shadow) noexcept;
-void submit_billboard(Vector3 position,
-                      Vector2 size,
-                      Color color,
-                      AssetHandle texture,
-                      bool visible) noexcept;
-void register_point_light(Vector3 position,
-                          Color color,
-                          float intensity,
-                          float range,
-                          bool enabled) noexcept;
-void register_directional_light(Vector3 direction,
-                                Color color,
-                                float intensity,
-                                bool enabled) noexcept;
+void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
+void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
+void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
 
 void propagate_hierarchy(std::size_t entity_count,
                          const ParentResolver& resolve_parent,

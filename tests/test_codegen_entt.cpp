@@ -1,13 +1,16 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/parser.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
-#include "backends/cpp-entt/component_emitter.h"
-#include "backends/cpp-entt/cpp_entt_codegen.h"
-#include "backends/cpp-entt/event_emitter.h"
-#include "backends/cpp-entt/system_emitter.h"
-#include "common/error_reporter.h"
-#include "frontend/lexer.h"
-#include "frontend/parser.h"
-#include "frontend/semantic_analyzer.h"
+#include "backends/cpp-entt/component_emitter.hpp"
+#include "backends/cpp-entt/cpp_entt_codegen.hpp"
+#include "backends/cpp-entt/event_emitter.hpp"
+#include "backends/cpp-entt/system_emitter.hpp"
+
+#include <catch2/catch_test_macros.hpp>
 
 using namespace cactus;
 
@@ -117,10 +120,11 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("#include <entt/entt.hpp>") != std::string::npos);
     CHECK(code.find("#include <raylib.h>") != std::string::npos);
     CHECK(code.find("struct Pos") != std::string::npos);
-    CHECK(code.find("backends/cpp-entt/runtime.h") != std::string::npos);
+    CHECK(code.find("backends/cpp-entt/runtime.hpp") != std::string::npos);
     CHECK(code.find("generated_project_config() noexcept") != std::string::npos);
     CHECK(code.find("generated_init_project(entt::registry& registry)") != std::string::npos);
-    CHECK(code.find("generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt)") != std::string::npos);
+    CHECK(code.find("generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt)") !=
+          std::string::npos);
     CHECK(code.find("move_tick(registry, TickEvent{dt});") != std::string::npos);
     CHECK(code.find("int main()") == std::string::npos);
     CHECK(code.find("InitWindow") == std::string::npos);
@@ -141,24 +145,20 @@ TEST_CASE("Codegen EnTT: extern func generates runtime header include", "[codege
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("#include \"cactus_runtime.h\"") != std::string::npos);
+    CHECK(code.find("#include \"cactus_runtime.hpp\"") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: no extern func means no runtime header", "[codegen-entt][extern-func]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        "trait Pos:\n    var x: float\n",
-        program);
+    auto decorated = full_pipeline("trait Pos:\n    var x: float\n", program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("#include \"cactus_runtime.h\"") == std::string::npos);
+    CHECK(code.find("#include \"cactus_runtime.hpp\"") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: extern func body is not emitted", "[codegen-entt][extern-func]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        "pub extern func sin(a: float) float\n",
-        program);
+    auto decorated = full_pipeline("pub extern func sin(a: float) float\n", program);
 
     auto code = CppEnttCodegen::generate(decorated);
     // No function definition should be emitted for the extern func
@@ -166,7 +166,8 @@ TEST_CASE("Codegen EnTT: extern func body is not emitted", "[codegen-entt][exter
     CHECK(code.find("float sin(") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace", "[codegen-entt][extern-func][stdlib]") {
+TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace",
+          "[codegen-entt][extern-func][stdlib]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "use std.math as math\n"
@@ -185,7 +186,8 @@ TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace"
     CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime namespace", "[codegen-entt][extern-func][stdlib]") {
+TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime namespace",
+          "[codegen-entt][extern-func][stdlib]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "use std.math\n"
@@ -204,7 +206,8 @@ TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime name
     CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespace", "[codegen-entt][extern-func][stdlib][input]") {
+TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespace",
+          "[codegen-entt][extern-func][stdlib][input]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "pub event tick:\n"
@@ -241,7 +244,8 @@ TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library",
     CHECK(code.find("cactus::runtime::entt_backend::destroy_entity_recursive(") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runtime adapters", "[codegen-entt][assets]") {
+TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runtime adapters",
+          "[codegen-entt][assets]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait WorldTransform:\n"
@@ -300,7 +304,8 @@ TEST_CASE("Codegen EnTT: render glue brackets render extern systems with frame c
     CHECK(code.find("cactus::runtime::entt_backend::end_render_frame();") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime without user callback", "[codegen-entt][assets]") {
+TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime without user callback",
+          "[codegen-entt][assets]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait WorldTransform:\n"
@@ -334,8 +339,10 @@ TEST_CASE("Codegen EnTT: generated init registers declared mesh and material ass
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("shared_asset_registry().register_mesh(BlueCubeMesh, \"models/blue_cube.mesh\", static_cast<int>(BlueCubeMesh));") != std::string::npos);
-    CHECK(code.find("shared_asset_registry().register_material(BlueCubeMaterial, \"materials/blue_cube.mat\", static_cast<int>(BlueCubeMaterial));") != std::string::npos);
+    CHECK(code.find("shared_asset_registry().register_mesh(BlueCubeMesh, \"models/blue_cube.mesh\", "
+                    "static_cast<int>(BlueCubeMesh));") != std::string::npos);
+    CHECK(code.find("shared_asset_registry().register_material(BlueCubeMaterial, \"materials/blue_cube.mat\", "
+                    "static_cast<int>(BlueCubeMaterial));") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
@@ -591,8 +598,10 @@ TEST_CASE("Codegen EnTT: extern system emits callback scaffold", "[codegen-entt]
             auto code = EnttSystemEmitter::emit_extern_system(*sys, decorated);
             CHECK(code.find("void particle_system_tick(entt::registry& registry)") != std::string::npos);
             CHECK(code.find("registry.view<Position, Velocity>()") != std::string::npos);
-            CHECK(code.find("particle_system_update(registry, entity, Position_comp, Velocity_comp)") != std::string::npos);
-            CHECK(code.find("void particle_system_update(entt::registry& registry, entt::entity entity, Position& Position_comp, Velocity& Velocity_comp);") != std::string::npos);
+            CHECK(code.find("particle_system_update(registry, entity, Position_comp, Velocity_comp)") !=
+                  std::string::npos);
+            CHECK(code.find("void particle_system_update(entt::registry& registry, entt::entity entity, Position& "
+                            "Position_comp, Velocity& Velocity_comp);") != std::string::npos);
         }
     }
 }
@@ -666,8 +675,10 @@ TEST_CASE("Codegen EnTT: system order by emits multi-key comparator", "[codegen-
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (registry.get<Sprite>(a).layer != registry.get<Sprite>(b).layer)") != std::string::npos);
-            CHECK(code.find("return registry.get<Position>(a).pos.y > registry.get<Position>(b).pos.y;") != std::string::npos);
+            CHECK(code.find("if (registry.get<Sprite>(a).layer != registry.get<Sprite>(b).layer)") !=
+                  std::string::npos);
+            CHECK(code.find("return registry.get<Position>(a).pos.y > registry.get<Position>(b).pos.y;") !=
+                  std::string::npos);
         }
     }
 }
@@ -708,7 +719,8 @@ TEST_CASE("Codegen EnTT: full pipeline includes extern system tick call", "[code
     CHECK(code.find("void sprite_renderer_tick(entt::registry& registry)") != std::string::npos);
     CHECK(code.find("sprite_renderer_update(registry, entity, Position_comp)") != std::string::npos);
     CHECK(code.find("namespace cactus::runtime::entt_backend") != std::string::npos);
-    CHECK(code.find("void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher)") != std::string::npos);
+    CHECK(code.find("void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher)") !=
+          std::string::npos);
     CHECK(code.find("sprite_renderer_tick(registry);") != std::string::npos);
 }
 
@@ -727,10 +739,12 @@ TEST_CASE("Codegen EnTT: stdlib-style extern sprite renderer emits scaffold", "[
 
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("void sprite_renderer_tick(entt::registry& registry)") != std::string::npos);
-    CHECK(code.find("void sprite_renderer_update(entt::registry& registry, entt::entity entity, Transform& Transform_comp, Renderer& Renderer_comp);") != std::string::npos);
+    CHECK(code.find("void sprite_renderer_update(entt::registry& registry, entt::entity entity, Transform& "
+                    "Transform_comp, Renderer& Renderer_comp);") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses recursive helper", "[codegen-entt][hierarchy]") {
+TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses recursive helper",
+          "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
@@ -824,6 +838,8 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern system is recognize
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("world.position = Vector3{") != std::string::npos);
     CHECK(code.find("parent_world.position.x + local.position.x") != std::string::npos);
-    CHECK(code.find("cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, local.rotation)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, local.rotation)") !=
+          std::string::npos);
     CHECK(code.find("parent_world.scale.z * local.scale.z") != std::string::npos);
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

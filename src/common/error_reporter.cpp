@@ -1,4 +1,4 @@
-#include "common/error_reporter.h"
+#include "common/error_reporter.hpp"
 
 #include <iostream>
 

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "common/error_reporter.h"
-#include "common/types.h"
-#include "frontend/semantic_analyzer.h"
+#include "common/error_reporter.hpp"
+#include "common/types.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -11,7 +11,7 @@
 
 namespace cactus {
 
-// Note: ImportedSymbols is defined in semantic_analyzer.h (included above).
+// Note: ImportedSymbols is defined in semantic_analyzer.hpp (included above).
 
 /// Serializes and deserializes a compiled module's `DecoratedProgram` to/from
 /// a `.cmod` binary artifact file.
@@ -26,7 +26,7 @@ namespace cactus {
 class ModuleArtifact {
 public:
     static constexpr uint8_t CURRENT_VERSION = 4;
-    static constexpr const char* MAGIC = "CMOD";
+    static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
 
@@ -39,8 +39,7 @@ public:
 
     /// Load a `.cmod` file. Returns nullopt on error.
     /// Populates `module_name_out` with the serialized module name.
-    std::optional<DecoratedProgram> load(const std::filesystem::path& path,
-                                          std::string& module_name_out);
+    std::optional<DecoratedProgram> load(const std::filesystem::path& path, std::string& module_name_out);
 
     /// Extract only pub symbols from a `.cmod` file without loading the full program.
     std::optional<ImportedSymbols> extract_pub_symbols(const std::filesystem::path& path);
@@ -56,13 +55,10 @@ private:
     static void write_str(std::ostream& out, const std::string& s);
     void write_type_info(std::ostream& out, const TypeInfo& t);
 
-    void write_traits(std::ostream& out,
-                      const std::unordered_map<std::string, ResolvedTrait>& traits);
-    void write_structs(std::ostream& out,
-                       const std::unordered_map<std::string, ResolvedStruct>& structs);
+    void write_traits(std::ostream& out, const std::unordered_map<std::string, ResolvedTrait>& traits);
+    void write_structs(std::ostream& out, const std::unordered_map<std::string, ResolvedStruct>& structs);
     static void write_enums(std::ostream& out, const std::unordered_map<std::string, ResolvedEnum>& enums);
-    void write_funcs(std::ostream& out,
-                     const std::unordered_map<std::string, ResolvedFunc>& funcs);
+    void write_funcs(std::ostream& out, const std::unordered_map<std::string, ResolvedFunc>& funcs);
     static void write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph);
     static void write_string_pool(std::ostream& out, const StringPool& pool);
 
@@ -73,10 +69,10 @@ private:
     static std::string read_str(std::istream& in);
     TypeInfo read_type_info(std::istream& in);
 
-    std::unordered_map<std::string, ResolvedTrait>  read_traits(std::istream& in);
+    std::unordered_map<std::string, ResolvedTrait> read_traits(std::istream& in);
     std::unordered_map<std::string, ResolvedStruct> read_structs(std::istream& in);
     static std::unordered_map<std::string, ResolvedEnum> read_enums(std::istream& in);
-    std::unordered_map<std::string, ResolvedFunc>   read_funcs(std::istream& in);
+    std::unordered_map<std::string, ResolvedFunc> read_funcs(std::istream& in);
     static std::vector<SystemDependency> read_dep_graph(std::istream& in);
     static StringPool read_string_pool(std::istream& in);
 

@@ -1,9 +1,11 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/module_artifact.hpp"
+#include "frontend/program_linker.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
-#include "common/error_reporter.h"
-#include "frontend/module_artifact.h"
-#include "frontend/program_linker.h"
-#include "frontend/semantic_analyzer.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 
@@ -16,25 +18,23 @@ static fs::path linker_build_dir() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-static DecoratedProgram make_program(
-    const std::string& trait_name, bool is_pub,
-    const std::string& enum_name = "") {
+static DecoratedProgram make_program(const std::string& trait_name, bool is_pub, const std::string& enum_name = "") {
     DecoratedProgram prog;
 
     ResolvedTrait rt;
-    rt.name = trait_name;
+    rt.name   = trait_name;
     rt.is_pub = is_pub;
     ResolvedField f;
-    f.name = "x";
-    f.type = make_float_type();
+    f.name   = "x";
+    f.type   = make_float_type();
     f.is_var = true;
     rt.fields.push_back(f);
     prog.traits[trait_name] = rt;
 
     if (!enum_name.empty()) {
         ResolvedEnum re;
-        re.name = enum_name;
-        re.variants = {"A", "B"};
+        re.name               = enum_name;
+        re.variants           = {"A", "B"};
         prog.enums[enum_name] = re;
     }
 
@@ -195,8 +195,7 @@ TEST_CASE("program_linker: link from artifact files round-trip", "[linker][5.1]"
     // Link them
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
-    auto merged = linker.link({build_dir / "player.cmod",
-                                build_dir / "enemies.cmod"});
+    auto merged = linker.link({build_dir / "player.cmod", build_dir / "enemies.cmod"});
 
     REQUIRE_FALSE(link_errors.has_errors());
     REQUIRE(merged.has_value());
@@ -223,11 +222,11 @@ TEST_CASE("program_linker: link detects duplicate across artifacts", "[linker][5
 
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
-    auto merged = linker.link({build_dir / "modA.cmod",
-                                build_dir / "modB.cmod"});
+    auto merged = linker.link({build_dir / "modA.cmod", build_dir / "modB.cmod"});
 
     CHECK_FALSE(merged.has_value());
     CHECK(link_errors.has_errors());
 
     fs::remove_all(build_dir, ec);
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

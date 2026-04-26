@@ -1,13 +1,16 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/parser.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
-#include "backends/cpp-manual/cpp_manual_codegen.h"
-#include "backends/cpp-manual/event_emitter.h"
-#include "backends/cpp-manual/soa_emitter.h"
-#include "backends/cpp-manual/system_emitter.h"
-#include "common/error_reporter.h"
-#include "frontend/lexer.h"
-#include "frontend/parser.h"
-#include "frontend/semantic_analyzer.h"
+#include "backends/cpp-manual/cpp_manual_codegen.hpp"
+#include "backends/cpp-manual/event_emitter.hpp"
+#include "backends/cpp-manual/soa_emitter.hpp"
+#include "backends/cpp-manual/system_emitter.hpp"
+
+#include <catch2/catch_test_macros.hpp>
 
 using namespace cactus;
 
@@ -88,7 +91,7 @@ TEST_CASE("Codegen Manual: POD struct", "[codegen-manual]") {
 
 TEST_CASE("Codegen Manual: enum generation", "[codegen-manual]") {
     ResolvedEnum e;
-    e.name = "Color";
+    e.name     = "Color";
     e.variants = {"Red", "Green", "Blue"};
 
     auto code = SoaEmitter::emit_enum(e);
@@ -132,7 +135,7 @@ TEST_CASE("Codegen Manual: event buffer generation", "[codegen-manual]") {
 
 TEST_CASE("Codegen Manual: emit_trait_bits assigns unique bit indices", "[codegen-manual][7.1]") {
     std::vector<std::string> traits = {"Position", "EnemyAI", "Health"};
-    auto code = SoaEmitter::emit_trait_bits(traits);
+    auto code                       = SoaEmitter::emit_trait_bits(traits);
 
     CHECK(code.find("namespace TraitBits") != std::string::npos);
     CHECK(code.find("Position = 1ULL << 0") != std::string::npos);
@@ -176,11 +179,10 @@ TEST_CASE("Codegen Manual: global field arrays emitted", "[codegen-manual][7.2]"
 }
 
 TEST_CASE("Codegen Manual: full pipeline has global pool and field arrays", "[codegen-manual][7.2]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "    var y: float = 0.0\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "    var y: float = 0.0\n");
 
     CHECK(code.find("entity_count") != std::string::npos);
     CHECK(code.find("g_trait_mask") != std::string::npos);
@@ -191,15 +193,14 @@ TEST_CASE("Codegen Manual: full pipeline has global pool and field arrays", "[co
 // ── Tasks 7.3, 7.4: Bitmask loop condition (filter and exclude) ───────────────
 
 TEST_CASE("Codegen Manual: system loop uses bitmask filter condition", "[codegen-manual][7.3]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system Move:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on tick:\n"
-        "        x = x + tick.dt\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system Move:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on tick:\n"
+                         "        x = x + tick.dt\n");
 
     CHECK(code.find("_filter_mask") != std::string::npos);
     CHECK(code.find("_exclude_mask") != std::string::npos);
@@ -211,28 +212,26 @@ TEST_CASE("Codegen Manual: system loop uses bitmask filter condition", "[codegen
 }
 
 TEST_CASE("Codegen Manual: system filter_mask=0 for no-filter system", "[codegen-manual][7.3]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "system GlobalCleanup:\n"
-        "    on tick:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "system GlobalCleanup:\n"
+                         "    on tick:\n"
+                         "        destroy\n");
 
     CHECK(code.find("0ULL") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: exclude mask in loop condition", "[codegen-manual][7.4]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "trait Frozen\n"
-        "system Move:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    exclude:\n"
-        "        Frozen\n"
-        "    on tick as t:\n"
-        "        x = x + t.dt\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "trait Frozen\n"
+                         "system Move:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    exclude:\n"
+                         "        Frozen\n"
+                         "    on tick as t:\n"
+                         "        x = x + t.dt\n");
 
     CHECK(code.find("TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("_exclude_mask") != std::string::npos);
@@ -245,37 +244,35 @@ TEST_CASE("Codegen Manual: exclude mask in loop condition", "[codegen-manual][7.
 // ── Dynamic trait add/remove codegen ────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: add emits trait bit set", "[codegen-manual][dynamic-traits]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Frozen\n"
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system FreezeSystem:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on tick:\n"
-        "        add Frozen\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Frozen\n"
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system FreezeSystem:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on tick:\n"
+                         "        add Frozen\n");
 
     CHECK(code.find("|= TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("g_trait_mask[i]") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: render extern systems bind to backend asset adapters", "[codegen-manual][assets]") {
-    auto code = generate(
-        STDLIB_EVENTS +
-        "trait WorldTransform:\n"
-        "    var position: vec2\n"
-        "    var rotation: float\n"
-        "    var scale: vec2\n"
-        "trait Renderer:\n"
-        "    let texture: texture_id\n"
-        "    var size: vec2\n"
-        "    var color: color\n"
-        "    var visible: bool\n"
-        "extern system SpriteRenderer:\n"
-        "    filter:\n"
-        "        WorldTransform\n"
-        "        Renderer\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait WorldTransform:\n"
+                         "    var position: vec2\n"
+                         "    var rotation: float\n"
+                         "    var scale: vec2\n"
+                         "trait Renderer:\n"
+                         "    let texture: texture_id\n"
+                         "    var size: vec2\n"
+                         "    var color: color\n"
+                         "    var visible: bool\n"
+                         "extern system SpriteRenderer:\n"
+                         "    filter:\n"
+                         "        WorldTransform\n"
+                         "        Renderer\n");
 
     CHECK(code.find("cactus::runtime::manual_backend::submit_sprite(") != std::string::npos);
     CHECK(code.find("void cactus::runtime::manual_backend::generated_render_project()") != std::string::npos);
@@ -283,34 +280,32 @@ TEST_CASE("Codegen Manual: render extern systems bind to backend asset adapters"
 }
 
 TEST_CASE("Codegen Manual: remove emits trait bit clear", "[codegen-manual][dynamic-traits]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Frozen\n"
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system ThawSystem:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on tick:\n"
-        "        remove Frozen\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Frozen\n"
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system ThawSystem:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on tick:\n"
+                         "        remove Frozen\n");
 
     CHECK(code.find("&= ~TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("g_trait_mask[i]") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: add with fields initializes arrays", "[codegen-manual][dynamic-traits]") {
-    auto code = generate(
-        STDLIB_EVENTS +
-        "trait Stunned:\n"
-        "    var duration: float = 0.0\n"
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system FreezeSystem:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on tick:\n"
-        "        add Stunned:\n"
-        "            duration = 2.0\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Stunned:\n"
+                         "    var duration: float = 0.0\n"
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system FreezeSystem:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on tick:\n"
+                         "        add Stunned:\n"
+                         "            duration = 2.0\n");
 
     CHECK(code.find("g_Stunned_duration[i] = 2.0f") != std::string::npos);
     CHECK(code.find("g_trait_mask[i] |= TraitBits::Stunned") != std::string::npos);
@@ -348,18 +343,17 @@ TEST_CASE("Codegen Manual: template factory has correct initial trait_mask", "[c
 // ── Task 7.8: spawn statement calls factory ───────────────────────────────────
 
 TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[codegen-manual][7.8]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "    var y: float = 0.0\n"
-        "template Enemy:\n"
-        "    Position\n"
-        "system Spawner:\n"
-        "    on load:\n"
-        "        spawn Enemy:\n"
-        "            Position:\n"
-        "                x = 200.0\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "    var y: float = 0.0\n"
+                         "template Enemy:\n"
+                         "    Position\n"
+                         "system Spawner:\n"
+                         "    on load:\n"
+                         "        spawn Enemy:\n"
+                         "            Position:\n"
+                         "                x = 200.0\n");
 
     CHECK(code.find("spawn_Enemy(") != std::string::npos);
     CHECK(code.find("200.0F") != std::string::npos);
@@ -368,15 +362,14 @@ TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[cod
 // ── Task 7.9: destroy uses swap-and-delete ────────────────────────────────────
 
 TEST_CASE("Codegen Manual: destroy emits entity_remove with swap-and-delete (task 7.9)", "[codegen-manual][7.9]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Health:\n"
-        "    var hp: int = 100\n"
-        "system DeathSystem:\n"
-        "    filter:\n"
-        "        Health\n"
-        "    on tick:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Health:\n"
+                         "    var hp: int = 100\n"
+                         "system DeathSystem:\n"
+                         "    filter:\n"
+                         "        Health\n"
+                         "    on tick:\n"
+                         "        destroy\n");
 
     CHECK(code.find("cactus_entity_remove_recursive(i)") != std::string::npos);
     CHECK(code.find("__destroyed = true") != std::string::npos);
@@ -386,15 +379,14 @@ TEST_CASE("Codegen Manual: destroy emits entity_remove with swap-and-delete (tas
 }
 
 TEST_CASE("Codegen Manual: destroy loop increments correctly", "[codegen-manual][7.9]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Health:\n"
-        "    var hp: int = 100\n"
-        "system DeathSystem:\n"
-        "    filter:\n"
-        "        Health\n"
-        "    on tick:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Health:\n"
+                         "    var hp: int = 100\n"
+                         "system DeathSystem:\n"
+                         "    filter:\n"
+                         "        Health\n"
+                         "    on tick:\n"
+                         "        destroy\n");
 
     // After destroy, entity slot is reused (while loop + __destroyed flag)
     CHECK(code.find("if (!__destroyed) ++i") != std::string::npos);
@@ -403,16 +395,15 @@ TEST_CASE("Codegen Manual: destroy loop increments correctly", "[codegen-manual]
 // ── Task 7.10: load emits deferred load ──────────────────────────────────────
 
 TEST_CASE("Codegen Manual: load emits deferred load mechanism (task 7.10)", "[codegen-manual][7.10]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "use levels\n"
-        "trait GameState:\n"
-        "    var active: bool = true\n"
-        "system GameMgr:\n"
-        "    filter:\n"
-        "        GameState\n"
-        "    on tick:\n"
-        "        load levels.game\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "use levels\n"
+                         "trait GameState:\n"
+                         "    var active: bool = true\n"
+                         "system GameMgr:\n"
+                         "    filter:\n"
+                         "        GameState\n"
+                         "    on tick:\n"
+                         "        load levels.game\n");
 
     CHECK(code.find("g_pending_load") != std::string::npos);
     CHECK(code.find("g_load_pending") != std::string::npos);
@@ -422,15 +413,14 @@ TEST_CASE("Codegen Manual: load emits deferred load mechanism (task 7.10)", "[co
 // ── Task 7.11: on_spawn dispatch ─────────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: on_spawn dispatch function emitted (task 7.11)", "[codegen-manual][7.11]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system Init:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on spawn:\n"
-        "        x = 0.0\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system Init:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on spawn:\n"
+                         "        x = 0.0\n");
 
     CHECK(code.find("dispatch_on_spawn") != std::string::npos);
     CHECK(code.find("Init_spawn") != std::string::npos);
@@ -442,30 +432,28 @@ TEST_CASE("Codegen Manual: on_spawn dispatch function emitted (task 7.11)", "[co
 }
 
 TEST_CASE("Codegen Manual: aliased tick handler uses alias in signature", "[codegen-manual][event-handler]") {
-    auto code = generate(
-        STDLIB_EVENTS +
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system Move:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on tick as t:\n"
-        "        x = x + t.dt\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system Move:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on tick as t:\n"
+                         "        x = x + t.dt\n");
 
     CHECK(code.find("static void Move_tick(const tickEvent& t)") != std::string::npos);
     CHECK(code.find("x = (x + t.dt)") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: marker spawn event emits empty struct and parameter", "[codegen-manual][event-handler]") {
-    auto code = generate(
-        STDLIB_EVENTS +
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system Init:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on spawn:\n"
-        "        x = 0.0\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system Init:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on spawn:\n"
+                         "        x = 0.0\n");
 
     CHECK(code.find("struct spawnEvent {\n};") != std::string::npos);
     CHECK(code.find("static void Init_spawn(size_t _idx, const spawnEvent& spawn)") != std::string::npos);
@@ -474,15 +462,14 @@ TEST_CASE("Codegen Manual: marker spawn event emits empty struct and parameter",
 // ── Task 7.12: on_destroy dispatch ───────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: on_destroy dispatch function emitted (task 7.12)", "[codegen-manual][7.12]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system Cleanup:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on destroy:\n"
-        "        x = 0.0\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system Cleanup:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on destroy:\n"
+                         "        x = 0.0\n");
 
     CHECK(code.find("dispatch_on_destroy") != std::string::npos);
     CHECK(code.find("Cleanup_destroy") != std::string::npos);
@@ -493,14 +480,13 @@ TEST_CASE("Codegen Manual: on_destroy dispatch function emitted (task 7.12)", "[
 // ── Task 7.13: on_unload dispatch ────────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: on_unload dispatch function emitted (task 7.13)", "[codegen-manual][7.13]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Persistent\n"
-        "system SceneCleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Persistent\n"
+                         "system SceneCleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n");
 
     CHECK(code.find("dispatch_on_unload") != std::string::npos);
     CHECK(code.find("SceneCleanup_unload") != std::string::npos);
@@ -510,15 +496,14 @@ TEST_CASE("Codegen Manual: on_unload dispatch function emitted (task 7.13)", "[c
 // ── Task 7.14: on_load dispatch ──────────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: on_load dispatch function emitted (task 7.14)", "[codegen-manual][7.14]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait LevelState:\n"
-        "    var loaded: bool = false\n"
-        "system LevelSetup:\n"
-        "    filter:\n"
-        "        LevelState\n"
-        "    on load:\n"
-        "        loaded = true\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait LevelState:\n"
+                         "    var loaded: bool = false\n"
+                         "system LevelSetup:\n"
+                         "    filter:\n"
+                         "        LevelState\n"
+                         "    on load:\n"
+                         "        loaded = true\n");
 
     CHECK(code.find("dispatch_on_load") != std::string::npos);
     CHECK(code.find("LevelSetup_load") != std::string::npos);
@@ -527,36 +512,35 @@ TEST_CASE("Codegen Manual: on_load dispatch function emitted (task 7.14)", "[cod
 // ── Task 7.15: Full codegen verification ─────────────────────────────────────
 
 TEST_CASE("Codegen Manual: complete codegen structure", "[codegen-manual][7.15]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "    var y: float = 0.0\n"
-        "trait Persistent\n"
-        "template Enemy:\n"
-        "    Position:\n"
-        "        x = 400.0\n"
-        "unit Player:\n"
-        "    Position:\n"
-        "        x = 100.0\n"
-        "        y = 200.0\n"
-        "    Persistent\n"
-        "system PatrolSystem:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on tick:\n"
-        "        x = x + tick.dt\n"
-        "    on spawn:\n"
-        "        x = 0.0\n"
-        "    on destroy:\n"
-        "        y = 0.0\n"
-        "system SceneCleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "    var y: float = 0.0\n"
+                         "trait Persistent\n"
+                         "template Enemy:\n"
+                         "    Position:\n"
+                         "        x = 400.0\n"
+                         "unit Player:\n"
+                         "    Position:\n"
+                         "        x = 100.0\n"
+                         "        y = 200.0\n"
+                         "    Persistent\n"
+                         "system PatrolSystem:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on tick:\n"
+                         "        x = x + tick.dt\n"
+                         "    on spawn:\n"
+                         "        x = 0.0\n"
+                         "    on destroy:\n"
+                         "        y = 0.0\n"
+                         "system SceneCleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n");
 
     // TraitBits constants (task 7.1)
     CHECK(code.find("namespace TraitBits") != std::string::npos);
@@ -609,17 +593,16 @@ TEST_CASE("Codegen Manual: deferred load state globals emitted (task 8.1)", "[co
 }
 
 TEST_CASE("Codegen Manual: perform_load has 3 phases in correct order (tasks 8.2-8.4)", "[codegen-manual][8.2-8.4]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Persistent\n"
-        "system SceneCleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n"
-        "system LevelSetup:\n"
-        "    on load:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Persistent\n"
+                         "system SceneCleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n"
+                         "system LevelSetup:\n"
+                         "    on load:\n"
+                         "        destroy\n");
 
     CHECK(code.find("perform_load") != std::string::npos);
 
@@ -637,34 +620,32 @@ TEST_CASE("Codegen Manual: perform_load has 3 phases in correct order (tasks 8.2
 
 TEST_CASE("Codegen Manual: on_unload fires before new entities (task 8.5)", "[codegen-manual][8.5]") {
     // Verify that dispatch_on_unload comes before any data-file loading
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Persistent\n"
-        "system Cleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Persistent\n"
+                         "system Cleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n");
 
     // In perform_load, unload must come first
     auto unload_pos = code.find("dispatch_on_unload");
     auto load_pos   = code.find("dispatch_on_load");
     CHECK(unload_pos != std::string::npos);
-    CHECK(load_pos   != std::string::npos);
+    CHECK(load_pos != std::string::npos);
     CHECK(unload_pos < load_pos);
 }
 
 TEST_CASE("Codegen Manual: end-of-frame deferred load in main loop (task 8.1)", "[codegen-manual][8.6]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "use levels\n"
-        "trait GameState:\n"
-        "    var x: float = 0.0\n"
-        "system GameMgr:\n"
-        "    filter:\n"
-        "        GameState\n"
-        "    on tick:\n"
-        "        load levels.game\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "use levels\n"
+                         "trait GameState:\n"
+                         "    var x: float = 0.0\n"
+                         "system GameMgr:\n"
+                         "    filter:\n"
+                         "        GameState\n"
+                         "    on tick:\n"
+                         "        load levels.game\n");
 
     // Main loop must check g_load_pending and call perform_load
     CHECK(code.find("if (g_load_pending)") != std::string::npos);
@@ -690,15 +671,14 @@ TEST_CASE("Codegen Manual: std.core Persistent trait codegen", "[codegen-manual]
 
 TEST_CASE("Codegen Manual: without SceneCleanup dispatch_on_unload is empty (task 9.4)", "[codegen-manual][9.4]") {
     // Without std.core, no SceneCleanup system, so dispatch_on_unload does nothing
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system PatrolSystem:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on tick:\n"
-        "        x = x + tick.dt\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system PatrolSystem:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on tick:\n"
+                         "        x = x + tick.dt\n");
 
     // dispatch_on_unload exists but has no system calls
     CHECK(code.find("dispatch_on_unload") != std::string::npos);
@@ -707,14 +687,13 @@ TEST_CASE("Codegen Manual: without SceneCleanup dispatch_on_unload is empty (tas
 }
 
 TEST_CASE("Codegen Manual: with SceneCleanup on_unload destroys non-persistent (task 9.4)", "[codegen-manual][9.4]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Persistent\n"
-        "system SceneCleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Persistent\n"
+                         "system SceneCleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n");
 
     CHECK(code.find("SceneCleanup_unload") != std::string::npos);
     CHECK(code.find("dispatch_on_unload") != std::string::npos);
@@ -738,22 +717,21 @@ TEST_CASE("Codegen: template declared, not auto-instantiated (task 11.1)", "[cod
 }
 
 TEST_CASE("Codegen: spawn creates entity, on_spawn fires (task 11.2)", "[codegen-manual][11.2]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "template Enemy:\n"
-        "    Position\n"
-        "system Init:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on spawn:\n"
-        "        x = 0.0\n"
-        "system Spawner:\n"
-        "    on load:\n"
-        "        spawn Enemy:\n"
-        "            Position:\n"
-        "                x = 400.0\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "template Enemy:\n"
+                         "    Position\n"
+                         "system Init:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on spawn:\n"
+                         "        x = 0.0\n"
+                         "system Spawner:\n"
+                         "    on load:\n"
+                         "        spawn Enemy:\n"
+                         "            Position:\n"
+                         "                x = 400.0\n");
 
     // Spawn call should appear in Spawner_load
     CHECK(code.find("spawn_Enemy(") != std::string::npos);
@@ -764,17 +742,16 @@ TEST_CASE("Codegen: spawn creates entity, on_spawn fires (task 11.2)", "[codegen
 }
 
 TEST_CASE("Codegen: destroy removes entity, on_destroy fires (task 11.3)", "[codegen-manual][11.3]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Health:\n"
-        "    var hp: int = 100\n"
-        "system DeathSys:\n"
-        "    filter:\n"
-        "        Health\n"
-        "    on destroy:\n"
-        "        hp = 0\n"
-        "    on tick:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Health:\n"
+                         "    var hp: int = 100\n"
+                         "system DeathSys:\n"
+                         "    filter:\n"
+                         "        Health\n"
+                         "    on destroy:\n"
+                         "        hp = 0\n"
+                         "    on tick:\n"
+                         "        destroy\n");
 
     // on_destroy handler defined
     CHECK(code.find("DeathSys_destroy") != std::string::npos);
@@ -785,35 +762,33 @@ TEST_CASE("Codegen: destroy removes entity, on_destroy fires (task 11.3)", "[cod
 }
 
 TEST_CASE("Codegen: load transition 3-phase ordering (task 11.4)", "[codegen-manual][11.4]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Persistent\n"
-        "system SceneCleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n"
-        "system LevelSetup:\n"
-        "    on load:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Persistent\n"
+                         "system SceneCleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n"
+                         "system LevelSetup:\n"
+                         "    on load:\n"
+                         "        destroy\n");
 
     auto unload_call = code.find("dispatch_on_unload();\n");
     auto load_call   = code.find("dispatch_on_load();\n");
     CHECK(unload_call != std::string::npos);
-    CHECK(load_call   != std::string::npos);
+    CHECK(load_call != std::string::npos);
     CHECK(unload_call < load_call);
 }
 
 TEST_CASE("Codegen: on_unload fires before new entities created (task 11.5)", "[codegen-manual][11.5]") {
     // Same as 11.4 — ordering verified by position in perform_load
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "system GlobalReset:\n"
-        "    on unload:\n"
-        "        destroy\n"
-        "system GlobalSetup:\n"
-        "    on load:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "system GlobalReset:\n"
+                         "    on unload:\n"
+                         "        destroy\n"
+                         "system GlobalSetup:\n"
+                         "    on load:\n"
+                         "        destroy\n");
 
     auto u = code.find("GlobalReset_unload");
     auto l = code.find("GlobalSetup_load");
@@ -824,11 +799,10 @@ TEST_CASE("Codegen: on_unload fires before new entities created (task 11.5)", "[
 }
 
 TEST_CASE("Codegen: on_load fires after all entities instantiated (task 11.6)", "[codegen-manual][11.6]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "system LevelSetup:\n"
-        "    on load:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "system LevelSetup:\n"
+                         "    on load:\n"
+                         "        destroy\n");
 
     // Phase 3 Load fires after Phase 2 Instantiate
     auto phase2 = code.find("Phase 2");
@@ -839,17 +813,16 @@ TEST_CASE("Codegen: on_load fires after all entities instantiated (task 11.6)", 
 }
 
 TEST_CASE("Codegen: add/remove toggles trait presence bitmask", "[codegen-manual][11.7]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Frozen\n"
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "system FreezeSystem:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    on tick:\n"
-        "        add Frozen\n"
-        "        remove Frozen\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Frozen\n"
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "system FreezeSystem:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    on tick:\n"
+                         "        add Frozen\n"
+                         "        remove Frozen\n");
 
     CHECK(code.find("|= TraitBits::Frozen") != std::string::npos);
     CHECK(code.find("&= ~TraitBits::Frozen") != std::string::npos);
@@ -857,18 +830,17 @@ TEST_CASE("Codegen: add/remove toggles trait presence bitmask", "[codegen-manual
 }
 
 TEST_CASE("Codegen: exclude skips entities with active excluded trait (task 11.8)", "[codegen-manual][11.8]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "trait Frozen\n"
-        "system Move:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    exclude:\n"
-        "        Frozen\n"
-        "    on tick:\n"
-        "        x = x + tick.dt\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "trait Frozen\n"
+                         "system Move:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    exclude:\n"
+                         "        Frozen\n"
+                         "    on tick:\n"
+                         "        x = x + tick.dt\n");
 
     // Exclude mask applied in loop condition
     auto filt = code.find("TraitBits::Position");
@@ -879,18 +851,17 @@ TEST_CASE("Codegen: exclude skips entities with active excluded trait (task 11.8
 }
 
 TEST_CASE("Codegen: exclude checks current trait presence bitmask (task 11.9)", "[codegen-manual][11.9]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "trait Frozen\n"
-        "system Move:\n"
-        "    filter:\n"
-        "        Position\n"
-        "    exclude:\n"
-        "        Frozen\n"
-        "    on tick:\n"
-        "        x = x + tick.dt\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "trait Frozen\n"
+                         "system Move:\n"
+                         "    filter:\n"
+                         "        Position\n"
+                         "    exclude:\n"
+                         "        Frozen\n"
+                         "    on tick:\n"
+                         "        x = x + tick.dt\n");
 
     CHECK(code.find("g_trait_mask[i] & _exclude_mask") != std::string::npos);
 }
@@ -908,14 +879,13 @@ TEST_CASE("Codegen: marker trait in apply initializes trait_mask bit (task 11.10
 }
 
 TEST_CASE("Codegen: no-filter + exclude processes all non-excluded (task 11.11)", "[codegen-manual][11.11]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Persistent\n"
-        "system SceneCleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Persistent\n"
+                         "system SceneCleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n");
 
     // filter_mask = 0 (no filter), exclude_mask = TraitBits::Persistent
     CHECK(code.find("0ULL") != std::string::npos);
@@ -924,19 +894,18 @@ TEST_CASE("Codegen: no-filter + exclude processes all non-excluded (task 11.11)"
 }
 
 TEST_CASE("Codegen: Persistent entity survives load with SceneCleanup (task 11.13)", "[codegen-manual][11.13]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Persistent\n"
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "unit Player:\n"
-        "    Position\n"
-        "    Persistent\n"
-        "system SceneCleanup:\n"
-        "    exclude:\n"
-        "        Persistent\n"
-        "    on unload:\n"
-        "        destroy\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Persistent\n"
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "unit Player:\n"
+                         "    Position\n"
+                         "    Persistent\n"
+                         "system SceneCleanup:\n"
+                         "    exclude:\n"
+                         "        Persistent\n"
+                         "    on unload:\n"
+                         "        destroy\n");
 
     // SceneCleanup excludes Persistent → Player survives unload
     CHECK(code.find("TraitBits::Persistent") != std::string::npos);
@@ -957,7 +926,7 @@ TEST_CASE("Codegen Manual: extern func generates runtime header include", "[code
         "trait Pos:\n"
         "    var x: float = 0.0\n");
 
-    CHECK(code.find("#include \"cactus_runtime.h\"") != std::string::npos);
+    CHECK(code.find("#include \"cactus_runtime.hpp\"") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: no extern func means no runtime header", "[codegen-manual][extern-func]") {
@@ -965,22 +934,22 @@ TEST_CASE("Codegen Manual: no extern func means no runtime header", "[codegen-ma
         "trait Pos:\n"
         "    var x: float = 0.0\n");
 
-    CHECK(code.find("#include \"cactus_runtime.h\"") == std::string::npos);
+    CHECK(code.find("#include \"cactus_runtime.hpp\"") == std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: runtime header placed after standard includes", "[codegen-manual][extern-func]") {
-    auto code = generate(
-        "pub extern func sin(a: float) float\n");
+    auto code = generate("pub extern func sin(a: float) float\n");
 
     auto raylib_pos  = code.find("#include \"raylib.h\"");
-    auto runtime_pos = code.find("#include \"cactus_runtime.h\"");
-    CHECK(raylib_pos  != std::string::npos);
+    auto runtime_pos = code.find("#include \"cactus_runtime.hpp\"");
+    CHECK(raylib_pos != std::string::npos);
     CHECK(runtime_pos != std::string::npos);
-    // cactus_runtime.h comes after raylib.h
+    // cactus_runtime.hpp comes after raylib.h
     CHECK(runtime_pos > raylib_pos);
 }
 
-TEST_CASE("Codegen Manual: imported stdlib math alias lowers to runtime namespace", "[codegen-manual][extern-func][stdlib]") {
+TEST_CASE("Codegen Manual: imported stdlib math alias lowers to runtime namespace",
+          "[codegen-manual][extern-func][stdlib]") {
     auto code = generate(
         "use std.math as math\n"
         "pub event tick:\n"
@@ -996,7 +965,8 @@ TEST_CASE("Codegen Manual: imported stdlib math alias lowers to runtime namespac
     CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
 }
 
-TEST_CASE("Codegen Manual: imported stdlib vec2 alias lowers to runtime namespace", "[codegen-manual][extern-func][stdlib]") {
+TEST_CASE("Codegen Manual: imported stdlib vec2 alias lowers to runtime namespace",
+          "[codegen-manual][extern-func][stdlib]") {
     auto code = generate(
         "use std.math.vec2 as v2\n"
         "pub event tick:\n"
@@ -1012,7 +982,8 @@ TEST_CASE("Codegen Manual: imported stdlib vec2 alias lowers to runtime namespac
     CHECK(code.find("cactus::runtime::stdlib::math::vec2::length(vec2(3.0f, 4.0f))") != std::string::npos);
 }
 
-TEST_CASE("Codegen Manual: unqualified imported stdlib func lowers to runtime namespace", "[codegen-manual][extern-func][stdlib]") {
+TEST_CASE("Codegen Manual: unqualified imported stdlib func lowers to runtime namespace",
+          "[codegen-manual][extern-func][stdlib]") {
     auto code = generate(
         "use std.math\n"
         "pub event tick:\n"
@@ -1028,30 +999,28 @@ TEST_CASE("Codegen Manual: unqualified imported stdlib func lowers to runtime na
     CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
 }
 
-TEST_CASE("Codegen Manual: std.input extern calls lower to backend runtime namespace", "[codegen-manual][extern-func][stdlib][input]") {
-    auto code = generate(
-        "use std.input\n" +
-        STDLIB_EVENTS +
-        "input MoveX: axis\n"
-        "    negative = Key.A\n"
-        "    positive = Key.D\n"
-        "system Demo:\n"
-        "    on tick:\n"
-        "        let x = axis(MoveX)\n");
+TEST_CASE("Codegen Manual: std.input extern calls lower to backend runtime namespace",
+          "[codegen-manual][extern-func][stdlib][input]") {
+    auto code = generate("use std.input\n" + STDLIB_EVENTS +
+                         "input MoveX: axis\n"
+                         "    negative = Key.A\n"
+                         "    positive = Key.D\n"
+                         "system Demo:\n"
+                         "    on tick:\n"
+                         "        let x = axis(MoveX)\n");
 
     CHECK(code.find("cactus::runtime::manual_backend::axis(K_MOVE_X)") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: hierarchy destroy helper delegates to runtime library", "[codegen-manual][hierarchy]") {
-    auto code = generate(
-        STDLIB_EVENTS +
-        "trait Parent:\n"
-        "    var parent: entity_id\n"
-        "pub event tick:\n"
-        "    dt: float\n"
-        "system Cleanup:\n"
-        "    on tick:\n"
-        "        destroy self\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Parent:\n"
+                         "    var parent: entity_id\n"
+                         "pub event tick:\n"
+                         "    dt: float\n"
+                         "system Cleanup:\n"
+                         "    on tick:\n"
+                         "        destroy self\n");
 
     CHECK(code.find("cactus::runtime::manual_backend::destroy_entity_recursive(") != std::string::npos);
 }
@@ -1059,16 +1028,15 @@ TEST_CASE("Codegen Manual: hierarchy destroy helper delegates to runtime library
 // ── Full pipeline structure tests ─────────────────────────────────────────────
 
 TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[codegen-manual]") {
-    auto code = generate(
-        STDLIB_EVENTS + 
-        "trait Pos:\n"
-        "    persist sync var x: float = 0.0\n"
-        "    persist sync var y: float = 0.0\n"
-        "system Move:\n"
-        "    filter:\n"
-        "        Pos\n"
-        "    on tick:\n"
-        "        x = x + tick.dt\n");
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Pos:\n"
+                         "    persist sync var x: float = 0.0\n"
+                         "    persist sync var y: float = 0.0\n"
+                         "system Move:\n"
+                         "    filter:\n"
+                         "        Pos\n"
+                         "    on tick:\n"
+                         "        x = x + tick.dt\n");
 
     // Check overall structure
     CHECK(code.find("Generated by Cactus DSL Compiler") != std::string::npos);
@@ -1090,16 +1058,16 @@ TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[code
     CHECK(code.find("replicate_Pos") != std::string::npos);
 }
 
-TEST_CASE("Codegen Manual: self lowers to current entity slot and destroy self uses recursive helper", "[codegen-manual][hierarchy]") {
-    auto code = generate(
-        STDLIB_EVENTS +
-        "trait Parent:\n"
-        "    var parent: entity_id\n"
-        "system Hierarchy:\n"
-        "    on tick:\n"
-        "        add Parent:\n"
-        "            parent = self\n"
-        "        destroy self\n");
+TEST_CASE("Codegen Manual: self lowers to current entity slot and destroy self uses recursive helper",
+          "[codegen-manual][hierarchy]") {
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Parent:\n"
+                         "    var parent: entity_id\n"
+                         "system Hierarchy:\n"
+                         "    on tick:\n"
+                         "        add Parent:\n"
+                         "            parent = self\n"
+                         "        destroy self\n");
 
     CHECK(code.find("g_Parent_parent[i] = i") != std::string::npos);
     CHECK(code.find("cactus_entity_remove_recursive(i)") != std::string::npos);
@@ -1125,7 +1093,8 @@ TEST_CASE("Codegen Manual: flat transform propagation extern system is recognize
 
     CHECK(code.find("static void TransformPropagation_tick()") != std::string::npos);
     CHECK(code.find("cactus::runtime::manual_backend::propagate_hierarchy(") != std::string::npos);
-    CHECK(code.find("g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x") != std::string::npos);
+    CHECK(code.find("g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + "
+                    "g_LocalTransform_position[_idx].x") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: shape renderer extern system is recognized", "[codegen-manual][render]") {
@@ -1153,7 +1122,8 @@ TEST_CASE("Codegen Manual: shape renderer extern system is recognized", "[codege
     CHECK(code.find("void ShapeRenderer_update(") == std::string::npos);
 }
 
-TEST_CASE("Codegen Manual: hierarchy propagation handles stale parents and cycles safely", "[codegen-manual][hierarchy]") {
+TEST_CASE("Codegen Manual: hierarchy propagation handles stale parents and cycles safely",
+          "[codegen-manual][hierarchy]") {
     auto code = generate(
         "trait Parent:\n"
         "    var parent: entity_id\n"
@@ -1176,14 +1146,14 @@ TEST_CASE("Codegen Manual: hierarchy propagation handles stale parents and cycle
     CHECK(code.find("g_Parent_parent[_idx]") != std::string::npos);
 }
 
-TEST_CASE("Codegen Manual: extern system scratch entity list uses pmr storage", "[codegen-manual][extern-system][pmr]") {
-    auto code = generate(
-        STDLIB_EVENTS +
-        "trait Position:\n"
-        "    var x: float = 0.0\n"
-        "extern system ParticleSystem:\n"
-        "    filter:\n"
-        "        Position\n");
+TEST_CASE("Codegen Manual: extern system scratch entity list uses pmr storage",
+          "[codegen-manual][extern-system][pmr]") {
+    auto code = generate(STDLIB_EVENTS +
+                         "trait Position:\n"
+                         "    var x: float = 0.0\n"
+                         "extern system ParticleSystem:\n"
+                         "    filter:\n"
+                         "        Position\n");
 
     CHECK(code.find("std::pmr::monotonic_buffer_resource _matched_entities_resource") != std::string::npos);
     CHECK(code.find("std::pmr::vector<std::size_t> _matched_entities") != std::string::npos);
@@ -1200,7 +1170,8 @@ TEST_CASE("Codegen Manual: extern system emits user-library callback contract", 
         "        Position\n"
         "        Velocity\n");
 
-    CHECK(code.find("void ParticleSystem_update(std::size_t entity, float& Position_x, float& Velocity_dx);") != std::string::npos);
+    CHECK(code.find("void ParticleSystem_update(std::size_t entity, float& Position_x, float& Velocity_dx);") !=
+          std::string::npos);
     CHECK(code.find("std::pmr::vector<std::size_t> _matched_entities") != std::string::npos);
     CHECK(code.find("ParticleSystem_update(_idx, Position_x, Velocity_dx);") != std::string::npos);
 }
@@ -1218,3 +1189,4 @@ TEST_CASE("Codegen Manual: extern system order by sorts invocation order", "[cod
     CHECK(code.find("std::stable_sort(_matched_entities.begin(), _matched_entities.end()") != std::string::npos);
     CHECK(code.find("g_Position_y[_lhs] > g_Position_y[_rhs]") != std::string::npos);
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

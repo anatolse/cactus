@@ -1,4 +1,4 @@
-#include "common/string_pool.h"
+#include "common/string_pool.hpp"
 
 #include <stdexcept>
 
@@ -10,9 +10,9 @@ uint64_t StringPool::intern(std::string_view str) {
     if (it != str_to_id_.end()) {
         return it->second;
     }
-    uint64_t id = next_id_++;
+    uint64_t id     = next_id_++;
     str_to_id_[key] = id;
-    id_to_str_[id] = key;
+    id_to_str_[id]  = key;
     return id;
 }
 

@@ -24,8 +24,8 @@ The Cactus compiler currently processes a single `.cactus` file at a time. Real 
 
 ## Impact
 
-- **Frontend**: `src/frontend/semantic_analyzer.h/.cpp` — new `ImportedSymbols` parameter, pub visibility checks
-- **New files**: `src/frontend/module_resolver.h/.cpp`, `src/frontend/module_artifact.h/.cpp`, `src/frontend/program_linker.h/.cpp`
+- **Frontend**: `src/frontend/semantic_analyzer.hpp/.cpp` — new `ImportedSymbols` parameter, pub visibility checks
+- **New files**: `src/frontend/module_resolver.hpp/.cpp`, `src/frontend/module_artifact.hpp/.cpp`, `src/frontend/program_linker.hpp/.cpp`
 - **Build folder**: `build/<module_name>.cmod` binary artifacts for each compiled module
 - **CLI**: `src/main.cpp` — multi-file pipeline replacing single-file pipeline
 - **Tests**: New test files for module resolver, module artifact serialization, program linker, and multi-module integration

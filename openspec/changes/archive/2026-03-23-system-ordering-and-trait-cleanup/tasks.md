@@ -1,21 +1,21 @@
 ## 1. AST Changes — Trait Cleanup
 
-- [x] 1.1 Remove `std::vector<EventHandlerNode> handlers` field from `TraitNode` in `src/frontend/ast.h`
+- [x] 1.1 Remove `std::vector<EventHandlerNode> handlers` field from `TraitNode` in `src/frontend/ast.hpp`
 
 ## 2. AST Changes — System Ordering
 
-- [x] 2.1 Add `std::vector<std::string> after_systems` field to `SystemNode` in `src/frontend/ast.h`
-- [x] 2.2 Add `std::vector<std::string> after_systems` field to `SystemInfo` in `src/frontend/semantic_analyzer.h`
+- [x] 2.1 Add `std::vector<std::string> after_systems` field to `SystemNode` in `src/frontend/ast.hpp`
+- [x] 2.2 Add `std::vector<std::string> after_systems` field to `SystemInfo` in `src/frontend/semantic_analyzer.hpp`
 
 ## 3. AST Changes — Config/Spawn Qualification
 
-- [x] 3.1 Add `std::optional<std::string> alias` field to `ApplyEntry` in `src/frontend/ast.h`
-- [x] 3.2 Replace `ConfigAssignment.name` (`std::string`) with a `ConfigKey` struct holding `std::string prefix` (empty if bare) and `std::string field` in `src/frontend/ast.h`
+- [x] 3.1 Add `std::optional<std::string> alias` field to `ApplyEntry` in `src/frontend/ast.hpp`
+- [x] 3.2 Replace `ConfigAssignment.name` (`std::string`) with a `ConfigKey` struct holding `std::string prefix` (empty if bare) and `std::string field` in `src/frontend/ast.hpp`
 - [x] 3.3 Apply the same `ConfigKey` struct to `SpawnStmt` override pairs (currently `std::vector<std::pair<std::string, ExprNode>>`)
 
 ## 4. Lexer — Add `after` Keyword
 
-- [x] 4.1 Add `AFTER` token type to `TokenType` enum in `src/frontend/token.h`
+- [x] 4.1 Add `AFTER` token type to `TokenType` enum in `src/frontend/token.hpp`
 - [x] 4.2 Register `"after"` → `AFTER` in the keyword map in `src/frontend/lexer.cpp`
 
 ## 5. Parser — Trait Body Restriction

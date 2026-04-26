@@ -1,8 +1,8 @@
 #pragma once
 
-#include "common/error_reporter.h"
-#include "frontend/ast.h"
-#include "frontend/token.h"
+#include "common/error_reporter.hpp"
+#include "frontend/ast.hpp"
+#include "frontend/token.hpp"
 
 #include <vector>
 

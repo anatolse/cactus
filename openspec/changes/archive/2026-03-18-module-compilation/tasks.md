@@ -12,7 +12,7 @@
 
 ## 2. Module Resolver
 
-- [x] 2.1 Define `src/frontend/module_resolver.h` — `ModuleResolver` class with `ModuleInfo` (qualified name, path, ProgramNode, DecoratedProgram), `resolve(root_path, search_paths)` returning compilation order
+- [x] 2.1 Define `src/frontend/module_resolver.hpp` — `ModuleResolver` class with `ModuleInfo` (qualified name, path, ProgramNode, DecoratedProgram), `resolve(root_path, search_paths)` returning compilation order
 - [x] 2.2 Implement dependency discovery — scan `ProgramNode` for `UseNode` declarations, extract module names (ignore aliases for file lookup)
 - [x] 2.3 Implement file locator — convert dotted module names to filesystem paths (dots → directory separators), search in root dir then --module-path dirs, report error with source location when not found
 - [x] 2.4 Implement DAG construction — recursively resolve transitive dependencies, handle diamond deps (deduplicate by canonical path)
@@ -23,7 +23,7 @@
 
 ## 3. Module Artifact Serialization
 
-- [x] 3.1 Define `src/frontend/module_artifact.h` — `ModuleArtifact` with `save()`, `load()`, and `extract_pub_symbols()` (returns `ImportedSymbols` keyed by symbol name with module source info)
+- [x] 3.1 Define `src/frontend/module_artifact.hpp` — `ModuleArtifact` with `save()`, `load()`, and `extract_pub_symbols()` (returns `ImportedSymbols` keyed by symbol name with module source info)
 - [x] 3.2 Implement binary format — magic number (`CMOD`), version byte, serialized DecoratedProgram with pub/non-pub visibility flags
 - [x] 3.3 Implement `save()` — write to `build/<qualified_name>.cmod`, create `build/` if needed
 - [x] 3.4 Implement `load()` — deserialize with version validation
@@ -43,7 +43,7 @@
 
 ## 5. Program Linker
 
-- [x] 5.1 Define `src/frontend/program_linker.h` — `ProgramLinker` with `link(artifact_paths)` loading `.cmod` files and returning merged `DecoratedProgram`
+- [x] 5.1 Define `src/frontend/program_linker.hpp` — `ProgramLinker` with `link(artifact_paths)` loading `.cmod` files and returning merged `DecoratedProgram`
 - [x] 5.2 Implement incremental merging — load artifacts one at a time, merge traits/structs/enums/dependency graphs/string pools
 - [x] 5.3 Implement duplicate symbol detection — same pub name from different modules = error
 - [x] 5.4 Implement combined AST construction — declarations in dependency order

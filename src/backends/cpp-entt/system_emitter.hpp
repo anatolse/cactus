@@ -1,8 +1,9 @@
 #pragma once
 
-#include "backends/cpp-manual/system_emitter.h"
-#include "frontend/ast.h"
-#include "frontend/semantic_analyzer.h"
+#include "frontend/ast.hpp"
+#include "frontend/semantic_analyzer.hpp"
+
+#include "backends/cpp-manual/system_emitter.hpp"
 
 #include <string>
 

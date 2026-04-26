@@ -1,12 +1,14 @@
-#include <catch2/catch_test_macros.hpp>
+// NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
+// -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
+#include "common/error_reporter.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/module_artifact.hpp"
+#include "frontend/module_resolver.hpp"
+#include "frontend/parser.hpp"
+#include "frontend/program_linker.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
-#include "common/error_reporter.h"
-#include "frontend/lexer.h"
-#include "frontend/module_artifact.h"
-#include "frontend/module_resolver.h"
-#include "frontend/parser.h"
-#include "frontend/program_linker.h"
-#include "frontend/semantic_analyzer.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -28,8 +30,8 @@ static fs::path integration_build_dir() {
 /// Lex, parse and semantically analyze one file with optional imports.
 /// Returns (program, decorated) or reports errors.
 static std::optional<DecoratedProgram> compile_file(const fs::path& path,
-                                                      ErrorReporter& errors,
-                                                      const ModuleImports& imports = {}) {
+                                                    ErrorReporter& errors,
+                                                    const ModuleImports& imports = {}) {
     // Read source
     std::ifstream ifs(path);
     if (!ifs) {
@@ -128,8 +130,7 @@ TEST_CASE("integration: resolve → compile → link player + level", "[integrat
     // Step 6: Link player.cmod + level.cmod
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
-    auto merged = linker.link({build_dir / "player.cmod",
-                                build_dir / "level.cmod"});
+    auto merged = linker.link({build_dir / "player.cmod", build_dir / "level.cmod"});
 
     REQUIRE_FALSE(link_errors.has_errors());
     REQUIRE(merged.has_value());
@@ -141,8 +142,7 @@ TEST_CASE("integration: resolve → compile → link player + level", "[integrat
     fs::remove_all(build_dir, ec);
 }
 
-TEST_CASE("integration: module resolver produces topo order for multi_module fixtures",
-          "[integration][7.2]") {
+TEST_CASE("integration: module resolver produces topo order for multi_module fixtures", "[integration][7.2]") {
     // ModuleResolver on level.cactus (which depends on player)
     ErrorReporter errors;
     ModuleResolver resolver(errors);
@@ -233,3 +233,4 @@ TEST_CASE("integration: full pipeline using module resolver", "[integration][7.2
 
     fs::remove_all(build_dir, ec);
 }
+// NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -13,14 +13,14 @@
 
 ## 2. Lexer Changes
 
-- [x] 2.1 Add `asset`, `input`, `fixed_tick`, `late_tick` as reserved keywords in the lexer token table (`src/frontend/lexer.cpp` / `token.h`)
+- [x] 2.1 Add `asset`, `input`, `fixed_tick`, `late_tick` as reserved keywords in the lexer token table (`src/frontend/lexer.cpp` / `token.hpp`)
 - [x] 2.2 Add corresponding `TOKEN_ASSET`, `TOKEN_INPUT`, `TOKEN_FIXED_TICK`, `TOKEN_LATE_TICK` token types (or reuse IDENTIFIER with keyword lookup)
 - [x] 2.3 Add lexer tests for the four new keywords
 
 ## 3. AST Node Additions
 
-- [x] 3.1 Add `AssetDecl` AST node to `src/frontend/ast.h` (fields: `is_pub`, `name`, `asset_type`, `path`)
-- [x] 3.2 Add `InputDecl` AST node to `src/frontend/ast.h` (fields: `is_pub`, `name`, `kind`, `props: list<InputProp>`)
+- [x] 3.1 Add `AssetDecl` AST node to `src/frontend/ast.hpp` (fields: `is_pub`, `name`, `asset_type`, `path`)
+- [x] 3.2 Add `InputDecl` AST node to `src/frontend/ast.hpp` (fields: `is_pub`, `name`, `kind`, `props: list<InputProp>`)
 - [x] 3.3 Add `InputProp` AST node (fields: `key`, `value: Expr`)
 - [x] 3.4 Extend `EventHandler` AST node or `event_name` enum to represent `fixed_tick`, `late_tick`, `input`
 

@@ -1,8 +1,8 @@
-#include "backends/cpp-manual/cpp_manual_codegen.h"
+#include "backends/cpp-manual/cpp_manual_codegen.hpp"
 
-#include "backends/cpp-manual/event_emitter.h"
-#include "backends/cpp-manual/soa_emitter.h"
-#include "backends/cpp-manual/system_emitter.h"
+#include "backends/cpp-manual/event_emitter.hpp"
+#include "backends/cpp-manual/soa_emitter.hpp"
+#include "backends/cpp-manual/system_emitter.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -16,7 +16,7 @@ namespace {
 
 // Task 7.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
-    for (const auto& [name, func] : program.funcs) { // NOLINT(readability-use-anyofallof)
+    for (const auto& [name, func] : program.funcs) {  // NOLINT(readability-use-anyofallof)
         if (func.is_extern) {
             return true;
         }
@@ -29,7 +29,7 @@ std::string upper_copy(std::string value) {
     return value;
 }
 
-std::string snake_case(std::string value) {
+std::string snake_case(const std::string& value) {
     std::string result;
     for (const char ch : value) {
         if (std::isupper(static_cast<unsigned char>(ch)) != 0) {
@@ -66,9 +66,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     if (sys.is_stdlib) {
         return true;
     }
-    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" ||
-        sys.name == "SpriteRenderer" || sys.name == "AnimatedSpriteSystem" ||
-        sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
+    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
+        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
         sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
         return true;
     }
@@ -120,12 +119,12 @@ std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
 
 // ── Build CodegenContext from a DecoratedProgram ────────────────────────────
 
-CodegenContext build_context(const DecoratedProgram& program, // NOLINT(readability-function-cognitive-complexity)
-                              const std::vector<std::string>& trait_names_ordered) {
+CodegenContext build_context(const DecoratedProgram& program,  // NOLINT(readability-function-cognitive-complexity)
+                             const std::vector<std::string>& trait_names_ordered) {
     CodegenContext ctx;
-    ctx.ast = program.ast;
-    ctx.decorated = &program;
-    ctx.traits = program.traits;
+    ctx.ast                 = program.ast;
+    ctx.decorated           = &program;
+    ctx.traits              = program.traits;
     ctx.trait_names_ordered = trait_names_ordered;
     for (size_t i = 0; i < trait_names_ordered.size(); ++i) {
         ctx.trait_bit_index[trait_names_ordered[i]] = static_cast<int>(i);
@@ -137,22 +136,20 @@ CodegenContext build_context(const DecoratedProgram& program, // NOLINT(readabil
 
     for (const auto& decl : program.ast->declarations) {
         std::visit(
-            [&ctx](const auto& node) { // NOLINT(readability-function-cognitive-complexity)
+            [&ctx](const auto& node) {  // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, TraitNode>) {
                     ctx.trait_ast[node.name] = &node;
                     for (const auto& f : node.fields) {
                         if (f.default_value) {
-                            ctx.trait_defaults[node.name][f.name] =
-                                ManualSystemEmitter::emit_expr(**f.default_value);
+                            ctx.trait_defaults[node.name][f.name] = ManualSystemEmitter::emit_expr(**f.default_value);
                         }
                     }
                 } else if constexpr (std::is_same_v<T, TemplateNode>) {
                     ctx.template_ast[node.name] = &node;
                     for (const auto& trait : node.traits) {
                         for (const auto& a : trait.assignments) {
-                            ctx.template_config[node.name][a.name] =
-                                ManualSystemEmitter::emit_expr(*a.value);
+                            ctx.template_config[node.name][a.name] = ManualSystemEmitter::emit_expr(*a.value);
                         }
                     }
                 } else if constexpr (std::is_same_v<T, UnitNode>) {
@@ -167,7 +164,8 @@ CodegenContext build_context(const DecoratedProgram& program, // NOLINT(readabil
 
 // ── Emit template factory function (task 7.7) ─────────────────────────────
 
-std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext& ctx) { // NOLINT(readability-function-cognitive-complexity)
+std::string emit_template_factory(const TemplateNode& tmpl,
+                                  const CodegenContext& ctx) {  // NOLINT(readability-function-cognitive-complexity)
     std::ostringstream out;
 
     // Collect factory parameters: one per field of each declared trait, in order
@@ -232,8 +230,7 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
         } else {
             out << "\n    ";
         }
-        out << params[i].cpp_type << " " << params[i].param_name
-            << " = " << params[i].default_val;
+        out << params[i].cpp_type << " " << params[i].param_name << " = " << params[i].default_val;
     }
     if (!params.empty()) {
         out << "\n";
@@ -242,8 +239,7 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
     out << "    size_t _idx = entity_count++;\n";
     out << "    g_trait_mask[_idx] = " << mask_expr << ";\n";
     for (const auto& p : params) {
-        out << "    g_" << p.trait_name << "_" << p.field_name
-            << "[_idx] = " << p.param_name << ";\n";
+        out << "    g_" << p.trait_name << "_" << p.field_name << "[_idx] = " << p.param_name << ";\n";
     }
     out << "    dispatch_on_spawn(_idx);\n";
     out << "}\n";
@@ -252,8 +248,10 @@ std::string emit_template_factory(const TemplateNode& tmpl, const CodegenContext
 
 // ── Compute field value for unit initialization ────────────────────────────
 
-std::string field_init_value(const std::string& trait_name, const std::string& field_name,
-                              const UnitNode& unit, const CodegenContext& ctx) {
+std::string field_init_value(const std::string& trait_name,
+                             const std::string& field_name,
+                             const UnitNode& unit,
+                             const CodegenContext& ctx) {
     // 1. Unit nested trait assignment
     for (const auto& trait : unit.traits) {
         if (trait.trait_name != trait_name) {
@@ -289,7 +287,8 @@ std::string field_init_value(const std::string& trait_name, const std::string& f
 
 // ── CppManualCodegen::generate ─────────────────────────────────────────────
 
-std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOLINT(readability-function-cognitive-complexity)
+std::string CppManualCodegen::generate(
+    const DecoratedProgram& program) {  // NOLINT(readability-function-cognitive-complexity)
     if (program.ast == nullptr) {
         return "// Generated by Cactus DSL Compiler (cpp-manual backend)\n";
     }
@@ -299,13 +298,13 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     // ── Step 1: Collect trait names in declaration order ───────────────────
     std::vector<std::string> trait_names_ordered;
     std::vector<const TemplateNode*> templates;
-    std::vector<const UnitNode*>     units;
-    std::vector<const SystemNode*>   systems;
+    std::vector<const UnitNode*> units;
+    std::vector<const SystemNode*> systems;
     std::vector<const ExternSystemNode*> extern_systems;
 
     for (const auto& decl : program.ast->declarations) {
         std::visit(
-            [&](const auto& node) { // NOLINT(readability-function-cognitive-complexity)
+            [&](const auto& node) {  // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, TraitNode>) {
                     trait_names_ordered.push_back(node.name);
@@ -333,10 +332,10 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     out << "#include <string>\n";
     out << "#include <vector>\n";
     out << "#include \"raylib.h\"\n";
-    out << "#include \"backends/cpp-manual/runtime.h\"\n";
+    out << "#include \"backends/cpp-manual/runtime.hpp\"\n";
     // Task 7.2: Include runtime header when extern funcs are present
     if (has_extern_funcs(program)) {
-        out << "#include \"cactus_runtime.h\"\n";
+        out << "#include \"cactus_runtime.hpp\"\n";
     }
     out << "\n";
 
@@ -348,11 +347,11 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
         out << SoaEmitter::emit_pod_struct(s) << "\n";
     }
 
-    bool has_axis_input = false;
+    bool has_axis_input   = false;
     bool has_button_input = false;
     for (const auto& decl : program.ast->declarations) {
         if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-            has_axis_input = has_axis_input || input->input_kind == InputKind::Axis;
+            has_axis_input   = has_axis_input || input->input_kind == InputKind::Axis;
             has_button_input = has_button_input || input->input_kind == InputKind::Button;
         }
     }
@@ -387,7 +386,8 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
                         }
                     }
                 }
-                out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return " << key << ";\n";
+                out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
+                    << key << ";\n";
             }
         }
         out << "        default:\n";
@@ -405,8 +405,8 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
                 if (input->input_kind != InputKind::Axis) {
                     continue;
                 }
-                out << "constexpr InputAxis " << input_action_constant_name(input->name)
-                    << " = static_cast<InputAxis>(" << static_cast<int>(axis_index++) << ");\n";
+                out << "constexpr InputAxis " << input_action_constant_name(input->name) << " = static_cast<InputAxis>("
+                    << static_cast<int>(axis_index++) << ");\n";
             }
         }
         out << "\n";
@@ -432,7 +432,8 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
                         }
                     }
                 }
-                out << "        case static_cast<InputAxis>(" << static_cast<int>(axis_index++) << "): return " << positive << " - " << negative << ";\n";
+                out << "        case static_cast<InputAxis>(" << static_cast<int>(axis_index++) << "): return "
+                    << positive << " - " << negative << ";\n";
             }
         }
         out << "        default:\n";
@@ -541,7 +542,8 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     if (program.traits.contains("Parent")) {
         out << "            size_t _scan = 0;\n";
         out << "            while (_scan < entity_count) {\n";
-        out << "                if (_scan != _parent && (g_trait_mask[_scan] & TraitBits::Parent) != 0 && g_Parent_parent[_scan] == _parent) {\n";
+        out << "                if (_scan != _parent && (g_trait_mask[_scan] & TraitBits::Parent) != 0 && "
+               "g_Parent_parent[_scan] == _parent) {\n";
         out << "                    _visit_child(_scan);\n";
         out << "                    continue;\n";
         out << "                }\n";
@@ -614,7 +616,10 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     for (const auto& [name, t] : program.traits) {
         bool has_persist = false;
         for (const auto& f : t.fields) {
-            if (f.is_persist) { has_persist = true; break; }
+            if (f.is_persist) {
+                has_persist = true;
+                break;
+            }
         }
         if (has_persist) {
             out << "void save_" << name << "(size_t idx) {\n";
@@ -639,7 +644,10 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
     for (const auto& [name, t] : program.traits) {
         bool has_sync = false;
         for (const auto& f : t.fields) {
-            if (f.is_sync) { has_sync = true; break; }
+            if (f.is_sync) {
+                has_sync = true;
+                break;
+            }
         }
         if (has_sync) {
             out << "void replicate_" << name << "(size_t idx) {\n";
@@ -674,8 +682,8 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
                 continue;
             }
             for (const auto& field : tit->second.fields) {
-                out << "        g_" << entry.trait_name << "_" << field.name << "[_idx] = "
-                    << field_init_value(entry.trait_name, field.name, *unit, ctx) << ";\n";
+                out << "        g_" << entry.trait_name << "_" << field.name
+                    << "[_idx] = " << field_init_value(entry.trait_name, field.name, *unit, ctx) << ";\n";
             }
         }
         out << "        dispatch_on_spawn(_idx);\n";
@@ -685,7 +693,8 @@ std::string CppManualCodegen::generate(const DecoratedProgram& program) { // NOL
 
     // ── Step 21: Runtime glue ───────────────────────────────────────────────
     out << "// ── Runtime Glue ─────────────────────────────────────────────────────\n\n";
-    out << "cactus::runtime::manual_backend::ProjectConfig cactus::runtime::manual_backend::generated_project_config() noexcept {\n";
+    out << "cactus::runtime::manual_backend::ProjectConfig cactus::runtime::manual_backend::generated_project_config() "
+           "noexcept {\n";
     out << "    return {800, 600, \"Cactus Game\", 60};\n";
     out << "}\n\n";
 

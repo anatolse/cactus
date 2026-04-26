@@ -1,7 +1,8 @@
-#include "backends/cpp-manual/system_emitter.h"
+#include "backends/cpp-manual/system_emitter.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <sstream>
 
 namespace cactus {
@@ -50,13 +51,12 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
                func_name == "pow";
     }
     if (module_name == "std.math.vec2") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
-               func_name == "lerp" || func_name == "distance" || func_name == "angle";
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "lerp" ||
+               func_name == "distance" || func_name == "angle";
     }
     if (module_name == "std.math.vec3") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" ||
-               func_name == "cross" || func_name == "lerp" || func_name == "distance" ||
-               func_name == "reflect";
+        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "cross" ||
+               func_name == "lerp" || func_name == "distance" || func_name == "reflect";
     }
     if (module_name == "std.math.quat") {
         return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
@@ -64,8 +64,8 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
                func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
     }
     if (module_name == "std.input") {
-        return func_name == "pressed" || func_name == "down" || func_name == "released" ||
-               func_name == "axis" || func_name == "axis2";
+        return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
+               func_name == "axis2";
     }
     return false;
 }
@@ -89,7 +89,9 @@ std::string lower_unqualified_stdlib_func(const ProgramNode* ast,
         if (prefix.empty()) {
             continue;
         }
-        std::string result = prefix + "::" + func_name + "(";
+        std::string result;
+        result.reserve(prefix.size() + func_name.size() + 3U);
+        result.append(prefix).append("::").append(func_name).push_back('(');
         for (size_t i = 0; i < args.size(); ++i) {
             if (i > 0) {
                 result += ", ";
@@ -115,7 +117,9 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
         return {};
     }
 
-    std::string result = prefix + "::" + member.member + "(";
+    std::string result;
+    result.reserve(prefix.size() + member.member.size() + 3U);
+    result.append(prefix).append("::").append(member.member).push_back('(');
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
             result += ", ";
@@ -144,21 +148,16 @@ bool filter_has_trait(const FilterClause& filter, const std::string& qualified, 
 }
 
 bool filter_has_exact_trait(const FilterClause& filter, const std::string& qualified) {
-    return std::ranges::any_of(filter.entries,
-                               [&](const auto& entry) {
-                                   return entry.qualified_name == qualified;
-                               });
+    return std::ranges::any_of(filter.entries, [&](const auto& entry) { return entry.qualified_name == qualified; });
 }
 
 bool filter_has_simple_trait(const FilterClause& filter, const std::string& simple) {
     return std::ranges::any_of(filter.entries,
-                               [&](const auto& entry) {
-                                   return filter_simple_name(entry) == simple;
-                               }) ||
+                               [&](const auto& entry) { return filter_simple_name(entry) == simple; }) ||
            std::ranges::find(filter.trait_names, simple) != filter.trait_names.end();
 }
 
-enum class TransformFlavor {
+enum class TransformFlavor : std::uint8_t {
     Unknown,
     Flat,
     Volume,
@@ -176,10 +175,7 @@ const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& f
     if (trait == nullptr) {
         return nullptr;
     }
-    auto it = std::ranges::find_if(trait->fields,
-                                   [&](const auto& field) {
-                                       return field.name == field_name;
-                                   });
+    auto it = std::ranges::find_if(trait->fields, [&](const auto& field) { return field.name == field_name; });
     if (it == trait->fields.end()) {
         return nullptr;
     }
@@ -189,18 +185,16 @@ const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& f
 TransformFlavor transform_flavor_for_trait(const ResolvedTrait* trait) {
     const auto* position = find_field(trait, "position");
     const auto* rotation = find_field(trait, "rotation");
-    const auto* scale = find_field(trait, "scale");
+    const auto* scale    = find_field(trait, "scale");
     if (position == nullptr || rotation == nullptr || scale == nullptr) {
         return TransformFlavor::Unknown;
     }
 
-    if (position->type.kind == TypeKind::Vec2 &&
-        rotation->type.kind == TypeKind::Float &&
+    if (position->type.kind == TypeKind::Vec2 && rotation->type.kind == TypeKind::Float &&
         scale->type.kind == TypeKind::Vec2) {
         return TransformFlavor::Flat;
     }
-    if (position->type.kind == TypeKind::Vec3 &&
-        rotation->type.kind == TypeKind::Quat &&
+    if (position->type.kind == TypeKind::Vec3 && rotation->type.kind == TypeKind::Quat &&
         scale->type.kind == TypeKind::Vec3) {
         return TransformFlavor::Volume;
     }
@@ -208,19 +202,16 @@ TransformFlavor transform_flavor_for_trait(const ResolvedTrait* trait) {
 }
 
 TransformFlavor infer_transform_propagation_flavor(const FilterClause& filter, const CodegenContext& ctx) {
-    const bool has_flat_qualified =
-        filter_has_exact_trait(filter, "std.transform.flat.LocalTransform") ||
-        filter_has_exact_trait(filter, "std.transform.flat.WorldTransform");
-    const bool has_volume_qualified =
-        filter_has_exact_trait(filter, "std.transform.volume.LocalTransform") ||
-        filter_has_exact_trait(filter, "std.transform.volume.WorldTransform");
+    const bool has_flat_qualified   = filter_has_exact_trait(filter, "std.transform.flat.LocalTransform") ||
+                                      filter_has_exact_trait(filter, "std.transform.flat.WorldTransform");
+    const bool has_volume_qualified = filter_has_exact_trait(filter, "std.transform.volume.LocalTransform") ||
+                                      filter_has_exact_trait(filter, "std.transform.volume.WorldTransform");
 
     if (has_flat_qualified != has_volume_qualified) {
         return has_flat_qualified ? TransformFlavor::Flat : TransformFlavor::Volume;
     }
 
-    if (!filter_has_simple_trait(filter, "LocalTransform") ||
-        !filter_has_simple_trait(filter, "WorldTransform")) {
+    if (!filter_has_simple_trait(filter, "LocalTransform") || !filter_has_simple_trait(filter, "WorldTransform")) {
         return TransformFlavor::Unknown;
     }
 
@@ -237,9 +228,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     if (sys.is_stdlib) {
         return true;
     }
-    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" ||
-        sys.name == "SpriteRenderer" || sys.name == "AnimatedSpriteSystem" ||
-        sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
+    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
+        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
         sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
         return true;
     }
@@ -310,12 +300,11 @@ std::string filter_trait_simple_name(const FilterEntry& entry) {
 }
 
 std::string upper_copy(std::string value) {
-    std::ranges::transform(value, value.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return value;
 }
 
-std::string snake_case(std::string value) {
+std::string snake_case(const std::string& value) {
     std::string result;
     for (const char ch : value) {
         if (std::isupper(static_cast<unsigned char>(ch)) != 0) {
@@ -363,13 +352,11 @@ std::string resolve_sort_trait_name(const ExternSystemNode& sys, const std::stri
     return alias;
 }
 
-std::string sort_expr_for_entity(const ExternSystemNode& sys,
-                                 const SortKey& key,
-                                 const std::string& entity_var) {
+std::string sort_expr_for_entity(const ExternSystemNode& sys, const SortKey& key, const std::string& entity_var) {
     const auto trait_name = resolve_sort_trait_name(sys, key.alias);
-    const auto dot = key.field.find('.');
+    const auto dot        = key.field.find('.');
     const auto field_name = key.field.substr(0, dot);
-    const auto suffix = dot == std::string::npos ? std::string{} : key.field.substr(dot);
+    const auto suffix     = dot == std::string::npos ? std::string{} : key.field.substr(dot);
     return "g_" + trait_name + "_" + field_name + "[" + entity_var + "]" + suffix;
 }
 
@@ -381,14 +368,13 @@ std::string extern_callback_signature(const ExternSystemNode& sys,
 
     for (const auto& entry : sys.filter.entries) {
         const auto trait_name = filter_trait_simple_name(entry);
-        const auto trait_it = ctx.traits.find(trait_name);
+        const auto trait_it   = ctx.traits.find(trait_name);
         if (trait_it == ctx.traits.end()) {
             continue;
         }
 
         for (const auto& field : trait_it->second.fields) {
-            out << ", " << SoaEmitter::type_to_cpp(field.type) << "& "
-                << trait_name << "_" << field.name;
+            out << ", " << SoaEmitter::type_to_cpp(field.type) << "& " << trait_name << "_" << field.name;
         }
     }
 
@@ -401,14 +387,12 @@ std::string extern_callback_signature(const ExternSystemNode& sys,
 
 std::string emit_expr_dynamic_impl(const ExprNode& expr,
                                    const std::string& entity_index_var,
-                                   const ProgramNode* ast); // NOLINT(misc-no-recursion)
+                                   const ProgramNode* ast);  // NOLINT(misc-no-recursion)
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
-std::string emit_expr_dynamic_impl(const ExprNode& expr,
-                                   const std::string& entity_index_var,
-                                   const ProgramNode* ast) {
+std::string emit_expr_dynamic_impl(const ExprNode& expr, const std::string& entity_index_var, const ProgramNode* ast) {
     return std::visit(
-        [&](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
+        [&](auto& e) -> std::string {  // NOLINT(readability-function-cognitive-complexity)
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, SelfExpr>) {
                 return entity_index_var;
@@ -442,7 +426,9 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
                 return op + emit_expr_dynamic_impl(*e.operand, entity_index_var, ast);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                    if (const auto lowered = lower_unqualified_stdlib_func(ast, ident->name,
+                    if (const auto lowered = lower_unqualified_stdlib_func(
+                            ast,
+                            ident->name,
                             [&](const ExprNode& arg) { return emit_expr_dynamic_impl(arg, entity_index_var, ast); },
                             e.args);
                         !lowered.empty()) {
@@ -450,7 +436,10 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
                     }
                 }
                 if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
-                    if (const auto lowered = lower_stdlib_member_call(*member, e.args, ast,
+                    if (const auto lowered = lower_stdlib_member_call(
+                            *member,
+                            e.args,
+                            ast,
                             [&](const ExprNode& arg) { return emit_expr_dynamic_impl(arg, entity_index_var, ast); });
                         !lowered.empty()) {
                         return lowered;
@@ -482,9 +471,10 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr,
 
 std::string ManualSystemEmitter::emit_extern_system_forward_decl(const ExternSystemNode& sys,
                                                                  const CodegenContext& ctx) {
-    if (is_flat_transform_propagation(sys, ctx) || is_volume_transform_propagation(sys, ctx) || is_shape_renderer(sys, ctx) ||
-        is_sprite_renderer(sys, ctx) || is_animated_sprite_system(sys, ctx) || is_mesh_renderer(sys, ctx) ||
-        is_billboard_renderer(sys, ctx) || is_point_light_system(sys, ctx) || is_directional_light_system(sys, ctx)) {
+    if (is_flat_transform_propagation(sys, ctx) || is_volume_transform_propagation(sys, ctx) ||
+        is_shape_renderer(sys, ctx) || is_sprite_renderer(sys, ctx) || is_animated_sprite_system(sys, ctx) ||
+        is_mesh_renderer(sys, ctx) || is_billboard_renderer(sys, ctx) || is_point_light_system(sys, ctx) ||
+        is_directional_light_system(sys, ctx)) {
         return {};
     }
 
@@ -492,12 +482,14 @@ std::string ManualSystemEmitter::emit_extern_system_forward_decl(const ExternSys
 }
 
 std::string ManualSystemEmitter::indent_str(int level) {
-    return std::string(static_cast<size_t>(level) * 4, ' '); // NOLINT(modernize-return-braced-init-list)
+    return std::string(static_cast<size_t>(level) * 4, ' ');  // NOLINT(modernize-return-braced-init-list)
 }
 
-std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNode* ast) { // NOLINT(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNode* ast) {
     return std::visit(
-        [&](auto& e) -> std::string { // NOLINT(readability-function-cognitive-complexity)
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+        [&](auto& e) -> std::string {
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
                 if (e.kind == LiteralExpr::Kind::String) {
@@ -512,7 +504,8 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNo
                         auto byte = [&](size_t offset) {
                             return std::to_string(std::stoi(hex.substr(offset, 2), nullptr, 16));
                         };
-                        return "Color{.r = " + byte(0) + ", .g = " + byte(2) + ", .b = " + byte(4) + ", .a = " + byte(6) + "}";
+                        return "Color{.r = " + byte(0) + ", .g = " + byte(2) + ", .b = " + byte(4) +
+                               ", .a = " + byte(6) + "}";
                     }
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
@@ -540,16 +533,15 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNo
                 return op + emit_expr(*e.operand, ast);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                    if (const auto lowered = lower_unqualified_stdlib_func(ast, ident->name,
-                            [&](const ExprNode& arg) { return emit_expr(arg, ast); },
-                            e.args);
+                    if (const auto lowered = lower_unqualified_stdlib_func(
+                            ast, ident->name, [&](const ExprNode& arg) { return emit_expr(arg, ast); }, e.args);
                         !lowered.empty()) {
                         return lowered;
                     }
                 }
                 if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
-                    if (const auto lowered = lower_stdlib_member_call(*member, e.args, ast,
-                            [&](const ExprNode& arg) { return emit_expr(arg, ast); });
+                    if (const auto lowered = lower_stdlib_member_call(
+                            *member, e.args, ast, [&](const ExprNode& arg) { return emit_expr(arg, ast); });
                         !lowered.empty()) {
                         return lowered;
                     }
@@ -587,10 +579,11 @@ std::string ManualSystemEmitter::emit_expr_dynamic(const ExprNode& expr,
 
 // ── Legacy emit_stmt (indexed model) ──────────────────────────────────────
 
-std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) { // NOLINT(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string ManualSystemEmitter::emit_stmt(const StmtNode& stmt, int indent) {
     return std::visit(
         [indent](auto& s) -> std::string {
-            using S = std::decay_t<decltype(s)>;
+            using S         = std::decay_t<decltype(s)>;
             std::string ind = indent_str(indent);
             if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string op = s.op;
@@ -685,8 +678,7 @@ std::string ManualSystemEmitter::emit_system(const SystemNode& sys, const Decora
 
 // ── Dynamic ECS helpers ────────────────────────────────────────────────────
 
-std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
-                                                   const CodegenContext& ctx) {
+std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause, const CodegenContext& ctx) {
     (void)ctx;
     std::string result;
     // Prefer the simple trait_names list (populated by both old and new parsers)
@@ -701,9 +693,8 @@ std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
         // Fall back to entries (extract simple name from qualified name)
         for (const auto& entry : clause.entries) {
             auto dot = entry.qualified_name.find('.');
-            std::string simple_name = (dot != std::string::npos)
-                                          ? entry.qualified_name.substr(dot + 1)
-                                          : entry.qualified_name;
+            std::string simple_name =
+                (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
             if (!result.empty()) {
                 result += " | ";
             }
@@ -713,8 +704,8 @@ std::string ManualSystemEmitter::compute_mask_expr(const FilterClause& clause,
     return result.empty() ? "0ULL" : result;
 }
 
-std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(readability-function-cognitive-complexity)
-                                                 const CodegenContext& ctx) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, const CodegenContext& ctx) {
     auto tmpl_it = ctx.template_ast.find(s.template_name);
     if (tmpl_it == ctx.template_ast.end()) {
         return "/* spawn " + s.template_name + " — template not found */";
@@ -777,13 +768,13 @@ std::string ManualSystemEmitter::emit_spawn_call(const SpawnStmt& s, // NOLINT(r
 
 // ── emit_stmt_dynamic ──────────────────────────────────────────────────────
 
-std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int indent, // NOLINT(readability-function-cognitive-complexity)
-                                                     const CodegenContext& ctx,
-                                                     const std::string& entity_index_var,
-                                                     bool in_loop) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string ManualSystemEmitter::emit_stmt_dynamic(
+    const StmtNode& stmt, int indent, const CodegenContext& ctx, const std::string& entity_index_var, bool in_loop) {
     return std::visit(
-        [indent, &ctx, &entity_index_var, in_loop](auto& s) -> std::string { // NOLINT(readability-function-cognitive-complexity)
-            using S = std::decay_t<decltype(s)>;
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+        [indent, &ctx, &entity_index_var, in_loop](auto& s) -> std::string {
+            using S         = std::decay_t<decltype(s)>;
             std::string ind = indent_str(indent);
 
             if constexpr (std::is_same_v<S, VarAssign>) {
@@ -808,7 +799,8 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 // task 7.9: swap-and-delete
                 if (s.target_expr.has_value()) {
-                    return ind + "cactus_entity_remove_recursive(" + emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast) + ");\n";
+                    return ind + "cactus_entity_remove_recursive(" +
+                           emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast) + ");\n";
                 }
                 if (in_loop) {
                     return ind + "cactus_entity_remove_recursive(" + entity_index_var + "); __destroyed = true;\n";
@@ -821,15 +813,16 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
 
             } else if constexpr (std::is_same_v<S, LoadStmt>) {
                 // task 7.10: deferred load
-                return ind + "if (g_load_pending) { g_load_multi_error = true; }\n" +
-                       ind + "g_pending_load = \"" + s.module_name + "\";\n" +
-                       ind + "g_load_pending = true;\n";
+                return ind + "if (g_load_pending) { g_load_multi_error = true; }\n" + ind + "g_pending_load = \"" +
+                       s.module_name + "\";\n" + ind + "g_load_pending = true;\n";
 
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast) : entity_index_var;
+                std::string target = s.target_expr.has_value()
+                                         ? emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast)
+                                         : entity_index_var;
                 std::ostringstream result;
                 result << ind << "if ((g_trait_mask[" << target << "] & TraitBits::" << s.trait_name << ") == 0) {\n";
-                auto td_it = ctx.trait_defaults.find(s.trait_name);
+                auto td_it    = ctx.trait_defaults.find(s.trait_name);
                 auto trait_it = ctx.traits.find(s.trait_name);
                 if (trait_it != ctx.traits.end()) {
                     for (const auto& field : trait_it->second.fields) {
@@ -840,20 +833,22 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                                 init_value = def_it->second;
                             }
                         }
-                        result << ind << "    g_" << s.trait_name << "_" << field.name << "[" << target << "] = "
-                               << init_value << ";\n";
+                        result << ind << "    g_" << s.trait_name << "_" << field.name << "[" << target
+                               << "] = " << init_value << ";\n";
                     }
                 }
                 result << ind << "}\n";
                 for (const auto& arg : s.args) {
-                    result << ind << "g_" << s.trait_name << "_" << arg.name << "[" << target << "] = "
-                           << emit_expr_dynamic(*arg.value, entity_index_var, ctx.ast) << ";\n";
+                    result << ind << "g_" << s.trait_name << "_" << arg.name << "[" << target
+                           << "] = " << emit_expr_dynamic(*arg.value, entity_index_var, ctx.ast) << ";\n";
                 }
                 result << ind << "g_trait_mask[" << target << "] |= TraitBits::" << s.trait_name << ";\n";
                 return result.str();
 
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                std::string target = s.target_expr.has_value() ? emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast) : entity_index_var;
+                std::string target = s.target_expr.has_value()
+                                         ? emit_expr_dynamic(**s.target_expr, entity_index_var, ctx.ast)
+                                         : entity_index_var;
                 return ind + "g_trait_mask[" + target + "] &= ~TraitBits::" + s.trait_name + ";\n";
 
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
@@ -866,7 +861,8 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                 return ind + emit_expr_dynamic(*s.expr, entity_index_var, ctx.ast) + ";\n";
 
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                std::string result = ind + "if (" + emit_expr_dynamic(*s.condition, entity_index_var, ctx.ast) + ") {\n";
+                std::string result =
+                    ind + "if (" + emit_expr_dynamic(*s.condition, entity_index_var, ctx.ast) + ") {\n";
                 for (auto& inner : s.then_body) {
                     result += emit_stmt_dynamic(*inner, indent + 1, ctx, entity_index_var, in_loop);
                 }
@@ -874,8 +870,7 @@ std::string ManualSystemEmitter::emit_stmt_dynamic(const StmtNode& stmt, int ind
                 if (!s.else_body.empty()) {
                     result += " else {\n";
                     for (auto& inner : s.else_body) {
-                        result += emit_stmt_dynamic(*inner, indent + 1, ctx, entity_index_var,
-                                                    in_loop);
+                        result += emit_stmt_dynamic(*inner, indent + 1, ctx, entity_index_var, in_loop);
                     }
                     result += ind + "}";
                 }
@@ -894,14 +889,13 @@ std::string ManualSystemEmitter::emit_system_forward_decls(const SystemNode& sys
     std::ostringstream out;
     for (const auto& handler : sys.handlers) {
         const std::string EVENT_VAR = handler.alias.value_or(handler.event_name);
-        bool is_per_entity = (handler.event_name == "spawn" ||
-                              handler.event_name == "destroy");
+        bool is_per_entity          = (handler.event_name == "spawn" || handler.event_name == "destroy");
         if (is_per_entity) {
-            out << "static void " << sys.name << "_" << handler.event_name
-                << "(size_t _idx, const " << handler.event_name << "Event& " << EVENT_VAR << ");\n";
+            out << "static void " << sys.name << "_" << handler.event_name << "(size_t _idx, const "
+                << handler.event_name << "Event& " << EVENT_VAR << ");\n";
         } else {
-            out << "static void " << sys.name << "_" << handler.event_name
-                << "(const " << handler.event_name << "Event& " << EVENT_VAR << ");\n";
+            out << "static void " << sys.name << "_" << handler.event_name << "(const " << handler.event_name
+                << "Event& " << EVENT_VAR << ");\n";
         }
     }
     return out.str();
@@ -909,22 +903,21 @@ std::string ManualSystemEmitter::emit_system_forward_decls(const SystemNode& sys
 
 // ── emit_system_dynamic ────────────────────────────────────────────────────
 
-std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // NOLINT(readability-function-cognitive-complexity)
-                                                      const CodegenContext& ctx) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, const CodegenContext& ctx) {
     std::ostringstream out;
 
     const std::string FILTER_MASK  = compute_mask_expr(sys.filter, ctx);
     const std::string EXCLUDE_MASK = compute_mask_expr(sys.exclude, ctx);
 
     for (const auto& handler : sys.handlers) {
-        bool is_per_entity = (handler.event_name == "spawn" ||
-                              handler.event_name == "destroy");
+        bool is_per_entity          = (handler.event_name == "spawn" || handler.event_name == "destroy");
         const std::string EVENT_VAR = handler.alias.value_or(handler.event_name);
 
         if (is_per_entity) {
             // ── Per-entity handler: called with a specific entity index ──────
-            out << "static void " << sys.name << "_" << handler.event_name
-                << "(size_t _idx, const " << handler.event_name << "Event& " << EVENT_VAR << ") {\n";
+            out << "static void " << sys.name << "_" << handler.event_name << "(size_t _idx, const "
+                << handler.event_name << "Event& " << EVENT_VAR << ") {\n";
 
             // Local references for filter trait fields
             for (const auto& trait_name : sys.filter.trait_names) {
@@ -933,8 +926,8 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
                     continue;
                 }
                 for (const auto& field : tit->second.fields) {
-                    out << "    " << SoaEmitter::type_to_cpp(field.type) << "& " << field.name
-                        << " = g_" << trait_name << "_" << field.name << "[_idx];\n";
+                    out << "    " << SoaEmitter::type_to_cpp(field.type) << "& " << field.name << " = g_" << trait_name
+                        << "_" << field.name << "[_idx];\n";
                 }
             }
 
@@ -945,8 +938,8 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
 
         } else {
             // ── Loop-based handler (tick, load, unload, or custom event) ─────
-            out << "static void " << sys.name << "_" << handler.event_name
-                << "(const " << handler.event_name << "Event& " << EVENT_VAR << ") {\n";
+            out << "static void " << sys.name << "_" << handler.event_name << "(const " << handler.event_name
+                << "Event& " << EVENT_VAR << ") {\n";
             out << "    uint64_t _filter_mask = " << FILTER_MASK << ";\n";
             out << "    uint64_t _exclude_mask = " << EXCLUDE_MASK << ";\n";
 
@@ -963,9 +956,8 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
                         continue;
                     }
                     for (const auto& field : tit->second.fields) {
-                        out << "            " << SoaEmitter::type_to_cpp(field.type) << "& "
-                            << field.name << " = g_" << trait_name << "_" << field.name
-                            << "[i];\n";
+                        out << "            " << SoaEmitter::type_to_cpp(field.type) << "& " << field.name << " = g_"
+                            << trait_name << "_" << field.name << "[i];\n";
                     }
                 }
                 for (const auto& stmt : handler.body) {
@@ -986,9 +978,8 @@ std::string ManualSystemEmitter::emit_system_dynamic(const SystemNode& sys, // N
                         continue;
                     }
                     for (const auto& field : tit->second.fields) {
-                        out << "            " << SoaEmitter::type_to_cpp(field.type) << "& "
-                            << field.name << " = g_" << trait_name << "_" << field.name
-                            << "[i];\n";
+                        out << "            " << SoaEmitter::type_to_cpp(field.type) << "& " << field.name << " = g_"
+                            << trait_name << "_" << field.name << "[i];\n";
                     }
                 }
                 out << "            bool __destroyed = false;\n";
@@ -1021,7 +1012,8 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "                return std::nullopt;\n";
         out << "            }\n";
         out << "            const auto _parent = static_cast<std::size_t>(g_Parent_parent[_idx]);\n";
-        out << "            if (_parent >= entity_count || (g_trait_mask[_parent] & TraitBits::WorldTransform) == 0) {\n";
+        out << "            if (_parent >= entity_count || (g_trait_mask[_parent] & TraitBits::WorldTransform) == 0) "
+               "{\n";
         out << "                return std::nullopt;\n";
         out << "            }\n";
         out << "            return _parent;\n";
@@ -1032,9 +1024,13 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "            g_WorldTransform_scale[_idx] = g_LocalTransform_scale[_idx];\n";
         out << "        },\n";
         out << "        [&](std::size_t _parent, std::size_t _idx) {\n";
-        out << "            g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y};\n";
-        out << "            g_WorldTransform_rotation[_idx] = g_WorldTransform_rotation[_parent] + g_LocalTransform_rotation[_idx];\n";
-        out << "            g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y};\n";
+        out << "            g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + "
+               "g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + "
+               "g_LocalTransform_position[_idx].y};\n";
+        out << "            g_WorldTransform_rotation[_idx] = g_WorldTransform_rotation[_parent] + "
+               "g_LocalTransform_rotation[_idx];\n";
+        out << "            g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * "
+               "g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y};\n";
         out << "        });\n";
         out << "}\n\n";
         return out.str();
@@ -1049,7 +1045,8 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "                return std::nullopt;\n";
         out << "            }\n";
         out << "            const auto _parent = static_cast<std::size_t>(g_Parent_parent[_idx]);\n";
-        out << "            if (_parent >= entity_count || (g_trait_mask[_parent] & TraitBits::WorldTransform) == 0) {\n";
+        out << "            if (_parent >= entity_count || (g_trait_mask[_parent] & TraitBits::WorldTransform) == 0) "
+               "{\n";
         out << "                return std::nullopt;\n";
         out << "            }\n";
         out << "            return _parent;\n";
@@ -1060,9 +1057,14 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "            g_WorldTransform_scale[_idx] = g_LocalTransform_scale[_idx];\n";
         out << "        },\n";
         out << "        [&](std::size_t _parent, std::size_t _idx) {\n";
-        out << "            g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + g_LocalTransform_position[_idx].y, g_WorldTransform_position[_parent].z + g_LocalTransform_position[_idx].z};\n";
+        out << "            g_WorldTransform_position[_idx] = {g_WorldTransform_position[_parent].x + "
+               "g_LocalTransform_position[_idx].x, g_WorldTransform_position[_parent].y + "
+               "g_LocalTransform_position[_idx].y, g_WorldTransform_position[_parent].z + "
+               "g_LocalTransform_position[_idx].z};\n";
         out << "            g_WorldTransform_rotation[_idx] = g_LocalTransform_rotation[_idx];\n";
-        out << "            g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y, g_WorldTransform_scale[_parent].z * g_LocalTransform_scale[_idx].z};\n";
+        out << "            g_WorldTransform_scale[_idx] = {g_WorldTransform_scale[_parent].x * "
+               "g_LocalTransform_scale[_idx].x, g_WorldTransform_scale[_parent].y * g_LocalTransform_scale[_idx].y, "
+               "g_WorldTransform_scale[_parent].z * g_LocalTransform_scale[_idx].z};\n";
         out << "        });\n";
         out << "}\n\n";
         return out.str();
@@ -1071,7 +1073,8 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
     if (is_shape_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
-        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Shape)) != (TraitBits::WorldTransform | TraitBits::Shape)) {\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Shape)) != "
+               "(TraitBits::WorldTransform | TraitBits::Shape)) {\n";
         out << "            continue;\n";
         out << "        }\n";
         out << "        if (!g_Shape_visible[i]) {\n";
@@ -1094,8 +1097,10 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
     if (is_sprite_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
-        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != (TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
-        out << "        cactus::runtime::manual_backend::submit_sprite(g_WorldTransform_position[i], g_Renderer_size[i], g_Renderer_color[i], g_Renderer_texture[i], g_Renderer_visible[i]);\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != "
+               "(TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
+        out << "        cactus::runtime::manual_backend::submit_sprite(g_WorldTransform_position[i], "
+               "g_Renderer_size[i], g_Renderer_color[i], g_Renderer_texture[i], g_Renderer_visible[i]);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();
@@ -1106,7 +1111,9 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "    constexpr float kFixedDt = 1.0F / 60.0F;\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & TraitBits::AnimatedSprite) == 0) continue;\n";
-        out << "        cactus::runtime::manual_backend::advance_animated_sprite(g_AnimatedSprite_texture[i], g_AnimatedSprite_frame[i], g_AnimatedSprite_frame_count[i], g_AnimatedSprite_fps[i], g_AnimatedSprite_playing[i], kFixedDt);\n";
+        out << "        cactus::runtime::manual_backend::advance_animated_sprite(g_AnimatedSprite_texture[i], "
+               "g_AnimatedSprite_frame[i], g_AnimatedSprite_frame_count[i], g_AnimatedSprite_fps[i], "
+               "g_AnimatedSprite_playing[i], kFixedDt);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();
@@ -1115,8 +1122,11 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
     if (is_mesh_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
-        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != (TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
-        out << "        cactus::runtime::manual_backend::submit_mesh(g_WorldTransform_position[i], g_WorldTransform_rotation[i], g_WorldTransform_scale[i], g_Renderer_mesh[i], g_Renderer_material[i], g_Renderer_visible[i], g_Renderer_cast_shadow[i]);\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::Renderer)) != "
+               "(TraitBits::WorldTransform | TraitBits::Renderer)) continue;\n";
+        out << "        cactus::runtime::manual_backend::submit_mesh(g_WorldTransform_position[i], "
+               "g_WorldTransform_rotation[i], g_WorldTransform_scale[i], g_Renderer_mesh[i], g_Renderer_material[i], "
+               "g_Renderer_visible[i], g_Renderer_cast_shadow[i]);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();
@@ -1125,8 +1135,11 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
     if (is_billboard_renderer(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
-        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::BillboardRenderer)) != (TraitBits::WorldTransform | TraitBits::BillboardRenderer)) continue;\n";
-        out << "        cactus::runtime::manual_backend::submit_billboard(g_WorldTransform_position[i], g_BillboardRenderer_size[i], g_BillboardRenderer_color[i], g_BillboardRenderer_texture[i], g_BillboardRenderer_visible[i]);\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::BillboardRenderer)) != "
+               "(TraitBits::WorldTransform | TraitBits::BillboardRenderer)) continue;\n";
+        out << "        cactus::runtime::manual_backend::submit_billboard(g_WorldTransform_position[i], "
+               "g_BillboardRenderer_size[i], g_BillboardRenderer_color[i], g_BillboardRenderer_texture[i], "
+               "g_BillboardRenderer_visible[i]);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();
@@ -1135,8 +1148,10 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
     if (is_point_light_system(sys, ctx)) {
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
-        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::PointLight)) != (TraitBits::WorldTransform | TraitBits::PointLight)) continue;\n";
-        out << "        cactus::runtime::manual_backend::register_point_light(g_WorldTransform_position[i], g_PointLight_color[i], g_PointLight_intensity[i], g_PointLight_range[i], g_PointLight_enabled[i]);\n";
+        out << "        if ((g_trait_mask[i] & (TraitBits::WorldTransform | TraitBits::PointLight)) != "
+               "(TraitBits::WorldTransform | TraitBits::PointLight)) continue;\n";
+        out << "        cactus::runtime::manual_backend::register_point_light(g_WorldTransform_position[i], "
+               "g_PointLight_color[i], g_PointLight_intensity[i], g_PointLight_range[i], g_PointLight_enabled[i]);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();
@@ -1146,7 +1161,8 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
         out << "static void " << sys.name << "_tick() {\n";
         out << "    for (std::size_t i = 0; i < entity_count; ++i) {\n";
         out << "        if ((g_trait_mask[i] & TraitBits::DirectionalLight) == 0) continue;\n";
-        out << "        cactus::runtime::manual_backend::register_directional_light(g_DirectionalLight_direction[i], g_DirectionalLight_color[i], g_DirectionalLight_intensity[i], g_DirectionalLight_enabled[i]);\n";
+        out << "        cactus::runtime::manual_backend::register_directional_light(g_DirectionalLight_direction[i], "
+               "g_DirectionalLight_color[i], g_DirectionalLight_intensity[i], g_DirectionalLight_enabled[i]);\n";
         out << "    }\n";
         out << "}\n\n";
         return out.str();
@@ -1162,7 +1178,8 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
     out << "        }\n";
     out << "    }\n";
     if (!sys.order_by.empty()) {
-        out << "    std::stable_sort(_matched_entities.begin(), _matched_entities.end(), [&](std::size_t _lhs, std::size_t _rhs) {\n";
+        out << "    std::stable_sort(_matched_entities.begin(), _matched_entities.end(), [&](std::size_t _lhs, "
+               "std::size_t _rhs) {\n";
         for (const auto& key : sys.order_by) {
             const auto lhs = sort_expr_for_entity(sys, key, "_lhs");
             const auto rhs = sort_expr_for_entity(sys, key, "_rhs");
@@ -1176,19 +1193,19 @@ std::string ManualSystemEmitter::emit_extern_system_dynamic(const ExternSystemNo
     out << "    for (const auto _idx : _matched_entities) {\n";
     for (const auto& entry : sys.filter.entries) {
         const auto trait_name = filter_trait_simple_name(entry);
-        const auto trait_it = ctx.traits.find(trait_name);
+        const auto trait_it   = ctx.traits.find(trait_name);
         if (trait_it == ctx.traits.end()) {
             continue;
         }
         for (const auto& field : trait_it->second.fields) {
-            out << "        auto& " << trait_name << "_" << field.name << " = g_"
-                << trait_name << "_" << field.name << "[_idx];\n";
+            out << "        auto& " << trait_name << "_" << field.name << " = g_" << trait_name << "_" << field.name
+                << "[_idx];\n";
         }
     }
     out << "        " << sys.name << "_update(_idx";
     for (const auto& entry : sys.filter.entries) {
         const auto trait_name = filter_trait_simple_name(entry);
-        const auto trait_it = ctx.traits.find(trait_name);
+        const auto trait_it   = ctx.traits.find(trait_name);
         if (trait_it == ctx.traits.end()) {
             continue;
         }

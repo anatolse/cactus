@@ -1,17 +1,20 @@
-#include "backends/cpp-manual/runtime.h"
+#include "backends/cpp-manual/runtime.hpp"
+
+#include <raylib.h>
 
 #include <memory_resource>
 #include <vector>
 
-#include <raylib.h>
-
 namespace cactus::runtime::manual_backend {
 
 namespace {
-RenderDebugState g_render_debug_state;
+RenderDebugState& render_debug_state_storage() noexcept {
+    static RenderDebugState state;
+    return state;
+}
 
 void note_missing_asset() noexcept {
-    ++g_render_debug_state.missing_assets;
+    ++render_debug_state_storage().missing_assets;
 }
 }  // namespace
 
@@ -20,12 +23,12 @@ RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept {
 }
 
 void reset_render_debug_state() noexcept {
-    g_render_debug_state = {};
+    render_debug_state_storage() = {};
     shared_asset_registry().clear_diagnostics();
 }
 
 const RenderDebugState& render_debug_state() noexcept {
-    return g_render_debug_state;
+    return render_debug_state_storage();
 }
 
 void submit_sprite(const Vector2 /*position*/,
@@ -41,7 +44,7 @@ void submit_sprite(const Vector2 /*position*/,
         note_missing_asset();
         return;
     }
-    ++g_render_debug_state.submitted_sprites;
+    ++render_debug_state_storage().submitted_sprites;
 }
 
 void advance_animated_sprite(const AssetHandle texture,
@@ -63,7 +66,7 @@ void advance_animated_sprite(const AssetHandle texture,
         return;
     }
     frame = (frame + step) % frame_count;
-    ++g_render_debug_state.advanced_animated_sprites;
+    ++render_debug_state_storage().advanced_animated_sprites;
 }
 
 void submit_mesh(const Vector3 /*position*/,
@@ -76,13 +79,13 @@ void submit_mesh(const Vector3 /*position*/,
     if (!visible) {
         return;
     }
-    const auto mesh_resolved = shared_asset_registry().resolve(AssetKind::Mesh, mesh);
+    const auto mesh_resolved     = shared_asset_registry().resolve(AssetKind::Mesh, mesh);
     const auto material_resolved = shared_asset_registry().resolve(AssetKind::Material, material);
     if (!mesh_resolved.ready() || !material_resolved.ready()) {
         note_missing_asset();
         return;
     }
-    ++g_render_debug_state.submitted_meshes;
+    ++render_debug_state_storage().submitted_meshes;
 }
 
 void submit_billboard(const Vector3 /*position*/,
@@ -98,7 +101,7 @@ void submit_billboard(const Vector3 /*position*/,
         note_missing_asset();
         return;
     }
-    ++g_render_debug_state.submitted_billboards;
+    ++render_debug_state_storage().submitted_billboards;
 }
 
 void register_point_light(const Vector3 /*position*/,
@@ -107,7 +110,7 @@ void register_point_light(const Vector3 /*position*/,
                           const float /*range*/,
                           const bool enabled) noexcept {
     if (enabled) {
-        ++g_render_debug_state.registered_point_lights;
+        ++render_debug_state_storage().registered_point_lights;
     }
 }
 
@@ -116,7 +119,7 @@ void register_directional_light(const Vector3 /*direction*/,
                                 const float /*intensity*/,
                                 const bool enabled) noexcept {
     if (enabled) {
-        ++g_render_debug_state.registered_directional_lights;
+        ++render_debug_state_storage().registered_directional_lights;
     }
 }
 
@@ -133,7 +136,7 @@ void propagate_hierarchy(std::size_t entity_count,
             return;
         }
 
-        active[entity] = 1U;
+        active[entity]    = 1U;
         bool copied_local = false;
 
         if (const auto parent = resolve_parent(entity); parent.has_value() && parent.value() < entity_count) {
@@ -172,9 +175,8 @@ void destroy_entity_recursive(std::size_t entity,
     }
 
     destroying_entities.push_back(entity);
-    visit_children(entity, [&](std::size_t child) {
-        destroy_entity_recursive(child, is_valid, visit_children, remove_entity);
-    });
+    visit_children(
+        entity, [&](std::size_t child) { destroy_entity_recursive(child, is_valid, visit_children, remove_entity); });
 
     if (is_valid(entity)) {
         remove_entity(entity);

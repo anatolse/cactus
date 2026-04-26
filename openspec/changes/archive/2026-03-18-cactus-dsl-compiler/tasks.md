@@ -23,25 +23,25 @@
 
 ## 4. Common Utilities
 
-- [x] 4.1 Implement `src/common/source_location.h` — SourceLocation struct (filename, line, column)
-- [x] 4.2 Implement `src/common/error_reporter.h/.cpp` — error/warning reporting with source locations
-- [x] 4.3 Implement `src/common/string_pool.h/.cpp` — interned string table (intern, lookup, contains)
-- [x] 4.4 Implement `src/common/types.h` — TypeKind enum, TypeInfo struct, built-in type definitions
+- [x] 4.1 Implement `src/common/source_location.hpp` — SourceLocation struct (filename, line, column)
+- [x] 4.2 Implement `src/common/error_reporter.hpp/.cpp` — error/warning reporting with source locations
+- [x] 4.3 Implement `src/common/string_pool.hpp/.cpp` — interned string table (intern, lookup, contains)
+- [x] 4.4 Implement `src/common/types.hpp` — TypeKind enum, TypeInfo struct, built-in type definitions
 
 ## 5. Lexer
 
-- [x] 5.1 Define `src/frontend/token.h` — TokenType enum (all keywords, operators, literals, INDENT/DEDENT/NEWLINE/EOF) and Token struct
-- [x] 5.2 Implement `src/frontend/lexer.h/.cpp` — indentation-sensitive tokenizer with indent stack, keyword recognition, numeric/string/hex-color literals, comment skipping, operator tokenization
+- [x] 5.1 Define `src/frontend/token.hpp` — TokenType enum (all keywords, operators, literals, INDENT/DEDENT/NEWLINE/EOF) and Token struct
+- [x] 5.2 Implement `src/frontend/lexer.hpp/.cpp` — indentation-sensitive tokenizer with indent stack, keyword recognition, numeric/string/hex-color literals, comment skipping, operator tokenization
 - [x] 5.3 Write `tests/test_lexer.cpp` — tests for INDENT/DEDENT, keywords vs identifiers, int/float literals, string literals, hex colors, comments, operators, tab rejection, error cases
 - [x] 5.4 Create `tests/fixtures/minimal_trait.cactus` — single trait with one var field for lexer/parser testing
 
 ## 6. AST Node Types
 
-- [x] 6.1 Define `src/frontend/ast.h` — all AST node types: ProgramNode, ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode, FieldNode, EventHandlerNode, ExprNode variants, StmtNode variants
+- [x] 6.1 Define `src/frontend/ast.hpp` — all AST node types: ProgramNode, ModuleNode, UseNode, ConstBlockNode, StructNode, EnumNode, TraitNode, UnitNode, SystemNode, ViewNode, EventNode, FuncNode, InterfaceNode, FieldNode, EventHandlerNode, ExprNode variants, StmtNode variants
 
 ## 7. Parser
 
-- [x] 7.1 Implement `src/frontend/parser.h/.cpp` — recursive descent parser: parse_program, parse_module, parse_use, parse_const_block, parse_struct, parse_enum
+- [x] 7.1 Implement `src/frontend/parser.hpp/.cpp` — recursive descent parser: parse_program, parse_module, parse_use, parse_const_block, parse_struct, parse_enum
 - [x] 7.2 Implement parser: parse_trait (with field modifiers persist/sync/pub/let/var and event handlers)
 - [x] 7.3 Implement parser: parse_unit (apply, config, child blocks), parse_system (filter, target, event handlers)
 - [x] 7.4 Implement parser: parse_func, parse_event, parse_view, parse_interface
@@ -51,30 +51,30 @@
 
 ## 8. Semantic Analyzer
 
-- [x] 8.1 Implement `src/frontend/semantic_analyzer.h/.cpp` — resolve_modules, resolve_types (struct/trait/enum/list[T] resolution)
+- [x] 8.1 Implement `src/frontend/semantic_analyzer.hpp/.cpp` — resolve_modules, resolve_types (struct/trait/enum/list[T] resolution)
 - [x] 8.2 Implement semantic analyzer: check_const_strings (reject string literals outside const blocks)
 - [x] 8.3 Implement semantic analyzer: check_func_purity (no emit, no world access, no mutation) and check_no_recursion (direct + indirect)
 - [x] 8.4 Implement semantic analyzer: resolve_scopes (scope tree, variable resolution)
 - [x] 8.5 Implement semantic analyzer: infer_types (expression type inference, lambda parameter inference)
 - [x] 8.6 Implement semantic analyzer: validate persist/sync modifiers (only on var fields), validate_system_filters, validate_event_usage
 - [x] 8.7 Implement semantic analyzer: build_dependency_graph (system read/write analysis for parallelism)
-- [x] 8.8 Define `src/frontend/decorated_ast.h` — DecoratedProgram with resolved types, scopes, dependency graph, string pool snapshot
+- [x] 8.8 Define `src/frontend/decorated_ast.hpp` — DecoratedProgram with resolved types, scopes, dependency graph, string pool snapshot
 - [x] 8.9 Write `tests/test_semantic.cpp` — tests for type resolution, const-string enforcement, func purity, no recursion, scope resolution, persist/sync validation, filter validation, event validation
 
 ## 9. C++ Manual SoA Backend
 
-- [x] 9.1 Implement `src/backends/cpp-manual/soa_emitter.h/.cpp` — SoA storage class generation from traits, POD struct generation
-- [x] 9.2 Implement `src/backends/cpp-manual/system_emitter.h/.cpp` — system update functions with map/filter/reduce loop generation
-- [x] 9.3 Implement `src/backends/cpp-manual/event_emitter.h/.cpp` — event struct, buffer, and dispatch generation
-- [x] 9.4 Implement `src/backends/cpp-manual/cpp_manual_codegen.h/.cpp` — main codegen orchestrator with persist serialization hooks, sync replication hooks, and Raylib main loop generation
+- [x] 9.1 Implement `src/backends/cpp-manual/soa_emitter.hpp/.cpp` — SoA storage class generation from traits, POD struct generation
+- [x] 9.2 Implement `src/backends/cpp-manual/system_emitter.hpp/.cpp` — system update functions with map/filter/reduce loop generation
+- [x] 9.3 Implement `src/backends/cpp-manual/event_emitter.hpp/.cpp` — event struct, buffer, and dispatch generation
+- [x] 9.4 Implement `src/backends/cpp-manual/cpp_manual_codegen.hpp/.cpp` — main codegen orchestrator with persist serialization hooks, sync replication hooks, and Raylib main loop generation
 - [x] 9.5 Write `tests/test_codegen_manual.cpp` — tests for SoA struct output, system loops, event buffers, persist/sync hooks, compilable output verification
 
 ## 10. C++ EnTT Backend
 
-- [x] 10.1 Implement `src/backends/cpp-entt/component_emitter.h/.cpp` — EnTT component struct and tag generation from traits
-- [x] 10.2 Implement `src/backends/cpp-entt/system_emitter.h/.cpp` — system functions using registry.view<>().each() with map/filter/reduce
-- [x] 10.3 Implement `src/backends/cpp-entt/event_emitter.h/.cpp` — EnTT dispatcher event structs and sink connections
-- [x] 10.4 Implement `src/backends/cpp-entt/cpp_entt_codegen.h/.cpp` — main codegen orchestrator with entity creation from units, persist/sync hooks, and Raylib+EnTT main loop generation
+- [x] 10.1 Implement `src/backends/cpp-entt/component_emitter.hpp/.cpp` — EnTT component struct and tag generation from traits
+- [x] 10.2 Implement `src/backends/cpp-entt/system_emitter.hpp/.cpp` — system functions using registry.view<>().each() with map/filter/reduce
+- [x] 10.3 Implement `src/backends/cpp-entt/event_emitter.hpp/.cpp` — EnTT dispatcher event structs and sink connections
+- [x] 10.4 Implement `src/backends/cpp-entt/cpp_entt_codegen.hpp/.cpp` — main codegen orchestrator with entity creation from units, persist/sync hooks, and Raylib+EnTT main loop generation
 - [x] 10.5 Write `tests/test_codegen_entt.cpp` — tests for component structs, registry views, dispatcher setup, entity creation, compilable output verification
 
 ## 11. CLI Entry Point

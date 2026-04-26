@@ -95,7 +95,7 @@ CommandResult run_command(const fs::path& working_dir, const std::string& stage,
     return {.exit_code = exitCode, .command = command, .output = output.str()};
 }
 
-[[noreturn]] void fail_stage(const ExampleCase& example, const std::string& stage, const CommandResult& result) {
+void fail_stage(const ExampleCase& example, const std::string& stage, const CommandResult& result) {
     FAIL("Example '" + example.name + "' failed during stage '" + stage + "'.\nCommand: " + result.command +
          "\nExit code: " + std::to_string(result.exit_code) + "\nOutput:\n" + result.output);
 }

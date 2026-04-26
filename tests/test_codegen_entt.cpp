@@ -126,8 +126,16 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt)") !=
           std::string::npos);
     CHECK(code.find("move_tick(registry, TickEvent{dt});") != std::string::npos);
-    CHECK(code.find("int main()") == std::string::npos);
-    CHECK(code.find("InitWindow") == std::string::npos);
+    CHECK(code.find("int main()") != std::string::npos);
+    CHECK(code.find("InitWindow(config.window_width, config.window_height, config.window_title)") != std::string::npos);
+    CHECK(code.find("entt::registry registry;") != std::string::npos);
+    CHECK(code.find("entt::dispatcher dispatcher;") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::generated_init_project(registry);") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);") !=
+          std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);") !=
+          std::string::npos);
 
     // Persist hooks
     CHECK(code.find("save_Pos") != std::string::npos);

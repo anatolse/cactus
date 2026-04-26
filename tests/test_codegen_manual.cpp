@@ -1048,7 +1048,12 @@ TEST_CASE("Codegen Manual: full pipeline generates compilable structure", "[code
     CHECK(code.find("generated_init_project()") != std::string::npos);
     CHECK(code.find("generated_update_project(float dt)") != std::string::npos);
     CHECK(code.find("generated_render_project()") != std::string::npos);
-    CHECK(code.find("int main()") == std::string::npos);
+    CHECK(code.find("int main()") != std::string::npos);
+    CHECK(code.find("InitWindow(config.window_width, config.window_height, config.window_title)") != std::string::npos);
+    CHECK(code.find("while (!WindowShouldClose())") != std::string::npos);
+    CHECK(code.find("cactus::runtime::manual_backend::generated_init_project();") != std::string::npos);
+    CHECK(code.find("cactus::runtime::manual_backend::generated_update_project(dt);") != std::string::npos);
+    CHECK(code.find("cactus::runtime::manual_backend::generated_render_project();") != std::string::npos);
 
     // Persist hooks (task 7.2 — field serialization stubs)
     CHECK(code.find("save_Pos") != std::string::npos);

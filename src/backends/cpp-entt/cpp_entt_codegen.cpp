@@ -191,6 +191,30 @@ std::string pad_to_width(const std::string& value, std::size_t width) {
     }
     return value + std::string(width - value.size(), ' ');
 }
+
+std::string emit_backend_main() {
+    std::ostringstream out;
+    out << "\n// ── Backend Entry Point ───────────────────────────────────────────────\n\n";
+    out << "int main() try {\n";
+    out << "    const auto config = cactus::runtime::entt_backend::generated_project_config();\n";
+    out << "    InitWindow(config.window_width, config.window_height, config.window_title);\n";
+    out << "    SetTargetFPS(config.target_fps);\n\n";
+    out << "    entt::registry registry;\n";
+    out << "    entt::dispatcher dispatcher;\n";
+    out << "    cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);\n";
+    out << "    cactus::runtime::entt_backend::generated_init_project(registry);\n";
+    out << "    while (!WindowShouldClose()) {\n";
+    out << "        const float dt = GetFrameTime();\n";
+    out << "        cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);\n";
+    out << "        cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);\n";
+    out << "    }\n\n";
+    out << "    CloseWindow();\n";
+    out << "    return 0;\n";
+    out << "} catch (...) {\n";
+    out << "    return 1;\n";
+    out << "}\n";
+    return out.str();
+}
 }  // namespace
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -644,6 +668,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
     out << "}\n";
     out << "\n}  // namespace cactus::runtime::entt_backend\n";
+
+    out << emit_backend_main();
 
     return out.str();
 }

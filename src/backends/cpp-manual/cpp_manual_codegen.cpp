@@ -106,6 +106,27 @@ bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     return false;
 }
 
+std::string emit_backend_main() {
+    std::ostringstream out;
+    out << "\n// ── Backend Entry Point ───────────────────────────────────────────────\n\n";
+    out << "int main() try {\n";
+    out << "    const auto config = cactus::runtime::manual_backend::generated_project_config();\n";
+    out << "    InitWindow(config.window_width, config.window_height, config.window_title);\n";
+    out << "    SetTargetFPS(config.target_fps);\n\n";
+    out << "    cactus::runtime::manual_backend::generated_init_project();\n";
+    out << "    while (!WindowShouldClose()) {\n";
+    out << "        const float dt = GetFrameTime();\n";
+    out << "        cactus::runtime::manual_backend::generated_update_project(dt);\n";
+    out << "        cactus::runtime::manual_backend::generated_render_project();\n";
+    out << "    }\n\n";
+    out << "    CloseWindow();\n";
+    out << "    return 0;\n";
+    out << "} catch (...) {\n";
+    out << "    return 1;\n";
+    out << "}\n";
+    return out.str();
+}
+
 std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
         if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
@@ -742,6 +763,8 @@ std::string CppManualCodegen::generate(
     }
     out << "    EndDrawing();\n";
     out << "}\n";
+
+    out << emit_backend_main();
 
     return out.str();
 }

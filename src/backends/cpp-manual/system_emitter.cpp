@@ -505,7 +505,7 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNo
                     }
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "F";
+                    return e.value + "f";
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {

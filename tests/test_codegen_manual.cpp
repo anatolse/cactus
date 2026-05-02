@@ -307,7 +307,7 @@ TEST_CASE("Codegen Manual: add with fields initializes arrays", "[codegen-manual
                          "        add Stunned:\n"
                          "            duration = 2.0\n");
 
-    CHECK(code.find("g_Stunned_duration[i] = 2.0f") != std::string::npos);
+    CHECK(code.find("g_Stunned_duration[i] = 2.0F") != std::string::npos);
     CHECK(code.find("g_trait_mask[i] |= TraitBits::Stunned") != std::string::npos);
 }
 
@@ -356,7 +356,7 @@ TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[cod
                          "                x = 200.0\n");
 
     CHECK(code.find("spawn_Enemy(") != std::string::npos);
-    CHECK(code.find("200.0f") != std::string::npos);
+    CHECK(code.find("200.0F") != std::string::npos);
 }
 
 // ── Task 7.9: destroy uses swap-and-delete ────────────────────────────────────
@@ -962,7 +962,7 @@ TEST_CASE("Codegen Manual: imported stdlib math alias lowers to runtime namespac
         "    on tick:\n"
         "        x = math.lerp(0.0, 10.0, 0.5)\n");
 
-    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: imported stdlib vec2 alias lowers to runtime namespace",
@@ -979,7 +979,7 @@ TEST_CASE("Codegen Manual: imported stdlib vec2 alias lowers to runtime namespac
         "    on tick:\n"
         "        x = v2.length(vec2(3.0, 4.0))\n");
 
-    CHECK(code.find("cactus::runtime::stdlib::math::vec2::length(vec2(3.0f, 4.0f))") != std::string::npos);
+    CHECK(code.find("cactus::runtime::stdlib::math::vec2::length(vec2(3.0F, 4.0F))") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: unqualified imported stdlib func lowers to runtime namespace",
@@ -996,7 +996,7 @@ TEST_CASE("Codegen Manual: unqualified imported stdlib func lowers to runtime na
         "    on tick:\n"
         "        x = lerp(0.0, 10.0, 0.5)\n");
 
-    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
 }
 
 TEST_CASE("Codegen Manual: std.input extern calls lower to backend runtime namespace",

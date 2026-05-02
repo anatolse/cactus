@@ -472,7 +472,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                     return "\"" + e.value + "\"";
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "f";
+                    return e.value + "F";
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, SelfExpr>) {

@@ -194,7 +194,7 @@ TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace"
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime namespace",
@@ -214,7 +214,7 @@ TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime name
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0f, 10.0f, 0.5f)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespace",

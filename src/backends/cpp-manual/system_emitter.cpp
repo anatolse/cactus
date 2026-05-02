@@ -397,7 +397,7 @@ std::string emit_expr_dynamic_impl(const ExprNode& expr, const std::string& enti
                     return "\"" + e.value + "\"";
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "f";
+                    return e.value + "F";
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
@@ -505,7 +505,7 @@ std::string ManualSystemEmitter::emit_expr(const ExprNode& expr, const ProgramNo
                     }
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "f";
+                    return e.value + "F";
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {

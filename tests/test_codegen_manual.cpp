@@ -356,7 +356,7 @@ TEST_CASE("Codegen Manual: spawn statement emits factory call (task 7.8)", "[cod
                          "                x = 200.0\n");
 
     CHECK(code.find("spawn_Enemy(") != std::string::npos);
-    CHECK(code.find("200.0F") != std::string::npos);
+    CHECK(code.find("200.0f") != std::string::npos);
 }
 
 // ── Task 7.9: destroy uses swap-and-delete ────────────────────────────────────

@@ -54,6 +54,28 @@ TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
     CHECK(code.find("std::vector") == std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: stdlib collider components keep authored defaults", "[codegen-entt][stdlib][physics]") {
+    ResolvedTrait collider;
+    collider.name      = "Collider";
+    collider.is_pub    = true;
+    collider.is_stdlib = true;
+    collider.fields.push_back({.name = "layer", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+    collider.fields.push_back({.name = "mask", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+
+    const auto collider_code = EnttComponentEmitter::emit_component(collider);
+    CHECK(collider_code.find("int layer{1};") != std::string::npos);
+    CHECK(collider_code.find("int mask{1};") != std::string::npos);
+
+    ResolvedTrait box;
+    box.name      = "BoxCollider";
+    box.is_pub    = true;
+    box.is_stdlib = true;
+    box.fields.push_back({.name = "size", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+
+    const auto box_code = EnttComponentEmitter::emit_component(box);
+    CHECK(box_code.find("Vector2 size{.x = 1.0F, .y = 1.0F};") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -99,6 +121,19 @@ TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
             CHECK(sink.find("dispatcher.sink<DamageEvent>") != std::string::npos);
         }
     }
+}
+
+TEST_CASE("Codegen EnTT: CollisionEnter event supports entity and vector payload fields",
+          "[codegen-entt][stdlib][physics]") {
+    EventNode event;
+    event.name = "CollisionEnter";
+    event.fields.push_back({.name = "other", .type = {.name = "entity_id"}});
+    event.fields.push_back({.name = "overlap", .type = {.name = "vec2"}});
+
+    DecoratedProgram program;
+    const auto code = EnttEventEmitter::emit_event(event, program);
+    CHECK(code.find("entt::entity other;") != std::string::npos);
+    CHECK(code.find("Vector2 overlap;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
@@ -852,5 +887,54 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern system is recognize
     CHECK(code.find("cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, local.rotation)") !=
           std::string::npos);
     CHECK(code.find("parent_world.scale.z * local.scale.z") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: stdlib flat box colliders emit overlap runtime pass", "[codegen-entt][stdlib][physics]") {
+    ProgramNode ast;
+    DecoratedProgram program;
+    program.ast = &ast;
+
+    ResolvedTrait world;
+    world.name = "WorldTransform";
+    world.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    world.fields.push_back({.name = "rotation", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    world.fields.push_back({.name = "scale", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    program.traits[world.name] = world;
+
+    ResolvedTrait collider;
+    collider.name      = "Collider";
+    collider.is_pub    = true;
+    collider.is_stdlib = true;
+    collider.fields.push_back({.name = "layer", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+    collider.fields.push_back({.name = "mask", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+    program.traits[collider.name] = collider;
+
+    ResolvedTrait box;
+    box.name      = "BoxCollider";
+    box.is_pub    = true;
+    box.is_stdlib = true;
+    box.fields.push_back({.name = "size", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    program.traits[box.name] = box;
+
+    ResolvedTrait circle;
+    circle.name      = "CircleCollider";
+    circle.is_pub    = true;
+    circle.is_stdlib = true;
+    circle.fields.push_back({.name = "radius", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    program.traits[circle.name] = circle;
+
+    ResolvedTrait capsule;
+    capsule.name      = "CapsuleCollider";
+    capsule.is_pub    = true;
+    capsule.is_stdlib = true;
+    capsule.fields.push_back({.name = "radius", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    capsule.fields.push_back({.name = "height", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    program.traits[capsule.name] = capsule;
+
+    const auto code = CppEnttCodegen::generate(program);
+    CHECK(code.find("cactus_dispatch_stdlib_flat_collisions") != std::string::npos);
+    CHECK(code.find("registry.view<WorldTransform, Collider, BoxCollider>()") != std::string::npos);
+    CHECK(code.find("cactus_collision_masks_allow") != std::string::npos);
+    CHECK(code.find("dispatcher.trigger(CollisionEnterEvent") != std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

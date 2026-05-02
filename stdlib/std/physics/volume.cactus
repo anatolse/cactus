@@ -16,14 +16,29 @@ pub trait CharacterBody:
     var ground_normal: vec3 = vec3(0.0, 1.0, 0.0)
     var step_height: float = 0.3
 
-# 3D collider for physics simulation.
+# Shared 3D collision participation/filtering data.
 # layer: collision layer bitmask this entity belongs to
 # mask:  collision layer bitmask this entity collides with
-# NOTE: shape field (let shape: collider_shape) is pending a type system
-# addition for the collider_shape built-in type. Add when available.
 pub trait Collider:
     var layer: int = 1
     var mask: int = 1
+
+# Axis-aligned box/cube collider for 3D entities.
+# size: collider width/height/depth in world units
+pub trait BoxCollider:
+    var size: vec3 = vec3(1.0, 1.0, 1.0)
+
+# Spherical collider for 3D entities.
+# radius: collider radius in world units
+pub trait SphereCollider:
+    var radius: float = 0.5
+
+# Vertical capsule collider for 3D entities.
+# radius: capsule radius in world units
+# height: total capsule height in world units along Y
+pub trait CapsuleCollider:
+    var radius: float = 0.5
+    var height: float = 1.0
 
 # Fired when this entity's collider first contacts another entity's collider.
 # other:  entity_id of the entity that was hit
@@ -33,8 +48,3 @@ pub event CollisionEnter:
     other: entity_id
     point: vec3
     normal: vec3
-
-    other: entity_id
-    normal: vec2
-    texture: texture_id
-    depth: float

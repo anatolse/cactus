@@ -192,6 +192,277 @@ std::string pad_to_width(const std::string& value, std::size_t width) {
     return value + std::string(width - value.size(), ' ');
 }
 
+const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::string& name) {
+    auto it = program.traits.find(name);
+    return it == program.traits.end() ? nullptr : &it->second;
+}
+
+const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& field_name) {
+    if (trait == nullptr) {
+        return nullptr;
+    }
+    auto it = std::ranges::find_if(trait->fields, [&](const auto& field) { return field.name == field_name; });
+    return it == trait->fields.end() ? nullptr : &*it;
+}
+
+bool trait_field_is(const DecoratedProgram& program,
+                    const std::string& trait_name,
+                    const std::string& field_name,
+                    TypeKind kind) {
+    const auto* field = find_field(find_trait(program, trait_name), field_name);
+    return field != nullptr && field->type.kind == kind;
+}
+
+bool has_collision_event_decl(const ProgramNode* ast) {
+    if (ast == nullptr) {
+        return false;
+    }
+    return std::ranges::any_of(ast->declarations, [](const auto& decl) {
+        const auto* event = std::get_if<EventNode>(&decl);
+        return event != nullptr && event->name == "CollisionEnter";
+    });
+}
+
+bool has_flat_collider_support(const DecoratedProgram& program) {
+    const auto* collider = find_trait(program, "Collider");
+    return collider != nullptr && collider->is_stdlib && find_field(collider, "layer") != nullptr &&
+           find_field(collider, "mask") != nullptr && trait_field_is(program, "BoxCollider", "size", TypeKind::Vec2) &&
+           trait_field_is(program, "CircleCollider", "radius", TypeKind::Float) &&
+           trait_field_is(program, "CapsuleCollider", "height", TypeKind::Float);
+}
+
+bool has_volume_collider_support(const DecoratedProgram& program) {
+    const auto* collider = find_trait(program, "Collider");
+    return collider != nullptr && collider->is_stdlib && find_field(collider, "layer") != nullptr &&
+           find_field(collider, "mask") != nullptr && trait_field_is(program, "BoxCollider", "size", TypeKind::Vec3) &&
+           trait_field_is(program, "SphereCollider", "radius", TypeKind::Float) &&
+           trait_field_is(program, "CapsuleCollider", "height", TypeKind::Float);
+}
+
+std::string emit_flat_collision_helpers() {
+    return R"(
+// ── Stdlib 2D Collider Runtime ───────────────────────────────────────────────
+
+namespace {
+
+struct CactusFlatColliderRef {
+    entt::entity entity{entt::null};
+    Vector2 position{};
+    Collider collider{};
+    Vector2 half_extents{};
+};
+
+bool cactus_collision_masks_allow(const Collider& lhs, const Collider& rhs) noexcept {
+    return ((lhs.mask & rhs.layer) != 0) && ((rhs.mask & lhs.layer) != 0);
+}
+
+Vector2 cactus_flat_box_overlap(const CactusFlatColliderRef& lhs, const CactusFlatColliderRef& rhs) noexcept {
+    const float lhs_center_x = lhs.position.x + lhs.half_extents.x;
+    const float lhs_center_y = lhs.position.y + lhs.half_extents.y;
+    const float rhs_center_x = rhs.position.x + rhs.half_extents.x;
+    const float rhs_center_y = rhs.position.y + rhs.half_extents.y;
+    const float delta_x = rhs_center_x - lhs_center_x;
+    const float delta_y = rhs_center_y - lhs_center_y;
+    const float overlap_x = (lhs.half_extents.x + rhs.half_extents.x) - std::abs(delta_x);
+    const float overlap_y = (lhs.half_extents.y + rhs.half_extents.y) - std::abs(delta_y);
+    if (overlap_x <= 0.0F || overlap_y <= 0.0F) {
+        return Vector2{.x = 0.0F, .y = 0.0F};
+    }
+    if (overlap_x < overlap_y) {
+        return Vector2{.x = delta_x < 0.0F ? -overlap_x : overlap_x, .y = 0.0F};
+    }
+    return Vector2{.x = 0.0F, .y = delta_y < 0.0F ? -overlap_y : overlap_y};
+}
+
+void cactus_collect_flat_colliders(entt::registry& registry, std::vector<CactusFlatColliderRef>& colliders) {
+    auto boxes = registry.view<WorldTransform, Collider, BoxCollider>();
+    boxes.each([&](entt::entity entity,
+                   const WorldTransform& transform,
+                   const Collider& collider,
+                   const BoxCollider& box) {
+        colliders.push_back(CactusFlatColliderRef{.entity       = entity,
+                                                  .position     = transform.position,
+                                                  .collider     = collider,
+                                                  .half_extents = Vector2{.x = box.size.x * 0.5F,
+                                                                          .y = box.size.y * 0.5F}});
+    });
+    auto circles = registry.view<WorldTransform, Collider, CircleCollider>();
+    circles.each([&](entt::entity entity,
+                     const WorldTransform& transform,
+                     const Collider& collider,
+                     const CircleCollider& circle) {
+        colliders.push_back(CactusFlatColliderRef{.entity       = entity,
+                                                  .position     = Vector2{.x = transform.position.x - circle.radius,
+                                                                          .y = transform.position.y - circle.radius},
+                                                  .collider     = collider,
+                                                  .half_extents = Vector2{.x = circle.radius,
+                                                                          .y = circle.radius}});
+    });
+    auto capsules = registry.view<WorldTransform, Collider, CapsuleCollider>();
+    capsules.each([&](entt::entity entity,
+                      const WorldTransform& transform,
+                      const Collider& collider,
+                      const CapsuleCollider& capsule) {
+        colliders.push_back(CactusFlatColliderRef{.entity       = entity,
+                                                  .position     = Vector2{.x = transform.position.x - capsule.radius,
+                                                                          .y = transform.position.y - (capsule.height * 0.5F)},
+                                                  .collider     = collider,
+                                                  .half_extents = Vector2{.x = capsule.radius,
+                                                                          .y = capsule.height * 0.5F}});
+    });
+}
+
+}  // namespace
+
+void cactus_dispatch_stdlib_flat_collisions(entt::registry& registry, entt::dispatcher& dispatcher) {
+    std::vector<CactusFlatColliderRef> colliders;
+    cactus_collect_flat_colliders(registry, colliders);
+    for (std::size_t i = 0; i < colliders.size(); ++i) {
+        for (std::size_t j = i + 1; j < colliders.size(); ++j) {
+            const auto& lhs = colliders[i];
+            const auto& rhs = colliders[j];
+            if (!cactus_collision_masks_allow(lhs.collider, rhs.collider)) {
+                continue;
+            }
+            const auto overlap = cactus_flat_box_overlap(lhs, rhs);
+            if (overlap.x == 0.0F && overlap.y == 0.0F) {
+                continue;
+            }
+            dispatcher.trigger(CollisionEnterEvent{.other = rhs.entity, .overlap = overlap});
+            dispatcher.trigger(CollisionEnterEvent{.other = lhs.entity,
+                                                   .overlap = Vector2{.x = -overlap.x, .y = -overlap.y}});
+        }
+    }
+}
+
+)";
+}
+
+std::string emit_volume_collision_helpers() {
+    return R"(
+// ── Stdlib 3D Collider Runtime ───────────────────────────────────────────────
+
+namespace {
+
+struct CactusVolumeColliderRef {
+    entt::entity entity{entt::null};
+    Vector3 position{};
+    Collider collider{};
+    Vector3 half_extents{};
+};
+
+bool cactus_collision_masks_allow(const Collider& lhs, const Collider& rhs) noexcept {
+    return ((lhs.mask & rhs.layer) != 0) && ((rhs.mask & lhs.layer) != 0);
+}
+
+Vector3 cactus_volume_box_overlap(const CactusVolumeColliderRef& lhs, const CactusVolumeColliderRef& rhs) noexcept {
+    const float lhs_center_x = lhs.position.x + lhs.half_extents.x;
+    const float lhs_center_y = lhs.position.y + lhs.half_extents.y;
+    const float lhs_center_z = lhs.position.z + lhs.half_extents.z;
+    const float rhs_center_x = rhs.position.x + rhs.half_extents.x;
+    const float rhs_center_y = rhs.position.y + rhs.half_extents.y;
+    const float rhs_center_z = rhs.position.z + rhs.half_extents.z;
+    const float delta_x = rhs_center_x - lhs_center_x;
+    const float delta_y = rhs_center_y - lhs_center_y;
+    const float delta_z = rhs_center_z - lhs_center_z;
+    const float overlap_x = (lhs.half_extents.x + rhs.half_extents.x) - std::abs(delta_x);
+    const float overlap_y = (lhs.half_extents.y + rhs.half_extents.y) - std::abs(delta_y);
+    const float overlap_z = (lhs.half_extents.z + rhs.half_extents.z) - std::abs(delta_z);
+    if (overlap_x <= 0.0F || overlap_y <= 0.0F || overlap_z <= 0.0F) {
+        return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    }
+    if (overlap_x <= overlap_y && overlap_x <= overlap_z) {
+        return Vector3{.x = delta_x < 0.0F ? -overlap_x : overlap_x, .y = 0.0F, .z = 0.0F};
+    }
+    if (overlap_y <= overlap_z) {
+        return Vector3{.x = 0.0F, .y = delta_y < 0.0F ? -overlap_y : overlap_y, .z = 0.0F};
+    }
+    return Vector3{.x = 0.0F, .y = 0.0F, .z = delta_z < 0.0F ? -overlap_z : overlap_z};
+}
+
+Vector3 cactus_volume_normal(Vector3 overlap) noexcept {
+    if (overlap.x != 0.0F) {
+        return Vector3{.x = overlap.x < 0.0F ? -1.0F : 1.0F, .y = 0.0F, .z = 0.0F};
+    }
+    if (overlap.y != 0.0F) {
+        return Vector3{.x = 0.0F, .y = overlap.y < 0.0F ? -1.0F : 1.0F, .z = 0.0F};
+    }
+    return Vector3{.x = 0.0F, .y = 0.0F, .z = overlap.z < 0.0F ? -1.0F : 1.0F};
+}
+
+void cactus_collect_volume_colliders(entt::registry& registry, std::vector<CactusVolumeColliderRef>& colliders) {
+    auto boxes = registry.view<WorldTransform, Collider, BoxCollider>();
+    boxes.each([&](entt::entity entity,
+                   const WorldTransform& transform,
+                   const Collider& collider,
+                   const BoxCollider& box) {
+        colliders.push_back(CactusVolumeColliderRef{.entity       = entity,
+                                                    .position     = transform.position,
+                                                    .collider     = collider,
+                                                    .half_extents = Vector3{.x = box.size.x * 0.5F,
+                                                                            .y = box.size.y * 0.5F,
+                                                                            .z = box.size.z * 0.5F}});
+    });
+    auto spheres = registry.view<WorldTransform, Collider, SphereCollider>();
+    spheres.each([&](entt::entity entity,
+                     const WorldTransform& transform,
+                     const Collider& collider,
+                     const SphereCollider& sphere) {
+        colliders.push_back(CactusVolumeColliderRef{.entity   = entity,
+                                                    .position = Vector3{.x = transform.position.x - sphere.radius,
+                                                                        .y = transform.position.y - sphere.radius,
+                                                                        .z = transform.position.z - sphere.radius},
+                                                    .collider = collider,
+                                                    .half_extents = Vector3{.x = sphere.radius,
+                                                                            .y = sphere.radius,
+                                                                            .z = sphere.radius}});
+    });
+    auto capsules = registry.view<WorldTransform, Collider, CapsuleCollider>();
+    capsules.each([&](entt::entity entity,
+                      const WorldTransform& transform,
+                      const Collider& collider,
+                      const CapsuleCollider& capsule) {
+        colliders.push_back(CactusVolumeColliderRef{.entity   = entity,
+                                                    .position = Vector3{.x = transform.position.x - capsule.radius,
+                                                                        .y = transform.position.y - (capsule.height * 0.5F),
+                                                                        .z = transform.position.z - capsule.radius},
+                                                    .collider = collider,
+                                                    .half_extents = Vector3{.x = capsule.radius,
+                                                                            .y = capsule.height * 0.5F,
+                                                                            .z = capsule.radius}});
+    });
+}
+
+}  // namespace
+
+void cactus_dispatch_stdlib_volume_collisions(entt::registry& registry, entt::dispatcher& dispatcher) {
+    std::vector<CactusVolumeColliderRef> colliders;
+    cactus_collect_volume_colliders(registry, colliders);
+    for (std::size_t i = 0; i < colliders.size(); ++i) {
+        for (std::size_t j = i + 1; j < colliders.size(); ++j) {
+            const auto& lhs = colliders[i];
+            const auto& rhs = colliders[j];
+            if (!cactus_collision_masks_allow(lhs.collider, rhs.collider)) {
+                continue;
+            }
+            const auto overlap = cactus_volume_box_overlap(lhs, rhs);
+            if (overlap.x == 0.0F && overlap.y == 0.0F && overlap.z == 0.0F) {
+                continue;
+            }
+            const auto normal = cactus_volume_normal(overlap);
+            dispatcher.trigger(CollisionEnterEvent{.other = rhs.entity, .point = lhs.position, .normal = normal});
+            dispatcher.trigger(CollisionEnterEvent{.other = lhs.entity,
+                                                   .point = rhs.position,
+                                                   .normal = Vector3{.x = -normal.x,
+                                                                      .y = -normal.y,
+                                                                      .z = -normal.z}});
+        }
+    }
+}
+
+)";
+}
+
 std::string emit_backend_main() {
     std::ostringstream out;
     out << "\n// ── Backend Entry Point ───────────────────────────────────────────────\n\n";
@@ -239,6 +510,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#undef PI\n";
     out << "#endif\n";
     out << "\n";
+    out << "#include <cmath>\n";
     out << "#include <cstdint>\n";
     out << "#include <string>\n";
     out << "#include <unordered_set>\n";
@@ -467,6 +739,27 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
+    const bool has_flat_colliders   = has_flat_collider_support(program);
+    const bool has_volume_colliders = has_volume_collider_support(program);
+    if ((has_flat_colliders || has_volume_colliders) && !has_collision_event_decl(program.ast)) {
+        out << "struct CollisionEnterEvent {\n";
+        out << "    entt::entity other;\n";
+        if (has_volume_colliders && !has_flat_colliders) {
+            out << "    Vector3 point;\n";
+            out << "    Vector3 normal;\n";
+        } else {
+            out << "    Vector2 overlap;\n";
+        }
+        out << "};\n\n";
+    }
+
+    if (has_flat_colliders) {
+        out << emit_flat_collision_helpers();
+    }
+    if (has_volume_colliders) {
+        out << emit_volume_collision_helpers();
+    }
+
     out << EnttSystemEmitter::emit_entt_hierarchy_helpers(program);
 
     // Persist serialization stubs
@@ -680,6 +973,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "    " << system_function_name(sys->name, "tick") << "(registry);\n";
             }
         }
+    }
+
+    if (has_flat_colliders) {
+        out << "    ::cactus_dispatch_stdlib_flat_collisions(registry, dispatcher);\n";
+    }
+    if (has_volume_colliders) {
+        out << "    ::cactus_dispatch_stdlib_volume_collisions(registry, dispatcher);\n";
     }
 
     out << "    dispatcher.update();\n";

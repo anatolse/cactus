@@ -3,6 +3,7 @@ module platformer
 use std.input
 use std.math as math
 use std.transform.flat
+use std.physics.flat as phys
 use std.render.shapes
 
 # ── Input Action Declarations ─────────────────────────────────────────────────
@@ -89,8 +90,6 @@ trait PlayerMotion:
     var move_speed: float
     var facing: FacingDirection
     var jump_state: JumpState
-    var width: float
-    var height: float
     var move_axis: float
     var jump_requested: bool
 
@@ -123,6 +122,11 @@ pub unit Player:
         size = vec2(PLAYER_WIDTH, PLAYER_HEIGHT)
         color = #44AAFFFF
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(PLAYER_WIDTH, PLAYER_HEIGHT)
     PlayerMotion:
         velocity = vec2(0.0, 0.0)
         gravity = GRAVITY
@@ -133,8 +137,6 @@ pub unit Player:
         move_speed = MOVE_SPEED
         facing = FacingDirection.Right
         jump_state = JumpState.Falling
-        width = PLAYER_WIDTH
-        height = PLAYER_HEIGHT
         move_axis = 0.0
         jump_requested = false
     Health:
@@ -153,6 +155,11 @@ pub unit GroundPlatform:
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
         color = GROUND_COLOR
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
 
 pub unit FloatingPlatform1:
     WorldTransform:
@@ -164,6 +171,11 @@ pub unit FloatingPlatform1:
         size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
         color = PLATFORM_COLOR
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
 
 pub unit FloatingPlatform2:
     WorldTransform:
@@ -175,6 +187,11 @@ pub unit FloatingPlatform2:
         size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
         color = PLATFORM_COLOR
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
 
 pub unit FloatingPlatform3:
     WorldTransform:
@@ -186,6 +203,11 @@ pub unit FloatingPlatform3:
         size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
         color = PLATFORM_COLOR
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
 
 pub unit WalkerEnemy1:
     WorldTransform:
@@ -197,6 +219,11 @@ pub unit WalkerEnemy1:
         size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
         color = ENEMY_COLOR
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
     PatrolMotion:
         patrol_min_x = 350.0
         patrol_max_x = 550.0
@@ -213,6 +240,11 @@ pub unit WalkerEnemy2:
         size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
         color = ENEMY_COLOR
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
     PatrolMotion:
         patrol_min_x = 700.0
         patrol_max_x = 1000.0
@@ -229,6 +261,11 @@ pub unit BlueGem1:
         size = vec2(GEM_SIZE, GEM_SIZE)
         color = GEM_COLOR_BLUE
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
@@ -244,6 +281,11 @@ pub unit BlueGem2:
         size = vec2(GEM_SIZE, GEM_SIZE)
         color = GEM_COLOR_BLUE
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
         point_value = BLUE_GEM_POINTS
         gem_type = GemType.Blue
@@ -259,6 +301,11 @@ pub unit GoldGem1:
         size = vec2(GEM_SIZE, GEM_SIZE)
         color = GEM_COLOR_GOLD
         visible = true
+    Collider:
+        layer = 1
+        mask = 1
+    BoxCollider:
+        size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
         point_value = GOLD_GEM_POINTS
         gem_type = GemType.Gold
@@ -278,9 +325,10 @@ system MovementSystem:
     filter:
         WorldTransform
         PlayerMotion
+        BoxCollider
 
     on tick:
-        let previous_bottom = position.y + height
+        let previous_bottom = position.y + size.y
 
         if move_axis > 0.0:
             facing = FacingDirection.Right
@@ -298,20 +346,20 @@ system MovementSystem:
 
         velocity = vec2(velocity.x, math.clamp(velocity.y + gravity * tick.dt, jump_force * -1.0, MAX_FALL_SPEED))
 
-        position = vec2(math.clamp(position.x + velocity.x * tick.dt, 0.0, GROUND_WIDTH - width), position.y + velocity.y * tick.dt)
+        position = vec2(math.clamp(position.x + velocity.x * tick.dt, 0.0, GROUND_WIDTH - size.x), position.y + velocity.y * tick.dt)
         grounded = false
 
         if velocity.y > 0.0 and jump_state == JumpState.Jumping:
             jump_state = JumpState.Falling
 
         let player_left = position.x
-        let player_right = position.x + width
-        let player_bottom = position.y + height
+        let player_right = position.x + size.x
+        let player_bottom = position.y + size.y
 
         if velocity.y >= 0.0:
             if player_right > PLATFORM1_X and player_left < PLATFORM1_X + PLATFORM1_WIDTH:
                 if previous_bottom <= PLATFORM1_Y and player_bottom >= PLATFORM1_Y:
-                    position = vec2(position.x, PLATFORM1_Y - height)
+                    position = vec2(position.x, PLATFORM1_Y - size.y)
                     velocity = vec2(velocity.x, 0.0)
                     grounded = true
                     jumps_remaining = max_jumps
@@ -319,7 +367,7 @@ system MovementSystem:
 
             if player_right > PLATFORM2_X and player_left < PLATFORM2_X + PLATFORM2_WIDTH:
                 if previous_bottom <= PLATFORM2_Y and player_bottom >= PLATFORM2_Y:
-                    position = vec2(position.x, PLATFORM2_Y - height)
+                    position = vec2(position.x, PLATFORM2_Y - size.y)
                     velocity = vec2(velocity.x, 0.0)
                     grounded = true
                     jumps_remaining = max_jumps
@@ -327,14 +375,14 @@ system MovementSystem:
 
             if player_right > PLATFORM3_X and player_left < PLATFORM3_X + PLATFORM3_WIDTH:
                 if previous_bottom <= PLATFORM3_Y and player_bottom >= PLATFORM3_Y:
-                    position = vec2(position.x, PLATFORM3_Y - height)
+                    position = vec2(position.x, PLATFORM3_Y - size.y)
                     velocity = vec2(velocity.x, 0.0)
                     grounded = true
                     jumps_remaining = max_jumps
                     jump_state = JumpState.Grounded
 
-        if position.y > GROUND_Y - PLAYER_HEIGHT:
-            position = vec2(position.x, GROUND_Y - PLAYER_HEIGHT)
+        if position.y > GROUND_Y - size.y:
+            position = vec2(position.x, GROUND_Y - size.y)
             velocity = vec2(velocity.x, 0.0)
             grounded = true
             jumps_remaining = max_jumps

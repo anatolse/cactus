@@ -233,6 +233,50 @@ TEST_CASE("semantic_modules: filter entry with alias resolves trait", "[semantic
     CHECK_FALSE(errors.has_errors());
 }
 
+TEST_CASE("semantic_modules: std.physics.flat collider filters resolve direct and alias imports",
+          "[semantic][modules][stdlib][physics]") {
+    auto direct = make_module_with_trait("std.physics.flat", "Collider");
+    auto alias  = make_module_with_trait("std.physics.flat", "BoxCollider");
+
+    ModuleImports imports;
+    imports.add("std.physics.flat", std::move(direct));
+    imports.add("phys", std::move(alias));
+
+    FilterEntry collider;
+    collider.qualified_name = "std.physics.flat.Collider";
+    FilterEntry box;
+    box.qualified_name = "phys.BoxCollider";
+    auto prog          = make_program_with_system("Collide", {collider, box});
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    CHECK_FALSE(errors.has_errors());
+}
+
+TEST_CASE("semantic_modules: std.physics.volume collider filters resolve direct and alias imports",
+          "[semantic][modules][stdlib][physics]") {
+    auto direct = make_module_with_trait("std.physics.volume", "Collider");
+    auto alias  = make_module_with_trait("std.physics.volume", "BoxCollider");
+
+    ModuleImports imports;
+    imports.add("std.physics.volume", std::move(direct));
+    imports.add("phys3", std::move(alias));
+
+    FilterEntry collider;
+    collider.qualified_name = "std.physics.volume.Collider";
+    FilterEntry box;
+    box.qualified_name = "phys3.BoxCollider";
+    auto prog          = make_program_with_system("Collide3D", {collider, box});
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    CHECK_FALSE(errors.has_errors());
+}
+
 TEST_CASE("semantic_modules: filter entry with unqualified trait from import", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "Position";  // unqualified, unique in imports

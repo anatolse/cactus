@@ -14,15 +14,29 @@ pub trait CharacterBody:
     var grounded: bool = false
     var gravity: float = 30.0
 
-# Axis-aligned bounding box collider for 2D entities.
-# width, height: collider size in world units
+# Shared 2D collision participation/filtering data.
 # layer: collision layer bitmask this entity belongs to
 # mask:  collision layer bitmask this entity collides with
 pub trait Collider:
-    var width: float = 1.0
-    var height: float = 1.0
     var layer: int = 1
     var mask: int = 1
+
+# Axis-aligned rectangle/square collider for 2D entities.
+# size: collider width/height in world units
+pub trait BoxCollider:
+    var size: vec2 = vec2(1.0, 1.0)
+
+# Circular collider for 2D entities.
+# radius: collider radius in world units
+pub trait CircleCollider:
+    var radius: float = 0.5
+
+# Vertical capsule collider for 2D entities.
+# radius: capsule radius in world units
+# height: total capsule height in world units
+pub trait CapsuleCollider:
+    var radius: float = 0.5
+    var height: float = 1.0
 
 # Fired when this entity's collider first overlaps another entity's collider.
 # other:   entity_id of the entity that was hit
@@ -30,8 +44,3 @@ pub trait Collider:
 pub event CollisionEnter:
     other: entity_id
     overlap: vec2
-
-    other: entity_id
-    normal: vec2
-    material: material_id
-    depth: float

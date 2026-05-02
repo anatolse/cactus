@@ -72,67 +72,6 @@ target_compile_definitions(test_runtime_stdlib PRIVATE
 )
 add_test(NAME RuntimeStdlibTests COMMAND test_runtime_stdlib)
 
-# Example C++ compilation integration tests
-
-set(CACTUS_GENERATED_EXAMPLES_DIR "${CMAKE_BINARY_DIR}/generated_examples")
-file(MAKE_DIRECTORY "${CACTUS_GENERATED_EXAMPLES_DIR}")
-
-set(BLUE_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/blue-square.generated.cpp")
-
-add_executable(example_blue_square_generated EXCLUDE_FROM_ALL
-    "${BLUE_SQUARE_GENERATED_CPP}"
-)
-set_source_files_properties("${BLUE_SQUARE_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
-target_compile_features(example_blue_square_generated PRIVATE cxx_std_20)
-target_link_libraries(example_blue_square_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
-target_include_directories(example_blue_square_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
-set_property(TARGET example_blue_square_generated PROPERTY CXX_CLANG_TIDY "")
-
-set(STDLIB_EXTERN_ENTT_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/stdlib-extern-entt.generated.cpp")
-
-add_executable(example_stdlib_extern_entt_generated EXCLUDE_FROM_ALL
-    "${STDLIB_EXTERN_ENTT_GENERATED_CPP}"
-)
-set_source_files_properties("${STDLIB_EXTERN_ENTT_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
-target_compile_features(example_stdlib_extern_entt_generated PRIVATE cxx_std_20)
-target_link_libraries(example_stdlib_extern_entt_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
-target_include_directories(example_stdlib_extern_entt_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
-set_property(TARGET example_stdlib_extern_entt_generated PROPERTY CXX_CLANG_TIDY "")
-
-set(STDLIB_EXTERN_MANUAL_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/stdlib-extern-manual.generated.cpp")
-
-add_executable(example_stdlib_extern_manual_generated EXCLUDE_FROM_ALL
-    "${STDLIB_EXTERN_MANUAL_GENERATED_CPP}"
-)
-set_source_files_properties("${STDLIB_EXTERN_MANUAL_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
-target_compile_features(example_stdlib_extern_manual_generated PRIVATE cxx_std_20)
-target_link_libraries(example_stdlib_extern_manual_generated PRIVATE cactus_runtime_cpp_manual raylib)
-target_include_directories(example_stdlib_extern_manual_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
-set_property(TARGET example_stdlib_extern_manual_generated PROPERTY CXX_CLANG_TIDY "")
-
-set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.generated.cpp")
-
-add_executable(example_mesh_renderer_generated EXCLUDE_FROM_ALL
-    "${MESH_RENDERER_GENERATED_CPP}"
-)
-set_source_files_properties("${MESH_RENDERER_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
-target_compile_features(example_mesh_renderer_generated PRIVATE cxx_std_20)
-target_link_libraries(example_mesh_renderer_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
-target_include_directories(example_mesh_renderer_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
-set_property(TARGET example_mesh_renderer_generated PROPERTY CXX_CLANG_TIDY "")
-
-set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
-
-add_executable(example_platformer_generated EXCLUDE_FROM_ALL
-    "${PLATFORMER_GENERATED_CPP}"
-)
-set_source_files_properties("${PLATFORMER_GENERATED_CPP}" PROPERTIES GENERATED TRUE)
-target_compile_features(example_platformer_generated PRIVATE cxx_std_20)
-target_link_libraries(example_platformer_generated PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
-target_include_directories(example_platformer_generated PRIVATE "${CMAKE_SOURCE_DIR}/src")
-set_property(TARGET example_platformer_generated PROPERTY CXX_CLANG_TIDY "")
-
-
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)
 add_dependencies(test_example_cpp_compilation cactus)

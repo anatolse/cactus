@@ -1,0 +1,79 @@
+# cmake-example-build-targets Specification
+
+## Purpose
+
+Define how Cactus examples are registered as generated C++ executable targets in the repository CMake build graph.
+
+## Requirements
+
+### Requirement: CMake provides reusable Cactus example target registration
+The repository CMake configuration SHALL provide a reusable function for registering a Cactus example as a generated C++ executable target in the regular build graph.
+
+#### Scenario: Function registers a generated executable
+- **WHEN** CMake configures an example through the helper function
+- **THEN** the build graph contains a generated C++ output produced by invoking the `cactus` compiler on that example source
+- **AND** the build graph contains an executable target that compiles and links that generated output
+
+#### Scenario: Generated source is tracked by CMake
+- **WHEN** the helper function creates the generated C++ source path
+- **THEN** the source is marked as generated and the custom generation step depends on the `cactus` compiler target and the example's root `.cactus` source file
+
+#### Scenario: Unsupported backend is rejected
+- **WHEN** a caller requests an unsupported backend in the helper function
+- **THEN** CMake configuration fails with a diagnostic that identifies the unsupported backend
+
+### Requirement: Buildable example executable targets participate in regular builds
+Cactus example executable targets that currently generate and compile cleanly SHALL be regular default build-tree targets rather than test-only or excluded-from-default targets. Existing examples that are not currently buildable SHALL still be exposed as explicit named build-tree targets, but SHALL NOT be part of the default build until their source or backend issues are fixed.
+
+#### Scenario: Example target is visible in the generated build tree
+- **WHEN** CMake configures the repository
+- **THEN** each registered Cactus example executable target is available by name to the selected build tool
+
+#### Scenario: Normal build compiles registered examples
+- **WHEN** a developer runs the regular repository build without selecting a test-only target
+- **THEN** currently buildable Cactus example executable targets are part of the default build graph and are eligible to be generated, compiled, and linked
+
+#### Scenario: Buildable example target is not excluded from all
+- **WHEN** the helper function declares a currently buildable example executable
+- **THEN** it does not declare that executable with `EXCLUDE_FROM_ALL`
+
+#### Scenario: Currently broken example target is explicit opt-in
+- **WHEN** the helper function declares an example executable for an existing example that does not currently generate or compile successfully
+- **THEN** it declares that executable as an explicit named target that is excluded from the default build graph
+
+### Requirement: Existing example entrypoints are registered
+The build configuration SHALL call the reusable example-registration function for every existing standalone Cactus example entrypoint under `examples/` that represents an application or curated compiler example.
+
+#### Scenario: Top-level standalone examples are registered
+- **WHEN** CMake configures example targets
+- **THEN** it registers targets for `examples/dsl_showcase.cactus`, `examples/shooter-slice.cactus`, and `examples/stdlib_extern_coverage.cactus`
+
+#### Scenario: Directory-based examples are registered
+- **WHEN** CMake configures example targets
+- **THEN** it registers targets for `examples/blue-square/square.cactus`, `examples/cactus_shop/main.cactus`, `examples/mesh-renderer/main.cactus`, and `examples/platformer/platformer.cactus`
+
+#### Scenario: Support modules are not treated as standalone applications
+- **WHEN** an example directory contains additional `.cactus` files that support its root entrypoint
+- **THEN** the build configuration does not create separate executable targets for those support modules unless they are explicitly designated as standalone examples
+
+### Requirement: Example targets use backend-appropriate runtime linkage
+Registered Cactus example targets SHALL link against the runtime libraries and third-party targets required by their selected backend.
+
+#### Scenario: EnTT example links EnTT runtime dependencies
+- **WHEN** an example is registered for the `cpp-entt` backend
+- **THEN** its executable target links against the Cactus EnTT runtime path, Raylib, and EnTT
+
+#### Scenario: Manual example links manual runtime dependencies
+- **WHEN** an example is registered for the `cpp-manual` backend
+- **THEN** its executable target links against the Cactus manual runtime path and Raylib
+
+### Requirement: Example target metadata remains stable for tests and developers
+Registered example target names and generated output paths SHALL be stable and documented in CMake variables or compile definitions where integration tests need to reference them.
+
+#### Scenario: Integration tests can build a registered example target
+- **WHEN** an integration test needs to compile a generated example
+- **THEN** it can reference the same target name and generated C++ output path used by the regular build-tree example target
+
+#### Scenario: Developer can build a single example target
+- **WHEN** a developer invokes the selected build tool with a registered example target name
+- **THEN** that target generates the example C++ output if needed and compiles the example executable

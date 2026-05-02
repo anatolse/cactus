@@ -45,3 +45,29 @@ Generated output SHALL NOT establish a third ownership path based on ad-hoc rege
 - **WHEN** generated code depends on a user-defined extern system
 - **THEN** that implementation is resolved from the user project library
 
+### Requirement: Standard C++ executables use generated output as the entrypoint owner
+When a generated C++ project is built as a standard executable, the final target SHALL be assembled from generated project output that contains the selected backend's generated `main()`, the selected standard Cactus backend/runtime library, and any required user project library. The build SHALL NOT require a separate host `main.cpp` source for the standard executable path.
+
+#### Scenario: EnTT executable composition uses generated EnTT main
+- **WHEN** a generated project targets `cpp-entt` and is built as a standard executable
+- **THEN** the final executable target obtains `main()` from the generated cpp-entt output and links the standard Cactus EnTT backend/runtime library
+
+#### Scenario: Manual executable composition uses generated manual main
+- **WHEN** a generated project targets `cpp-manual` and is built as a standard executable
+- **THEN** the final executable target obtains `main()` from the generated cpp-manual output and links the standard Cactus manual backend/runtime library
+
+#### Scenario: Runtime libraries remain entrypoint-free
+- **WHEN** backend runtime libraries are linked into tests or generated executable targets
+- **THEN** those libraries do not themselves provide a `main()` symbol
+
+### Requirement: Build scripts compile but do not author entrypoints
+Build configuration SHALL compile generated backend output containing the selected backend's emitted entrypoint, but SHALL NOT author entrypoint implementation code as generated build-system text.
+
+#### Scenario: CMake target compiles generated output containing main
+- **WHEN** CMake defines a generated-example executable target
+- **THEN** the target uses the compiler-produced generated C++ output as the source of `main()`
+
+#### Scenario: CMake target does not generate host main text
+- **WHEN** CMake configures generated-example executable targets
+- **THEN** the configuration does not write a host `main()` implementation into the build tree as a substitute for backend-owned source
+

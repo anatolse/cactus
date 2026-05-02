@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace cactus {
@@ -42,6 +43,11 @@ private:
 
     /// Symbol origin tracking: symbol name → module that first defined it.
     std::unordered_map<std::string, std::string> symbol_origins_;
+
+    /// Module names already merged. Re-linking the same artifact/module is
+    /// idempotent so implicit std.core plus explicit `use std.core` has one
+    /// authoritative symbol source.
+    std::unordered_set<std::string> merged_modules_;
 };
 
 }  // namespace cactus

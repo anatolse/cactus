@@ -194,6 +194,18 @@ bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignme
 void ModuleImports::add(const std::string& qualifier,
                         ImportedSymbols pub_syms,
                         std::unordered_set<std::string> non_pub) {
+    const auto existing = modules.find(qualifier);
+    if (existing != modules.end() && existing->second.module_name == pub_syms.module_name) {
+        // Idempotent import of the same module source under the same qualifier.
+        // This happens for std.core because lifecycle/core symbols are preloaded
+        // while authors may still write `use std.core` explicitly.
+        modules[qualifier] = std::move(pub_syms);
+        if (!non_pub.empty()) {
+            non_pub_trait_names[qualifier] = std::move(non_pub);
+        }
+        return;
+    }
+
     // Build global uniqueness providers index
     for (auto& [name, _] : pub_syms.traits) {
         trait_providers[name].push_back(qualifier);

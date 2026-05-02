@@ -14,9 +14,24 @@ The system SHALL provide automated integration coverage that runs the compiler o
 - **WHEN** the integration coverage runs for the curated example set
 - **THEN** it includes `examples/mesh-renderer/main.cactus` as a required cpp-entt example case
 
+#### Scenario: Platformer example is validated
+- **WHEN** the integration coverage runs for the curated example set
+- **THEN** it includes `examples/platformer/platformer.cactus` as a required cpp-entt example case
+
 #### Scenario: Generated output is compiled after code generation
 - **WHEN** an example is selected for integration validation
 - **THEN** the coverage first generates C++ from the example's `.cactus` input and then invokes a C++ compilation step on that generated source
+
+### Requirement: Curated cpp-entt examples compile linked with the standard runtime
+Curated cpp-entt examples SHALL compile generated project-specific C++ together with the standard Cactus cpp-entt runtime/backend libraries.
+
+#### Scenario: Platformer uses standard runtime-linked pattern
+- **WHEN** the platformer curated example target is built
+- **THEN** the target links the generated platformer C++ against the standard cpp-entt runtime/backend library
+
+#### Scenario: Missing platformer runtime binding fails integration
+- **WHEN** generated platformer C++ references a stdlib-owned input, transform, or render binding that is not provided by the cpp-entt runtime/backend library
+- **THEN** the curated example compilation workflow fails and identifies the `platformer` example case
 
 ### Requirement: Example compilation failures identify the failing example
 The integration coverage SHALL fail with output that identifies which example case did not produce compilable generated C++.
@@ -71,4 +86,45 @@ Automated example-compilation integration coverage SHALL include the mesh render
 #### Scenario: Curated example list includes the mesh renderer example
 - **WHEN** example-compilation integration coverage runs
 - **THEN** it includes `examples/mesh-renderer/main.cactus` as a named curated example case for the `cpp-entt` backend
+
+### Requirement: Curated examples validate backend-generated entrypoint linking
+Example-compilation integration coverage SHALL validate that curated generated examples build from generated C++ output containing the selected backend's generated `main()`, linked against the selected backend/runtime library.
+
+#### Scenario: Curated EnTT example uses generated EnTT main
+- **WHEN** the integration coverage builds a curated `cpp-entt` generated example executable
+- **THEN** the generated C++ output contains the EnTT backend-generated `main()` and links with the standard cpp-entt runtime/backend library
+
+#### Scenario: Curated manual example uses generated manual main
+- **WHEN** the integration coverage builds a curated `cpp-manual` generated example executable
+- **THEN** the generated C++ output contains the manual backend-generated `main()` and links with the standard cpp-manual runtime/backend library
+
+#### Scenario: Missing backend-generated main fails example compilation
+- **WHEN** a curated generated example output lacks the expected backend-generated `main()` and no other valid `main()` is supplied
+- **THEN** the compilation/link integration workflow fails and identifies the affected example case
+
+### Requirement: Example coverage rejects CMake-authored entrypoints
+Example-compilation integration coverage SHALL verify that standard executable entrypoint behavior comes from generated backend output, not CMake-authored host source files.
+
+#### Scenario: Generated example output defines main
+- **WHEN** the integration coverage generates C++ for a curated backend example
+- **THEN** the generated output contains a standalone `int main()` implementation emitted by the selected backend
+
+#### Scenario: Build scripts do not create generated host main files
+- **WHEN** the integration coverage inspects or configures curated generated-example targets
+- **THEN** the target setup does not depend on a CMake-generated host `main.cpp` file for backend startup behavior
+
+### Requirement: Example compilation coverage uses regular example build targets
+Example-compilation integration coverage SHALL remain compatible with the regular build-tree example targets created for currently buildable Cactus examples and SHALL NOT require a separate duplicate target-definition mechanism for those curated examples.
+
+#### Scenario: Curated compilation case references regular target metadata
+- **WHEN** the integration coverage compiles a curated example that is also registered as a regular example build target
+- **THEN** the compilation step uses that regular target's target name and generated C++ output path
+
+#### Scenario: Existing buildable curated coverage remains intact
+- **WHEN** example-compilation integration coverage runs after regular example targets are introduced
+- **THEN** it still generates, compiles, formats, and runs tidy checks for the curated example cases that currently generate and compile cleanly
+
+#### Scenario: Target setup is not duplicated in tests
+- **WHEN** a new Cactus example is added to both regular example targets and curated compilation coverage
+- **THEN** maintainers can reuse the regular example target registration metadata instead of hand-writing another generated executable target solely in the test CMake file
 

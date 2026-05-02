@@ -1,6 +1,7 @@
 module platformer
 
 use std.input
+use std.math as math
 use std.transform.flat
 use std.render.shapes
 
@@ -26,13 +27,14 @@ const:
     WINDOW_WIDTH = 1280
     WINDOW_HEIGHT = 720
     TARGET_FPS = 60
-    MOVE_SPEED = 6.0
-    JUMP_FORCE = 12.0
-    GRAVITY = 30.0
+    MOVE_SPEED = 320.0
+    JUMP_FORCE = 780.0
+    GRAVITY = 2200.0
+    MAX_FALL_SPEED = 1250.0
     MAX_JUMPS = 2
     START_HEALTH = 3
     START_LIVES = 3
-    WALL_SLIDE_SPEED = 2.0
+    WALL_SLIDE_SPEED = 20.0
     PLAYER_WIDTH = 32.0
     PLAYER_HEIGHT = 48.0
     GROUND_Y = 600.0
@@ -40,7 +42,17 @@ const:
     GROUND_HEIGHT = 40.0
     GROUND_COLOR = #5B8C3E
     PLATFORM_COLOR = #8B6914
-    PATROL_SPEED = 2.0
+    PLATFORM1_X = 300.0
+    PLATFORM1_Y = 450.0
+    PLATFORM1_WIDTH = 200.0
+    PLATFORM2_X = 600.0
+    PLATFORM2_Y = 350.0
+    PLATFORM2_WIDTH = 150.0
+    PLATFORM3_X = 950.0
+    PLATFORM3_Y = 280.0
+    PLATFORM3_WIDTH = 180.0
+    PLATFORM_HEIGHT = 20.0
+    PATROL_SPEED = 140.0
     ENEMY_WIDTH = 32.0
     ENEMY_HEIGHT = 32.0
     ENEMY_COLOR = #CC3333
@@ -144,34 +156,34 @@ pub unit GroundPlatform:
 
 pub unit FloatingPlatform1:
     WorldTransform:
-        position = vec2(300.0, 450.0)
+        position = vec2(PLATFORM1_X, PLATFORM1_Y)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
     Shape:
         type = ShapeType.Rectangle
-        size = vec2(200.0, 20.0)
+        size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
         color = PLATFORM_COLOR
         visible = true
 
 pub unit FloatingPlatform2:
     WorldTransform:
-        position = vec2(600.0, 350.0)
+        position = vec2(PLATFORM2_X, PLATFORM2_Y)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
     Shape:
         type = ShapeType.Rectangle
-        size = vec2(150.0, 20.0)
+        size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
         color = PLATFORM_COLOR
         visible = true
 
 pub unit FloatingPlatform3:
     WorldTransform:
-        position = vec2(950.0, 280.0)
+        position = vec2(PLATFORM3_X, PLATFORM3_Y)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
     Shape:
         type = ShapeType.Rectangle
-        size = vec2(180.0, 20.0)
+        size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
         color = PLATFORM_COLOR
         visible = true
 
@@ -252,20 +264,6 @@ pub unit GoldGem1:
         gem_type = GemType.Gold
         collected = false
 
-# ── Pure Functions ───────────────────────────────────────────────────────────────
-
-func lerp(a: float, b: float, t: float) float:
-    return a + (b - a) * t
-
-func clamp_f(value: float, lo: float, hi: float) float:
-    if value < lo: return lo
-    if value > hi: return hi
-    return value
-
-func abs_f(v: float) float:
-    if v < 0.0: return v * -1.0
-    return v
-
 # ── Systems ──────────────────────────────────────────────────────────────────────
 
 system ReadPlayerInput:
@@ -273,8 +271,8 @@ system ReadPlayerInput:
         PlayerMotion
 
     on input:
-        move_axis = axis(MoveX)
-        jump_requested = pressed(Jump)
+        move_axis = input.axis(MoveX)
+        jump_requested = input.pressed(Jump)
 
 system MovementSystem:
     filter:
@@ -282,6 +280,8 @@ system MovementSystem:
         PlayerMotion
 
     on tick:
+        let previous_bottom = position.y + height
+
         if move_axis > 0.0:
             facing = FacingDirection.Right
         if move_axis < 0.0:
@@ -296,13 +296,42 @@ system MovementSystem:
                 jump_state = JumpState.Jumping
         jump_requested = false
 
-        if grounded == false:
-            velocity = vec2(velocity.x, velocity.y + gravity * tick.dt)
+        velocity = vec2(velocity.x, math.clamp(velocity.y + gravity * tick.dt, jump_force * -1.0, MAX_FALL_SPEED))
 
-        position = vec2(position.x + velocity.x * tick.dt, position.y + velocity.y * tick.dt)
+        position = vec2(math.clamp(position.x + velocity.x * tick.dt, 0.0, GROUND_WIDTH - width), position.y + velocity.y * tick.dt)
+        grounded = false
 
         if velocity.y > 0.0 and jump_state == JumpState.Jumping:
             jump_state = JumpState.Falling
+
+        let player_left = position.x
+        let player_right = position.x + width
+        let player_bottom = position.y + height
+
+        if velocity.y >= 0.0:
+            if player_right > PLATFORM1_X and player_left < PLATFORM1_X + PLATFORM1_WIDTH:
+                if previous_bottom <= PLATFORM1_Y and player_bottom >= PLATFORM1_Y:
+                    position = vec2(position.x, PLATFORM1_Y - height)
+                    velocity = vec2(velocity.x, 0.0)
+                    grounded = true
+                    jumps_remaining = max_jumps
+                    jump_state = JumpState.Grounded
+
+            if player_right > PLATFORM2_X and player_left < PLATFORM2_X + PLATFORM2_WIDTH:
+                if previous_bottom <= PLATFORM2_Y and player_bottom >= PLATFORM2_Y:
+                    position = vec2(position.x, PLATFORM2_Y - height)
+                    velocity = vec2(velocity.x, 0.0)
+                    grounded = true
+                    jumps_remaining = max_jumps
+                    jump_state = JumpState.Grounded
+
+            if player_right > PLATFORM3_X and player_left < PLATFORM3_X + PLATFORM3_WIDTH:
+                if previous_bottom <= PLATFORM3_Y and player_bottom >= PLATFORM3_Y:
+                    position = vec2(position.x, PLATFORM3_Y - height)
+                    velocity = vec2(velocity.x, 0.0)
+                    grounded = true
+                    jumps_remaining = max_jumps
+                    jump_state = JumpState.Grounded
 
         if position.y > GROUND_Y - PLAYER_HEIGHT:
             position = vec2(position.x, GROUND_Y - PLAYER_HEIGHT)
@@ -341,7 +370,7 @@ system CollectionSystem:
         Shape
 
     on tick:
-        if collected == false:
+        if not collected:
             visible = true
         else:
             visible = false

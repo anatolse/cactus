@@ -123,6 +123,20 @@ TEST_CASE("program_linker: duplicate pub trait name detected", "[linker][5.3]") 
     CHECK(msg.find("modB") != std::string::npos);
 }
 
+TEST_CASE("program_linker: merging same module twice is idempotent", "[linker][std-core]") {
+    auto std_core = make_program("Persistent", true);
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, std_core, "std.core"));
+    REQUIRE(linker.merge_into(merged, std_core, "std.core"));
+
+    CHECK_FALSE(errors.has_errors());
+    CHECK(merged.traits.count("Persistent") == 1);
+}
+
 TEST_CASE("program_linker: duplicate enum name detected", "[linker][5.3]") {
     auto prog_a = make_program("TraitA", true, "Direction");
     auto prog_b = make_program("TraitB", true, "Direction");  // same enum name

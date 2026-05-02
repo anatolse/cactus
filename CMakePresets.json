@@ -86,7 +86,7 @@
     "testPresets": [
         {
             "name": "default",
-            "configurePreset": "default",
+            "configurePreset": "clang-o3-release",
             "output": {
                 "outputOnFailure": true
             }

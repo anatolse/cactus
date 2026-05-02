@@ -192,6 +192,11 @@ function(cactus_add_example TARGET_NAME)
     endif()
 
     set(example_source "${CMAKE_CURRENT_SOURCE_DIR}/${CACTUS_EXAMPLE_SOURCE}")
+    get_filename_component(example_source_dir "${example_source}" DIRECTORY)
+    file(GLOB cactus_example_cactus_sources CONFIGURE_DEPENDS
+        "${example_source_dir}/*.cactus"
+    )
+    list(SORT cactus_example_cactus_sources)
     set(generated_output "${CACTUS_EXAMPLE_OUTPUT}")
 
     add_custom_command(
@@ -201,11 +206,13 @@ function(cactus_add_example TARGET_NAME)
                 "$<SHELL_PATH:${example_source}>"
                 --backend "${CACTUS_EXAMPLE_BACKEND}"
                 --output "$<SHELL_PATH:${generated_output}>"
-        DEPENDS cactus "${example_source}"
+        DEPENDS cactus ${cactus_example_cactus_sources}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMENT "Generating ${TARGET_NAME} from ${CACTUS_EXAMPLE_SOURCE} (${CACTUS_EXAMPLE_BACKEND})"
         VERBATIM
     )
+
+    set_source_files_properties(${cactus_example_cactus_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
 
     if(CACTUS_EXAMPLE_EXCLUDE_FROM_ALL)
         set(cactus_example_exclude_from_all EXCLUDE_FROM_ALL)
@@ -215,6 +222,7 @@ function(cactus_add_example TARGET_NAME)
 
     add_executable(${TARGET_NAME} ${cactus_example_exclude_from_all}
         "${generated_output}"
+        ${cactus_example_cactus_sources}
         ${CACTUS_EXAMPLE_EXTRA_SOURCES}
     )
     set_source_files_properties("${generated_output}" PROPERTIES GENERATED TRUE)

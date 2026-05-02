@@ -245,6 +245,13 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
         }
 
         for (auto& mod : modules) {
+            if (compiled.contains(mod.qualified_name)) {
+                // std.core may appear here from an explicit `use std.core` even
+                // though it was already precompiled for lifecycle events.
+                // Keep the preloaded artifact as the single source of symbols.
+                continue;
+            }
+
             // Build ModuleImports from already-compiled dependencies
             cactus::ModuleImports imports;
             auto std_core_it = compiled.find("std.core");

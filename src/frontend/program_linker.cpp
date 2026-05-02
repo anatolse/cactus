@@ -12,6 +12,10 @@ ProgramLinker::ProgramLinker(ErrorReporter& errors)
 bool ProgramLinker::merge_into(DecoratedProgram& target,
                                const DecoratedProgram& src,
                                const std::string& src_module_name) {
+    if (merged_modules_.contains(src_module_name)) {
+        return true;
+    }
+
     bool ok = true;
 
     // ── Merge traits ─────────────────────────────────────────────────────────
@@ -96,6 +100,9 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         target.string_pool.intern(dep.system_name);
     }
 
+    if (ok) {
+        merged_modules_.insert(src_module_name);
+    }
     return ok;
 }
 

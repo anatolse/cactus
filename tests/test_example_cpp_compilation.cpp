@@ -133,6 +133,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_MESH_RENDERER_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_MESH_RENDERER_TARGET,
         },
+        ExampleCase{
+            .name           = "platformer",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_PLATFORMER_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_PLATFORMER_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_PLATFORMER_TARGET,
+        },
     };
 }
 
@@ -199,5 +206,48 @@ TEST_CASE("integration: curated examples generate compilable C++ with lint-clean
                                 " --warnings-as-errors=*" + " --extra-arg=-Wno-deprecated-literal-operator");
         }
     }
+}
+
+TEST_CASE("integration: explicit std.core import with lifecycle handler generates without duplicate symbols",
+          "[integration][examples][std-core]") {
+    ensure_tools_present();
+
+    const auto source_file = build_root() / "generated_examples" / "std-core-explicit.cactus";
+    const auto output_file = build_root() / "generated_examples" / "std-core-explicit.generated.cpp";
+    fs::create_directories(source_file.parent_path());
+
+    {
+        std::ofstream out(source_file);
+        out << "module std_core_explicit\n\n"
+            << "use std.core\n\n"
+            << "trait Counter:\n"
+            << "    var value: int\n\n"
+            << "pub unit CounterEntity:\n"
+            << "    Counter:\n"
+            << "        value = 0\n"
+            << "    Persistent\n\n"
+            << "system CountTicks:\n"
+            << "    filter:\n"
+            << "        Counter\n\n"
+            << "    on tick:\n"
+            << "        value = value + 1\n";
+    }
+
+    const ExampleCase example{
+        .name           = "std-core-explicit",
+        .source_file    = source_file,
+        .backend        = "cpp-entt",
+        .generated_cpp  = output_file,
+        .compile_target = {},
+    };
+
+    reset_generated_output(example);
+    require_success(example,
+                    "generate",
+                    repo_root(),
+                    quote(compiler_path()) + " " + quote(example.source_file) + " --backend " + quote(example.backend) +
+                        " --output " + quote(example.generated_cpp));
+
+    REQUIRE(fs::exists(example.generated_cpp));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -472,7 +472,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                     return "\"" + e.value + "\"";
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
-                    return e.value + "f";
+                    return e.value + "F";
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, SelfExpr>) {
@@ -541,8 +541,9 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         return lowered;
                     }
                     if (const auto* object = std::get_if<IdentExpr>(&member->object->expr)) {
-                        if (object->name == "input" && member->member == "axis") {
-                            std::string result = "InputEvent::axis(";
+                        if (object->name == "input" && (member->member == "axis" || member->member == "pressed" ||
+                                                        member->member == "down" || member->member == "released")) {
+                            std::string result = "InputEvent::" + member->member + "(";
                             for (size_t i = 0; i < e.args.size(); ++i) {
                                 if (i > 0) {
                                     result += ", ";

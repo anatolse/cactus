@@ -82,11 +82,26 @@ The backend SHALL generate network replication stubs for fields marked with `syn
 - **THEN** the backend generates code that iterates the Position view to collect/apply network deltas
 
 ### Requirement: Raylib integration in generated code
-The backend SHALL support a standard runtime-driven game loop for EnTT projects, with EnTT registry and dispatcher initialized before frame execution. The default compiled-project integration SHALL be realized through generated project glue linked against the standard Cactus EnTT backend/runtime library rather than requiring the generated output to embed a complete standalone `main()` implementation.
+The backend SHALL support a standard runtime-driven game loop for EnTT projects, with EnTT registry and dispatcher initialized before frame execution. The default compiled-project integration SHALL be realized through generated project output that embeds a backend-generated `main()` and links against the standard Cactus EnTT backend/runtime library.
 
 #### Scenario: Linked EnTT runtime integration
 - **WHEN** the full pipeline runs on a complete `.cactus` program with the EnTT backend selected
-- **THEN** the generated project-specific output links against the standard Cactus EnTT backend/runtime library, which provides the reusable runtime/game-loop integration for the project
+- **THEN** the generated project-specific output contains the backend-generated executable entrypoint and links against the standard Cactus EnTT backend/runtime library, which provides reusable runtime integration for the project
+
+### Requirement: EnTT standard executable output includes backend-generated entrypoint
+The cpp-entt backend SHALL support standard executable builds by emitting a backend-generated `main()` into generated project output and linking that generated output with the standard Cactus EnTT backend/runtime library. The emitted `main()` SHALL be owned by the cpp-entt backend template and SHALL NOT be authored by CMake or a separate host source file.
+
+#### Scenario: Generated EnTT executable contains backend-generated main
+- **WHEN** a supported `.cactus` program is generated with the `cpp-entt` backend for the standard executable path
+- **THEN** the generated C++ output contains a standalone `int main()` implementation emitted by the cpp-entt backend
+
+#### Scenario: Generated EnTT executable links with runtime library
+- **WHEN** the generated cpp-entt output is built as an executable
+- **THEN** the executable links the generated C++ file containing `main()` with the standard Cactus EnTT backend/runtime library
+
+#### Scenario: EnTT generated main initializes registry and dispatcher
+- **WHEN** the cpp-entt backend-generated `main()` starts a generated project
+- **THEN** it owns creation of `entt::registry` and `entt::dispatcher` and passes them to the generated setup, init, update, and render hooks
 
 ### Requirement: Compilable C++20 output with EnTT
 The backend SHALL produce valid C++20 generated project glue that compiles and links successfully with EnTT v3.x headers, Raylib, and the standard Cactus EnTT backend/runtime library.

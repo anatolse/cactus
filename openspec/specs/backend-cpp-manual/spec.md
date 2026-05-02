@@ -68,11 +68,26 @@ The backend SHALL generate network replication stubs for fields marked with `syn
 - **THEN** the backend generates replication code that includes `position` in network update functions
 
 ### Requirement: Raylib integration in generated code
-The backend SHALL support a standard runtime-driven game loop for manual-backend projects. The default compiled-project integration SHALL be realized through generated project glue linked against the standard Cactus manual backend/runtime library rather than requiring generated output to embed a complete standalone `main()` implementation.
+The backend SHALL support a standard runtime-driven game loop for manual-backend projects. The default compiled-project integration SHALL be realized through generated project output that embeds a backend-generated `main()` and links against the standard Cactus manual backend/runtime library.
 
 #### Scenario: Linked manual runtime integration
 - **WHEN** the full pipeline runs on a complete `.cactus` program targeting the manual backend
-- **THEN** the generated project-specific output links against the standard Cactus manual backend/runtime library, which provides the reusable runtime/game-loop integration for the project
+- **THEN** the generated project-specific output contains the backend-generated executable entrypoint and links against the standard Cactus manual backend/runtime library, which provides reusable runtime integration for the project
+
+### Requirement: Manual standard executable output includes backend-generated entrypoint
+The cpp-manual backend SHALL support standard executable builds by emitting a backend-generated `main()` into generated project output and linking that generated output with the standard Cactus manual backend/runtime library. The emitted `main()` SHALL be owned by the cpp-manual backend template and SHALL NOT be authored by CMake or a separate host source file.
+
+#### Scenario: Generated manual executable contains backend-generated main
+- **WHEN** a supported `.cactus` program is generated with the `cpp-manual` backend for the standard executable path
+- **THEN** the generated C++ output contains a standalone `int main()` implementation emitted by the cpp-manual backend
+
+#### Scenario: Generated manual executable links with runtime library
+- **WHEN** the generated cpp-manual output is built as an executable
+- **THEN** the executable links the generated C++ file containing `main()` with the standard Cactus manual backend/runtime library
+
+#### Scenario: Manual generated main runs parameterless generated project hooks
+- **WHEN** the cpp-manual backend-generated `main()` starts a generated project
+- **THEN** it calls the generated config, init, update, and render hooks using the manual backend hook signatures declared by `backends/cpp-manual/runtime.hpp`
 
 ### Requirement: Compilable C++20 output
 The backend SHALL produce syntactically and semantically valid C++20 generated project glue that compiles and links successfully with Raylib, the standard library, and the standard Cactus manual backend/runtime library.

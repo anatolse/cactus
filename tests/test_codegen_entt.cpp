@@ -274,6 +274,51 @@ TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespa
     CHECK(code.find("cactus::runtime::entt_backend::down(K_JUMP)") != std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: std.physics.flat query calls lower with registry access",
+          "[codegen-entt][extern-func][stdlib][physics]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.physics.flat as phys\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "pub enum QueryResultKind:\n"
+        "    Empty\n"
+        "    Hit\n"
+        "pub struct QueryContact2D:\n"
+        "    entity: entity_id\n"
+        "    normal: vec2\n"
+        "    distance: float\n"
+        "    overlap: vec2\n"
+        "pub struct QueryResult2D:\n"
+        "    kind: QueryResultKind\n"
+        "    contact: QueryContact2D\n"
+        "pub extern func query_cast_nearest(subject: entity_id, delta: vec2, mask: int, exclude: entity_id) "
+        "QueryResult2D\n"
+        "pub extern func query_overlap_deepest(subject: entity_id, mask: int, exclude: entity_id) QueryResult2D\n"
+        "pub extern func query_overlap_all(subject: entity_id, mask: int, exclude: entity_id) list[QueryContact2D]\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait BoxCollider:\n"
+        "    var size: vec2\n"
+        "system QueryProbe:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "        BoxCollider\n"
+        "    on tick:\n"
+        "        let hit = phys.query_cast_nearest(self, vec2(1.0, 0.0), 1, self)\n"
+        "        if hit.kind == phys.QueryResultKind.Empty:\n"
+        "            let contacts = phys.query_overlap_all(self, 1, self)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("auto hit = cactus_query_cast_nearest(registry, entity, vec2(1.0F, 0.0F), 1, entity)") !=
+          std::string::npos);
+    CHECK(code.find("if (hit.kind == QueryResultKind::Empty)") != std::string::npos);
+    CHECK(code.find("auto contacts = cactus_query_overlap_all(registry, entity, 1, entity)") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library", "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -936,5 +981,86 @@ TEST_CASE("Codegen EnTT: stdlib flat box colliders emit overlap runtime pass", "
     CHECK(code.find("registry.view<WorldTransform, Collider, BoxCollider>()") != std::string::npos);
     CHECK(code.find("cactus_collision_masks_allow") != std::string::npos);
     CHECK(code.find("dispatcher.trigger(CollisionEnterEvent") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap helpers",
+          "[codegen-entt][stdlib][physics]") {
+    ProgramNode ast;
+    DecoratedProgram program;
+    program.ast = &ast;
+
+    ResolvedEnum kind;
+    kind.name                = "QueryResultKind";
+    kind.variants            = {"Empty", "Hit"};
+    program.enums[kind.name] = kind;
+
+    ResolvedStruct contact;
+    contact.name                  = "QueryContact2D";
+    contact.fields                = {{.name = "entity", .type = make_entity_id_type()},
+                                     {.name = "normal", .type = make_vec2_type()},
+                                     {.name = "distance", .type = make_float_type()},
+                                     {.name = "overlap", .type = make_vec2_type()}};
+    program.structs[contact.name] = contact;
+
+    ResolvedStruct query_result;
+    query_result.name   = "QueryResult2D";
+    query_result.fields = {{.name = "kind", .type = {.kind = TypeKind::Enum, .name = "QueryResultKind"}},
+                           {.name = "contact", .type = {.kind = TypeKind::Struct, .name = "QueryContact2D"}}};
+    program.structs[query_result.name] = query_result;
+
+    ResolvedTrait world;
+    world.name = "WorldTransform";
+    world.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    world.fields.push_back({.name = "rotation", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    world.fields.push_back({.name = "scale", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    program.traits[world.name] = world;
+
+    ResolvedTrait collider;
+    collider.name      = "Collider";
+    collider.is_pub    = true;
+    collider.is_stdlib = true;
+    collider.fields.push_back({.name = "layer", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+    collider.fields.push_back({.name = "mask", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+    program.traits[collider.name] = collider;
+
+    ResolvedTrait box;
+    box.name      = "BoxCollider";
+    box.is_pub    = true;
+    box.is_stdlib = true;
+    box.fields.push_back({.name = "size", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    program.traits[box.name] = box;
+
+    ResolvedTrait circle;
+    circle.name      = "CircleCollider";
+    circle.is_pub    = true;
+    circle.is_stdlib = true;
+    circle.fields.push_back({.name = "radius", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    program.traits[circle.name] = circle;
+
+    ResolvedTrait capsule;
+    capsule.name      = "CapsuleCollider";
+    capsule.is_pub    = true;
+    capsule.is_stdlib = true;
+    capsule.fields.push_back({.name = "radius", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    capsule.fields.push_back({.name = "height", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    program.traits[capsule.name] = capsule;
+
+    const auto code = CppEnttCodegen::generate(program);
+    CHECK(code.find("QueryResult2D cactus_query_cast_nearest(entt::registry& registry") != std::string::npos);
+    CHECK(code.find("if (delta.x == 0.0F && delta.y == 0.0F)") != std::string::npos);
+    CHECK(code.find("if (!cactus_find_flat_collider(registry, subject_entity, subject))") != std::string::npos);
+    CHECK(code.find("return cactus_empty_query_result();") != std::string::npos);
+    CHECK(code.find("if (!nearest.has_value() || contact->distance < nearest->distance)") != std::string::npos);
+    CHECK(code.find("const float distance = cactus_flat_length(delta) * std::max(0.0F, entry)") != std::string::npos);
+    CHECK(code.find("normal.y = delta.y > 0.0F ? -1.0F : 1.0F") != std::string::npos);
+    CHECK(code.find("QueryResult2D cactus_query_overlap_deepest(entt::registry& registry") != std::string::npos);
+    CHECK(code.find("const float amount = std::abs(contact->overlap.x) + std::abs(contact->overlap.y)") !=
+          std::string::npos);
+    CHECK(code.find("if (!deepest.has_value() || amount > deepest_amount)") != std::string::npos);
+    CHECK(code.find("std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry") !=
+          std::string::npos);
+    CHECK(code.find("candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)") != std::string::npos);
+    CHECK(code.find("contacts.push_back(*contact)") != std::string::npos);
+    CHECK(code.find("return contacts;") != std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

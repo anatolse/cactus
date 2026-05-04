@@ -916,6 +916,54 @@ TEST_CASE("Parser: consecutive extern funcs parse cleanly", "[parser][extern-fun
     }
 }
 
+TEST_CASE("Parser: std.physics.flat query extern declarations parse", "[parser][extern-func][stdlib][physics]") {
+    auto prog = parse(
+        "pub enum QueryResultKind:\n"
+        "    Empty\n"
+        "    Hit\n"
+        "pub struct QueryContact2D:\n"
+        "    entity: entity_id\n"
+        "    normal: vec2\n"
+        "    distance: float\n"
+        "    overlap: vec2\n"
+        "pub struct QueryResult2D:\n"
+        "    kind: QueryResultKind\n"
+        "    contact: QueryContact2D\n"
+        "pub extern func query_cast_nearest(subject: entity_id, delta: vec2, mask: int, exclude: entity_id) "
+        "QueryResult2D\n"
+        "pub extern func query_overlap_deepest(subject: entity_id, mask: int, exclude: entity_id) QueryResult2D\n"
+        "pub extern func query_overlap_all(subject: entity_id, mask: int, exclude: entity_id) "
+        "list[QueryContact2D]\n");
+
+    REQUIRE(prog.declarations.size() == 6);
+    auto& kind = std::get<EnumNode>(prog.declarations[0]);
+    CHECK(kind.name == "QueryResultKind");
+    REQUIRE(kind.variants.size() == 2);
+    CHECK(kind.variants[0].name == "Empty");
+    CHECK(kind.variants[1].name == "Hit");
+
+    auto& contact = std::get<StructNode>(prog.declarations[1]);
+    CHECK(contact.name == "QueryContact2D");
+    REQUIRE(contact.fields.size() == 4);
+    CHECK(contact.fields[0].type.name == "entity_id");
+    CHECK(contact.fields[1].type.name == "vec2");
+
+    auto& cast = std::get<FuncNode>(prog.declarations[3]);
+    CHECK(cast.name == "query_cast_nearest");
+    CHECK(cast.is_pub);
+    CHECK(cast.is_extern);
+    REQUIRE(cast.params.size() == 4);
+    CHECK(cast.params[3].name == "exclude");
+    REQUIRE(cast.return_type.has_value());
+    CHECK(cast.return_type->name == "QueryResult2D");
+
+    auto& overlap_all = std::get<FuncNode>(prog.declarations[5]);
+    REQUIRE(overlap_all.return_type.has_value());
+    CHECK(overlap_all.return_type->name == "list");
+    REQUIRE(overlap_all.return_type->param.has_value());
+    CHECK((*overlap_all.return_type->param)->name == "QueryContact2D");
+}
+
 TEST_CASE("Parser: non-extern func without body still errors", "[parser][extern-func]") {
     // A regular func must have a body (colon + indented block)
     // Without it, the parser will error on the missing ':'

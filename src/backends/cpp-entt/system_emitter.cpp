@@ -43,6 +43,9 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.input") {
         return "cactus::runtime::entt_backend";
     }
+    if (module_name == "std.physics.flat") {
+        return "::";
+    }
     return {};
 }
 
@@ -70,7 +73,28 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
         return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
                func_name == "axis2";
     }
+    if (module_name == "std.physics.flat") {
+        return func_name == "query_cast_nearest" || func_name == "query_overlap_deepest" ||
+               func_name == "query_overlap_all";
+    }
     return false;
+}
+
+bool is_stdlib_physics_flat_query(const std::string& func_name) {
+    return func_name == "query_cast_nearest" || func_name == "query_overlap_deepest" ||
+           func_name == "query_overlap_all";
+}
+
+std::string stdlib_physics_flat_query_call(const std::string& func_name,
+                                           const std::vector<std::unique_ptr<ExprNode>>& args,
+                                           const auto& emit_arg) {
+    std::string result = "cactus_" + func_name + "(registry";
+    for (const auto& arg : args) {
+        result += ", ";
+        result += emit_arg(*arg);
+    }
+    result += ")";
+    return result;
 }
 
 std::string lower_unqualified_stdlib_func(const DecoratedProgram& program,
@@ -90,6 +114,9 @@ std::string lower_unqualified_stdlib_func(const DecoratedProgram& program,
         }
         const std::string prefix = stdlib_runtime_prefix(program.ast, use->module_name);
         if (prefix.empty()) {
+            continue;
+        }
+        if (use->module_name == "std.physics.flat" && is_stdlib_physics_flat_query(func_name)) {
             continue;
         }
         std::string result;
@@ -115,6 +142,10 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
     const std::string prefix = stdlib_runtime_prefix(program.ast, object->name);
     if (prefix.empty()) {
         return {};
+    }
+    if (imported_module_name(program.ast, object->name) == "std.physics.flat" &&
+        is_stdlib_physics_flat_query(member.member)) {
+        return stdlib_physics_flat_query_call(member.member, args, emit_arg);
     }
     std::string result;
     result.reserve(prefix.size() + member.member.size() + 3U);
@@ -510,6 +541,17 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                     return "registry.valid(" + rewrite_expr(*e.args[0], trait_names, program, pointer_aliases) + ")";
                 }
                 if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                    if (program.ast != nullptr) {
+                        for (const auto& decl : program.ast->declarations) {
+                            const auto* use = std::get_if<UseNode>(&decl);
+                            if (use != nullptr && !use->alias.has_value() && use->module_name == "std.physics.flat" &&
+                                is_stdlib_physics_flat_query(ident->name)) {
+                                return stdlib_physics_flat_query_call(ident->name, e.args, [&](const ExprNode& arg) {
+                                    return rewrite_expr(arg, trait_names, program, pointer_aliases);
+                                });
+                            }
+                        }
+                    }
                     if (const auto lowered_name = lower_unqualified_stdlib_func(
                             program,
                             ident->name,
@@ -563,6 +605,14 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (const auto* enum_member = std::get_if<MemberExpr>(&e.object->expr)) {
+                    if (const auto* module_ident = std::get_if<IdentExpr>(&enum_member->object->expr)) {
+                        if (imported_module_name(program.ast, module_ident->name) == "std.physics.flat" &&
+                            program.enums.contains(enum_member->member)) {
+                            return enum_member->member + "::" + e.member;
+                        }
+                    }
+                }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
                     // Enum names — use :: notation
                     if (program.enums.contains(ident->name)) {
@@ -752,8 +802,14 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
                 return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                std::string result =
-                    ind + "if (" + rewrite_expr(*s.condition, trait_names, program, pointer_aliases) + ") {\n";
+                const auto condition = rewrite_expr(*s.condition, trait_names, program, pointer_aliases);
+                std::string result   = ind + "if ";
+                if (!condition.empty() && condition.front() == '(' && condition.back() == ')') {
+                    result += condition;
+                } else {
+                    result += "(" + condition + ")";
+                }
+                result += " {\n";
                 for (auto& inner : s.then_body) {
                     result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
                 }

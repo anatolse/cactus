@@ -312,7 +312,205 @@ void cactus_collect_flat_colliders(entt::registry& registry, std::vector<CactusF
     });
 }
 
+Vector2 cactus_flat_overlap_normal(Vector2 overlap) noexcept {
+    if (overlap.x != 0.0F) {
+        return Vector2{.x = overlap.x < 0.0F ? -1.0F : 1.0F, .y = 0.0F};
+    }
+    if (overlap.y != 0.0F) {
+        return Vector2{.x = 0.0F, .y = overlap.y < 0.0F ? -1.0F : 1.0F};
+    }
+    return Vector2{.x = 0.0F, .y = 0.0F};
+}
+
+float cactus_flat_length(Vector2 value) noexcept {
+    return std::sqrt((value.x * value.x) + (value.y * value.y));
+}
+
+QueryContact2D cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {
+    return QueryContact2D{.entity = entity, .normal = normal, .distance = distance, .overlap = overlap};
+}
+
+QueryResult2D cactus_empty_query_result() noexcept {
+    return QueryResult2D{.kind = QueryResultKind::Empty,
+                         .contact = cactus_flat_contact(entt::entity{entt::null},
+                                                        Vector2{.x = 0.0F, .y = 0.0F},
+                                                        0.0F,
+                                                        Vector2{.x = 0.0F, .y = 0.0F})};
+}
+
+QueryResult2D cactus_hit_query_result(QueryContact2D contact) noexcept {
+    return QueryResult2D{.kind = QueryResultKind::Hit, .contact = contact};
+}
+
+bool cactus_query_mask_allows(const CactusFlatColliderRef& candidate, int mask) noexcept {
+    return (candidate.collider.layer & mask) != 0;
+}
+
+bool cactus_find_flat_collider(entt::registry& registry, entt::entity entity, CactusFlatColliderRef& result) {
+    std::vector<CactusFlatColliderRef> colliders;
+    cactus_collect_flat_colliders(registry, colliders);
+    for (const auto& collider : colliders) {
+        if (collider.entity == entity) {
+            result = collider;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<QueryContact2D> cactus_flat_overlap_contact(const CactusFlatColliderRef& subject,
+                                                          const CactusFlatColliderRef& candidate) noexcept {
+    const auto overlap = cactus_flat_box_overlap(candidate, subject);
+    if (overlap.x == 0.0F && overlap.y == 0.0F) {
+        return std::nullopt;
+    }
+    return cactus_flat_contact(candidate.entity, cactus_flat_overlap_normal(overlap), 0.0F, overlap);
+}
+
+std::optional<QueryContact2D> cactus_flat_cast_contact(const CactusFlatColliderRef& subject,
+                                                       const CactusFlatColliderRef& candidate,
+                                                       Vector2 delta) noexcept {
+    if (auto overlap = cactus_flat_overlap_contact(subject, candidate)) {
+        return overlap;
+    }
+
+    const float subject_min_x = subject.position.x;
+    const float subject_max_x = subject.position.x + (subject.half_extents.x * 2.0F);
+    const float subject_min_y = subject.position.y;
+    const float subject_max_y = subject.position.y + (subject.half_extents.y * 2.0F);
+    const float candidate_min_x = candidate.position.x;
+    const float candidate_max_x = candidate.position.x + (candidate.half_extents.x * 2.0F);
+    const float candidate_min_y = candidate.position.y;
+    const float candidate_max_y = candidate.position.y + (candidate.half_extents.y * 2.0F);
+
+    constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
+    constexpr float POS_INF = std::numeric_limits<float>::infinity();
+    float x_entry = NEG_INF;
+    float x_exit = POS_INF;
+    if (delta.x > 0.0F) {
+        x_entry = (candidate_min_x - subject_max_x) / delta.x;
+        x_exit = (candidate_max_x - subject_min_x) / delta.x;
+    } else if (delta.x < 0.0F) {
+        x_entry = (candidate_max_x - subject_min_x) / delta.x;
+        x_exit = (candidate_min_x - subject_max_x) / delta.x;
+    } else if (subject_max_x <= candidate_min_x || subject_min_x >= candidate_max_x) {
+        return std::nullopt;
+    }
+
+    float y_entry = NEG_INF;
+    float y_exit = POS_INF;
+    if (delta.y > 0.0F) {
+        y_entry = (candidate_min_y - subject_max_y) / delta.y;
+        y_exit = (candidate_max_y - subject_min_y) / delta.y;
+    } else if (delta.y < 0.0F) {
+        y_entry = (candidate_max_y - subject_min_y) / delta.y;
+        y_exit = (candidate_min_y - subject_max_y) / delta.y;
+    } else if (subject_max_y <= candidate_min_y || subject_min_y >= candidate_max_y) {
+        return std::nullopt;
+    }
+
+    const float entry = std::max(x_entry, y_entry);
+    const float exit = std::min(x_exit, y_exit);
+    if (entry > exit || exit < 0.0F || entry > 1.0F) {
+        return std::nullopt;
+    }
+
+    Vector2 normal{.x = 0.0F, .y = 0.0F};
+    if (x_entry > y_entry) {
+        normal.x = delta.x > 0.0F ? -1.0F : 1.0F;
+    } else {
+        normal.y = delta.y > 0.0F ? -1.0F : 1.0F;
+    }
+    const float distance = cactus_flat_length(delta) * std::max(0.0F, entry);
+    return cactus_flat_contact(candidate.entity, normal, distance, Vector2{.x = 0.0F, .y = 0.0F});
+}
+
 }  // namespace
+
+QueryResult2D cactus_query_cast_nearest(entt::registry& registry,
+                                        entt::entity subject_entity,
+                                        Vector2 delta,
+                                        int mask,
+                                        entt::entity exclude) {
+    if (delta.x == 0.0F && delta.y == 0.0F) {
+        return cactus_empty_query_result();
+    }
+
+    CactusFlatColliderRef subject;
+    if (!cactus_find_flat_collider(registry, subject_entity, subject)) {
+        return cactus_empty_query_result();
+    }
+
+    std::vector<CactusFlatColliderRef> colliders;
+    cactus_collect_flat_colliders(registry, colliders);
+    std::optional<QueryContact2D> nearest;
+    for (const auto& candidate : colliders) {
+        if (candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)) {
+            continue;
+        }
+        const auto contact = cactus_flat_cast_contact(subject, candidate, delta);
+        if (!contact.has_value()) {
+            continue;
+        }
+        if (!nearest.has_value() || contact->distance < nearest->distance) {
+            nearest = *contact;
+        }
+    }
+    return nearest.has_value() ? cactus_hit_query_result(*nearest) : cactus_empty_query_result();
+}
+
+QueryResult2D cactus_query_overlap_deepest(entt::registry& registry,
+                                           entt::entity subject_entity,
+                                           int mask,
+                                           entt::entity exclude) {
+    CactusFlatColliderRef subject;
+    if (!cactus_find_flat_collider(registry, subject_entity, subject)) {
+        return cactus_empty_query_result();
+    }
+
+    std::vector<CactusFlatColliderRef> colliders;
+    cactus_collect_flat_colliders(registry, colliders);
+    std::optional<QueryContact2D> deepest;
+    float deepest_amount = 0.0F;
+    for (const auto& candidate : colliders) {
+        if (candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)) {
+            continue;
+        }
+        const auto contact = cactus_flat_overlap_contact(subject, candidate);
+        if (!contact.has_value()) {
+            continue;
+        }
+        const float amount = std::abs(contact->overlap.x) + std::abs(contact->overlap.y);
+        if (!deepest.has_value() || amount > deepest_amount) {
+            deepest = *contact;
+            deepest_amount = amount;
+        }
+    }
+    return deepest.has_value() ? cactus_hit_query_result(*deepest) : cactus_empty_query_result();
+}
+
+std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry,
+                                                     entt::entity subject_entity,
+                                                     int mask,
+                                                     entt::entity exclude) {
+    CactusFlatColliderRef subject;
+    if (!cactus_find_flat_collider(registry, subject_entity, subject)) {
+        return {};
+    }
+
+    std::vector<CactusFlatColliderRef> colliders;
+    cactus_collect_flat_colliders(registry, colliders);
+    std::vector<QueryContact2D> contacts;
+    for (const auto& candidate : colliders) {
+        if (candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)) {
+            continue;
+        }
+        if (const auto contact = cactus_flat_overlap_contact(subject, candidate)) {
+            contacts.push_back(*contact);
+        }
+    }
+    return contacts;
+}
 
 void cactus_dispatch_stdlib_flat_collisions(entt::registry& registry, entt::dispatcher& dispatcher) {
     std::vector<CactusFlatColliderRef> colliders;
@@ -512,6 +710,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "\n";
     out << "#include <cmath>\n";
     out << "#include <cstdint>\n";
+    out << "#include <limits>\n";
+    out << "#include <optional>\n";
     out << "#include <string>\n";
     out << "#include <unordered_set>\n";
     out << "#include <vector>\n";

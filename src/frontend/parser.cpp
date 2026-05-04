@@ -622,8 +622,16 @@ TypeRef Parser::parse_type_ref() {
 // ── Parameters ──────────────────────────────────────────────────────────────
 
 FuncParam Parser::parse_param() {
-    auto loc  = peek().location;
-    auto name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
+    auto loc = peek().location;
+    std::string name;
+    if (check(TokenType::IDENTIFIER)) {
+        name = advance().value;
+    } else if (check(TokenType::EXCLUDE)) {
+        // `exclude` is a system-clause keyword, but stdlib extern functions use it as a parameter name.
+        name = advance().value;
+    } else {
+        name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
+    }
     consume(TokenType::COLON, "expected ':'");
     auto type = parse_type_ref();
     return {.name = name, .type = std::move(type), .location = loc};

@@ -38,6 +38,36 @@ pub trait CapsuleCollider:
     var radius: float = 0.5
     var height: float = 1.0
 
+# Result tag for collider-backed 2D world queries.
+# Empty means the query found no matching contact; Hit means contact is valid.
+pub enum QueryResultKind:
+    Empty
+    Hit
+
+# Contact payload returned by collider-backed 2D world queries.
+# normal:   direction from hit collider toward subject/query shape
+# distance: scalar cast travel distance before contact
+# overlap:  minimum translation/separation vector for overlap contacts
+pub struct QueryContact2D:
+    entity: entity_id
+    normal: vec2
+    distance: float
+    overlap: vec2
+
+# Algebraic neutral-or-hit result for single-contact 2D world queries.
+pub struct QueryResult2D:
+    kind: QueryResultKind
+    contact: QueryContact2D
+
+# Cast the subject collider through delta and return the nearest matching hit.
+pub extern func query_cast_nearest(subject: entity_id, delta: vec2, mask: int, exclude: entity_id) QueryResult2D
+
+# Return the deepest current overlap for the subject collider.
+pub extern func query_overlap_deepest(subject: entity_id, mask: int, exclude: entity_id) QueryResult2D
+
+# Return all current overlaps for the subject collider.
+pub extern func query_overlap_all(subject: entity_id, mask: int, exclude: entity_id) list[QueryContact2D]
+
 # Fired when this entity's collider first overlaps another entity's collider.
 # other:   entity_id of the entity that was hit
 # overlap: overlap vector (direction and depth of penetration)

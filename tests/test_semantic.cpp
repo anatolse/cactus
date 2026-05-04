@@ -340,6 +340,67 @@ TEST_CASE("Semantic: multiple extern funcs resolve correctly", "[semantic][exter
     }
 }
 
+TEST_CASE("Semantic: std.physics.flat query types and extern funcs resolve",
+          "[semantic][extern-func][stdlib][physics]") {
+    auto result = analyze(
+        "pub enum QueryResultKind:\n"
+        "    Empty\n"
+        "    Hit\n"
+        "pub struct QueryContact2D:\n"
+        "    entity: entity_id\n"
+        "    normal: vec2\n"
+        "    distance: float\n"
+        "    overlap: vec2\n"
+        "pub struct QueryResult2D:\n"
+        "    kind: QueryResultKind\n"
+        "    contact: QueryContact2D\n"
+        "pub extern func query_cast_nearest(subject: entity_id, delta: vec2, mask: int, exclude: entity_id) "
+        "QueryResult2D\n"
+        "pub extern func query_overlap_deepest(subject: entity_id, mask: int, exclude: entity_id) QueryResult2D\n"
+        "pub extern func query_overlap_all(subject: entity_id, mask: int, exclude: entity_id) list[QueryContact2D]\n");
+
+    REQUIRE(result.enums.contains("QueryResultKind"));
+    CHECK(result.enums.at("QueryResultKind").variants == std::vector<std::string>{"Empty", "Hit"});
+
+    REQUIRE(result.structs.contains("QueryContact2D"));
+    const auto& contact = result.structs.at("QueryContact2D");
+    REQUIRE(contact.fields.size() == 4);
+    CHECK(contact.fields[0].type.kind == TypeKind::EntityId);
+    CHECK(contact.fields[1].type.kind == TypeKind::Vec2);
+    CHECK(contact.fields[2].type.kind == TypeKind::Float);
+    CHECK(contact.fields[3].type.kind == TypeKind::Vec2);
+
+    REQUIRE(result.structs.contains("QueryResult2D"));
+    const auto& query_result = result.structs.at("QueryResult2D");
+    REQUIRE(query_result.fields.size() == 2);
+    CHECK(query_result.fields[0].type.kind == TypeKind::Enum);
+    CHECK(query_result.fields[0].type.name == "QueryResultKind");
+    CHECK(query_result.fields[1].type.kind == TypeKind::Struct);
+    CHECK(query_result.fields[1].type.name == "QueryContact2D");
+
+    REQUIRE(result.funcs.contains("query_cast_nearest"));
+    const auto& cast = result.funcs.at("query_cast_nearest");
+    CHECK(cast.is_pub);
+    CHECK(cast.is_extern);
+    REQUIRE(cast.return_type.has_value());
+    CHECK(cast.return_type->kind == TypeKind::Struct);
+    CHECK(cast.return_type->name == "QueryResult2D");
+    REQUIRE(cast.params.size() == 4);
+    CHECK(cast.params[0].type.kind == TypeKind::EntityId);
+    CHECK(cast.params[1].type.kind == TypeKind::Vec2);
+    CHECK(cast.params[2].type.kind == TypeKind::Int);
+    CHECK(cast.params[3].name == "exclude");
+    CHECK(cast.params[3].type.kind == TypeKind::EntityId);
+
+    REQUIRE(result.funcs.contains("query_overlap_all"));
+    const auto& overlap_all = result.funcs.at("query_overlap_all");
+    REQUIRE(overlap_all.return_type.has_value());
+    CHECK(overlap_all.return_type->kind == TypeKind::List);
+    REQUIRE(overlap_all.return_type->element != nullptr);
+    CHECK(overlap_all.return_type->element->kind == TypeKind::Struct);
+    CHECK(overlap_all.return_type->element->name == "QueryContact2D");
+}
+
 TEST_CASE("Semantic: extern system with filter is valid", "[semantic][extern-system]") {
     CHECK_FALSE(
         analyze_has_errors("trait Position:\n"

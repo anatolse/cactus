@@ -364,6 +364,88 @@ TEST_CASE("ModuleArtifact: extract_pub_symbols returns pub extern funcs only", "
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: stdlib physics query API symbols round-trip", "[artifact][extern-func][stdlib][physics]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    DecoratedProgram prog;
+
+    ResolvedEnum kind;
+    kind.name             = "QueryResultKind";
+    kind.variants         = {"Empty", "Hit"};
+    prog.enums[kind.name] = kind;
+
+    ResolvedStruct contact;
+    contact.name               = "QueryContact2D";
+    contact.fields             = {{.name = "entity", .type = make_entity_id_type()},
+                                  {.name = "normal", .type = make_vec2_type()},
+                                  {.name = "distance", .type = make_float_type()},
+                                  {.name = "overlap", .type = make_vec2_type()}};
+    prog.structs[contact.name] = contact;
+
+    ResolvedStruct query_result;
+    query_result.name   = "QueryResult2D";
+    query_result.fields = {{.name = "kind", .type = {.kind = TypeKind::Enum, .name = "QueryResultKind"}},
+                           {.name = "contact", .type = {.kind = TypeKind::Struct, .name = "QueryContact2D"}}};
+    prog.structs[query_result.name] = query_result;
+
+    ResolvedFunc cast;
+    cast.name             = "query_cast_nearest";
+    cast.is_pub           = true;
+    cast.is_extern        = true;
+    cast.return_type      = TypeInfo{.kind = TypeKind::Struct, .name = "QueryResult2D"};
+    cast.params           = {{.name = "subject", .type = make_entity_id_type()},
+                             {.name = "delta", .type = make_vec2_type()},
+                             {.name = "mask", .type = make_int_type()},
+                             {.name = "exclude", .type = make_entity_id_type()}};
+    prog.funcs[cast.name] = cast;
+
+    ResolvedFunc overlap_all;
+    overlap_all.name             = "query_overlap_all";
+    overlap_all.is_pub           = true;
+    overlap_all.is_extern        = true;
+    overlap_all.return_type      = make_list_type(TypeInfo{.kind = TypeKind::Struct, .name = "QueryContact2D"});
+    overlap_all.params           = {{.name = "subject", .type = make_entity_id_type()},
+                                    {.name = "mask", .type = make_int_type()},
+                                    {.name = "exclude", .type = make_entity_id_type()}};
+    prog.funcs[overlap_all.name] = overlap_all;
+
+    REQUIRE(artifact.save(prog, "std.physics.flat", build_dir));
+    REQUIRE_FALSE(errors.has_errors());
+
+    std::string loaded_name;
+    auto loaded = artifact.load(build_dir / "std.physics.flat.cmod", loaded_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    CHECK(loaded_name == "std.physics.flat");
+
+    REQUIRE(loaded->enums.contains("QueryResultKind"));
+    CHECK(loaded->enums.at("QueryResultKind").variants == std::vector<std::string>{"Empty", "Hit"});
+    REQUIRE(loaded->structs.contains("QueryContact2D"));
+    REQUIRE(loaded->structs.contains("QueryResult2D"));
+    REQUIRE(loaded->funcs.contains("query_cast_nearest"));
+    CHECK(loaded->funcs.at("query_cast_nearest").return_type->name == "QueryResult2D");
+    REQUIRE(loaded->funcs.contains("query_overlap_all"));
+    REQUIRE(loaded->funcs.at("query_overlap_all").return_type.has_value());
+    CHECK(loaded->funcs.at("query_overlap_all").return_type->kind == TypeKind::List);
+    REQUIRE(loaded->funcs.at("query_overlap_all").return_type->element != nullptr);
+    CHECK(loaded->funcs.at("query_overlap_all").return_type->element->name == "QueryContact2D");
+
+    auto symbols = artifact.extract_pub_symbols(build_dir / "std.physics.flat.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+    CHECK(symbols->funcs.contains("query_cast_nearest"));
+    CHECK(symbols->funcs.contains("query_overlap_all"));
+    CHECK(symbols->structs.contains("QueryContact2D"));
+    CHECK(symbols->structs.contains("QueryResult2D"));
+    CHECK(symbols->enums.contains("QueryResultKind"));
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: version-1 artifact rejected with error", "[artifact][extern-func]") {
     // This is covered by the existing "version mismatch error" test (version 99)
     // which also rejects version 1 (since CURRENT_VERSION is now 2)

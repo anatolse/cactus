@@ -62,6 +62,15 @@ const:
     GEM_COLOR_GOLD = #FFD700
     BLUE_GEM_POINTS = 10
     GOLD_GEM_POINTS = 100
+    SOLID_LAYER = 1
+    PLAYER_LAYER = 2
+    ENEMY_LAYER = 4
+    COLLECTIBLE_LAYER = 8
+    SOLID_MASK = 1
+    PLAYER_MASK = 14
+    ENEMY_MASK = 3
+    COLLECTIBLE_MASK = 2
+    GROUND_PROBE_DISTANCE = 3.0
 
 # ── Enums ────────────────────────────────────────────────────────────────────────
 
@@ -123,8 +132,8 @@ pub unit Player:
         color = #44AAFFFF
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = PLAYER_LAYER
+        mask = PLAYER_MASK
     BoxCollider:
         size = vec2(PLAYER_WIDTH, PLAYER_HEIGHT)
     PlayerMotion:
@@ -156,8 +165,8 @@ pub unit GroundPlatform:
         color = GROUND_COLOR
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = SOLID_LAYER
+        mask = PLAYER_LAYER
     BoxCollider:
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
 
@@ -172,8 +181,8 @@ pub unit FloatingPlatform1:
         color = PLATFORM_COLOR
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = SOLID_LAYER
+        mask = PLAYER_LAYER
     BoxCollider:
         size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
 
@@ -188,8 +197,8 @@ pub unit FloatingPlatform2:
         color = PLATFORM_COLOR
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = SOLID_LAYER
+        mask = PLAYER_LAYER
     BoxCollider:
         size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
 
@@ -204,8 +213,8 @@ pub unit FloatingPlatform3:
         color = PLATFORM_COLOR
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = SOLID_LAYER
+        mask = PLAYER_LAYER
     BoxCollider:
         size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
 
@@ -220,8 +229,8 @@ pub unit WalkerEnemy1:
         color = ENEMY_COLOR
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = ENEMY_LAYER
+        mask = ENEMY_MASK
     BoxCollider:
         size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
     PatrolMotion:
@@ -241,8 +250,8 @@ pub unit WalkerEnemy2:
         color = ENEMY_COLOR
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = ENEMY_LAYER
+        mask = ENEMY_MASK
     BoxCollider:
         size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
     PatrolMotion:
@@ -262,8 +271,8 @@ pub unit BlueGem1:
         color = GEM_COLOR_BLUE
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = COLLECTIBLE_LAYER
+        mask = COLLECTIBLE_MASK
     BoxCollider:
         size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
@@ -282,8 +291,8 @@ pub unit BlueGem2:
         color = GEM_COLOR_BLUE
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = COLLECTIBLE_LAYER
+        mask = COLLECTIBLE_MASK
     BoxCollider:
         size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
@@ -302,8 +311,8 @@ pub unit GoldGem1:
         color = GEM_COLOR_GOLD
         visible = true
     Collider:
-        layer = 1
-        mask = 1
+        layer = COLLECTIBLE_LAYER
+        mask = COLLECTIBLE_MASK
     BoxCollider:
         size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
@@ -328,8 +337,6 @@ system MovementSystem:
         BoxCollider
 
     on tick:
-        let previous_bottom = position.y + size.y
-
         if move_axis > 0.0:
             facing = FacingDirection.Right
         if move_axis < 0.0:
@@ -346,47 +353,46 @@ system MovementSystem:
 
         velocity = vec2(velocity.x, math.clamp(velocity.y + gravity * tick.dt, jump_force * -1.0, MAX_FALL_SPEED))
 
-        position = vec2(math.clamp(position.x + velocity.x * tick.dt, 0.0, GROUND_WIDTH - size.x), position.y + velocity.y * tick.dt)
+        let horizontal_delta = velocity.x * tick.dt
+        let horizontal_hit = phys.query_cast_nearest(self, vec2(horizontal_delta, 0.0), SOLID_MASK, self)
+
+        if horizontal_hit.kind == phys.QueryResultKind.Hit:
+            if horizontal_delta > 0.0:
+                position = vec2(math.clamp(position.x + horizontal_hit.contact.distance, 0.0, GROUND_WIDTH - size.x), position.y)
+            if horizontal_delta < 0.0:
+                position = vec2(math.clamp(position.x - horizontal_hit.contact.distance, 0.0, GROUND_WIDTH - size.x), position.y)
+            velocity = vec2(0.0, velocity.y)
+        else:
+            position = vec2(math.clamp(position.x + horizontal_delta, 0.0, GROUND_WIDTH - size.x), position.y)
+
+        let vertical_delta = velocity.y * tick.dt
+        let vertical_hit = phys.query_cast_nearest(self, vec2(0.0, vertical_delta), SOLID_MASK, self)
         grounded = false
+
+        if vertical_hit.kind == phys.QueryResultKind.Hit:
+            if vertical_delta > 0.0:
+                position = vec2(position.x, position.y + vertical_hit.contact.distance)
+            if vertical_delta < 0.0:
+                position = vec2(position.x, position.y - vertical_hit.contact.distance)
+            velocity = vec2(velocity.x, 0.0)
+            if vertical_hit.contact.normal.y < 0.0:
+                grounded = true
+                jumps_remaining = max_jumps
+                jump_state = JumpState.Grounded
+        else:
+            position = vec2(position.x, position.y + vertical_delta)
 
         if velocity.y > 0.0 and jump_state == JumpState.Jumping:
             jump_state = JumpState.Falling
 
-        let player_left = position.x
-        let player_right = position.x + size.x
-        let player_bottom = position.y + size.y
-
-        if velocity.y >= 0.0:
-            if player_right > PLATFORM1_X and player_left < PLATFORM1_X + PLATFORM1_WIDTH:
-                if previous_bottom <= PLATFORM1_Y and player_bottom >= PLATFORM1_Y:
-                    position = vec2(position.x, PLATFORM1_Y - size.y)
-                    velocity = vec2(velocity.x, 0.0)
-                    grounded = true
-                    jumps_remaining = max_jumps
-                    jump_state = JumpState.Grounded
-
-            if player_right > PLATFORM2_X and player_left < PLATFORM2_X + PLATFORM2_WIDTH:
-                if previous_bottom <= PLATFORM2_Y and player_bottom >= PLATFORM2_Y:
-                    position = vec2(position.x, PLATFORM2_Y - size.y)
-                    velocity = vec2(velocity.x, 0.0)
-                    grounded = true
-                    jumps_remaining = max_jumps
-                    jump_state = JumpState.Grounded
-
-            if player_right > PLATFORM3_X and player_left < PLATFORM3_X + PLATFORM3_WIDTH:
-                if previous_bottom <= PLATFORM3_Y and player_bottom >= PLATFORM3_Y:
-                    position = vec2(position.x, PLATFORM3_Y - size.y)
-                    velocity = vec2(velocity.x, 0.0)
-                    grounded = true
-                    jumps_remaining = max_jumps
-                    jump_state = JumpState.Grounded
-
-        if position.y > GROUND_Y - size.y:
-            position = vec2(position.x, GROUND_Y - size.y)
-            velocity = vec2(velocity.x, 0.0)
-            grounded = true
-            jumps_remaining = max_jumps
-            jump_state = JumpState.Grounded
+        if not grounded:
+            if velocity.y == 0.0:
+                let ground_probe = phys.query_cast_nearest(self, vec2(0.0, GROUND_PROBE_DISTANCE), SOLID_MASK, self)
+                if ground_probe.kind == phys.QueryResultKind.Hit:
+                    if ground_probe.contact.normal.y < 0.0:
+                        grounded = true
+                        jumps_remaining = max_jumps
+                        jump_state = JumpState.Grounded
 
 system InvincibilitySystem:
     filter:

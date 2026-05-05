@@ -54,3 +54,36 @@ The platformer example SHALL generate cpp-entt project glue that links against t
 #### Scenario: Platformer generated output uses project glue shape
 - **WHEN** the platformer generated output is compiled in curated example coverage
 - **THEN** it compiles as project-specific generated C++ linked with the standard cpp-entt runtime/backend library
+
+### Requirement: Platformer movement uses stdlib physics world queries for solid collision
+The platformer example SHALL resolve player collision against solid platforms and ground by querying authored collider entities through `std.physics.flat` world query functions rather than by hardcoding per-platform geometry checks in movement code.
+
+#### Scenario: Platformer imports physics query API
+- **WHEN** `examples/platformer/platformer.cactus` is read
+- **THEN** it imports `std.physics.flat` or an alias of that module
+- **AND** player movement systems can call the stdlib physics query functions declared by that module
+
+#### Scenario: Player movement casts against solid colliders
+- **WHEN** the platformer updates player movement
+- **THEN** it uses `query_cast_nearest` with `self` as the subject entity and an explicit excluded entity to test movement against solid collider layers
+- **AND** movement collision is resolved from returned `QueryResult2D` values rather than from hardcoded `PLATFORM1_*`, `PLATFORM2_*`, `PLATFORM3_*`, or `GROUND_Y` landing checks
+
+#### Scenario: Grounded state uses query contacts or probe
+- **WHEN** the player is falling or standing on a platform
+- **THEN** the platformer determines grounded state from downward cast/probe query contacts with upward-facing floor normals
+- **AND** the grounded state is not determined by comparing the player's position directly to hardcoded platform or ground constants
+
+### Requirement: Platformer level colliders use distinct query layers
+The platformer example SHALL assign collision layers and masks so solid terrain, the player, enemies, and collectibles can be queried independently by gameplay systems.
+
+#### Scenario: Solid terrain is queryable separately
+- **WHEN** ground and floating platform units are declared
+- **THEN** their `Collider.layer` values identify them as solid terrain for player movement queries
+
+#### Scenario: Player can exclude itself from queries
+- **WHEN** player movement or interaction systems call physics query functions
+- **THEN** they pass `self` as the explicit excluded entity so the player's own collider is not returned as a contact
+
+#### Scenario: Interaction layers are separable from solid layers
+- **WHEN** enemies or collectibles are queried by platformer gameplay systems
+- **THEN** their `Collider.layer` values can be distinguished from solid terrain so overlap queries can target interactions without treating every solid as an interaction

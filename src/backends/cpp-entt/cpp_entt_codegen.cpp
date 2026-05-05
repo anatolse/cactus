@@ -411,7 +411,7 @@ std::optional<QueryContact2D> cactus_flat_cast_contact(const CactusFlatColliderR
 
     const float entry = std::max(x_entry, y_entry);
     const float exit = std::min(x_exit, y_exit);
-    if (entry > exit || exit < 0.0F || entry > 1.0F) {
+    if (entry > exit || entry < 0.0F || entry > 1.0F) {
         return std::nullopt;
     }
 

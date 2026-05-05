@@ -1051,6 +1051,7 @@ TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap help
     CHECK(code.find("if (!cactus_find_flat_collider(registry, subject_entity, subject))") != std::string::npos);
     CHECK(code.find("return cactus_empty_query_result();") != std::string::npos);
     CHECK(code.find("if (!nearest.has_value() || contact->distance < nearest->distance)") != std::string::npos);
+    CHECK(code.find("entry > exit || entry < 0.0F || entry > 1.0F") != std::string::npos);
     CHECK(code.find("const float distance = cactus_flat_length(delta) * std::max(0.0F, entry)") != std::string::npos);
     CHECK(code.find("normal.y = delta.y > 0.0F ? -1.0F : 1.0F") != std::string::npos);
     CHECK(code.find("QueryResult2D cactus_query_overlap_deepest(entt::registry& registry") != std::string::npos);

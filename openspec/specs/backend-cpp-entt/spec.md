@@ -446,6 +446,41 @@ The cpp-entt backend SHALL include tests that verify stdlib extern function corr
 - **WHEN** the cpp-entt backend test suite runs
 - **THEN** it includes tests covering recognized hierarchy and render extern system behavior or binding outcomes
 
+### Requirement: EnTT backend supports std.physics collider traits
+The cpp-entt backend SHALL support the `std.physics.flat` and `std.physics.volume` collider traits used by authored programs and curated examples. This support SHALL be limited to the cpp-entt backend/runtime path and SHALL NOT require other backends to implement physics simulation.
+
+#### Scenario: Imported 2D collider traits generate usable EnTT components
+- **WHEN** a program imports `std.physics.flat` and applies `Collider` plus a supported shape trait to a unit
+- **THEN** cpp-entt generation produces usable EnTT components for shared filtering data and the selected 2D shape dimensions initialized from authored values or stdlib defaults
+
+#### Scenario: Imported 3D collider traits generate usable EnTT components
+- **WHEN** a program imports `std.physics.volume` and applies `Collider` plus a supported shape trait to a unit
+- **THEN** cpp-entt generation produces usable EnTT components for shared filtering data and the selected 3D shape dimensions initialized from authored values or stdlib defaults
+
+#### Scenario: Collider recognition uses fully qualified stdlib trait identity
+- **WHEN** a collider trait is imported through an alias such as `use std.physics.flat as phys` or `use std.physics.volume as phys` and used as `phys.Collider`, `phys.BoxCollider`, `phys.CircleCollider`, `phys.SphereCollider`, or `phys.CapsuleCollider`
+- **THEN** the cpp-entt backend recognizes it as a stdlib collider trait rather than as an unrelated user-defined component
+
+#### Scenario: EnTT runtime detects 2D primitive overlap for stdlib colliders
+- **WHEN** two valid entities have `std.transform.flat.WorldTransform`, compatible `std.physics.flat.Collider` components, and supported 2D shape collider components whose primitive bounds overlap
+- **THEN** the cpp-entt runtime detects the overlap using transform position plus shape-specific dimensions
+
+#### Scenario: EnTT runtime detects 3D primitive overlap for stdlib colliders
+- **WHEN** two valid entities have `std.transform.volume.WorldTransform`, compatible `std.physics.volume.Collider` components, and supported 3D shape collider components whose primitive bounds overlap
+- **THEN** the cpp-entt runtime detects the overlap using transform position plus shape-specific dimensions
+
+#### Scenario: EnTT runtime honors collider layer masks
+- **WHEN** two colliders overlap geometrically but their layer and mask bitmasks do not allow interaction
+- **THEN** the cpp-entt runtime does not report a collision between them
+
+#### Scenario: EnTT runtime emits CollisionEnter for supported overlaps
+- **WHEN** two compatible stdlib colliders begin overlapping in a cpp-entt program
+- **THEN** the cpp-entt runtime emits or dispatches the matching stdlib `CollisionEnter` event payload for each participating entity
+
+#### Scenario: Platformer compiles with stdlib collider usage
+- **WHEN** `examples/platformer/platformer.cactus` uses `std.physics.flat.Collider` and a supported 2D shape collider and is generated for cpp-entt
+- **THEN** the generated output compiles and links with the standard cpp-entt backend/runtime library without requiring user-provided collider callbacks
+
 ### Requirement: EnTT mesh render pass applies registered point lights to mesh shading
 The cpp-entt backend SHALL treat recognized stdlib point-light registration as render-pass input for backend-owned mesh shading rather than debug-only accounting. During a render frame, enabled point lights registered through the recognized `std.render.meshes.PointLightSystem` binding SHALL contribute lighting data consumed by the backend-owned mesh pass.
 

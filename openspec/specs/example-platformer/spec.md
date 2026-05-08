@@ -7,7 +7,7 @@ This spec defines the curated platformer example as a current-stdlib Cactus DSL 
 ## Requirements
 
 ### Requirement: Platformer example source uses current 2D stdlib authoring patterns
-The repository SHALL provide `examples/platformer/platformer.cactus` as a valid Cactus DSL example that demonstrates a 2D platformer-style scene using currently shipped stdlib modules and language syntax.
+The repository SHALL provide `examples/platformer/platformer.cactus` as a valid Cactus DSL example that demonstrates a 2D platformer-style scene using currently shipped stdlib modules and language syntax, including stdlib transform, render, input, and physics collider traits.
 
 #### Scenario: Platformer has one authoritative curated DSL source
 - **WHEN** users inspect `examples/platformer/` for the curated platformer DSL source
@@ -18,6 +18,7 @@ The repository SHALL provide `examples/platformer/platformer.cactus` as a valid 
 - **WHEN** `examples/platformer/platformer.cactus` is read
 - **THEN** it imports `std.input`
 - **AND** it imports `std.transform.flat`
+- **AND** it imports `std.physics.flat` or an alias of that module
 - **AND** it imports at least one shipped 2D render module such as `std.render.shapes` or `std.render.sprites`
 
 #### Scenario: Example declares 2D entities through stdlib transform data
@@ -28,6 +29,12 @@ The repository SHALL provide `examples/platformer/platformer.cactus` as a valid 
 - **WHEN** platformer-visible entities such as the player, platforms, enemies, or collectibles are declared
 - **THEN** they use shipped passive render traits such as `std.render.shapes.Shape` or `std.render.sprites.Renderer`
 - **AND** the example does not require a project-local `draw_rect` extern function to render those entities
+
+#### Scenario: Example uses stdlib collider traits for collision bounds
+- **WHEN** collidable platformer entities such as the player, ground, floating platforms, enemies, or collectibles are declared
+- **THEN** they use `std.physics.flat.Collider` or an imported alias of that trait for shared layer and mask data
+- **AND** they use `std.physics.flat.BoxCollider`, `CircleCollider`, or `CapsuleCollider` for shape-specific collision dimensions
+- **AND** player collision dimensions are not duplicated as authoritative project-local motion-trait fields
 
 ### Requirement: Platformer example avoids undeclared backend helper functions
 The platformer example SHALL NOT rely on helper functions that are neither declared as Cactus extern functions nor provided by the current stdlib/backend contract.
@@ -45,7 +52,7 @@ The platformer example SHALL NOT rely on helper functions that are neither decla
 - **THEN** it does not require an undeclared `set_camera_2d` helper
 
 ### Requirement: Platformer example is compatible with cpp-entt generation
-The platformer example SHALL generate cpp-entt project glue that links against the standard cpp-entt runtime/backend library.
+The platformer example SHALL generate cpp-entt project glue that links against the standard cpp-entt runtime/backend library and the stdlib collider support used by the example.
 
 #### Scenario: Platformer code generation succeeds
 - **WHEN** the compiler is invoked with `cactus examples/platformer/platformer.cactus --backend cpp-entt --output <generated.cpp>`
@@ -54,6 +61,10 @@ The platformer example SHALL generate cpp-entt project glue that links against t
 #### Scenario: Platformer generated output uses project glue shape
 - **WHEN** the platformer generated output is compiled in curated example coverage
 - **THEN** it compiles as project-specific generated C++ linked with the standard cpp-entt runtime/backend library
+
+#### Scenario: Platformer generated output includes collider components
+- **WHEN** the platformer generated output is inspected or compiled for cpp-entt
+- **THEN** it contains component data corresponding to the imported stdlib `Collider` trait on collidable platformer units
 
 ### Requirement: Platformer movement uses stdlib physics world queries for solid collision
 The platformer example SHALL resolve player collision against solid platforms and ground by querying authored collider entities through `std.physics.flat` world query functions rather than by hardcoding per-platform geometry checks in movement code.

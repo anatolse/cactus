@@ -18,11 +18,6 @@ add_executable(test_semantic test_semantic.cpp)
 target_link_libraries(test_semantic PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticTests COMMAND test_semantic)
 
-# Manual SoA codegen tests
-add_executable(test_codegen_manual test_codegen_manual.cpp)
-target_link_libraries(test_codegen_manual PRIVATE cactus_backend_cpp_manual Catch2::Catch2WithMain)
-add_test(NAME CodegenManualTests COMMAND test_codegen_manual)
-
 # EnTT codegen tests
 add_executable(test_codegen_entt test_codegen_entt.cpp)
 target_link_libraries(test_codegen_entt PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
@@ -65,8 +60,7 @@ add_test(NAME DataFileTests COMMAND test_data_file)
 
 # Shared/backend runtime stdlib tests
 add_executable(test_runtime_stdlib test_runtime_stdlib.cpp)
-target_link_libraries(test_runtime_stdlib PRIVATE cactus_runtime_common cactus_runtime_cpp_manual Catch2::Catch2WithMain)
-target_link_libraries(test_runtime_stdlib PRIVATE cactus_runtime_cpp_entt)
+target_link_libraries(test_runtime_stdlib PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 target_compile_definitions(test_runtime_stdlib PRIVATE
     CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
@@ -94,8 +88,6 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_STDLIB_EXTERN_SOURCE="examples/stdlib_extern_coverage.cactus"
     CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_GENERATED_CPP="${STDLIB_EXTERN_ENTT_GENERATED_CPP}"
     CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_TARGET="example_stdlib_extern_entt_generated"
-    CACTUS_EXAMPLE_STDLIB_EXTERN_MANUAL_GENERATED_CPP="${STDLIB_EXTERN_MANUAL_GENERATED_CPP}"
-    CACTUS_EXAMPLE_STDLIB_EXTERN_MANUAL_TARGET="example_stdlib_extern_manual_generated"
 
     CACTUS_EXAMPLE_MESH_RENDERER_SOURCE="examples/mesh-renderer/main.cactus"
     CACTUS_EXAMPLE_MESH_RENDERER_GENERATED_CPP="${MESH_RENDERER_GENERATED_CPP}"

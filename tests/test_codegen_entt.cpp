@@ -99,7 +99,7 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
             CHECK(code.find("const TickEvent& tick") != std::string::npos);
             CHECK(code.find("Pos_comp.x = (Pos_comp.x + tick.dt)") != std::string::npos);
             CHECK(code.find("registry.view<Pos>()") != std::string::npos);
-            CHECK(code.find("registry.each") != std::string::npos);
+            CHECK(code.find("registry.storage<entt::entity>()") != std::string::npos);
             CHECK(code.find("cactus_try_get_projected_or_durable_Pos(registry, entity)") != std::string::npos);
         }
     }

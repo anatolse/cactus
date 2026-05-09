@@ -3,7 +3,6 @@
 #include "common/cactus_runtime.hpp"
 
 #include "backends/cpp-entt/runtime.hpp"
-#include "backends/cpp-manual/runtime.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -57,18 +56,6 @@ std::string read_text_file(const fs::path& path) {
 }
 
 }  // namespace
-
-namespace cactus::runtime::manual_backend {
-
-int cactus_input_button_key(std::uint8_t /*button*/) noexcept {
-    return 0;
-}
-
-float cactus_input_axis_value(std::uint8_t /*action*/) noexcept {
-    return 0.0F;
-}
-
-}  // namespace cactus::runtime::manual_backend
 
 TEST_CASE("Runtime stdlib: scalar and vector math helpers behave correctly", "[runtime][stdlib][math]") {
     CHECK(stdlib::math::lerp(0.0F, 10.0F, 0.5F) == Catch::Approx(5.0F));
@@ -171,77 +158,16 @@ TEST_CASE("Runtime stdlib: allocation-free helper contracts stay constexpr and n
     CHECK(noexcept(stdlib::math::quat::multiply(stdlib::math::quat::identity(), stdlib::math::quat::identity())));
 }
 
-TEST_CASE("Runtime stdlib: manual hierarchy propagation and recursive destroy work", "[runtime][hierarchy][manual]") {
-    struct Transform2D {
-        Vector2 position{};
-        float rotation{};
-        Vector2 scale{.x = 1.0F, .y = 1.0F};
-    };
-
-    std::vector<Transform2D> local(2);
-    std::vector<Transform2D> world(2);
-    local[0].position = {.x = 1.0F, .y = 2.0F};
-    local[1].position = {.x = 3.0F, .y = 4.0F};
-
-    cactus::runtime::manual_backend::propagate_hierarchy(
-        2,
-        [&](std::size_t entity) -> std::optional<std::size_t> {
-            if (entity == 1) {
-                return 0;
-            }
-            return std::nullopt;
-        },
-        [&](std::size_t entity) { world[entity] = local[entity]; },
-        [&](std::size_t parent, std::size_t child) {
-            world[child] = local[child];
-            world[child].position.x += world[parent].position.x;
-            world[child].position.y += world[parent].position.y;
-        });
-
-    CHECK(world[0].position.x == Catch::Approx(1.0F));
-    CHECK(world[0].position.y == Catch::Approx(2.0F));
-    CHECK(world[1].position.x == Catch::Approx(4.0F));
-    CHECK(world[1].position.y == Catch::Approx(6.0F));
-
-    std::vector<std::size_t> removed;
-    std::vector<bool> alive = {true, true, true};
-    cactus::runtime::manual_backend::destroy_entity_recursive(
-        0,
-        [&](std::size_t entity) { return entity < alive.size() && alive[entity]; },
-        [&](std::size_t parent, const auto& visitor) {
-            if (parent == 0) {
-                visitor(1);
-                visitor(2);
-            }
-        },
-        [&](std::size_t entity) {
-            alive[entity] = false;
-            removed.push_back(entity);
-        });
-
-    CHECK(removed.size() == 3);
-    CHECK(std::ranges::find(removed, 0) != removed.end());
-    CHECK(std::ranges::find(removed, 1) != removed.end());
-    CHECK(std::ranges::find(removed, 2) != removed.end());
-}
-
 TEST_CASE("Runtime stdlib: backend hierarchy runtime sources enforce pmr allocator discipline",
           "[runtime][hierarchy][pmr][review]") {
-    const auto entt_runtime   = read_text_file(repo_root() / "src/backends/cpp-entt/runtime.cpp");
-    const auto manual_runtime = read_text_file(repo_root() / "src/backends/cpp-manual/runtime.cpp");
+    const auto entt_runtime = read_text_file(repo_root() / "src/backends/cpp-entt/runtime.cpp");
 
     REQUIRE_FALSE(entt_runtime.empty());
-    REQUIRE_FALSE(manual_runtime.empty());
 
     CHECK(entt_runtime.find("std::pmr::monotonic_buffer_resource scratch_resource") != std::string::npos);
     CHECK(entt_runtime.find("std::pmr::vector<entt::entity> active_entities") != std::string::npos);
     CHECK(entt_runtime.find("std::pmr::unsynchronized_pool_resource destroying_resource") != std::string::npos);
     CHECK(entt_runtime.find("std::pmr::vector<entt::entity> child_entities") != std::string::npos);
-
-    CHECK(manual_runtime.find("std::pmr::monotonic_buffer_resource scratch_resource") != std::string::npos);
-    CHECK(manual_runtime.find("std::pmr::vector<std::uint8_t> active") != std::string::npos);
-    CHECK(manual_runtime.find("std::pmr::unsynchronized_pool_resource destroying_resource") != std::string::npos);
-    CHECK(manual_runtime.find("std::pmr::vector<std::size_t> destroying_entities") != std::string::npos);
 }
 
 TEST_CASE("Runtime stdlib: shared asset registry supports eager and lazy resolution", "[runtime][assets]") {
@@ -267,34 +193,6 @@ TEST_CASE("Runtime stdlib: shared asset registry supports eager and lazy resolut
     const auto missing = registry.resolve(AssetKind::Material, 99U);
     CHECK_FALSE(missing.valid());
     CHECK(registry.missing_count() >= 1);
-}
-
-TEST_CASE("Runtime stdlib: manual backend asset adapters record submissions and misses", "[runtime][assets][manual]") {
-    auto& registry = shared_asset_registry();
-    registry.clear();
-    registry.register_texture(11U, "sprite", 1);
-    registry.register_mesh(12U, "mesh", 2);
-    registry.register_material(13U, "mat", 3);
-
-    cactus::runtime::manual_backend::reset_render_debug_state();
-    cactus::runtime::manual_backend::submit_sprite(
-        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, WHITE, 11U, true);
-    cactus::runtime::manual_backend::submit_mesh(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
-                                                 stdlib::math::quat::identity(),
-                                                 Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
-                                                 12U,
-                                                 13U,
-                                                 true,
-                                                 true);
-    cactus::runtime::manual_backend::register_point_light(
-        Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, WHITE, 1.0F, 10.0F, true);
-    CHECK(cactus::runtime::manual_backend::render_debug_state().submitted_sprites == 1);
-    CHECK(cactus::runtime::manual_backend::render_debug_state().submitted_meshes == 1);
-    CHECK(cactus::runtime::manual_backend::render_debug_state().registered_point_lights == 1);
-
-    cactus::runtime::manual_backend::submit_sprite(
-        Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 1.0F}, WHITE, 999U, true);
-    CHECK(cactus::runtime::manual_backend::render_debug_state().missing_assets >= 1);
 }
 
 TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing assets", "[runtime][assets][entt]") {

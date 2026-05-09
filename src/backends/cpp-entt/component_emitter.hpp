@@ -2,7 +2,7 @@
 
 #include "frontend/semantic_analyzer.hpp"
 
-#include "backends/cpp-manual/soa_emitter.hpp"
+#include "backends/cpp-entt/type_utils.hpp"
 
 #include <string>
 

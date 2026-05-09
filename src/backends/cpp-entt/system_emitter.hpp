@@ -3,8 +3,6 @@
 #include "frontend/ast.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
-#include "backends/cpp-manual/system_emitter.hpp"
-
 #include <string>
 
 namespace cactus {

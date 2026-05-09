@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -63,6 +64,14 @@ fs::path compiler_path() {
 
 std::string build_config() {
     return CACTUS_BUILD_CONFIG;
+}
+
+std::optional<fs::path> compilation_database_dir() {
+    const auto compile_commands = build_root() / "compile_commands.json";
+    if (fs::exists(compile_commands)) {
+        return build_root();
+    }
+    return std::nullopt;
 }
 
 std::string quote(const fs::path& value) {
@@ -167,6 +176,24 @@ std::string build_target_command(const std::string& target) {
     return command.str();
 }
 
+std::string clang_tidy_command(const ExampleCase& example) {
+    std::ostringstream command;
+    command << quote(fs::path(CACTUS_CLANG_TIDY_PATH)) << " " << quote(example.generated_cpp);
+
+    if (const auto db_dir = compilation_database_dir()) {
+        command << " -p " << quote(*db_dir);
+    } else {
+        command << " --extra-arg=-std=c++20";
+        command << " --extra-arg=-I" << quote(repo_root() / "src");
+        command << " --extra-arg=-I" << quote(build_root() / "_deps" / "entt-src" / "src");
+        command << " --extra-arg=-I" << quote(build_root() / "_deps" / "raylib-src" / "src");
+    }
+
+    command << " --header-filter=" << quote(example.generated_cpp.string()) << " --warnings-as-errors=*"
+            << " --extra-arg=-Wno-deprecated-literal-operator";
+    return command.str();
+}
+
 }  // namespace
 
 TEST_CASE("integration: curated examples generate compilable C++ with lint-clean output",
@@ -198,12 +225,7 @@ TEST_CASE("integration: curated examples generate compilable C++ with lint-clean
                 repo_root(),
                 quote(fs::path(CACTUS_CLANG_FORMAT_PATH)) + " --dry-run --Werror " + quote(example.generated_cpp));
 
-            require_success(example,
-                            "clang-tidy",
-                            repo_root(),
-                            quote(fs::path(CACTUS_CLANG_TIDY_PATH)) + " " + quote(example.generated_cpp) + " -p " +
-                                quote(build_root()) + " --header-filter=" + quote(example.generated_cpp.string()) +
-                                " --warnings-as-errors=*" + " --extra-arg=-Wno-deprecated-literal-operator");
+            require_success(example, "clang-tidy", repo_root(), clang_tidy_command(example));
         }
     }
 }
@@ -249,5 +271,36 @@ TEST_CASE("integration: explicit std.core import with lifecycle handler generate
                         " --output " + quote(example.generated_cpp));
 
     REQUIRE(fs::exists(example.generated_cpp));
+}
+
+TEST_CASE("integration: removed cpp-manual backend is rejected", "[integration][cli][backend]") {
+    REQUIRE(fs::exists(compiler_path()));
+
+    const auto source_file = build_root() / "generated_examples" / "removed-manual-backend.cactus";
+    const auto output_file = build_root() / "generated_examples" / "removed-manual-backend.generated.cpp";
+    fs::create_directories(source_file.parent_path());
+
+    {
+        std::ofstream out(source_file);
+        out << "trait Marker:\n\n"
+            << "unit One:\n"
+            << "    Marker\n";
+    }
+
+    const ExampleCase example{
+        .name           = "removed-manual-backend",
+        .source_file    = source_file,
+        .backend        = "cpp-manual",
+        .generated_cpp  = output_file,
+        .compile_target = {},
+    };
+
+    const auto result = run_command(repo_root(),
+                                    example.name + "-reject",
+                                    quote(compiler_path()) + " " + quote(example.source_file) + " --backend " +
+                                        quote(example.backend) + " --output " + quote(example.generated_cpp));
+
+    CHECK(result.exit_code != 0);
+    CHECK(result.output.find("unknown backend 'cpp-manual'") != std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

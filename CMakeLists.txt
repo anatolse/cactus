@@ -91,15 +91,6 @@ add_library(cactus_runtime_common STATIC
 target_include_directories(cactus_runtime_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_runtime_common PUBLIC cactus_common raylib)
 
-add_library(cactus_runtime_cpp_manual STATIC
-    src/backends/cpp-manual/runtime.cpp
-)
-target_include_directories(cactus_runtime_cpp_manual PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/cpp-manual
-)
-target_link_libraries(cactus_runtime_cpp_manual PUBLIC cactus_runtime_common raylib)
-
 add_library(cactus_runtime_cpp_entt STATIC
     src/backends/cpp-entt/runtime.cpp
 )
@@ -122,22 +113,10 @@ add_library(cactus_frontend STATIC
 target_include_directories(cactus_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_frontend PUBLIC cactus_common)
 
-# ── Backend: C++ Manual SoA ─────────────────────────────────────────────────────
-add_library(cactus_backend_cpp_manual STATIC
-    src/backends/cpp-manual/soa_emitter.cpp
-    src/backends/cpp-manual/system_emitter.cpp
-    src/backends/cpp-manual/event_emitter.cpp
-    src/backends/cpp-manual/cpp_manual_codegen.cpp
-)
-target_include_directories(cactus_backend_cpp_manual PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/cpp-manual
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-target_link_libraries(cactus_backend_cpp_manual PUBLIC cactus_frontend cactus_runtime_cpp_manual)
-
 # ── Backend: C++ EnTT ───────────────────────────────────────────────────────────
 add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/component_emitter.cpp
+    src/backends/cpp-entt/type_utils.cpp
     src/backends/cpp-entt/system_emitter.cpp
     src/backends/cpp-entt/event_emitter.cpp
     src/backends/cpp-entt/cpp_entt_codegen.cpp
@@ -149,7 +128,6 @@ target_include_directories(cactus_backend_cpp_entt PUBLIC
 target_link_libraries(cactus_backend_cpp_entt 
     PUBLIC 
         cactus_frontend 
-        cactus_backend_cpp_manual 
         cactus_runtime_cpp_entt
         EnTT::EnTT)
 
@@ -157,7 +135,6 @@ target_link_libraries(cactus_backend_cpp_entt
 add_executable(cactus src/main.cpp)
 target_link_libraries(cactus PRIVATE
     cactus_frontend
-    cactus_backend_cpp_manual
     cactus_backend_cpp_entt
 )
 # Stdlib directory is baked in at compile time so the compiler can always find std.core
@@ -236,8 +213,6 @@ function(cactus_add_example TARGET_NAME)
 
     if(CACTUS_EXAMPLE_BACKEND STREQUAL "cpp-entt")
         target_link_libraries(${TARGET_NAME} PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
-    elseif(CACTUS_EXAMPLE_BACKEND STREQUAL "cpp-manual")
-        target_link_libraries(${TARGET_NAME} PRIVATE cactus_runtime_cpp_manual raylib)
     else()
         message(FATAL_ERROR "Unsupported Cactus example backend '${CACTUS_EXAMPLE_BACKEND}' for target ${TARGET_NAME}")
     endif()
@@ -250,7 +225,6 @@ endfunction()
 
 set(BLUE_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/blue-square.generated.cpp")
 set(STDLIB_EXTERN_ENTT_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/stdlib-extern-entt.generated.cpp")
-set(STDLIB_EXTERN_MANUAL_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/stdlib-extern-manual.generated.cpp")
 set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.generated.cpp")
 set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
 set(DSL_SHOWCASE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/dsl-showcase.generated.cpp")
@@ -267,13 +241,6 @@ cactus_add_example(example_stdlib_extern_entt_generated
     SOURCE "examples/stdlib_extern_coverage.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${STDLIB_EXTERN_ENTT_GENERATED_CPP}"
-)
-
-cactus_add_example(example_stdlib_extern_manual_generated
-    SOURCE "examples/stdlib_extern_coverage.cactus"
-    BACKEND "cpp-manual"
-    OUTPUT "${STDLIB_EXTERN_MANUAL_GENERATED_CPP}"
-    EXCLUDE_FROM_ALL
 )
 
 cactus_add_example(example_mesh_renderer_generated

@@ -10,7 +10,7 @@ std::string entt_type_to_cpp(const TypeInfo& type) {
     if (type.kind == TypeKind::EntityId) {
         return "entt::entity";
     }
-    return SoaEmitter::type_to_cpp(type);
+    return EnttCodegenUtils::type_to_cpp(type);
 }
 
 }  // namespace

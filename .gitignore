@@ -25,3 +25,4 @@ CMakeUserPresets.json
 Thumbs.db
 .cactus/
 build-clang-o3-release/
+build-remove-cpp-manual/

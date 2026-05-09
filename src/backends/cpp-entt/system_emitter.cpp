@@ -500,7 +500,7 @@ void emit_filter_bindings(std::ostringstream& out, const FilterClause& filter, i
             out << ind << "    return;\n";
             out << ind << "}\n";
         }
-        out << ind << "auto& " << binding.binding_name << " = *__" << binding.trait_name << "_ptr;\n";
+        out << ind << "[[maybe_unused]] auto& " << binding.binding_name << " = *__" << binding.trait_name << "_ptr;\n";
     }
 }
 
@@ -799,8 +799,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
         [&](auto& s) -> std::string {
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, LetStmt>) {
-                return ind + "auto " + s.name + " = " + rewrite_expr(*s.value, trait_names, program, pointer_aliases) +
-                       ";\n";
+                return ind + "[[maybe_unused]] auto " + s.name + " = " +
+                       rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
                 if (known_fields.contains(s.name)) {
@@ -963,7 +963,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
 
         emit_sort_call(out, sys);
         emit_durable_view_comment(out, sys.filter, 1);
-        out << "    registry.each([&](entt::entity entity) {\n";
+        out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
         out << "        (void)entity;\n";
         emit_filter_match(out, sys.filter, sys.exclude, 2);
         emit_filter_bindings(out, sys.filter, 2);
@@ -973,7 +973,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
             out << rewrite_stmt(*stmt, 2, filter_traits, program);
         }
 
-        out << "    });\n";
+        out << "    }\n";
         out << "}\n\n";
     }
 
@@ -1180,7 +1180,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         }
     }
 
-    out << "    registry.each([&](entt::entity entity) {\n";
+    out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
     out << "        (void)entity;\n";
     emit_filter_match(out, sys.filter, sys.exclude, 2);
     emit_filter_bindings(out, sys.filter, 2);
@@ -1189,7 +1189,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << ", " << trait_name << "_comp";
     }
     out << ");\n";
-    out << "    });\n";
+    out << "    }\n";
     out << "}\n\n";
 
     out << "void " << system_function_name(sys.name, "update") << "(entt::registry& registry, entt::entity entity";

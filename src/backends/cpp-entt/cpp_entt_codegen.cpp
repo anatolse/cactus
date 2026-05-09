@@ -3,7 +3,7 @@
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
-#include "backends/cpp-manual/soa_emitter.hpp"
+#include "backends/cpp-entt/type_utils.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -28,8 +28,8 @@ std::string emit_projected_trait_overlay_helpers(const DecoratedProgram& program
     out << "// ── Projected Trait Overlays ─────────────────────────────────────────\n\n";
     out << "namespace {\n\n";
     for (const auto& [name, trait] : program.traits) {
-        (void)trait;
-        out << "std::unordered_map<entt::entity, " << name << "> cactus_projected_" << name << ";\n";
+        out << "std::unordered_map<entt::entity, " << name << "> cactus_projected_" << name
+            << ";  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n";
         out << "[[maybe_unused]] " << name << "* cactus_try_get_projected_" << name << "(entt::entity entity) {\n";
         out << "    auto it = cactus_projected_" << name << ".find(entity);\n";
         out << "    return it == cactus_projected_" << name << ".end() ? nullptr : &it->second;\n";
@@ -39,7 +39,15 @@ std::string emit_projected_trait_overlay_helpers(const DecoratedProgram& program
         out << "    if (auto* projected = cactus_try_get_projected_" << name << "(entity); projected != nullptr) {\n";
         out << "        return projected;\n";
         out << "    }\n";
-        out << "    return registry.try_get<" << name << ">(entity);\n";
+        if (trait.fields.empty()) {
+            out << "    if (registry.all_of<" << name << ">(entity)) {\n";
+            out << "        static " << name << " durable_marker{};\n";
+            out << "        return &durable_marker;\n";
+            out << "    }\n";
+            out << "    return nullptr;\n";
+        } else {
+            out << "    return registry.try_get<" << name << ">(entity);\n";
+        }
         out << "}\n\n";
         out << "[[maybe_unused]] bool cactus_has_projected_or_durable_" << name
             << "(entt::registry& registry, entt::entity entity) {\n";
@@ -260,7 +268,11 @@ bool has_collision_event_decl(const ProgramNode* ast) {
 bool has_flat_collider_support(const DecoratedProgram& program) {
     const auto* collider = find_trait(program, "Collider");
     return collider != nullptr && collider->is_stdlib && find_field(collider, "layer") != nullptr &&
-           find_field(collider, "mask") != nullptr && trait_field_is(program, "BoxCollider", "size", TypeKind::Vec2) &&
+           find_field(collider, "mask") != nullptr &&
+           trait_field_is(program, "WorldTransform", "position", TypeKind::Vec2) &&
+           trait_field_is(program, "WorldTransform", "rotation", TypeKind::Float) &&
+           trait_field_is(program, "WorldTransform", "scale", TypeKind::Vec2) &&
+           trait_field_is(program, "BoxCollider", "size", TypeKind::Vec2) &&
            trait_field_is(program, "CircleCollider", "radius", TypeKind::Float) &&
            trait_field_is(program, "CapsuleCollider", "height", TypeKind::Float);
 }
@@ -268,9 +280,76 @@ bool has_flat_collider_support(const DecoratedProgram& program) {
 bool has_volume_collider_support(const DecoratedProgram& program) {
     const auto* collider = find_trait(program, "Collider");
     return collider != nullptr && collider->is_stdlib && find_field(collider, "layer") != nullptr &&
-           find_field(collider, "mask") != nullptr && trait_field_is(program, "BoxCollider", "size", TypeKind::Vec3) &&
+           find_field(collider, "mask") != nullptr &&
+           trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3) &&
+           trait_field_is(program, "WorldTransform", "rotation", TypeKind::Quat) &&
+           trait_field_is(program, "WorldTransform", "scale", TypeKind::Vec3) &&
+           trait_field_is(program, "BoxCollider", "size", TypeKind::Vec3) &&
            trait_field_is(program, "SphereCollider", "radius", TypeKind::Float) &&
            trait_field_is(program, "CapsuleCollider", "height", TypeKind::Float);
+}
+
+bool has_flat_physics_query_api(const DecoratedProgram& program) {
+    return program.enums.contains("QueryResultKind") && program.structs.contains("QueryContact2D") &&
+           program.structs.contains("QueryResult2D");
+}
+
+std::string emit_flat_query_fallback_helpers() {
+    return R"(
+// ── Stdlib 2D Query Fallbacks ────────────────────────────────────────────────
+
+namespace {
+
+QueryContact2D cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {
+    return QueryContact2D{.entity = entity, .normal = normal, .distance = distance, .overlap = overlap};
+}
+
+QueryResult2D cactus_empty_query_result() noexcept {
+    return QueryResult2D{.kind = QueryResultKind::Empty,
+                         .contact = cactus_flat_contact(entt::entity{entt::null},
+                                                        Vector2{.x = 0.0F, .y = 0.0F},
+                                                        0.0F,
+                                                        Vector2{.x = 0.0F, .y = 0.0F})};
+}
+
+}  // namespace
+
+QueryResult2D cactus_query_cast_nearest(entt::registry& registry,
+                                        entt::entity subject_entity,
+                                        Vector2 delta,
+                                        int mask,
+                                        entt::entity exclude) {
+    (void)registry;
+    (void)subject_entity;
+    (void)delta;
+    (void)mask;
+    (void)exclude;
+    return cactus_empty_query_result();
+}
+
+QueryResult2D cactus_query_overlap_deepest(entt::registry& registry,
+                                           entt::entity subject_entity,
+                                           int mask,
+                                           entt::entity exclude) {
+    (void)registry;
+    (void)subject_entity;
+    (void)mask;
+    (void)exclude;
+    return cactus_empty_query_result();
+}
+
+std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry,
+                                                     entt::entity subject_entity,
+                                                     int mask,
+                                                     entt::entity exclude) {
+    (void)registry;
+    (void)subject_entity;
+    (void)mask;
+    (void)exclude;
+    return {};
+}
+
+)";
 }
 
 std::string emit_flat_collision_helpers() {
@@ -731,8 +810,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // Header
     out << "// Generated by Cactus DSL Compiler (cpp-entt backend)\n\n";
-    out << "// NOLINTBEGIN(modernize-use-std-numbers,readability-function-cognitive-complexity)\n";
-    out << "// Generated C++ mirrors authored DSL constants and system control flow.\n\n";
+    out << "// NOLINTBEGIN(modernize-use-std-numbers,readability-function-cognitive-complexity,"
+           "bugprone-branch-clone,bugprone-reserved-identifier,bugprone-throwing-static-initialization,"
+           "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
+           "readability-redundant-member-init,readability-simplify-boolean-expr)\n";
+    out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
     out << "\n";
     out << "#include <entt/entt.hpp>\n";
@@ -922,7 +1004,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                         continue;
                     }
                     out << "[[maybe_unused]] constexpr auto " << upper_copy(ca.name) << " = "
-                        << ManualSystemEmitter::emit_expr(*ca.value, program.ast) << ";\n";
+                        << EnttCodegenUtils::emit_expr(*ca.value, program.ast) << ";\n";
                 }
             }
         }
@@ -980,18 +1062,20 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     const bool has_volume_colliders = has_volume_collider_support(program);
     if ((has_flat_colliders || has_volume_colliders) && !has_collision_event_decl(program.ast)) {
         out << "struct CollisionEnterEvent {\n";
-        out << "    entt::entity other;\n";
+        out << "    entt::entity other{};\n";
         if (has_volume_colliders && !has_flat_colliders) {
-            out << "    Vector3 point;\n";
-            out << "    Vector3 normal;\n";
+            out << "    Vector3 point{};\n";
+            out << "    Vector3 normal{};\n";
         } else {
-            out << "    Vector2 overlap;\n";
+            out << "    Vector2 overlap{};\n";
         }
         out << "};\n\n";
     }
 
     if (has_flat_colliders) {
         out << emit_flat_collision_helpers();
+    } else if (has_flat_physics_query_api(program)) {
+        out << emit_flat_query_fallback_helpers();
     }
     if (has_volume_colliders) {
         out << emit_volume_collision_helpers();
@@ -1085,7 +1169,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                     out << "        " << pad_to_width("auto component", widest) << " = " << trait.trait_name << "{};\n";
                     for (const auto& assignment : trait.assignments) {
                         out << "        " << pad_to_width("component." + assignment.name, widest) << " = "
-                            << ManualSystemEmitter::emit_expr(*assignment.value, program.ast) << ";\n";
+                            << EnttCodegenUtils::emit_expr(*assignment.value, program.ast) << ";\n";
                     }
                     out << "        registry.emplace<" << trait.trait_name << ">(entity, component);\n";
                     out << "    }\n";
@@ -1120,13 +1204,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             if (auto* cb = std::get_if<ConstBlockNode>(&decl)) {
                 for (auto& ca : cb->assignments) {
                     if (ca.name == "WINDOW_WIDTH") {
-                        win_width = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
+                        win_width = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
                     } else if (ca.name == "WINDOW_HEIGHT") {
-                        win_height = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
+                        win_height = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
                     } else if (ca.name == "WINDOW_TITLE") {
-                        win_title = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
+                        win_title = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
                     } else if (ca.name == "TARGET_FPS") {
-                        win_fps = ManualSystemEmitter::emit_expr(*ca.value, program.ast);
+                        win_fps = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
                     }
                 }
             }
@@ -1242,7 +1326,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << emit_backend_main();
 
-    out << "\n// NOLINTEND(modernize-use-std-numbers,readability-function-cognitive-complexity)\n";
+    out << "\n// NOLINTEND(modernize-use-std-numbers,readability-function-cognitive-complexity,"
+           "bugprone-branch-clone,bugprone-reserved-identifier,bugprone-throwing-static-initialization,"
+           "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
+           "readability-redundant-member-init,readability-simplify-boolean-expr)\n";
 
     return out.str();
 }

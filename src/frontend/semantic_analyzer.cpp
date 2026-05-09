@@ -1624,6 +1624,26 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         if (auto local_it = local_bindings.find(ident->name); local_it != local_bindings.end()) {
             return local_it->second;
         }
+        const ResolvedField* matching_filter_field = nullptr;
+        std::unordered_set<const ResolvedTrait*> visited_traits;
+        for (const auto& [_, trait] : filter_bindings) {
+            if (trait == nullptr || visited_traits.contains(trait)) {
+                continue;
+            }
+            visited_traits.insert(trait);
+            for (const auto& field : trait->fields) {
+                if (field.name != ident->name) {
+                    continue;
+                }
+                if (matching_filter_field != nullptr) {
+                    return make_unknown_type();
+                }
+                matching_filter_field = &field;
+            }
+        }
+        if (matching_filter_field != nullptr) {
+            return matching_filter_field->type;
+        }
         if (auto asset_it = asset_decl_types_.find(ident->name); asset_it != asset_decl_types_.end()) {
             switch (asset_it->second) {
                 case TypeKind::MeshId:

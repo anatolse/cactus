@@ -10,7 +10,7 @@ std::string entt_type_to_cpp(const TypeInfo& type) {
     if (type.kind == TypeKind::EntityId) {
         return "entt::entity";
     }
-    return SoaEmitter::type_to_cpp(type);
+    return EnttCodegenUtils::type_to_cpp(type);
 }
 
 bool should_defer_to_raylib_enum(const std::string& name) {
@@ -81,7 +81,7 @@ std::string EnttComponentEmitter::emit_enum(const ResolvedEnum& e) {
     if (should_defer_to_raylib_enum(e.name)) {
         return "";
     }
-    return SoaEmitter::emit_enum(e);
+    return EnttCodegenUtils::emit_enum(e);
 }
 
 }  // namespace cactus

@@ -7,7 +7,6 @@
 #include "frontend/semantic_analyzer.hpp"
 
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
-#include "backends/cpp-manual/cpp_manual_codegen.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -26,7 +25,7 @@ namespace fs = std::filesystem;
 static void print_usage(const char* program) {
     std::cerr << "Usage: " << program << " <input.cactus> [options]\n"
               << "\nOptions:\n"
-              << "  --backend <cpp-manual|cpp-entt>     Code generation backend (default: cpp-entt)\n"
+              << "  --backend <cpp-entt>                Code generation backend (default: cpp-entt)\n"
               << "  --output <file>                      Output file (default: stdout)\n"
               << "  --module-path <dir>                  Additional module search directory (repeatable)\n"
               << "  --help                               Show this help message\n";
@@ -159,8 +158,8 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
                 return 1;
             }
             backend = argv[++i];
-            if (backend != "cpp-manual" && backend != "cpp-entt") {
-                std::cerr << "error: unknown backend '" << backend << "' (use cpp-manual or cpp-entt)\n";
+            if (backend != "cpp-entt") {
+                std::cerr << "error: unknown backend '" << backend << "' (use cpp-entt)\n";
                 return 1;
             }
         } else if (std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "-o") == 0) {
@@ -327,12 +326,7 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
     }
 
     // ── Code generation ───────────────────────────────────────────────────────
-    std::string generated;
-    if (backend == "cpp-manual") {
-        generated = cactus::CppManualCodegen::generate(decorated);
-    } else {
-        generated = cactus::CppEnttCodegen::generate(decorated);
-    }
+    std::string generated = cactus::CppEnttCodegen::generate(decorated);
 
     // ── Output ────────────────────────────────────────────────────────────────
     if (output_file.empty()) {

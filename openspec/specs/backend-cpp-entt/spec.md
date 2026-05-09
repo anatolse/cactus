@@ -13,11 +13,11 @@ The backend SHALL generate EnTT-compatible component structs for each trait. Emp
 - **THEN** the backend generates `struct Alive {};` as an EnTT tag component
 
 ### Requirement: Registry-based system generation
-The backend SHALL generate system functions that use `entt::registry::view<Components...>()` for entity iteration. Filter clauses SHALL map to view template parameters. For each event handler the backend SHALL emit a second parameter `const EventType& <name>` where `<name>` is the handler alias if present, otherwise the event name. The backend SHALL NOT emit individual field parameters (e.g., `float dt`) — handler body code accesses fields via the event variable (e.g., `tick.dt`).
+The backend SHALL generate system functions that iterate over the EnTT registry and apply declared filter clauses. For durable-only filters the backend MAY use `entt::registry::view<Components...>()`; when projected-trait overlays can affect matching, generated handlers SHALL account for both durable registry components and projected overlays. For each event handler the backend SHALL emit a second parameter `const EventType& <name>` where `<name>` is the handler alias if present, otherwise the event name. The backend SHALL NOT emit individual field parameters (e.g., `float dt`) — handler body code accesses fields via the event variable (e.g., `tick.dt`).
 
 #### Scenario: System with filter
 - **WHEN** a system has `filter:` listing `Position` and `Velocity`, and an `on tick:` handler
-- **THEN** the backend generates a function `void SystemName_tick(entt::registry& registry, const TickEvent& tick)` using `registry.view<Position, Velocity>().each([](auto& pos, auto& vel) { ... })`
+- **THEN** the backend generates a function `void SystemName_tick(entt::registry& registry, const TickEvent& tick)` that iterates matching entities and binds `Position` and `Velocity` component references for the handler body
 
 #### Scenario: on tick handler body accesses tick.dt
 - **WHEN** a handler body references `tick.dt`
@@ -498,4 +498,53 @@ The cpp-entt backend-owned mesh render path SHALL support at least two enabled p
 #### Scenario: Two active point lights are retained in one frame
 - **WHEN** two enabled recognized stdlib point lights are registered before the mesh pass flushes
 - **THEN** the cpp-entt runtime retains both lights for the frame instead of dropping to a single-light debug path
+
+### Requirement: cpp-entt backend lowers bounded foreach over list values
+The cpp-entt backend SHALL compile bounded foreach statements into C++ iteration over the evaluated list snapshot. The iterable expression SHALL be emitted once before the generated loop.
+
+#### Scenario: Foreach iterable emitted once
+- **WHEN** a handler contains `for hit in phys.query_overlap_all(self, mask, self):`
+- **THEN** generated code evaluates `phys.query_overlap_all(...)` once into a temporary list value before iterating
+
+#### Scenario: Foreach body emitted inside generated loop
+- **WHEN** a foreach body emits `Damage` to `hit.entity`
+- **THEN** generated code emits the body statements inside the C++ loop with `hit` bound to the current element
+
+### Requirement: cpp-entt backend stores projected trait overlays
+The cpp-entt backend SHALL provide transient projected-trait overlay storage keyed by `(entt::entity, trait type)` for traits that may be projected. Projected storage SHALL be separate from durable EnTT component storage.
+
+#### Scenario: Project writes overlay not durable component
+- **WHEN** generated code executes `project DamageFlash to target`
+- **THEN** the backend writes or patches the projected `DamageFlash` overlay for `target` without emplacing a durable `DamageFlash` component in the registry
+
+#### Scenario: Project to stale target is no-op
+- **WHEN** generated code executes `project DamageFlash to target` and `target` is stale/non-live
+- **THEN** the operation is a safe no-op consistent with total `entity_id` semantics
+
+### Requirement: cpp-entt backend coalesces projected overlays
+The cpp-entt backend SHALL maintain at most one projected overlay value per `(entity, trait)` during a frame. Repeated projections to the same key SHALL patch or replace the existing overlay according to project initialization semantics.
+
+#### Scenario: Repeated projection coalesces
+- **WHEN** `DamageFlash` is projected twice to the same entity in one frame
+- **THEN** later filter matching observes one `DamageFlash` value for that entity
+
+### Requirement: cpp-entt system filters include projected overlays
+For generated system handlers, the cpp-entt backend SHALL match entities that satisfy filter traits through durable registry components, projected overlays, or a combination of both. Exclude traits SHALL also consider projected overlays.
+
+#### Scenario: Filter matches projected trait
+- **WHEN** an entity has durable `Health` and projected `DamageFlash`
+- **AND** a later system filters `Health as hp` and `DamageFlash as flash`
+- **THEN** the generated handler processes that entity and binds `flash` to the projected overlay value
+
+#### Scenario: Exclude skips projected trait
+- **WHEN** an entity has projected `Suppressed`
+- **AND** a later system excludes `Suppressed`
+- **THEN** the generated handler skips that entity for the current frame
+
+### Requirement: cpp-entt backend clears projected overlays at frame boundary
+The cpp-entt backend SHALL clear all projected-trait overlay storage at the deterministic frame boundary after render processing completes.
+
+#### Scenario: Projected overlay not visible next frame
+- **WHEN** an entity has projected `Highlighted` during one frame
+- **THEN** the next frame does not match `Highlighted` unless it is projected again
 

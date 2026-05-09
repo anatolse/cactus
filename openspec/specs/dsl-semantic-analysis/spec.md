@@ -565,3 +565,66 @@ The semantic analyzer SHALL validate `TraitMatchStmt` nodes as follows:
 - **WHEN** `Boss as b =>` arm ends and subsequent arm `EnemyAI as e =>` begins
 - **THEN** `b` is no longer in scope; `e` is in scope only within its arm body
 
+### Requirement: Semantic analyzer validates bounded foreach
+The semantic analyzer SHALL validate foreach statements by requiring the iterable expression to have type `list[T]`, binding the loop variable as a read-only local of type `T` inside the loop body, and rejecting assignments to the loop variable.
+
+#### Scenario: Foreach over list accepted
+- **WHEN** `contacts` has type `list[phys.QueryContact2D]` and a handler contains `for contact in contacts:`
+- **THEN** the semantic analyzer accepts the loop and binds `contact` as `phys.QueryContact2D` within the loop body
+
+#### Scenario: Foreach over non-list rejected
+- **WHEN** a handler contains `for x in 42:`
+- **THEN** the semantic analyzer reports that foreach requires a `list[T]` iterable
+
+#### Scenario: Loop variable is read-only
+- **WHEN** a foreach body assigns directly to the loop variable
+- **THEN** the semantic analyzer reports that foreach loop variables are read-only
+
+### Requirement: Semantic analyzer restricts foreach context
+Bounded foreach statements SHALL be valid in system event handlers and rejected in pure `func` bodies for v1.
+
+#### Scenario: Foreach in handler accepted
+- **WHEN** a system event handler iterates a list value with `for item in items:`
+- **THEN** the semantic analyzer accepts the statement subject to ordinary type checks
+
+#### Scenario: Foreach in pure func rejected
+- **WHEN** a user `func` body contains `for item in items:`
+- **THEN** the semantic analyzer reports that bounded foreach is only allowed in handler/world-aware contexts
+
+### Requirement: Semantic analyzer validates project statements
+The semantic analyzer SHALL validate `project` statements similarly to `add` statements: the trait name must resolve to a declared trait, field assignments must refer to fields on that trait, field values must type-check, and any `to` target expression must have type `entity_id`. If no target is supplied, the statement targets `self` and therefore requires a current entity context.
+
+#### Scenario: Project declared trait to self accepted
+- **WHEN** a handler on an entity-filtered system contains `project GroundContact: normal = n`
+- **THEN** the semantic analyzer accepts it if `GroundContact.normal` exists and `n` has the correct type
+
+#### Scenario: Project target must be entity_id
+- **WHEN** a handler contains `project Highlighted to 123`
+- **THEN** the semantic analyzer reports that the projection target must have type `entity_id`
+
+#### Scenario: Unknown projected trait rejected
+- **WHEN** a handler contains `project GhostFact`
+- **THEN** the semantic analyzer reports that `GhostFact` is not a declared trait
+
+#### Scenario: Unknown projected field rejected
+- **WHEN** a handler projects `GroundContact` with an assignment to an undeclared field
+- **THEN** the semantic analyzer reports an unknown field error
+
+### Requirement: Semantic analyzer rejects incompatible projected traits
+Projecting a trait with `persist` or `sync` fields SHALL be rejected in v1 because those modifiers describe durable storage behavior and are incompatible with transient projected overlays.
+
+#### Scenario: Persist projected trait rejected
+- **WHEN** a trait has a `persist` field and authored code attempts to `project` that trait
+- **THEN** the semantic analyzer reports that persistent traits cannot be projected
+
+#### Scenario: Sync projected trait rejected
+- **WHEN** a trait has a `sync` field and authored code attempts to `project` that trait
+- **THEN** the semantic analyzer reports that synced traits cannot be projected
+
+### Requirement: Semantic analyzer models projected trait filter access
+When a system filters on a trait, semantic analysis SHALL treat the alias type the same whether the trait is supplied by durable storage or projected overlay storage at runtime. Projected overlays do not change the static field type of the alias.
+
+#### Scenario: Projected trait alias has trait field types
+- **WHEN** a system filters `DamageFlash as flash`
+- **THEN** `flash.color` type-checks according to the declared `DamageFlash` trait fields
+

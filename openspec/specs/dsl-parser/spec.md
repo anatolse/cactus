@@ -583,6 +583,41 @@ The `match` keyword is already in the lexer (used by `MatchExpr`). The parser di
 - **WHEN** match has `Boss as b =>`, then `EnemyAI as e =>`, then `_ =>`
 - **THEN** the `TraitMatchStmt` contains arms in declaration order: `[TraitArm(Boss,b), TraitArm(EnemyAI,e), WildcardArm]`
 
+### Requirement: Parser recognizes bounded foreach statements
+The parser SHALL recognize `for IDENTIFIER in expression:` at statement position and parse the following indented block as the foreach body.
+
+```ebnf
+foreach_stmt = "for" IDENTIFIER "in" expression ":" NEWLINE INDENT { statement } DEDENT ;
+```
+
+#### Scenario: Parse foreach over identifier list
+- **WHEN** source contains `for item in items:` followed by an indented body
+- **THEN** the parser produces a foreach statement with loop variable `item`, iterable expression `items`, and the parsed body statements
+
+#### Scenario: Parse foreach over query expression
+- **WHEN** source contains `for hit in query.all[Enemy]():`
+- **THEN** the parser accepts the query expression as the iterable expression
+
+### Requirement: Parser recognizes project statements
+The parser SHALL recognize `project TraitName [to expression]` at statement position. The statement SHALL allow either a bare marker projection followed by newline or a colon-introduced field assignment block.
+
+```ebnf
+project_stmt = "project" IDENTIFIER [ "to" expression ] NEWLINE
+             | "project" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT { field_assignment } DEDENT ;
+```
+
+#### Scenario: Parse marker projection
+- **WHEN** source contains `project Grounded`
+- **THEN** the parser produces a project statement with trait name `Grounded`, no explicit target, and no field assignments
+
+#### Scenario: Parse projection with payload
+- **WHEN** source contains `project GroundContact: normal = n`
+- **THEN** the parser produces a project statement with field assignment payload
+
+#### Scenario: Parse targeted projection
+- **WHEN** source contains `project InExplosion to hit.entity:`
+- **THEN** the parser records the target expression `hit.entity`
+
 ### Requirement: Parser SHALL guarantee forward progress on all inputs
 The parser MUST guarantee forward progress through the token stream, even when encountering syntax errors. The parser SHALL NOT enter infinite loops or hang indefinitely on any input, including malformed programs.
 

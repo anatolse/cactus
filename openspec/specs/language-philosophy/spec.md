@@ -76,18 +76,24 @@ The Cactus authoring surface SHALL be divided into two tiers:
 
 **Tier 1 — Declarative**: assets, inputs, trait declarations, unit/template declarations, system declarations, event declarations, module structure, and other structural gameplay description.
 
-**Tier 2 — Restricted imperative**: behavior inside handlers only, including field mutation, conditionals, event emission, spawn/destroy, trait add/remove, and pure function calls.
+**Tier 2 — Restricted imperative**: behavior inside handlers only, including field mutation, conditionals, event emission, spawn/destroy, trait add/remove, projected trait facts, bounded list iteration, and pure function calls.
 
 The following SHALL be explicitly out of scope for the authoring tier:
-- general loops (`for`, `while`),
+- general loops (`while`, numeric/indexed `for`, and other open-ended loop forms),
 - open-ended recursion in user `func` bodies,
 - mutable global or module-level state,
 - direct memory management,
 - unsafe operations.
 
-#### Scenario: Loop construct rejected
-- **WHEN** a `for` or `while` statement appears in author code
-- **THEN** the compiler SHALL report that loops are not supported in the authoring tier
+Bounded `for item in list_expr:` iteration is permitted as a restricted handler construct because it iterates a finite list snapshot and does not introduce open-ended control flow.
+
+#### Scenario: General loop construct rejected
+- **WHEN** a `while` statement or numeric/indexed `for` loop appears in author code
+- **THEN** the compiler SHALL report that general loops are not supported in the authoring tier
+
+#### Scenario: Bounded foreach accepted in handler
+- **WHEN** a system event handler contains `for hit in hits:` and `hits` has type `list[T]`
+- **THEN** the construct is evaluated as bounded snapshot iteration rather than as a general loop
 
 #### Scenario: Func recursion rejected
 - **WHEN** a `func` body calls itself directly
@@ -137,5 +143,7 @@ All proposed changes to the language SHALL be evaluated against the following cr
 
 #### Scenario: Proposed feature expands imperative power
 - **WHEN** a proposal adds new imperative constructs such as loops or mutable globals
-- **THEN** it MUST provide strong justification for why the existing gameplay model is insufficient
+- **THEN** it MUST provide strong justification for why the existing gameplay model, bounded foreach, events, and projected facts are insufficient
+
+Projected traits and bounded foreach SHALL be evaluated as restricted gameplay constructs: `project` states current-frame facts for ECS filtering, while bounded foreach consumes finite query/list snapshots. Neither construct SHALL be treated as permission to add open-ended imperative scripting features by default.
 

@@ -78,6 +78,8 @@ private:
     // Statements
     AddTraitStmt parse_add_trait_stmt();
     RemoveTraitStmt parse_remove_trait_stmt();
+    ProjectTraitStmt parse_project_trait_stmt();
+    ForeachStmt parse_foreach_stmt();
     TraitMatchStmt parse_trait_match_stmt();
     std::unique_ptr<StmtNode> parse_statement();
     std::vector<std::unique_ptr<StmtNode>> parse_block();

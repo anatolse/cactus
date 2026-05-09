@@ -2,6 +2,10 @@ module stdlib_extern_coverage
 
 use std.input
 use std.math.vec2 as v2
+use std.physics.flat as phys
+
+const:
+    CONTACT_MASK = 1
 
 input MoveX: axis
     negative = Key.A
@@ -10,13 +14,33 @@ input MoveX: axis
 trait Motion:
     var x: float = 0.0
 
+trait DamageFlash:
+    var color: color = #FF3333
+    var intensity: float = 0.0
+
+trait ContactSnapshot:
+    var hits: list[QueryContact2D] = []
+
 pub unit ExternSurface:
     Motion:
         x = 0.0
+    ContactSnapshot
 
 system Demo:
     filter:
         Motion
+        ContactSnapshot
 
     on tick:
         x = v2.length(vec2(axis(MoveX), axis(MoveX)))
+        hits = phys.query_overlap_all(self, CONTACT_MASK, self)
+        add DamageFlash
+
+system ConsumeProjectedFlash:
+    filter:
+        DamageFlash as flash
+    after:
+        Demo
+
+    on tick:
+        let flash_strength = flash.intensity

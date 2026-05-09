@@ -50,7 +50,7 @@ The current gameplay-core profile includes:
 - `system`, `event`, `func`, `extern func`
 - `asset`, `input`
 - handlers: `on input:`, `on fixed_tick:`, `on tick:`, `on late_tick:`, `on spawn:`, `on destroy:`, `on load:`, `on unload:`
-- statements: `let`, `var`, assignment, `if`, `emit`, `spawn`, `destroy`, `load`, `add`, `remove`, `return`
+- statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit`, `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
 
 ### 1.3 Deferred / Non-Normative Items
 
@@ -90,7 +90,8 @@ system  event   func    extern  asset   input
 let     var     persist sync    pub
 on      emit    if      else    match   return
 filter  exclude order   by      after   as
-spawn   destroy load    add     remove  to      from    self
+spawn   destroy load    add     remove  project for     in
+to      from    self
 true    false   and     or      not
 fixed_tick late_tick
 ```
@@ -416,7 +417,7 @@ spawn_expr      = "spawn" IDENTIFIER ":" NEWLINE INDENT
 ```ebnf
 statement       = let_decl | var_decl | var_assign | emit_stmt | destroy_stmt
                 | load_stmt | add_stmt | remove_stmt | return_stmt
-                | expr_stmt | if_stmt | trait_match_stmt ;
+                 | project_stmt | foreach_stmt | expr_stmt | if_stmt | trait_match_stmt ;
 
 let_decl        = "let" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 var_decl        = "var" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
@@ -435,6 +436,15 @@ add_stmt        = "add" IDENTIFIER [ "to" expression ] NEWLINE
                   DEDENT ;
 
 remove_stmt     = "remove" IDENTIFIER [ "from" expression ] NEWLINE ;
+
+project_stmt    = "project" IDENTIFIER [ "to" expression ] NEWLINE
+                | "project" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
+                  { field_assignment }
+                  DEDENT ;
+
+foreach_stmt    = "for" IDENTIFIER "in" expression ":" NEWLINE INDENT
+                  { statement }
+                  DEDENT ;
 
 return_stmt     = "return" [ expression ] NEWLINE ;
 expr_stmt       = expression NEWLINE ;
@@ -456,10 +466,23 @@ let bullet = spawn PlayerBullet:
 add Invincible:
     duration = 1.5
 
+project DamageFlash:
+    color = #FF3333
+
 remove Frozen
 destroy bullet
 load levels.level2
 ```
+
+Bounded foreach is allowed only inside system event handlers. The iterable expression is evaluated once before the loop and must have type `list[T]`; the loop variable is a read-only binding scoped to the loop body. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
+
+`project` mirrors `add` field-initialization syntax but writes to a frame-local projected trait overlay instead of durable ECS component storage. If no `to` target is provided, the target is `self`. Projected traits are coalesced by `(entity, trait)`, visible to later `filter:` / `exclude:` matching during the same rendered frame, and cleared at the frame boundary after render processing. Use:
+
+- `emit` for occurrence-oriented messages, especially when multiple occurrences matter;
+- `add` / `remove` for durable entity state;
+- `project` for current-frame facts such as grounded/contact facts, interaction availability, tint overrides, damage flashes, outlines, or other render/VFX hints.
+
+Traits with `persist` or `sync` fields cannot be projected because those modifiers describe durable storage behavior.
 
 ### 3.17 Trait Match Statements
 

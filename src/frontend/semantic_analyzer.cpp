@@ -1272,6 +1272,66 @@ void SemanticAnalyzer::validate_event_stmts(
         }
     };
 
+    auto validate_project = [this, &filter_bindings, &locals, handler_event](const ProjectTraitStmt& project) {
+        const auto* trait = find_resolved_trait(project.trait_name);
+        if (trait == nullptr) {
+            errors_.error(project.location, "undeclared trait '" + project.trait_name + "'");
+            return;
+        }
+
+        for (const auto& field : trait->fields) {
+            if (field.is_persist) {
+                errors_.error(project.location,
+                              "trait '" + project.trait_name + "' has persistent fields and cannot be projected");
+                break;
+            }
+            if (field.is_sync) {
+                errors_.error(project.location,
+                              "trait '" + project.trait_name + "' has synced fields and cannot be projected");
+                break;
+            }
+        }
+
+        if (project.target_expr.has_value()) {
+            auto t = infer_expr_type(**project.target_expr, filter_bindings, locals, handler_event);
+            if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+                errors_.error(project.location, "`project ... to` target must be of type `entity_id`");
+            }
+        }
+
+        std::unordered_map<std::string, const ResolvedField*> fields_by_name;
+        for (const auto& field : trait->fields) {
+            fields_by_name[field.name] = &field;
+        }
+
+        std::unordered_set<std::string> supplied;
+        for (const auto& arg : project.args) {
+            supplied.insert(arg.name);
+            auto it = fields_by_name.find(arg.name);
+            if (it == fields_by_name.end()) {
+                errors_.error(arg.location, "unknown field '" + arg.name + "' in `project " + project.trait_name + "`");
+                continue;
+            }
+
+            auto actual          = infer_expr_type(*arg.value, filter_bindings, locals, handler_event);
+            const auto& expected = it->second->type;
+            if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
+                actual.kind != expected.kind) {
+                errors_.error(arg.location,
+                              "type mismatch for field '" + arg.name + "' in `project " + project.trait_name + "`");
+            }
+        }
+
+        for (const auto& field : trait->fields) {
+            if (!field.has_default && !supplied.contains(field.name)) {
+                errors_.error(
+                    project.location,
+                    "required field '" + field.name + "' must be supplied in `project " + project.trait_name + "`");
+                break;
+            }
+        }
+    };
+
     auto validate_remove = [this, &filter_bindings, &locals, handler_event](const RemoveTraitStmt& remove) {
         if (!is_trait_declared(remove.trait_name)) {
             errors_.error(remove.location, "undeclared trait '" + remove.trait_name + "'");
@@ -1304,10 +1364,18 @@ void SemanticAnalyzer::validate_event_stmts(
             }
             continue;
         }
+        if (const auto* assign_stmt = std::get_if<VarAssign>(&stmt->stmt)) {
+            if (auto local_it = locals.find(assign_stmt->name); local_it != locals.end() && local_it->second.is_let) {
+                errors_.error(assign_stmt->location, "foreach loop variable '" + assign_stmt->name + "' is read-only");
+            }
+            (void)infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event);
+            continue;
+        }
         if (const auto* expr_stmt = std::get_if<ExprStmt>(&stmt->stmt)) {
             if (const auto* spawn = std::get_if<SpawnExpr>(&expr_stmt->expr->expr)) {
                 validate_spawn_expr(*spawn, expr_stmt->location);
             }
+            (void)infer_expr_type(*expr_stmt->expr, filter_bindings, locals, handler_event);
             continue;
         }
         if (const auto* emit_stmt = std::get_if<EmitStmt>(&stmt->stmt)) {
@@ -1316,6 +1384,10 @@ void SemanticAnalyzer::validate_event_stmts(
         }
         if (const auto* add_stmt = std::get_if<AddTraitStmt>(&stmt->stmt)) {
             validate_add(*add_stmt);
+            continue;
+        }
+        if (const auto* project_stmt = std::get_if<ProjectTraitStmt>(&stmt->stmt)) {
+            validate_project(*project_stmt);
             continue;
         }
         if (const auto* remove_stmt = std::get_if<RemoveTraitStmt>(&stmt->stmt)) {
@@ -1333,8 +1405,22 @@ void SemanticAnalyzer::validate_event_stmts(
         }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
             (void)infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event);
-            validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, "");
-            validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, "");
+            validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, system_name);
+            validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, system_name);
+            continue;
+        }
+        if (const auto* foreach_stmt = std::get_if<ForeachStmt>(&stmt->stmt)) {
+            auto iterable_type = infer_expr_type(*foreach_stmt->iterable, filter_bindings, locals, handler_event);
+            if (iterable_type.kind != TypeKind::List && iterable_type.kind != TypeKind::Unknown) {
+                errors_.error(foreach_stmt->location, "foreach requires a `list[T]` iterable");
+                continue;
+            }
+
+            auto loop_locals      = locals;
+            TypeInfo element_type = iterable_type.element != nullptr ? *iterable_type.element : make_unknown_type();
+            element_type.is_let   = true;
+            loop_locals[foreach_stmt->var_name] = std::move(element_type);
+            validate_event_stmts(foreach_stmt->body, filter_bindings, loop_locals, handler_event, system_name);
         }
     }
 }
@@ -1448,6 +1534,10 @@ void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<Stm
                     }
                 } else if constexpr (std::is_same_v<S, EmitStmt>) {
                     dep.emits.insert(s.event_name);
+                } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                    dep.writes.insert(s.trait_name);
+                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                    collect_system_deps(s.body, dep);
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     collect_system_deps(s.then_body, dep);
                     collect_system_deps(s.else_body, dep);
@@ -1919,7 +2009,8 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                 };
                 if constexpr (std::is_same_v<S, SpawnStmt> || std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> || std::is_same_v<S, AddTraitStmt> ||
-                              std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, TraitMatchStmt>) {
+                              std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, ProjectTraitStmt> ||
+                              std::is_same_v<S, ForeachStmt> || std::is_same_v<S, TraitMatchStmt>) {
                     if (!in_system_handler) {
                         // Determine which keyword is used
                         std::string kw;
@@ -1931,6 +2022,10 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                             kw = "load";
                         } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                             kw = "add";
+                        } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                            kw = "project";
+                        } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                            kw = "for";
                         } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
                             kw = "match";
                         } else {
@@ -1982,6 +2077,25 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                                 }
                             }
                         }
+                    }
+                    if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                        const std::string& tname = s.trait_name;
+                        if (!is_trait_declared(tname)) {
+                            errors_.error(s.location, "undeclared trait '" + tname + "' in `project` statement");
+                        }
+                        if (s.target_expr.has_value()) {
+                            auto t = infer_expr_type(**s.target_expr, {}, self_context_locals, nullptr);
+                            if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
+                                errors_.error(s.location, "`project ... to` target must be of type `entity_id`");
+                            }
+                        }
+                        for (const auto& arg : s.args) {
+                            validate_self_expr(*arg.value, arg.location);
+                        }
+                    }
+                    if constexpr (std::is_same_v<S, ForeachStmt>) {
+                        validate_self_expr(*s.iterable, s.location);
+                        validate_context_stmts(s.body, context_name, in_system_handler);
                     }
                     if constexpr (std::is_same_v<S, DestroyStmt>) {
                         if (s.target_expr.has_value()) {

@@ -23,6 +23,40 @@ bool has_extern_funcs(const DecoratedProgram& program) {
     return false;
 }
 
+std::string emit_projected_trait_overlay_helpers(const DecoratedProgram& program) {
+    std::ostringstream out;
+    out << "// ── Projected Trait Overlays ─────────────────────────────────────────\n\n";
+    out << "namespace {\n\n";
+    for (const auto& [name, trait] : program.traits) {
+        (void)trait;
+        out << "std::unordered_map<entt::entity, " << name << "> cactus_projected_" << name << ";\n";
+        out << "[[maybe_unused]] " << name << "* cactus_try_get_projected_" << name << "(entt::entity entity) {\n";
+        out << "    auto it = cactus_projected_" << name << ".find(entity);\n";
+        out << "    return it == cactus_projected_" << name << ".end() ? nullptr : &it->second;\n";
+        out << "}\n\n";
+        out << "[[maybe_unused]] " << name << "* cactus_try_get_projected_or_durable_" << name
+            << "(entt::registry& registry, entt::entity entity) {\n";
+        out << "    if (auto* projected = cactus_try_get_projected_" << name << "(entity); projected != nullptr) {\n";
+        out << "        return projected;\n";
+        out << "    }\n";
+        out << "    return registry.try_get<" << name << ">(entity);\n";
+        out << "}\n\n";
+        out << "[[maybe_unused]] bool cactus_has_projected_or_durable_" << name
+            << "(entt::registry& registry, entt::entity entity) {\n";
+        out << "    return cactus_projected_" << name << ".contains(entity) || registry.all_of<" << name
+            << ">(entity);\n";
+        out << "}\n\n";
+    }
+    out << "void cactus_clear_projected_traits() {\n";
+    for (const auto& [name, trait] : program.traits) {
+        (void)trait;
+        out << "    cactus_projected_" << name << ".clear();\n";
+    }
+    out << "}\n\n";
+    out << "}  // namespace\n\n";
+    return out.str();
+}
+
 std::string upper_copy(std::string value) {
     std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return value;
@@ -713,6 +747,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <limits>\n";
     out << "#include <optional>\n";
     out << "#include <string>\n";
+    out << "#include <unordered_map>\n";
     out << "#include <unordered_set>\n";
     out << "#include <vector>\n";
     // Task 6.2: Include runtime header when extern funcs are present
@@ -929,6 +964,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     for (const auto& [name, t] : program.traits) {
         out << EnttComponentEmitter::emit_component(t) << "\n";
     }
+
+    out << emit_projected_trait_overlay_helpers(program);
 
     // Events
     if (program.ast != nullptr) {
@@ -1199,6 +1236,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
+    out << "    cactus_clear_projected_traits();\n";
     out << "}\n";
     out << "\n}  // namespace cactus::runtime::entt_backend\n";
 

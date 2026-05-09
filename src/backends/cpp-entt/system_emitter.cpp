@@ -217,6 +217,42 @@ std::string filter_simple_name(const FilterEntry& entry) {
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
 }
 
+struct FilterBinding {
+    std::string trait_name;
+    std::string binding_name;
+};
+
+std::vector<FilterBinding> filter_bindings(const FilterClause& filter) {
+    std::vector<FilterBinding> result;
+    std::unordered_set<std::string> seen_traits;
+    for (const auto& entry : filter.entries) {
+        const auto trait_name = filter_simple_name(entry);
+        if (seen_traits.insert(trait_name).second) {
+            result.push_back(FilterBinding{.trait_name = trait_name, .binding_name = trait_name + "_comp"});
+        }
+        if (entry.alias.has_value()) {
+            result.push_back(FilterBinding{.trait_name = trait_name, .binding_name = *entry.alias});
+        }
+    }
+    for (const auto& trait_name : filter.trait_names) {
+        if (seen_traits.insert(trait_name).second) {
+            result.push_back(FilterBinding{.trait_name = trait_name, .binding_name = trait_name + "_comp"});
+        }
+    }
+    return result;
+}
+
+std::vector<std::string> filter_trait_names(const FilterClause& filter) {
+    std::vector<std::string> result;
+    std::unordered_set<std::string> seen;
+    for (const auto& binding : filter_bindings(filter)) {
+        if (seen.insert(binding.trait_name).second) {
+            result.push_back(binding.trait_name);
+        }
+    }
+    return result;
+}
+
 template <typename FilterLike>
 bool filter_has_trait(const FilterLike& filter, const std::string& qualified, const std::string& simple) {
     for (const auto& entry : filter.entries) {
@@ -434,6 +470,56 @@ void emit_sort_call(std::ostringstream& out, const SystemNode& sys) {
     out << "    });\n";
 }
 
+std::string foreach_temp_name(const ForeachStmt& stmt) {
+    return "__foreach_snapshot_" + std::to_string(std::max(stmt.location.line, 0)) + "_" +
+           std::to_string(std::max(stmt.location.column, 0));
+}
+
+void emit_filter_match(std::ostringstream& out, const FilterClause& filter, const FilterClause& exclude, int indent) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    for (const auto& trait_name : filter_trait_names(filter)) {
+        out << ind << "if (!cactus_has_projected_or_durable_" << trait_name << "(registry, entity)) {\n";
+        out << ind << "    return;\n";
+        out << ind << "}\n";
+    }
+    for (const auto& trait_name : filter_trait_names(exclude)) {
+        out << ind << "if (cactus_has_projected_or_durable_" << trait_name << "(registry, entity)) {\n";
+        out << ind << "    return;\n";
+        out << ind << "}\n";
+    }
+}
+
+void emit_filter_bindings(std::ostringstream& out, const FilterClause& filter, int indent) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    std::unordered_set<std::string> emitted_trait_ptrs;
+    for (const auto& binding : filter_bindings(filter)) {
+        if (emitted_trait_ptrs.insert(binding.trait_name).second) {
+            out << ind << "auto* __" << binding.trait_name << "_ptr = cactus_try_get_projected_or_durable_"
+                << binding.trait_name << "(registry, entity);\n";
+            out << ind << "if (__" << binding.trait_name << "_ptr == nullptr) {\n";
+            out << ind << "    return;\n";
+            out << ind << "}\n";
+        }
+        out << ind << "auto& " << binding.binding_name << " = *__" << binding.trait_name << "_ptr;\n";
+    }
+}
+
+void emit_durable_view_comment(std::ostringstream& out, const FilterClause& filter, int indent) {
+    const auto traits = filter_trait_names(filter);
+    if (traits.empty()) {
+        return;
+    }
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    out << ind << "// durable fast path equivalent: registry.view<";
+    for (size_t i = 0; i < traits.size(); ++i) {
+        if (i > 0) {
+            out << ", ";
+        }
+        out << traits[i];
+    }
+    out << ">()\n";
+}
+
 }  // namespace
 
 // ── Helper: resolve which component a field belongs to ──────────────────────
@@ -627,6 +713,16 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 return rewrite_expr(*e.object, trait_names, program, pointer_aliases) + "." + e.member;
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 return "/* spawn expr */";
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                std::string result = "std::vector{";
+                for (size_t i = 0; i < e.elements.size(); ++i) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += rewrite_expr(*e.elements[i], trait_names, program, pointer_aliases);
+                }
+                result += "}";
+                return result;
             } else {
                 return "/* unsupported expr */";
             }
@@ -658,11 +754,12 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 
         out << ind << "        " << (first ? "if" : "else if") << " (";
         if (IS_MARKER) {
-            out << "registry.all_of<" << arm.trait_name << ">(__match_entity)) {\n";
+            out << "cactus_has_projected_or_durable_" << arm.trait_name << "(registry, __match_entity)) {\n";
         } else {
             const std::string ALIAS = arm.alias.value_or("__match_" + arm.trait_name);
             arm_aliases.insert(ALIAS);
-            out << "auto* " << ALIAS << " = registry.try_get<" << arm.trait_name << ">(__match_entity)) {\n";
+            out << "auto* " << ALIAS << " = cactus_try_get_projected_or_durable_" << arm.trait_name
+                << "(registry, __match_entity)) {\n";
         }
 
         for (const auto& stmt : arm.body) {
@@ -787,6 +884,19 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            s.trait_name + ">(" + target + ");\n" + ind + "}\n";
                 }
                 return ind + "registry.remove<" + s.trait_name + ">(" + target + ");\n";
+            } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                const std::string target = s.target_expr.has_value()
+                                               ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
+                                               : "entity";
+                std::ostringstream result;
+                result << ind << "if (registry.valid(" << target << ")) {\n";
+                result << ind << "    auto& __projected = cactus_projected_" << s.trait_name << "[" << target << "];\n";
+                for (const auto& arg : s.args) {
+                    result << ind << "    __projected." << arg.name << " = "
+                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
+                }
+                result << ind << "}\n";
+                return result.str();
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 if (s.target_expr.has_value()) {
                     std::string target = rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases);
@@ -824,6 +934,16 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return result + "\n";
             } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
                 return emit_trait_match_stmt(s, indent, trait_names, program, pointer_aliases);
+            } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                const auto temp    = foreach_temp_name(s);
+                std::string result = ind + "auto " + temp + " = " +
+                                     rewrite_expr(*s.iterable, trait_names, program, pointer_aliases) + ";\n";
+                result += ind + "for (const auto& " + s.var_name + " : " + temp + ") {\n";
+                for (const auto& inner : s.body) {
+                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
+                }
+                result += ind + "}\n";
+                return result;
             } else {
                 return ind + "/* unsupported stmt */\n";
             }
@@ -833,6 +953,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
 
 std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
+    const auto filter_traits = filter_trait_names(sys.filter);
 
     for (const auto& handler : sys.handlers) {
         out << "void " << system_function_name(sys.name, handler.event_name) << "(entt::registry& registry";
@@ -840,30 +961,16 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
         out << ") {\n";
         out << "    (void)" << handler.alias.value_or(handler.event_name) << ";\n";
 
-        // Build view template args
         emit_sort_call(out, sys);
-        out << "    auto view = registry.view<";
-        for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
-            if (i > 0) {
-                out << ", ";
-            }
-            out << sys.filter.trait_names[i];
-        }
-        out << ">();\n";
-
-        // each() lambda
-        out << "    view.each([&](";
-        out << "entt::entity entity";
-        for (const auto& trait_name : sys.filter.trait_names) {
-            out << ", ";
-            out << "auto& " << trait_name << "_comp";
-        }
-        out << ") {\n";
+        emit_durable_view_comment(out, sys.filter, 1);
+        out << "    registry.each([&](entt::entity entity) {\n";
         out << "        (void)entity;\n";
+        emit_filter_match(out, sys.filter, sys.exclude, 2);
+        emit_filter_bindings(out, sys.filter, 2);
 
         // Emit body with proper component field access
         for (const auto& stmt : handler.body) {
-            out << rewrite_stmt(*stmt, 2, sys.filter.trait_names, program);
+            out << rewrite_stmt(*stmt, 2, filter_traits, program);
         }
 
         out << "    });\n";
@@ -1061,15 +1168,10 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
+    const auto filter_traits = filter_trait_names(sys.filter);
+
     out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-    out << "    auto view = registry.view<";
-    for (size_t i = 0; i < sys.filter.trait_names.size(); ++i) {
-        if (i > 0) {
-            out << ", ";
-        }
-        out << sys.filter.trait_names[i];
-    }
-    out << ">();\n";
+    emit_durable_view_comment(out, sys.filter, 1);
 
     if (!sys.order_by.empty()) {
         out << "    // order by:\n";
@@ -1078,14 +1180,12 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         }
     }
 
-    out << "    view.each([&](entt::entity entity";
-    for (const auto& trait_name : sys.filter.trait_names) {
-        out << ", auto& " << trait_name << "_comp";
-    }
-    out << ") {\n";
+    out << "    registry.each([&](entt::entity entity) {\n";
     out << "        (void)entity;\n";
+    emit_filter_match(out, sys.filter, sys.exclude, 2);
+    emit_filter_bindings(out, sys.filter, 2);
     out << "        " << system_function_name(sys.name, "update") << "(registry, entity";
-    for (const auto& trait_name : sys.filter.trait_names) {
+    for (const auto& trait_name : filter_traits) {
         out << ", " << trait_name << "_comp";
     }
     out << ");\n";
@@ -1093,7 +1193,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     out << "}\n\n";
 
     out << "void " << system_function_name(sys.name, "update") << "(entt::registry& registry, entt::entity entity";
-    for (const auto& trait_name : sys.filter.trait_names) {
+    for (const auto& trait_name : filter_traits) {
         out << ", " << trait_name << "& " << trait_name << "_comp";
     }
     out << ");\n\n";

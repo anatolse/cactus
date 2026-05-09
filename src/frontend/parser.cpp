@@ -1284,6 +1284,46 @@ AddTraitStmt Parser::parse_add_trait_stmt() {
     return stmt;
 }
 
+ProjectTraitStmt Parser::parse_project_trait_stmt() {
+    auto loc = peek().location;
+    consume(TokenType::PROJECT, "expected 'project'");
+    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+
+    ProjectTraitStmt stmt;
+    stmt.trait_name = trait_name;
+    stmt.location   = loc;
+
+    if (match(TokenType::TO)) {
+        stmt.target_expr = parse_expression();
+    }
+
+    if (check(TokenType::COLON)) {
+        advance();
+        stmt.args = parse_field_assignment_block();
+    } else {
+        expect_newline();
+    }
+
+    return stmt;
+}
+
+ForeachStmt Parser::parse_foreach_stmt() {
+    auto loc = peek().location;
+    consume(TokenType::FOR, "expected 'for'");
+    auto var_name = consume(TokenType::IDENTIFIER, "expected loop variable name").value;
+    consume(TokenType::IN, "expected 'in' after loop variable");
+    auto iterable = parse_expression();
+    consume(TokenType::COLON, "expected ':' after foreach iterable");
+    expect_newline();
+
+    ForeachStmt stmt;
+    stmt.var_name = var_name;
+    stmt.iterable = std::move(iterable);
+    stmt.body     = parse_block();
+    stmt.location = loc;
+    return stmt;
+}
+
 RemoveTraitStmt Parser::parse_remove_trait_stmt() {
     auto loc = peek().location;
     consume(TokenType::REMOVE, "expected 'remove'");
@@ -1439,6 +1479,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(match_stmt)}, loc);
     }
 
+    if (check(TokenType::FOR)) {
+        auto foreach_stmt = parse_foreach_stmt();
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(foreach_stmt)}, loc);
+    }
+
     // Task 4.5-4.6: spawn statement — spawn TemplateName(field = expr, ...)
     if (check(TokenType::SPAWN)) {
         advance();
@@ -1482,6 +1527,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
     if (check(TokenType::REMOVE)) {
         auto remove = parse_remove_trait_stmt();
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(remove)}, loc);
+    }
+
+    if (check(TokenType::PROJECT)) {
+        auto project = parse_project_trait_stmt();
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(project)}, loc);
     }
 
     // Assignment or expression statement

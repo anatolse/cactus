@@ -99,7 +99,8 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
             CHECK(code.find("const TickEvent& tick") != std::string::npos);
             CHECK(code.find("Pos_comp.x = (Pos_comp.x + tick.dt)") != std::string::npos);
             CHECK(code.find("registry.view<Pos>()") != std::string::npos);
-            CHECK(code.find("view.each") != std::string::npos);
+            CHECK(code.find("registry.each") != std::string::npos);
+            CHECK(code.find("cactus_try_get_projected_or_durable_Pos(registry, entity)") != std::string::npos);
         }
     }
 }
@@ -597,8 +598,9 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
-            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
-            CHECK(code.find("registry.all_of<Spike>(__match_entity)") != std::string::npos);
+            CHECK(code.find("auto* b = cactus_try_get_projected_or_durable_Boss(registry, __match_entity)") !=
+                  std::string::npos);
+            CHECK(code.find("cactus_has_projected_or_durable_Spike(registry, __match_entity)") != std::string::npos);
             CHECK(code.find("else {") != std::string::npos);
         }
     }
@@ -665,7 +667,8 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
+            CHECK(code.find("auto* b = cactus_try_get_projected_or_durable_Boss(registry, __match_entity)") !=
+                  std::string::npos);
             CHECK(code.find("else {") == std::string::npos);
         }
     }
@@ -1063,5 +1066,70 @@ TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap help
     CHECK(code.find("candidate.entity == exclude || !cactus_query_mask_allows(candidate, mask)") != std::string::npos);
     CHECK(code.find("contacts.push_back(*contact)") != std::string::npos);
     CHECK(code.find("return contacts;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-entt][foreach]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "struct Hit:\n"
+        "    entity: entity_id\n"
+        "event Damage:\n"
+        "    amount: int\n"
+        "trait Detector:\n"
+        "    var hits: list[Hit]\n"
+        "system Detect:\n"
+        "    filter:\n"
+        "        Detector\n"
+        "    on tick:\n"
+        "        for hit in hits:\n"
+        "            emit Damage to hit.entity:\n"
+        "                amount = 1\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("auto __foreach_snapshot_") != std::string::npos);
+    CHECK(code.find("= Detector_comp.hits;") != std::string::npos);
+    CHECK(code.find("for (const auto& hit : __foreach_snapshot_") != std::string::npos);
+    CHECK(code.find("if (registry.valid(hit.entity))") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: projected traits use overlays in filters and clear after render", "[codegen-entt][project]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Health:\n"
+        "    var hp: int\n"
+        "trait DamageFlash:\n"
+        "    var intensity: float = 0.0\n"
+        "system Producer:\n"
+        "    filter:\n"
+        "        Health\n"
+        "    on tick:\n"
+        "        project DamageFlash:\n"
+        "            intensity = 1.0\n"
+        "system Consumer:\n"
+        "    filter:\n"
+        "        Health\n"
+        "        DamageFlash as flash\n"
+        "    exclude:\n"
+        "        Suppressed\n"
+        "    after:\n"
+        "        Producer\n"
+        "    on tick:\n"
+        "        hp = hp - 1\n"
+        "trait Suppressed\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("std::unordered_map<entt::entity, DamageFlash> cactus_projected_DamageFlash") != std::string::npos);
+    CHECK(code.find("auto& __projected = cactus_projected_DamageFlash[entity]") != std::string::npos);
+    CHECK(code.find("__projected.intensity = 1.0F") != std::string::npos);
+    CHECK(code.find("cactus_try_get_projected_or_durable_DamageFlash(registry, entity)") != std::string::npos);
+    CHECK(code.find("auto& flash = *__DamageFlash_ptr") != std::string::npos);
+    CHECK(code.find("cactus_has_projected_or_durable_Suppressed(registry, entity)") != std::string::npos);
+    CHECK(code.find("cactus_clear_projected_traits();") != std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

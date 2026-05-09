@@ -1,0 +1,34 @@
+module bounded_foreach_projected_traits
+
+use std.physics.flat as phys
+
+const:
+    CONTACT_MASK = 1
+
+trait ColliderProbe
+
+trait DamageFlash:
+    var color: color = #FF3333
+    var intensity: float = 0.0
+
+pub unit Probe:
+    ColliderProbe
+
+system DetectContacts:
+    filter:
+        ColliderProbe
+
+    on tick:
+        let contacts = phys.query_overlap_all(self, CONTACT_MASK, self)
+        for hit in contacts:
+            project DamageFlash to hit.entity:
+                intensity = 1.0
+
+system RenderDamageFlash:
+    filter:
+        DamageFlash as flash
+    after:
+        DetectContacts
+
+    on tick:
+        let flash_strength = flash.intensity

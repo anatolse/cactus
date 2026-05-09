@@ -35,9 +35,9 @@ static std::vector<TokenType> token_types(const std::vector<Token>& tokens) {
 }
 
 TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
-    auto tokens = lex("module use const struct enum trait unit system view event func interface");
+    auto tokens = lex("module use const struct enum trait unit system view event func interface for in project");
     auto types  = token_types(tokens);
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 15);
     CHECK(types[0] == TokenType::MODULE);
     CHECK(types[1] == TokenType::USE);
     CHECK(types[2] == TokenType::CONST);
@@ -50,6 +50,9 @@ TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
     CHECK(types[9] == TokenType::EVENT);
     CHECK(types[10] == TokenType::FUNC);
     CHECK(types[11] == TokenType::INTERFACE);
+    CHECK(types[12] == TokenType::FOR);
+    CHECK(types[13] == TokenType::IN);
+    CHECK(types[14] == TokenType::PROJECT);
 }
 
 TEST_CASE("Lexer: modifier keywords", "[lexer]") {

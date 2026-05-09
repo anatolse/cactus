@@ -199,6 +199,66 @@ TEST_CASE("Parser: system with filter and handler", "[parser]") {
     CHECK_FALSE(decl.handlers[0].alias.has_value());
 }
 
+TEST_CASE("Parser: bounded foreach statement", "[parser]") {
+    auto prog = parse(
+        "system ContactSystem:\n"
+        "    on tick:\n"
+        "        for hit in hits:\n"
+        "            emit Damage to hit.entity:\n"
+        "                amount = 1\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    REQUIRE(sys.handlers[0].body.size() == 1);
+    auto* foreach_stmt = std::get_if<ForeachStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(foreach_stmt != nullptr);
+    CHECK(foreach_stmt->var_name == "hit");
+    REQUIRE(std::get_if<IdentExpr>(&foreach_stmt->iterable->expr) != nullptr);
+    REQUIRE(foreach_stmt->body.size() == 1);
+    CHECK(std::get_if<EmitStmt>(&foreach_stmt->body[0]->stmt) != nullptr);
+}
+
+TEST_CASE("Parser: project statements", "[parser]") {
+    auto prog = parse(
+        "system ProjectionSystem:\n"
+        "    on tick:\n"
+        "        project Grounded\n"
+        "        project GroundContact:\n"
+        "            normal = n\n"
+        "        project InExplosion to hit.entity:\n"
+        "            damage = 10\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    REQUIRE(sys.handlers[0].body.size() == 3);
+
+    auto* marker = std::get_if<ProjectTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(marker != nullptr);
+    CHECK(marker->trait_name == "Grounded");
+    CHECK(marker->args.empty());
+    CHECK_FALSE(marker->target_expr.has_value());
+
+    auto* self_payload = std::get_if<ProjectTraitStmt>(&sys.handlers[0].body[1]->stmt);
+    REQUIRE(self_payload != nullptr);
+    CHECK(self_payload->trait_name == "GroundContact");
+    REQUIRE(self_payload->args.size() == 1);
+    CHECK(self_payload->args[0].name == "normal");
+
+    auto* targeted = std::get_if<ProjectTraitStmt>(&sys.handlers[0].body[2]->stmt);
+    REQUIRE(targeted != nullptr);
+    CHECK(targeted->trait_name == "InExplosion");
+    REQUIRE(targeted->target_expr.has_value());
+    REQUIRE(targeted->args.size() == 1);
+    CHECK(targeted->args[0].name == "damage");
+}
+
+TEST_CASE("Parser: malformed foreach block reports errors", "[parser]") {
+    auto errors = parse_expect_errors(
+        "system BadSystem:\n"
+        "    on tick:\n"
+        "        for hit in hits\n"
+        "            project Grounded\n");
+    CHECK(errors.has_errors());
+}
+
 TEST_CASE("Parser: event declaration", "[parser]") {
     auto prog = parse(
         "event Damage:\n"

@@ -765,4 +765,93 @@ TEST_CASE("Semantic: self rejected in unit initializer", "[semantic][hierarchy]"
                               "    Parent:\n"
                               "        parent = self\n") == "`self` only allowed inside system event handlers");
 }
+
+TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[semantic][foreach][project]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "struct Hit:\n"
+                                                   "    entity: entity_id\n"
+                                                   "trait Source:\n"
+                                                   "    var hits: list[Hit]\n"
+                                                   "event Damage:\n"
+                                                   "    amount: int\n"
+                                                   "system ApplyHits:\n"
+                                                   "    filter:\n"
+                                                   "        Source\n"
+                                                   "    on tick:\n"
+                                                   "        for hit in hits:\n"
+                                                   "            emit Damage to hit.entity:\n"
+                                                   "                amount = 1\n"));
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "trait Source:\n"
+                                              "    var count: int\n"
+                                              "system BadLoop:\n"
+                                              "    filter:\n"
+                                              "        Source\n"
+                                              "    on tick:\n"
+                                              "        for item in count:\n"
+                                              "            let x = item\n") == "foreach requires a `list[T]` iterable");
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "trait Source:\n"
+                                              "    var values: list[int]\n"
+                                              "system BadAssign:\n"
+                                              "    filter:\n"
+                                              "        Source\n"
+                                              "    on tick:\n"
+                                              "        for value in values:\n"
+                                              "            value = 2\n") ==
+          "foreach loop variable 'value' is read-only");
+}
+
+TEST_CASE("Semantic: project validates trait fields target and transient restrictions", "[semantic][project]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait DamageFlash:\n"
+                                                   "    var color: color = #FFFFFF\n"
+                                                   "    var intensity: float\n"
+                                                   "trait Target:\n"
+                                                   "    var victim: entity_id\n"
+                                                   "system Flash:\n"
+                                                   "    filter:\n"
+                                                   "        Target\n"
+                                                   "    on tick:\n"
+                                                   "        project DamageFlash to victim:\n"
+                                                   "            intensity = 1.0\n"));
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "trait DamageFlash:\n"
+                                              "    var intensity: float\n"
+                                              "system BadTarget:\n"
+                                              "    on tick:\n"
+                                              "        project DamageFlash to 123:\n"
+                                              "            intensity = 1.0\n") ==
+          "`project ... to` target must be of type `entity_id`");
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "trait DamageFlash:\n"
+                                              "    var intensity: float\n"
+                                              "system BadField:\n"
+                                              "    on tick:\n"
+                                              "        project DamageFlash:\n"
+                                              "            missing = 1.0\n") ==
+          "unknown field 'missing' in `project DamageFlash`");
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "trait SavedFact:\n"
+                                              "    persist var value: int\n"
+                                              "system BadPersist:\n"
+                                              "    on tick:\n"
+                                              "        project SavedFact:\n"
+                                              "            value = 1\n") ==
+          "trait 'SavedFact' has persistent fields and cannot be projected");
+}
+
+TEST_CASE("Semantic: project participates in dependency writes", "[semantic][project]") {
+    auto result = analyze(STDLIB_EVENTS +
+                          "trait DamageFlash\n"
+                          "trait Health:\n"
+                          "    var hp: int\n"
+                          "system Producer:\n"
+                          "    filter:\n"
+                          "        Health\n"
+                          "    on tick:\n"
+                          "        project DamageFlash\n");
+
+    REQUIRE(result.dependency_graph.size() == 1);
+    CHECK(result.dependency_graph[0].reads.count("Health") == 1);
+    CHECK(result.dependency_graph[0].writes.count("DamageFlash") == 1);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

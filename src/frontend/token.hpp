@@ -38,6 +38,8 @@ enum class TokenType {
     IF,
     ELSE,
     MATCH,
+    FOR,
+    IN,
     RETURN,
     SELF,
     SPAWN,
@@ -46,6 +48,7 @@ enum class TokenType {
     UNLOAD,
     ADD,
     REMOVE,
+    PROJECT,
     FIXED_TICK,
     LATE_TICK,
 
@@ -191,6 +194,10 @@ inline const char* token_type_to_string(TokenType t) {
             return "ELSE";
         case TokenType::MATCH:
             return "MATCH";
+        case TokenType::FOR:
+            return "FOR";
+        case TokenType::IN:
+            return "IN";
         case TokenType::RETURN:
             return "RETURN";
         case TokenType::SELF:
@@ -207,6 +214,8 @@ inline const char* token_type_to_string(TokenType t) {
             return "ADD";
         case TokenType::REMOVE:
             return "REMOVE";
+        case TokenType::PROJECT:
+            return "PROJECT";
         case TokenType::FIXED_TICK:
             return "FIXED_TICK";
         case TokenType::LATE_TICK:

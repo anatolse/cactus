@@ -215,6 +215,13 @@ struct IfStmt {
     SourceLocation location;
 };
 
+struct ForeachStmt {
+    std::string var_name;
+    std::unique_ptr<ExprNode> iterable;
+    std::vector<std::unique_ptr<StmtNode>> body;
+    SourceLocation location;
+};
+
 struct TraitMatchArm {
     std::string trait_name;
     std::optional<std::string> alias;
@@ -268,6 +275,14 @@ struct RemoveTraitStmt {
     SourceLocation location;
 };
 
+// project TraitName[: ...] [to expr] — frame-local projected trait overlay
+struct ProjectTraitStmt {
+    std::string trait_name;
+    std::vector<FieldAssignment> args;
+    std::optional<std::unique_ptr<ExprNode>> target_expr;
+    SourceLocation location;
+};
+
 struct StmtNode {
     using Variant = std::variant<LetStmt,
                                  VarAssign,
@@ -277,9 +292,11 @@ struct StmtNode {
                                  LoadStmt,
                                  AddTraitStmt,
                                  RemoveTraitStmt,
+                                 ProjectTraitStmt,
                                  ReturnStmt,
                                  ExprStmt,
                                  IfStmt,
+                                 ForeachStmt,
                                  TraitMatchStmt>;
     Variant stmt;
     SourceLocation location;

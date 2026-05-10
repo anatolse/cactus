@@ -63,11 +63,11 @@ Automated compilation/integration coverage SHALL include curated cases that exer
 
 #### Scenario: Extern function coverage example is compiled
 - **WHEN** example-compilation integration coverage runs
-- **THEN** it includes at least one curated case that imports stdlib math/input extern declarations and compiles generated output that links against the backend runtime library
+- **THEN** it includes at least one curated case that imports stdlib math/input extern declarations and compiles generated output that links against a supported backend runtime library
 
 #### Scenario: Recognized extern system coverage example is compiled
 - **WHEN** example-compilation integration coverage runs
-- **THEN** it includes at least one curated case that exercises recognized stdlib extern systems such as hierarchy propagation or rendering-backed behavior
+- **THEN** it includes at least one curated case that exercises recognized stdlib extern systems such as hierarchy propagation or rendering-backed behavior for a supported backend
 
 #### Scenario: Mesh renderer coverage example is compiled
 - **WHEN** example-compilation integration coverage runs
@@ -88,15 +88,11 @@ Automated example-compilation integration coverage SHALL include the mesh render
 - **THEN** it includes `examples/mesh-renderer/main.cactus` as a named curated example case for the `cpp-entt` backend
 
 ### Requirement: Curated examples validate backend-generated entrypoint linking
-Example-compilation integration coverage SHALL validate that curated generated examples build from generated C++ output containing the selected backend's generated `main()`, linked against the selected backend/runtime library.
+Example-compilation integration coverage SHALL validate that curated generated examples build from generated C++ output containing the selected supported backend's generated `main()`, linked against the selected backend/runtime library.
 
 #### Scenario: Curated EnTT example uses generated EnTT main
 - **WHEN** the integration coverage builds a curated `cpp-entt` generated example executable
 - **THEN** the generated C++ output contains the EnTT backend-generated `main()` and links with the standard cpp-entt runtime/backend library
-
-#### Scenario: Curated manual example uses generated manual main
-- **WHEN** the integration coverage builds a curated `cpp-manual` generated example executable
-- **THEN** the generated C++ output contains the manual backend-generated `main()` and links with the standard cpp-manual runtime/backend library
 
 #### Scenario: Missing backend-generated main fails example compilation
 - **WHEN** a curated generated example output lacks the expected backend-generated `main()` and no other valid `main()` is supplied
@@ -106,7 +102,7 @@ Example-compilation integration coverage SHALL validate that curated generated e
 Example-compilation integration coverage SHALL verify that standard executable entrypoint behavior comes from generated backend output, not CMake-authored host source files.
 
 #### Scenario: Generated example output defines main
-- **WHEN** the integration coverage generates C++ for a curated backend example
+- **WHEN** the integration coverage generates C++ for a curated supported-backend example
 - **THEN** the generated output contains a standalone `int main()` implementation emitted by the selected backend
 
 #### Scenario: Build scripts do not create generated host main files

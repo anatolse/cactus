@@ -22,6 +22,10 @@ The repository CMake configuration SHALL provide a reusable function for registe
 - **WHEN** a caller requests an unsupported backend in the helper function
 - **THEN** CMake configuration fails with a diagnostic that identifies the unsupported backend
 
+#### Scenario: Removed manual backend is rejected
+- **WHEN** a caller requests the removed `cpp-manual` backend in the helper function
+- **THEN** CMake configuration fails with a diagnostic that identifies `cpp-manual` as unsupported
+
 ### Requirement: Buildable example executable targets participate in regular builds
 Cactus example executable targets that currently generate and compile cleanly SHALL be regular default build-tree targets rather than test-only or excluded-from-default targets. Existing examples that are not currently buildable SHALL still be exposed as explicit named build-tree targets, but SHALL NOT be part of the default build until their source or backend issues are fixed.
 
@@ -62,10 +66,6 @@ Registered Cactus example targets SHALL link against the runtime libraries and t
 #### Scenario: EnTT example links EnTT runtime dependencies
 - **WHEN** an example is registered for the `cpp-entt` backend
 - **THEN** its executable target links against the Cactus EnTT runtime path, Raylib, and EnTT
-
-#### Scenario: Manual example links manual runtime dependencies
-- **WHEN** an example is registered for the `cpp-manual` backend
-- **THEN** its executable target links against the Cactus manual runtime path and Raylib
 
 ### Requirement: Example target metadata remains stable for tests and developers
 Registered example target names and generated output paths SHALL be stable and documented in CMake variables or compile definitions where integration tests need to reference them.

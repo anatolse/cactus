@@ -11,20 +11,12 @@ C++ backends SHALL own backend-specific `main()` templates for the standard Rayl
 - **WHEN** a generated project targets `cpp-entt` in the standard executable output mode
 - **THEN** the generated C++ output contains an EnTT backend-generated `main()` that boots the generated project
 
-#### Scenario: Manual backend emits a standard executable entrypoint
-- **WHEN** a generated project targets `cpp-manual` in the standard executable output mode
-- **THEN** the generated C++ output contains a manual backend-generated `main()` that boots the generated project
-
 #### Scenario: CMake does not synthesize backend entrypoint source
 - **WHEN** the repository build configures generated-example executable targets
 - **THEN** it SHALL NOT create `main.cpp` or equivalent entrypoint source content with `file(WRITE)`, `configure_file` from inline text, or another build-script source-generation workaround
 
 ### Requirement: Generated entrypoints invoke generated lifecycle hooks
 Backend-generated entrypoints SHALL bridge final executable startup and frame execution to the generated hook functions emitted by the selected backend.
-
-#### Scenario: Manual generated main invokes manual lifecycle hooks
-- **WHEN** a standard `cpp-manual` generated executable starts
-- **THEN** its backend-generated `main()` reads `generated_project_config()`, initializes the Raylib window, calls `generated_init_project()`, and runs frames through `generated_update_project(dt)` and `generated_render_project()`
 
 #### Scenario: EnTT generated main invokes EnTT lifecycle hooks
 - **WHEN** a standard `cpp-entt` generated executable starts
@@ -34,7 +26,7 @@ Backend-generated entrypoints SHALL bridge final executable startup and frame ex
 Reusable backend/runtime library targets SHALL remain usable by tests and host projects without defining `main()`. The executable entrypoint SHALL live in generated project output for the standard executable mode, while reusable runtime behavior remains in linked backend/runtime libraries.
 
 #### Scenario: Runtime-only test links backend runtime without main conflict
-- **WHEN** a unit test links `cactus_runtime_cpp_entt` or `cactus_runtime_cpp_manual` for runtime helper coverage
+- **WHEN** a unit test links `cactus_runtime_cpp_entt` for runtime helper coverage
 - **THEN** linking succeeds without a duplicate or unexpected backend-provided `main()` symbol
 
 #### Scenario: Executable target obtains main from generated output

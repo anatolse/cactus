@@ -7,16 +7,12 @@ TBD - created by archiving change separate-backend-cpp-libraries. Update Purpose
 The C++ compilation model SHALL separate generated project-specific code from reusable backend/runtime code. For each generated C++ project, the final executable or library SHALL be assembled from:
 
 - generated project glue emitted by the compiler,
-- a standard Cactus backend/runtime library for the selected backend,
+- a standard Cactus backend/runtime library for the selected supported backend,
 - a user project library when user-defined extern systems or host-side C++ extensions are required.
 
 #### Scenario: EnTT project links generated glue with backend library
 - **WHEN** a project is compiled for the `cpp-entt` backend
 - **THEN** the resulting build links project-specific generated code against the standard Cactus EnTT backend/runtime library instead of relying on a fully self-contained generated source file
-
-#### Scenario: Manual project links generated glue with backend library
-- **WHEN** a project is compiled for the `cpp-manual` backend
-- **THEN** the resulting build links project-specific generated code against the standard Cactus manual backend/runtime library instead of relying on a fully self-contained generated source file
 
 ### Requirement: Reusable backend support code is not regenerated per project
 Reusable backend support code SHALL be compiled into standard Cactus C++ libraries and reused across generated projects. Generated project output SHALL NOT duplicate backend-generic support implementations whose behavior is independent of the authored program.
@@ -46,22 +42,18 @@ Generated output SHALL NOT establish a third ownership path based on ad-hoc rege
 - **THEN** that implementation is resolved from the user project library
 
 ### Requirement: Standard C++ executables use generated output as the entrypoint owner
-When a generated C++ project is built as a standard executable, the final target SHALL be assembled from generated project output that contains the selected backend's generated `main()`, the selected standard Cactus backend/runtime library, and any required user project library. The build SHALL NOT require a separate host `main.cpp` source for the standard executable path.
+When a generated C++ project is built as a standard executable, the final target SHALL be assembled from generated project output that contains the selected supported backend's generated `main()`, the selected standard Cactus backend/runtime library, and any required user project library. The build SHALL NOT require a separate host `main.cpp` source for the standard executable path.
 
 #### Scenario: EnTT executable composition uses generated EnTT main
 - **WHEN** a generated project targets `cpp-entt` and is built as a standard executable
 - **THEN** the final executable target obtains `main()` from the generated cpp-entt output and links the standard Cactus EnTT backend/runtime library
-
-#### Scenario: Manual executable composition uses generated manual main
-- **WHEN** a generated project targets `cpp-manual` and is built as a standard executable
-- **THEN** the final executable target obtains `main()` from the generated cpp-manual output and links the standard Cactus manual backend/runtime library
 
 #### Scenario: Runtime libraries remain entrypoint-free
 - **WHEN** backend runtime libraries are linked into tests or generated executable targets
 - **THEN** those libraries do not themselves provide a `main()` symbol
 
 ### Requirement: Build scripts compile but do not author entrypoints
-Build configuration SHALL compile generated backend output containing the selected backend's emitted entrypoint, but SHALL NOT author entrypoint implementation code as generated build-system text.
+Build configuration SHALL compile generated backend output containing the selected supported backend's emitted entrypoint, but SHALL NOT author entrypoint implementation code as generated build-system text.
 
 #### Scenario: CMake target compiles generated output containing main
 - **WHEN** CMake defines a generated-example executable target

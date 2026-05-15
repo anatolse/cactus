@@ -475,49 +475,66 @@ std::string foreach_temp_name(const ForeachStmt& stmt) {
            std::to_string(std::max(stmt.location.column, 0));
 }
 
-void emit_filter_match(std::ostringstream& out, const FilterClause& filter, const FilterClause& exclude, int indent) {
+void emit_storage_filter_skip(std::ostringstream& out,
+                              const FilterClause& filter,
+                              const FilterClause& exclude,
+                              int indent) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     for (const auto& trait_name : filter_trait_names(filter)) {
-        out << ind << "if (!cactus_has_projected_or_durable_" << trait_name << "(registry, entity)) {\n";
-        out << ind << "    return;\n";
+        out << ind << "if (!registry.all_of<" << trait_name << ">(entity)) {\n";
+        out << ind << "    continue;\n";
         out << ind << "}\n";
     }
     for (const auto& trait_name : filter_trait_names(exclude)) {
-        out << ind << "if (cactus_has_projected_or_durable_" << trait_name << "(registry, entity)) {\n";
-        out << ind << "    return;\n";
+        out << ind << "if (registry.all_of<" << trait_name << ">(entity)) {\n";
+        out << ind << "    continue;\n";
         out << ind << "}\n";
     }
 }
 
-void emit_filter_bindings(std::ostringstream& out, const FilterClause& filter, int indent) {
+void emit_filter_alias_bindings(std::ostringstream& out, const FilterClause& filter, int indent) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
-    std::unordered_set<std::string> emitted_trait_ptrs;
     for (const auto& binding : filter_bindings(filter)) {
-        if (emitted_trait_ptrs.insert(binding.trait_name).second) {
-            out << ind << "auto* __" << binding.trait_name << "_ptr = cactus_try_get_projected_or_durable_"
-                << binding.trait_name << "(registry, entity);\n";
-            out << ind << "if (__" << binding.trait_name << "_ptr == nullptr) {\n";
-            out << ind << "    return;\n";
-            out << ind << "}\n";
+        if (binding.binding_name == binding.trait_name + "_comp") {
+            continue;
         }
-        out << ind << "[[maybe_unused]] auto& " << binding.binding_name << " = *__" << binding.trait_name << "_ptr;\n";
+        out << ind << "[[maybe_unused]] auto& " << binding.binding_name << " = " << binding.trait_name << "_comp;\n";
     }
 }
 
-void emit_durable_view_comment(std::ostringstream& out, const FilterClause& filter, int indent) {
-    const auto traits = filter_trait_names(filter);
-    if (traits.empty()) {
-        return;
-    }
+void emit_view_declaration(std::ostringstream& out,
+                           const std::vector<std::string>& filter_traits,
+                           const std::vector<std::string>& exclude_traits,
+                           int indent) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
-    out << ind << "// durable fast path equivalent: registry.view<";
-    for (size_t i = 0; i < traits.size(); ++i) {
+    out << ind << "auto view = registry.view<";
+    for (size_t i = 0; i < filter_traits.size(); ++i) {
         if (i > 0) {
             out << ", ";
         }
-        out << traits[i];
+        out << filter_traits[i];
     }
-    out << ">()\n";
+    out << ">(";
+    if (!exclude_traits.empty()) {
+        out << "entt::exclude<";
+        for (size_t i = 0; i < exclude_traits.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            out << exclude_traits[i];
+        }
+        out << ">";
+    }
+    out << ");\n";
+}
+
+void emit_view_each_header(std::ostringstream& out, const std::vector<std::string>& filter_traits, int indent) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    out << ind << "view.each([&](entt::entity entity";
+    for (const auto& trait_name : filter_traits) {
+        out << ", " << trait_name << "& " << trait_name << "_comp";
+    }
+    out << ") {\n";
 }
 
 }  // namespace
@@ -754,12 +771,11 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 
         out << ind << "        " << (first ? "if" : "else if") << " (";
         if (IS_MARKER) {
-            out << "cactus_has_projected_or_durable_" << arm.trait_name << "(registry, __match_entity)) {\n";
+            out << "registry.all_of<" << arm.trait_name << ">(__match_entity)) {\n";
         } else {
             const std::string ALIAS = arm.alias.value_or("__match_" + arm.trait_name);
             arm_aliases.insert(ALIAS);
-            out << "auto* " << ALIAS << " = cactus_try_get_projected_or_durable_" << arm.trait_name
-                << "(registry, __match_entity)) {\n";
+            out << "auto* " << ALIAS << " = registry.try_get<" << arm.trait_name << ">(__match_entity)) {\n";
         }
 
         for (const auto& stmt : arm.body) {
@@ -849,10 +865,12 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 const bool GUARDED = s.target_expr.has_value();
                 if (s.args.empty()) {
                     if (GUARDED) {
-                        return ind + "if (registry.valid(" + target + ")) {\n" + ind +
-                               "    registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n" + ind + "}\n";
+                        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" +
+                               s.trait_name + "(" + target + ");\n" + ind + "    registry.emplace_or_replace<" +
+                               s.trait_name + ">(" + target + ");\n" + ind + "}\n";
                     }
-                    return ind + "registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n";
+                    return ind + "cancel_projected_" + s.trait_name + "(" + target + ");\n" + ind +
+                           "registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n";
                 }
 
                 std::ostringstream result;
@@ -860,6 +878,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     result << ind << "if (registry.valid(" << target << ")) {\n";
                 }
                 result << ind << (GUARDED ? "    " : "") << "{\n";
+                result << ind << (GUARDED ? "        " : "    ") << "cancel_projected_" << s.trait_name << "(" << target
+                       << ");\n";
                 result << ind << (GUARDED ? "        " : "    ") << "auto __existing = registry.try_get<"
                        << s.trait_name << ">(" << target << ");\n";
                 result << ind << (GUARDED ? "        " : "    ")
@@ -880,20 +900,31 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                          ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
                                          : "entity";
                 if (s.target_expr.has_value()) {
-                    return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    registry.remove<" +
-                           s.trait_name + ">(" + target + ");\n" + ind + "}\n";
+                    return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" +
+                           s.trait_name + "(" + target + ");\n" + ind + "    if (registry.all_of<" + s.trait_name +
+                           ">(" + target + ")) {\n" + ind + "        registry.remove<" + s.trait_name + ">(" + target +
+                           ");\n" + ind + "    }\n" + ind + "}\n";
                 }
-                return ind + "registry.remove<" + s.trait_name + ">(" + target + ");\n";
+                return ind + "cancel_projected_" + s.trait_name + "(" + target + ");\n" + ind + "if (registry.all_of<" +
+                       s.trait_name + ">(" + target + ")) {\n" + ind + "    registry.remove<" + s.trait_name + ">(" +
+                       target + ");\n" + ind + "}\n";
             } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                 const std::string target = s.target_expr.has_value()
                                                ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
                                                : "entity";
+                const auto trait_it      = program.traits.find(s.trait_name);
+                const bool is_marker     = trait_it == program.traits.end() || trait_it->second.fields.empty();
                 std::ostringstream result;
                 result << ind << "if (registry.valid(" << target << ")) {\n";
-                result << ind << "    auto& __projected = cactus_projected_" << s.trait_name << "[" << target << "];\n";
-                for (const auto& arg : s.args) {
-                    result << ind << "    __projected." << arg.name << " = "
-                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
+                if (is_marker) {
+                    result << ind << "    project_" << s.trait_name << "(registry, " << target << ");\n";
+                } else {
+                    result << ind << "    [[maybe_unused]] auto& __projected = project_" << s.trait_name
+                           << "(registry, " << target << ");\n";
+                    for (const auto& arg : s.args) {
+                        result << ind << "    __projected." << arg.name << " = "
+                               << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
+                    }
                 }
                 result << ind << "}\n";
                 return result.str();
@@ -953,7 +984,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
 
 std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
-    const auto filter_traits = filter_trait_names(sys.filter);
+    const auto filter_traits  = filter_trait_names(sys.filter);
+    const auto exclude_traits = filter_trait_names(sys.exclude);
 
     for (const auto& handler : sys.handlers) {
         out << "void " << system_function_name(sys.name, handler.event_name) << "(entt::registry& registry";
@@ -962,18 +994,23 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
         out << "    (void)" << handler.alias.value_or(handler.event_name) << ";\n";
 
         emit_sort_call(out, sys);
-        emit_durable_view_comment(out, sys.filter, 1);
-        out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
-        out << "        (void)entity;\n";
-        emit_filter_match(out, sys.filter, sys.exclude, 2);
-        emit_filter_bindings(out, sys.filter, 2);
+        if (!filter_traits.empty()) {
+            emit_view_declaration(out, filter_traits, exclude_traits, 1);
+            emit_view_each_header(out, filter_traits, 1);
+            out << "        (void)entity;\n";
+            emit_filter_alias_bindings(out, sys.filter, 2);
+        } else {
+            out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
+            out << "        (void)entity;\n";
+            emit_storage_filter_skip(out, sys.filter, sys.exclude, 2);
+        }
 
         // Emit body with proper component field access
         for (const auto& stmt : handler.body) {
             out << rewrite_stmt(*stmt, 2, filter_traits, program);
         }
 
-        out << "    }\n";
+        out << (filter_traits.empty() ? "    }\n" : "    });\n");
         out << "}\n\n";
     }
 
@@ -1168,10 +1205,10 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
-    const auto filter_traits = filter_trait_names(sys.filter);
+    const auto filter_traits  = filter_trait_names(sys.filter);
+    const auto exclude_traits = filter_trait_names(sys.exclude);
 
     out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-    emit_durable_view_comment(out, sys.filter, 1);
 
     if (!sys.order_by.empty()) {
         out << "    // order by:\n";
@@ -1180,16 +1217,22 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         }
     }
 
-    out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
-    out << "        (void)entity;\n";
-    emit_filter_match(out, sys.filter, sys.exclude, 2);
-    emit_filter_bindings(out, sys.filter, 2);
+    if (!filter_traits.empty()) {
+        emit_view_declaration(out, filter_traits, exclude_traits, 1);
+        emit_view_each_header(out, filter_traits, 1);
+        out << "        (void)entity;\n";
+        emit_filter_alias_bindings(out, sys.filter, 2);
+    } else {
+        out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
+        out << "        (void)entity;\n";
+        emit_storage_filter_skip(out, sys.filter, sys.exclude, 2);
+    }
     out << "        " << system_function_name(sys.name, "update") << "(registry, entity";
     for (const auto& trait_name : filter_traits) {
         out << ", " << trait_name << "_comp";
     }
     out << ");\n";
-    out << "    }\n";
+    out << (filter_traits.empty() ? "    }\n" : "    });\n");
     out << "}\n\n";
 
     out << "void " << system_function_name(sys.name, "update") << "(entt::registry& registry, entt::entity entity";

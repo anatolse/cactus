@@ -99,8 +99,9 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
             CHECK(code.find("const TickEvent& tick") != std::string::npos);
             CHECK(code.find("Pos_comp.x = (Pos_comp.x + tick.dt)") != std::string::npos);
             CHECK(code.find("registry.view<Pos>()") != std::string::npos);
-            CHECK(code.find("registry.storage<entt::entity>()") != std::string::npos);
-            CHECK(code.find("cactus_try_get_projected_or_durable_Pos(registry, entity)") != std::string::npos);
+            CHECK(code.find("view.each([&](entt::entity entity, Pos& Pos_comp)") != std::string::npos);
+            CHECK(code.find("registry.storage<entt::entity>()") == std::string::npos);
+            CHECK(code.find("cactus_try_get_projected_or_durable_Pos(registry, entity)") == std::string::npos);
         }
     }
 }
@@ -598,9 +599,8 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
-            CHECK(code.find("auto* b = cactus_try_get_projected_or_durable_Boss(registry, __match_entity)") !=
-                  std::string::npos);
-            CHECK(code.find("cactus_has_projected_or_durable_Spike(registry, __match_entity)") != std::string::npos);
+            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
+            CHECK(code.find("registry.all_of<Spike>(__match_entity)") != std::string::npos);
             CHECK(code.find("else {") != std::string::npos);
         }
     }
@@ -667,8 +667,7 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("auto* b = cactus_try_get_projected_or_durable_Boss(registry, __match_entity)") !=
-                  std::string::npos);
+            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
             CHECK(code.find("else {") == std::string::npos);
         }
     }
@@ -692,6 +691,7 @@ TEST_CASE("Codegen EnTT: extern system emits callback scaffold", "[codegen-entt]
             auto code = EnttSystemEmitter::emit_extern_system(*sys, decorated);
             CHECK(code.find("void particle_system_tick(entt::registry& registry)") != std::string::npos);
             CHECK(code.find("registry.view<Position, Velocity>()") != std::string::npos);
+            CHECK(code.find("registry.storage<entt::entity>()") == std::string::npos);
             CHECK(code.find("particle_system_update(registry, entity, Position_comp, Velocity_comp)") !=
                   std::string::npos);
             CHECK(code.find("void particle_system_update(entt::registry& registry, entt::entity entity, Position& "
@@ -1095,7 +1095,8 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
     CHECK(code.find("if (registry.valid(hit.entity))") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: projected traits use overlays in filters and clear after render", "[codegen-entt][project]") {
+TEST_CASE("Codegen EnTT: projected traits use registry components in filters and clear after render",
+          "[codegen-entt][project]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "pub event tick:\n"
@@ -1124,12 +1125,96 @@ TEST_CASE("Codegen EnTT: projected traits use overlays in filters and clear afte
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::unordered_map<entt::entity, DamageFlash> cactus_projected_DamageFlash") != std::string::npos);
-    CHECK(code.find("auto& __projected = cactus_projected_DamageFlash[entity]") != std::string::npos);
+    CHECK(code.find("std::vector<entt::entity> projected_DamageFlash_entities") != std::string::npos);
+    CHECK(code.find("std::unordered_map<entt::entity, std::optional<DamageFlash>> projected_DamageFlash_previous") !=
+          std::string::npos);
+    CHECK(code.find("auto& __projected = project_DamageFlash(registry, entity)") != std::string::npos);
     CHECK(code.find("__projected.intensity = 1.0F") != std::string::npos);
-    CHECK(code.find("cactus_try_get_projected_or_durable_DamageFlash(registry, entity)") != std::string::npos);
-    CHECK(code.find("auto& flash = *__DamageFlash_ptr") != std::string::npos);
-    CHECK(code.find("cactus_has_projected_or_durable_Suppressed(registry, entity)") != std::string::npos);
-    CHECK(code.find("cactus_clear_projected_traits();") != std::string::npos);
+    CHECK(code.find("registry.view<Health, DamageFlash>(entt::exclude<Suppressed>)") != std::string::npos);
+    CHECK(code.find("auto& flash = DamageFlash_comp") != std::string::npos);
+    CHECK(code.find("cactus_projected_DamageFlash") == std::string::npos);
+    CHECK(code.find("cactus_try_get_projected_or_durable_DamageFlash") == std::string::npos);
+    CHECK(code.find("cactus_has_projected_or_durable_Suppressed") == std::string::npos);
+    CHECK(code.find("clear_projected_traits(registry);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: filtered systems use native views and no early-return guards", "[codegen-entt][project]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Wanted\n"
+        "trait Blocked\n"
+        "system Consumer:\n"
+        "    filter:\n"
+        "        Wanted\n"
+        "    exclude:\n"
+        "        Blocked\n"
+        "    on tick:\n"
+        "        let seen = 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.view<Wanted>(entt::exclude<Blocked>)") != std::string::npos);
+            CHECK(code.find("registry.storage<entt::entity>()") == std::string::npos);
+            CHECK(code.find("return;") == std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: projected trait cleanup restores durable or removes projected-only components",
+          "[codegen-entt][project]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Health:\n"
+        "    var hp: int\n"
+        "trait Flash:\n"
+        "    var amount: int = 0\n"
+        "system Producer:\n"
+        "    filter:\n"
+        "        Health\n"
+        "    on tick:\n"
+        "        project Flash:\n"
+        "            amount = 2\n"
+        "        project Flash:\n"
+        "            amount = 3\n"
+        "        remove Flash\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("if (projected_Flash_previous.contains(entity))") != std::string::npos);
+    CHECK(code.find("projected_Flash_previous.emplace(entity, *previous)") != std::string::npos);
+    CHECK(code.find("projected_Flash_previous.emplace(entity, std::nullopt)") != std::string::npos);
+    CHECK(code.find("registry.emplace_or_replace<Flash>(entity, *previous_it->second)") != std::string::npos);
+    CHECK(code.find("registry.remove<Flash>(entity)") != std::string::npos);
+    CHECK(code.find("cancel_projected_Flash(entity)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codegen-entt][project]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Actor\n"
+        "trait Grounded\n"
+        "system Producer:\n"
+        "    filter:\n"
+        "        Actor\n"
+        "    on tick:\n"
+        "        project Grounded\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("std::unordered_map<entt::entity, bool> projected_Grounded_previous") != std::string::npos);
+    CHECK(code.find("projected_Grounded_previous.emplace(entity, registry.all_of<Grounded>(entity))") !=
+          std::string::npos);
+    CHECK(code.find("void project_Grounded(entt::registry& registry, entt::entity entity)") != std::string::npos);
+    CHECK(code.find("project_Grounded(registry, entity);") != std::string::npos);
+    CHECK(code.find("registry.try_get<Grounded>") == std::string::npos);
+    CHECK(code.find("std::optional<Grounded>") == std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

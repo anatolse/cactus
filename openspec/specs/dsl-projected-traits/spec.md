@@ -3,8 +3,8 @@ Define projected trait overlays: frame-local ECS facts created by handler code a
 
 ## Requirements
 
-### Requirement: Project statement creates frame-local projected trait overlays
-The DSL SHALL support a `project` statement that creates or patches a projected trait value for a target entity in transient overlay storage.
+### Requirement: Project statement creates frame-local projected trait facts
+The DSL SHALL support a `project` statement that creates or patches a projected trait value for a target entity as frame-local trait state.
 
 ```cactus
 project TraitName:
@@ -14,7 +14,7 @@ project TraitName to target_entity:
     field = value
 ```
 
-If no target expression is supplied, the target SHALL be the current `self` entity. Projected trait values SHALL remain visible through the current rendered frame and SHALL be cleared at the frame boundary after render processing completes.
+If no target expression is supplied, the target SHALL be the current `self` entity. Projected trait values SHALL remain visible through the current rendered frame and SHALL be cleared at the frame boundary after render processing completes. The language semantics SHALL NOT require projected traits to be stored separately from durable backend component storage; a backend MAY materialize projected traits in its normal component registry if it restores/removes them at the frame boundary.
 
 #### Scenario: Project marker trait to self
 - **WHEN** a handler executes `project Grounded`
@@ -29,7 +29,7 @@ If no target expression is supplied, the target SHALL be the current `self` enti
 - **THEN** it is no longer visible after that frame's render/frame boundary cleanup completes unless projected again
 
 ### Requirement: Projected trait values are coalesced, not accumulated
-Projected trait overlay storage SHALL contain at most one projected value per `(entity, trait)` at a time. Repeated `project` statements for the same `(entity, trait)` in the same frame SHALL patch or replace the existing projected value according to the same field-initialization semantics selected for `add`-like trait initialization.
+Projected trait state SHALL contain at most one projected value per `(entity, trait)` at a time. Repeated `project` statements for the same `(entity, trait)` in the same frame SHALL patch or replace the existing projected value according to the same field-initialization semantics selected for `add`-like trait initialization.
 
 Projected traits SHALL NOT create multiple per-entity facts. Multiple occurrences SHALL be modeled with events or explicit bounded foreach logic.
 
@@ -42,7 +42,7 @@ Projected traits SHALL NOT create multiple per-entity facts. Multiple occurrence
 - **THEN** authored code uses `emit Damage` for each occurrence rather than relying on accumulated projected traits
 
 ### Requirement: Projected traits participate in system filtering
-System `filter:` and `exclude:` matching SHALL consider both durable trait storage and projected trait overlay storage visible at the time the system handler is scheduled.
+System `filter:` and `exclude:` matching SHALL consider both durable trait state and projected trait state visible at the time the system handler is scheduled.
 
 `after:` ordering constraints SHALL be the author-facing mechanism for ensuring a consumer system runs after a producer system that projects traits.
 

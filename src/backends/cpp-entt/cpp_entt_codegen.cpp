@@ -23,42 +23,82 @@ bool has_extern_funcs(const DecoratedProgram& program) {
     return false;
 }
 
-std::string emit_projected_trait_overlay_helpers(const DecoratedProgram& program) {
+std::string emit_projected_trait_registry_helpers(const DecoratedProgram& program) {
     std::ostringstream out;
-    out << "// ── Projected Trait Overlays ─────────────────────────────────────────\n\n";
+    out << "// ── Projected Trait Registry Tracking ────────────────────────────────\n\n";
     out << "namespace {\n\n";
     for (const auto& [name, trait] : program.traits) {
-        out << "std::unordered_map<entt::entity, " << name << "> cactus_projected_" << name
-            << ";  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n";
-        out << "[[maybe_unused]] " << name << "* cactus_try_get_projected_" << name << "(entt::entity entity) {\n";
-        out << "    auto it = cactus_projected_" << name << ".find(entity);\n";
-        out << "    return it == cactus_projected_" << name << ".end() ? nullptr : &it->second;\n";
-        out << "}\n\n";
-        out << "[[maybe_unused]] " << name << "* cactus_try_get_projected_or_durable_" << name
-            << "(entt::registry& registry, entt::entity entity) {\n";
-        out << "    if (auto* projected = cactus_try_get_projected_" << name << "(entity); projected != nullptr) {\n";
-        out << "        return projected;\n";
-        out << "    }\n";
+        out << "std::vector<entt::entity> projected_" << name
+            << "_entities;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n";
         if (trait.fields.empty()) {
-            out << "    if (registry.all_of<" << name << ">(entity)) {\n";
-            out << "        static " << name << " durable_marker{};\n";
-            out << "        return &durable_marker;\n";
-            out << "    }\n";
-            out << "    return nullptr;\n";
+            out << "std::unordered_map<entt::entity, bool> projected_" << name
+                << "_previous;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
         } else {
-            out << "    return registry.try_get<" << name << ">(entity);\n";
+            out << "std::unordered_map<entt::entity, std::optional<" << name << ">> projected_" << name
+                << "_previous;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
+        }
+        out << "[[maybe_unused]] void remember_projected_" << name
+            << "(entt::registry& registry, entt::entity entity) {\n";
+        out << "    if (projected_" << name << "_previous.contains(entity)) {\n";
+        out << "        return;\n";
+        out << "    }\n";
+        out << "    projected_" << name << "_entities.push_back(entity);\n";
+        if (trait.fields.empty()) {
+            out << "    projected_" << name << "_previous.emplace(entity, registry.all_of<" << name << ">(entity));\n";
+        } else {
+            out << "    if (auto* previous = registry.try_get<" << name << ">(entity); previous != nullptr) {\n";
+            out << "        projected_" << name << "_previous.emplace(entity, *previous);\n";
+            out << "    } else {\n";
+            out << "        projected_" << name << "_previous.emplace(entity, std::nullopt);\n";
+            out << "    }\n";
         }
         out << "}\n\n";
-        out << "[[maybe_unused]] bool cactus_has_projected_or_durable_" << name
-            << "(entt::registry& registry, entt::entity entity) {\n";
-        out << "    return cactus_projected_" << name << ".contains(entity) || registry.all_of<" << name
-            << ">(entity);\n";
+        if (trait.fields.empty()) {
+            out << "[[maybe_unused]] void project_" << name << "(entt::registry& registry, entt::entity entity) {\n";
+            out << "    remember_projected_" << name << "(registry, entity);\n";
+            out << "    registry.emplace_or_replace<" << name << ">(entity);\n";
+            out << "}\n\n";
+        } else {
+            out << "[[maybe_unused]] " << name << "& project_" << name
+                << "(entt::registry& registry, entt::entity entity) {\n";
+            out << "    remember_projected_" << name << "(registry, entity);\n";
+            out << "    if (auto* current = registry.try_get<" << name << ">(entity); current != nullptr) {\n";
+            out << "        return *current;\n";
+            out << "    }\n";
+            out << "    return registry.emplace<" << name << ">(entity);\n";
+            out << "}\n\n";
+        }
+        out << "[[maybe_unused]] void cancel_projected_" << name << "(entt::entity entity) {\n";
+        out << "    projected_" << name << "_previous.erase(entity);\n";
         out << "}\n\n";
     }
-    out << "void cactus_clear_projected_traits() {\n";
+    out << "void clear_projected_traits(entt::registry& registry) {\n";
     for (const auto& [name, trait] : program.traits) {
         (void)trait;
-        out << "    cactus_projected_" << name << ".clear();\n";
+        out << "    for (const auto entity : projected_" << name << "_entities) {\n";
+        out << "        auto previous_it = projected_" << name << "_previous.find(entity);\n";
+        out << "        if (previous_it == projected_" << name << "_previous.end()) {\n";
+        out << "            continue;\n";
+        out << "        }\n";
+        out << "        if (!registry.valid(entity)) {\n";
+        out << "            continue;\n";
+        out << "        }\n";
+        if (trait.fields.empty()) {
+            out << "        if (previous_it->second) {\n";
+            out << "            registry.emplace_or_replace<" << name << ">(entity);\n";
+            out << "        } else if (registry.all_of<" << name << ">(entity)) {\n";
+            out << "            registry.remove<" << name << ">(entity);\n";
+            out << "        }\n";
+        } else {
+            out << "        if (previous_it->second.has_value()) {\n";
+            out << "            registry.emplace_or_replace<" << name << ">(entity, *previous_it->second);\n";
+            out << "        } else if (registry.all_of<" << name << ">(entity)) {\n";
+            out << "            registry.remove<" << name << ">(entity);\n";
+            out << "        }\n";
+        }
+        out << "    }\n";
+        out << "    projected_" << name << "_entities.clear();\n";
+        out << "    projected_" << name << "_previous.clear();\n";
     }
     out << "}\n\n";
     out << "}  // namespace\n\n";
@@ -1047,7 +1087,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << EnttComponentEmitter::emit_component(t) << "\n";
     }
 
-    out << emit_projected_trait_overlay_helpers(program);
+    out << emit_projected_trait_registry_helpers(program);
 
     // Events
     if (program.ast != nullptr) {
@@ -1320,7 +1360,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
-    out << "    cactus_clear_projected_traits();\n";
+    out << "    clear_projected_traits(registry);\n";
     out << "}\n";
     out << "\n}  // namespace cactus::runtime::entt_backend\n";
 

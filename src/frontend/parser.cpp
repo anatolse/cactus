@@ -700,6 +700,47 @@ ArchetypeTraitEntry Parser::parse_archetype_trait_entry() {
     return entry;
 }
 
+ArchetypeTemplateUseEntry Parser::parse_archetype_template_use_entry() {
+    auto loc = peek().location;
+    consume(TokenType::USE, "expected 'use'");
+    auto template_name = parse_dotted_name();
+    expect_newline();
+    return {.template_name = template_name, .location = loc};
+}
+
+Parser::ParsedArchetypeBody Parser::parse_archetype_body_entries() {
+    ParsedArchetypeBody body;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        auto error_count_before = errors_.error_count();
+        if (check(TokenType::USE)) {
+            auto use_entry = parse_archetype_template_use_entry();
+            if (errors_.error_count() > error_count_before) {
+                synchronize();
+                continue;
+            }
+            body.entries.push_back({.kind     = ArchetypeBodyEntry::Kind::TemplateUse,
+                                    .index    = body.template_uses.size(),
+                                    .location = use_entry.location});
+            body.template_uses.push_back(std::move(use_entry));
+            continue;
+        }
+
+        auto trait_entry = parse_archetype_trait_entry();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        body.entries.push_back(
+            {.kind = ArchetypeBodyEntry::Kind::Trait, .index = body.traits.size(), .location = trait_entry.location});
+        body.traits.push_back(std::move(trait_entry));
+    }
+    return body;
+}
+
 std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries() {
     std::vector<ArchetypeTraitEntry> entries;
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
@@ -741,7 +782,10 @@ UnitNode Parser::parse_unit(bool is_pub) {
     node.is_pub   = is_pub;
     node.location = loc;
 
-    node.traits = parse_archetype_trait_entries();
+    auto body          = parse_archetype_body_entries();
+    node.body_entries  = std::move(body.entries);
+    node.template_uses = std::move(body.template_uses);
+    node.traits        = std::move(body.traits);
 
     skip_newlines();
     expect_dedent();
@@ -762,7 +806,10 @@ TemplateNode Parser::parse_template(bool is_pub) {
     node.is_pub   = is_pub;
     node.location = loc;
 
-    node.traits = parse_archetype_trait_entries();
+    auto body          = parse_archetype_body_entries();
+    node.body_entries  = std::move(body.entries);
+    node.template_uses = std::move(body.template_uses);
+    node.traits        = std::move(body.traits);
 
     skip_newlines();
     expect_dedent();

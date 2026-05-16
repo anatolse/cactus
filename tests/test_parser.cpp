@@ -544,6 +544,77 @@ TEST_CASE("Parser: template declaration", "[parser][dynamic-ecs]") {
     CHECK(tmpl.traits[1].assignments[0].name == "patrol_speed");
 }
 
+TEST_CASE("Parser: template body use entry", "[parser][template-composition]") {
+    auto prog = parse(
+        "template EnemyBase:\n"
+        "    Health\n"
+        "template WalkerEnemy:\n"
+        "    use EnemyBase\n"
+        "    PatrolMotion:\n"
+        "        patrol_speed = 140.0\n");
+
+    REQUIRE(prog.declarations.size() == 2);
+    auto& tmpl = std::get<TemplateNode>(prog.declarations[1]);
+    CHECK(tmpl.name == "WalkerEnemy");
+    REQUIRE(tmpl.template_uses.size() == 1);
+    CHECK(tmpl.template_uses[0].template_name == "EnemyBase");
+    REQUIRE(tmpl.traits.size() == 1);
+    CHECK(tmpl.traits[0].trait_name == "PatrolMotion");
+    REQUIRE(tmpl.body_entries.size() == 2);
+    CHECK(tmpl.body_entries[0].kind == ArchetypeBodyEntry::Kind::TemplateUse);
+    CHECK(tmpl.body_entries[0].index == 0);
+    CHECK(tmpl.body_entries[1].kind == ArchetypeBodyEntry::Kind::Trait);
+    CHECK(tmpl.body_entries[1].index == 0);
+}
+
+TEST_CASE("Parser: unit body use entry", "[parser][template-composition]") {
+    auto prog = parse(
+        "unit Walker1:\n"
+        "    use WalkerEnemy\n"
+        "    WorldTransform:\n"
+        "        position = vec2(400.0, 568.0)\n");
+
+    REQUIRE(prog.declarations.size() == 1);
+    auto& unit = std::get<UnitNode>(prog.declarations[0]);
+    CHECK(unit.name == "Walker1");
+    REQUIRE(unit.template_uses.size() == 1);
+    CHECK(unit.template_uses[0].template_name == "WalkerEnemy");
+    REQUIRE(unit.traits.size() == 1);
+    CHECK(unit.traits[0].trait_name == "WorldTransform");
+    REQUIRE(unit.body_entries.size() == 2);
+    CHECK(unit.body_entries[0].kind == ArchetypeBodyEntry::Kind::TemplateUse);
+    CHECK(unit.body_entries[1].kind == ArchetypeBodyEntry::Kind::Trait);
+}
+
+TEST_CASE("Parser: archetype body use names can be local qualified or aliased", "[parser][template-composition]") {
+    auto prog = parse(
+        "use enemies.walker as enemy\n"
+        "template LocalVariant:\n"
+        "    use EnemyBase\n"
+        "template QualifiedVariant:\n"
+        "    use enemies.WalkerEnemy\n"
+        "unit AliasedWalker:\n"
+        "    use enemy.WalkerEnemy\n");
+
+    REQUIRE(prog.declarations.size() == 4);
+    auto& top_level_use = std::get<UseNode>(prog.declarations[0]);
+    CHECK(top_level_use.module_name == "enemies.walker");
+    REQUIRE(top_level_use.alias.has_value());
+    CHECK(*top_level_use.alias == "enemy");
+
+    auto& local = std::get<TemplateNode>(prog.declarations[1]);
+    REQUIRE(local.template_uses.size() == 1);
+    CHECK(local.template_uses[0].template_name == "EnemyBase");
+
+    auto& qualified = std::get<TemplateNode>(prog.declarations[2]);
+    REQUIRE(qualified.template_uses.size() == 1);
+    CHECK(qualified.template_uses[0].template_name == "enemies.WalkerEnemy");
+
+    auto& aliased = std::get<UnitNode>(prog.declarations[3]);
+    REQUIRE(aliased.template_uses.size() == 1);
+    CHECK(aliased.template_uses[0].template_name == "enemy.WalkerEnemy");
+}
+
 // Task 4.1: pub template
 TEST_CASE("Parser: pub template declaration", "[parser][dynamic-ecs]") {
     auto prog = parse(

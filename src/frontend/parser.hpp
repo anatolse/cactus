@@ -57,6 +57,12 @@ private:
     // Helpers
     std::string parse_dotted_name();
 
+    struct ParsedArchetypeBody {
+        std::vector<ArchetypeBodyEntry> entries;
+        std::vector<ArchetypeTemplateUseEntry> template_uses;
+        std::vector<ArchetypeTraitEntry> traits;
+    };
+
     // Sub-parsers
     FieldNode parse_field();
     FieldModifiers parse_field_modifiers();
@@ -66,7 +72,9 @@ private:
     std::vector<FuncParam> parse_param_list();
     FieldAssignment parse_field_assignment();
     std::vector<FieldAssignment> parse_field_assignment_block();
+    ArchetypeTemplateUseEntry parse_archetype_template_use_entry();
     ArchetypeTraitEntry parse_archetype_trait_entry();
+    ParsedArchetypeBody parse_archetype_body_entries();
     std::vector<ArchetypeTraitEntry> parse_archetype_trait_entries();
     std::vector<ArchetypeTraitEntry> parse_archetype_trait_entry_block();
     FilterClause parse_filter_clause();

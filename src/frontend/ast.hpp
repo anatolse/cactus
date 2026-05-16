@@ -3,6 +3,7 @@
 #include "common/source_location.hpp"
 #include "common/types.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -61,6 +62,19 @@ struct FieldAssignment {
 struct ArchetypeTraitEntry {
     std::string trait_name;
     std::vector<FieldAssignment> assignments;
+    SourceLocation location;
+};
+
+struct ArchetypeTemplateUseEntry {
+    std::string template_name;
+    SourceLocation location;
+};
+
+struct ArchetypeBodyEntry {
+    enum class Kind { Trait, TemplateUse };
+
+    Kind kind         = Kind::Trait;
+    std::size_t index = 0;  // Index into UnitNode/TemplateNode traits or template_uses.
     SourceLocation location;
 };
 
@@ -369,15 +383,19 @@ struct TraitNode {
 struct UnitNode {
     std::string name;
     bool is_pub = false;
+    std::vector<ArchetypeBodyEntry> body_entries;
+    std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
     SourceLocation location;
 };
 
 // Template declaration — multi-instance blueprint, not auto-instantiated.
-// Identical structure to UnitNode; instantiated at runtime via `spawn`.
+// Similar to UnitNode; instantiated at runtime via `spawn`.
 struct TemplateNode {
     std::string name;
     bool is_pub = false;
+    std::vector<ArchetypeBodyEntry> body_entries;
+    std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
     SourceLocation location;
 };

@@ -1,0 +1,143 @@
+module shooter_slice
+
+use std.input
+
+const:
+    PLAYER_SPEED = 8.0
+    BULLET_SPEED = 24.0
+    FIRE_COOLDOWN = 0.15
+    BULLET_LIFETIME = 1.0
+    ENEMY_HEALTH = 3
+
+input MoveX: axis
+    negative = Key.A
+    positive = Key.D
+
+input MoveY: axis
+    negative = Key.S
+    positive = Key.W
+
+input Fire: button
+    mouse = MouseButton.Left
+
+trait Position:
+    var pos: vec2
+    var velocity: vec2
+
+trait PlayerInput:
+    var move: vec2 = vec2(0.0, 0.0)
+    var fire_pressed: bool = false
+
+trait Shooter:
+    var cooldown: float = 0.0
+
+trait Bullet:
+    let damage: int = 1
+    var lifetime: float = BULLET_LIFETIME
+
+trait Enemy:
+    var health: int = ENEMY_HEALTH
+
+trait PlayerTag
+
+event ShotFired:
+    origin: vec2
+
+event EnemyHit:
+    amount: int
+
+pub unit Player:
+    Position:
+        pos = vec2(0.0, 0.0)
+        velocity = vec2(0.0, 0.0)
+    PlayerInput:
+        move = vec2(0.0, 0.0)
+        fire_pressed = false
+    Shooter:
+        cooldown = 0.0
+    PlayerTag
+
+pub unit DummyEnemy:
+    Position:
+        pos = vec2(10.0, 0.0)
+        velocity = vec2(0.0, 0.0)
+    Enemy:
+        health = ENEMY_HEALTH
+
+template PlayerBullet:
+    Position:
+        pos = vec2(0.0, 0.0)
+        velocity = vec2(BULLET_SPEED, 0.0)
+    Bullet:
+        damage = 1
+        lifetime = BULLET_LIFETIME
+
+system ReadPlayerInput:
+    filter:
+        PlayerInput as input_state
+
+    on input:
+        input_state.move = input.axis2(MoveX, MoveY)
+        input_state.fire_pressed = input.pressed(Fire)
+
+system PlayerMoveSystem:
+    filter:
+        Position as pos
+        PlayerInput as input_state
+        PlayerTag
+
+    on tick:
+        pos.velocity = input_state.move * PLAYER_SPEED
+        pos.pos = pos.pos + pos.velocity * tick.dt
+
+system FireSystem:
+    filter:
+        Position as pos
+        PlayerInput as input_state
+        Shooter as shooter
+        PlayerTag
+
+    on tick:
+        if shooter.cooldown > 0.0:
+            shooter.cooldown = shooter.cooldown - tick.dt
+
+        if input_state.fire_pressed and shooter.cooldown <= 0.0:
+            let bullet_id = spawn PlayerBullet:
+                Position:
+                    pos = pos.pos
+                    velocity = vec2(BULLET_SPEED, 0.0)
+            shooter.cooldown = FIRE_COOLDOWN
+            emit ShotFired:
+                origin = pos.pos
+
+system BulletMoveSystem:
+    filter:
+        Position as pos
+        Bullet as bullet
+
+    on tick:
+        pos.pos = pos.pos + pos.velocity * tick.dt
+        bullet.lifetime = bullet.lifetime - tick.dt
+        if bullet.lifetime <= 0.0:
+            destroy
+
+system BulletHitSystem:
+    filter:
+        Position as pos
+        Bullet as bullet
+
+    on tick:
+        let enemy_id = get_test_enemy()
+        if point_hits_enemy(pos.pos, enemy_id):
+            emit EnemyHit to enemy_id:
+                amount = bullet.damage
+            destroy
+
+system EnemyHealthSystem:
+    filter:
+        Enemy as enemy
+
+    on EnemyHit as hit:
+        enemy.health = enemy.health - hit.amount
+        if enemy.health <= 0:
+            destroy

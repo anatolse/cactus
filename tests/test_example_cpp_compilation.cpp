@@ -2,10 +2,12 @@
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -194,6 +196,23 @@ std::string clang_tidy_command(const ExampleCase& example) {
     return command.str();
 }
 
+struct DriftPattern {
+    std::string name;
+    std::regex pattern;
+};
+
+std::vector<fs::path> cactus_example_sources() {
+    std::vector<fs::path> sources;
+    const auto examples_dir = repo_root() / "examples";
+    for (const auto& entry : fs::recursive_directory_iterator(examples_dir)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".cactus") {
+            continue;
+        }
+        sources.push_back(entry.path());
+    }
+    return sources;
+}
+
 }  // namespace
 
 TEST_CASE("integration: curated examples generate compilable C++ with lint-clean output",
@@ -205,14 +224,14 @@ TEST_CASE("integration: curated examples generate compilable C++ with lint-clean
             reset_generated_output(example);
 
             require_success(example,
-                            "generate",
+                            "parse-semantic-codegen",
                             repo_root(),
                             quote(compiler_path()) + " " + quote(example.source_file) + " --backend " +
                                 quote(example.backend) + " --output " + quote(example.generated_cpp));
 
             REQUIRE(fs::exists(example.generated_cpp));
 
-            require_success(example, "compile", repo_root(), build_target_command(example.compile_target));
+            require_success(example, "cpp-compile-link", repo_root(), build_target_command(example.compile_target));
 
             require_success(example,
                             "clang-format-fix",
@@ -265,7 +284,7 @@ TEST_CASE("integration: explicit std.core import with lifecycle handler generate
 
     reset_generated_output(example);
     require_success(example,
-                    "generate",
+                    "parse-semantic-codegen",
                     repo_root(),
                     quote(compiler_path()) + " " + quote(example.source_file) + " --backend " + quote(example.backend) +
                         " --output " + quote(example.generated_cpp));
@@ -302,5 +321,35 @@ TEST_CASE("integration: removed cpp-manual backend is rejected", "[integration][
 
     CHECK(result.exit_code != 0);
     CHECK(result.output.find("unknown backend 'cpp-manual'") != std::string::npos);
+}
+
+TEST_CASE("examples do not present removed syntax as current syntax", "[examples][drift]") {
+    static const std::array<DriftPattern, 5> REMOVED_PATTERNS{{
+        {"legacy apply block", std::regex{R"(\bapply\s*:)", std::regex::icase}},
+        {"legacy config block", std::regex{R"(\bconfig\s*:)", std::regex::icase}},
+        {"parenthesized add statement", std::regex{R"(\badd\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
+        {"parenthesized emit statement", std::regex{R"(\bemit\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
+        {"parenthesized spawn statement", std::regex{R"(\bspawn\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
+    }};
+
+    const auto sources = cactus_example_sources();
+    REQUIRE_FALSE(sources.empty());
+
+    for (const auto& source : sources) {
+        CAPTURE(source.string());
+        std::ifstream in(source);
+        REQUIRE(in.is_open());
+
+        std::string line;
+        std::size_t line_number = 0;
+        while (std::getline(in, line)) {
+            ++line_number;
+            for (const auto& drift : REMOVED_PATTERNS) {
+                INFO("Example '" << source.string() << "' contains " << drift.name << " at line " << line_number << ": "
+                                 << line);
+                CHECK_FALSE(std::regex_search(line, drift.pattern));
+            }
+        }
+    }
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

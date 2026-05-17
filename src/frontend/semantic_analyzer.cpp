@@ -138,6 +138,10 @@ TypeInfo find_field_type_in(const FieldContainer& fields, const std::string& mem
 
 bool expr_contains_self(const ExprNode& expr);
 bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments);
+std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr);
+FieldAssignment clone_field_assignment(const FieldAssignment& assignment);
+ArchetypeTraitEntry clone_archetype_trait_entry(const ArchetypeTraitEntry& entry);
+std::vector<ArchetypeTraitEntry> clone_archetype_trait_entries(const std::vector<ArchetypeTraitEntry>& entries);
 
 template <typename ExprContainer>
 bool any_expr_contains_self(const ExprContainer& expressions) {
@@ -185,6 +189,109 @@ bool expr_contains_self(const ExprNode& expr) {
 
 bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments) {
     return std::ranges::any_of(assignments, [](const auto& field) { return expr_contains_self(*field.value); });
+}
+
+std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
+    return std::visit(
+        [&expr](const auto& e) -> std::unique_ptr<ExprNode> {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, LiteralExpr> || std::is_same_v<E, IdentExpr> ||
+                          std::is_same_v<E, SelfExpr>) {
+                return std::make_unique<ExprNode>(ExprNode::Variant{e}, expr.location);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                UnaryExpr copy{.op = e.op, .operand = clone_expr(*e.operand), .location = e.location};
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                BinaryExpr copy{
+                    .op = e.op, .left = clone_expr(*e.left), .right = clone_expr(*e.right), .location = e.location};
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                CallExpr copy;
+                copy.callee   = clone_expr(*e.callee);
+                copy.location = e.location;
+                copy.args.reserve(e.args.size());
+                for (const auto& arg : e.args) {
+                    copy.args.push_back(clone_expr(*arg));
+                }
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                MemberExpr copy{.object = clone_expr(*e.object), .member = e.member, .location = e.location};
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                LambdaExpr copy{.params = e.params, .body = clone_expr(*e.body), .location = e.location};
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                PipelineExpr copy;
+                copy.source   = clone_expr(*e.source);
+                copy.location = e.location;
+                copy.operations.reserve(e.operations.size());
+                for (const auto& op : e.operations) {
+                    PipelineExpr::PipelineOp copied_op;
+                    copied_op.method = op.method;
+                    copied_op.args.reserve(op.args.size());
+                    for (const auto& arg : op.args) {
+                        copied_op.args.push_back(clone_expr(*arg));
+                    }
+                    copy.operations.push_back(std::move(copied_op));
+                }
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                MatchExpr copy;
+                copy.subject  = clone_expr(*e.subject);
+                copy.location = e.location;
+                copy.arms.reserve(e.arms.size());
+                for (const auto& arm : e.arms) {
+                    copy.arms.push_back(MatchArm{
+                        .pattern = clone_expr(*arm.pattern), .body = clone_expr(*arm.body), .location = arm.location});
+                }
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                IfExpr copy{.condition = clone_expr(*e.condition),
+                            .then_expr = clone_expr(*e.then_expr),
+                            .else_expr = clone_expr(*e.else_expr),
+                            .location  = e.location};
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                ListExpr copy;
+                copy.location = e.location;
+                copy.elements.reserve(e.elements.size());
+                for (const auto& element : e.elements) {
+                    copy.elements.push_back(clone_expr(*element));
+                }
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                SpawnExpr copy{.template_name = e.template_name,
+                               .overrides     = clone_archetype_trait_entries(e.overrides),
+                               .location      = e.location};
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            }
+        },
+        expr.expr);
+}
+
+FieldAssignment clone_field_assignment(const FieldAssignment& assignment) {
+    return FieldAssignment{
+        .name = assignment.name, .value = clone_expr(*assignment.value), .location = assignment.location};
+}
+
+ArchetypeTraitEntry clone_archetype_trait_entry(const ArchetypeTraitEntry& entry) {
+    ArchetypeTraitEntry copy;
+    copy.trait_name = entry.trait_name;
+    copy.location   = entry.location;
+    copy.assignments.reserve(entry.assignments.size());
+    for (const auto& assignment : entry.assignments) {
+        copy.assignments.push_back(clone_field_assignment(assignment));
+    }
+    return copy;
+}
+
+std::vector<ArchetypeTraitEntry> clone_archetype_trait_entries(const std::vector<ArchetypeTraitEntry>& entries) {
+    std::vector<ArchetypeTraitEntry> copy;
+    copy.reserve(entries.size());
+    for (const auto& entry : entries) {
+        copy.push_back(clone_archetype_trait_entry(entry));
+    }
+    return copy;
 }
 
 }  // namespace
@@ -269,6 +376,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 3: Dynamic ECS checks (dynamic-ecs-language change)
     validate_template_unit_declarations(program);
     validate_template_use_cycles(program);
+    flatten_template_compositions(program);
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
     validate_trait_default_values(program);
@@ -2064,6 +2172,162 @@ void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
 
     for (const auto& name : template_order) {
         visit(name);
+    }
+}
+
+void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
+    std::unordered_map<std::string, TemplateNode*> local_templates;
+    std::vector<TemplateNode*> template_order;
+
+    for (auto& decl : program.declarations) {
+        if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            local_templates[tmpl->name] = tmpl;
+            template_order.push_back(tmpl);
+        }
+    }
+
+    auto merge_trait_entry = [](std::vector<ArchetypeTraitEntry>& merged, const ArchetypeTraitEntry& entry) {
+        auto existing = std::ranges::find_if(
+            merged, [&entry](const auto& candidate) { return candidate.trait_name == entry.trait_name; });
+        if (existing == merged.end()) {
+            merged.push_back(clone_archetype_trait_entry(entry));
+            return;
+        }
+
+        for (const auto& assignment : entry.assignments) {
+            auto field = std::ranges::find_if(existing->assignments, [&assignment](const auto& candidate) {
+                return candidate.name == assignment.name;
+            });
+            if (field == existing->assignments.end()) {
+                existing->assignments.push_back(clone_field_assignment(assignment));
+            } else {
+                *field = clone_field_assignment(assignment);
+            }
+        }
+    };
+
+    std::unordered_map<std::string, std::vector<ArchetypeTraitEntry>> flattened_templates;
+    std::unordered_set<std::string> visiting;
+
+    std::function<std::vector<ArchetypeTraitEntry>(TemplateNode&)> flatten_template;
+    std::function<std::vector<ArchetypeTraitEntry>(const std::vector<ArchetypeBodyEntry>&,
+                                                   const std::vector<ArchetypeTemplateUseEntry>&,
+                                                   const std::vector<ArchetypeTraitEntry>&)>
+        flatten_body;
+
+    auto append_template_use = [&](std::vector<ArchetypeTraitEntry>& merged, const ArchetypeTemplateUseEntry& use) {
+        if (use.template_name.find('.') != std::string::npos) {
+            // Imported templates are resolved during validation. Their concrete
+            // archetype bodies are not present in this compilation unit, so they
+            // remain represented by the original template-use entry for later
+            // multi-module/backend handling.
+            return;
+        }
+
+        auto template_it = local_templates.find(use.template_name);
+        if (template_it == local_templates.end() || template_it->second == nullptr) {
+            return;
+        }
+
+        auto used_traits = flatten_template(*template_it->second);
+        for (const auto& used_trait : used_traits) {
+            merge_trait_entry(merged, used_trait);
+        }
+    };
+
+    flatten_body = [&](const std::vector<ArchetypeBodyEntry>& body_entries,
+                       const std::vector<ArchetypeTemplateUseEntry>& template_uses,
+                       const std::vector<ArchetypeTraitEntry>& traits) {
+        std::vector<ArchetypeTraitEntry> merged;
+
+        if (body_entries.empty()) {
+            // Some tests construct AST nodes directly and predate body_entries.
+            // Preserve the parser's effective order as use entries followed by
+            // explicit trait blocks for those synthetic nodes.
+            for (const auto& template_use : template_uses) {
+                append_template_use(merged, template_use);
+            }
+            for (const auto& trait : traits) {
+                merge_trait_entry(merged, trait);
+            }
+            return merged;
+        }
+
+        for (const auto& entry : body_entries) {
+            if (entry.kind == ArchetypeBodyEntry::Kind::TemplateUse) {
+                if (entry.index < template_uses.size()) {
+                    append_template_use(merged, template_uses[entry.index]);
+                }
+                continue;
+            }
+            if (entry.index < traits.size()) {
+                merge_trait_entry(merged, traits[entry.index]);
+            }
+        }
+
+        return merged;
+    };
+
+    flatten_template = [&](TemplateNode& tmpl) -> std::vector<ArchetypeTraitEntry> {
+        if (auto flattened_it = flattened_templates.find(tmpl.name); flattened_it != flattened_templates.end()) {
+            return clone_archetype_trait_entries(flattened_it->second);
+        }
+
+        if (!visiting.insert(tmpl.name).second) {
+            // Cycle diagnostics are emitted by validate_template_use_cycles().
+            // Avoid recursing indefinitely if analysis continues after errors.
+            return clone_archetype_trait_entries(tmpl.traits);
+        }
+
+        auto flattened = flatten_body(tmpl.body_entries, tmpl.template_uses, tmpl.traits);
+        visiting.erase(tmpl.name);
+
+        flattened_templates[tmpl.name] = clone_archetype_trait_entries(flattened);
+        tmpl.traits                    = clone_archetype_trait_entries(flattened);
+        archetype_traits_[tmpl.name]   = &tmpl.traits;
+        return flattened;
+    };
+
+    for (auto* tmpl : template_order) {
+        if (tmpl != nullptr) {
+            (void)flatten_template(*tmpl);
+        }
+    }
+
+    for (auto& decl : program.declarations) {
+        if (auto* unit = std::get_if<UnitNode>(&decl)) {
+            auto flattened                = flatten_body(unit->body_entries, unit->template_uses, unit->traits);
+            unit->traits                  = clone_archetype_trait_entries(flattened);
+            archetype_traits_[unit->name] = &unit->traits;
+        }
+    }
+
+    template_required_fields_.clear();
+    for (auto* tmpl : template_order) {
+        if (tmpl == nullptr) {
+            continue;
+        }
+
+        std::unordered_set<std::string> provided;
+        for (const auto& entry : tmpl->traits) {
+            for (const auto& assign : entry.assignments) {
+                provided.insert(assign.name);
+            }
+        }
+
+        std::unordered_set<std::string> required;
+        for (const auto& entry : tmpl->traits) {
+            const auto* trait = find_resolved_trait(entry.trait_name);
+            if (trait == nullptr) {
+                continue;
+            }
+            for (const auto& field : trait->fields) {
+                if (field.is_var && !field.has_default && !provided.contains(field.name)) {
+                    required.insert(field.name);
+                }
+            }
+        }
+        template_required_fields_[tmpl->name] = std::move(required);
     }
 }
 

@@ -175,6 +175,7 @@ private:
 
     // Phase 3: Dynamic ECS validations (dynamic-ecs-language change)
     void validate_template_unit_declarations(ProgramNode& program);
+    void validate_template_use_cycles(ProgramNode& program);
     void validate_spawn_sites(ProgramNode& program);
     void validate_stmt_contexts(ProgramNode& program);
     void validate_trait_modifier_rules(ProgramNode& program);

@@ -268,6 +268,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
 
     // Phase 3: Dynamic ECS checks (dynamic-ecs-language change)
     validate_template_unit_declarations(program);
+    validate_template_use_cycles(program);
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
     validate_trait_default_values(program);
@@ -1969,6 +1970,100 @@ void SemanticAnalyzer::validate_template_unit_declarations(
                 }
             },
             decl);
+    }
+}
+
+void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
+    struct TemplateUseEdge {
+        std::string target;
+        SourceLocation location;
+    };
+
+    std::unordered_map<std::string, std::vector<TemplateUseEdge>> graph;
+    std::vector<std::string> template_order;
+
+    for (auto& decl : program.declarations) {
+        auto* tmpl = std::get_if<TemplateNode>(&decl);
+        if (tmpl == nullptr) {
+            continue;
+        }
+
+        template_order.push_back(tmpl->name);
+        auto& edges = graph[tmpl->name];
+        for (const auto& use : tmpl->template_uses) {
+            if (use.template_name.find('.') != std::string::npos) {
+                continue;
+            }
+            if (template_names_.contains(use.template_name)) {
+                edges.push_back({.target = use.template_name, .location = use.location});
+            }
+        }
+    }
+
+    enum class VisitState { Visiting, Done };
+    std::unordered_map<std::string, VisitState> state;
+    std::vector<std::string> stack;
+    std::unordered_set<std::string> reported_cycle_keys;
+
+    auto report_cycle = [this, &stack, &reported_cycle_keys](const std::string& target,
+                                                             const SourceLocation& location) {
+        auto cycle_start = std::find(stack.begin(), stack.end(), target);
+        if (cycle_start == stack.end()) {
+            return;
+        }
+
+        std::vector<std::string> cycle(cycle_start, stack.end());
+        cycle.push_back(target);
+
+        std::string key;
+        for (const auto& name : cycle) {
+            if (!key.empty()) {
+                key += "->";
+            }
+            key += name;
+        }
+        if (!reported_cycle_keys.insert(key).second) {
+            return;
+        }
+
+        std::ostringstream msg;
+        msg << "cyclic template-use graph detected: ";
+        for (std::size_t i = 0; i < cycle.size(); ++i) {
+            if (i > 0) {
+                msg << " -> ";
+            }
+            msg << cycle[i];
+        }
+        errors_.error(location, msg.str());
+    };
+
+    std::function<void(const std::string&)> visit = [&](const std::string& name) {
+        if (auto state_it = state.find(name); state_it != state.end()) {
+            return;
+        }
+
+        state[name] = VisitState::Visiting;
+        stack.push_back(name);
+
+        if (auto graph_it = graph.find(name); graph_it != graph.end()) {
+            for (const auto& edge : graph_it->second) {
+                auto edge_state = state.find(edge.target);
+                if (edge_state == state.end()) {
+                    visit(edge.target);
+                    continue;
+                }
+                if (edge_state->second == VisitState::Visiting) {
+                    report_cycle(edge.target, edge.location);
+                }
+            }
+        }
+
+        stack.pop_back();
+        state[name] = VisitState::Done;
+    };
+
+    for (const auto& name : template_order) {
+        visit(name);
     }
 }
 

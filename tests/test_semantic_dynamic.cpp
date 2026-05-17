@@ -171,6 +171,26 @@ TEST_CASE("Semantic: archetype body use reports undefined template", "[semantic]
     CHECK(err.find("undefined template 'MissingTemplate'") != std::string::npos);
 }
 
+TEST_CASE("Semantic: archetype body use rejects self cycle", "[semantic][dynamic-ecs][template-composition]") {
+    auto err = first_error(
+        "template EnemyBase:\n"
+        "    use EnemyBase\n");
+    CHECK(err.find("cyclic template-use graph") != std::string::npos);
+    CHECK(err.find("EnemyBase -> EnemyBase") != std::string::npos);
+}
+
+TEST_CASE("Semantic: archetype body use rejects indirect cycle", "[semantic][dynamic-ecs][template-composition]") {
+    auto err = first_error(
+        "template A:\n"
+        "    use B\n"
+        "template B:\n"
+        "    use C\n"
+        "template C:\n"
+        "    use A\n");
+    CHECK(err.find("cyclic template-use graph") != std::string::npos);
+    CHECK(err.find("A -> B -> C -> A") != std::string::npos);
+}
+
 // ── Task 5.3: Spawn site validation ─────────────────────────────────────────
 
 TEST_CASE("Semantic: spawn valid template — ok", "[semantic][dynamic-ecs]") {

@@ -1,0 +1,56 @@
+module template_composition
+
+# Canonical template composition example.
+# Body-level `use TemplateName` entries copy reusable template traits at compile time;
+# later local trait blocks override selected fields while keeping the rest.
+
+trait Health:
+    var hp: int = 1
+    var max_hp: int = 1
+
+trait Visual:
+    var color: color = #FFFFFFFF
+    var width: float = 16.0
+    var height: float = 16.0
+
+trait PatrolMotion:
+    var speed: float = 0.0
+    var min_x: float = 0.0
+    var max_x: float = 0.0
+
+trait SpawnPoint:
+    var position: vec2 = vec2(0.0, 0.0)
+
+template EnemyBase:
+    Health:
+        hp = 3
+        max_hp = 3
+    Visual:
+        color = #CC3333FF
+        width = 32.0
+        height = 32.0
+
+template WalkerEnemy:
+    use EnemyBase
+    PatrolMotion:
+        speed = 140.0
+        min_x = 320.0
+        max_x = 520.0
+
+template BossWalker:
+    use WalkerEnemy
+    Health:
+        hp = 20
+        max_hp = 20
+    Visual:
+        color = #8822FFFF
+
+unit FirstWalker:
+    use WalkerEnemy
+    SpawnPoint:
+        position = vec2(400.0, 568.0)
+
+unit BossRoom:
+    use BossWalker
+    SpawnPoint:
+        position = vec2(720.0, 568.0)

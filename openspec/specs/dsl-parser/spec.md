@@ -103,6 +103,10 @@ template_use_entry = "use" dotted_name NEWLINE ;
 - **WHEN** source contains `template WalkerEnemy:` followed by an indented `use EnemyBase` entry
 - **THEN** the parser produces a `TemplateDecl` AST node containing an archetype template-use entry for `EnemyBase`
 
+#### Scenario: Qualified archetype template use parsed
+- **WHEN** source contains `use enemies.WalkerEnemy` inside a template or unit body
+- **THEN** the parser records the used template name as a dotted name for archetype template composition
+
 ### Requirement: `filter:` and `exclude:` both optional in system grammar
 Both `filter:` and `exclude:` are optional on system declarations. The parser SHALL accept systems with `filter:` only, `exclude:` only, both, or neither. The old bracket-list syntax `filter: [A, B, C]` is rejected.
 
@@ -479,6 +483,10 @@ The parser SHALL accept dotted identifiers in `module` and `use` declarations. T
 #### Scenario: Use with alias
 - **WHEN** `use phys.body as b` appears
 - **THEN** the parser produces a `UseNode` with `module_name = "phys.body"` and `alias = "b"`
+
+#### Scenario: Top-level use remains module import
+- **WHEN** source contains `use std.physics.flat as phys` at the top level
+- **THEN** the parser produces a module import node rather than an archetype template-use entry
 
 ### Requirement: Trait declaration body restricted to field declarations only
 The parser SHALL accept only `field_decl` entries inside a trait body. Event handlers (`on ...`) and `func` declarations are not valid inside a trait body. Encountering `on` or `func` inside a trait block SHALL produce a parse error with a helpful message.

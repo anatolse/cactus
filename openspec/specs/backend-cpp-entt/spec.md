@@ -59,6 +59,17 @@ The backend SHALL generate entity creation code from `unit` declarations. Each `
 - **WHEN** the decorated AST contains `unit Cactus:` with `apply:` listing `Position` and `Renderable` and `config:` setting position values
 - **THEN** the backend generates `auto entity = registry.create();` followed by `registry.emplace<Position>(entity, ...);` for each trait
 
+### Requirement: cpp-entt codegen consumes flattened composed archetypes
+The cpp-entt backend SHALL generate units and spawned template instances from the semantic analyzer's flattened archetype representation after archetype-body template uses have been resolved and merged.
+
+#### Scenario: Composed unit emits used-template components
+- **WHEN** a unit uses `WalkerEnemy` and `WalkerEnemy` uses `EnemyBase`
+- **THEN** the generated cpp-entt setup code emplaces components from both templates exactly once according to the flattened archetype
+
+#### Scenario: Spawned composed template emits used-template components
+- **WHEN** a handler spawns `WalkerEnemy` and `WalkerEnemy` uses `EnemyBase`
+- **THEN** the generated spawn code emplaces all flattened component traits from the composed template
+
 ### Requirement: Code generation for `add` statement
 The backend SHALL generate code for `AddTraitStmt` nodes. For the EnTT backend, marker adds use `registry.emplace_or_replace<TraitName>(entity)`, data-bearing adds initialize fields, and `to` targets use the resolved target entity.
 

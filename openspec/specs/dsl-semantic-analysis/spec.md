@@ -297,7 +297,7 @@ The semantic analyzer SHALL continue to work identically for single-file program
 - **THEN** the analyzer produces the same `DecoratedProgram` as before this change
 
 ### Requirement: Template declaration validation
-The semantic analyzer SHALL validate `template` declarations by checking that every nested trait entry names a declared trait, every field assignment inside a trait block belongs to that trait, and every archetype-body `use` entry resolves to a template.
+The semantic analyzer SHALL validate `template` declarations by checking that every nested trait entry names a declared trait, every field assignment inside a trait block belongs to that trait, and every archetype-body `use` entry resolves to a template using the existing local/imported symbol resolution rules. Archetype-body `use` entries SHALL reject non-public templates from imported modules.
 
 #### Scenario: Template with undeclared trait rejected
 - **WHEN** a `template Foo:` contains a nested trait entry `UnknownTrait:`
@@ -311,6 +311,10 @@ The semantic analyzer SHALL validate `template` declarations by checking that ev
 - **WHEN** a template body contains `use Health` and `Health` resolves to a trait rather than a template
 - **THEN** the analyzer SHALL report that archetype-body template uses must reference templates
 
+#### Scenario: Imported private template rejected
+- **WHEN** an archetype body uses a template from another module that is not `pub`
+- **THEN** the analyzer reports that the template is not importable
+
 ### Requirement: Template composition flattening
 The semantic analyzer SHALL flatten archetype-body `use TemplateName` entries in declaration order before backend generation and spawn-site validation. Flattening SHALL merge duplicate trait entries field-by-field, where later entries override earlier assignments for the same field, and SHALL reject cyclic template-use graphs.
 
@@ -321,6 +325,10 @@ The semantic analyzer SHALL flatten archetype-body `use TemplateName` entries in
 #### Scenario: Template-use cycle rejected
 - **WHEN** `template A` uses `B` and `template B` uses `A`
 - **THEN** semantic analysis reports a cyclic template-use error
+
+#### Scenario: Marker duplicates collapse
+- **WHEN** two used templates both apply marker trait `Persistent`
+- **THEN** the flattened archetype contains one `Persistent` marker entry
 
 ### Requirement: Spawn-site validation
 At each block-structured `spawn TemplateName:` call site, the semantic analyzer SHALL verify the template exists, every overridden trait exists on the template's flattened archetype, all overridden fields are valid for that trait, and all required fields remain satisfied after applying overrides.

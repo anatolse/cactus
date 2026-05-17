@@ -14,6 +14,24 @@
 
 using namespace cactus;
 
+static std::size_t count_occurrences(const std::string& text, const std::string& needle) {
+    std::size_t count = 0;
+    std::size_t pos   = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
+}
+
+static std::string generated_function(const std::string& code, const std::string& signature_fragment) {
+    const auto start = code.find(signature_fragment);
+    REQUIRE(start != std::string::npos);
+    const auto end = code.find("\n}\n\n", start);
+    REQUIRE(end != std::string::npos);
+    return code.substr(start, end - start + 3);
+}
+
 static DecoratedProgram full_pipeline(const std::string& source, ProgramNode& program_out) {
     ErrorReporter errors;
     Lexer lexer(source, "test.cactus", errors);
@@ -456,6 +474,123 @@ TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
     CHECK(code.find("registry.create()") != std::string::npos);
     CHECK(code.find("registry.emplace<Pos>") != std::string::npos);
     CHECK(code.find("registry.emplace<Health>") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: composed unit creation uses flattened template traits",
+          "[codegen-entt][template-composition]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Health:\n"
+        "    var hp: int = 1\n"
+        "    var armor: int = 0\n"
+        "trait Patrol:\n"
+        "    var speed: float = 0.0\n"
+        "trait Persistent\n"
+        "template EnemyBase:\n"
+        "    Health:\n"
+        "        hp = 3\n"
+        "    Persistent\n"
+        "template WalkerEnemy:\n"
+        "    use EnemyBase\n"
+        "    Health:\n"
+        "        armor = 5\n"
+        "    Patrol:\n"
+        "        speed = 2.0\n"
+        "unit Walker1:\n"
+        "    use WalkerEnemy\n"
+        "    Health:\n"
+        "        hp = 4\n",
+        program);
+
+    const auto code    = CppEnttCodegen::generate(decorated);
+    const auto unit_fn = generated_function(code, "entt::entity create_walker1");
+
+    CHECK(count_occurrences(unit_fn, "registry.emplace<Health>(entity, component);") == 1);
+    CHECK(count_occurrences(unit_fn, "registry.emplace<Patrol>(entity, component);") == 1);
+    CHECK(count_occurrences(unit_fn, "registry.emplace<Persistent>(entity);") == 1);
+    CHECK(unit_fn.find("component.hp") != std::string::npos);
+    CHECK(unit_fn.find("= 4;") != std::string::npos);
+    CHECK(unit_fn.find("component.armor") != std::string::npos);
+    CHECK(unit_fn.find("= 5;") != std::string::npos);
+    CHECK(unit_fn.find("component.speed") != std::string::npos);
+    CHECK(unit_fn.find("= 2.0F;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: spawn of composed template constructs flattened traits once",
+          "[codegen-entt][template-composition]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Health:\n"
+        "    var hp: int = 1\n"
+        "    var armor: int = 0\n"
+        "trait Patrol:\n"
+        "    var speed: float = 0.0\n"
+        "template EnemyBase:\n"
+        "    Health:\n"
+        "        hp = 3\n"
+        "template WalkerEnemy:\n"
+        "    use EnemyBase\n"
+        "    Patrol:\n"
+        "        speed = 2.0\n"
+        "system Spawner:\n"
+        "    on tick:\n"
+        "        spawn WalkerEnemy:\n"
+        "            Health:\n"
+        "                armor = 7\n",
+        program);
+
+    const auto code        = CppEnttCodegen::generate(decorated);
+    const auto template_fn = generated_function(code, "entt::entity create_walker_enemy");
+    const auto system_fn   = generated_function(code, "void spawner_tick");
+
+    CHECK(count_occurrences(template_fn, "registry.emplace<Health>(entity, component);") == 1);
+    CHECK(count_occurrences(template_fn, "registry.emplace<Patrol>(entity, component);") == 1);
+    CHECK(template_fn.find("component.hp") != std::string::npos);
+    CHECK(template_fn.find("= 3;") != std::string::npos);
+    CHECK(template_fn.find("component.speed") != std::string::npos);
+    CHECK(template_fn.find("= 2.0F;") != std::string::npos);
+
+    CHECK(system_fn.find("auto __spawned = create_walker_enemy(registry);") != std::string::npos);
+    CHECK(system_fn.find("auto __existing = registry.try_get<Health>(__spawned);") != std::string::npos);
+    CHECK(system_fn.find("auto __value = __existing ? *__existing : Health{};") != std::string::npos);
+    CHECK(system_fn.find("__value.armor = 7;") != std::string::npos);
+    CHECK(system_fn.find("registry.emplace_or_replace<Health>(__spawned, __value);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: spawn expression of composed template returns created entity",
+          "[codegen-entt][template-composition]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Health:\n"
+        "    var hp: int = 1\n"
+        "trait Patrol:\n"
+        "    var speed: float = 0.0\n"
+        "template EnemyBase:\n"
+        "    Health:\n"
+        "        hp = 3\n"
+        "template WalkerEnemy:\n"
+        "    use EnemyBase\n"
+        "    Patrol:\n"
+        "        speed = 2.0\n"
+        "system Spawner:\n"
+        "    on tick:\n"
+        "        let spawned = spawn WalkerEnemy:\n"
+        "            Patrol:\n"
+        "                speed = 3.0\n",
+        program);
+
+    const auto code      = CppEnttCodegen::generate(decorated);
+    const auto system_fn = generated_function(code, "void spawner_tick");
+
+    CHECK(system_fn.find("auto spawned = ([&]()") != std::string::npos);
+    CHECK(system_fn.find("auto __spawned = create_walker_enemy(registry);") != std::string::npos);
+    CHECK(system_fn.find("auto __existing = registry.try_get<Patrol>(__spawned);") != std::string::npos);
+    CHECK(system_fn.find("__value.speed = 3.0F;") != std::string::npos);
+    CHECK(system_fn.find("return __spawned;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {

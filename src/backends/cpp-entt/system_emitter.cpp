@@ -184,6 +184,10 @@ std::string system_function_name(const std::string& system_name, const std::stri
     return snake_case(system_name) + "_" + suffix;
 }
 
+std::string archetype_create_function_name(const std::string& archetype_name) {
+    return "create_" + snake_case(archetype_name);
+}
+
 std::string event_cpp_type(const std::string& event_name) {
     if (event_name == "tick") {
         return "TickEvent";
@@ -586,6 +590,47 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                 const DecoratedProgram& program,
                                 const std::unordered_set<std::string>& pointer_aliases = {});
 
+static std::string emit_spawn_overrides(const std::string& entity_name,
+                                        const std::vector<ArchetypeTraitEntry>& overrides,
+                                        int indent,
+                                        const std::vector<std::string>& trait_names,
+                                        const DecoratedProgram& program,
+                                        const std::unordered_set<std::string>& pointer_aliases) {
+    const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
+    std::ostringstream out;
+    for (const auto& override_entry : overrides) {
+        if (override_entry.assignments.empty()) {
+            continue;
+        }
+
+        out << ind << "{\n";
+        out << ind << "    auto __existing = registry.try_get<" << override_entry.trait_name << ">(" << entity_name
+            << ");\n";
+        out << ind << "    auto __value = __existing ? *__existing : " << override_entry.trait_name << "{};\n";
+        for (const auto& assignment : override_entry.assignments) {
+            out << ind << "    __value." << assignment.name << " = "
+                << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases) << ";\n";
+        }
+        out << ind << "    registry.emplace_or_replace<" << override_entry.trait_name << ">(" << entity_name
+            << ", __value);\n";
+        out << ind << "}\n";
+    }
+    return out.str();
+}
+
+static std::string emit_spawn_expression(const SpawnExpr& spawn,
+                                         const std::vector<std::string>& trait_names,
+                                         const DecoratedProgram& program,
+                                         const std::unordered_set<std::string>& pointer_aliases) {
+    std::ostringstream out;
+    out << "([&]() {\n";
+    out << "    auto __spawned = " << archetype_create_function_name(spawn.template_name) << "(registry);\n";
+    out << emit_spawn_overrides("__spawned", spawn.overrides, 1, trait_names, program, pointer_aliases);
+    out << "    return __spawned;\n";
+    out << "})()";
+    return out.str();
+}
+
 static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          int indent,
                                          const std::vector<std::string>& trait_names,
@@ -729,7 +774,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 }
                 return rewrite_expr(*e.object, trait_names, program, pointer_aliases) + "." + e.member;
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                return "/* spawn expr */";
+                return emit_spawn_expression(e, trait_names, program, pointer_aliases);
             } else if constexpr (std::is_same_v<E, ListExpr>) {
                 std::string result = "std::vector{";
                 for (size_t i = 0; i < e.elements.size(); ++i) {
@@ -858,6 +903,15 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            "}\n";
                 }
                 return ind + emit_call + "\n";
+            } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                std::ostringstream result;
+                result << ind << "{\n";
+                result << ind << "    auto __spawned = " << archetype_create_function_name(s.template_name)
+                       << "(registry);\n";
+                result << emit_spawn_overrides(
+                    "__spawned", s.overrides, indent + 1, trait_names, program, pointer_aliases);
+                result << ind << "}\n";
+                return result.str();
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                 std::string target = s.target_expr.has_value()
                                          ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)

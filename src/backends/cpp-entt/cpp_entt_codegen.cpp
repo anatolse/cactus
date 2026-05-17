@@ -274,6 +274,50 @@ std::string pad_to_width(const std::string& value, std::size_t width) {
     return value + std::string(width - value.size(), ' ');
 }
 
+std::string archetype_create_function_name(const std::string& archetype_name) {
+    return "create_" + snake_case(archetype_name);
+}
+
+void emit_archetype_trait_initializers(std::ostringstream& out,
+                                       const std::vector<ArchetypeTraitEntry>& traits,
+                                       const DecoratedProgram& program,
+                                       const std::string& entity_name,
+                                       int indent) {
+    const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
+    for (const auto& trait : traits) {
+        auto resolved_trait = program.traits.find(trait.trait_name);
+        if (resolved_trait != program.traits.end() && resolved_trait->second.fields.empty()) {
+            out << ind << "registry.emplace<" << trait.trait_name << ">(" << entity_name << ");\n";
+            continue;
+        }
+
+        out << ind << "{\n";
+        std::size_t widest = std::string("auto component").size();
+        for (const auto& assignment : trait.assignments) {
+            widest = std::max(widest, std::string("component.").size() + assignment.name.size());
+        }
+        out << ind << "    " << pad_to_width("auto component", widest) << " = " << trait.trait_name << "{};\n";
+        for (const auto& assignment : trait.assignments) {
+            out << ind << "    " << pad_to_width("component." + assignment.name, widest) << " = "
+                << EnttCodegenUtils::emit_expr(*assignment.value, program.ast) << ";\n";
+        }
+        out << ind << "    registry.emplace<" << trait.trait_name << ">(" << entity_name << ", component);\n";
+        out << ind << "}\n";
+    }
+}
+
+std::string emit_archetype_creation_function(const std::string& archetype_name,
+                                             const std::vector<ArchetypeTraitEntry>& traits,
+                                             const DecoratedProgram& program) {
+    std::ostringstream out;
+    out << "entt::entity " << archetype_create_function_name(archetype_name) << "(entt::registry& registry) {\n";
+    out << "    auto entity = registry.create();\n";
+    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    out << "    return entity;\n";
+    out << "}\n\n";
+    return out.str();
+}
+
 const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::string& name) {
     auto it = program.traits.find(name);
     return it == program.traits.end() ? nullptr : &it->second;
@@ -1175,6 +1219,21 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
+    // Entity creation from flattened templates and units
+    if (program.ast != nullptr) {
+        out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
+        for (auto& decl : program.ast->declarations) {
+            if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+                out << emit_archetype_creation_function(tmpl->name, tmpl->traits, program);
+            }
+        }
+        for (auto& decl : program.ast->declarations) {
+            if (auto* unit = std::get_if<UnitNode>(&decl)) {
+                out << emit_archetype_creation_function(unit->name, unit->traits, program);
+            }
+        }
+    }
+
     // System functions
     if (program.ast != nullptr) {
         out << "// ── Systems ─────────────────────────────────────────────────────────\n\n";
@@ -1184,38 +1243,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
             if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
                 out << EnttSystemEmitter::emit_extern_system(*sys, program);
-            }
-        }
-    }
-
-    // Entity creation from units
-    if (program.ast != nullptr) {
-        out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
-        for (auto& decl : program.ast->declarations) {
-            if (auto* unit = std::get_if<UnitNode>(&decl)) {
-                out << "entt::entity create_" << snake_case(unit->name) << "(entt::registry& registry) {\n";
-                out << "    auto entity = registry.create();\n";
-                for (const auto& trait : unit->traits) {
-                    auto resolved_trait = program.traits.find(trait.trait_name);
-                    if (resolved_trait != program.traits.end() && resolved_trait->second.fields.empty()) {
-                        out << "    registry.emplace<" << trait.trait_name << ">(entity);\n";
-                        continue;
-                    }
-                    out << "    {\n";
-                    std::size_t widest = std::string("auto component").size();
-                    for (const auto& assignment : trait.assignments) {
-                        widest = std::max(widest, std::string("component.").size() + assignment.name.size());
-                    }
-                    out << "        " << pad_to_width("auto component", widest) << " = " << trait.trait_name << "{};\n";
-                    for (const auto& assignment : trait.assignments) {
-                        out << "        " << pad_to_width("component." + assignment.name, widest) << " = "
-                            << EnttCodegenUtils::emit_expr(*assignment.value, program.ast) << ";\n";
-                    }
-                    out << "        registry.emplace<" << trait.trait_name << ">(entity, component);\n";
-                    out << "    }\n";
-                }
-                out << "    return entity;\n";
-                out << "}\n\n";
             }
         }
     }

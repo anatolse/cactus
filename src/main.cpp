@@ -94,6 +94,7 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
             syms.funcs[name] = func;
         }
     }
+    syms.templates = prog.pub_templates;
     // Export pub event names so downstream modules can validate handlers
     syms.events = prog.pub_events;
     return syms;
@@ -251,27 +252,45 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
                 continue;
             }
 
-            // Build ModuleImports from already-compiled dependencies
-            cactus::ModuleImports imports;
-            auto std_core_it = compiled.find("std.core");
-            if (std_core_it != compiled.end() && mod.qualified_name != "std.core") {
-                auto syms = extract_pub_symbols("std.core", std_core_it->second);
-                imports.add("std.core", std::move(syms));
-            }
-            for (auto& dep_name : mod.dependencies) {
-                auto it = compiled.find(dep_name);
-                if (it != compiled.end()) {
-                    auto syms = extract_pub_symbols(dep_name, it->second);
-                    imports.add(dep_name, std::move(syms));
-                }
-            }
-
             // Lex + parse module file
             cactus::ErrorReporter mod_errors;
             auto mod_prog = lex_and_parse(mod.file_path.string(), mod_errors);
             if (!mod_prog || mod_errors.has_errors()) {
                 print_errors(mod_errors);
                 return 1;
+            }
+
+            // Build ModuleImports from already-compiled dependencies.
+            // Register each dependency under the same qualifier the source uses:
+            // either the module name itself, or the `use ... as alias` alias.
+            cactus::ModuleImports imports;
+            auto std_core_it = compiled.find("std.core");
+            if (std_core_it != compiled.end() && mod.qualified_name != "std.core") {
+                auto syms = extract_pub_symbols("std.core", std_core_it->second);
+                imports.add("std.core", std::move(syms), {}, std_core_it->second.non_pub_templates);
+            }
+            auto qualifiers_for_dependency = [&mod_prog](const std::string& dep_name) {
+                std::vector<std::string> qualifiers;
+                for (const auto& decl : mod_prog->declarations) {
+                    const auto* use = std::get_if<cactus::UseNode>(&decl);
+                    if (use != nullptr && use->module_name == dep_name) {
+                        qualifiers.push_back(use->alias.value_or(use->module_name));
+                    }
+                }
+                if (qualifiers.empty()) {
+                    qualifiers.push_back(dep_name);
+                }
+                return qualifiers;
+            };
+            for (auto& dep_name : mod.dependencies) {
+                auto it = compiled.find(dep_name);
+                if (it == compiled.end()) {
+                    continue;
+                }
+                for (const auto& qualifier : qualifiers_for_dependency(dep_name)) {
+                    auto syms = extract_pub_symbols(dep_name, it->second);
+                    imports.add(qualifier, std::move(syms), {}, it->second.non_pub_templates);
+                }
             }
 
             // Semantic analyze

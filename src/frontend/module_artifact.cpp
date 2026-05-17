@@ -134,6 +134,13 @@ void ModuleArtifact::write_funcs(std::ostream& out, const std::unordered_map<std
     }
 }
 
+void ModuleArtifact::write_string_set(std::ostream& out, const std::unordered_set<std::string>& values) {
+    ModuleArtifact::write_u32(out, static_cast<uint32_t>(values.size()));
+    for (const auto& value : values) {
+        ModuleArtifact::write_str(out, value);
+    }
+}
+
 void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph) {
     write_u32(out, static_cast<uint32_t>(graph.size()));
     for (const auto& dep : graph) {
@@ -314,6 +321,15 @@ std::unordered_map<std::string, ResolvedFunc> ModuleArtifact::read_funcs(std::is
     return funcs;
 }
 
+std::unordered_set<std::string> ModuleArtifact::read_string_set(std::istream& in) {
+    std::unordered_set<std::string> values;
+    uint32_t count = ModuleArtifact::read_u32(in);
+    for (uint32_t i = 0; i < count; ++i) {
+        values.insert(ModuleArtifact::read_str(in));
+    }
+    return values;
+}
+
 std::vector<SystemDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
     std::vector<SystemDependency> graph;
     uint32_t count = read_u32(in);
@@ -385,6 +401,8 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_structs(out, program.structs);
     write_enums(out, program.enums);
     write_funcs(out, program.funcs);
+    write_string_set(out, program.pub_templates);
+    write_string_set(out, program.non_pub_templates);
     write_dep_graph(out, program.dependency_graph);
     write_string_pool(out, program.string_pool);
 
@@ -419,13 +437,15 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     module_name_out = read_str(in);
 
     DecoratedProgram program;
-    program.traits           = read_traits(in);
-    program.structs          = read_structs(in);
-    program.enums            = read_enums(in);
-    program.funcs            = read_funcs(in);
-    program.dependency_graph = read_dep_graph(in);
-    program.string_pool      = read_string_pool(in);
-    program.ast              = nullptr;  // not serialized
+    program.traits            = read_traits(in);
+    program.structs           = read_structs(in);
+    program.enums             = read_enums(in);
+    program.funcs             = read_funcs(in);
+    program.pub_templates     = read_string_set(in);
+    program.non_pub_templates = read_string_set(in);
+    program.dependency_graph  = read_dep_graph(in);
+    program.string_pool       = read_string_pool(in);
+    program.ast               = nullptr;  // not serialized
 
     if (!in.good()) {
         errors_.error({}, "truncated artifact: " + path.string());
@@ -466,6 +486,7 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
             symbols.funcs[name] = func;
         }
     }
+    symbols.templates = program->pub_templates;
 
     return symbols;
 }

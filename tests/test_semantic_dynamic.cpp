@@ -122,6 +122,55 @@ TEST_CASE("Semantic: unit config with unknown field — error", "[semantic][dyna
                        "        badfield = 10\n"));
 }
 
+TEST_CASE("Semantic: archetype body use resolves local template", "[semantic][dynamic-ecs][template-composition]") {
+    CHECK_FALSE(
+        analyze_errors("trait Position:\n"
+                       "    var x: float = 0.0\n"
+                       "template EnemyBase:\n"
+                       "    Position\n"
+                       "template WalkerEnemy:\n"
+                       "    use EnemyBase\n"));
+}
+
+TEST_CASE("Semantic: unit body use resolves local template", "[semantic][dynamic-ecs][template-composition]") {
+    CHECK_FALSE(
+        analyze_errors("trait Position:\n"
+                       "    var x: float = 0.0\n"
+                       "template EnemyBase:\n"
+                       "    Position\n"
+                       "unit Walker1:\n"
+                       "    use EnemyBase\n"));
+}
+
+TEST_CASE("Semantic: archetype body use rejects local trait", "[semantic][dynamic-ecs][template-composition]") {
+    auto err = first_error(
+        "trait Health:\n"
+        "    var hp: int = 100\n"
+        "template Bad:\n"
+        "    use Health\n");
+    CHECK(err.find("must reference a template") != std::string::npos);
+    CHECK(err.find("not a template") != std::string::npos);
+}
+
+TEST_CASE("Semantic: archetype body use rejects local unit", "[semantic][dynamic-ecs][template-composition]") {
+    auto err = first_error(
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "unit Player:\n"
+        "    Position\n"
+        "template Bad:\n"
+        "    use Player\n");
+    CHECK(err.find("must reference a template") != std::string::npos);
+    CHECK(err.find("not a template") != std::string::npos);
+}
+
+TEST_CASE("Semantic: archetype body use reports undefined template", "[semantic][dynamic-ecs][template-composition]") {
+    auto err = first_error(
+        "template Bad:\n"
+        "    use MissingTemplate\n");
+    CHECK(err.find("undefined template 'MissingTemplate'") != std::string::npos);
+}
+
 // ── Task 5.3: Spawn site validation ─────────────────────────────────────────
 
 TEST_CASE("Semantic: spawn valid template — ok", "[semantic][dynamic-ecs]") {

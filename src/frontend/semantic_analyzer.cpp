@@ -193,7 +193,8 @@ bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignme
 
 void ModuleImports::add(const std::string& qualifier,
                         ImportedSymbols pub_syms,
-                        std::unordered_set<std::string> non_pub) {
+                        std::unordered_set<std::string> non_pub,
+                        std::unordered_set<std::string> non_pub_templates) {
     const auto existing = modules.find(qualifier);
     if (existing != modules.end() && existing->second.module_name == pub_syms.module_name) {
         // Idempotent import of the same module source under the same qualifier.
@@ -202,6 +203,9 @@ void ModuleImports::add(const std::string& qualifier,
         modules[qualifier] = std::move(pub_syms);
         if (!non_pub.empty()) {
             non_pub_trait_names[qualifier] = std::move(non_pub);
+        }
+        if (!non_pub_templates.empty()) {
+            non_pub_template_names[qualifier] = std::move(non_pub_templates);
         }
         return;
     }
@@ -220,6 +224,9 @@ void ModuleImports::add(const std::string& qualifier,
     for (auto& [name, _] : pub_syms.funcs) {
         func_providers[name].push_back(qualifier);
     }
+    for (const auto& name : pub_syms.templates) {
+        template_providers[name].push_back(qualifier);
+    }
     // Index imported event names (e.g. from std.core)
     for (const auto& ev_name : pub_syms.events) {
         (void)ev_name;  // no uniqueness conflict for events — just populate event_names_ in analyzer
@@ -227,6 +234,9 @@ void ModuleImports::add(const std::string& qualifier,
     // Store non-pub trait names for error diagnostics
     if (!non_pub.empty()) {
         non_pub_trait_names[qualifier] = std::move(non_pub);
+    }
+    if (!non_pub_templates.empty()) {
+        non_pub_template_names[qualifier] = std::move(non_pub_templates);
     }
     // Store the module
     modules[qualifier] = std::move(pub_syms);
@@ -348,6 +358,11 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                     }
                     template_names_.insert(node.name);
                     archetype_traits_[node.name] = &node.traits;
+                    if (node.is_pub) {
+                        result_.pub_templates.insert(node.name);
+                    } else {
+                        result_.non_pub_templates.insert(node.name);
+                    }
                 } else if constexpr (std::is_same_v<T, UnitNode>) {
                     // Track unit names to distinguish from templates (5.4)
                     unit_names_.insert(node.name);
@@ -1570,6 +1585,114 @@ bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
     return false;
 }
 
+bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbols& symbols,
+                                                             const std::string& name) const {
+    return symbols.traits.contains(name) || symbols.structs.contains(name) || symbols.enums.contains(name) ||
+           symbols.funcs.contains(name) || symbols.events.contains(name);
+}
+
+bool SemanticAnalyzer::local_non_template_symbol_exists(const std::string& name) const {
+    return trait_names_.contains(name) || unit_names_.contains(name) || struct_names_.contains(name) ||
+           enum_names_.contains(name) || event_names_.contains(name) || func_names_.contains(name) ||
+           system_names_.contains(name) || asset_decl_types_.contains(name) || input_decl_types_.contains(name) ||
+           use_names_.contains(name);
+}
+
+bool SemanticAnalyzer::imported_non_template_symbol_exists(const std::string& name) const {
+    if (imports_.trait_providers.contains(name) || imports_.struct_providers.contains(name) ||
+        imports_.enum_providers.contains(name) || imports_.func_providers.contains(name)) {
+        return true;
+    }
+    return std::ranges::any_of(imports_.modules,
+                               [&name](const auto& entry) { return entry.second.events.contains(name); });
+}
+
+bool SemanticAnalyzer::resolve_archetype_template_use(const ArchetypeTemplateUseEntry& use,
+                                                      const std::string& archetype_kind,
+                                                      const std::string& archetype_name) {
+    auto report_non_template = [this, &use, &archetype_kind, &archetype_name](const std::string& referenced) {
+        errors_.error(use.location,
+                      "archetype-body use '" + use.template_name + "' in " + archetype_kind + " '" + archetype_name +
+                          "' must reference a template; '" + referenced + "' is not a template");
+    };
+
+    const auto dot = use.template_name.rfind('.');
+    if (dot != std::string::npos) {
+        const auto qualifier     = use.template_name.substr(0, dot);
+        const auto template_name = use.template_name.substr(dot + 1);
+
+        auto module_it = imports_.modules.find(qualifier);
+        if (module_it == imports_.modules.end()) {
+            errors_.error(use.location, "unknown module qualifier '" + qualifier + "' in archetype-body template use");
+            return false;
+        }
+
+        if (module_it->second.templates.contains(template_name)) {
+            return true;
+        }
+
+        auto non_pub_it = imports_.non_pub_template_names.find(qualifier);
+        if (non_pub_it != imports_.non_pub_template_names.end() && non_pub_it->second.contains(template_name)) {
+            errors_.error(use.location,
+                          "template '" + template_name + "' is not public in module '" + qualifier +
+                              "'; did you mean to mark it as 'pub'?");
+            return false;
+        }
+
+        if (imported_symbols_contain_non_template(module_it->second, template_name)) {
+            report_non_template(template_name);
+            return false;
+        }
+
+        errors_.error(use.location, "unknown template '" + template_name + "' in module '" + qualifier + "'");
+        return false;
+    }
+
+    if (template_names_.contains(use.template_name)) {
+        return true;
+    }
+
+    if (local_non_template_symbol_exists(use.template_name)) {
+        report_non_template(use.template_name);
+        return false;
+    }
+
+    if (!imports_.empty()) {
+        auto provider_it = imports_.template_providers.find(use.template_name);
+        if (provider_it != imports_.template_providers.end()) {
+            if (provider_it->second.size() > 1) {
+                std::ostringstream msg;
+                msg << "ambiguous template '" << use.template_name << "' in archetype-body use: found in module '"
+                    << provider_it->second[0] << "' and module '" << provider_it->second[1] << "'";
+                if (provider_it->second.size() > 2) {
+                    msg << " (and others)";
+                }
+                msg << "; use qualified access to disambiguate";
+                errors_.error(use.location, msg.str());
+                return false;
+            }
+            return true;
+        }
+
+        for (const auto& [qualifier, names] : imports_.non_pub_template_names) {
+            if (names.contains(use.template_name)) {
+                errors_.error(use.location,
+                              "template '" + use.template_name + "' is not public in module '" + qualifier +
+                                  "'; did you mean to mark it as 'pub'?");
+                return false;
+            }
+        }
+
+        if (imported_non_template_symbol_exists(use.template_name)) {
+            report_non_template(use.template_name);
+            return false;
+        }
+    }
+
+    errors_.error(use.location, "undefined template '" + use.template_name + "' in archetype-body use");
+    return false;
+}
+
 const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::string& name) const {
     auto it = result_.traits.find(name);
     if (it != result_.traits.end()) {
@@ -1788,6 +1911,10 @@ void SemanticAnalyzer::validate_template_unit_declarations(
                                 entry.location,
                                 "undeclared trait '" + entry.trait_name + "' in " + KIND + " '" + node.name + "'");
                         }
+                    }
+
+                    for (const auto& template_use : node.template_uses) {
+                        resolve_archetype_template_use(template_use, KIND, node.name);
                     }
 
                     // 5.1: Validate field assignments in trait blocks belong to the trait

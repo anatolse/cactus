@@ -65,6 +65,122 @@ static ImportedSymbols make_module_with_trait(const std::string& module_name, co
     return syms;
 }
 
+/// Build an ImportedSymbols with a single pub template.
+static ImportedSymbols make_module_with_template(const std::string& module_name, const std::string& template_name) {
+    ImportedSymbols syms;
+    syms.module_name = module_name;
+    syms.templates.insert(template_name);
+    return syms;
+}
+
+/// Build a ProgramNode with one template that uses another template by name.
+static ProgramNode make_program_with_template_use(const std::string& template_use_name) {
+    ProgramNode prog;
+    TemplateNode tmpl;
+    tmpl.name = "Composed";
+    tmpl.template_uses.push_back({.template_name = template_use_name, .location = {}});
+    prog.declarations.emplace_back(std::move(tmpl));
+    return prog;
+}
+
+// ── Template composition import resolution ───────────────────────────────────
+
+TEST_CASE("semantic_modules: archetype template use resolves qualified imported template",
+          "[semantic][modules][template-composition]") {
+    auto prog = make_program_with_template_use("enemies.EnemyBase");
+
+    ModuleImports imports;
+    imports.add("enemies", make_module_with_template("enemies", "EnemyBase"));
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    CHECK_FALSE(errors.has_errors());
+}
+
+TEST_CASE("semantic_modules: archetype template use resolves aliased imported template",
+          "[semantic][modules][template-composition]") {
+    auto prog = make_program_with_template_use("enemy.EnemyBase");
+
+    ModuleImports imports;
+    imports.add("enemy", make_module_with_template("enemies", "EnemyBase"));
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    CHECK_FALSE(errors.has_errors());
+}
+
+TEST_CASE("semantic_modules: archetype template use resolves unique unqualified imported template",
+          "[semantic][modules][template-composition]") {
+    auto prog = make_program_with_template_use("EnemyBase");
+
+    ModuleImports imports;
+    imports.add("enemies", make_module_with_template("enemies", "EnemyBase"));
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    CHECK_FALSE(errors.has_errors());
+}
+
+TEST_CASE("semantic_modules: archetype template use rejects imported non-template symbol",
+          "[semantic][modules][template-composition]") {
+    auto prog = make_program_with_template_use("player.Health");
+
+    ModuleImports imports;
+    imports.add("player", make_module_with_trait("player", "Health"));
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    REQUIRE(errors.has_errors());
+    const auto& msg = errors.diagnostics()[0].message;
+    CHECK(msg.find("must reference a template") != std::string::npos);
+    CHECK(msg.find("not a template") != std::string::npos);
+}
+
+TEST_CASE("semantic_modules: archetype template use rejects imported private template",
+          "[semantic][modules][template-composition]") {
+    auto prog = make_program_with_template_use("enemies.SecretBase");
+
+    ImportedSymbols syms;
+    syms.module_name = "enemies";
+    ModuleImports imports;
+    imports.add("enemies", std::move(syms), {}, {"SecretBase"});
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    REQUIRE(errors.has_errors());
+    const auto& msg = errors.diagnostics()[0].message;
+    CHECK(msg.find("not public") != std::string::npos);
+    CHECK(msg.find("SecretBase") != std::string::npos);
+}
+
+TEST_CASE("semantic_modules: ambiguous unqualified archetype template use reports error",
+          "[semantic][modules][template-composition]") {
+    auto prog = make_program_with_template_use("EnemyBase");
+
+    ModuleImports imports;
+    imports.add("enemies.ground", make_module_with_template("enemies.ground", "EnemyBase"));
+    imports.add("enemies.flying", make_module_with_template("enemies.flying", "EnemyBase"));
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(prog, imports);
+
+    REQUIRE(errors.has_errors());
+    const auto& msg = errors.diagnostics()[0].message;
+    CHECK(msg.find("ambiguous template 'EnemyBase'") != std::string::npos);
+    CHECK(msg.find("use qualified access") != std::string::npos);
+}
+
 // ── Task 4.2: Qualified symbol resolution ────────────────────────────────────
 
 TEST_CASE("semantic_modules: qualified struct type resolved", "[semantic][modules][4.2]") {

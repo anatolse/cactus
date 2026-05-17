@@ -69,6 +69,8 @@ struct DecoratedProgram {
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
     std::unordered_map<std::string, ResolvedFunc> funcs;
+    std::unordered_set<std::string> pub_templates;
+    std::unordered_set<std::string> non_pub_templates;
     std::unordered_set<std::string> pub_events;  // pub event names (for ImportedSymbols export)
     std::vector<SystemDependency> dependency_graph;
     StringPool string_pool;
@@ -86,6 +88,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ResolvedStruct> structs;  // pub structs
     std::unordered_map<std::string, ResolvedEnum> enums;      // pub enums
     std::unordered_map<std::string, ResolvedFunc> funcs;      // pub extern funcs
+    std::unordered_set<std::string> templates;                // pub templates
     std::unordered_set<std::string> events;                   // pub event names
 };
 
@@ -101,12 +104,14 @@ struct ModuleImports {
 
     /// qualifier → non-pub trait names (for "did you mean to add pub?" errors)
     std::unordered_map<std::string, std::unordered_set<std::string>> non_pub_trait_names;
+    std::unordered_map<std::string, std::unordered_set<std::string>> non_pub_template_names;
 
     /// Global uniqueness index: symbol name → list of qualifiers that export it
     std::unordered_map<std::string, std::vector<std::string>> trait_providers;
     std::unordered_map<std::string, std::vector<std::string>> struct_providers;
     std::unordered_map<std::string, std::vector<std::string>> enum_providers;
     std::unordered_map<std::string, std::vector<std::string>> func_providers;
+    std::unordered_map<std::string, std::vector<std::string>> template_providers;
 
     [[nodiscard]] bool empty() const {
         return modules.empty();
@@ -114,7 +119,10 @@ struct ModuleImports {
 
     /// Add one module's pub symbols under the given qualifier (module name or alias).
     /// non_pub: non-pub trait names in this module, for helpful error diagnostics.
-    void add(const std::string& qualifier, ImportedSymbols pub_syms, std::unordered_set<std::string> non_pub = {});
+    void add(const std::string& qualifier,
+             ImportedSymbols pub_syms,
+             std::unordered_set<std::string> non_pub           = {},
+             std::unordered_set<std::string> non_pub_templates = {});
 };
 
 // ── Semantic Analyzer ───────────────────────────────────────────────────────
@@ -177,6 +185,12 @@ private:
 
     // Dynamic ECS helpers
     bool is_trait_declared(const std::string& name) const;
+    bool resolve_archetype_template_use(const ArchetypeTemplateUseEntry& use,
+                                        const std::string& archetype_kind,
+                                        const std::string& archetype_name);
+    bool local_non_template_symbol_exists(const std::string& name) const;
+    bool imported_non_template_symbol_exists(const std::string& name) const;
+    bool imported_symbols_contain_non_template(const ImportedSymbols& symbols, const std::string& name) const;
     std::unordered_set<std::string> get_archetype_fields(const std::vector<ArchetypeTraitEntry>& traits) const;
     const ResolvedTrait* find_resolved_trait(const std::string& name) const;
     const ResolvedStruct* find_resolved_event(const std::string& name) const;

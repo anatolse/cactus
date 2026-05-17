@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace cactus {
 
@@ -25,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 4;
+    static constexpr uint8_t CURRENT_VERSION = 5;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -59,6 +60,7 @@ private:
     void write_structs(std::ostream& out, const std::unordered_map<std::string, ResolvedStruct>& structs);
     static void write_enums(std::ostream& out, const std::unordered_map<std::string, ResolvedEnum>& enums);
     void write_funcs(std::ostream& out, const std::unordered_map<std::string, ResolvedFunc>& funcs);
+    static void write_string_set(std::ostream& out, const std::unordered_set<std::string>& values);
     static void write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph);
     static void write_string_pool(std::ostream& out, const StringPool& pool);
 
@@ -73,6 +75,7 @@ private:
     std::unordered_map<std::string, ResolvedStruct> read_structs(std::istream& in);
     static std::unordered_map<std::string, ResolvedEnum> read_enums(std::istream& in);
     std::unordered_map<std::string, ResolvedFunc> read_funcs(std::istream& in);
+    static std::unordered_set<std::string> read_string_set(std::istream& in);
     static std::vector<SystemDependency> read_dep_graph(std::istream& in);
     static StringPool read_string_pool(std::istream& in);
 

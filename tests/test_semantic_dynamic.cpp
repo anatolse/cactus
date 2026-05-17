@@ -63,6 +63,78 @@ static std::string first_error(const std::string& source) {
     return errors.has_errors() ? errors.diagnostics()[0].message : "";
 }
 
+static ProgramNode analyze_ast(const std::string& source) {
+    const std::string FULL_SOURCE = STDLIB_EVENTS + source;
+    ErrorReporter errors;
+    Lexer lexer(FULL_SOURCE, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    REQUIRE_FALSE(errors.has_errors());
+    Parser parser(std::move(tokens), errors);
+    auto program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(program);
+    REQUIRE_FALSE(errors.has_errors());
+    return program;
+}
+
+static const TemplateNode& find_template(const ProgramNode& program, const std::string& name) {
+    const TemplateNode* found = nullptr;
+    for (const auto& decl : program.declarations) {
+        const auto* tmpl = std::get_if<TemplateNode>(&decl);
+        if (tmpl != nullptr && tmpl->name == name) {
+            found = tmpl;
+            break;
+        }
+    }
+    REQUIRE(found != nullptr);
+    return *found;
+}
+
+static const UnitNode& find_unit(const ProgramNode& program, const std::string& name) {
+    const UnitNode* found = nullptr;
+    for (const auto& decl : program.declarations) {
+        const auto* unit = std::get_if<UnitNode>(&decl);
+        if (unit != nullptr && unit->name == name) {
+            found = unit;
+            break;
+        }
+    }
+    REQUIRE(found != nullptr);
+    return *found;
+}
+
+static const ArchetypeTraitEntry& find_archetype_trait(const std::vector<ArchetypeTraitEntry>& traits,
+                                                       const std::string& name) {
+    const ArchetypeTraitEntry* found = nullptr;
+    for (const auto& trait : traits) {
+        if (trait.trait_name == name) {
+            found = &trait;
+            break;
+        }
+    }
+    REQUIRE(found != nullptr);
+    return *found;
+}
+
+static const FieldAssignment& find_assignment(const ArchetypeTraitEntry& trait, const std::string& name) {
+    const FieldAssignment* found = nullptr;
+    for (const auto& assignment : trait.assignments) {
+        if (assignment.name == name) {
+            found = &assignment;
+            break;
+        }
+    }
+    REQUIRE(found != nullptr);
+    return *found;
+}
+
+static std::string literal_value(const FieldAssignment& assignment) {
+    const auto* literal = std::get_if<LiteralExpr>(&assignment.value->expr);
+    REQUIRE(literal != nullptr);
+    return literal->value;
+}
+
 // ── Task 5.1: Template declaration validation ─────────────────────────────────
 
 TEST_CASE("Semantic: template with declared traits — valid", "[semantic][dynamic-ecs]") {
@@ -189,6 +261,68 @@ TEST_CASE("Semantic: archetype body use rejects indirect cycle", "[semantic][dyn
         "    use A\n");
     CHECK(err.find("cyclic template-use graph") != std::string::npos);
     CHECK(err.find("A -> B -> C -> A") != std::string::npos);
+}
+
+TEST_CASE("Semantic: template composition flattens merge order and field overrides",
+          "[semantic][dynamic-ecs][template-composition]") {
+    auto program = analyze_ast(
+        "trait Stats:\n"
+        "    var hp: int = 0\n"
+        "    var damage: int = 0\n"
+        "    var armor: int = 0\n"
+        "template EnemyBase:\n"
+        "    Stats:\n"
+        "        hp = 1\n"
+        "        damage = 10\n"
+        "        armor = 5\n"
+        "template EnemyElite:\n"
+        "    Stats:\n"
+        "        hp = 2\n"
+        "template BossEnemy:\n"
+        "    use EnemyBase\n"
+        "    use EnemyElite\n"
+        "    Stats:\n"
+        "        damage = 99\n");
+
+    const auto& boss  = find_template(program, "BossEnemy");
+    const auto& stats = find_archetype_trait(boss.traits, "Stats");
+
+    REQUIRE(boss.traits.size() == 1);
+    CHECK(literal_value(find_assignment(stats, "hp")) == "2");
+    CHECK(literal_value(find_assignment(stats, "damage")) == "99");
+    CHECK(literal_value(find_assignment(stats, "armor")) == "5");
+}
+
+TEST_CASE("Semantic: template composition collapses duplicate marker traits",
+          "[semantic][dynamic-ecs][template-composition]") {
+    auto program = analyze_ast(
+        "trait Persistent\n"
+        "trait Renderable:\n"
+        "    var layer: int = 0\n"
+        "template PersistentBase:\n"
+        "    Persistent\n"
+        "template VisiblePersistent:\n"
+        "    Persistent\n"
+        "    Renderable:\n"
+        "        layer = 1\n"
+        "unit Crate:\n"
+        "    use PersistentBase\n"
+        "    use VisiblePersistent\n"
+        "    Persistent\n");
+
+    const auto& crate = find_unit(program, "Crate");
+
+    std::size_t persistent_count = 0;
+    for (const auto& trait : crate.traits) {
+        if (trait.trait_name == "Persistent") {
+            ++persistent_count;
+            CHECK(trait.assignments.empty());
+        }
+    }
+
+    CHECK(persistent_count == 1);
+    const auto& renderable = find_archetype_trait(crate.traits, "Renderable");
+    CHECK(literal_value(find_assignment(renderable, "layer")) == "1");
 }
 
 // ── Task 5.3: Spawn site validation ─────────────────────────────────────────

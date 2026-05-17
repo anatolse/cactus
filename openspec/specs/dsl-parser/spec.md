@@ -63,8 +63,8 @@ The parser SHALL parse `trait Name:` blocks containing fields with modifiers (`l
 - **WHEN** the source contains `trait Damageable:` with `on damage(amount: int):` block
 - **THEN** the parser produces a TraitNode containing an EventHandlerNode with event_name "damage"
 
-### Requirement: Unit parsing with apply and config blocks
-The parser SHALL parse `[pub] unit Name:` blocks as a sequence of nested trait entries. Each entry is either a bare trait name for a marker trait or a trait name followed by `:` and an indented field-assignment block. `apply:` and `config:` blocks are not part of unit syntax.
+### Requirement: Unit parsing with nested archetype entries
+The parser SHALL parse `[pub] unit Name:` blocks as a sequence of archetype entries. Each entry is either a body-level `use TemplateName` entry, a bare trait name for a marker trait, or a trait name followed by `:` and an indented field-assignment block. `apply:` and `config:` blocks are not part of unit syntax.
 
 #### Scenario: Unit with nested trait block parsed
 - **WHEN** the source contains `unit Cactus:` with `Position:` followed by indented field assignments
@@ -74,14 +74,21 @@ The parser SHALL parse `[pub] unit Name:` blocks as a sequence of nested trait e
 - **WHEN** the source contains `unit Cactus:` with a bare `Persistent` entry in the body
 - **THEN** the parser produces a UnitNode containing a marker-trait entry for `Persistent`
 
+#### Scenario: Unit with template use parsed
+- **WHEN** the source contains `unit Walker1:` with an indented `use WalkerEnemy` entry
+- **THEN** the parser produces a UnitNode containing an archetype template-use entry for `WalkerEnemy`
+
 ### Requirement: `template` declaration grammar
 
-The parser SHALL accept `template_decl` as a top-level declaration whose body is a sequence of nested trait entries, structurally identical to `unit_decl` except using the `TEMPLATE` keyword. `apply:` and `config:` blocks are not part of template syntax.
+The parser SHALL accept `template_decl` as a top-level declaration whose body is a sequence of archetype entries, structurally identical to `unit_decl` except using the `TEMPLATE` keyword. Body-level `use TemplateName` entries in this context are template-composition entries, not module imports. `apply:` and `config:` blocks are not part of template syntax.
 
 ```ebnf
 template_decl = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
-                { archetype_trait_entry }
+                { archetype_entry }
                 DEDENT ;
+
+archetype_entry = template_use_entry | archetype_trait_entry ;
+template_use_entry = "use" dotted_name NEWLINE ;
 ```
 
 #### Scenario: Template with nested trait blocks parsed
@@ -91,6 +98,10 @@ template_decl = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
 #### Scenario: Template with pub modifier parsed
 - **WHEN** `pub template Foo:` appears in source
 - **THEN** the parser produces a `TemplateDecl` node with `is_pub = true`
+
+#### Scenario: Template with template use parsed
+- **WHEN** source contains `template WalkerEnemy:` followed by an indented `use EnemyBase` entry
+- **THEN** the parser produces a `TemplateDecl` AST node containing an archetype template-use entry for `EnemyBase`
 
 ### Requirement: `filter:` and `exclude:` both optional in system grammar
 Both `filter:` and `exclude:` are optional on system declarations. The parser SHALL accept systems with `filter:` only, `exclude:` only, both, or neither. The old bracket-list syntax `filter: [A, B, C]` is rejected.

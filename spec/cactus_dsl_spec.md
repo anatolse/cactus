@@ -195,16 +195,19 @@ trait Health:
 
 `unit` declares an entity archetype that is instantiated automatically for the owning module/scene. `template` declares a reusable blueprint that is instantiated later by `spawn`.
 
-Both use nested trait entries.
+Both use archetype bodies. An archetype body can contain nested trait entries and body-level `use TemplateName` entries. Body-level `use` composes another template into the current archetype at compile time; it is distinct from top-level module `use` and does not create an entity.
 
 ```ebnf
 unit_decl       = [ "pub" ] "unit" IDENTIFIER ":" NEWLINE INDENT
-                  { archetype_trait_entry }
+                  { archetype_entry }
                   DEDENT ;
 
 template_decl   = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
-                  { archetype_trait_entry }
+                  { archetype_entry }
                   DEDENT ;
+
+archetype_entry = template_use_entry | archetype_trait_entry ;
+template_use_entry = "use" dotted_name NEWLINE ;
 
 archetype_trait_entry = IDENTIFIER NEWLINE
                       | IDENTIFIER ":" NEWLINE INDENT
@@ -229,7 +232,23 @@ template Bullet:
     Bullet:
         damage = 1
         lifetime = 1.0
+
+template EnemyBase:
+    Health:
+        health = 3
+
+template WalkerEnemy:
+    use EnemyBase
+    Position:
+        velocity = vec2(2.0, 0.0)
+
+unit FirstWalker:
+    use WalkerEnemy
+    Position:
+        pos = vec2(400.0, 568.0)
 ```
+
+In this example, `WalkerEnemy` is a composed blueprint: it receives `EnemyBase`'s trait initializers before applying its own `Position` block. `FirstWalker` is still one automatically-instantiated unit; its body-level `use WalkerEnemy` is flattened into the unit's archetype and does not perform a runtime spawn.
 
 ### 3.8 Systems
 
@@ -412,6 +431,8 @@ spawn_expr      = "spawn" IDENTIFIER ":" NEWLINE INDENT
                   DEDENT ;
 ```
 
+`spawn TemplateName:` is runtime entity creation. It creates an `entity_id` from the named template's already-composed archetype, then applies the spawn body's nested trait override blocks. Unlike body-level `use TemplateName`, `spawn` can run inside handlers, creates a new entity, and participates in `on spawn` lifecycle delivery.
+
 ### 3.16 Statements
 
 ```ebnf
@@ -508,6 +529,8 @@ match collision.other:
 - **templates** define spawnable blueprints
 - **systems** define logic over filtered entities
 - **events** define typed gameplay messages
+
+Template composition is static blueprint reuse: a body-level `use TemplateName` inside a `unit` or `template` is resolved and flattened before runtime. Runtime `spawn TemplateName:` is separate; it creates an entity from the flattened template and applies spawn-site overrides.
 
 ### 4.2 Field Access and Handler Bindings
 

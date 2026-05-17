@@ -297,7 +297,7 @@ The semantic analyzer SHALL continue to work identically for single-file program
 - **THEN** the analyzer produces the same `DecoratedProgram` as before this change
 
 ### Requirement: Template declaration validation
-The semantic analyzer SHALL validate `template` declarations by checking that every nested trait entry names a declared trait and that every field assignment inside a trait block belongs to that trait.
+The semantic analyzer SHALL validate `template` declarations by checking that every nested trait entry names a declared trait, every field assignment inside a trait block belongs to that trait, and every archetype-body `use` entry resolves to a template.
 
 #### Scenario: Template with undeclared trait rejected
 - **WHEN** a `template Foo:` contains a nested trait entry `UnknownTrait:`
@@ -307,8 +307,23 @@ The semantic analyzer SHALL validate `template` declarations by checking that ev
 - **WHEN** a `template` assigns a field inside `Health:` that is not declared on `Health`
 - **THEN** the analyzer SHALL report an error naming the unknown trait field
 
+#### Scenario: Template use of non-template rejected
+- **WHEN** a template body contains `use Health` and `Health` resolves to a trait rather than a template
+- **THEN** the analyzer SHALL report that archetype-body template uses must reference templates
+
+### Requirement: Template composition flattening
+The semantic analyzer SHALL flatten archetype-body `use TemplateName` entries in declaration order before backend generation and spawn-site validation. Flattening SHALL merge duplicate trait entries field-by-field, where later entries override earlier assignments for the same field, and SHALL reject cyclic template-use graphs.
+
+#### Scenario: Local entry overrides composed template field
+- **WHEN** `BossEnemy` uses `EnemyBase` and then defines `Health.health = 50`
+- **THEN** the flattened `BossEnemy` archetype uses `Health.health = 50` while preserving other `Health` fields from `EnemyBase`
+
+#### Scenario: Template-use cycle rejected
+- **WHEN** `template A` uses `B` and `template B` uses `A`
+- **THEN** semantic analysis reports a cyclic template-use error
+
 ### Requirement: Spawn-site validation
-At each block-structured `spawn TemplateName:` call site, the semantic analyzer SHALL verify the template exists, every overridden trait exists on the template, all overridden fields are valid for that trait, and all required fields remain satisfied after applying overrides.
+At each block-structured `spawn TemplateName:` call site, the semantic analyzer SHALL verify the template exists, every overridden trait exists on the template's flattened archetype, all overridden fields are valid for that trait, and all required fields remain satisfied after applying overrides.
 
 #### Scenario: Spawn of undeclared template rejected
 - **WHEN** `spawn UnknownFoo:` is used

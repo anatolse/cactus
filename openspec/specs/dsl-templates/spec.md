@@ -1,7 +1,7 @@
 ## Requirements
 
 ### Requirement: Template declaration syntax
-The language SHALL support a `template` top-level declaration that defines a reusable entity blueprint using nested trait entries instead of `apply:` and `config:` blocks. A `template` declaration has the same body structure as a `unit` declaration but is NOT automatically instantiated at program start. `template` declarations may be marked `pub` for cross-module access.
+The language SHALL support a `template` top-level declaration that defines a reusable entity blueprint using an archetype body instead of `apply:` and `config:` blocks. An archetype body contains nested trait entries and MAY contain body-level `use TemplateName` entries that compose another template at compile time. A `template` declaration has the same body structure as a `unit` declaration but is NOT automatically instantiated at program start. `template` declarations may be marked `pub` for cross-module access.
 
 #### Scenario: Template declared but not auto-instantiated
 - **WHEN** a module contains a `template Foo:` declaration
@@ -15,8 +15,23 @@ The language SHALL support a `template` top-level declaration that defines a reu
 - **WHEN** a `template` declares traits with required fields and omits those fields from its nested trait blocks
 - **THEN** the remaining required fields SHALL be provided at every `spawn` site or the compiler reports an error
 
+#### Scenario: Template composes another template
+- **WHEN** `template WalkerEnemy:` contains an archetype-body entry `use EnemyBase`
+- **THEN** `WalkerEnemy` is a composed blueprint whose flattened trait initializers include `EnemyBase` and its own entries without creating an entity
+
+### Requirement: Template composition is distinct from runtime spawn
+Archetype-body `use TemplateName` SHALL be compile-time blueprint composition. It SHALL NOT instantiate an entity, return an `entity_id`, or fire lifecycle handlers. `spawn TemplateName:` SHALL be the runtime construct that creates an entity from the named template after composition has been flattened.
+
+#### Scenario: Unit uses template without spawning
+- **WHEN** `unit FirstWalker:` contains `use WalkerEnemy`
+- **THEN** the unit is instantiated as one entity with `WalkerEnemy`'s flattened trait initializers and no additional entity is spawned by the `use` entry
+
+#### Scenario: Runtime spawn uses composed template
+- **WHEN** a handler executes `spawn WalkerEnemy:` and `WalkerEnemy` uses `EnemyBase`
+- **THEN** the spawned entity is created from the flattened `WalkerEnemy` archetype and receives trait initializers from both `WalkerEnemy` and `EnemyBase`
+
 ### Requirement: `spawn` statement creates entity from template
-The language SHALL support a block-structured `spawn` statement inside system event handlers. `spawn TemplateName:` creates a new entity using the named template as its archetype. Nested trait override blocks are merged with the template's trait initializers; provided values take precedence over template values.
+The language SHALL support a block-structured `spawn` statement inside system event handlers. `spawn TemplateName:` creates a new entity using the named template's already-composed archetype. Nested trait override blocks are merged with the template's flattened trait initializers; provided values take precedence over template values.
 
 #### Scenario: Spawn can override defaulted field
 - **WHEN** `spawn Foo:` overrides a field that `Foo` already initializes in its template body

@@ -1,0 +1,3 @@
+module import_std_text
+
+use std.text as text

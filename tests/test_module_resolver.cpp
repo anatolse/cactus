@@ -5,16 +5,22 @@
 #include "frontend/lexer.hpp"
 #include "frontend/module_resolver.hpp"
 #include "frontend/parser.hpp"
+#include "frontend/semantic_analyzer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 
 using namespace cactus;
 namespace fs = std::filesystem;
 
 static const fs::path FIXTURES = fs::path(CACTUS_TEST_FIXTURES_DIR) / "multi_module";
+
+static fs::path stdlib_root() {
+    return fs::path(CACTUS_TEST_FIXTURES_DIR).parent_path().parent_path() / "stdlib";
+}
 
 // ── Helper: parse a string into ProgramNode ─────────────────────────────────
 
@@ -27,6 +33,13 @@ static ProgramNode parse(const std::string& source) {
     auto program = parser.parse_program();
     REQUIRE_FALSE(errors.has_errors());
     return program;
+}
+
+static ProgramNode parse_file(const fs::path& file_path) {
+    std::ifstream input(file_path);
+    REQUIRE(input.is_open());
+    const std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    return parse(source);
 }
 
 // ── Dependency Extraction ───────────────────────────────────────────────────
@@ -122,6 +135,34 @@ TEST_CASE("ModuleResolver: locate nonexistent file", "[resolver]") {
     ModuleResolver resolver(errors);
     auto path = cactus::ModuleResolver::locate_file("nonexistent", {FIXTURES});
     CHECK(path.empty());
+}
+
+TEST_CASE("ModuleResolver: std.text import resolves from stdlib search root", "[resolver][stdlib][text]") {
+    ErrorReporter errors;
+    ModuleResolver resolver(errors);
+
+    auto result = resolver.resolve(FIXTURES / "import_std_text.cactus", {stdlib_root()});
+
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(result.size() == 2);
+    CHECK(result[0].qualified_name == "std.text");
+    CHECK(result[0].file_path.filename() == "text.cactus");
+    CHECK(result[1].qualified_name == "import_std_text");
+}
+
+TEST_CASE("ModuleResolver: std.text compiles without fixed-arity format extern", "[resolver][stdlib][text]") {
+    const auto text_path = ModuleResolver::locate_file("std.text", {stdlib_root()});
+    REQUIRE_FALSE(text_path.empty());
+
+    auto program = parse_file(text_path);
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    auto decorated = analyzer.analyze(program);
+
+    REQUIRE_FALSE(errors.has_errors());
+    CHECK(decorated.funcs.empty());
+    CHECK_FALSE(decorated.funcs.contains("format"));
 }
 
 // ── Full Resolution ─────────────────────────────────────────────────────────

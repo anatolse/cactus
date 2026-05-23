@@ -1,0 +1,21 @@
+module std.text
+
+# ── Text Formatting ───────────────────────────────────────────────────────────
+#
+# `format` is provided by the Cactus compiler as a stdlib intrinsic rather than
+# as a fixed-arity `extern func` declaration in this module. This keeps the
+# author-facing namespace stable (`use std.text` / `use std.text as text`) while
+# allowing the compiler to validate the string-literal format argument and the
+# variable number of formatting values at each call site.
+#
+# Examples, once semantic/backend support is enabled by the compiler:
+#
+#     use std.text
+#     let label = format("HP: {}/{}", hp, max_hp)
+#
+#     use std.text as text
+#     let score_label = text.format("Score: {}", score)
+#
+# No `pub extern func format(...)` declaration appears here intentionally: the
+# operation cannot be represented by the current fixed-arity extern function
+# model and is recognized specially as `std.text.format`.

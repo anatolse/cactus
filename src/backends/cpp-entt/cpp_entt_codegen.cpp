@@ -13,6 +13,21 @@
 namespace cactus {
 
 namespace {
+
+bool uses_text_format(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
+            if (use->module_name == "std.text") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Task 6.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
     for (const auto& [name, func] : program.funcs) {  // NOLINT(readability-use-anyofallof)
@@ -916,6 +931,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <unordered_map>\n";
     out << "#include <unordered_set>\n";
     out << "#include <vector>\n";
+    if (uses_text_format(program)) {
+        out << "#include <format>\n";
+    }
     // Task 6.2: Include runtime header when extern funcs are present
     if (has_extern_funcs(program)) {
         out << "#include \"cactus_runtime.hpp\"\n";

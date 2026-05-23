@@ -212,6 +212,26 @@ private:
     void build_dependency_graph(ProgramNode& program);
     void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep);
 
+    // Phase 3: std.text.format validation
+    bool is_std_text_format_callee(const ExprNode& callee) const;
+    void validate_text_format_calls(ProgramNode& program);
+    void validate_text_format_in_stmts(
+        const std::vector<std::unique_ptr<StmtNode>>& stmts,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const std::unordered_map<std::string, TypeInfo>& local_bindings,
+        const ResolvedStruct* handler_event);
+    void validate_text_format_in_expr(
+        const ExprNode& expr,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const std::unordered_map<std::string, TypeInfo>& local_bindings,
+        const ResolvedStruct* handler_event);
+    void validate_one_text_format_call(
+        const CallExpr& call,
+        const SourceLocation& loc,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const std::unordered_map<std::string, TypeInfo>& local_bindings,
+        const ResolvedStruct* handler_event);
+
     // Phase 5: after: validation
     void validate_after_clauses(ProgramNode& program);
 

@@ -854,4 +854,98 @@ TEST_CASE("Semantic: project participates in dependency writes", "[semantic][pro
     CHECK(result.dependency_graph[0].reads.count("Health") == 1);
     CHECK(result.dependency_graph[0].writes.count("DamageFlash") == 1);
 }
+
+// ── std.text.format semantic tests (add-stdlib-text-format) ───────────────────
+
+TEST_CASE("Semantic: std.text.format aliased import — valid single auto placeholder", "[semantic][std-text-format]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"Score: {}\", 42)\n"));
+}
+
+TEST_CASE("Semantic: std.text.format aliased import — valid multiple auto placeholders", "[semantic][std-text-format]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"HP: {}/{}\", 10, 100)\n"));
+}
+
+TEST_CASE("Semantic: std.text.format — valid no placeholders no args", "[semantic][std-text-format]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"Ready\")\n"));
+}
+
+TEST_CASE("Semantic: std.text.format — valid manual placeholder", "[semantic][std-text-format]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"{0} and {0} again\", 42)\n"));
+}
+
+TEST_CASE("Semantic: std.text.format — non-literal first arg is rejected", "[semantic][std-text-format]") {
+    auto err = analyze_first_error(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let x = 42\n"
+        "    let s = text.format(x)\n");
+    CHECK(err.find("must be a string literal") != std::string::npos);
+}
+
+TEST_CASE("Semantic: std.text.format — too few args for auto placeholders", "[semantic][std-text-format]") {
+    auto err = analyze_first_error(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"hello {} {}\")\n");
+    CHECK(err.find("placeholder") != std::string::npos);
+    CHECK(err.find("argument") != std::string::npos);
+}
+
+TEST_CASE("Semantic: std.text.format — manual index out of range", "[semantic][std-text-format]") {
+    auto err = analyze_first_error(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"{1}\", 42)\n");
+    CHECK(err.find("out of range") != std::string::npos);
+}
+
+TEST_CASE("Semantic: std.text.format — mixed automatic and manual placeholders rejected", "[semantic][std-text-format]") {
+    auto err = analyze_first_error(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"{} {0}\", 42, 43)\n");
+    CHECK(err.find("mixes") != std::string::npos);
+}
+
+TEST_CASE("Semantic: std.text.format — malformed unclosed brace rejected", "[semantic][std-text-format]") {
+    auto err = analyze_first_error(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"{\", 42)\n");
+    CHECK(err.find("malformed") != std::string::npos);
+}
+
+TEST_CASE("Semantic: std.text.format — unsupported vec2 arg type rejected", "[semantic][std-text-format]") {
+    auto err = analyze_first_error(
+        STDLIB_EVENTS +
+        "use std.text as text\n"
+        "trait Pos:\n"
+        "    var pos: vec2\n"
+        "system S:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on tick:\n"
+        "        let s = text.format(\"pos={}\", pos)\n");
+    CHECK(err.find("not supported") != std::string::npos);
+}
+
+TEST_CASE("Semantic: std.text.format — extra args with no placeholders rejected", "[semantic][std-text-format]") {
+    auto err = analyze_first_error(
+        "use std.text as text\n"
+        "func render():\n"
+        "    let s = text.format(\"Ready\", 42)\n");
+    CHECK(err.find("no placeholders") != std::string::npos);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

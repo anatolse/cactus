@@ -1,6 +1,7 @@
 #include "frontend/semantic_analyzer.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <ranges>
 #include <sstream>
@@ -294,6 +295,95 @@ std::vector<ArchetypeTraitEntry> clone_archetype_trait_entries(const std::vector
     return copy;
 }
 
+// ── std.text.format helpers ────────────────────────────────────────────────────
+
+struct FormatStringAnalysis {
+    int automatic_count  = 0;
+    int manual_max_index = -1;
+    bool has_automatic   = false;
+    bool has_manual      = false;
+};
+
+bool analyze_format_string(const std::string& fmt, FormatStringAnalysis& result, std::string& error_msg) {
+    size_t i = 0;
+    while (i < fmt.size()) {
+        const char c = fmt[i];
+        if (c == '{') {
+            if (i + 1 < fmt.size() && fmt[i + 1] == '{') {
+                i += 2;
+                continue;
+            }
+            size_t j = i + 1;
+            while (j < fmt.size() && fmt[j] != '}') {
+                j++;
+            }
+            if (j >= fmt.size()) {
+                error_msg = "malformed format string: unclosed '{'";
+                return false;
+            }
+            const std::string content = fmt.substr(i + 1, j - i - 1);
+            if (content.empty() || content[0] == ':') {
+                result.has_automatic = true;
+                result.automatic_count++;
+            } else if (std::isdigit(static_cast<unsigned char>(content[0]))) {
+                result.has_manual         = true;
+                const size_t colon_pos    = content.find(':');
+                const std::string idx_str = content.substr(0, colon_pos == std::string::npos ? content.size() : colon_pos);
+                try {
+                    const int idx = std::stoi(idx_str);
+                    if (idx < 0) {
+                        error_msg = "malformed format string: negative placeholder index";
+                        return false;
+                    }
+                    result.manual_max_index = std::max(result.manual_max_index, idx);
+                } catch (...) {
+                    error_msg = "malformed format string: invalid placeholder index";
+                    return false;
+                }
+            } else {
+                error_msg = "malformed format string: invalid replacement field content";
+                return false;
+            }
+            if (result.has_automatic && result.has_manual) {
+                error_msg = "format string mixes automatic and manual positional placeholders";
+                return false;
+            }
+            i = j + 1;
+        } else if (c == '}') {
+            if (i + 1 < fmt.size() && fmt[i + 1] == '}') {
+                i += 2;
+                continue;
+            }
+            error_msg = "malformed format string: unmatched '}'";
+            return false;
+        } else {
+            i++;
+        }
+    }
+    return true;
+}
+
+bool is_format_supported_type(TypeKind kind) {
+    switch (kind) {
+        case TypeKind::Int:
+        case TypeKind::Float:
+        case TypeKind::Bool:
+        case TypeKind::String:
+        case TypeKind::EntityId:
+        case TypeKind::MeshId:
+        case TypeKind::TextureId:
+        case TypeKind::SoundId:
+        case TypeKind::MusicId:
+        case TypeKind::FontId:
+        case TypeKind::MaterialId:
+        case TypeKind::InputButton:
+        case TypeKind::InputAxis:
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace
 
 // ── ModuleImports::add ──────────────────────────────────────────────────────
@@ -372,6 +462,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     check_persist_sync(program);
     validate_system_filters(program);
     validate_event_usage(program);
+    validate_text_format_calls(program);
 
     // Phase 3: Dynamic ECS checks (dynamic-ecs-language change)
     validate_template_unit_declarations(program);
@@ -758,8 +849,14 @@ void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_co
                 check_const_strings_expr(*e.operand, in_const);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 check_const_strings_expr(*e.callee, in_const);
-                for (auto& arg : e.args) {
-                    check_const_strings_expr(*arg, in_const);
+                if (is_std_text_format_callee(*e.callee)) {
+                    for (size_t i = 0; i < e.args.size(); ++i) {
+                        check_const_strings_expr(*e.args[i], in_const || (i == 0));
+                    }
+                } else {
+                    for (auto& arg : e.args) {
+                        check_const_strings_expr(*arg, in_const);
+                    }
                 }
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 check_const_strings_expr(*e.object, in_const);
@@ -1832,6 +1929,239 @@ const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& n
     return nullptr;
 }
 
+// ── std.text.format recognition ────────────────────────────────────────────────
+
+bool SemanticAnalyzer::is_std_text_format_callee(const ExprNode& callee) const {
+    if (result_.ast == nullptr) {
+        return false;
+    }
+    // Unaliased: format(...) from use std.text (no alias)
+    if (const auto* ident = std::get_if<IdentExpr>(&callee.expr)) {
+        if (ident->name != "format") {
+            return false;
+        }
+        for (const auto& decl : result_.ast->declarations) {
+            if (const auto* use = std::get_if<UseNode>(&decl)) {
+                if (use->module_name == "std.text" && !use->alias.has_value()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    // Aliased: qualifier.format(...) — qualifier resolves to std.text
+    if (const auto* member = std::get_if<MemberExpr>(&callee.expr)) {
+        if (member->member != "format") {
+            return false;
+        }
+        if (const auto* obj = std::get_if<IdentExpr>(&member->object->expr)) {
+            for (const auto& decl : result_.ast->declarations) {
+                if (const auto* use = std::get_if<UseNode>(&decl)) {
+                    if (use->module_name != "std.text") {
+                        continue;
+                    }
+                    if (use->alias.has_value() && *use->alias == obj->name) {
+                        return true;
+                    }
+                    if (!use->alias.has_value() && obj->name == "text") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// ── std.text.format validation ────────────────────────────────────────────────
+
+void SemanticAnalyzer::validate_one_text_format_call(
+    const CallExpr& call,
+    const SourceLocation& loc,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event) {
+
+    if (call.args.empty()) {
+        errors_.error(loc, "std.text.format requires a format string as the first argument");
+        return;
+    }
+
+    // First arg must be a string literal
+    const auto* fmt_lit = std::get_if<LiteralExpr>(&call.args[0]->expr);
+    if (fmt_lit == nullptr || fmt_lit->kind != LiteralExpr::Kind::String) {
+        errors_.error(loc, "the first argument to std.text.format must be a string literal");
+        return;
+    }
+
+    // Parse and validate the format string
+    FormatStringAnalysis analysis;
+    std::string parse_error;
+    if (!analyze_format_string(fmt_lit->value, analysis, parse_error)) {
+        errors_.error(loc, parse_error);
+        return;
+    }
+
+    const auto value_arg_count = static_cast<int>(call.args.size()) - 1;
+
+    if (analysis.has_automatic) {
+        if (value_arg_count != analysis.automatic_count) {
+            errors_.error(loc,
+                          "format string has " + std::to_string(analysis.automatic_count) + " placeholder(s) but " +
+                              std::to_string(value_arg_count) + " argument(s) were provided");
+            return;
+        }
+    } else if (analysis.has_manual) {
+        if (analysis.manual_max_index >= value_arg_count) {
+            errors_.error(loc,
+                          "format string placeholder index " + std::to_string(analysis.manual_max_index) +
+                              " is out of range; only " + std::to_string(value_arg_count) +
+                              " format argument(s) were provided");
+            return;
+        }
+    } else {
+        // No placeholders: no value args allowed
+        if (value_arg_count > 0) {
+            errors_.error(loc,
+                          "format string has no placeholders but " + std::to_string(value_arg_count) +
+                              " argument(s) were provided");
+            return;
+        }
+    }
+
+    // Validate value arg types
+    for (size_t i = 1; i < call.args.size(); ++i) {
+        auto arg_type = infer_expr_type(*call.args[i], filter_bindings, local_bindings, handler_event);
+        if (arg_type.kind != TypeKind::Unknown && !is_format_supported_type(arg_type.kind)) {
+            errors_.error(call.args[i]->location,
+                          "type '" + arg_type.name + "' is not supported by std.text.format in v1");
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_text_format_in_expr(
+    const ExprNode& expr,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event) {
+
+    if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        if (is_std_text_format_callee(*call->callee)) {
+            validate_one_text_format_call(*call, expr.location, filter_bindings, local_bindings, handler_event);
+        } else {
+            validate_text_format_in_expr(*call->callee, filter_bindings, local_bindings, handler_event);
+            for (const auto& arg : call->args) {
+                validate_text_format_in_expr(*arg, filter_bindings, local_bindings, handler_event);
+            }
+        }
+    } else if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
+        validate_text_format_in_expr(*binary->left, filter_bindings, local_bindings, handler_event);
+        validate_text_format_in_expr(*binary->right, filter_bindings, local_bindings, handler_event);
+    } else if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
+        validate_text_format_in_expr(*unary->operand, filter_bindings, local_bindings, handler_event);
+    } else if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        validate_text_format_in_expr(*member->object, filter_bindings, local_bindings, handler_event);
+    } else if (const auto* if_expr = std::get_if<IfExpr>(&expr.expr)) {
+        validate_text_format_in_expr(*if_expr->condition, filter_bindings, local_bindings, handler_event);
+        validate_text_format_in_expr(*if_expr->then_expr, filter_bindings, local_bindings, handler_event);
+        validate_text_format_in_expr(*if_expr->else_expr, filter_bindings, local_bindings, handler_event);
+    } else if (const auto* list = std::get_if<ListExpr>(&expr.expr)) {
+        for (const auto& elem : list->elements) {
+            validate_text_format_in_expr(*elem, filter_bindings, local_bindings, handler_event);
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_text_format_in_stmts(
+    const std::vector<std::unique_ptr<StmtNode>>& stmts,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event) {
+
+    auto locals = local_bindings;
+    for (const auto& stmt : stmts) {
+        std::visit(
+            [&](const auto& s) {
+                using S = std::decay_t<decltype(s)>;
+                if constexpr (std::is_same_v<S, LetStmt>) {
+                    validate_text_format_in_expr(*s.value, filter_bindings, locals, handler_event);
+                    locals[s.name] = infer_expr_type(*s.value, filter_bindings, locals, handler_event);
+                } else if constexpr (std::is_same_v<S, VarAssign>) {
+                    validate_text_format_in_expr(*s.value, filter_bindings, locals, handler_event);
+                } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                    validate_text_format_in_expr(*s.expr, filter_bindings, locals, handler_event);
+                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                    if (s.value) {
+                        validate_text_format_in_expr(**s.value, filter_bindings, locals, handler_event);
+                    }
+                } else if constexpr (std::is_same_v<S, EmitStmt>) {
+                    if (s.target) {
+                        validate_text_format_in_expr(**s.target, filter_bindings, locals, handler_event);
+                    }
+                    for (const auto& field : s.payload) {
+                        validate_text_format_in_expr(*field.value, filter_bindings, locals, handler_event);
+                    }
+                } else if constexpr (std::is_same_v<S, IfStmt>) {
+                    validate_text_format_in_expr(*s.condition, filter_bindings, locals, handler_event);
+                    validate_text_format_in_stmts(s.then_body, filter_bindings, locals, handler_event);
+                    validate_text_format_in_stmts(s.else_body, filter_bindings, locals, handler_event);
+                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                    validate_text_format_in_expr(*s.iterable, filter_bindings, locals, handler_event);
+                    validate_text_format_in_stmts(s.body, filter_bindings, locals, handler_event);
+                }
+            },
+            stmt->stmt);
+    }
+}
+
+void SemanticAnalyzer::validate_text_format_calls(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        std::visit(
+            [this](auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, FuncNode>) {
+                    validate_text_format_in_stmts(node.body, {}, {}, nullptr);
+                } else if constexpr (std::is_same_v<T, SystemNode>) {
+                    for (auto& handler : node.handlers) {
+                        std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
+                        for (const auto& entry : node.filter.entries) {
+                            auto dot        = entry.qualified_name.rfind('.');
+                            auto simple     = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1)
+                                                                         : entry.qualified_name;
+                            const auto* tr  = find_resolved_trait(simple);
+                            if (tr != nullptr) {
+                                filter_bindings[simple] = tr;
+                                if (entry.alias.has_value()) {
+                                    filter_bindings[*entry.alias] = tr;
+                                }
+                            }
+                        }
+                        for (const auto& trait_name : node.filter.trait_names) {
+                            const auto* tr = find_resolved_trait(trait_name);
+                            if (tr != nullptr) {
+                                filter_bindings[trait_name] = tr;
+                            }
+                        }
+
+                        const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
+                        std::unordered_map<std::string, TypeInfo> local_bindings;
+                        if (handler_event != nullptr) {
+                            local_bindings[handler.event_name] =
+                                TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                            if (handler.alias.has_value()) {
+                                local_bindings[*handler.alias] =
+                                    TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                            }
+                        }
+
+                        validate_text_format_in_stmts(handler.body, filter_bindings, local_bindings, handler_event);
+                    }
+                }
+            },
+            decl);
+    }
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                                            const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -1936,6 +2266,9 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return make_entity_id_type();
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        if (is_std_text_format_callee(*call->callee)) {
+            return make_string_type();
+        }
         if (auto* ident = std::get_if<IdentExpr>(&call->callee->expr); ident != nullptr && ident->name == "exists") {
             if (handler_event == nullptr) {
                 errors_.error(expr.location,

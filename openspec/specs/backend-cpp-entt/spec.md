@@ -560,6 +560,34 @@ The cpp-entt backend SHALL maintain at most one projected value per `(entity, tr
 - **THEN** later filter matching observes one `DamageFlash` value for that entity
 - **AND** cleanup restores the value that existed before the first projection, if any
 
+### Requirement: cpp-entt backend lowers `std.text.format` to C++20 `std::format`
+The cpp-entt backend SHALL compile recognized `std.text.format` calls to C++20 `std::format` expressions. The generated C++ SHALL preserve the source format string and pass each Cactus formatting value in argument order after normal expression lowering.
+
+Generated cpp-entt translation units that contain at least one lowered `std.text.format` call SHALL include `<format>`.
+
+#### Scenario: Unqualified format call lowers to std::format
+- **WHEN** authored code imports `std.text` and calls `format("HP: {}", hp)`
+- **THEN** the backend emits a C++ expression equivalent to `std::format("HP: {}", hp)` and includes `<format>`
+
+#### Scenario: Aliased format call lowers to std::format
+- **WHEN** authored code imports `std.text as text` and calls `text.format("Score: {}", score)`
+- **THEN** the backend emits a C++ expression equivalent to `std::format("Score: {}", score)` and includes `<format>`
+
+#### Scenario: Non-format stdlib calls are not affected
+- **WHEN** authored code calls `std.math.sqrt(x)`
+- **THEN** the backend lowers it using existing stdlib math behavior and does not treat it as a text-format call
+
+### Requirement: cpp-entt backend preserves C++20 format semantics
+The cpp-entt backend SHALL preserve C++20 replacement-field syntax in generated format strings, including automatic placeholders, manual positional placeholders, format-spec tails, and escaped braces.
+
+#### Scenario: Format specifier preserved
+- **WHEN** authored code calls `text.format("time={:.2f}", seconds)`
+- **THEN** the generated C++ format string remains `"time={:.2f}"`
+
+#### Scenario: Manual placeholder order preserved
+- **WHEN** authored code calls `text.format("{1} / {0}", first, second)`
+- **THEN** the generated C++ format string remains `"{1} / {0}"`
+
 ### Requirement: cpp-entt system filters include projected registry components
 For generated system handlers, the cpp-entt backend SHALL match entities that satisfy filter traits through registry components, including components materialized by projection earlier in the frame. Exclude traits SHALL also consider projected registry components.
 

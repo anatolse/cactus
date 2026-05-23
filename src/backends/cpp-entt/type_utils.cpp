@@ -78,6 +78,21 @@ std::string lower_unqualified_stdlib_func(const ProgramNode* ast,
     if (ast == nullptr) {
         return {};
     }
+    if (func_name == "format") {
+        for (const auto& decl : ast->declarations) {
+            const auto* use = std::get_if<UseNode>(&decl);
+            if (use != nullptr && !use->alias.has_value() && use->module_name == "std.text") {
+                std::string result = "std::format(";
+                for (size_t i = 0; i < args.size(); ++i) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += emit_args(*args[i]);
+                }
+                return result + ")";
+            }
+        }
+    }
     for (const auto& decl : ast->declarations) {
         const auto* use = std::get_if<UseNode>(&decl);
         if (use == nullptr || use->alias.has_value()) {
@@ -112,6 +127,16 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
     const auto* object_ident = std::get_if<IdentExpr>(&member.object->expr);
     if (object_ident == nullptr) {
         return {};
+    }
+    if (member.member == "format" && imported_module_name(ast, object_ident->name) == "std.text") {
+        std::string result = "std::format(";
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i > 0) {
+                result += ", ";
+            }
+            result += emit_arg(*args[i]);
+        }
+        return result + ")";
     }
     const std::string prefix = stdlib_runtime_prefix(ast, object_ident->name);
     if (prefix.empty()) {

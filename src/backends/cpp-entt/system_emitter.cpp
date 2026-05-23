@@ -104,6 +104,14 @@ std::string lower_unqualified_stdlib_func(const DecoratedProgram& program,
     if (program.ast == nullptr) {
         return {};
     }
+    if (func_name == "format") {
+        for (const auto& decl : program.ast->declarations) {
+            const auto* use = std::get_if<UseNode>(&decl);
+            if (use != nullptr && !use->alias.has_value() && use->module_name == "std.text") {
+                return "std::format";
+            }
+        }
+    }
     for (const auto& decl : program.ast->declarations) {
         const auto* use = std::get_if<UseNode>(&decl);
         if (use == nullptr || use->alias.has_value()) {
@@ -138,6 +146,16 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
     const auto* object = std::get_if<IdentExpr>(&member.object->expr);
     if (object == nullptr) {
         return {};
+    }
+    if (member.member == "format" && imported_module_name(program.ast, object->name) == "std.text") {
+        std::string result = "std::format(";
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i > 0) {
+                result += ", ";
+            }
+            result += emit_arg(*args[i]);
+        }
+        return result + ")";
     }
     const std::string prefix = stdlib_runtime_prefix(program.ast, object->name);
     if (prefix.empty()) {

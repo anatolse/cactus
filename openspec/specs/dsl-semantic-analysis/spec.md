@@ -11,7 +11,7 @@ The semantic analyzer SHALL resolve all type references in the AST to concrete T
 - **THEN** the analyzer reports an error "unknown type 'Foo'" with the source location
 
 ### Requirement: Const-string enforcement
-The semantic analyzer SHALL reject string literals (`"..."`) that appear outside of `const` blocks or `asset` declarations. String literals inside `trait`, `unit`, `system`, `func`, and `event` bodies SHALL produce a compile error.
+The semantic analyzer SHALL reject string literals (`"..."`) that appear outside of `const` blocks, `asset` declarations, or the first argument position of a recognized `std.text.format` call. String literals in other `trait`, `unit`, `system`, `func`, and `event` expression positions SHALL produce a compile error.
 
 #### Scenario: String literal in trait body rejected
 - **WHEN** a trait field has a default value of `"hello"`
@@ -24,6 +24,41 @@ The semantic analyzer SHALL reject string literals (`"..."`) that appear outside
 #### Scenario: String literal in asset declaration accepted
 - **WHEN** `asset Theme: music = "audio/theme.ogg"` appears in a source file
 - **THEN** the analyzer accepts the string literal as an asset path without error
+
+#### Scenario: Format string literal accepted in recognized format call
+- **WHEN** a system handler or pure function contains `text.format("HP: {}", hp)` and `text` resolves to `std.text`
+- **THEN** the analyzer accepts the first string literal as a format string without reporting the const-string error
+
+#### Scenario: Non-format string argument remains rejected
+- **WHEN** authored code calls some ordinary function as `log("HP: {}", hp)` and that call is not recognized as `std.text.format`
+- **THEN** the analyzer rejects the string literal outside a const block
+
+### Requirement: Semantic analyzer validates `std.text.format` calls
+The semantic analyzer SHALL recognize calls resolved to `std.text.format`, infer their result type as `string`, and validate their format string and arguments. The first argument MUST be a string literal. Format-string validation SHALL detect malformed braces, escaped braces, automatic/manual placeholder mode, placeholder arity, and manual placeholder indexes.
+
+#### Scenario: Format call returns string
+- **WHEN** authored code binds `let label = text.format("Score: {}", score)`
+- **THEN** the analyzer infers `label` as type `string`
+
+#### Scenario: Non-literal format string rejected
+- **WHEN** authored code calls `text.format(fmt, score)` where `fmt` is a variable or const identifier rather than a literal at the call site
+- **THEN** the analyzer reports that the first argument to `std.text.format` must be a string literal
+
+#### Scenario: Too few arguments rejected
+- **WHEN** authored code calls `text.format("{} {}", a)`
+- **THEN** semantic analysis reports a placeholder/argument count mismatch
+
+#### Scenario: Manual placeholder index out of range rejected
+- **WHEN** authored code calls `text.format("{1}", a)`
+- **THEN** semantic analysis reports that placeholder index `1` has no corresponding format argument
+
+#### Scenario: Malformed brace rejected
+- **WHEN** authored code calls `text.format("value={", value)`
+- **THEN** semantic analysis reports a malformed format string
+
+#### Scenario: Unsupported argument type rejected
+- **WHEN** authored code calls `text.format("{}", some_vec2)` where the argument type is `vec2`
+- **THEN** semantic analysis reports that the argument type is not supported by `std.text.format`
 
 ### Requirement: Func purity enforcement
 The semantic analyzer SHALL verify that user-defined `func` declarations (those with `is_extern = false`) are pure: no `emit` statements, no mutation of external state, no `world` access. Violations SHALL produce a compile error. `extern func` declarations (those with `is_extern = true`) SHALL be skipped entirely — purity is not enforced over backend-provided functions.

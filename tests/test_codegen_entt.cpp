@@ -1352,4 +1352,78 @@ TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codeg
     CHECK(code.find("registry.try_get<Grounded>") == std::string::npos);
     CHECK(code.find("std::optional<Grounded>") == std::string::npos);
 }
+
+// ── std.text.format codegen tests (add-stdlib-text-format) ───────────────────
+
+TEST_CASE("Codegen EnTT: aliased std.text.format lowers to std::format in system handler",
+          "[codegen-entt][std-text-format]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.text as text\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Score:\n"
+        "    var value: int\n"
+        "system Display:\n"
+        "    filter:\n"
+        "        Score\n"
+        "    on tick:\n"
+        "        let s = text.format(\"Score: {}\", value)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("std::format(") != std::string::npos);
+    CHECK(code.find("\"Score: {}\"") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: std.text import causes format header to be emitted",
+          "[codegen-entt][std-text-format]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.text as text\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Score:\n"
+        "    var value: int\n"
+        "system Display:\n"
+        "    filter:\n"
+        "        Score\n"
+        "    on tick:\n"
+        "        let s = text.format(\"Score: {}\", value)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("#include <format>") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: no std.text import means no format header", "[codegen-entt][std-text-format]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Score:\n"
+        "    var value: int\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("#include <format>") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in system handler",
+          "[codegen-entt][std-text-format]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.text\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Score:\n"
+        "    var value: int\n"
+        "system Display:\n"
+        "    filter:\n"
+        "        Score\n"
+        "    on tick:\n"
+        "        let s = format(\"Score: {}\", value)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("std::format(") != std::string::npos);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -218,7 +218,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
-        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
+        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
+        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -252,6 +253,12 @@ bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     }
     if (sys.name == "DirectionalLightSystem") {
         return filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
+    }
+    if (sys.name == "TextRenderer2D") {
+        return filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
+    }
+    if (sys.name == "TextRenderer3D") {
+        return filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
     }
     return false;
 }

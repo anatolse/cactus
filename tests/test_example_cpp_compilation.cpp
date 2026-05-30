@@ -151,6 +151,20 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_PLATFORMER_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_PLATFORMER_TARGET,
         },
+        ExampleCase{
+            .name           = "waving-label-2d",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_WAVING_LABEL_2D_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_WAVING_LABEL_2D_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_WAVING_LABEL_2D_TARGET,
+        },
+        ExampleCase{
+            .name           = "waving-label-3d",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_WAVING_LABEL_3D_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_WAVING_LABEL_3D_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_WAVING_LABEL_3D_TARGET,
+        },
     };
 }
 

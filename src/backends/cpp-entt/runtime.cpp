@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <memory_resource>
+#include <numbers>
 #include <raymath.h>
 #include <string>
 #include <string_view>
@@ -39,6 +40,32 @@ struct PointLightSubmission {
     Color color{};
     float intensity{1.0F};
     float range{10.0F};
+};
+
+struct TextSubmission2D {
+    Vector2 position{};
+    float   rotation_deg{0.0F};
+    int     font_size{32};
+    Color   color{};
+    std::string text;
+};
+
+struct TextSubmission3D {
+    uint32_t    entity_id{0};
+    Vector3     position{};
+    Quat        rotation{};
+    Vector3     scale{};
+    int         font_size{1};
+    Color       color{};
+    std::string text;
+};
+
+struct TextLabel3DEntry {
+    RenderTexture2D rt{};
+    std::string     cached_text;
+    int             cached_font_size{0};
+    Color           cached_color{};
+    bool            loaded{false};
 };
 
 struct TextureResourceEntry {
@@ -77,6 +104,21 @@ std::pmr::vector<MeshSubmission>& mesh_queue() noexcept {
 std::pmr::vector<PointLightSubmission>& point_light_queue() noexcept {
     static std::pmr::vector<PointLightSubmission> queue{&render_queue_resource()};
     return queue;
+}
+
+std::vector<TextSubmission2D>& text_2d_queue() noexcept {
+    static std::vector<TextSubmission2D> queue;
+    return queue;
+}
+
+std::vector<TextSubmission3D>& text_3d_queue() noexcept {
+    static std::vector<TextSubmission3D> queue;
+    return queue;
+}
+
+std::unordered_map<uint32_t, TextLabel3DEntry>& text_label_3d_cache() noexcept {
+    static std::unordered_map<uint32_t, TextLabel3DEntry> cache;
+    return cache;
 }
 
 std::unordered_map<int, TextureResourceEntry>& textures() noexcept {
@@ -515,6 +557,159 @@ void flush_mesh_queue() noexcept {
     EndMode3D();
 }
 
+// Shared 1×1 XY-plane mesh (normal = +Z). V coordinates are pre-flipped to
+// cancel the RenderTexture2D vertical inversion so text appears upright.
+Mesh& text_plane_mesh() noexcept {
+    static Mesh mesh{};
+    static bool ready{false};
+    if (!ready && IsWindowReady()) {
+        constexpr int kVerts     = 4;
+        constexpr int kTriangles = 2;
+
+        mesh.vertexCount  = kVerts;
+        mesh.triangleCount = kTriangles;
+
+        mesh.vertices  = static_cast<float*>(MemAlloc(static_cast<unsigned>(kVerts * 3) * sizeof(float)));
+        mesh.texcoords = static_cast<float*>(MemAlloc(static_cast<unsigned>(kVerts * 2) * sizeof(float)));
+        mesh.normals   = static_cast<float*>(MemAlloc(static_cast<unsigned>(kVerts * 3) * sizeof(float)));
+        mesh.indices   = static_cast<unsigned short*>(
+            MemAlloc(static_cast<unsigned>(kTriangles * 3) * sizeof(unsigned short)));
+
+        // Positions: XY plane, centred, counter-clockwise when viewed from +Z
+        // [0] bottom-left  [1] bottom-right  [2] top-right  [3] top-left
+        const std::array<float, 12> verts = {
+            -0.5F, -0.5F, 0.0F,
+             0.5F, -0.5F, 0.0F,
+             0.5F,  0.5F, 0.0F,
+            -0.5F,  0.5F, 0.0F,
+        };
+        // UVs: V=0 at top, V=1 at bottom — cancels RenderTexture2D Y-flip
+        const std::array<float, 8> uvs = {
+            0.0F, 1.0F,
+            1.0F, 1.0F,
+            1.0F, 0.0F,
+            0.0F, 0.0F,
+        };
+        const std::array<float, 12> normals = {
+            0.0F, 0.0F, 1.0F,
+            0.0F, 0.0F, 1.0F,
+            0.0F, 0.0F, 1.0F,
+            0.0F, 0.0F, 1.0F,
+        };
+        const std::array<unsigned short, 6> indices = { 0, 1, 2, 0, 2, 3 };
+
+        for (int i = 0; i < kVerts * 3; ++i) { mesh.vertices[i]  = verts[static_cast<size_t>(i)]; }
+        for (int i = 0; i < kVerts * 2; ++i) { mesh.texcoords[i] = uvs[static_cast<size_t>(i)]; }
+        for (int i = 0; i < kVerts * 3; ++i) { mesh.normals[i]   = normals[static_cast<size_t>(i)]; }
+        for (int i = 0; i < kTriangles * 3; ++i) { mesh.indices[i] = indices[static_cast<size_t>(i)]; }
+
+        UploadMesh(&mesh, false);
+        ready = true;
+    }
+    return mesh;
+}
+
+void flush_text_2d_queue() noexcept {
+    if (text_2d_queue().empty() || !IsWindowReady()) {
+        return;
+    }
+    const Font font       = GetFontDefault();
+    constexpr float kSpacing = 1.0F;
+
+    Camera2D camera{};
+    camera.zoom = 1.0F;
+    BeginMode2D(camera);
+    for (const auto& sub : text_2d_queue()) {
+        const auto fs       = static_cast<float>(sub.font_size);
+        const Vector2 size  = MeasureTextEx(font, sub.text.c_str(), fs, kSpacing);
+        const Vector2 origin{.x = size.x * 0.5F, .y = size.y * 0.5F};
+        DrawTextPro(font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
+    }
+    EndMode2D();
+}
+
+void flush_text_3d_queue() noexcept {
+    if (text_3d_queue().empty() || !IsWindowReady()) {
+        return;
+    }
+
+    constexpr int kPixelsPerWorldUnit = 256;
+
+    // Phase 1: bake dirty render textures (must be outside any BeginMode block)
+    for (auto& sub : text_3d_queue()) {
+        if (sub.text.empty()) {
+            continue;
+        }
+        auto& entry = text_label_3d_cache()[sub.entity_id];
+        const bool dirty = !entry.loaded
+                        || entry.cached_text      != sub.text
+                        || entry.cached_font_size != sub.font_size
+                        || entry.cached_color.r   != sub.color.r
+                        || entry.cached_color.g   != sub.color.g
+                        || entry.cached_color.b   != sub.color.b
+                        || entry.cached_color.a   != sub.color.a;
+        if (!dirty) {
+            continue;
+        }
+        const int tex_h = std::max(64, sub.font_size * kPixelsPerWorldUnit);
+        const int tex_w = tex_h * 4;
+        if (entry.loaded) {
+            UnloadRenderTexture(entry.rt);
+        }
+        entry.rt     = LoadRenderTexture(tex_w, tex_h);
+        entry.loaded = true;
+
+        const int bake_fs   = static_cast<int>(static_cast<float>(tex_h) * 0.75F);
+        const int text_w_px = MeasureText(sub.text.c_str(), bake_fs);
+        const int draw_x    = (tex_w - text_w_px) / 2;
+        const int draw_y    = (tex_h - bake_fs) / 2;
+
+        BeginTextureMode(entry.rt);
+        ClearBackground(Color{.r = 0, .g = 0, .b = 0, .a = 0});
+        DrawText(sub.text.c_str(), draw_x, draw_y, bake_fs, sub.color);
+        EndTextureMode();
+
+        entry.cached_text      = sub.text;
+        entry.cached_font_size = sub.font_size;
+        entry.cached_color     = sub.color;
+    }
+
+    // Phase 2: draw plane meshes inside the 3D camera block
+    Camera3D camera{};
+    camera.position   = Vector3{.x = 6.0F, .y = 6.0F, .z = 6.0F};
+    camera.target     = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    camera.up         = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F};
+    camera.fovy       = 45.0F;
+    camera.projection = CAMERA_PERSPECTIVE;
+
+    Mesh& plane = text_plane_mesh();
+
+    BeginMode3D(camera);
+    for (const auto& sub : text_3d_queue()) {
+        if (sub.text.empty()) {
+            continue;
+        }
+        auto it = text_label_3d_cache().find(sub.entity_id);
+        if (it == text_label_3d_cache().end() || !it->second.loaded) {
+            continue;
+        }
+        Material mat           = LoadMaterialDefault();
+        mat.maps[MATERIAL_MAP_DIFFUSE].texture = it->second.rt.texture;
+
+        const Matrix xform = mesh_transform_matrix(MeshSubmission{
+            .position = sub.position,
+            .rotation = sub.rotation,
+            .scale    = sub.scale,
+        });
+        DrawMesh(plane, mat, xform);
+
+        // Detach texture before unloading the transient material to avoid freeing the cached RT
+        mat.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{};
+        UnloadMaterial(mat);
+    }
+    EndMode3D();
+}
+
 void flush_sprite_queue() noexcept {
     if (sprite_queue().empty()) {
         return;
@@ -566,6 +761,16 @@ void reset_render_debug_state() noexcept {
     sprite_queue().clear();
     mesh_queue().clear();
     point_light_queue().clear();
+    text_2d_queue().clear();
+    text_3d_queue().clear();
+    if (IsWindowReady()) {
+        for (auto& [id, entry] : text_label_3d_cache()) {
+            if (entry.loaded) {
+                UnloadRenderTexture(entry.rt);
+            }
+        }
+    }
+    text_label_3d_cache().clear();
     clear_texture_store();
     clear_mesh_store();
     clear_material_store();
@@ -581,6 +786,8 @@ void begin_render_frame() noexcept {
     sprite_queue().clear();
     mesh_queue().clear();
     point_light_queue().clear();
+    text_2d_queue().clear();
+    text_3d_queue().clear();
     render_debug_state_storage().used_default_2d_camera = false;
     render_debug_state_storage().used_default_3d_camera = false;
     render_debug_state_storage().active_point_lights    = 0;
@@ -590,10 +797,14 @@ void begin_render_frame() noexcept {
 
 void end_render_frame() noexcept {
     flush_mesh_queue();
+    flush_text_3d_queue();
     flush_sprite_queue();
+    flush_text_2d_queue();
     mesh_queue().clear();
     sprite_queue().clear();
     point_light_queue().clear();
+    text_2d_queue().clear();
+    text_3d_queue().clear();
 }
 
 void submit_sprite(const Vector2 position,
@@ -707,6 +918,47 @@ void register_directional_light(const Vector3 /*direction*/,
     if (enabled) {
         ++render_debug_state_storage().registered_directional_lights;
     }
+}
+
+void submit_text_2d(const Vector2 position,
+                    const float rotation_rad,
+                    const int font_size,
+                    const Color color,
+                    const std::string& text,
+                    const bool visible) noexcept {
+    if (!visible) {
+        return;
+    }
+    constexpr float kRadToDeg = 180.0F / std::numbers::pi_v<float>;
+    text_2d_queue().push_back(TextSubmission2D{
+        .position     = position,
+        .rotation_deg = rotation_rad * kRadToDeg,
+        .font_size    = font_size,
+        .color        = color,
+        .text         = text,
+    });
+}
+
+void submit_text_3d(const uint32_t entity_id,
+                    const Vector3 position,
+                    const Quat rotation,
+                    const Vector3 scale,
+                    const int font_size,
+                    const Color color,
+                    const std::string& text,
+                    const bool visible) noexcept {
+    if (!visible) {
+        return;
+    }
+    text_3d_queue().push_back(TextSubmission3D{
+        .entity_id = entity_id,
+        .position  = position,
+        .rotation  = rotation,
+        .scale     = scale,
+        .font_size = font_size,
+        .color     = color,
+        .text      = text,
+    });
 }
 
 void propagate_hierarchy(entt::registry& registry,

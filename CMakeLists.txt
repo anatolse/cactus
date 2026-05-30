@@ -229,6 +229,8 @@ set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.
 set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
 set(SHOOTER_SLICE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/shooter-slice.generated.cpp")
 set(CACTUS_SHOP_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/cactus-shop.generated.cpp")
+set(WAVING_LABEL_2D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-2d.generated.cpp")
+set(WAVING_LABEL_3D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-3d.generated.cpp")
 
 cactus_add_example(example_blue_square_generated
     SOURCE "examples/blue-square/square.cactus"
@@ -267,6 +269,18 @@ cactus_add_example(example_cactus_shop_generated
     BACKEND "cpp-entt"
     OUTPUT "${CACTUS_SHOP_GENERATED_CPP}"
     EXCLUDE_FROM_ALL
+)
+
+cactus_add_example(example_waving_label_2d_generated
+    SOURCE "examples/waving-label-2d/waving_label_2d.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${WAVING_LABEL_2D_GENERATED_CPP}"
+)
+
+cactus_add_example(example_waving_label_3d_generated
+    SOURCE "examples/waving-label-3d/waving_label_3d.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${WAVING_LABEL_3D_GENERATED_CPP}"
 )
 
 # ── Tests ───────────────────────────────────────────────────────────────────────

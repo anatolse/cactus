@@ -376,7 +376,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
-        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem") {
+        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
+        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -431,6 +432,26 @@ bool is_point_light_system(const ExternSystemNode& sys) {
 bool is_directional_light_system(const ExternSystemNode& sys) {
     return uses_stdlib_extern_contract(sys) && sys.name == "DirectionalLightSystem" &&
            filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
+}
+
+bool world_transform_is_volume(const DecoratedProgram& program) {
+    auto it = program.traits.find("WorldTransform");
+    if (it == program.traits.end()) {
+        return false;
+    }
+    return std::any_of(it->second.fields.begin(), it->second.fields.end(), [](const auto& f) {
+        return f.name == "rotation" && f.type.kind == TypeKind::Quat;
+    });
+}
+
+bool is_any_text_renderer_2d(const ExternSystemNode& sys) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "TextRenderer2D" &&
+           filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
+}
+
+bool is_any_text_renderer_3d(const ExternSystemNode& sys) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "TextRenderer3D" &&
+           filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
 }
 
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const SystemNode& sys) {
@@ -1090,7 +1111,6 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
 }
 
 std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, const DecoratedProgram& program) {
-    (void)program;
     std::ostringstream out;
 
     if (is_flat_transform_propagation(sys, program)) {
@@ -1273,6 +1293,41 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << "        cactus::runtime::entt_backend::register_directional_light(DirectionalLight_comp.direction, "
                "DirectionalLight_comp.color, DirectionalLight_comp.intensity, DirectionalLight_comp.enabled);\n";
         out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_any_text_renderer_2d(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        if (!world_transform_is_volume(program)) {
+            out << "    auto view = registry.view<WorldTransform, TextLabel>();\n";
+            out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const TextLabel& "
+                   "TextLabel_comp) {\n";
+            out << "        (void)entity;\n";
+            out << "        cactus::runtime::entt_backend::submit_text_2d(WorldTransform_comp.position, "
+                   "WorldTransform_comp.rotation, TextLabel_comp.font_size, TextLabel_comp.color, TextLabel_comp.text, "
+                   "TextLabel_comp.visible);\n";
+            out << "    });\n";
+        } else {
+            out << "    (void)registry;\n";
+        }
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_any_text_renderer_3d(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        if (world_transform_is_volume(program)) {
+            out << "    auto view = registry.view<WorldTransform, TextLabel>();\n";
+            out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const TextLabel& "
+                   "TextLabel_comp) {\n";
+            out << "        cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), "
+                   "WorldTransform_comp.position, WorldTransform_comp.rotation, WorldTransform_comp.scale, "
+                   "TextLabel_comp.font_size, TextLabel_comp.color, TextLabel_comp.text, TextLabel_comp.visible);\n";
+            out << "    });\n";
+        } else {
+            out << "    (void)registry;\n";
+        }
         out << "}\n\n";
         return out.str();
     }

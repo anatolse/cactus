@@ -1,0 +1,56 @@
+module waving_label_2d
+
+use std.math
+use std.transform.flat
+use std.render.shapes
+use std.render.text
+use std.text
+
+const:
+    WINDOW_WIDTH  = 800
+    WINDOW_HEIGHT = 600
+    WINDOW_TITLE  = "Waving Label 2D"
+    TARGET_FPS    = 60
+
+    CENTER_X    = 400.0
+    CENTER_Y    = 300.0
+    AMPLITUDE   = 250.0
+    WAVE_SPEED  = 1.2
+    ROT_SPEED   = 0.9
+    ROT_AMP     = 0.6
+
+trait Clock:
+    var elapsed: float = 0.0
+
+pub unit WavingSquare:
+    WorldTransform:
+        position = vec2(CENTER_X, CENTER_Y)
+        rotation = 0.0
+        scale    = vec2(1.0, 1.0)
+    Shape:
+        type    = ShapeType.Rectangle
+        size    = vec2(80.0, 80.0)
+        color   = #6495EDFF
+        visible = true
+    TextLabel:
+        text      = "00:00"
+        font_size = 32
+        color     = #FFFFFFFF
+        visible   = true
+    Clock:
+        elapsed = 0.0
+
+system WaveSystem:
+    filter:
+        WorldTransform
+        TextLabel
+        Clock
+
+    on tick:
+        elapsed = elapsed + tick.dt
+        position = vec2(CENTER_X + sin(elapsed * WAVE_SPEED) * AMPLITUDE, CENTER_Y)
+        rotation = sin(elapsed * ROT_SPEED) * ROT_AMP
+        let secs = floor(elapsed)
+        let mm   = secs / 60
+        let ss   = secs % 60
+        text = format("{:02}:{:02}", mm, ss)

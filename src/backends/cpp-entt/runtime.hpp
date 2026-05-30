@@ -4,8 +4,9 @@
 
 #include <entt/entt.hpp>
 
-#include <array>
+#include <cstdint>
 #include <functional>
+#include <string>
 
 namespace cactus::runtime::entt_backend {
 
@@ -61,6 +62,10 @@ void submit_mesh(Vector3 position,
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
+void submit_text_2d(Vector2 position, float rotation_rad, int font_size, Color color,
+                    const std::string& text, bool visible) noexcept;
+void submit_text_3d(std::uint32_t entity_id, Vector3 position, Quat rotation, Vector3 scale,
+                    int font_size, Color color, const std::string& text, bool visible) noexcept;
 
 void propagate_hierarchy(entt::registry& registry,
                          const std::function<bool(entt::entity)>& has_local_world,

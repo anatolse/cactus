@@ -96,6 +96,14 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_PLATFORMER_SOURCE="examples/platformer/platformer.cactus"
     CACTUS_EXAMPLE_PLATFORMER_GENERATED_CPP="${PLATFORMER_GENERATED_CPP}"
     CACTUS_EXAMPLE_PLATFORMER_TARGET="example_platformer_generated"
+
+    CACTUS_EXAMPLE_WAVING_LABEL_2D_SOURCE="examples/waving-label-2d/waving_label_2d.cactus"
+    CACTUS_EXAMPLE_WAVING_LABEL_2D_GENERATED_CPP="${WAVING_LABEL_2D_GENERATED_CPP}"
+    CACTUS_EXAMPLE_WAVING_LABEL_2D_TARGET="example_waving_label_2d_generated"
+
+    CACTUS_EXAMPLE_WAVING_LABEL_3D_SOURCE="examples/waving-label-3d/waving_label_3d.cactus"
+    CACTUS_EXAMPLE_WAVING_LABEL_3D_GENERATED_CPP="${WAVING_LABEL_3D_GENERATED_CPP}"
+    CACTUS_EXAMPLE_WAVING_LABEL_3D_TARGET="example_waving_label_3d_generated"
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)

@@ -612,3 +612,63 @@ The cpp-entt backend SHALL clear projected-trait state at the deterministic fram
 - **WHEN** an entity had durable `Highlighted` before projection and receives a projected `Highlighted` value during the frame
 - **THEN** the next frame observes the original durable `Highlighted` value unless authored code changed or removed it durably
 
+### Requirement: Backend recognizes TextRenderer2D and emits DrawTextPro-based 2D text rendering
+The cpp-entt backend SHALL recognize the `extern system TextRenderer2D` from `std.render.text` (identified by its filter containing `std.transform.flat.WorldTransform` and `TextLabel`) and emit a system body that submits text draw calls for the backend-owned 2D render pass. The generated code SHALL use `DrawTextPro` (or equivalent rotation-capable raylib function) so that `WorldTransform.rotation` (radians) is applied to the rendered text.
+
+#### Scenario: TextRenderer2D generates a draw-text submission
+- **WHEN** the backend encounters a recognized `TextRenderer2D` extern system
+- **THEN** it emits a tick function that iterates entities with `std.transform.flat.WorldTransform` and `TextLabel`, and for each visible entity submits a text draw call carrying position, rotation (converted from radians to degrees), font_size, color, and text string to the 2D render pass
+
+#### Scenario: Invisible 2D label is excluded from submission
+- **WHEN** `TextLabel.visible = false` on a flat-world entity
+- **THEN** the generated body skips the draw submission for that entity
+
+#### Scenario: Rotation is passed as degrees to the raylib draw call
+- **WHEN** a flat-world entity has `WorldTransform.rotation = r` (in radians)
+- **THEN** the emitted raylib call receives `r * (180.0f / PI)` as the rotation argument
+
+### Requirement: Backend recognizes TextRenderer3D and emits render-to-texture plane rendering
+The cpp-entt backend SHALL recognize the `extern system TextRenderer3D` from `std.render.text` (identified by its filter containing `std.transform.volume.WorldTransform` and `TextLabel`) and emit a system body that participates in the backend-owned 3D render pass. The implementation SHALL use a per-entity `RenderTexture2D` as the text surface and SHALL draw it as a plane mesh with the entity's full world transform applied via `DrawMesh`.
+
+#### Scenario: TextRenderer3D generates a render-texture-backed draw call
+- **WHEN** the backend encounters a recognized `TextRenderer3D` extern system
+- **THEN** it emits a tick function that for each visible entity with `std.transform.volume.WorldTransform` and `TextLabel`: ensures a per-entity `RenderTexture2D` exists, conditionally rebakes the texture if content is dirty, and submits a plane mesh draw to the 3D render pass using the entity's world position, rotation quaternion, and scale
+
+#### Scenario: Render texture is rebaked only when content changes
+- **WHEN** a volume-world entity's `TextLabel.text`, `TextLabel.font_size`, or `TextLabel.color` differs from the cached values
+- **THEN** the backend executes a bake pass (`BeginTextureMode → ClearBackground → DrawText → EndTextureMode`) before the 3D draw
+
+#### Scenario: Render texture is reused when content is unchanged
+- **WHEN** a volume-world entity's `TextLabel` fields have not changed since the previous bake
+- **THEN** the backend skips the bake pass and uses the existing `RenderTexture2D` for the draw call
+
+#### Scenario: Invisible 3D label is excluded from draw
+- **WHEN** `TextLabel.visible = false` on a volume-world entity
+- **THEN** the generated body skips both the bake check and the draw submission for that entity
+
+#### Scenario: Plane mesh orientation follows WorldTransform quaternion
+- **WHEN** a volume-world entity has `WorldTransform.rotation` set to a non-identity quaternion
+- **THEN** the backend applies the quaternion to the plane mesh draw call via a full 4×4 transform matrix (same `mesh_transform_matrix` pattern as `MeshRenderer`)
+
+### Requirement: Backend manages per-entity RenderTexture2D lifecycle
+The cpp-entt backend SHALL allocate `RenderTexture2D` resources lazily on first render and SHALL unload all text render textures during window/runtime teardown alongside other managed render resources.
+
+#### Scenario: Render texture is allocated on first render
+- **WHEN** a volume-world entity with `TextLabel` appears for the first time in a frame
+- **THEN** the backend allocates a `RenderTexture2D` sized appropriately for the text content and stores it keyed by entity
+
+#### Scenario: All render textures are released at teardown
+- **WHEN** the backend runtime tears down (window close or application exit)
+- **THEN** all `RenderTexture2D` resources held for text labels are unloaded via `UnloadRenderTexture`
+
+### Requirement: Backend uses a shared plane mesh for all TextRenderer3D draw calls
+The cpp-entt backend SHALL allocate a single plane mesh (XY-oriented, 1×1 world units, normal along +Z) shared across all `TextRenderer3D` entities. Per-entity variation SHALL be expressed only through the `DrawMesh` transform matrix and the per-entity bound texture.
+
+#### Scenario: Single plane mesh is allocated once
+- **WHEN** one or more volume-world entities with `TextLabel` are present
+- **THEN** the backend allocates exactly one plane mesh for all such entities, not one per entity
+
+#### Scenario: Per-entity texture is bound before each draw call
+- **WHEN** the backend draws two volume-world `TextLabel` entities with different text in the same frame
+- **THEN** each `DrawMesh` call uses the plane mesh but a distinct `RenderTexture2D`-backed material
+

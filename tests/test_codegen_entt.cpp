@@ -445,7 +445,7 @@ TEST_CASE("Codegen EnTT: generated init registers declared mesh and material ass
         "asset BlueCubeMesh: mesh = \"models/blue_cube.mesh\"\n"
         "asset BlueCubeMaterial: material = \"materials/blue_cube.mat\"\n"
         "trait Marker\n"
-        "unit Cube:\n"
+        "entity Cube:\n"
         "    Marker\n",
         program);
 
@@ -464,7 +464,7 @@ TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {
         "    var y: float\n"
         "trait Health:\n"
         "    var hp: int\n"
-        "unit Player:\n"
+        "entity Player:\n"
         "    Pos\n"
         "    Health\n",
         program);
@@ -496,7 +496,7 @@ TEST_CASE("Codegen EnTT: composed unit creation uses flattened template traits",
         "        armor = 5\n"
         "    Patrol:\n"
         "        speed = 2.0\n"
-        "unit Walker1:\n"
+        "entity Walker1:\n"
         "    use WalkerEnemy\n"
         "    Health:\n"
         "        hp = 4\n",
@@ -1425,5 +1425,65 @@ TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in syst
 
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("std::format(") != std::string::npos);
+}
+
+// ── Task 3.5: Template-backed entity backend tests ────────────────────────────
+
+TEST_CASE("Codegen EnTT: template-backed entity emits template components plus overrides",
+          "[codegen-entt][entity]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Shape:\n"
+        "    var size: float = 16.0\n"
+        "trait Collectible:\n"
+        "    var point_value: int = 10\n"
+        "trait WorldTransform:\n"
+        "    var x: float = 0.0\n"
+        "template BlueGem:\n"
+        "    Shape:\n"
+        "        size = 16.0\n"
+        "    Collectible:\n"
+        "        point_value = 10\n"
+        "    WorldTransform\n"
+        "entity Gem1 from BlueGem:\n"
+        "    WorldTransform:\n"
+        "        x = 250.0\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    // Should have a create function for Gem1 that emplaces Shape, Collectible, and WorldTransform
+    CHECK(code.find("create_gem1") != std::string::npos);
+    CHECK(code.find("emplace<Shape>") != std::string::npos);
+    CHECK(code.find("emplace<Collectible>") != std::string::npos);
+    CHECK(code.find("emplace<WorldTransform>") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: mixed entity creation order preserved", "[codegen-entt][entity]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Tag:\n"
+        "    var v: int = 0\n"
+        "template T:\n"
+        "    Tag:\n"
+        "        v = 1\n"
+        "entity A:\n"
+        "    Tag\n"
+        "entity B from T:\n"
+        "    Tag:\n"
+        "        v = 2\n"
+        "entity C:\n"
+        "    Tag\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    // A, B, C should appear in that order in the init function
+    const auto pos_a = code.find("create_a(registry)");
+    const auto pos_b = code.find("create_b(registry)");
+    const auto pos_c = code.find("create_c(registry)");
+    REQUIRE(pos_a != std::string::npos);
+    REQUIRE(pos_b != std::string::npos);
+    REQUIRE(pos_c != std::string::npos);
+    CHECK(pos_a < pos_b);
+    CHECK(pos_b < pos_c);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

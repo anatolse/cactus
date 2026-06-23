@@ -21,7 +21,7 @@ trait DamageFlash:
 trait ContactSnapshot:
     var hits: list[QueryContact2D] = []
 
-pub unit ExternSurface:
+pub entity ExternSurface:
     Motion:
         x = 0.0
     ContactSnapshot

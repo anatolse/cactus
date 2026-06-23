@@ -27,7 +27,7 @@ trait MoveInput:
 
 # ── Unit ──────────────────────────────────────────────────────────────────────
 
-pub unit Square:
+pub entity Square:
     WorldTransform:
         position = vec2(375.0, 275.0)
         rotation = 0.0

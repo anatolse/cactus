@@ -21,7 +21,7 @@ The language should be understood in layers:
 ```text
 ┌──────────────────────────────────────────────┐
 │ Gameplay core                               │
-│ modules, traits, units, templates, systems, │
+│ modules, traits, entities, templates, systems, │
 │ events, inputs, assets, spawn, destroy,     │
 │ add/remove, scene flow                      │
 └──────────────────────────────────────────────┘
@@ -46,7 +46,7 @@ The current gameplay-core profile includes:
 
 - `module`, `use`, `const`
 - `struct`, `enum`, `trait`
-- `unit`, `template`
+- `entity`, `template`
 - `system`, `event`, `func`, `extern func`
 - `asset`, `input`
 - handlers: `on input:`, `on fixed_tick:`, `on tick:`, `on late_tick:`, `on spawn:`, `on destroy:`, `on load:`, `on unload:`
@@ -85,7 +85,7 @@ Single-line comments start with `#` and extend to the end of the line.
 ### 2.4 Keywords
 
 ```text
-module  use     const   struct  enum    trait   unit    template
+module  use     const   struct  enum    trait   entity  template
 system  event   func    extern  asset   input
 let     var     persist sync    pub
 on      emit    if      else    match   return
@@ -111,7 +111,7 @@ fixed_tick late_tick
 ```ebnf
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
-                | enum_decl | trait_decl | unit_decl | template_decl
+                | enum_decl | trait_decl | entity_decl | template_decl
                 | system_decl | extern_system_decl | event_decl
                 | func_decl | extern_func_decl | asset_decl | input_decl ;
 ```
@@ -191,14 +191,25 @@ trait Health:
     persist sync var health: int = 100
 ```
 
-### 3.7 Units and Templates
+### 3.7 Entities and Templates
 
-`unit` declares an entity archetype that is instantiated automatically for the owning module/scene. `template` declares a reusable blueprint that is instantiated later by `spawn`.
+The four load-time and runtime constructs and how they differ:
 
-Both use archetype bodies. An archetype body can contain nested trait entries and body-level `use TemplateName` entries. Body-level `use` composes another template into the current archetype at compile time; it is distinct from top-level module `use` and does not create an entity.
+| Construct | Time | Purpose |
+|---|---|---|
+| `entity Name:` | module/scene load | declare one pre-existing entity directly |
+| `entity Name from Template:` | module/scene load | declare one pre-existing entity from a template plus overrides |
+| `template Name:` | declaration-time | declare a reusable entity blueprint |
+| `spawn Template:` | runtime handler execution | dynamically create an entity from a template |
+
+`entity` declares an entity archetype that is instantiated automatically for the owning module/scene. When the optional `from TemplateName` clause is present, the entity starts from the referenced template's flattened archetype and applies the body's nested trait override entries field-by-field. `template` declares a reusable blueprint that is instantiated by `spawn` (at runtime) or by `entity … from Template:` (at load time).
+
+Both `entity` and `template` use archetype bodies. An archetype body can contain nested trait entries and body-level `use TemplateName` entries. Body-level `use` composes another template into the current archetype at compile time; it is distinct from top-level module `use` and does not create an entity.
+
+Legacy `unit` is no longer valid; use `entity` instead.
 
 ```ebnf
-unit_decl       = [ "pub" ] "unit" IDENTIFIER ":" NEWLINE INDENT
+entity_decl     = [ "pub" ] "entity" IDENTIFIER [ "from" dotted_name ] ":" NEWLINE INDENT
                   { archetype_entry }
                   DEDENT ;
 
@@ -218,7 +229,7 @@ field_assignment = IDENTIFIER "=" expression NEWLINE ;
 ```
 
 ```cactus
-pub unit Player:
+pub entity Player:
     Position:
         pos = vec2(100.0, 300.0)
         velocity = vec2(0.0, 0.0)
@@ -242,13 +253,24 @@ template WalkerEnemy:
     Position:
         velocity = vec2(2.0, 0.0)
 
-unit FirstWalker:
+# Inline entity: body-level use composes the template at compile time
+entity FirstWalker:
     use WalkerEnemy
     Position:
         pos = vec2(400.0, 568.0)
+
+# Template-backed entity: `from` clause provides the base archetype;
+# the body contains per-entity override fields only
+entity SecondWalker from WalkerEnemy:
+    Position:
+        pos = vec2(800.0, 568.0)
 ```
 
-In this example, `WalkerEnemy` is a composed blueprint: it receives `EnemyBase`'s trait initializers before applying its own `Position` block. `FirstWalker` is still one automatically-instantiated unit; its body-level `use WalkerEnemy` is flattened into the unit's archetype and does not perform a runtime spawn.
+`WalkerEnemy` is a composed blueprint: it receives `EnemyBase`'s trait initializers before applying its own `Position` block. `FirstWalker` uses a body-level `use` (compile-time composition). `SecondWalker` uses the `from` clause (template-backed entity): it starts from `WalkerEnemy`'s flattened archetype and overrides only `Position.pos`. Neither performs a runtime spawn.
+
+Template-backed entities (`entity Name from Template:`) are the declarative load-time counterpart to runtime `spawn Template:`. Use `entity … from …` for pre-placed authored scene content; use `spawn` for entities created dynamically during gameplay.
+
+Deferred grouped syntax (`entities from Template:` with multiple named instances in one block) is not part of this version of the language.
 
 ### 3.8 Systems
 
@@ -525,12 +547,12 @@ match collision.other:
 ### 4.1 Core Data Model
 
 - **traits** define entity data
-- **units** define pre-existing entities
+- **entities** define pre-existing load-time entity instances
 - **templates** define spawnable blueprints
 - **systems** define logic over filtered entities
 - **events** define typed gameplay messages
 
-Template composition is static blueprint reuse: a body-level `use TemplateName` inside a `unit` or `template` is resolved and flattened before runtime. Runtime `spawn TemplateName:` is separate; it creates an entity from the flattened template and applies spawn-site overrides.
+Template composition is static blueprint reuse: a body-level `use TemplateName` inside an `entity` or `template` is resolved and flattened before runtime. Runtime `spawn TemplateName:` is separate; it creates an entity from the flattened template and applies spawn-site overrides.
 
 ### 4.2 Field Access and Handler Bindings
 
@@ -619,7 +641,7 @@ Events cascade between these phases according to the runtime's configured cascad
 `load module.name` transitions to another module-as-scene. Conceptually:
 
 1. unload old scene entities
-2. instantiate new scene units
+2. instantiate new scene entities
 3. fire `on load:` handlers for the new scene
 
 ### 5.3 Structural Changes
@@ -748,7 +770,7 @@ The following older forms are not normative in the current profile:
 
 Prefer:
 
-- nested trait blocks in `unit`, `template`, and `spawn`
+- nested trait blocks in `entity`, `template`, and `spawn`
 - `emit EventName:` with payload block syntax
 - `on tick:` / `tick.dt`
 - `add` / `remove`

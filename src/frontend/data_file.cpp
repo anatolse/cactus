@@ -392,14 +392,14 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() {  // NOLINT(rea
     std::vector<EntityInstanceData> records;
 
     for (const auto& decl : ast_.declarations) {
-        if (const auto* unit = std::get_if<UnitNode>(&decl)) {
+        if (const auto* entity = std::get_if<EntityNode>(&decl)) {
             EntityInstanceData rec;
-            rec.name       = unit->name;
-            rec.trait_mask = compute_trait_mask(unit->traits);
+            rec.name       = entity->name;
+            rec.trait_mask = compute_trait_mask(entity->traits);
 
             // Build config map from nested trait assignments: field_name → evaluated value
             std::unordered_map<std::string, FieldValue> config_vals;
-            for (const auto& trait : unit->traits) {
+            for (const auto& trait : entity->traits) {
                 for (const auto& assign : trait.assignments) {
                     auto val = eval_expr(*assign.value);
                     if (val) {
@@ -409,7 +409,7 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() {  // NOLINT(rea
             }
 
             // For each declared trait entry, emit all fields in declaration order
-            for (const auto& entry : unit->traits) {
+            for (const auto& entry : entity->traits) {
                 auto it = decorated_.traits.find(entry.trait_name);
                 if (it == decorated_.traits.end()) {
                     continue;
@@ -431,7 +431,7 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() {  // NOLINT(rea
 
             records.push_back(std::move(rec));
         }
-        // TemplateNode → skip (task 6.4: templates produce no data file entries)
+        // TemplateNode → skip (templates produce no data file entries on their own)
     }
 
     return records;

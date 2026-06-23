@@ -566,7 +566,7 @@ TEST_CASE("Semantic: duplicate field across nested traits reports no error", "[s
                            "    var value: int\n"
                            "trait TraitB:\n"
                            "    var value: int\n"
-                           "unit Player:\n"
+                           "entity Player:\n"
                            "    TraitA:\n"
                            "        value = 5\n"
                            "    TraitB:\n"
@@ -577,7 +577,7 @@ TEST_CASE("Semantic: nested trait field resolves correctly", "[semantic][config-
     CHECK_FALSE(
         analyze_has_errors("trait Health:\n"
                            "    var hp: int = 100\n"
-                           "unit Player:\n"
+                           "entity Player:\n"
                            "    Health:\n"
                            "        hp = 50\n"));
 }
@@ -586,7 +586,7 @@ TEST_CASE("Semantic: nested trait field with unknown field reports error", "[sem
     CHECK(
         analyze_has_errors("trait Health:\n"
                            "    var hp: int = 100\n"
-                           "unit Player:\n"
+                           "entity Player:\n"
                            "    Health:\n"
                            "        notafield = 50\n"));
 }
@@ -595,7 +595,7 @@ TEST_CASE("Semantic: marker trait with nested trait assignment passes", "[semant
     CHECK_FALSE(
         analyze_has_errors("trait Health:\n"
                            "    var hp: int = 100\n"
-                           "unit Player:\n"
+                           "entity Player:\n"
                            "    Health:\n"
                            "        hp = 50\n"));
 }
@@ -758,10 +758,10 @@ TEST_CASE("Semantic: self rejected in trait default", "[semantic][hierarchy]") {
           "`self` only allowed inside system event handlers");
 }
 
-TEST_CASE("Semantic: self rejected in unit initializer", "[semantic][hierarchy]") {
+TEST_CASE("Semantic: self rejected in entity initializer", "[semantic][hierarchy]") {
     CHECK(analyze_first_error("trait Parent:\n"
                               "    var parent: entity_id\n"
-                              "unit Child:\n"
+                              "entity Child:\n"
                               "    Parent:\n"
                               "        parent = self\n") == "`self` only allowed inside system event handlers");
 }
@@ -947,5 +947,141 @@ TEST_CASE("Semantic: std.text.format — extra args with no placeholders rejecte
         "func render():\n"
         "    let s = text.format(\"Ready\", 42)\n");
     CHECK(err.find("no placeholders") != std::string::npos);
+}
+
+// ── Task 2.7: Template-backed entity semantic tests ──────────────────────────
+
+TEST_CASE("Semantic: template-backed entity from local template accepted", "[semantic][entity]") {
+    CHECK_FALSE(analyze_has_errors(
+        "trait Shape:\n"
+        "    var size: float = 16.0\n"
+        "trait Collectible:\n"
+        "    var point_value: int = 10\n"
+        "trait WorldTransform:\n"
+        "    var x: float = 0.0\n"
+        "template BlueGem:\n"
+        "    Shape:\n"
+        "        size = 16.0\n"
+        "    Collectible:\n"
+        "        point_value = 10\n"
+        "    WorldTransform\n"
+        "entity Gem1 from BlueGem:\n"
+        "    WorldTransform:\n"
+        "        x = 250.0\n"));
+}
+
+TEST_CASE("Semantic: template-backed entity from undefined template rejected", "[semantic][entity]") {
+    auto err = analyze_first_error(
+        "trait Shape:\n"
+        "    var size: float = 16.0\n"
+        "entity Gem1 from MissingTemplate:\n"
+        "    Shape:\n"
+        "        size = 8.0\n");
+    CHECK(err.find("undefined template") != std::string::npos);
+    CHECK(err.find("MissingTemplate") != std::string::npos);
+}
+
+TEST_CASE("Semantic: template-backed entity from non-template rejected", "[semantic][entity]") {
+    auto err = analyze_first_error(
+        "trait Collectible:\n"
+        "    var point_value: int = 10\n"
+        "entity Gem1 from Collectible:\n"
+        "    Collectible:\n"
+        "        point_value = 5\n");
+    CHECK(err.find("not a template") != std::string::npos);
+}
+
+TEST_CASE("Semantic: template-backed entity override with unknown trait rejected", "[semantic][entity]") {
+    auto err = analyze_first_error(
+        "trait Shape:\n"
+        "    var size: float = 16.0\n"
+        "trait UnrelatedTrait:\n"
+        "    var val: int = 0\n"
+        "template BlueGem:\n"
+        "    Shape:\n"
+        "        size = 16.0\n"
+        "entity Gem1 from BlueGem:\n"
+        "    UnrelatedTrait:\n"
+        "        val = 5\n");
+    CHECK(err.find("UnrelatedTrait") != std::string::npos);
+}
+
+TEST_CASE("Semantic: template-backed entity override with unknown field rejected", "[semantic][entity]") {
+    auto err = analyze_first_error(
+        "trait Shape:\n"
+        "    var size: float = 16.0\n"
+        "template BlueGem:\n"
+        "    Shape:\n"
+        "        size = 16.0\n"
+        "entity Gem1 from BlueGem:\n"
+        "    Shape:\n"
+        "        notafield = 8.0\n");
+    CHECK(err.find("notafield") != std::string::npos);
+}
+
+TEST_CASE("Semantic: template-backed entity satisfies required field via override", "[semantic][entity]") {
+    CHECK_FALSE(analyze_has_errors(
+        "trait WorldTransform:\n"
+        "    var x: float\n"
+        "template GemTemplate:\n"
+        "    WorldTransform\n"
+        "entity Gem1 from GemTemplate:\n"
+        "    WorldTransform:\n"
+        "        x = 250.0\n"));
+}
+
+TEST_CASE("Semantic: template-backed entity missing required field rejected", "[semantic][entity]") {
+    auto err = analyze_first_error(
+        "trait WorldTransform:\n"
+        "    var x: float\n"
+        "template GemTemplate:\n"
+        "    WorldTransform\n"
+        "entity Gem1 from GemTemplate:\n"
+        "    WorldTransform\n");
+    CHECK(err.find("required field") != std::string::npos);
+    CHECK(err.find("x") != std::string::npos);
+}
+
+TEST_CASE("Semantic: entity name is not an entity_id expression", "[semantic][entity]") {
+    auto err = analyze_first_error(
+        "trait Shape:\n"
+        "    var size: float = 16.0\n"
+        "template BlueGem:\n"
+        "    Shape\n"
+        "entity Gem1 from BlueGem:\n"
+        "    Shape\n"
+        "system S:\n"
+        "    on tick:\n"
+        "        let x = Gem1\n");
+    CHECK(err.find("Gem1") != std::string::npos);
+}
+
+TEST_CASE("Semantic: mixed inline and template-backed entity order preserved", "[semantic][entity]") {
+    // All three should be accepted without errors in source order
+    CHECK_FALSE(analyze_has_errors(
+        "trait Tag:\n"
+        "    var v: int = 0\n"
+        "template T:\n"
+        "    Tag:\n"
+        "        v = 1\n"
+        "entity A:\n"
+        "    Tag\n"
+        "entity B from T:\n"
+        "    Tag:\n"
+        "        v = 2\n"
+        "entity C:\n"
+        "    Tag\n"));
+}
+
+TEST_CASE("Semantic: spawn of entity rejected", "[semantic][entity]") {
+    auto err = analyze_first_error(
+        "trait Tag\n"
+        "entity Player:\n"
+        "    Tag\n"
+        "system S:\n"
+        "    on tick:\n"
+        "        spawn Player\n");
+    CHECK(err.find("Player") != std::string::npos);
+    CHECK(err.find("entity") != std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

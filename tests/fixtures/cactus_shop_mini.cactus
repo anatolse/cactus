@@ -1,4 +1,4 @@
-module mini_shop
+﻿module mini_shop
 
 const:
     SHOP_NAME = "Mini Shop"
@@ -22,7 +22,7 @@ event ItemBought:
     var item: Item
     var buyer: int
 
-pub unit Player:
+pub entity Player:
     apply:
         Wallet
         Inventory

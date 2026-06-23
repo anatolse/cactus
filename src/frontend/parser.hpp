@@ -42,7 +42,7 @@ private:
     StructNode parse_struct();
     EnumNode parse_enum();
     TraitNode parse_trait();
-    UnitNode parse_unit(bool is_pub);
+    EntityNode parse_entity(bool is_pub);
     TemplateNode parse_template(bool is_pub);
     SystemNode parse_system();
     ExternSystemNode parse_extern_system();

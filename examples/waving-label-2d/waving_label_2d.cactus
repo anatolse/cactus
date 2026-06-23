@@ -22,7 +22,7 @@ const:
 trait Clock:
     var elapsed: float = 0.0
 
-pub unit WavingSquare:
+pub entity WavingSquare:
     WorldTransform:
         position = vec2(CENTER_X, CENTER_Y)
         rotation = 0.0

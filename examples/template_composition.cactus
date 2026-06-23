@@ -45,12 +45,12 @@ template BossWalker:
     Visual:
         color = #8822FFFF
 
-unit FirstWalker:
+entity FirstWalker:
     use WalkerEnemy
     SpawnPoint:
         position = vec2(400.0, 568.0)
 
-unit BossRoom:
+entity BossRoom:
     use BossWalker
     SpawnPoint:
         position = vec2(720.0, 568.0)

@@ -38,7 +38,7 @@ TEST_CASE("DataFile: simple unit — field values and trait mask", "[datafile]")
     auto [program, decorated] = compile(
         "trait Health:\n"
         "    var hp: int = 100\n"
-        "unit Player:\n"
+        "entity Player:\n"
         "    Health:\n"
         "        hp = 42\n");
 
@@ -63,7 +63,7 @@ TEST_CASE("DataFile: float field with constant reference", "[datafile]") {
         "    GRAVITY = 30.0\n"
         "trait Physics:\n"
         "    var gravity: float = 0.0\n"
-        "unit Ball:\n"
+        "entity Ball:\n"
         "    Physics:\n"
         "        gravity = GRAVITY\n");
 
@@ -82,7 +82,7 @@ TEST_CASE("DataFile: vec2 field from constructor call", "[datafile]") {
     auto [program, decorated] = compile(
         "trait Position:\n"
         "    var pos: vec2\n"
-        "unit Enemy:\n"
+        "entity Enemy:\n"
         "    Position:\n"
         "        pos = vec2(100.0, 200.0)\n");
 
@@ -101,7 +101,7 @@ TEST_CASE("DataFile: bool field", "[datafile]") {
     auto [program, decorated] = compile(
         "trait Collectible:\n"
         "    var collected: bool = false\n"
-        "unit Gem:\n"
+        "entity Gem:\n"
         "    Collectible:\n"
         "        collected = false\n");
 
@@ -119,7 +119,7 @@ TEST_CASE("DataFile: color field from hex literal", "[datafile]") {
     auto [program, decorated] = compile(
         "trait Visual:\n"
         "    var color: color\n"
-        "unit Block:\n"
+        "entity Block:\n"
         "    Visual:\n"
         "        color = #FF8800\n");
 
@@ -144,7 +144,7 @@ TEST_CASE("DataFile: template declarations excluded from data file", "[datafile]
         "    var x: float = 0.0\n"
         "template Enemy:\n"
         "    Position\n"
-        "unit Floor:\n"
+        "entity Floor:\n"
         "    Position:\n"
         "        x = 0.0\n");
 
@@ -161,13 +161,13 @@ TEST_CASE("DataFile: multiple units all included", "[datafile]") {
     auto [program, decorated] = compile(
         "trait HP:\n"
         "    var hp: int = 100\n"
-        "unit UnitA:\n"
+        "entity UnitA:\n"
         "    HP:\n"
         "        hp = 10\n"
-        "unit UnitB:\n"
+        "entity UnitB:\n"
         "    HP:\n"
         "        hp = 20\n"
-        "unit UnitC:\n"
+        "entity UnitC:\n"
         "    HP:\n"
         "        hp = 30\n");
 
@@ -191,7 +191,7 @@ TEST_CASE("DataFile: disabled trait not set in trait_mask", "[.datafile]") {
         "trait Frozen\n"
         "trait Position:\n"
         "    var x: float = 0.0\n"
-        "unit Enemy:\n"
+        "entity Enemy:\n"
         "    Position:\n"
         "        x = 1.0\n"
         "    Frozen: disabled\n");
@@ -219,7 +219,7 @@ TEST_CASE("DataFile: write and read round-trip", "[datafile]") {
         "trait Position:\n"
         "    var x: float = 0.0\n"
         "    var y: float = 0.0\n"
-        "unit Player:\n"
+        "entity Player:\n"
         "    Health:\n"
         "        hp = 75\n"
         "    Position:\n"
@@ -280,7 +280,7 @@ TEST_CASE("DataFile: version mismatch error", "[datafile]") {
     auto [program, decorated] = compile(
         "trait HP:\n"
         "    var hp: int = 100\n"
-        "unit P:\n"
+        "entity P:\n"
         "    HP:\n"
         "        hp = 1\n");
 

@@ -14,7 +14,8 @@ enum class TokenType {
     STRUCT,
     ENUM,
     TRAIT,
-    UNIT,
+    UNIT,    // reserved for migration diagnostic only; use ENTITY
+    ENTITY,
     TEMPLATE,
     SYSTEM,
     VIEW,
@@ -156,6 +157,8 @@ inline const char* token_type_to_string(TokenType t) {
             return "TRAIT";
         case TokenType::UNIT:
             return "UNIT";
+        case TokenType::ENTITY:
+            return "ENTITY";
         case TokenType::TEMPLATE:
             return "TEMPLATE";
         case TokenType::SYSTEM:

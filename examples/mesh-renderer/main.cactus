@@ -27,7 +27,7 @@ trait RotationInput:
     var horizontal: float = 0.0
     var vertical: float = 0.0
 
-pub unit BlueCube:
+pub entity BlueCube:
     WorldTransform:
         position = vec3(0.0, 0.0, 0.0)
         rotation = quat.identity()
@@ -41,7 +41,7 @@ pub unit BlueCube:
         visible = true
         cast_shadow = true
 
-pub unit BlueCube2:
+pub entity BlueCube2:
     WorldTransform:
         position = vec3(3.0, 1.0, 0.0)
         rotation = quat.identity()
@@ -55,7 +55,7 @@ pub unit BlueCube2:
         visible = true
         cast_shadow = true
 
-pub unit LeftPointLight:
+pub entity LeftPointLight:
     WorldTransform:
         position = vec3(-2.0, 1.5, 2.5)
         rotation = quat.identity()
@@ -66,7 +66,7 @@ pub unit LeftPointLight:
         range = 8.0
         enabled = true
 
-pub unit RightPointLight:
+pub entity RightPointLight:
     WorldTransform:
         position = vec3(2.0, 1.25, 2.0)
         rotation = quat.identity()

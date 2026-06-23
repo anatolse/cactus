@@ -11,7 +11,7 @@ trait DamageFlash:
     var color: color = #FF3333
     var intensity: float = 0.0
 
-pub unit Probe:
+pub entity Probe:
     ColliderProbe
 
 system DetectContacts:

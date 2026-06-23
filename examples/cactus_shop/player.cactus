@@ -42,7 +42,7 @@ event CoinSpent:
     amount: int
     remaining: int
 
-pub unit Player:
+pub entity Player:
     Position:
         position = vec3(0.0, 0.0, 0.0)
         rotation = quat(0.0, 0.0, 0.0, 1.0)

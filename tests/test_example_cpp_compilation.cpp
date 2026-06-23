@@ -316,7 +316,7 @@ TEST_CASE("integration: removed cpp-manual backend is rejected", "[integration][
     {
         std::ofstream out(source_file);
         out << "trait Marker:\n\n"
-            << "unit One:\n"
+            << "entity One:\n"
             << "    Marker\n";
     }
 

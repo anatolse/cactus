@@ -46,7 +46,7 @@ event ShotFired:
 event EnemyHit:
     amount: int
 
-pub unit Player:
+pub entity Player:
     Position:
         pos = vec2(0.0, 0.0)
         velocity = vec2(0.0, 0.0)
@@ -57,7 +57,7 @@ pub unit Player:
         cooldown = 0.0
     PlayerTag
 
-pub unit DummyEnemy:
+pub entity DummyEnemy:
     Position:
         pos = vec2(10.0, 0.0)
         velocity = vec2(0.0, 0.0)

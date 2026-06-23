@@ -66,6 +66,7 @@ bool Parser::is_synchronization_point() const {
         case TokenType::ENUM:
         case TokenType::EVENT:
         case TokenType::UNIT:
+        case TokenType::ENTITY:
         case TokenType::TEMPLATE:
         case TokenType::VIEW:
         case TokenType::INTERFACE:
@@ -198,8 +199,12 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
             t.is_pub = true;
             return t;
         }
+        if (check(TokenType::ENTITY)) {
+            return parse_entity(true);
+        }
         if (check(TokenType::UNIT)) {
-            return parse_unit(true);
+            errors_.error(peek().location, "'unit' has been renamed to 'entity'; rewrite as 'entity <Name>:'");
+            return ModuleNode{.name = "<error>", .location = peek().location};
         }
         if (check(TokenType::TEMPLATE)) {
             return parse_template(true);
@@ -231,11 +236,16 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         }
         errors_.error(
             peek().location,
-            "expected trait, unit, template, func, extern func, asset, input, event, enum, or struct after 'pub'");
+            "expected trait, entity, template, func, extern func, asset, input, event, enum, or struct after 'pub'");
     }
 
+    if (tok.type == TokenType::ENTITY) {
+        return parse_entity(false);
+    }
     if (tok.type == TokenType::UNIT) {
-        return parse_unit(false);
+        errors_.error(tok.location, "'unit' has been renamed to 'entity'; rewrite as 'entity <Name>:'");
+        advance();
+        return ModuleNode{.name = "<error>", .location = tok.location};
     }
     if (tok.type == TokenType::FUNC) {
         return parse_func(false);
@@ -248,7 +258,7 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     }
 
     errors_.error(tok.location,
-                  "expected declaration (module, use, const, struct, enum, trait, unit, system, view, event, func, "
+                  "expected declaration (module, use, const, struct, enum, trait, entity, system, view, event, func, "
                   "extern, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{.name = "<error>", .location = tok.location};
@@ -767,20 +777,25 @@ std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entry_block() {
     return entries;
 }
 
-// ── Unit ────────────────────────────────────────────────────────────────────
+// ── Entity ───────────────────────────────────────────────────────────────────
 
-UnitNode Parser::parse_unit(bool is_pub) {
+EntityNode Parser::parse_entity(bool is_pub) {
     auto loc = peek().location;
-    consume(TokenType::UNIT, "expected 'unit'");
-    auto name = consume(TokenType::IDENTIFIER, "expected unit name").value;
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
+    consume(TokenType::ENTITY, "expected 'entity'");
+    auto name = consume(TokenType::IDENTIFIER, "expected entity name").value;
 
-    UnitNode node;
+    EntityNode node;
     node.name     = name;
     node.is_pub   = is_pub;
     node.location = loc;
+
+    if (match(TokenType::FROM)) {
+        node.template_ref = parse_dotted_name();
+    }
+
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
 
     auto body          = parse_archetype_body_entries();
     node.body_entries  = std::move(body.entries);

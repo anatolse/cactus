@@ -21,12 +21,12 @@ trait SunLight:
     var direction: vec3
     var intensity: float
 
-pub unit Ground:
+pub entity Ground:
     Terrain:
         ground_size = GROUND_SIZE
         ground_color = GROUND_COLOR
 
-pub unit Sun:
+pub entity Sun:
     SunLight:
         direction = vec3(SUN_DIR_X, SUN_DIR_Y, SUN_DIR_Z)
         intensity = 1.0

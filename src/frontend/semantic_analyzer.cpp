@@ -468,6 +468,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_template_unit_declarations(program);
     validate_template_use_cycles(program);
     flatten_template_compositions(program);
+    validate_template_backed_entity_overrides(program);
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
     validate_trait_default_values(program);
@@ -563,9 +564,9 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                     } else {
                         result_.non_pub_templates.insert(node.name);
                     }
-                } else if constexpr (std::is_same_v<T, UnitNode>) {
-                    // Track unit names to distinguish from templates (5.4)
-                    unit_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, EntityNode>) {
+                    // Track entity names to distinguish from templates (5.4)
+                    entity_names_.insert(node.name);
                     archetype_traits_[node.name] = &node.traits;
                 } else if constexpr (std::is_same_v<T, UseNode>) {
                     // Track declared module names for `load` reachability (5.6)
@@ -1798,7 +1799,7 @@ bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbo
 }
 
 bool SemanticAnalyzer::local_non_template_symbol_exists(const std::string& name) const {
-    return trait_names_.contains(name) || unit_names_.contains(name) || struct_names_.contains(name) ||
+    return trait_names_.contains(name) || entity_names_.contains(name) || struct_names_.contains(name) ||
            enum_names_.contains(name) || event_names_.contains(name) || func_names_.contains(name) ||
            system_names_.contains(name) || asset_decl_types_.contains(name) || input_decl_types_.contains(name) ||
            use_names_.contains(name);
@@ -2343,8 +2344,77 @@ void SemanticAnalyzer::validate_template_unit_declarations(
         std::visit(
             [this](auto& node) {  // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, TemplateNode> || std::is_same_v<T, UnitNode>) {
-                    const std::string KIND = std::is_same_v<T, TemplateNode> ? "template" : "unit";
+                if constexpr (std::is_same_v<T, TemplateNode> || std::is_same_v<T, EntityNode>) {
+                    const std::string KIND = std::is_same_v<T, TemplateNode> ? "template" : "entity";
+
+                    // For template-backed entities, validate the template reference; body entries are
+                    // overrides (not inline traits), so skip the standard trait/field checks below.
+                    if constexpr (std::is_same_v<T, EntityNode>) {
+                        if (node.template_ref.has_value()) {
+                            const auto& tmpl_ref = *node.template_ref;
+                            const auto dot       = tmpl_ref.rfind('.');
+                            if (dot != std::string::npos) {
+                                const auto qualifier     = tmpl_ref.substr(0, dot);
+                                const auto template_name = tmpl_ref.substr(dot + 1);
+                                auto module_it           = imports_.modules.find(qualifier);
+                                if (module_it == imports_.modules.end()) {
+                                    errors_.error(node.location,
+                                                  "unknown module qualifier '" + qualifier +
+                                                      "' in 'from' clause of entity '" + node.name + "'");
+                                } else if (!module_it->second.templates.contains(template_name)) {
+                                    auto non_pub_it = imports_.non_pub_template_names.find(qualifier);
+                                    if (non_pub_it != imports_.non_pub_template_names.end() &&
+                                        non_pub_it->second.contains(template_name)) {
+                                        errors_.error(node.location,
+                                                      "template '" + template_name + "' is not public in module '" +
+                                                          qualifier + "'");
+                                    } else if (imported_symbols_contain_non_template(module_it->second,
+                                                                                     template_name)) {
+                                        errors_.error(node.location,
+                                                      "'" + template_name +
+                                                          "' is not a template; entity 'from' clause must reference "
+                                                          "a template");
+                                    } else {
+                                        errors_.error(node.location,
+                                                      "undefined template '" + template_name + "' in module '" +
+                                                          qualifier + "'");
+                                    }
+                                }
+                            } else if (template_names_.contains(tmpl_ref)) {
+                                // valid local template — override validation happens after flattening
+                            } else if (local_non_template_symbol_exists(tmpl_ref)) {
+                                errors_.error(node.location,
+                                              "'" + tmpl_ref +
+                                                  "' is not a template; entity 'from' clause must reference "
+                                                  "a template");
+                            } else if (!imports_.empty()) {
+                                auto provider_it = imports_.template_providers.find(tmpl_ref);
+                                if (provider_it != imports_.template_providers.end()) {
+                                    // valid imported template
+                                } else {
+                                    bool found_non_pub = false;
+                                    for (const auto& [q, names] : imports_.non_pub_template_names) {
+                                        if (names.contains(tmpl_ref)) {
+                                            errors_.error(node.location,
+                                                          "template '" + tmpl_ref + "' is not public in module '" +
+                                                              q + "'");
+                                            found_non_pub = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found_non_pub) {
+                                        errors_.error(node.location,
+                                                      "undefined template '" + tmpl_ref + "' in entity '" + node.name +
+                                                          "'");
+                                    }
+                                }
+                            } else {
+                                errors_.error(node.location,
+                                              "undefined template '" + tmpl_ref + "' in entity '" + node.name + "'");
+                            }
+                            return;  // skip inline-entity trait validation for template-backed entities
+                        }
+                    }
 
                     // 5.1: Validate all traits in nested trait blocks are declared
                     for (auto& entry : node.traits) {
@@ -2628,10 +2698,24 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
     }
 
     for (auto& decl : program.declarations) {
-        if (auto* unit = std::get_if<UnitNode>(&decl)) {
-            auto flattened                = flatten_body(unit->body_entries, unit->template_uses, unit->traits);
-            unit->traits                  = clone_archetype_trait_entries(flattened);
-            archetype_traits_[unit->name] = &unit->traits;
+        if (auto* entity = std::get_if<EntityNode>(&decl)) {
+            if (entity->template_ref.has_value()) {
+                // Template-backed entity: start from template's flattened archetype, apply overrides
+                const auto& tmpl_ref = *entity->template_ref;
+                auto tmpl_it         = archetype_traits_.find(tmpl_ref);
+                if (tmpl_it != archetype_traits_.end() && tmpl_it->second != nullptr) {
+                    auto merged = clone_archetype_trait_entries(*tmpl_it->second);
+                    for (const auto& override_entry : entity->traits) {
+                        merge_trait_entry(merged, override_entry);
+                    }
+                    entity->traits = clone_archetype_trait_entries(merged);
+                }
+                // (If template not found, validation already reported the error; leave traits as-is)
+            } else {
+                auto flattened = flatten_body(entity->body_entries, entity->template_uses, entity->traits);
+                entity->traits = clone_archetype_trait_entries(flattened);
+            }
+            archetype_traits_[entity->name] = &entity->traits;
         }
     }
 
@@ -2664,6 +2748,80 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
     }
 }
 
+// ── Template-backed entity override validation (runs after flattening) ───────
+
+void SemanticAnalyzer::validate_template_backed_entity_overrides(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
+    for (auto& decl : program.declarations) {
+        auto* entity = std::get_if<EntityNode>(&decl);
+        if (entity == nullptr || !entity->template_ref.has_value()) {
+            continue;
+        }
+
+        const auto& tmpl_ref = *entity->template_ref;
+
+        // Resolve the template's flattened archetype (already done by flatten_template_compositions)
+        auto tmpl_traits_it = archetype_traits_.find(tmpl_ref);
+        if (tmpl_traits_it == archetype_traits_.end() || tmpl_traits_it->second == nullptr) {
+            continue;  // template not found — already reported in validate_template_unit_declarations
+        }
+
+        // Build set of trait names on the referenced template
+        std::unordered_set<std::string> tmpl_trait_names;
+        for (const auto& te : *tmpl_traits_it->second) {
+            tmpl_trait_names.insert(te.trait_name);
+        }
+
+        // Validate each override entry
+        for (auto& entry : entity->traits) {
+            if (!tmpl_trait_names.contains(entry.trait_name)) {
+                errors_.error(entry.location,
+                              "trait '" + entry.trait_name + "' is not part of template '" + tmpl_ref +
+                                  "'; cannot override it in entity '" + entity->name + "'");
+                continue;
+            }
+
+            const auto* trait = find_resolved_trait(entry.trait_name);
+            if (trait == nullptr) {
+                continue;
+            }
+
+            std::unordered_set<std::string> trait_fields;
+            for (const auto& f : trait->fields) {
+                trait_fields.insert(f.name);
+            }
+
+            for (auto& assign : entry.assignments) {
+                if (!trait_fields.contains(assign.name)) {
+                    errors_.error(assign.location,
+                                  "unknown field '" + assign.name + "' for trait '" + entry.trait_name +
+                                      "' in entity '" + entity->name + "'");
+                }
+                if (expr_contains_self(*assign.value)) {
+                    errors_.error(assign.location, "`self` only allowed inside system event handlers");
+                }
+            }
+        }
+
+        // Check required fields are satisfied by template defaults or entity overrides
+        auto req_it = template_required_fields_.find(tmpl_ref);
+        if (req_it != template_required_fields_.end()) {
+            std::unordered_set<std::string> provided;
+            for (const auto& entry : entity->traits) {
+                for (const auto& assign : entry.assignments) {
+                    provided.insert(assign.name);
+                }
+            }
+            for (const auto& req : req_it->second) {
+                if (!provided.contains(req)) {
+                    errors_.error(entity->location,
+                                  "required field '" + req + "' not set for entity '" + entity->name + "'");
+                }
+            }
+        }
+    }
+}
+
 // ── Task 5.3, 5.4: Validate spawn sites ─────────────────────────────────────
 
 void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cognitive-complexity)
@@ -2674,11 +2832,11 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
             [this, &context_name](auto& s) {  // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, SpawnStmt>) {
-                    // 5.4: Reject spawn of a unit
-                    if (unit_names_.contains(s.template_name)) {
+                    // 5.4: Reject spawn of an entity
+                    if (entity_names_.contains(s.template_name)) {
                         errors_.error(s.location,
                                       "'" + s.template_name +
-                                          "' is a unit, not a template; use `spawn` only with "
+                                          "' is an entity, not a template; use `spawn` only with "
                                           "`template` declarations");
                         return;
                     }
@@ -2742,10 +2900,11 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
 }
 
 void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location) {
-    if (unit_names_.contains(spawn.template_name)) {
+    if (entity_names_.contains(spawn.template_name)) {
         errors_.error(
             location,
-            "'" + spawn.template_name + "' is a unit, not a template; use `spawn` only with `template` declarations");
+            "'" + spawn.template_name +
+                "' is an entity, not a template; use `spawn` only with `template` declarations");
         return;
     }
     if (!template_names_.contains(spawn.template_name)) {

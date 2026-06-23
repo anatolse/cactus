@@ -119,9 +119,80 @@ trait Collectible:
     let gem_type: GemType
     var collected: bool
 
-# ── Units ────────────────────────────────────────────────────────────────────────
+# ── Templates ────────────────────────────────────────────────────────────────────
 
-pub unit Player:
+template FloatingPlatformBase:
+    WorldTransform:
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        color = PLATFORM_COLOR
+        visible = true
+    Collider:
+        layer = SOLID_LAYER
+        mask = PLAYER_LAYER
+    BoxCollider
+
+template WalkerEnemyBase:
+    WorldTransform:
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
+        color = ENEMY_COLOR
+        visible = true
+    Collider:
+        layer = ENEMY_LAYER
+        mask = ENEMY_MASK
+    BoxCollider:
+        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
+    PatrolMotion:
+        patrol_speed = PATROL_SPEED
+        direction = 1.0
+
+template BlueGemBase:
+    WorldTransform:
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(GEM_SIZE, GEM_SIZE)
+        color = GEM_COLOR_BLUE
+        visible = true
+    Collider:
+        layer = COLLECTIBLE_LAYER
+        mask = COLLECTIBLE_MASK
+    BoxCollider:
+        size = vec2(GEM_SIZE, GEM_SIZE)
+    Collectible:
+        point_value = BLUE_GEM_POINTS
+        gem_type = GemType.Blue
+        collected = false
+
+template GoldGemBase:
+    WorldTransform:
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        type = ShapeType.Rectangle
+        size = vec2(GEM_SIZE, GEM_SIZE)
+        color = GEM_COLOR_GOLD
+        visible = true
+    Collider:
+        layer = COLLECTIBLE_LAYER
+        mask = COLLECTIBLE_MASK
+    BoxCollider:
+        size = vec2(GEM_SIZE, GEM_SIZE)
+    Collectible:
+        point_value = GOLD_GEM_POINTS
+        gem_type = GemType.Gold
+        collected = false
+
+# ── Entities ──────────────────────────────────────────────────────────────────────
+
+pub entity Player:
     WorldTransform:
         position = vec2(100.0, 300.0)
         rotation = 0.0
@@ -154,7 +225,7 @@ pub unit Player:
         invincible_timer = 0.0
     Persistent
 
-pub unit GroundPlatform:
+pub entity GroundPlatform:
     WorldTransform:
         position = vec2(0.0, GROUND_Y)
         rotation = 0.0
@@ -170,155 +241,55 @@ pub unit GroundPlatform:
     BoxCollider:
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
 
-pub unit FloatingPlatform1:
+pub entity FloatingPlatform1 from FloatingPlatformBase:
     WorldTransform:
         position = vec2(PLATFORM1_X, PLATFORM1_Y)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Shape:
-        type = ShapeType.Rectangle
         size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
-        color = PLATFORM_COLOR
-        visible = true
-    Collider:
-        layer = SOLID_LAYER
-        mask = PLAYER_LAYER
     BoxCollider:
         size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
 
-pub unit FloatingPlatform2:
+pub entity FloatingPlatform2 from FloatingPlatformBase:
     WorldTransform:
         position = vec2(PLATFORM2_X, PLATFORM2_Y)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Shape:
-        type = ShapeType.Rectangle
         size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
-        color = PLATFORM_COLOR
-        visible = true
-    Collider:
-        layer = SOLID_LAYER
-        mask = PLAYER_LAYER
     BoxCollider:
         size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
 
-pub unit FloatingPlatform3:
+pub entity FloatingPlatform3 from FloatingPlatformBase:
     WorldTransform:
         position = vec2(PLATFORM3_X, PLATFORM3_Y)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Shape:
-        type = ShapeType.Rectangle
         size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
-        color = PLATFORM_COLOR
-        visible = true
-    Collider:
-        layer = SOLID_LAYER
-        mask = PLAYER_LAYER
     BoxCollider:
         size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
 
-pub unit WalkerEnemy1:
+pub entity WalkerEnemy1 from WalkerEnemyBase:
     WorldTransform:
         position = vec2(400.0, 568.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
-        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
-        color = ENEMY_COLOR
-        visible = true
-    Collider:
-        layer = ENEMY_LAYER
-        mask = ENEMY_MASK
-    BoxCollider:
-        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
     PatrolMotion:
         patrol_min_x = 350.0
         patrol_max_x = 550.0
-        patrol_speed = PATROL_SPEED
-        direction = 1.0
 
-pub unit WalkerEnemy2:
+pub entity WalkerEnemy2 from WalkerEnemyBase:
     WorldTransform:
         position = vec2(800.0, 568.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
-        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
-        color = ENEMY_COLOR
-        visible = true
-    Collider:
-        layer = ENEMY_LAYER
-        mask = ENEMY_MASK
-    BoxCollider:
-        size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
     PatrolMotion:
         patrol_min_x = 700.0
         patrol_max_x = 1000.0
-        patrol_speed = PATROL_SPEED
-        direction = 1.0
 
-pub unit BlueGem1:
+pub entity BlueGem1 from BlueGemBase:
     WorldTransform:
         position = vec2(250.0, 560.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
-        size = vec2(GEM_SIZE, GEM_SIZE)
-        color = GEM_COLOR_BLUE
-        visible = true
-    Collider:
-        layer = COLLECTIBLE_LAYER
-        mask = COLLECTIBLE_MASK
-    BoxCollider:
-        size = vec2(GEM_SIZE, GEM_SIZE)
-    Collectible:
-        point_value = BLUE_GEM_POINTS
-        gem_type = GemType.Blue
-        collected = false
 
-pub unit BlueGem2:
+pub entity BlueGem2 from BlueGemBase:
     WorldTransform:
         position = vec2(350.0, 410.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
-        size = vec2(GEM_SIZE, GEM_SIZE)
-        color = GEM_COLOR_BLUE
-        visible = true
-    Collider:
-        layer = COLLECTIBLE_LAYER
-        mask = COLLECTIBLE_MASK
-    BoxCollider:
-        size = vec2(GEM_SIZE, GEM_SIZE)
-    Collectible:
-        point_value = BLUE_GEM_POINTS
-        gem_type = GemType.Blue
-        collected = false
 
-pub unit GoldGem1:
+pub entity GoldGem1 from GoldGemBase:
     WorldTransform:
         position = vec2(1000.0, 240.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
-        size = vec2(GEM_SIZE, GEM_SIZE)
-        color = GEM_COLOR_GOLD
-        visible = true
-    Collider:
-        layer = COLLECTIBLE_LAYER
-        mask = COLLECTIBLE_MASK
-    BoxCollider:
-        size = vec2(GEM_SIZE, GEM_SIZE)
-    Collectible:
-        point_value = GOLD_GEM_POINTS
-        gem_type = GemType.Gold
-        collected = false
 
 # ── Systems ──────────────────────────────────────────────────────────────────────
 

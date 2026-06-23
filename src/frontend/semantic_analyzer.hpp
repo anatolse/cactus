@@ -177,6 +177,7 @@ private:
     void validate_template_unit_declarations(ProgramNode& program);
     void validate_template_use_cycles(ProgramNode& program);
     void flatten_template_compositions(ProgramNode& program);
+    void validate_template_backed_entity_overrides(ProgramNode& program);
     void validate_spawn_sites(ProgramNode& program);
     void validate_stmt_contexts(ProgramNode& program);
     void validate_trait_modifier_rules(ProgramNode& program);
@@ -265,9 +266,9 @@ private:
     std::unordered_map<std::string, std::unordered_set<std::string>> call_graph_;
 
     // ── Dynamic ECS tracking (dynamic-ecs-language change) ──────────────────
-    // Separate sets for templates vs units (spawn only works on templates)
+    // Separate sets for templates vs entities (spawn only works on templates)
     std::unordered_set<std::string> template_names_;
-    std::unordered_set<std::string> unit_names_;
+    std::unordered_set<std::string> entity_names_;
 
     // Module names/aliases declared via `use` (for `load` reachability check)
     std::unordered_set<std::string> use_names_;

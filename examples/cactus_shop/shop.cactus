@@ -48,7 +48,7 @@ event ItemPurchased:
     item: ShopItem
     buyer: entity_id
 
-pub unit CactusShop:
+pub entity CactusShop:
     Position:
         position = vec3(10.0, 0.0, 5.0)
         rotation = quat(0.0, 0.0, 0.0, 1.0)
@@ -56,28 +56,28 @@ pub unit CactusShop:
         is_open = true
         interact_distance = INTERACT_DISTANCE
 
-pub unit SmallCactus:
+pub entity SmallCactus:
     Position:
         position = vec3(8.0, 0.0, 4.0)
         rotation = quat(0.0, 0.0, 0.0, 1.0)
     Purchasable:
         item = ShopItem(CACTUS_SMALL_PRICE, CACTUS_SMALL_PRICE, ItemRarity.Common, 0.5)
 
-pub unit MediumCactus:
+pub entity MediumCactus:
     Position:
         position = vec3(9.0, 0.0, 4.5)
         rotation = quat(0.0, 0.0, 0.0, 1.0)
     Purchasable:
         item = ShopItem(CACTUS_MEDIUM_PRICE, CACTUS_MEDIUM_PRICE, ItemRarity.Uncommon, 1.0)
 
-pub unit LargeCactus:
+pub entity LargeCactus:
     Position:
         position = vec3(11.0, 0.0, 4.5)
         rotation = quat(0.0, 0.0, 0.0, 1.0)
     Purchasable:
         item = ShopItem(CACTUS_LARGE_PRICE, CACTUS_LARGE_PRICE, ItemRarity.Rare, 1.5)
 
-pub unit GoldenCactus:
+pub entity GoldenCactus:
     Position:
         position = vec3(12.0, 0.0, 5.0)
         rotation = quat(0.0, 0.0, 0.0, 1.0)

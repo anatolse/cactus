@@ -1,0 +1,65 @@
+module entity_from_template
+
+# Demonstrates `entity Name from TemplateName:` declarations.
+# Template-backed entities are load-time instances created from a reusable
+# template blueprint with per-entity override blocks.
+
+trait WorldTransform:
+    var position: vec2
+    var rotation: float = 0.0
+    var scale: vec2 = vec2(1.0, 1.0)
+
+trait Shape:
+    var size: vec2 = vec2(16.0, 16.0)
+    var color: color = #FFFFFFFF
+    var visible: bool = true
+
+trait Collectible:
+    let point_value: int
+    var collected: bool = false
+
+# Blueprint for every blue gem — all position-independent fields live here.
+# WorldTransform is included so entities can override just the position.
+pub template BlueGem:
+    WorldTransform:
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        size = vec2(16.0, 16.0)
+        color = #4488FFFF
+        visible = true
+    Collectible:
+        point_value = 10
+        collected = false
+
+# Blueprint for the rarer gold gem variant.
+pub template GoldGem:
+    WorldTransform:
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Shape:
+        size = vec2(16.0, 16.0)
+        color = #FFD700FF
+        visible = true
+    Collectible:
+        point_value = 100
+        collected = false
+
+# Each entity below is one load-time instance.
+# Only the fields that differ from the template need to be specified.
+
+entity BlueGem_250_560 from BlueGem:
+    WorldTransform:
+        position = vec2(250.0, 560.0)
+
+entity BlueGem_350_410 from BlueGem:
+    WorldTransform:
+        position = vec2(350.0, 410.0)
+
+entity BlueGem_500_300 from BlueGem:
+    WorldTransform:
+        position = vec2(500.0, 300.0)
+
+entity GoldGem_1000_240 from GoldGem:
+    WorldTransform:
+        position = vec2(1000.0, 240.0)

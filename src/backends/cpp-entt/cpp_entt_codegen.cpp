@@ -1244,7 +1244,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
-    // Entity creation from flattened templates and units
+    // Entity creation from flattened templates and entities (inline and template-backed)
     if (program.ast != nullptr) {
         out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
@@ -1253,8 +1253,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
         }
         for (auto& decl : program.ast->declarations) {
-            if (auto* unit = std::get_if<UnitNode>(&decl)) {
-                out << emit_archetype_creation_function(unit->name, unit->traits, program);
+            if (auto* entity = std::get_if<EntityNode>(&decl)) {
+                out << emit_archetype_creation_function(entity->name, entity->traits, program);
             }
         }
     }
@@ -1327,8 +1327,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
         }
         for (auto& decl : program.ast->declarations) {
-            if (auto* unit = std::get_if<UnitNode>(&decl)) {
-                out << "    create_" << snake_case(unit->name) << "(registry);\n";
+            if (auto* entity = std::get_if<EntityNode>(&decl)) {
+                out << "    create_" << snake_case(entity->name) << "(registry);\n";
             }
         }
     }

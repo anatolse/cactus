@@ -160,17 +160,18 @@ TEST_CASE("Parser: trait with persist sync modifiers", "[parser]") {
     CHECK(decl.fields[0].name == "x");
 }
 
-TEST_CASE("Parser: pub unit with nested trait blocks", "[parser]") {
+TEST_CASE("Parser: pub entity with nested trait blocks", "[parser]") {
     auto prog = parse(
-        "pub unit Player:\n"
+        "pub entity Player:\n"
         "    Health:\n"
         "        health = 100\n"
         "    Position:\n"
         "        x = 0.0\n");
     REQUIRE(prog.declarations.size() == 1);
-    auto& decl = std::get<UnitNode>(prog.declarations[0]);
+    auto& decl = std::get<EntityNode>(prog.declarations[0]);
     CHECK(decl.name == "Player");
     CHECK(decl.is_pub);
+    CHECK_FALSE(decl.template_ref.has_value());
     REQUIRE(decl.traits.size() == 2);
     CHECK(decl.traits[0].trait_name == "Health");
     REQUIRE(decl.traits[0].assignments.size() == 1);
@@ -567,23 +568,24 @@ TEST_CASE("Parser: template body use entry", "[parser][template-composition]") {
     CHECK(tmpl.body_entries[1].index == 0);
 }
 
-TEST_CASE("Parser: unit body use entry", "[parser][template-composition]") {
+TEST_CASE("Parser: entity body use entry", "[parser][template-composition]") {
     auto prog = parse(
-        "unit Walker1:\n"
+        "entity Walker1:\n"
         "    use WalkerEnemy\n"
         "    WorldTransform:\n"
         "        position = vec2(400.0, 568.0)\n");
 
     REQUIRE(prog.declarations.size() == 1);
-    auto& unit = std::get<UnitNode>(prog.declarations[0]);
-    CHECK(unit.name == "Walker1");
-    REQUIRE(unit.template_uses.size() == 1);
-    CHECK(unit.template_uses[0].template_name == "WalkerEnemy");
-    REQUIRE(unit.traits.size() == 1);
-    CHECK(unit.traits[0].trait_name == "WorldTransform");
-    REQUIRE(unit.body_entries.size() == 2);
-    CHECK(unit.body_entries[0].kind == ArchetypeBodyEntry::Kind::TemplateUse);
-    CHECK(unit.body_entries[1].kind == ArchetypeBodyEntry::Kind::Trait);
+    auto& entity = std::get<EntityNode>(prog.declarations[0]);
+    CHECK(entity.name == "Walker1");
+    CHECK_FALSE(entity.template_ref.has_value());
+    REQUIRE(entity.template_uses.size() == 1);
+    CHECK(entity.template_uses[0].template_name == "WalkerEnemy");
+    REQUIRE(entity.traits.size() == 1);
+    CHECK(entity.traits[0].trait_name == "WorldTransform");
+    REQUIRE(entity.body_entries.size() == 2);
+    CHECK(entity.body_entries[0].kind == ArchetypeBodyEntry::Kind::TemplateUse);
+    CHECK(entity.body_entries[1].kind == ArchetypeBodyEntry::Kind::Trait);
 }
 
 TEST_CASE("Parser: archetype body use names can be local qualified or aliased", "[parser][template-composition]") {
@@ -593,7 +595,7 @@ TEST_CASE("Parser: archetype body use names can be local qualified or aliased", 
         "    use EnemyBase\n"
         "template QualifiedVariant:\n"
         "    use enemies.WalkerEnemy\n"
-        "unit AliasedWalker:\n"
+        "entity AliasedWalker:\n"
         "    use enemy.WalkerEnemy\n");
 
     REQUIRE(prog.declarations.size() == 4);
@@ -610,7 +612,7 @@ TEST_CASE("Parser: archetype body use names can be local qualified or aliased", 
     REQUIRE(qualified.template_uses.size() == 1);
     CHECK(qualified.template_uses[0].template_name == "enemies.WalkerEnemy");
 
-    auto& aliased = std::get<UnitNode>(prog.declarations[3]);
+    auto& aliased = std::get<EntityNode>(prog.declarations[3]);
     REQUIRE(aliased.template_uses.size() == 1);
     CHECK(aliased.template_uses[0].template_name == "enemy.WalkerEnemy");
 }
@@ -1176,28 +1178,28 @@ TEST_CASE("Parser: system after: block parsed correctly", "[parser][system-order
     CHECK(scene.after_systems.empty());
 }
 
-TEST_CASE("Parser: marker trait entry in unit", "[parser][config-qualification]") {
+TEST_CASE("Parser: marker trait entry in entity", "[parser][config-qualification]") {
     auto prog = parse(
-        "unit Player:\n"
+        "entity Player:\n"
         "    Position\n");
-    auto& unit = std::get<UnitNode>(prog.declarations[0]);
-    REQUIRE(unit.traits.size() == 1);
-    CHECK(unit.traits[0].trait_name == "Position");
-    CHECK(unit.traits[0].assignments.empty());
+    auto& entity = std::get<EntityNode>(prog.declarations[0]);
+    REQUIRE(entity.traits.size() == 1);
+    CHECK(entity.traits[0].trait_name == "Position");
+    CHECK(entity.traits[0].assignments.empty());
 }
 
 TEST_CASE("Parser: nested trait field assignment parsed correctly", "[parser][config-qualification]") {
     auto prog = parse(
         "trait Health:\n"
         "    var health: int = 100\n"
-        "unit Player:\n"
+        "entity Player:\n"
         "    Health:\n"
         "        health = 50\n");
-    auto& unit = std::get<UnitNode>(prog.declarations[1]);
-    REQUIRE(unit.traits.size() == 1);
-    CHECK(unit.traits[0].trait_name == "Health");
-    REQUIRE(unit.traits[0].assignments.size() == 1);
-    CHECK(unit.traits[0].assignments[0].name == "health");
+    auto& entity = std::get<EntityNode>(prog.declarations[1]);
+    REQUIRE(entity.traits.size() == 1);
+    CHECK(entity.traits[0].trait_name == "Health");
+    REQUIRE(entity.traits[0].assignments.size() == 1);
+    CHECK(entity.traits[0].assignments[0].name == "health");
 }
 
 TEST_CASE("Parser: trait field default values are parsed", "[parser][dynamic-traits]") {
@@ -1504,5 +1506,65 @@ TEST_CASE("Parser: synchronization limits spurious cascade errors", "[parser][re
     auto errors = parse_expect_errors(read_fixture("malformed_struct.cactus"), "malformed_struct.cactus");
     CHECK(errors.error_count() >= 2);
     CHECK(errors.error_count() <= 8);
+}
+
+// ── Task 1.5: entity / template-backed entity parser tests ──────────────────
+
+TEST_CASE("Parser: inline entity parsed", "[parser][entity]") {
+    auto prog = parse(
+        "entity LevelDirector:\n"
+        "    LevelState:\n"
+        "        wave_index = 0\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& entity = std::get<EntityNode>(prog.declarations[0]);
+    CHECK(entity.name == "LevelDirector");
+    CHECK_FALSE(entity.template_ref.has_value());
+    REQUIRE(entity.traits.size() == 1);
+    CHECK(entity.traits[0].trait_name == "LevelState");
+}
+
+TEST_CASE("Parser: template-backed entity from local template parsed", "[parser][entity]") {
+    auto prog = parse(
+        "entity Gem1 from BlueGem:\n"
+        "    WorldTransform:\n"
+        "        position = vec2(250.0, 560.0)\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& entity = std::get<EntityNode>(prog.declarations[0]);
+    CHECK(entity.name == "Gem1");
+    REQUIRE(entity.template_ref.has_value());
+    CHECK(*entity.template_ref == "BlueGem");
+    REQUIRE(entity.traits.size() == 1);
+    CHECK(entity.traits[0].trait_name == "WorldTransform");
+}
+
+TEST_CASE("Parser: template-backed entity from qualified template parsed", "[parser][entity]") {
+    auto prog = parse(
+        "entity Gem1 from items.BlueGem:\n"
+        "    WorldTransform:\n"
+        "        position = vec2(250.0, 560.0)\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& entity = std::get<EntityNode>(prog.declarations[0]);
+    REQUIRE(entity.template_ref.has_value());
+    CHECK(*entity.template_ref == "items.BlueGem");
+}
+
+TEST_CASE("Parser: template-backed entity from aliased template parsed", "[parser][entity]") {
+    auto prog = parse(
+        "use items.gems as gems\n"
+        "entity Gem1 from gems.BlueGem:\n"
+        "    WorldTransform:\n"
+        "        position = vec2(250.0, 560.0)\n");
+    REQUIRE(prog.declarations.size() == 2);
+    auto& entity = std::get<EntityNode>(prog.declarations[1]);
+    REQUIRE(entity.template_ref.has_value());
+    CHECK(*entity.template_ref == "gems.BlueGem");
+}
+
+TEST_CASE("Parser: legacy unit declaration rejected", "[parser][entity]") {
+    auto errors = parse_expect_errors(
+        "unit Player:\n"
+        "    Position\n");
+    REQUIRE_FALSE(errors.diagnostics().empty());
+    CHECK(errors.diagnostics().front().message.find("renamed") != std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

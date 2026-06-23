@@ -15,7 +15,7 @@ const:
 trait Clock:
     var elapsed: float = 0.0
 
-pub unit WavingLabel:
+pub entity WavingLabel:
     WorldTransform:
         position = vec3(0.0, 0.0, 0.0)
         rotation = quat.identity()

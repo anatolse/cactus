@@ -91,12 +91,12 @@ static const TemplateNode& find_template(const ProgramNode& program, const std::
     return *found;
 }
 
-static const UnitNode& find_unit(const ProgramNode& program, const std::string& name) {
-    const UnitNode* found = nullptr;
+static const EntityNode& find_entity(const ProgramNode& program, const std::string& name) {
+    const EntityNode* found = nullptr;
     for (const auto& decl : program.declarations) {
-        const auto* unit = std::get_if<UnitNode>(&decl);
-        if (unit != nullptr && unit->name == name) {
-            found = unit;
+        const auto* entity = std::get_if<EntityNode>(&decl);
+        if (entity != nullptr && entity->name == name) {
+            found = entity;
             break;
         }
     }
@@ -169,27 +169,27 @@ TEST_CASE("Semantic: template with valid config field — ok", "[semantic][dynam
                        "        x = 5.0\n"));
 }
 
-// ── Task 5.2: Templates tracked separately from units ─────────────────────────
+// ── Task 5.2: Templates tracked separately from entities ──────────────────────
 
-TEST_CASE("Semantic: unit with undeclared trait — error", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: entity with undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(
-        analyze_errors("unit Player:\n"
+        analyze_errors("entity Player:\n"
                        "    NonExistent\n"));
 }
 
-TEST_CASE("Semantic: unit with declared trait — valid", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: entity with declared trait — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Health:\n"
                        "    var hp: int = 100\n"
-                       "unit Player:\n"
+                       "entity Player:\n"
                        "    Health\n"));
 }
 
-TEST_CASE("Semantic: unit config with unknown field — error", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: entity config with unknown field — error", "[semantic][dynamic-ecs]") {
     CHECK(
         analyze_errors("trait Health:\n"
                        "    var hp: int = 100\n"
-                       "unit Player:\n"
+                       "entity Player:\n"
                        "    Health:\n"
                        "        badfield = 10\n"));
 }
@@ -210,7 +210,7 @@ TEST_CASE("Semantic: unit body use resolves local template", "[semantic][dynamic
                        "    var x: float = 0.0\n"
                        "template EnemyBase:\n"
                        "    Position\n"
-                       "unit Walker1:\n"
+                       "entity Walker1:\n"
                        "    use EnemyBase\n"));
 }
 
@@ -228,7 +228,7 @@ TEST_CASE("Semantic: archetype body use rejects local unit", "[semantic][dynamic
     auto err = first_error(
         "trait Position:\n"
         "    var x: float = 0.0\n"
-        "unit Player:\n"
+        "entity Player:\n"
         "    Position\n"
         "template Bad:\n"
         "    use Player\n");
@@ -305,12 +305,12 @@ TEST_CASE("Semantic: template composition collapses duplicate marker traits",
         "    Persistent\n"
         "    Renderable:\n"
         "        layer = 1\n"
-        "unit Crate:\n"
+        "entity Crate:\n"
         "    use PersistentBase\n"
         "    use VisiblePersistent\n"
         "    Persistent\n");
 
-    const auto& crate = find_unit(program, "Crate");
+    const auto& crate = find_entity(program, "Crate");
 
     std::size_t persistent_count = 0;
     for (const auto& trait : crate.traits) {
@@ -410,7 +410,7 @@ TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
     auto err = first_error(
         "trait Position:\n"
         "    var x: float = 0.0\n"
-        "unit Player:\n"
+        "entity Player:\n"
         "    Position\n"
         "system Spawner:\n"
         "    on load:\n"
@@ -704,7 +704,7 @@ TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic
 TEST_CASE("Semantic: marker trait in apply is valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
-                       "unit Player:\n"
+                       "entity Player:\n"
                        "    Persistent\n"));
 }
 

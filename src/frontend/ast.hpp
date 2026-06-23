@@ -74,7 +74,7 @@ struct ArchetypeBodyEntry {
     enum class Kind { Trait, TemplateUse };
 
     Kind kind         = Kind::Trait;
-    std::size_t index = 0;  // Index into UnitNode/TemplateNode traits or template_uses.
+    std::size_t index = 0;  // Index into EntityNode/TemplateNode traits or template_uses.
     SourceLocation location;
 };
 
@@ -380,9 +380,10 @@ struct TraitNode {
     SourceLocation location;
 };
 
-struct UnitNode {
+struct EntityNode {
     std::string name;
     bool is_pub = false;
+    std::optional<std::string> template_ref;  // set when "entity Name from TemplateName:"
     std::vector<ArchetypeBodyEntry> body_entries;
     std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
@@ -390,7 +391,7 @@ struct UnitNode {
 };
 
 // Template declaration — multi-instance blueprint, not auto-instantiated.
-// Similar to UnitNode; instantiated at runtime via `spawn`.
+// Similar to EntityNode; instantiated at runtime via `spawn`.
 struct TemplateNode {
     std::string name;
     bool is_pub = false;
@@ -530,7 +531,7 @@ using Declaration = std::variant<ModuleNode,
                                  StructNode,
                                  EnumNode,
                                  TraitNode,
-                                 UnitNode,
+                                 EntityNode,
                                  TemplateNode,
                                  SystemNode,
                                  ExternSystemNode,

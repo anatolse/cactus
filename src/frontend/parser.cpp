@@ -66,6 +66,7 @@ bool Parser::is_synchronization_point() const {
         case TokenType::ENUM:
         case TokenType::EVENT:
         case TokenType::UNIT:
+        case TokenType::ENTITY:
         case TokenType::TEMPLATE:
         case TokenType::VIEW:
         case TokenType::INTERFACE:
@@ -1794,7 +1795,19 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                 if (tok.type != TokenType::NEWLINE && tok.type != TokenType::DEDENT &&
                     tok.type != TokenType::EOF_TOKEN && tok.type != TokenType::COLON && tok.type != TokenType::INDENT &&
                     tok.type != TokenType::COMMA && tok.type != TokenType::DOT && tok.type != TokenType::LPAREN &&
-                    tok.type != TokenType::RPAREN && !tok.value.empty()) {
+                    tok.type != TokenType::RPAREN && tok.type != TokenType::LBRACKET &&
+                    tok.type != TokenType::RBRACKET && tok.type != TokenType::LBRACE &&
+                    tok.type != TokenType::RBRACE && tok.type != TokenType::ASSIGN &&
+                    tok.type != TokenType::ARROW && tok.type != TokenType::FAT_ARROW &&
+                    tok.type != TokenType::PLUS_ASSIGN && tok.type != TokenType::MINUS_ASSIGN &&
+                    tok.type != TokenType::EQUALS && tok.type != TokenType::NOT_EQUALS &&
+                    tok.type != TokenType::LESS && tok.type != TokenType::GREATER &&
+                    tok.type != TokenType::LESS_EQ && tok.type != TokenType::GREATER_EQ &&
+                    tok.type != TokenType::PLUS && tok.type != TokenType::MINUS &&
+                    tok.type != TokenType::STAR && tok.type != TokenType::SLASH &&
+                    tok.type != TokenType::PERCENT && tok.type != TokenType::AMPERSAND &&
+                    tok.type != TokenType::PIPE && tok.type != TokenType::CARET &&
+                    tok.type != TokenType::TILDE && !tok.value.empty()) {
                     member = advance().value;
                 } else {
                     member = consume(TokenType::IDENTIFIER, "expected member name").value;

@@ -1055,7 +1055,7 @@ TEST_CASE("Parser: std.physics.flat query extern declarations parse", "[parser][
         "    Empty\n"
         "    Hit\n"
         "pub struct QueryContact2D:\n"
-        "    entity: entity_id\n"
+        "    other: entity_id\n"
         "    normal: vec2\n"
         "    distance: float\n"
         "    overlap: vec2\n"
@@ -1078,6 +1078,7 @@ TEST_CASE("Parser: std.physics.flat query extern declarations parse", "[parser][
     auto& contact = std::get<StructNode>(prog.declarations[1]);
     CHECK(contact.name == "QueryContact2D");
     REQUIRE(contact.fields.size() == 4);
+    CHECK(contact.fields[0].name == "other");
     CHECK(contact.fields[0].type.name == "entity_id");
     CHECK(contact.fields[1].type.name == "vec2");
 
@@ -1566,5 +1567,54 @@ TEST_CASE("Parser: legacy unit declaration rejected", "[parser][entity]") {
         "    Position\n");
     REQUIRE_FALSE(errors.diagnostics().empty());
     CHECK(errors.diagnostics().front().message.find("renamed") != std::string::npos);
+}
+
+TEST_CASE("Parser: struct field named 'entity' produces reserved-keyword error and recovers", "[parser][reserved]") {
+    auto errors = parse_expect_errors(
+        "struct Data:\n"
+        "    entity: entity_id\n"
+        "    name: string\n");
+    REQUIRE(errors.error_count() >= 1);
+    bool has_kw_error = false;
+    for (const auto& d : errors.diagnostics()) {
+        if (d.message.find("reserved keyword") != std::string::npos && d.message.find("entity") != std::string::npos) {
+            has_kw_error = true;
+            break;
+        }
+    }
+    CHECK(has_kw_error);
+    // Verify recovery: subsequent field 'name' should parse successfully.
+    // We expect fewer errors than before the fix (which would lose all remaining fields to sync).
+    CHECK(errors.error_count() < 3);
+}
+
+TEST_CASE("Parser: trait field named 'entity' produces reserved-keyword error", "[parser][reserved]") {
+    auto errors = parse_expect_errors(
+        "trait Data:\n"
+        "    let entity: entity_id\n");
+    REQUIRE(errors.error_count() >= 1);
+    bool has_kw_error = false;
+    for (const auto& d : errors.diagnostics()) {
+        if (d.message.find("reserved keyword") != std::string::npos && d.message.find("entity") != std::string::npos) {
+            has_kw_error = true;
+            break;
+        }
+    }
+    CHECK(has_kw_error);
+}
+
+TEST_CASE("Parser: event field named 'entity' produces reserved-keyword error", "[parser][reserved]") {
+    auto errors = parse_expect_errors(
+        "event Data:\n"
+        "    entity: entity_id\n");
+    REQUIRE(errors.error_count() >= 1);
+    bool has_kw_error = false;
+    for (const auto& d : errors.diagnostics()) {
+        if (d.message.find("reserved keyword") != std::string::npos && d.message.find("entity") != std::string::npos) {
+            has_kw_error = true;
+            break;
+        }
+    }
+    CHECK(has_kw_error);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

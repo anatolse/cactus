@@ -305,7 +305,7 @@ TEST_CASE("Codegen EnTT: std.physics.flat query calls lower with registry access
         "    Empty\n"
         "    Hit\n"
         "pub struct QueryContact2D:\n"
-        "    entity: entity_id\n"
+        "    other: entity_id\n"
         "    normal: vec2\n"
         "    distance: float\n"
         "    overlap: vec2\n"
@@ -1134,7 +1134,7 @@ TEST_CASE("Codegen EnTT: stdlib flat collider queries emit cast and overlap help
 
     ResolvedStruct contact;
     contact.name                  = "QueryContact2D";
-    contact.fields                = {{.name = "entity", .type = make_entity_id_type()},
+    contact.fields                = {{.name = "other", .type = make_entity_id_type()},
                                      {.name = "normal", .type = make_vec2_type()},
                                      {.name = "distance", .type = make_float_type()},
                                      {.name = "overlap", .type = make_vec2_type()}};
@@ -1209,7 +1209,7 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
         "pub event tick:\n"
         "    dt: float\n"
         "struct Hit:\n"
-        "    entity: entity_id\n"
+        "    victim: entity_id\n"
         "event Damage:\n"
         "    amount: int\n"
         "trait Detector:\n"
@@ -1219,7 +1219,7 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
         "        Detector\n"
         "    on tick:\n"
         "        for hit in hits:\n"
-        "            emit Damage to hit.entity:\n"
+        "            emit Damage to hit.victim:\n"
         "                amount = 1\n",
         program);
 
@@ -1227,7 +1227,7 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
     CHECK(code.find("auto __foreach_snapshot_") != std::string::npos);
     CHECK(code.find("= Detector_comp.hits;") != std::string::npos);
     CHECK(code.find("for (const auto& hit : __foreach_snapshot_") != std::string::npos);
-    CHECK(code.find("if (registry.valid(hit.entity))") != std::string::npos);
+    CHECK(code.find("if (registry.valid(hit.victim))") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: projected traits use registry components in filters and clear after render",
@@ -1376,8 +1376,7 @@ TEST_CASE("Codegen EnTT: aliased std.text.format lowers to std::format in system
     CHECK(code.find("\"Score: {}\"") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: std.text import causes format header to be emitted",
-          "[codegen-entt][std-text-format]") {
+TEST_CASE("Codegen EnTT: std.text import causes format header to be emitted", "[codegen-entt][std-text-format]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "use std.text as text\n"
@@ -1429,8 +1428,7 @@ TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in syst
 
 // ── Task 3.5: Template-backed entity backend tests ────────────────────────────
 
-TEST_CASE("Codegen EnTT: template-backed entity emits template components plus overrides",
-          "[codegen-entt][entity]") {
+TEST_CASE("Codegen EnTT: template-backed entity emits template components plus overrides", "[codegen-entt][entity]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait Shape:\n"

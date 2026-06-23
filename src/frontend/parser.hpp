@@ -34,6 +34,9 @@ private:
     void synchronize();
     [[nodiscard]] bool is_synchronization_point() const;
 
+    // Helpers
+    [[nodiscard]] std::string parse_field_name_or_keyword_error(const char* error_msg);
+
     // Top-level declarations
     Declaration parse_declaration();
     ModuleNode parse_module();

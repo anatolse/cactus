@@ -66,7 +66,6 @@ bool Parser::is_synchronization_point() const {
         case TokenType::ENUM:
         case TokenType::EVENT:
         case TokenType::UNIT:
-        case TokenType::ENTITY:
         case TokenType::TEMPLATE:
         case TokenType::VIEW:
         case TokenType::INTERFACE:
@@ -266,6 +265,36 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+std::string Parser::parse_field_name_or_keyword_error(const char* error_msg) {
+    if (check(TokenType::IDENTIFIER)) {
+        return advance().value;
+    }
+    const auto& tok = peek();
+    // Check if the token is a reserved keyword (any keyword token, not structural/punctuation).
+    // Structural tokens like NEWLINE, DEDENT, COLON, etc. are handled by the caller's error recovery.
+    auto tok_type = tok.type;
+    bool is_kw =
+        (tok_type != TokenType::NEWLINE && tok_type != TokenType::DEDENT && tok_type != TokenType::EOF_TOKEN &&
+         tok_type != TokenType::COLON && tok_type != TokenType::INDENT && tok_type != TokenType::COMMA &&
+         tok_type != TokenType::DOT && tok_type != TokenType::LPAREN && tok_type != TokenType::RPAREN &&
+         tok_type != TokenType::LBRACKET && tok_type != TokenType::RBRACKET && tok_type != TokenType::LBRACE &&
+         tok_type != TokenType::RBRACE && tok_type != TokenType::ASSIGN && tok_type != TokenType::ARROW &&
+         tok_type != TokenType::FAT_ARROW && tok_type != TokenType::PLUS_ASSIGN &&
+         tok_type != TokenType::MINUS_ASSIGN && tok_type != TokenType::EQUALS && tok_type != TokenType::NOT_EQUALS &&
+         tok_type != TokenType::LESS && tok_type != TokenType::GREATER && tok_type != TokenType::LESS_EQ &&
+         tok_type != TokenType::GREATER_EQ && tok_type != TokenType::PLUS && tok_type != TokenType::MINUS &&
+         tok_type != TokenType::STAR && tok_type != TokenType::SLASH && tok_type != TokenType::PERCENT &&
+         tok_type != TokenType::AMPERSAND && tok_type != TokenType::PIPE && tok_type != TokenType::CARET &&
+         tok_type != TokenType::TILDE && tok_type != TokenType::IDENTIFIER && !tok.value.empty());
+    if (is_kw) {
+        errors_.error(tok.location, "'" + tok.value + "' is a reserved keyword and cannot be used as a field name");
+        return advance().value;
+    }
+    // Not a keyword: fall back to generic error
+    errors_.error(tok.location, std::string(error_msg) + ", got " + token_type_to_string(tok.type));
+    return "<error>";
+}
+
 std::string Parser::parse_dotted_name() {
     // Helper: consume an IDENTIFIER or any keyword token as a name segment.
     // This allows module paths that include keyword-named components (e.g. `std.input`).
@@ -375,7 +404,7 @@ StructNode Parser::parse_struct() {
         auto error_count_before = errors_.error_count();
         // Struct fields: name: type (no let/var modifiers)
         auto field_loc  = peek().location;
-        auto field_name = consume(TokenType::IDENTIFIER, "expected field name").value;
+        auto field_name = parse_field_name_or_keyword_error("expected field name");
         consume(TokenType::COLON, "expected ':'");
         auto type = parse_type_ref();
         expect_newline();
@@ -513,7 +542,7 @@ FieldNode Parser::parse_field() {
         errors_.error(peek().location, "expected 'let' or 'var'");
     }
 
-    auto name = consume(TokenType::IDENTIFIER, "expected field name").value;
+    auto name = parse_field_name_or_keyword_error("expected field name");
     consume(TokenType::COLON, "expected ':'");
     auto type = parse_type_ref();
 
@@ -1162,7 +1191,7 @@ EventNode Parser::parse_event(bool is_pub) {
             }
         }
 
-        auto field_name = consume(TokenType::IDENTIFIER, "expected event field name").value;
+        auto field_name = parse_field_name_or_keyword_error("expected event field name");
         consume(TokenType::COLON, "expected ':'");
         auto field_type = parse_type_ref();
 
@@ -1756,7 +1785,21 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
         if (check(TokenType::DOT)) {
             auto loc = peek().location;
             advance();
-            auto member = consume(TokenType::IDENTIFIER, "expected member name").value;
+            // Accept any identifier or keyword token as member name (e.g., `hit.entity`)
+            std::string member;
+            if (check(TokenType::IDENTIFIER)) {
+                member = advance().value;
+            } else {
+                const auto& tok = peek();
+                if (tok.type != TokenType::NEWLINE && tok.type != TokenType::DEDENT &&
+                    tok.type != TokenType::EOF_TOKEN && tok.type != TokenType::COLON && tok.type != TokenType::INDENT &&
+                    tok.type != TokenType::COMMA && tok.type != TokenType::DOT && tok.type != TokenType::LPAREN &&
+                    tok.type != TokenType::RPAREN && !tok.value.empty()) {
+                    member = advance().value;
+                } else {
+                    member = consume(TokenType::IDENTIFIER, "expected member name").value;
+                }
+            }
 
             // Check for method call: .member(args)
             if (check(TokenType::LPAREN)) {

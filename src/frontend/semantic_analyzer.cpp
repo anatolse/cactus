@@ -326,9 +326,10 @@ bool analyze_format_string(const std::string& fmt, FormatStringAnalysis& result,
                 result.has_automatic = true;
                 result.automatic_count++;
             } else if (std::isdigit(static_cast<unsigned char>(content[0]))) {
-                result.has_manual         = true;
-                const size_t colon_pos    = content.find(':');
-                const std::string idx_str = content.substr(0, colon_pos == std::string::npos ? content.size() : colon_pos);
+                result.has_manual      = true;
+                const size_t colon_pos = content.find(':');
+                const std::string idx_str =
+                    content.substr(0, colon_pos == std::string::npos ? content.size() : colon_pos);
                 try {
                     const int idx = std::stoi(idx_str);
                     if (idx < 0) {
@@ -1982,7 +1983,6 @@ void SemanticAnalyzer::validate_one_text_format_call(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event) {
-
     if (call.args.empty()) {
         errors_.error(loc, "std.text.format requires a format string as the first argument");
         return;
@@ -2045,7 +2045,6 @@ void SemanticAnalyzer::validate_text_format_in_expr(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event) {
-
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
         if (is_std_text_format_callee(*call->callee)) {
             validate_one_text_format_call(*call, expr.location, filter_bindings, local_bindings, handler_event);
@@ -2078,7 +2077,6 @@ void SemanticAnalyzer::validate_text_format_in_stmts(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event) {
-
     auto locals = local_bindings;
     for (const auto& stmt : stmts) {
         std::visit(
@@ -2126,10 +2124,10 @@ void SemanticAnalyzer::validate_text_format_calls(ProgramNode& program) {
                     for (auto& handler : node.handlers) {
                         std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
                         for (const auto& entry : node.filter.entries) {
-                            auto dot        = entry.qualified_name.rfind('.');
-                            auto simple     = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1)
-                                                                         : entry.qualified_name;
-                            const auto* tr  = find_resolved_trait(simple);
+                            auto dot       = entry.qualified_name.rfind('.');
+                            auto simple    = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1)
+                                                                        : entry.qualified_name;
+                            const auto* tr = find_resolved_trait(simple);
                             if (tr != nullptr) {
                                 filter_bindings[simple] = tr;
                                 if (entry.alias.has_value()) {
@@ -2227,6 +2225,9 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         }
         if (auto input_it = input_decl_types_.find(ident->name); input_it != input_decl_types_.end()) {
             return input_it->second == TypeKind::InputAxis ? make_input_axis_type() : make_input_button_type();
+        }
+        if (entity_names_.contains(ident->name)) {
+            errors_.error(expr.location, "entity '" + ident->name + "' is not an entity_id expression");
         }
         return make_unknown_type();
     }
@@ -2375,9 +2376,9 @@ void SemanticAnalyzer::validate_template_unit_declarations(
                                                           "' is not a template; entity 'from' clause must reference "
                                                           "a template");
                                     } else {
-                                        errors_.error(node.location,
-                                                      "undefined template '" + template_name + "' in module '" +
-                                                          qualifier + "'");
+                                        errors_.error(
+                                            node.location,
+                                            "undefined template '" + template_name + "' in module '" + qualifier + "'");
                                     }
                                 }
                             } else if (template_names_.contains(tmpl_ref)) {
@@ -2395,17 +2396,17 @@ void SemanticAnalyzer::validate_template_unit_declarations(
                                     bool found_non_pub = false;
                                     for (const auto& [q, names] : imports_.non_pub_template_names) {
                                         if (names.contains(tmpl_ref)) {
-                                            errors_.error(node.location,
-                                                          "template '" + tmpl_ref + "' is not public in module '" +
-                                                              q + "'");
+                                            errors_.error(
+                                                node.location,
+                                                "template '" + tmpl_ref + "' is not public in module '" + q + "'");
                                             found_non_pub = true;
                                             break;
                                         }
                                     }
                                     if (!found_non_pub) {
-                                        errors_.error(node.location,
-                                                      "undefined template '" + tmpl_ref + "' in entity '" + node.name +
-                                                          "'");
+                                        errors_.error(
+                                            node.location,
+                                            "undefined template '" + tmpl_ref + "' in entity '" + node.name + "'");
                                     }
                                 }
                             } else {
@@ -2901,10 +2902,9 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
 
 void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location) {
     if (entity_names_.contains(spawn.template_name)) {
-        errors_.error(
-            location,
-            "'" + spawn.template_name +
-                "' is an entity, not a template; use `spawn` only with `template` declarations");
+        errors_.error(location,
+                      "'" + spawn.template_name +
+                          "' is an entity, not a template; use `spawn` only with `template` declarations");
         return;
     }
     if (!template_names_.contains(spawn.template_name)) {

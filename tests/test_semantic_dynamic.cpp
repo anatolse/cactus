@@ -404,9 +404,9 @@ TEST_CASE("Semantic: spawn with required field provided by template config — o
                        "            Movement\n"));
 }
 
-// ── Task 5.4: Spawn does not target a unit ──────────────────────────────────
+// ── Task 5.4: Spawn does not target an entity ───────────────────────────────
 
-TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: spawn of entity — error", "[semantic][dynamic-ecs]") {
     auto err = first_error(
         "trait Position:\n"
         "    var x: float = 0.0\n"
@@ -417,7 +417,7 @@ TEST_CASE("Semantic: spawn of unit — error", "[semantic][dynamic-ecs]") {
         "        spawn Player:\n"
         "            Position:\n"
         "                x = 0.0\n");
-    CHECK(err.find("is a unit, not a template") != std::string::npos);
+    CHECK(err.find("is an entity, not a template") != std::string::npos);
 }
 
 // ── Task 5.5: spawn/destroy/load/add/remove only in system handlers ──────

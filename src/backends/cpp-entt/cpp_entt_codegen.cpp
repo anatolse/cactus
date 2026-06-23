@@ -218,8 +218,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
-        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
-        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D") {
+        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" ||
+        sys.name == "TextRenderer3D") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -407,7 +407,7 @@ std::string emit_flat_query_fallback_helpers() {
 namespace {
 
 QueryContact2D cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {
-    return QueryContact2D{.entity = entity, .normal = normal, .distance = distance, .overlap = overlap};
+    return QueryContact2D{.other = entity, .normal = normal, .distance = distance, .overlap = overlap};
 }
 
 QueryResult2D cactus_empty_query_result() noexcept {
@@ -546,7 +546,7 @@ float cactus_flat_length(Vector2 value) noexcept {
 }
 
 QueryContact2D cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {
-    return QueryContact2D{.entity = entity, .normal = normal, .distance = distance, .overlap = overlap};
+    return QueryContact2D{.other = entity, .normal = normal, .distance = distance, .overlap = overlap};
 }
 
 QueryResult2D cactus_empty_query_result() noexcept {

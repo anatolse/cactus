@@ -380,7 +380,7 @@ TEST_CASE("ModuleArtifact: stdlib physics query API symbols round-trip", "[artif
 
     ResolvedStruct contact;
     contact.name               = "QueryContact2D";
-    contact.fields             = {{.name = "entity", .type = make_entity_id_type()},
+    contact.fields             = {{.name = "other", .type = make_entity_id_type()},
                                   {.name = "normal", .type = make_vec2_type()},
                                   {.name = "distance", .type = make_float_type()},
                                   {.name = "overlap", .type = make_vec2_type()}};

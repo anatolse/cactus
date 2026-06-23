@@ -277,7 +277,7 @@ TEST_CASE("integration: explicit std.core import with lifecycle handler generate
             << "use std.core\n\n"
             << "trait Counter:\n"
             << "    var value: int\n\n"
-            << "pub unit CounterEntity:\n"
+            << "pub entity CounterEntity:\n"
             << "    Counter:\n"
             << "        value = 0\n"
             << "    Persistent\n\n"

@@ -1484,4 +1484,132 @@ TEST_CASE("Codegen EnTT: mixed entity creation order preserved", "[codegen-entt]
     CHECK(pos_a < pos_b);
     CHECK(pos_b < pos_c);
 }
+// ── std.editor codegen tests (add-std-editor) ──────────────────────────────
+
+TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, Editor entity, extern system stubs",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "    Rotate\n"
+        "    Scale\n"
+        "    Place\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "    var selected: entity_id\n"
+        "    var active_template: string = \"\"\n"
+        "    var focused_trait: string = \"\"\n"
+        "    var focused_field: string = \"\"\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "pub trait EditorSelected\n"
+        "pub trait EditorSnap:\n"
+        "    var position_snap: float = 0.0\n"
+        "    var rotation_snap: float = 0.0\n"
+        "    var scale_snap: float = 0.0\n"
+        "pub event EditorSelectionChanged:\n"
+        "    previous: entity_id\n"
+        "    current: entity_id\n"
+        "pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
+        "pub extern system EditorTemplatePalette:\n"
+        "    filter:\n"
+        "        EditorState\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+
+    // EditorState should have a component struct
+    CHECK(code.find("struct EditorState") != std::string::npos);
+    // Editor entity should be created
+    CHECK(code.find("create_editor") != std::string::npos);
+    // EditorSelected marker trait should be registered
+    CHECK(code.find("struct EditorSelected") != std::string::npos);
+    // EditorSnap should have fields
+    CHECK(code.find("struct EditorSnap") != std::string::npos);
+    // EditorSelectionChanged event should have a struct
+    CHECK(code.find("struct EditorSelectionChanged") != std::string::npos);
+    // EditorTemplatePalette extern system stub (snake_case name)
+    CHECK(code.find("editor_template_palette_tick") != std::string::npos);
+    // HexColor for #00FF00FF is not in this test, but HexColor conversion path should exist
+}
+
+TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "pub trait EditorGizmo2D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "pub trait EditorGizmo3D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "system Gizmo2D:\n"
+        "    filter:\n"
+        "        EditorGizmo2D\n"
+        "    on tick:\n"
+        "        project EditorGizmo2D:\n"
+        "            mode = 1\n"
+        "            color = #00FF00FF\n"
+        "            size = 1.0\n"
+        "        project EditorGizmo3D:\n"
+        "            mode = 1\n"
+        "            color = #00FF00FF\n"
+        "            size = 1.0\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+
+    // Should generate projected trait helper for EditorGizmo2D
+    CHECK(code.find("project_EditorGizmo2D") != std::string::npos);
+    CHECK(code.find("registry.emplace<EditorGizmo2D>") != std::string::npos);
+    // Should generate projected trait helper for EditorGizmo3D
+    CHECK(code.find("project_EditorGizmo3D") != std::string::npos);
+    CHECK(code.find("registry.emplace<EditorGizmo3D>") != std::string::npos);
+    // Should have the general projected trait cleanup call
+    CHECK(code.find("clear_projected_traits(registry)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
+          "[codegen-entt][stdlib][editor][extern-system]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "pub trait EditorGizmo2D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "pub extern system EditorTemplatePalette:\n"
+        "    filter:\n"
+        "        EditorState\n"
+        "pub extern system EditorPropertyPanel:\n"
+        "    filter:\n"
+        "        EditorState\n"
+        "pub extern system GizmoRenderer2D:\n"
+        "    filter:\n"
+        "        EditorGizmo2D\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+
+    // EditorTemplatePalette should have a tick call (snake_case names)
+    CHECK(code.find("editor_template_palette_tick") != std::string::npos);
+    // EditorPropertyPanel should have a tick call
+    CHECK(code.find("editor_property_panel_tick") != std::string::npos);
+    // EditorTemplatePalette and EditorPropertyPanel extern system stubs are generated
+    // (GizmoRenderer2D dispatch requires WorldTransform in filter + stdlib contract flag,
+    //  which are tested in the actual editor-test.cactus example via test_example_cpp_compilation)
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

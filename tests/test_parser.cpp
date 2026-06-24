@@ -1603,6 +1603,73 @@ TEST_CASE("Parser: trait field named 'entity' produces reserved-keyword error", 
     CHECK(has_kw_error);
 }
 
+// ── std.editor module parser tests (add-std-editor) ─────────────────────────
+
+TEST_CASE("Parser: std.editor module parses enum, traits, events, extern funcs, extern systems without errors",
+          "[parser][stdlib][editor]") {
+    auto prog = parse(
+        "module std.editor\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "    Rotate\n"
+        "    Scale\n"
+        "    Place\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "    var selected: entity_id\n"
+        "    var active_template: string = \"\"\n"
+        "    var focused_trait: string = \"\"\n"
+        "    var focused_field: string = \"\"\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "pub trait EditorSelected\n"
+        "pub trait EditorLocked\n"
+        "pub trait EditorHidden\n"
+        "pub trait EditorSnap:\n"
+        "    var position_snap: float = 0.0\n"
+        "    var rotation_snap: float = 0.0\n"
+        "    var scale_snap: float = 0.0\n"
+        "pub trait EditorCategory:\n"
+        "    let category: string\n"
+        "    var visible: bool = true\n"
+        "pub trait EditorGizmo2D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "pub trait EditorGizmo3D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "pub event EditorSelectionChanged:\n"
+        "    previous: entity_id\n"
+        "    current: entity_id\n"
+        "pub event EditorModeChanged:\n"
+        "    previous_mode: int\n"
+        "    current_mode: int\n"
+        "pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id\n"
+        "pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
+        "pub extern func editor_raycast_3d(screen_pos: vec2, mask: int) entity_id\n"
+        "pub extern func editor_screen_to_world_2d(screen: vec2) vec2\n"
+        "pub extern func editor_mouse_delta_2d() vec2\n"
+        "pub extern func editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3\n"
+        "pub extern func editor_mouse_delta_3d() vec3\n"
+        "pub extern system EditorTemplatePalette:\n"
+        "    filter:\n"
+        "        EditorState\n"
+        "pub extern system EditorPropertyPanel:\n"
+        "    filter:\n"
+        "        EditorState\n"
+        "pub extern system GizmoRenderer2D:\n"
+        "    filter:\n"
+        "        EditorGizmo2D\n"
+        "pub extern system GizmoRenderer3D:\n"
+        "    filter:\n"
+        "        EditorGizmo3D\n");
+    CHECK(prog.declarations.size() >= 20);
+}
+
 TEST_CASE("Parser: event field named 'entity' produces reserved-keyword error", "[parser][reserved]") {
     auto errors = parse_expect_errors(
         "event Data:\n"

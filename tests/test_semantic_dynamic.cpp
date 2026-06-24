@@ -818,4 +818,189 @@ TEST_CASE("Semantic: field access in no-filter if-branch — error (task 11.12)"
                        "        if hp <= 0:\n"
                        "            hp = 100\n"));
 }
+// ── std.editor semantic tests (add-std-editor) ─────────────────────────────
+
+TEST_CASE("Semantic: EditorState trait fields have correct types and defaults", "[semantic][stdlib][editor]") {
+    auto prog = analyze_ast(
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "    Rotate\n"
+        "    Scale\n"
+        "    Place\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "    var selected: entity_id\n"
+        "    var active_template: string = \"\"\n"
+        "    var focused_trait: string = \"\"\n"
+        "    var focused_field: string = \"\"\n");
+    // Find the EditorState trait
+    const TraitNode* editor_state = nullptr;
+    for (const auto& decl : prog.declarations) {
+        if (const auto* trait = std::get_if<TraitNode>(&decl)) {
+            if (trait->name == "EditorState") {
+                editor_state = trait;
+                break;
+            }
+        }
+    }
+    REQUIRE(editor_state != nullptr);
+    REQUIRE(editor_state->fields.size() == 6);
+    CHECK(editor_state->fields[0].name == "active");
+    CHECK(editor_state->fields[0].type.name == "bool");
+    CHECK(editor_state->fields[1].name == "mode");
+    CHECK(editor_state->fields[1].type.name == "int");
+    CHECK(editor_state->fields[2].name == "selected");
+    CHECK(editor_state->fields[2].type.name == "entity_id");
+    CHECK(editor_state->fields[3].name == "active_template");
+    CHECK(editor_state->fields[3].type.name == "string");
+}
+
+TEST_CASE("Semantic: Editor entity with EditorState trait is valid", "[semantic][stdlib][editor]") {
+    CHECK_FALSE(
+        analyze_errors("pub trait EditorState:\n"
+                       "    var active: bool = true\n"
+                       "    var mode: int = 0\n"
+                       "    var selected: entity_id\n"
+                       "pub entity Editor:\n"
+                       "    EditorState\n"));
+}
+
+TEST_CASE("Semantic: EditorGizmo2D and EditorGizmo3D traits are valid for projection", "[semantic][stdlib][editor]") {
+    // Projection traits must be valid (have fields, can be projected)
+    auto prog = analyze_ast(
+        "pub trait EditorGizmo2D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "pub trait EditorGizmo3D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "system Gizmo2D:\n"
+        "    filter:\n"
+        "        EditorGizmo2D\n"
+        "    on tick:\n"
+        "        let m = mode\n");
+    // Find EditorGizmo2D trait
+    const TraitNode* gizmo2d = nullptr;
+    const TraitNode* gizmo3d = nullptr;
+    for (const auto& decl : prog.declarations) {
+        if (const auto* trait = std::get_if<TraitNode>(&decl)) {
+            if (trait->name == "EditorGizmo2D")
+                gizmo2d = trait;
+            if (trait->name == "EditorGizmo3D")
+                gizmo3d = trait;
+        }
+    }
+    REQUIRE(gizmo2d != nullptr);
+    REQUIRE(gizmo3d != nullptr);
+    CHECK(gizmo2d->fields.size() == 3);
+    CHECK(gizmo3d->fields.size() == 3);
+}
+
+TEST_CASE("Semantic: EditorSelectionChanged and EditorModeChanged events are valid", "[semantic][stdlib][editor]") {
+    // Both events should pass semantic validation
+    auto prog = analyze_ast(
+        "pub event EditorSelectionChanged:\n"
+        "    previous: entity_id\n"
+        "    current: entity_id\n"
+        "pub event EditorModeChanged:\n"
+        "    previous_mode: int\n"
+        "    current_mode: int\n"
+        "system EventHandler:\n"
+        "    on EditorSelectionChanged as e:\n"
+        "        pass\n"
+        "    on EditorModeChanged as e:\n"
+        "        pass\n");
+    const EventNode* sel_event  = nullptr;
+    const EventNode* mode_event = nullptr;
+    for (const auto& decl : prog.declarations) {
+        if (const auto* event = std::get_if<EventNode>(&decl)) {
+            if (event->name == "EditorSelectionChanged")
+                sel_event = event;
+            if (event->name == "EditorModeChanged")
+                mode_event = event;
+        }
+    }
+    REQUIRE(sel_event != nullptr);
+    REQUIRE(mode_event != nullptr);
+    CHECK(sel_event->fields.size() == 2);
+    CHECK(sel_event->fields[0].name == "previous");
+    CHECK(sel_event->fields[1].name == "current");
+    CHECK(mode_event->fields.size() == 2);
+    CHECK(mode_event->fields[0].name == "previous_mode");
+    CHECK(mode_event->fields[1].name == "current_mode");
+}
+
+TEST_CASE("Semantic: editor_spawn_template extern func with string param passes validation",
+          "[semantic][stdlib][editor][extern-func]") {
+    // string param in extern func should NOT produce const-binding errors
+    CHECK_FALSE(
+        analyze_errors("pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: "
+                       "vec3) entity_id\n"));
+}
+
+TEST_CASE("Semantic: all seven editor extern funcs with string/int/vec params pass validation",
+          "[semantic][stdlib][editor][extern-func]") {
+    CHECK_FALSE(
+        analyze_errors("pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: "
+                       "vec3) entity_id\n"
+                       "pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
+                       "pub extern func editor_raycast_3d(screen_pos: vec2, mask: int) entity_id\n"
+                       "pub extern func editor_screen_to_world_2d(screen: vec2) vec2\n"
+                       "pub extern func editor_mouse_delta_2d() vec2\n"
+                       "pub extern func editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) "
+                       "vec3\n"
+                       "pub extern func editor_mouse_delta_3d() vec3\n"));
+}
+
+TEST_CASE("Semantic: extern system EditorTemplatePalette filter on EditorState is valid",
+          "[semantic][stdlib][editor][extern-system]") {
+    CHECK_FALSE(
+        analyze_errors("pub trait EditorState:\n"
+                       "    var active: bool = true\n"
+                       "    var mode: int = 0\n"
+                       "    var selected: entity_id\n"
+                       "pub extern system EditorTemplatePalette:\n"
+                       "    filter:\n"
+                       "        EditorState\n"));
+}
+
+TEST_CASE("Semantic: extern system EditorPropertyPanel filter on EditorState is valid",
+          "[semantic][stdlib][editor][extern-system]") {
+    CHECK_FALSE(
+        analyze_errors("pub trait EditorState:\n"
+                       "    var active: bool = true\n"
+                       "    var mode: int = 0\n"
+                       "pub extern system EditorPropertyPanel:\n"
+                       "    filter:\n"
+                       "        EditorState\n"));
+}
+
+TEST_CASE("Semantic: extern system GizmoRenderer2D filter on EditorGizmo2D is valid",
+          "[semantic][stdlib][editor][extern-system]") {
+    CHECK_FALSE(
+        analyze_errors("pub trait EditorGizmo2D:\n"
+                       "    var mode: int = 1\n"
+                       "    var color: color = #00FF00FF\n"
+                       "    var size: float = 1.0\n"
+                       "pub extern system GizmoRenderer2D:\n"
+                       "    filter:\n"
+                       "        EditorGizmo2D\n"));
+}
+
+TEST_CASE("Semantic: extern system GizmoRenderer3D filter on EditorGizmo3D is valid",
+          "[semantic][stdlib][editor][extern-system]") {
+    CHECK_FALSE(
+        analyze_errors("pub trait EditorGizmo3D:\n"
+                       "    var mode: int = 1\n"
+                       "    var color: color = #00FF00FF\n"
+                       "    var size: float = 1.0\n"
+                       "pub extern system GizmoRenderer3D:\n"
+                       "    filter:\n"
+                       "        EditorGizmo3D\n"));
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -2703,13 +2703,16 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
             if (entity->template_ref.has_value()) {
                 // Template-backed entity: start from template's flattened archetype, apply overrides
                 const auto& tmpl_ref = *entity->template_ref;
-                auto tmpl_it         = archetype_traits_.find(tmpl_ref);
+                // archetype_traits_ uses unqualified names; strip module qualifier if present
+                const auto dot        = tmpl_ref.rfind('.');
+                const auto lookup_key = dot != std::string::npos ? tmpl_ref.substr(dot + 1) : tmpl_ref;
+                auto tmpl_it          = archetype_traits_.find(lookup_key);
                 if (tmpl_it != archetype_traits_.end() && tmpl_it->second != nullptr) {
                     auto merged = clone_archetype_trait_entries(*tmpl_it->second);
                     for (const auto& override_entry : entity->traits) {
                         merge_trait_entry(merged, override_entry);
                     }
-                    entity->traits = clone_archetype_trait_entries(merged);
+                    entity->traits = std::move(merged);
                 }
                 // (If template not found, validation already reported the error; leave traits as-is)
             } else {
@@ -2761,8 +2764,11 @@ void SemanticAnalyzer::validate_template_backed_entity_overrides(
 
         const auto& tmpl_ref = *entity->template_ref;
 
-        // Resolve the template's flattened archetype (already done by flatten_template_compositions)
-        auto tmpl_traits_it = archetype_traits_.find(tmpl_ref);
+        // Resolve the template's flattened archetype (already done by flatten_template_compositions).
+        // archetype_traits_ uses unqualified names; strip module qualifier if present.
+        const auto tmpl_dot   = tmpl_ref.rfind('.');
+        const auto tmpl_key   = tmpl_dot != std::string::npos ? tmpl_ref.substr(tmpl_dot + 1) : tmpl_ref;
+        auto tmpl_traits_it   = archetype_traits_.find(tmpl_key);
         if (tmpl_traits_it == archetype_traits_.end() || tmpl_traits_it->second == nullptr) {
             continue;  // template not found — already reported in validate_template_unit_declarations
         }
@@ -2805,7 +2811,7 @@ void SemanticAnalyzer::validate_template_backed_entity_overrides(
         }
 
         // Check required fields are satisfied by template defaults or entity overrides
-        auto req_it = template_required_fields_.find(tmpl_ref);
+        auto req_it = template_required_fields_.find(tmpl_key);
         if (req_it != template_required_fields_.end()) {
             std::unordered_set<std::string> provided;
             for (const auto& entry : entity->traits) {

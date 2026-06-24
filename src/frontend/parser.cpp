@@ -203,8 +203,10 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
             return parse_entity(true);
         }
         if (check(TokenType::UNIT)) {
-            errors_.error(peek().location, "'unit' has been renamed to 'entity'; rewrite as 'entity <Name>:'");
-            return ModuleNode{.name = "<error>", .location = peek().location};
+            auto loc = peek().location;
+            errors_.error(loc, "'unit' has been renamed to 'entity'; rewrite as 'entity <Name>:'");
+            advance();
+            return ModuleNode{.name = "<error>", .location = loc};
         }
         if (check(TokenType::TEMPLATE)) {
             return parse_template(true);
@@ -286,7 +288,9 @@ std::string Parser::parse_field_name_or_keyword_error(const char* error_msg) {
          tok_type != TokenType::GREATER_EQ && tok_type != TokenType::PLUS && tok_type != TokenType::MINUS &&
          tok_type != TokenType::STAR && tok_type != TokenType::SLASH && tok_type != TokenType::PERCENT &&
          tok_type != TokenType::AMPERSAND && tok_type != TokenType::PIPE && tok_type != TokenType::CARET &&
-         tok_type != TokenType::TILDE && tok_type != TokenType::IDENTIFIER && !tok.value.empty());
+         tok_type != TokenType::TILDE && tok_type != TokenType::IDENTIFIER &&
+         tok_type != TokenType::INT_LITERAL && tok_type != TokenType::FLOAT_LITERAL &&
+         tok_type != TokenType::STRING_LITERAL && tok_type != TokenType::HEX_COLOR && !tok.value.empty());
     if (is_kw) {
         errors_.error(tok.location, "'" + tok.value + "' is a reserved keyword and cannot be used as a field name");
         return advance().value;

@@ -1,0 +1,15 @@
+module game_templates
+
+pub trait Renderable:
+    var color: color = #FFFFFFFF
+    var size: vec2 = vec2(1.0, 1.0)
+
+pub template Box:
+    Renderable:
+        color = #FF4444FF
+        size = vec2(1.0, 1.0)
+
+pub template PlayerSpawn:
+    Renderable:
+        color = #4488FFFF
+        size = vec2(1.0, 1.0)

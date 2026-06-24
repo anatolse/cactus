@@ -4,11 +4,13 @@ use std.transform.flat
 use std.physics.flat
 use std.editor
 
-# ── A simple scene with 2D entities ──────────────────────────────────────────
+# ── Visual trait for 2D scene entities ────────────────────────────────────────
 
 trait Renderable:
     var color: color = #FFFFFFFF
     var size: vec2 = vec2(1.0, 1.0)
+
+# ── Template Catalog (editor-spawnable via EditorPlace2D) ─────────────────────
 
 pub template Box:
     LocalTransform:
@@ -20,13 +22,26 @@ pub template Box:
         color = #FF4444FF
         size = vec2(1.0, 1.0)
 
-pub entity Player:
+pub template PlayerSpawn:
     LocalTransform:
         position = vec2(0.0, 0.0)
     WorldTransform
     Renderable:
         color = #4488FFFF
         size = vec2(1.0, 1.0)
+
+# ── Initial Scene Entities ────────────────────────────────────────────────────
+
+pub entity Player:
+    LocalTransform:
+        position = vec2(0.0, 0.0)
+    WorldTransform
+    BoxCollider:
+        size = vec2(1.0, 1.0)
+    Renderable:
+        color = #4488FFFF
+        size = vec2(1.0, 1.0)
+    EditorLocked
 
 pub entity SpawnBox:
     LocalTransform:
@@ -38,7 +53,18 @@ pub entity SpawnBox:
         color = #44FF44FF
         size = vec2(1.0, 1.0)
 
-# ── Simple rendering system ──────────────────────────────────────────────────
+# ── Gizmo visualization entity (receives projected EditorGizmo2D at runtime) ──
+
+pub entity GizmoHandle:
+    LocalTransform:
+        position = vec2(0.0, 0.0)
+    WorldTransform
+    EditorGizmo2D:
+        mode = 1
+        color = #00FF00FF
+        size = 1.0
+
+# ── Simple scene renderer ─────────────────────────────────────────────────────
 
 system RenderScene:
     filter:
@@ -46,6 +72,5 @@ system RenderScene:
         Renderable as render
 
     on tick:
-        # Rendering would happen here in real game
         let pos_x = xform.position.x
         let pos_y = xform.position.y

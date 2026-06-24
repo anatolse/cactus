@@ -233,4 +233,66 @@ TEST_CASE("integration: full pipeline using module resolver", "[integration][7.2
 
     fs::remove_all(build_dir, ec);
 }
+
+// ── std.editor cross-module test (add-std-editor, task 5.4) ────────────────
+
+TEST_CASE("integration: game_templates + editor_module cross-compile with std.editor", "[integration][editor]") {
+    auto build_dir = integration_build_dir() / "editor_cross";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    // Step 1: Compile game_templates.cactus (defines templates and Renderable trait)
+    ErrorReporter gt_errors;
+    auto gt_prog = compile_file(fixtures_dir() / "game_templates.cactus", gt_errors);
+    REQUIRE_FALSE(gt_errors.has_errors());
+    REQUIRE(gt_prog.has_value());
+    CHECK(gt_prog->traits.count("Renderable") == 1);
+    CHECK(gt_prog->pub_templates.count("Box") == 1);
+    CHECK(gt_prog->pub_templates.count("PlayerSpawn") == 1);
+
+    // Step 2: Save game_templates artifact
+    ModuleArtifact gt_artifact(gt_errors);
+    REQUIRE(gt_artifact.save(*gt_prog, "game_templates", build_dir));
+
+    // Step 3: Build imports for editor_module
+    ImportedSymbols gt_syms;
+    gt_syms.module_name = "game_templates";
+    for (auto& [name, trait] : gt_prog->traits) {
+        if (trait.is_pub) {
+            gt_syms.traits[name] = trait;
+        }
+    }
+    gt_syms.templates = gt_prog->pub_templates;
+    ModuleImports editor_imports;
+    editor_imports.add("game_templates", std::move(gt_syms));
+
+    // Step 4: Compile editor_module.cactus importing game_templates + std.editor
+    ErrorReporter editor_errors;
+    auto editor_prog = compile_file(fixtures_dir() / "editor_module.cactus", editor_errors, editor_imports);
+    REQUIRE_FALSE(editor_errors.has_errors());
+    REQUIRE(editor_prog.has_value());
+
+    // editor_module has locally declared traits (EditorLocked, EditorState) and uses imported Renderable via
+    // filter/entity
+    CHECK(editor_prog->traits.count("EditorLocked") == 1);
+    CHECK(editor_prog->traits.count("EditorState") == 1);
+
+    // Save and link
+    ModuleArtifact editor_artifact(editor_errors);
+    REQUIRE(editor_artifact.save(*editor_prog, "editor_module", build_dir));
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link({build_dir / "game_templates.cmod", build_dir / "editor_module.cmod"});
+
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(merged.has_value());
+    // Merged program should have Renderable (from game_templates) and local traits (from editor_module)
+    CHECK(merged->traits.count("Renderable") == 1);
+    CHECK(merged->traits.count("EditorLocked") == 1);
+    CHECK(merged->traits.count("EditorState") == 1);
+
+    fs::remove_all(build_dir, ec);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

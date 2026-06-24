@@ -193,7 +193,7 @@ private:
                                         const std::string& archetype_name);
     bool local_non_template_symbol_exists(const std::string& name) const;
     bool imported_non_template_symbol_exists(const std::string& name) const;
-    bool imported_symbols_contain_non_template(const ImportedSymbols& symbols, const std::string& name) const;
+    static bool imported_symbols_contain_non_template(const ImportedSymbols& symbols, const std::string& name);
     std::unordered_set<std::string> get_archetype_fields(const std::vector<ArchetypeTraitEntry>& traits) const;
     const ResolvedTrait* find_resolved_trait(const std::string& name) const;
     const ResolvedStruct* find_resolved_event(const std::string& name) const;

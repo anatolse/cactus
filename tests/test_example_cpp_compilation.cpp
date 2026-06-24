@@ -165,6 +165,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_WAVING_LABEL_3D_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_WAVING_LABEL_3D_TARGET,
         },
+        ExampleCase{
+            .name           = "editor-test",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_EDITOR_TEST_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_EDITOR_TEST_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_EDITOR_TEST_TARGET,
+        },
     };
 }
 

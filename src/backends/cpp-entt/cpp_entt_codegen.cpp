@@ -260,6 +260,14 @@ bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     if (sys.name == "TextRenderer3D") {
         return filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
     }
+    if (sys.name == "GizmoRenderer2D") {
+        return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "EditorGizmo2D", "EditorGizmo2D");
+    }
+    if (sys.name == "GizmoRenderer3D") {
+        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "EditorGizmo3D", "EditorGizmo3D");
+    }
     return false;
 }
 

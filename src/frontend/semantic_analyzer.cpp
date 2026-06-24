@@ -325,7 +325,7 @@ bool analyze_format_string(const std::string& fmt, FormatStringAnalysis& result,
             if (content.empty() || content[0] == ':') {
                 result.has_automatic = true;
                 result.automatic_count++;
-            } else if (std::isdigit(static_cast<unsigned char>(content[0]))) {
+            } else if (std::isdigit(static_cast<unsigned char>(content[0])) != 0) {
                 result.has_manual      = true;
                 const size_t colon_pos = content.find(':');
                 const std::string idx_str =
@@ -1794,7 +1794,7 @@ bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
 }
 
 bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbols& symbols,
-                                                             const std::string& name) const {
+                                                             const std::string& name) {
     return symbols.traits.contains(name) || symbols.structs.contains(name) || symbols.enums.contains(name) ||
            symbols.funcs.contains(name) || symbols.events.contains(name);
 }
@@ -2519,7 +2519,7 @@ void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
 
     auto report_cycle = [this, &stack, &reported_cycle_keys](const std::string& target,
                                                              const SourceLocation& location) {
-        auto cycle_start = std::find(stack.begin(), stack.end(), target);
+        auto cycle_start = std::ranges::find(stack, target);
         if (cycle_start == stack.end()) {
             return;
         }

@@ -181,7 +181,7 @@ namespace vec3 {
 
 namespace quat {
 [[nodiscard]] constexpr Quat identity() noexcept {
-    return Quat{0.0F, 0.0F, 0.0F, 1.0F};
+    return Quat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
 }
 [[nodiscard]] Quat from_euler(float pitch, float yaw, float roll) noexcept;
 [[nodiscard]] Quat from_axis_angle(Vector3 axis, float angle) noexcept;

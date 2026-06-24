@@ -62,10 +62,47 @@ void submit_mesh(Vector3 position,
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
-void submit_text_2d(Vector2 position, float rotation_rad, int font_size, Color color,
-                    const std::string& text, bool visible) noexcept;
-void submit_text_3d(std::uint32_t entity_id, Vector3 position, Quat rotation, Vector3 scale,
-                    int font_size, Color color, const std::string& text, bool visible) noexcept;
+void submit_text_2d(Vector2 position,
+                    float rotation_rad,
+                    int font_size,
+                    Color color,
+                    const std::string& text,
+                    bool visible) noexcept;
+void submit_text_3d(std::uint32_t entity_id,
+                    Vector3 position,
+                    Quat rotation,
+                    Vector3 scale,
+                    int font_size,
+                    Color color,
+                    const std::string& text,
+                    bool visible) noexcept;
+
+// ── Editor extern func bridges (std.editor) ───────────────────────────────────
+
+/// Spawn a template entity by name at the given 2D/3D position.
+/// Returns the created entity handle, or entt::null on failure.
+[[nodiscard]] entt::entity editor_spawn_template(entt::registry& registry,
+                                                 const std::string& template_name,
+                                                 Vector2 position_2d,
+                                                 Vector3 position_3d) noexcept;
+
+/// 2D hit-test: return the top-most entity under screen_pos matching mask, or entt::null.
+[[nodiscard]] entt::entity editor_hit_test_2d(Vector2 screen_pos, int mask) noexcept;
+
+/// 3D raycast: return the first entity hit by a ray from screen_pos, or entt::null.
+[[nodiscard]] entt::entity editor_raycast_3d(Vector2 screen_pos, int mask) noexcept;
+
+/// Convert a screen position to a 2D world position.
+[[nodiscard]] Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept;
+
+/// Return the current frame's mouse delta in 2D world space.
+[[nodiscard]] Vector2 editor_mouse_delta_2d() noexcept;
+
+/// Project a screen position onto a 3D plane.
+[[nodiscard]] Vector3 editor_plane_project_3d(Vector2 screen, Vector3 plane_origin, Vector3 plane_normal) noexcept;
+
+/// Return the current frame's mouse delta in 3D world space.
+[[nodiscard]] Vector3 editor_mouse_delta_3d() noexcept;
 
 void propagate_hierarchy(entt::registry& registry,
                          const std::function<bool(entt::entity)>& has_local_world,

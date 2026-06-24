@@ -566,14 +566,14 @@ Mesh& text_plane_mesh() noexcept {
         constexpr int kVerts     = 4;
         constexpr int kTriangles = 2;
 
-        mesh.vertexCount  = kVerts;
+        mesh.vertexCount   = kVerts;
         mesh.triangleCount = kTriangles;
 
         mesh.vertices  = static_cast<float*>(MemAlloc(static_cast<unsigned>(kVerts * 3) * sizeof(float)));
         mesh.texcoords = static_cast<float*>(MemAlloc(static_cast<unsigned>(kVerts * 2) * sizeof(float)));
         mesh.normals   = static_cast<float*>(MemAlloc(static_cast<unsigned>(kVerts * 3) * sizeof(float)));
-        mesh.indices   = static_cast<unsigned short*>(
-            MemAlloc(static_cast<unsigned>(kTriangles * 3) * sizeof(unsigned short)));
+        mesh.indices =
+            static_cast<unsigned short*>(MemAlloc(static_cast<unsigned>(kTriangles * 3) * sizeof(unsigned short)));
 
         // Positions: XY plane, centred, counter-clockwise when viewed from +Z
         // [0] bottom-left  [1] bottom-right  [2] top-right  [3] top-left
@@ -596,12 +596,20 @@ Mesh& text_plane_mesh() noexcept {
             0.0F, 0.0F, 1.0F,
             0.0F, 0.0F, 1.0F,
         };
-        const std::array<unsigned short, 6> indices = { 0, 1, 2, 0, 2, 3 };
+        const std::array<unsigned short, 6> indices = {0, 1, 2, 0, 2, 3};
 
-        for (int i = 0; i < kVerts * 3; ++i) { mesh.vertices[i]  = verts[static_cast<size_t>(i)]; }
-        for (int i = 0; i < kVerts * 2; ++i) { mesh.texcoords[i] = uvs[static_cast<size_t>(i)]; }
-        for (int i = 0; i < kVerts * 3; ++i) { mesh.normals[i]   = normals[static_cast<size_t>(i)]; }
-        for (int i = 0; i < kTriangles * 3; ++i) { mesh.indices[i] = indices[static_cast<size_t>(i)]; }
+        for (int i = 0; i < kVerts * 3; ++i) {
+            mesh.vertices[i] = verts[static_cast<size_t>(i)];
+        }
+        for (int i = 0; i < kVerts * 2; ++i) {
+            mesh.texcoords[i] = uvs[static_cast<size_t>(i)];
+        }
+        for (int i = 0; i < kVerts * 3; ++i) {
+            mesh.normals[i] = normals[static_cast<size_t>(i)];
+        }
+        for (int i = 0; i < kTriangles * 3; ++i) {
+            mesh.indices[i] = indices[static_cast<size_t>(i)];
+        }
 
         UploadMesh(&mesh, false);
         ready = true;
@@ -613,15 +621,15 @@ void flush_text_2d_queue() noexcept {
     if (text_2d_queue().empty() || !IsWindowReady()) {
         return;
     }
-    const Font font       = GetFontDefault();
+    const Font font          = GetFontDefault();
     constexpr float kSpacing = 1.0F;
 
     Camera2D camera{};
     camera.zoom = 1.0F;
     BeginMode2D(camera);
     for (const auto& sub : text_2d_queue()) {
-        const auto fs       = static_cast<float>(sub.font_size);
-        const Vector2 size  = MeasureTextEx(font, sub.text.c_str(), fs, kSpacing);
+        const auto fs      = static_cast<float>(sub.font_size);
+        const Vector2 size = MeasureTextEx(font, sub.text.c_str(), fs, kSpacing);
         const Vector2 origin{.x = size.x * 0.5F, .y = size.y * 0.5F};
         DrawTextPro(font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
     }
@@ -640,14 +648,10 @@ void flush_text_3d_queue() noexcept {
         if (sub.text.empty()) {
             continue;
         }
-        auto& entry = text_label_3d_cache()[sub.entity_id];
-        const bool dirty = !entry.loaded
-                        || entry.cached_text      != sub.text
-                        || entry.cached_font_size != sub.font_size
-                        || entry.cached_color.r   != sub.color.r
-                        || entry.cached_color.g   != sub.color.g
-                        || entry.cached_color.b   != sub.color.b
-                        || entry.cached_color.a   != sub.color.a;
+        auto& entry      = text_label_3d_cache()[sub.entity_id];
+        const bool dirty = !entry.loaded || entry.cached_text != sub.text || entry.cached_font_size != sub.font_size ||
+                           entry.cached_color.r != sub.color.r || entry.cached_color.g != sub.color.g ||
+                           entry.cached_color.b != sub.color.b || entry.cached_color.a != sub.color.a;
         if (!dirty) {
             continue;
         }
@@ -693,7 +697,7 @@ void flush_text_3d_queue() noexcept {
         if (it == text_label_3d_cache().end() || !it->second.loaded) {
             continue;
         }
-        Material mat           = LoadMaterialDefault();
+        Material mat                           = LoadMaterialDefault();
         mat.maps[MATERIAL_MAP_DIFFUSE].texture = it->second.rt.texture;
 
         const Matrix xform = mesh_transform_matrix(MeshSubmission{
@@ -1024,6 +1028,51 @@ void destroy_entity_recursive(
     if (!destroying_entities.empty()) {
         destroying_entities.pop_back();
     }
+}
+
+// ── Editor extern func stubs (std.editor) ────────────────────────────────────
+
+entt::entity editor_spawn_template(entt::registry& registry,
+                                   const std::string& /*template_name*/,
+                                   Vector2 position_2d,
+                                   Vector3 position_3d) noexcept {
+    (void)registry;
+    (void)position_2d;
+    (void)position_3d;
+    // TODO: resolve template_name to compiled template archetype,
+    // create entity with all trait components, return entity handle
+    return entt::entity{entt::null};
+}
+
+entt::entity editor_hit_test_2d(Vector2 /*screen_pos*/, int /*mask*/) noexcept {
+    // TODO: perform 2D hit-test against entities with BoxCollider + flat.WorldTransform
+    return entt::entity{entt::null};
+}
+
+entt::entity editor_raycast_3d(Vector2 /*screen_pos*/, int /*mask*/) noexcept {
+    // TODO: perform 3D raycast against entities with volume.WorldTransform
+    return entt::entity{entt::null};
+}
+
+Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept {
+    // TODO: convert screen coordinates to 2D world coordinates using the active camera
+    return screen;
+}
+
+Vector2 editor_mouse_delta_2d() noexcept {
+    // TODO: return the mouse movement delta since last frame in 2D world space
+    return Vector2{.x = 0.0F, .y = 0.0F};
+}
+
+Vector3 editor_plane_project_3d(Vector2 screen, Vector3 /*plane_origin*/, Vector3 /*plane_normal*/) noexcept {
+    // TODO: project screen position onto a 3D plane (e.g., ground plane at y=0)
+    (void)screen;
+    return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+}
+
+Vector3 editor_mouse_delta_3d() noexcept {
+    // TODO: return the mouse movement delta since last frame in 3D world space
+    return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
 }
 
 }  // namespace cactus::runtime::entt_backend

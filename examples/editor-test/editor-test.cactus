@@ -1,0 +1,51 @@
+module editor_test
+
+use std.transform.flat
+use std.physics.flat
+use std.editor
+
+# ── A simple scene with 2D entities ──────────────────────────────────────────
+
+trait Renderable:
+    var color: color = #FFFFFFFF
+    var size: vec2 = vec2(1.0, 1.0)
+
+pub template Box:
+    LocalTransform:
+        position = vec2(0.0, 0.0)
+    WorldTransform
+    BoxCollider:
+        size = vec2(1.0, 1.0)
+    Renderable:
+        color = #FF4444FF
+        size = vec2(1.0, 1.0)
+
+pub entity Player:
+    LocalTransform:
+        position = vec2(0.0, 0.0)
+    WorldTransform
+    Renderable:
+        color = #4488FFFF
+        size = vec2(1.0, 1.0)
+
+pub entity SpawnBox:
+    LocalTransform:
+        position = vec2(3.0, 0.0)
+    WorldTransform
+    BoxCollider:
+        size = vec2(1.0, 1.0)
+    Renderable:
+        color = #44FF44FF
+        size = vec2(1.0, 1.0)
+
+# ── Simple rendering system ──────────────────────────────────────────────────
+
+system RenderScene:
+    filter:
+        WorldTransform as xform
+        Renderable as render
+
+    on tick:
+        # Rendering would happen here in real game
+        let pos_x = xform.position.x
+        let pos_y = xform.position.y

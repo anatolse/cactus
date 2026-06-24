@@ -104,6 +104,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_WAVING_LABEL_3D_SOURCE="examples/waving-label-3d/waving_label_3d.cactus"
     CACTUS_EXAMPLE_WAVING_LABEL_3D_GENERATED_CPP="${WAVING_LABEL_3D_GENERATED_CPP}"
     CACTUS_EXAMPLE_WAVING_LABEL_3D_TARGET="example_waving_label_3d_generated"
+
+    CACTUS_EXAMPLE_EDITOR_TEST_SOURCE="examples/editor-test/editor-test.cactus"
+    CACTUS_EXAMPLE_EDITOR_TEST_GENERATED_CPP="${EDITOR_TEST_GENERATED_CPP}"
+    CACTUS_EXAMPLE_EDITOR_TEST_TARGET="example_editor_test_generated"
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)

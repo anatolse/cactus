@@ -1,0 +1,100 @@
+module std.editor
+
+# ── Gizmo Mode ────────────────────────────────────────────────────────────────
+
+pub enum GizmoMode:
+    Select
+    Translate
+    Rotate
+    Scale
+    Place
+
+# ── Editor State ──────────────────────────────────────────────────────────────
+
+pub trait EditorState:
+    var active: bool = true
+    var mode: int = 0
+    var selected: entity_id
+    var active_template: string = ""
+    var focused_trait: string = ""
+    var focused_field: string = ""
+
+pub entity Editor:
+    EditorState
+
+# ── Selection Marker Traits ───────────────────────────────────────────────────
+
+pub trait EditorSelected
+
+pub trait EditorLocked
+
+pub trait EditorHidden
+
+# ── Snap Settings ─────────────────────────────────────────────────────────────
+
+pub trait EditorSnap:
+    var position_snap: float = 0.0
+    var rotation_snap: float = 0.0
+    var scale_snap: float = 0.0
+
+# ── Editor Category ───────────────────────────────────────────────────────────
+
+pub trait EditorCategory:
+    let category: string
+    var visible: bool = true
+
+# ── Gizmo Projection Traits (frame-local) ─────────────────────────────────────
+
+pub trait EditorGizmo2D:
+    var mode: int = 1
+    var color: color = #00FF00FF
+    var size: float = 1.0
+
+pub trait EditorGizmo3D:
+    var mode: int = 1
+    var color: color = #00FF00FF
+    var size: float = 1.0
+
+# ── Editor Events ─────────────────────────────────────────────────────────────
+
+pub event EditorSelectionChanged:
+    previous: entity_id
+    current: entity_id
+
+pub event EditorModeChanged:
+    previous_mode: int
+    current_mode: int
+
+# ── Extern Func Bridges ───────────────────────────────────────────────────────
+
+pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id
+
+pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id
+
+pub extern func editor_raycast_3d(screen_pos: vec2, mask: int) entity_id
+
+pub extern func editor_screen_to_world_2d(screen: vec2) vec2
+
+pub extern func editor_mouse_delta_2d() vec2
+
+pub extern func editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3
+
+pub extern func editor_mouse_delta_3d() vec3
+
+# ── Extern System Declarations ────────────────────────────────────────────────
+
+pub extern system EditorTemplatePalette:
+    filter:
+        EditorState
+
+pub extern system EditorPropertyPanel:
+    filter:
+        EditorState
+
+pub extern system GizmoRenderer2D:
+    filter:
+        EditorGizmo2D
+
+pub extern system GizmoRenderer3D:
+    filter:
+        EditorGizmo3D

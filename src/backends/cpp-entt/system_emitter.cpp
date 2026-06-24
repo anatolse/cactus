@@ -46,6 +46,9 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.physics.flat") {
         return "::";
     }
+    if (module_name == "std.editor") {
+        return "cactus::runtime::entt_backend";
+    }
     return {};
 }
 
@@ -76,6 +79,12 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
     if (module_name == "std.physics.flat") {
         return func_name == "query_cast_nearest" || func_name == "query_overlap_deepest" ||
                func_name == "query_overlap_all";
+    }
+    if (module_name == "std.editor") {
+        return func_name == "editor_spawn_template" || func_name == "editor_hit_test_2d" ||
+               func_name == "editor_raycast_3d" || func_name == "editor_screen_to_world_2d" ||
+               func_name == "editor_mouse_delta_2d" || func_name == "editor_plane_project_3d" ||
+               func_name == "editor_mouse_delta_3d";
     }
     return false;
 }
@@ -376,8 +385,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
-        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
-        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D") {
+        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" ||
+        sys.name == "TextRenderer3D") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -452,6 +461,12 @@ bool is_any_text_renderer_2d(const ExternSystemNode& sys) {
 bool is_any_text_renderer_3d(const ExternSystemNode& sys) {
     return uses_stdlib_extern_contract(sys) && sys.name == "TextRenderer3D" &&
            filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
+}
+
+bool is_editor_extern_system(const ExternSystemNode& sys) {
+    return uses_stdlib_extern_contract(sys) &&
+           (sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel" || sys.name == "GizmoRenderer2D" ||
+            sys.name == "GizmoRenderer3D");
 }
 
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const SystemNode& sys) {
@@ -691,6 +706,19 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 }
                 if (e.kind == LiteralExpr::Kind::Float) {
                     return e.value + "F";
+                }
+                if (e.kind == LiteralExpr::Kind::HexColor) {
+                    std::string hex = e.value;
+                    if (hex.size() == 6) {
+                        hex += "FF";
+                    }
+                    if (hex.size() == 8) {
+                        auto byte = [&](size_t offset) {
+                            return std::to_string(std::stoi(hex.substr(offset, 2), nullptr, 16));
+                        };
+                        return "Color{.r = " + byte(0) + ", .g = " + byte(2) + ", .b = " + byte(4) +
+                               ", .a = " + byte(6) + "}";
+                    }
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, SelfExpr>) {
@@ -1328,6 +1356,14 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         } else {
             out << "    (void)registry;\n";
         }
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_editor_extern_system(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    (void)registry;\n";
+        out << "    // TODO: implement editor UI rendering (ImGui/raygui)\n";
         out << "}\n\n";
         return out.str();
     }

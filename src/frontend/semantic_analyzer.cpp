@@ -487,10 +487,16 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
 // ── Phase 1: Collect Types ──────────────────────────────────────────────────
 
 void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    // Seed event_names_ from imported modules (e.g. std.core lifecycle events)
+    // Seed event_names_ from imported modules (e.g. std.core lifecycle events).
+    // Also seed event_structs_ with empty stubs so that handler_event is non-null
+    // for marker/cross-module events (e.g. `input`), enabling world-access calls
+    // like exists() inside on-input handlers.
     for (const auto& [qualifier, syms] : imports_.modules) {
         for (const auto& ev_name : syms.events) {
             event_names_.insert(ev_name);
+            if (!event_structs_.contains(ev_name)) {
+                event_structs_[ev_name] = ResolvedStruct{.name = ev_name};
+            }
         }
     }
 

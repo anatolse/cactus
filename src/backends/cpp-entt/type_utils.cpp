@@ -66,7 +66,7 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
     }
     if (module_name == "std.input") {
         return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
-               func_name == "axis2";
+               func_name == "axis2" || func_name == "mouse_position";
     }
     return false;
 }
@@ -137,6 +137,9 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
             result += emit_arg(*args[i]);
         }
         return result + ")";
+    }
+    if (object_ident->name == "input" && member.member == "mouse_position" && args.empty()) {
+        return "cactus::runtime::entt_backend::mouse_position()";
     }
     const std::string prefix = stdlib_runtime_prefix(ast, object_ident->name);
     if (prefix.empty()) {

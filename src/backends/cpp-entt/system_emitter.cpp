@@ -74,7 +74,7 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
     }
     if (module_name == "std.input") {
         return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
-               func_name == "axis2";
+               func_name == "axis2" || func_name == "mouse_position";
     }
     if (module_name == "std.physics.flat") {
         return func_name == "query_cast_nearest" || func_name == "query_overlap_deepest" ||
@@ -586,11 +586,19 @@ void emit_view_declaration(std::ostringstream& out,
     out << ");\n";
 }
 
-void emit_view_each_header(std::ostringstream& out, const std::vector<std::string>& filter_traits, int indent) {
+void emit_view_each_header(std::ostringstream& out,
+                           const std::vector<std::string>& filter_traits,
+                           int indent,
+                           const DecoratedProgram& program) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     out << ind << "view.each([&](entt::entity entity";
     for (const auto& trait_name : filter_traits) {
-        out << ", " << trait_name << "& " << trait_name << "_comp";
+        // EnTT does not pass empty (marker) components to view.each lambdas.
+        auto it = program.traits.find(trait_name);
+        const bool is_empty = it == program.traits.end() || it->second.fields.empty();
+        if (!is_empty) {
+            out << ", [[maybe_unused]] " << trait_name << "& " << trait_name << "_comp";
+        }
     }
     out << ") {\n";
 }
@@ -642,7 +650,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                 int indent,
                                 const std::vector<std::string>& trait_names,
                                 const DecoratedProgram& program,
-                                const std::unordered_set<std::string>& pointer_aliases = {});
+                                const std::unordered_set<std::string>& pointer_aliases = {},
+                                bool dispatcher_available                               = false);
 
 static std::string emit_spawn_overrides(const std::string& entity_name,
                                         const std::vector<ArchetypeTraitEntry>& overrides,
@@ -689,7 +698,8 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          int indent,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
-                                         const std::unordered_set<std::string>& pointer_aliases = {});
+                                         const std::unordered_set<std::string>& pointer_aliases = {},
+                                         bool dispatcher_available = false);
 
 static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-function-cognitive-complexity)
                                 const std::vector<std::string>& trait_names,
@@ -774,9 +784,14 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                 return rewrite_expr(arg, trait_names, program, pointer_aliases);
                             });
                         !lowered_name.empty()) {
+                        // editor_spawn_template needs registry as its first arg
+                        const bool needs_registry = (ident->name == "editor_spawn_template");
                         std::string result = lowered_name + "(";
+                        if (needs_registry) {
+                            result += "registry";
+                        }
                         for (size_t i = 0; i < e.args.size(); ++i) {
-                            if (i > 0) {
+                            if (i > 0 || needs_registry) {
                                 result += ", ";
                             }
                             result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases);
@@ -798,6 +813,9 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         return lowered;
                     }
                     if (const auto* object = std::get_if<IdentExpr>(&member->object->expr)) {
+                        if (object->name == "input" && member->member == "mouse_position" && e.args.empty()) {
+                            return "cactus::runtime::entt_backend::mouse_position()";
+                        }
                         if (object->name == "input" && (member->member == "axis" || member->member == "pressed" ||
                                                         member->member == "down" || member->member == "released")) {
                             std::string result = "InputEvent::" + member->member + "(";
@@ -865,7 +883,8 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          int indent,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
-                                         const std::unordered_set<std::string>& pointer_aliases) {
+                                         const std::unordered_set<std::string>& pointer_aliases,
+                                         bool dispatcher_available) {
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
     std::ostringstream out;
 
@@ -891,7 +910,7 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
         }
 
         for (const auto& stmt : arm.body) {
-            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, arm_aliases);
+            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, arm_aliases, dispatcher_available);
         }
         out << ind << "        }";
         first = false;
@@ -903,7 +922,7 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     if (match_stmt.wildcard.has_value()) {
         out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
         for (const auto& stmt : match_stmt.wildcard->body) {
-            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, pointer_aliases);
+            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, pointer_aliases, dispatcher_available);
         }
         out << ind << "        }\n";
     }
@@ -914,11 +933,13 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static std::string rewrite_stmt(const StmtNode& stmt,
-                                int indent,
-                                const std::vector<std::string>& trait_names,
-                                const DecoratedProgram& program,
-                                const std::unordered_set<std::string>& pointer_aliases) {
+static std::string rewrite_stmt(
+    const StmtNode& stmt,
+    int indent,
+    const std::vector<std::string>& trait_names,
+    const DecoratedProgram& program,
+    const std::unordered_set<std::string>& pointer_aliases,
+    bool dispatcher_available) {
     auto known_fields = collect_trait_fields(trait_names, program);
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
@@ -955,7 +976,12 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return ind + lhs + " " + s.op + " " + rewrite_expr(*s.value, trait_names, program, pointer_aliases) +
                        ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                std::string emit_call = s.event_name + "_buffer.push_back({";
+                std::string emit_call;
+                if (dispatcher_available) {
+                    emit_call = "dispatcher.trigger(" + event_cpp_type(s.event_name) + "{";
+                } else {
+                    emit_call = s.event_name + "_buffer.push_back({";
+                }
                 for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
                         emit_call += ", ";
@@ -1073,26 +1099,26 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 }
                 result += " {\n";
                 for (auto& inner : s.then_body) {
-                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
+                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available);
                 }
                 result += ind + "}";
                 if (!s.else_body.empty()) {
                     result += " else {\n";
                     for (auto& inner : s.else_body) {
-                        result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
+                        result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available);
                     }
                     result += ind + "}";
                 }
                 return result + "\n";
             } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
-                return emit_trait_match_stmt(s, indent, trait_names, program, pointer_aliases);
+                return emit_trait_match_stmt(s, indent, trait_names, program, pointer_aliases, dispatcher_available);
             } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                 const auto temp    = foreach_temp_name(s);
                 std::string result = ind + "auto " + temp + " = " +
                                      rewrite_expr(*s.iterable, trait_names, program, pointer_aliases) + ";\n";
                 result += ind + "for (const auto& " + s.var_name + " : " + temp + ") {\n";
                 for (const auto& inner : s.body) {
-                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases);
+                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available);
                 }
                 result += ind + "}\n";
                 return result;
@@ -1109,15 +1135,26 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
     const auto exclude_traits = filter_trait_names(sys.exclude);
 
     for (const auto& handler : sys.handlers) {
+        // Frame events (tick, input, fixed_tick, late_tick) are called directly from
+        // generated_update_project which has dispatcher; lifecycle events (spawn, destroy,
+        // load, unload) are connected via dispatcher sinks and cannot take extra args.
+        const bool is_frame_event = handler.event_name == "tick" || handler.event_name == "input" ||
+                                    handler.event_name == "fixed_tick" || handler.event_name == "late_tick";
         out << "void " << system_function_name(sys.name, handler.event_name) << "(entt::registry& registry";
+        if (is_frame_event) {
+            out << ", entt::dispatcher& dispatcher";
+        }
         out << ", const " << event_cpp_type(handler.event_name) << "& " << handler.alias.value_or(handler.event_name);
         out << ") {\n";
+        if (is_frame_event) {
+            out << "    (void)dispatcher;\n";
+        }
         out << "    (void)" << handler.alias.value_or(handler.event_name) << ";\n";
 
         emit_sort_call(out, sys);
         if (!filter_traits.empty()) {
             emit_view_declaration(out, filter_traits, exclude_traits, 1);
-            emit_view_each_header(out, filter_traits, 1);
+            emit_view_each_header(out, filter_traits, 1, program);
             out << "        (void)entity;\n";
             emit_filter_alias_bindings(out, sys.filter, 2);
         } else {
@@ -1128,7 +1165,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
 
         // Emit body with proper component field access
         for (const auto& stmt : handler.body) {
-            out << rewrite_stmt(*stmt, 2, filter_traits, program);
+            out << rewrite_stmt(*stmt, 2, filter_traits, program, {}, is_frame_event);
         }
 
         out << (filter_traits.empty() ? "    }\n" : "    });\n");
@@ -1382,7 +1419,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
 
     if (!filter_traits.empty()) {
         emit_view_declaration(out, filter_traits, exclude_traits, 1);
-        emit_view_each_header(out, filter_traits, 1);
+        emit_view_each_header(out, filter_traits, 1, program);
         out << "        (void)entity;\n";
         emit_filter_alias_bindings(out, sys.filter, 2);
     } else {

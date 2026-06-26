@@ -121,3 +121,5 @@ pub extern func released(b: InputButton) bool
 pub extern func axis(a: InputAxis) float
 
 pub extern func axis2(x: InputAxis, y: InputAxis) vec2
+
+pub extern func mouse_position() vec2

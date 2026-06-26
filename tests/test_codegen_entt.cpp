@@ -117,7 +117,7 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
             CHECK(code.find("const TickEvent& tick") != std::string::npos);
             CHECK(code.find("Pos_comp.x = (Pos_comp.x + tick.dt)") != std::string::npos);
             CHECK(code.find("registry.view<Pos>()") != std::string::npos);
-            CHECK(code.find("view.each([&](entt::entity entity, Pos& Pos_comp)") != std::string::npos);
+            CHECK(code.find("view.each([&](entt::entity entity, [[maybe_unused]] Pos& Pos_comp)") != std::string::npos);
             CHECK(code.find("registry.storage<entt::entity>()") == std::string::npos);
             CHECK(code.find("cactus_try_get_projected_or_durable_Pos(registry, entity)") == std::string::npos);
         }
@@ -180,7 +180,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("generated_init_project(entt::registry& registry)") != std::string::npos);
     CHECK(code.find("generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt)") !=
           std::string::npos);
-    CHECK(code.find("move_tick(registry, TickEvent{dt});") != std::string::npos);
+    CHECK(code.find("move_tick(registry, dispatcher, TickEvent{dt});") != std::string::npos);
     CHECK(code.find("int main()") != std::string::npos);
     CHECK(code.find("InitWindow(config.window_width, config.window_height, config.window_title)") != std::string::npos);
     CHECK(code.find("entt::registry registry;") != std::string::npos);
@@ -201,6 +201,32 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
 
     // Sync hooks
     CHECK(code.find("replicate_Pos") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower to runtime helpers",
+          "[codegen-entt][input][mouse]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.input\n"
+        "pub event input\n"
+        "input Select: button\n"
+        "    mouse = MouseButton.Left\n"
+        "trait MouseState:\n"
+        "    var pos: vec2\n"
+        "system ReadMouse:\n"
+        "    filter:\n"
+        "        MouseState\n"
+        "    on input:\n"
+        "        if input.pressed(Select):\n"
+        "            pos = input.mouse_position()\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK(code.find("int cactus_input_button_mouse(std::uint8_t button) noexcept") != std::string::npos);
+    CHECK(code.find("return MOUSE_BUTTON_LEFT;") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::pressed(action)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::mouse_position()") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: extern func generates runtime header include", "[codegen-entt][extern-func]") {
@@ -780,7 +806,7 @@ TEST_CASE("Codegen EnTT: spawn handler uses marker event parameter", "[codegen-e
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn)") != std::string::npos);
+            CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn)") != std::string::npos);  // spawn handlers don't get dispatcher (lifecycle event)
         }
     }
 }

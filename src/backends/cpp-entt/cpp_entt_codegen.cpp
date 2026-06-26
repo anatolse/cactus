@@ -1029,6 +1029,31 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "    }\n";
             out << "    return 0;\n";
             out << "}\n";
+            out << "int cactus_input_button_mouse(std::uint8_t button) noexcept {\n";
+            out << "    switch (button) {\n";
+            button_index = 0;
+            for (const auto& decl : program.ast->declarations) {
+                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                    if (input->input_kind != InputKind::Button) {
+                        continue;
+                    }
+                    std::string mouse = "-1";
+                    for (const auto& prop : input->props) {
+                        if (prop.key == "mouse") {
+                            if (auto maybe_mouse = raylib_mouse_constant(*prop.value)) {
+                                mouse = *maybe_mouse;
+                            }
+                        }
+                    }
+                    out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
+                        << mouse << ";\n";
+                }
+            }
+            out << "        default:\n";
+            out << "            break;\n";
+            out << "    }\n";
+            out << "    return -1;\n";
+            out << "}\n";
             out << "}  // namespace cactus::runtime::entt_backend\n\n";
         }
 
@@ -1368,7 +1393,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 if (auto* sys = std::get_if<SystemNode>(&decl)) {
                     for (auto& handler : sys->handlers) {
                         if (handler.event_name == "input") {
-                            out << "    " << system_function_name(sys->name, "input") << "(registry, input);\n";
+                            out << "    " << system_function_name(sys->name, "input") << "(registry, dispatcher, input);\n";
                         }
                     }
                 }
@@ -1383,7 +1408,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 for (auto& handler : sys->handlers) {
                     if (handler.event_name == "tick") {
-                        out << "    " << system_function_name(sys->name, "tick") << "(registry, TickEvent{dt});\n";
+                        out << "    " << system_function_name(sys->name, "tick") << "(registry, dispatcher, TickEvent{dt});\n";
                     }
                 }
             }

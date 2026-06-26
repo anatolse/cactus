@@ -11,6 +11,7 @@
 namespace cactus::runtime::entt_backend {
 
 int cactus_input_button_key(std::uint8_t button) noexcept;
+int cactus_input_button_mouse(std::uint8_t button) noexcept;
 float cactus_input_axis_value(std::uint8_t action) noexcept;
 
 struct RuntimeBinding {
@@ -116,15 +117,30 @@ void destroy_entity_recursive(
     const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children);
 
 [[nodiscard]] inline bool pressed(std::uint8_t button) noexcept {
-    return IsKeyPressed(cactus_input_button_key(button));
+    const int mouse_button = cactus_input_button_mouse(button);
+    if (mouse_button >= 0) {
+        return IsMouseButtonPressed(mouse_button);
+    }
+    const int key = cactus_input_button_key(button);
+    return key != 0 && IsKeyPressed(key);
 }
 
 [[nodiscard]] inline bool down(std::uint8_t button) noexcept {
-    return IsKeyDown(cactus_input_button_key(button));
+    const int mouse_button = cactus_input_button_mouse(button);
+    if (mouse_button >= 0) {
+        return IsMouseButtonDown(mouse_button);
+    }
+    const int key = cactus_input_button_key(button);
+    return key != 0 && IsKeyDown(key);
 }
 
 [[nodiscard]] inline bool released(std::uint8_t button) noexcept {
-    return IsKeyReleased(cactus_input_button_key(button));
+    const int mouse_button = cactus_input_button_mouse(button);
+    if (mouse_button >= 0) {
+        return IsMouseButtonReleased(mouse_button);
+    }
+    const int key = cactus_input_button_key(button);
+    return key != 0 && IsKeyReleased(key);
 }
 
 [[nodiscard]] inline float axis(std::uint8_t action) noexcept {
@@ -133,6 +149,10 @@ void destroy_entity_recursive(
 
 [[nodiscard]] inline Vector2 axis2(std::uint8_t x_action, std::uint8_t y_action) noexcept {
     return Vector2{.x = axis(x_action), .y = axis(y_action)};
+}
+
+[[nodiscard]] inline Vector2 mouse_position() noexcept {
+    return GetMousePosition();
 }
 
 void generated_setup_dispatcher(entt::dispatcher& dispatcher);

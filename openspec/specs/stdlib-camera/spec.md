@@ -40,3 +40,29 @@ The active camera systems (`FollowCameraSystem`, `FirstPersonCameraSystem`, `Thi
 #### Scenario: Camera traits usable before systems are implemented
 - **WHEN** a user imports `std.camera.volume` and applies `Camera` and `FirstPersonCamera` to an entity
 - **THEN** the compiler accepts the unit and filter clauses referencing these traits, even if the active systems are stubs
+
+---
+
+### Requirement: std.camera.flat.Camera entity drives the runtime active camera
+When a Cactus module imports `std.camera.flat` and declares an entity with the `Camera` trait, the cpp-entt backend SHALL read that entity at the start of each frame (in `generated_update_project`) and translate it into a raylib `Camera2D` that is used for all world-space rendering in that frame. This makes the `Camera` trait functionally active rather than a data-only declaration.
+
+The translation rules are:
+- `Camera2D.target` ← `Camera.offset` (the world position that maps to screen center)
+- `Camera2D.zoom` ← `Camera.zoom`
+- `Camera2D.rotation` ← `Camera.rotation` (radians converted to degrees for raylib)
+- `Camera2D.offset` ← `{GetScreenWidth()/2.0f, GetScreenHeight()/2.0f}` (world origin at screen center)
+
+Only the first entity with `Camera.active == true` is used.
+
+#### Scenario: Camera with zoom renders world-unit entities at correct screen size
+- **WHEN** a Camera entity has `zoom=64.0` and an entity has `WorldTransform.position = {0,0}` with `Shape.size = {1,1}`
+- **THEN** the entity is rendered as a 64×64 pixel rectangle at the screen center
+
+#### Scenario: Camera with non-zero offset pans the view
+- **WHEN** a Camera entity has `zoom=64.0` and `offset=vec2(3.0, 0.0)`
+- **THEN** the world position `{3,0}` maps to screen center, and `{0,0}` maps 192px left of center
+
+#### Scenario: Module without std.camera.flat uses identity camera
+- **WHEN** a module does not import `std.camera.flat`
+- **THEN** no camera entity is read and the runtime uses an identity Camera2D (zoom=1, no offset/target)
+- **THEN** rendering behavior is identical to before this change (pixel-space coordinates)

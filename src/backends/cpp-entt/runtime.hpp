@@ -14,6 +14,12 @@ int cactus_input_button_key(std::uint8_t button) noexcept;
 int cactus_input_button_mouse(std::uint8_t button) noexcept;
 float cactus_input_axis_value(std::uint8_t action) noexcept;
 
+// ── Active camera state (set once per frame before any camera-dependent code) ──
+void set_active_camera_2d(Camera2D cam) noexcept;
+[[nodiscard]] Camera2D get_active_camera_2d() noexcept;
+void set_active_camera_3d(Camera3D cam) noexcept;
+[[nodiscard]] Camera3D get_active_camera_3d() noexcept;
+
 struct RuntimeBinding {
     GeneratedProjectInfo project;
 };
@@ -88,7 +94,16 @@ void submit_text_3d(std::uint32_t entity_id,
                                                  Vector3 position_3d) noexcept;
 
 /// 2D hit-test: return the top-most entity under screen_pos matching mask, or entt::null.
-[[nodiscard]] entt::entity editor_hit_test_2d(Vector2 screen_pos, int mask) noexcept;
+[[nodiscard]] entt::entity editor_hit_test_2d(entt::registry& registry,
+                                              Vector2 screen_pos,
+                                              int mask) noexcept;
+
+// ── Editor impl registration (called by generated_init_project) ───────────────
+using EditorHitTestImpl = std::function<entt::entity(entt::registry&, Vector2, int)>;
+using EditorSpawnImpl =
+    std::function<entt::entity(entt::registry&, const std::string&, Vector2, Vector3)>;
+void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept;
+void register_editor_spawn_impl(EditorSpawnImpl fn) noexcept;
 
 /// 3D raycast: return the first entity hit by a ray from screen_pos, or entt::null.
 [[nodiscard]] entt::entity editor_raycast_3d(Vector2 screen_pos, int mask) noexcept;

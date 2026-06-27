@@ -19,6 +19,30 @@ RenderDebugState& render_debug_state_storage() noexcept {
     return state;
 }
 
+Camera2D& active_camera_2d_storage() noexcept {
+    static Camera2D cam{.offset = {}, .target = {}, .rotation = 0.0F, .zoom = 1.0F};
+    return cam;
+}
+
+Camera3D& active_camera_3d_storage() noexcept {
+    static Camera3D cam{.position   = {.x = 6.0F, .y = 6.0F, .z = 6.0F},
+                        .target     = {.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                        .up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F},
+                        .fovy       = 45.0F,
+                        .projection = CAMERA_PERSPECTIVE};
+    return cam;
+}
+
+EditorHitTestImpl& hit_test_impl_storage() noexcept {
+    static EditorHitTestImpl impl;
+    return impl;
+}
+
+EditorSpawnImpl& spawn_impl_storage() noexcept {
+    static EditorSpawnImpl impl;
+    return impl;
+}
+
 struct SpriteSubmission {
     Vector2 position{};
     Vector2 size{};
@@ -536,12 +560,7 @@ void flush_mesh_queue() noexcept {
         return;
     }
 
-    Camera3D camera{};
-    camera.position   = Vector3{.x = 6.0F, .y = 6.0F, .z = 6.0F};
-    camera.target     = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    camera.up         = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F};
-    camera.fovy       = 45.0F;
-    camera.projection = CAMERA_PERSPECTIVE;
+    const Camera3D camera = get_active_camera_3d();
 
     apply_point_lights(camera);
 
@@ -679,12 +698,7 @@ void flush_text_3d_queue() noexcept {
     }
 
     // Phase 2: draw plane meshes inside the 3D camera block
-    Camera3D camera{};
-    camera.position   = Vector3{.x = 6.0F, .y = 6.0F, .z = 6.0F};
-    camera.target     = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    camera.up         = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F};
-    camera.fovy       = 45.0F;
-    camera.projection = CAMERA_PERSPECTIVE;
+    const Camera3D camera = get_active_camera_3d();
 
     Mesh& plane = text_plane_mesh();
 
@@ -1030,48 +1044,76 @@ void destroy_entity_recursive(
     }
 }
 
-// ── Editor extern func stubs (std.editor) ────────────────────────────────────
+// ── Active camera state ───────────────────────────────────────────────────────
+
+void set_active_camera_2d(Camera2D cam) noexcept {
+    active_camera_2d_storage() = cam;
+}
+
+Camera2D get_active_camera_2d() noexcept {
+    return active_camera_2d_storage();
+}
+
+void set_active_camera_3d(Camera3D cam) noexcept {
+    active_camera_3d_storage() = cam;
+}
+
+Camera3D get_active_camera_3d() noexcept {
+    return active_camera_3d_storage();
+}
+
+// ── Editor extern func implementations (std.editor) ──────────────────────────
+
+void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept {
+    hit_test_impl_storage() = std::move(fn);
+}
+
+void register_editor_spawn_impl(EditorSpawnImpl fn) noexcept {
+    spawn_impl_storage() = std::move(fn);
+}
 
 entt::entity editor_spawn_template(entt::registry& registry,
-                                   const std::string& /*template_name*/,
+                                   const std::string& template_name,
                                    Vector2 position_2d,
                                    Vector3 position_3d) noexcept {
-    (void)registry;
-    (void)position_2d;
-    (void)position_3d;
-    // TODO: resolve template_name to compiled template archetype,
-    // create entity with all trait components, return entity handle
+    if (spawn_impl_storage()) {
+        return spawn_impl_storage()(registry, template_name, position_2d, position_3d);
+    }
     return entt::entity{entt::null};
 }
 
-entt::entity editor_hit_test_2d(Vector2 /*screen_pos*/, int /*mask*/) noexcept {
-    // TODO: perform 2D hit-test against entities with BoxCollider + flat.WorldTransform
+entt::entity editor_hit_test_2d(entt::registry& registry, Vector2 screen_pos, int mask) noexcept {
+    const Vector2 world_pos = editor_screen_to_world_2d(screen_pos);
+    if (hit_test_impl_storage()) {
+        return hit_test_impl_storage()(registry, world_pos, mask);
+    }
     return entt::entity{entt::null};
 }
 
 entt::entity editor_raycast_3d(Vector2 /*screen_pos*/, int /*mask*/) noexcept {
-    // TODO: perform 3D raycast against entities with volume.WorldTransform
     return entt::entity{entt::null};
 }
 
 Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept {
-    // TODO: convert screen coordinates to 2D world coordinates using the active camera
-    return screen;
+    const Camera2D cam = get_active_camera_2d();
+    return Vector2{
+        .x = ((screen.x - cam.offset.x) / cam.zoom) + cam.target.x,
+        .y = ((screen.y - cam.offset.y) / cam.zoom) + cam.target.y,
+    };
 }
 
 Vector2 editor_mouse_delta_2d() noexcept {
-    // TODO: return the mouse movement delta since last frame in 2D world space
-    return Vector2{.x = 0.0F, .y = 0.0F};
+    const Camera2D cam   = get_active_camera_2d();
+    const Vector2  delta = GetMouseDelta();
+    return Vector2{.x = delta.x / cam.zoom, .y = delta.y / cam.zoom};
 }
 
 Vector3 editor_plane_project_3d(Vector2 screen, Vector3 /*plane_origin*/, Vector3 /*plane_normal*/) noexcept {
-    // TODO: project screen position onto a 3D plane (e.g., ground plane at y=0)
     (void)screen;
     return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
 }
 
 Vector3 editor_mouse_delta_3d() noexcept {
-    // TODO: return the mouse movement delta since last frame in 3D world space
     return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
 }
 

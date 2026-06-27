@@ -386,7 +386,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
         sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" ||
-        sys.name == "TextRenderer3D") {
+        sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
+        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -784,8 +785,9 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                 return rewrite_expr(arg, trait_names, program, pointer_aliases);
                             });
                         !lowered_name.empty()) {
-                        // editor_spawn_template needs registry as its first arg
-                        const bool needs_registry = (ident->name == "editor_spawn_template");
+                        // editor_spawn_template and editor_hit_test_2d need registry as first arg
+                        const bool needs_registry = (ident->name == "editor_spawn_template" ||
+                                                     ident->name == "editor_hit_test_2d");
                         std::string result = lowered_name + "(";
                         if (needs_registry) {
                             result += "registry";
@@ -1262,6 +1264,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     if (is_shape_renderer(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, Shape>();\n";
+        out << "    BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
         out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Shape& "
                "Shape_comp) {\n";
         out << "        (void)entity;\n";
@@ -1270,14 +1273,13 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << "        }\n";
         out << "        switch (Shape_comp.type) {\n";
         out << "            case ShapeType::Rectangle:\n";
-        out << "                DrawRectangle(static_cast<int>(WorldTransform_comp.position.x),\n";
-        out << "                              static_cast<int>(WorldTransform_comp.position.y),\n";
-        out << "                              static_cast<int>(Shape_comp.size.x),\n";
-        out << "                              static_cast<int>(Shape_comp.size.y),\n";
-        out << "                              Shape_comp.color);\n";
+        out << "                DrawRectangleV(WorldTransform_comp.position,\n";
+        out << "                               Shape_comp.size,\n";
+        out << "                               Shape_comp.color);\n";
         out << "                break;\n";
         out << "        }\n";
         out << "    });\n";
+        out << "    EndMode2D();\n";
         out << "}\n\n";
         return out.str();
     }
@@ -1398,9 +1400,112 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_editor_extern_system(sys)) {
+        if (sys.name == "GizmoRenderer2D") {
+            out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+            out << "    bool __editor_active = false;\n";
+            out << "    auto __estate_view = registry.view<EditorState>();\n";
+            out << "    for (auto __e : __estate_view) {\n";
+            out << "        if (__estate_view.get<EditorState>(__e).active) { __editor_active = true; break; }\n";
+            out << "    }\n";
+            out << "    if (!__editor_active) { return; }\n";
+            out << "    BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
+            out << "    auto view = registry.view<EditorGizmo2D, WorldTransform>();\n";
+            out << "    view.each([&](entt::entity entity, const EditorGizmo2D& gizmo, const WorldTransform& xform) {\n";
+            out << "        Rectangle rect{.x = xform.position.x - 0.5F, .y = xform.position.y - 0.5F,\n";
+            out << "                       .width = 1.0F, .height = 1.0F};\n";
+            out << "        if (const auto* box = registry.try_get<BoxCollider>(entity)) {\n";
+            out << "            rect = {.x = xform.position.x, .y = xform.position.y,\n";
+            out << "                    .width = box->size.x, .height = box->size.y};\n";
+            out << "        }\n";
+            out << "        DrawRectangleLinesEx(rect, 0.05F, gizmo.color);\n";
+            out << "        const float arrow_len   = gizmo.size;\n";
+            out << "        const float arrow_thick = arrow_len * 0.05F;\n";
+            out << "        const Vector2 center    = xform.position;\n";
+            out << "        if (gizmo.mode == 1) {\n";
+            out << "            DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
+            out << "            DrawTriangle(\n";
+            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y - (arrow_len * 0.1F)},\n";
+            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y + (arrow_len * 0.1F)},\n";
+            out << "                {.x = center.x + arrow_len, .y = center.y}, RED);\n";
+            out << "            DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
+            out << "            DrawTriangle(\n";
+            out << "                {.x = center.x - (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * 0.2F)},\n";
+            out << "                {.x = center.x + (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * 0.2F)},\n";
+            out << "                {.x = center.x, .y = center.y + arrow_len}, GREEN);\n";
+            out << "        } else if (gizmo.mode == 2) {\n";
+            out << "            DrawRing(center, gizmo.size * 0.8F, gizmo.size, 0.0F, 360.0F, 32, SKYBLUE);\n";
+            out << "        } else if (gizmo.mode == 3) {\n";
+            out << "            const float sq = arrow_len * 0.15F;\n";
+            out << "            DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
+            out << "            DrawRectangleV(\n";
+            out << "                {.x = center.x + arrow_len - (sq * 0.5F), .y = center.y - (sq * 0.5F)},\n";
+            out << "                {.x = sq, .y = sq}, RED);\n";
+            out << "            DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
+            out << "            DrawRectangleV(\n";
+            out << "                {.x = center.x - (sq * 0.5F), .y = center.y + arrow_len - (sq * 0.5F)},\n";
+            out << "                {.x = sq, .y = sq}, GREEN);\n";
+            out << "        }\n";
+            out << "    });\n";
+            out << "    EndMode2D();\n";
+            out << "}\n\n";
+            return out.str();
+        }
+        if (sys.name == "EditorTemplatePalette") {
+            out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+            out << "    auto __estate_view = registry.view<EditorState>();\n";
+            out << "    for (auto __ed_ent : __estate_view) {\n";
+            out << "        auto& __es = __estate_view.get<EditorState>(__ed_ent);\n";
+            out << "        if (!__es.active) { continue; }\n";
+            out << "        static std::unordered_map<std::string, Color> __tint_cache;\n";
+            out << "        int __idx = 0;\n";
+            out << "        for (const auto& [__name, __factory] : cactus_template_registry) {\n";
+            out << "            if (!__tint_cache.contains(__name)) {\n";
+            out << "                const float __hue = static_cast<float>(std::hash<std::string>{}(__name) % 360);\n";
+            out << "                const float __h   = __hue / 60.0F;\n";
+            out << "                const float __s   = 0.70F;\n";
+            out << "                const float __l   = 0.55F;\n";
+            out << "                const float __c   = (1.0F - std::abs((2.0F * __l) - 1.0F)) * __s;\n";
+            out << "                const float __x   = __c * (1.0F - std::abs(std::fmod(__h, 2.0F) - 1.0F));\n";
+            out << "                const float __m   = __l - (__c * 0.5F);\n";
+            out << "                float __r = 0.0F;\n";
+            out << "                float __g = 0.0F;\n";
+            out << "                float __b = 0.0F;\n";
+            out << "                switch (static_cast<int>(__h) % 6) {\n";
+            out << "                    case 0: __r = __c; __g = __x; break;\n";
+            out << "                    case 1: __r = __x; __g = __c; break;\n";
+            out << "                    case 2: __g = __c; __b = __x; break;\n";
+            out << "                    case 3: __g = __x; __b = __c; break;\n";
+            out << "                    case 4: __r = __x; __b = __c; break;\n";
+            out << "                    case 5: __r = __c; __b = __x; break;\n";
+            out << "                    default: break;\n";
+            out << "                }\n";
+            out << "                __tint_cache[__name] = Color{\n";
+            out << "                    .r = static_cast<unsigned char>((__r + __m) * 255.0F),\n";
+            out << "                    .g = static_cast<unsigned char>((__g + __m) * 255.0F),\n";
+            out << "                    .b = static_cast<unsigned char>((__b + __m) * 255.0F),\n";
+            out << "                    .a = 200};\n";
+            out << "            }\n";
+            out << "            const Rectangle __btn = {.x = 10.0F,\n";
+            out << "                                     .y = 40.0F + (static_cast<float>(__idx) * 30.0F),\n";
+            out << "                                     .width = 140.0F, .height = 26.0F};\n";
+            out << "            DrawRectangleRec(__btn, __tint_cache[__name]);\n";
+            out << "            DrawText(__name.c_str(), static_cast<int>(__btn.x) + 6,\n";
+            out << "                     static_cast<int>(__btn.y) + 6, 14, WHITE);\n";
+            out << "            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&\n";
+            out << "                CheckCollisionPointRec(GetMousePosition(), __btn)) {\n";
+            out << "                __es.active_template = __name;\n";
+            out << "                __es.mode = 4;\n";
+            out << "            }\n";
+            out << "            ++__idx;\n";
+            out << "        }\n";
+            out << "        break;\n";
+            out << "    }\n";
+            out << "}\n\n";
+            return out.str();
+        }
+        // EditorPropertyPanel and GizmoRenderer3D — stub for now
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    (void)registry;\n";
-        out << "    // TODO: implement editor UI rendering (ImGui/raygui)\n";
         out << "}\n\n";
         return out.str();
     }

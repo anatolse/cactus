@@ -2,13 +2,9 @@ module editor_test
 
 use std.transform.flat
 use std.physics.flat
+use std.camera.flat
+use std.render.shapes
 use std.editor
-
-# ── Visual trait for 2D scene entities ────────────────────────────────────────
-
-trait Renderable:
-    var color: color = #FFFFFFFF
-    var size: vec2 = vec2(1.0, 1.0)
 
 # ── Template Catalog (editor-spawnable via EditorPlace2D) ─────────────────────
 
@@ -18,17 +14,29 @@ pub template Box:
     WorldTransform
     BoxCollider:
         size = vec2(1.0, 1.0)
-    Renderable:
-        color = #FF4444FF
+    Shape:
+        type = ShapeType.Rectangle
         size = vec2(1.0, 1.0)
+        color = #FF4444FF
+        visible = true
 
 pub template PlayerSpawn:
     LocalTransform:
         position = vec2(0.0, 0.0)
     WorldTransform
-    Renderable:
-        color = #4488FFFF
+    Shape:
+        type = ShapeType.Rectangle
         size = vec2(1.0, 1.0)
+        color = #4488FFFF
+        visible = true
+
+# ── Camera ────────────────────────────────────────────────────────────────────
+
+pub entity EditorCamera:
+    Camera:
+        zoom = 64.0
+        offset = vec2(0.0, 0.0)
+        active = true
 
 # ── Initial Scene Entities ────────────────────────────────────────────────────
 
@@ -38,9 +46,11 @@ pub entity Player:
     WorldTransform
     BoxCollider:
         size = vec2(1.0, 1.0)
-    Renderable:
-        color = #4488FFFF
+    Shape:
+        type = ShapeType.Rectangle
         size = vec2(1.0, 1.0)
+        color = #4488FFFF
+        visible = true
     EditorLocked
 
 pub entity SpawnBox:
@@ -49,28 +59,8 @@ pub entity SpawnBox:
     WorldTransform
     BoxCollider:
         size = vec2(1.0, 1.0)
-    Renderable:
-        color = #44FF44FF
+    Shape:
+        type = ShapeType.Rectangle
         size = vec2(1.0, 1.0)
-
-# ── Gizmo visualization entity (receives projected EditorGizmo2D at runtime) ──
-
-pub entity GizmoHandle:
-    LocalTransform:
-        position = vec2(0.0, 0.0)
-    WorldTransform
-    EditorGizmo2D:
-        mode = 1
-        color = #00FF00FF
-        size = 1.0
-
-# ── Simple scene renderer ─────────────────────────────────────────────────────
-
-system RenderScene:
-    filter:
-        WorldTransform as xform
-        Renderable as render
-
-    on tick:
-        let pos_x = xform.position.x
-        let pos_y = xform.position.y
+        color = #44FF44FF
+        visible = true

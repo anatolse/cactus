@@ -672,3 +672,40 @@ The cpp-entt backend SHALL allocate a single plane mesh (XY-oriented, 1×1 world
 - **WHEN** the backend draws two volume-world `TextLabel` entities with different text in the same frame
 - **THEN** each `DrawMesh` call uses the plane mesh but a distinct `RenderTexture2D`-backed material
 
+### Requirement: editor_spawn_template resolves template names at runtime via codegen-emitted registry
+`editor_spawn_template` SHALL NOT return `entt::null` for valid `pub template` names declared in the current module. It SHALL consult a `cactus_template_registry` map (emitted by the codegen) to resolve the name to a factory function, create the entity, and patch its position. Previously this function was a stub returning `entt::null` unconditionally.
+
+#### Scenario: Spawn by name succeeds for registered template
+- **WHEN** the module declares `pub template Box` and `editor_spawn_template(registry, "Box", {2.0, 1.0}, {})` is called
+- **THEN** a new entity is created with all Box template components and `LocalTransform.position = {2.0, 1.0}`
+- **THEN** a valid entity handle is returned
+
+#### Scenario: Spawn by unregistered name returns null
+- **WHEN** `editor_spawn_template(registry, "DoesNotExist", {}, {})` is called
+- **THEN** `entt::null` is returned
+
+### Requirement: editor_hit_test_2d performs world-space AABB hit testing
+`editor_hit_test_2d` SHALL convert the screen position to world space using `editor_screen_to_world_2d` and test it against all entities with `WorldTransform` and `BoxCollider`. Previously this function returned `entt::null` unconditionally.
+
+#### Scenario: Hit test finds entity under cursor
+- **WHEN** the cursor is at a screen position that maps to world point inside an entity's AABB
+- **THEN** `editor_hit_test_2d` returns that entity (not `entt::null`)
+
+#### Scenario: Hit test skips locked entities
+- **WHEN** the entity under the cursor has `EditorLocked`
+- **THEN** `editor_hit_test_2d` returns `entt::null`
+
+### Requirement: editor_screen_to_world_2d applies camera inverse transform
+`editor_screen_to_world_2d` SHALL return the world-space point corresponding to the given screen coordinate, using the active camera set by `set_active_camera_2d`. Previously this function returned the screen coordinate unchanged.
+
+#### Scenario: World-space conversion with active camera
+- **WHEN** the active camera has zoom=64 and `offset={400, 300}`
+- **THEN** `editor_screen_to_world_2d({400, 300})` returns `{0, 0}`
+
+### Requirement: editor_mouse_delta_2d returns world-space delta
+`editor_mouse_delta_2d` SHALL return the mouse pixel delta divided by the active camera zoom, giving world-unit displacement per frame. Previously this function returned zero.
+
+#### Scenario: Delta is non-zero on mouse movement
+- **WHEN** the mouse moved 64 pixels to the right and the active camera zoom is 64.0
+- **THEN** `editor_mouse_delta_2d()` returns approximately `{1.0, 0.0}`
+

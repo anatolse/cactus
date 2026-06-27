@@ -148,3 +148,22 @@ Current stdlib render coverage SHALL reflect the binding and runtime-adapter tes
 #### Scenario: Representative render adapter behavior is covered in runtime stdlib tests
 - **WHEN** runtime stdlib tests run against the shipped backend runtime adapters
 - **THEN** they verify representative sprite submission, mesh submission, point-light registration, and missing-asset diagnostics through backend adapter entry points
+
+---
+
+### Requirement: ShapeRenderer renders entities in world space using the active camera
+The `ShapeRenderer` extern system SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible).
+
+#### Scenario: World-unit entity rendered at correct screen position
+- **WHEN** the active camera has zoom=64 and offset={400,300} (world origin at screen center)
+- **WHEN** an entity has `WorldTransform.position = {1.0, 0.0}` and `Shape.size = {1.0, 1.0}` with `ShapeType.Rectangle`
+- **THEN** a 64×64 pixel rectangle is drawn at screen position (464, 300)
+
+#### Scenario: Pixel-space module unaffected
+- **WHEN** no Camera entity exists (identity active camera, zoom=1)
+- **WHEN** an entity has `WorldTransform.position = {100.0, 200.0}` and `Shape.size = {32.0, 32.0}`
+- **THEN** a 32×32 pixel rectangle is drawn at screen position (100, 200) — same as before this change
+
+#### Scenario: Hidden shape not drawn
+- **WHEN** a Shape entity has `visible = false`
+- **THEN** no rectangle is drawn for that entity (unchanged behavior)

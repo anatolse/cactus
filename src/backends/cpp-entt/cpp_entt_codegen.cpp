@@ -28,6 +28,34 @@ bool uses_text_format(const DecoratedProgram& program) {
     return false;
 }
 
+bool module_uses_camera_flat(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
+            if (use->module_name == "std.camera.flat") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool module_uses_editor(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
+            if (use->module_name == "std.editor") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Task 6.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
     for (const auto& [name, func] : program.funcs) {  // NOLINT(readability-use-anyofallof)
@@ -219,7 +247,8 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
         sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" ||
-        sys.name == "TextRenderer3D") {
+        sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
+        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -260,13 +289,9 @@ bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     if (sys.name == "TextRenderer3D") {
         return filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
     }
-    if (sys.name == "GizmoRenderer2D") {
-        return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "EditorGizmo2D", "EditorGizmo2D");
-    }
-    if (sys.name == "GizmoRenderer3D") {
-        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "EditorGizmo3D", "EditorGizmo3D");
+    if (sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
+        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
+        return uses_stdlib_extern_contract(sys);
     }
     return false;
 }
@@ -937,7 +962,15 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#ifdef PI\n";
     out << "#undef PI\n";
     out << "#endif\n";
+    // raylib defines `typedef Camera3D Camera;` which conflicts with the Camera DSL
+    // component struct. Redirect the token so struct Camera becomes struct CactusCamera.
+    // Use Camera3D directly for any raylib 3D-camera uses.
+    if (module_uses_camera_flat(program)) {
+        out << "// Suppress raylib Camera typedef; DSL Camera struct takes this name\n";
+        out << "#define Camera CactusCamera\n";
+    }
     out << "\n";
+    out << "#include <array>\n";
     out << "#include <cmath>\n";
     out << "#include <cstdint>\n";
     out << "#include <limits>\n";
@@ -1292,6 +1325,21 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
+    // Template registry (used by editor_spawn_template and EditorTemplatePalette)
+    if (module_uses_editor(program) && program.ast != nullptr) {
+        out << "// ── Template Registry ───────────────────────────────────────────────\n\n";
+        out << "using CactusTemplateFactory = entt::entity(*)(entt::registry&);\n";
+        out << "static const std::unordered_map<std::string, CactusTemplateFactory> cactus_template_registry = {\n";
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+                if (tmpl->is_pub) {
+                    out << "    {\"" << tmpl->name << "\", " << archetype_create_function_name(tmpl->name) << "},\n";
+                }
+            }
+        }
+        out << "};\n\n";
+    }
+
     // System functions
     if (program.ast != nullptr) {
         out << "// ── Systems ─────────────────────────────────────────────────────────\n\n";
@@ -1365,11 +1413,58 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
         }
     }
+    if (module_uses_editor(program) && program.traits.contains("WorldTransform") &&
+        program.traits.contains("BoxCollider")) {
+        out << "    cactus::runtime::entt_backend::register_editor_hit_test_impl(\n";
+        out << "        [](entt::registry& reg, Vector2 world_pos, int /*mask*/) -> entt::entity {\n";
+        out << "            auto view = reg.view<WorldTransform, BoxCollider>(entt::exclude<EditorLocked>);\n";
+        out << "            for (auto entity : view) {\n";
+        out << "                const auto& xform = reg.get<WorldTransform>(entity);\n";
+        out << "                const auto& box   = reg.get<BoxCollider>(entity);\n";
+        out << "                if (world_pos.x < xform.position.x || world_pos.x > xform.position.x + box.size.x) { continue; }\n";
+        out << "                if (world_pos.y < xform.position.y || world_pos.y > xform.position.y + box.size.y) { continue; }\n";
+        out << "                return entity;\n";
+        out << "            }\n";
+        out << "            return entt::entity{entt::null};\n";
+        out << "        });\n";
+    }
+    if (module_uses_editor(program) && program.traits.contains("LocalTransform") &&
+        program.traits.contains("WorldTransform")) {
+        out << "    cactus::runtime::entt_backend::register_editor_spawn_impl(\n";
+        out << "        [](entt::registry& reg, const std::string& name, Vector2 pos2d, Vector3 /*pos3d*/) -> entt::entity {\n";
+        out << "            auto it = cactus_template_registry.find(name);\n";
+        out << "            if (it == cactus_template_registry.end()) { return entt::entity{entt::null}; }\n";
+        out << "            auto entity = it->second(reg);\n";
+        out << "            if (auto* lt = reg.try_get<LocalTransform>(entity)) { lt->position = pos2d; }\n";
+        out << "            if (auto* wt = reg.try_get<WorldTransform>(entity)) { wt->position = pos2d; }\n";
+        out << "            return entity;\n";
+        out << "        });\n";
+    }
     out << "}\n\n";
 
     out << "void generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt) {\n";
 
     out << "    (void)dt;\n\n";
+
+    // Camera-sync block: derive active Camera2D from the first active Camera entity
+    if (module_uses_camera_flat(program)) {
+        out << "    {\n";
+        out << "        auto __cam_view = registry.view<Camera>();\n";
+        out << "        for (auto __cam_ent : __cam_view) {\n";
+        out << "            const auto& __cam = __cam_view.get<Camera>(__cam_ent);\n";
+        out << "            if (__cam.active) {\n";
+        out << "                Camera2D __cam2d{};\n";
+        out << "                __cam2d.target   = __cam.offset;\n";
+        out << "                __cam2d.zoom     = __cam.zoom;\n";
+        out << "                __cam2d.rotation = __cam.rotation * (180.0F / 3.14159265F);\n";
+        out << "                __cam2d.offset   = {.x = static_cast<float>(GetScreenWidth()) * 0.5F,\n";
+        out << "                                    .y = static_cast<float>(GetScreenHeight()) * 0.5F};\n";
+        out << "                cactus::runtime::entt_backend::set_active_camera_2d(__cam2d);\n";
+        out << "                break;\n";
+        out << "            }\n";
+        out << "        }\n";
+        out << "    }\n\n";
+    }
 
     // Call system input handlers
     if (program.ast != nullptr) {
@@ -1445,6 +1540,31 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
+
+    // Edit-mode overlay drawn after end_render_frame (screen-space, no camera transform)
+    if (module_uses_editor(program) && program.traits.contains("EditorState")) {
+        out << "    {\n";
+        out << "        bool __editor_active = false;\n";
+        out << "        int  __editor_mode   = 0;\n";
+        out << "        auto __ed_view = registry.view<EditorState>();\n";
+        out << "        for (auto __ed_ent : __ed_view) {\n";
+        out << "            const auto& __es = __ed_view.get<EditorState>(__ed_ent);\n";
+        out << "            if (__es.active) { __editor_active = true; __editor_mode = __es.mode; break; }\n";
+        out << "        }\n";
+        out << "        if (__editor_active) {\n";
+        out << "            DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
+        out << "                                  .width  = static_cast<float>(GetScreenWidth()),\n";
+        out << "                                  .height = static_cast<float>(GetScreenHeight())}, 3, YELLOW);\n";
+        out << "            const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", \"ROTATE\", \"SCALE\", \"PLACE\"};\n";
+        out << "            const char* __mode_str = (__editor_mode >= 0 && __editor_mode < 5)\n";
+        out << "                                         ? __mode_names[static_cast<std::size_t>(__editor_mode)] : \"SELECT\";\n";
+        out << "            std::string __hud = std::string(\"EDIT [\") + __mode_str +\n";
+        out << "                                \"]  F1:toggle  W:trans  E:rot  R:scale  T:place\";\n";
+        out << "            DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
+        out << "        }\n";
+        out << "    }\n";
+    }
+
     out << "    clear_projected_traits(registry);\n";
     out << "}\n";
     out << "\n}  // namespace cactus::runtime::entt_backend\n";

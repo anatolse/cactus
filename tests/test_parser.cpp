@@ -1561,14 +1561,6 @@ TEST_CASE("Parser: template-backed entity from aliased template parsed", "[parse
     CHECK(*entity.template_ref == "gems.BlueGem");
 }
 
-TEST_CASE("Parser: legacy unit declaration rejected", "[parser][entity]") {
-    auto errors = parse_expect_errors(
-        "unit Player:\n"
-        "    Position\n");
-    REQUIRE_FALSE(errors.diagnostics().empty());
-    CHECK(errors.diagnostics().front().message.find("renamed") != std::string::npos);
-}
-
 TEST_CASE("Parser: struct field named 'entity' produces reserved-keyword error and recovers", "[parser][reserved]") {
     auto errors = parse_expect_errors(
         "struct Data:\n"

@@ -65,7 +65,6 @@ bool Parser::is_synchronization_point() const {
         case TokenType::STRUCT:
         case TokenType::ENUM:
         case TokenType::EVENT:
-        case TokenType::UNIT:
         case TokenType::ENTITY:
         case TokenType::TEMPLATE:
         case TokenType::VIEW:
@@ -202,12 +201,6 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         if (check(TokenType::ENTITY)) {
             return parse_entity(true);
         }
-        if (check(TokenType::UNIT)) {
-            auto loc = peek().location;
-            errors_.error(loc, "'unit' has been renamed to 'entity'; rewrite as 'entity <Name>:'");
-            advance();
-            return ModuleNode{.name = "<error>", .location = loc};
-        }
         if (check(TokenType::TEMPLATE)) {
             return parse_template(true);
         }
@@ -244,11 +237,6 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::ENTITY) {
         return parse_entity(false);
     }
-    if (tok.type == TokenType::UNIT) {
-        errors_.error(tok.location, "'unit' has been renamed to 'entity'; rewrite as 'entity <Name>:'");
-        advance();
-        return ModuleNode{.name = "<error>", .location = tok.location};
-    }
     if (tok.type == TokenType::FUNC) {
         return parse_func(false);
     }
@@ -276,21 +264,20 @@ std::string Parser::parse_field_name_or_keyword_error(const char* error_msg) {
     // Check if the token is a reserved keyword (any keyword token, not structural/punctuation).
     // Structural tokens like NEWLINE, DEDENT, COLON, etc. are handled by the caller's error recovery.
     auto tok_type = tok.type;
-    bool is_kw =
-        (tok_type != TokenType::NEWLINE && tok_type != TokenType::DEDENT && tok_type != TokenType::EOF_TOKEN &&
-         tok_type != TokenType::COLON && tok_type != TokenType::INDENT && tok_type != TokenType::COMMA &&
-         tok_type != TokenType::DOT && tok_type != TokenType::LPAREN && tok_type != TokenType::RPAREN &&
-         tok_type != TokenType::LBRACKET && tok_type != TokenType::RBRACKET && tok_type != TokenType::LBRACE &&
-         tok_type != TokenType::RBRACE && tok_type != TokenType::ASSIGN && tok_type != TokenType::ARROW &&
-         tok_type != TokenType::FAT_ARROW && tok_type != TokenType::PLUS_ASSIGN &&
-         tok_type != TokenType::MINUS_ASSIGN && tok_type != TokenType::EQUALS && tok_type != TokenType::NOT_EQUALS &&
-         tok_type != TokenType::LESS && tok_type != TokenType::GREATER && tok_type != TokenType::LESS_EQ &&
-         tok_type != TokenType::GREATER_EQ && tok_type != TokenType::PLUS && tok_type != TokenType::MINUS &&
-         tok_type != TokenType::STAR && tok_type != TokenType::SLASH && tok_type != TokenType::PERCENT &&
-         tok_type != TokenType::AMPERSAND && tok_type != TokenType::PIPE && tok_type != TokenType::CARET &&
-         tok_type != TokenType::TILDE && tok_type != TokenType::IDENTIFIER &&
-         tok_type != TokenType::INT_LITERAL && tok_type != TokenType::FLOAT_LITERAL &&
-         tok_type != TokenType::STRING_LITERAL && tok_type != TokenType::HEX_COLOR && !tok.value.empty());
+    bool is_kw = (tok_type != TokenType::NEWLINE && tok_type != TokenType::DEDENT && tok_type != TokenType::EOF_TOKEN &&
+                  tok_type != TokenType::COLON && tok_type != TokenType::INDENT && tok_type != TokenType::COMMA &&
+                  tok_type != TokenType::DOT && tok_type != TokenType::LPAREN && tok_type != TokenType::RPAREN &&
+                  tok_type != TokenType::LBRACKET && tok_type != TokenType::RBRACKET && tok_type != TokenType::LBRACE &&
+                  tok_type != TokenType::RBRACE && tok_type != TokenType::ASSIGN && tok_type != TokenType::ARROW &&
+                  tok_type != TokenType::FAT_ARROW && tok_type != TokenType::PLUS_ASSIGN &&
+                  tok_type != TokenType::MINUS_ASSIGN && tok_type != TokenType::EQUALS &&
+                  tok_type != TokenType::NOT_EQUALS && tok_type != TokenType::LESS && tok_type != TokenType::GREATER &&
+                  tok_type != TokenType::LESS_EQ && tok_type != TokenType::GREATER_EQ && tok_type != TokenType::PLUS &&
+                  tok_type != TokenType::MINUS && tok_type != TokenType::STAR && tok_type != TokenType::SLASH &&
+                  tok_type != TokenType::PERCENT && tok_type != TokenType::AMPERSAND && tok_type != TokenType::PIPE &&
+                  tok_type != TokenType::CARET && tok_type != TokenType::TILDE && tok_type != TokenType::IDENTIFIER &&
+                  tok_type != TokenType::INT_LITERAL && tok_type != TokenType::FLOAT_LITERAL &&
+                  tok_type != TokenType::STRING_LITERAL && tok_type != TokenType::HEX_COLOR && !tok.value.empty());
     if (is_kw) {
         errors_.error(tok.location, "'" + tok.value + "' is a reserved keyword and cannot be used as a field name");
         return advance().value;
@@ -1233,8 +1220,7 @@ FuncNode Parser::parse_func(bool is_pub) {
     consume(TokenType::RPAREN, "expected ')'");
 
     std::optional<TypeRef> return_type;
-    // Task 8.1/8.2: Return type follows ')' directly — no arrow.
-    // Produce an error if old '->' syntax is used.
+
     if (check(TokenType::ARROW)) {
         errors_.error(peek().location, "unexpected '->'; return type follows ')' directly");
         advance();  // consume and skip the arrow
@@ -1800,17 +1786,14 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                     tok.type != TokenType::EOF_TOKEN && tok.type != TokenType::COLON && tok.type != TokenType::INDENT &&
                     tok.type != TokenType::COMMA && tok.type != TokenType::DOT && tok.type != TokenType::LPAREN &&
                     tok.type != TokenType::RPAREN && tok.type != TokenType::LBRACKET &&
-                    tok.type != TokenType::RBRACKET && tok.type != TokenType::LBRACE &&
-                    tok.type != TokenType::RBRACE && tok.type != TokenType::ASSIGN &&
-                    tok.type != TokenType::ARROW && tok.type != TokenType::FAT_ARROW &&
+                    tok.type != TokenType::RBRACKET && tok.type != TokenType::LBRACE && tok.type != TokenType::RBRACE &&
+                    tok.type != TokenType::ASSIGN && tok.type != TokenType::ARROW && tok.type != TokenType::FAT_ARROW &&
                     tok.type != TokenType::PLUS_ASSIGN && tok.type != TokenType::MINUS_ASSIGN &&
-                    tok.type != TokenType::EQUALS && tok.type != TokenType::NOT_EQUALS &&
-                    tok.type != TokenType::LESS && tok.type != TokenType::GREATER &&
-                    tok.type != TokenType::LESS_EQ && tok.type != TokenType::GREATER_EQ &&
-                    tok.type != TokenType::PLUS && tok.type != TokenType::MINUS &&
-                    tok.type != TokenType::STAR && tok.type != TokenType::SLASH &&
-                    tok.type != TokenType::PERCENT && tok.type != TokenType::AMPERSAND &&
-                    tok.type != TokenType::PIPE && tok.type != TokenType::CARET &&
+                    tok.type != TokenType::EQUALS && tok.type != TokenType::NOT_EQUALS && tok.type != TokenType::LESS &&
+                    tok.type != TokenType::GREATER && tok.type != TokenType::LESS_EQ &&
+                    tok.type != TokenType::GREATER_EQ && tok.type != TokenType::PLUS && tok.type != TokenType::MINUS &&
+                    tok.type != TokenType::STAR && tok.type != TokenType::SLASH && tok.type != TokenType::PERCENT &&
+                    tok.type != TokenType::AMPERSAND && tok.type != TokenType::PIPE && tok.type != TokenType::CARET &&
                     tok.type != TokenType::TILDE && !tok.value.empty()) {
                     member = advance().value;
                 } else {

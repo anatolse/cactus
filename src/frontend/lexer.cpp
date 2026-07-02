@@ -15,7 +15,6 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"struct", TokenType::STRUCT},
         {"enum", TokenType::ENUM},
         {"trait", TokenType::TRAIT},
-        {"unit", TokenType::UNIT},    // reserved; parser emits migration diagnostic
         {"entity", TokenType::ENTITY},
         {"system", TokenType::SYSTEM},
         {"view", TokenType::VIEW},

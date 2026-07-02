@@ -44,7 +44,7 @@ TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
     CHECK(types[3] == TokenType::STRUCT);
     CHECK(types[4] == TokenType::ENUM);
     CHECK(types[5] == TokenType::TRAIT);
-    CHECK(types[6] == TokenType::UNIT);
+    CHECK(types[6] == TokenType::IDENTIFIER);
     CHECK(types[7] == TokenType::SYSTEM);
     CHECK(types[8] == TokenType::VIEW);
     CHECK(types[9] == TokenType::EVENT);

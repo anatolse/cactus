@@ -2,7 +2,7 @@
 ### Requirement: Top-level declaration parsing
 The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. Supported declarations: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `event`, `func`, `extern func`, `template`, `asset`, `input`.
 
-Note: `view` and `interface` are not supported top-level declarations in v0.2.
+Note: `view` is not supported as a top-level declaration in v0.2. `interface` is not a keyword and MAY appear as an identifier in any identifier position.
 
 ```ebnf
 declaration = module_decl | use_decl | const_block | struct_decl
@@ -29,6 +29,10 @@ declaration = module_decl | use_decl | const_block | struct_decl
 #### Scenario: Unknown top-level keyword
 - **WHEN** the source contains an unrecognized keyword at the top level
 - **THEN** the parser reports an error with the source location and expected declaration types
+
+#### Scenario: interface used as identifier
+- **WHEN** the source contains `interface` as a field name or identifier inside a valid declaration
+- **THEN** the parser accepts it as an ordinary identifier without error
 
 ### Requirement: Marker trait grammar (body is optional)
 The parser SHALL accept `trait` declarations with no colon and no body. The trait body (colon + indented block) is optional:

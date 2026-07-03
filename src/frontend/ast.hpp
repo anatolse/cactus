@@ -482,12 +482,6 @@ struct FuncSignature {
     SourceLocation location;
 };
 
-struct InterfaceNode {
-    std::string name;
-    std::vector<FuncSignature> methods;
-    SourceLocation location;
-};
-
 // ── Asset Declaration ────────────────────────────────────────────────────────
 
 /// Asset type kinds for asset_decl
@@ -538,7 +532,6 @@ using Declaration = std::variant<ModuleNode,
                                  ViewNode,
                                  EventNode,
                                  FuncNode,
-                                 InterfaceNode,
                                  AssetDeclNode,
                                  InputDeclNode>;
 

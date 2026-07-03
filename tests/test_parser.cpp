@@ -395,19 +395,6 @@ TEST_CASE("Parser: assignment operators", "[parser]") {
     CHECK(a3->op == "-=");
 }
 
-TEST_CASE("Parser: interface declaration", "[parser]") {
-    auto prog = parse(
-        "interface Renderable:\n"
-        "    func draw(x: int, y: int)\n"
-        "    func update(dt: float)\n");
-    REQUIRE(prog.declarations.size() == 1);
-    auto& decl = std::get<InterfaceNode>(prog.declarations[0]);
-    CHECK(decl.name == "Renderable");
-    REQUIRE(decl.methods.size() == 2);
-    CHECK(decl.methods[0].name == "draw");
-    CHECK(decl.methods[1].name == "update");
-}
-
 TEST_CASE("Parser: multiple declarations", "[parser]") {
     auto prog = parse(
         "module game\n"

@@ -16,7 +16,9 @@ The lexer SHALL maintain an indent stack and emit explicit INDENT and DEDENT tok
 - **THEN** the lexer reports an error with the source location
 
 ### Requirement: Keyword recognition
-The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `view`, `event`, `func`, `interface`, `let`, `var`, `persist`, `sync`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `filter`, `target`, `map`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`, `extern`.
+The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `view`, `event`, `func`, `let`, `var`, `persist`, `sync`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `filter`, `target`, `map`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`, `extern`.
+
+`interface` is NOT a reserved keyword and SHALL lex as `IDENTIFIER`.
 
 #### Scenario: Keyword vs identifier
 - **WHEN** the source contains the text `system`
@@ -33,6 +35,10 @@ The lexer SHALL recognize all Cactus keywords and produce the corresponding Toke
 #### Scenario: extern_value not a keyword
 - **WHEN** the source contains the text `extern_value`
 - **THEN** the lexer produces a token with type IDENTIFIER
+
+#### Scenario: interface lexes as identifier
+- **WHEN** the source contains the text `interface`
+- **THEN** the lexer produces a token with type IDENTIFIER (not a keyword token)
 
 ### Requirement: Numeric literal tokenization
 The lexer SHALL distinguish integer literals from float literals. A number containing a decimal point SHALL be tokenized as FLOAT_LITERAL; otherwise as INT_LITERAL.

@@ -49,7 +49,7 @@ TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
     CHECK(types[8] == TokenType::VIEW);
     CHECK(types[9] == TokenType::EVENT);
     CHECK(types[10] == TokenType::FUNC);
-    CHECK(types[11] == TokenType::INTERFACE);
+    CHECK(types[11] == TokenType::IDENTIFIER);
     CHECK(types[12] == TokenType::FOR);
     CHECK(types[13] == TokenType::IN);
     CHECK(types[14] == TokenType::PROJECT);

@@ -68,7 +68,6 @@ bool Parser::is_synchronization_point() const {
         case TokenType::ENTITY:
         case TokenType::TEMPLATE:
         case TokenType::VIEW:
-        case TokenType::INTERFACE:
         case TokenType::ASSET:
         case TokenType::INPUT:
         case TokenType::MODULE:
@@ -175,10 +174,6 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::EVENT) {
         return parse_event();
     }
-    if (tok.type == TokenType::INTERFACE) {
-        return parse_interface();
-    }
-
     if (tok.type == TokenType::TEMPLATE) {
         return parse_template(false);
     }
@@ -1275,49 +1270,6 @@ FuncNode Parser::parse_extern_func(bool is_pub) {
     node.return_type = std::move(return_type);
     // body intentionally empty for extern
     node.location = loc;
-    return node;
-}
-
-// ── Interface ───────────────────────────────────────────────────────────────
-
-InterfaceNode Parser::parse_interface() {
-    auto loc = peek().location;
-    consume(TokenType::INTERFACE, "expected 'interface'");
-    auto name = consume(TokenType::IDENTIFIER, "expected interface name").value;
-    consume(TokenType::COLON, "expected ':'");
-    expect_newline();
-    expect_indent();
-
-    InterfaceNode node;
-    node.name     = name;
-    node.location = loc;
-
-    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-        skip_newlines();
-        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-            break;
-        }
-        auto error_count_before = errors_.error_count();
-        auto sig_loc            = peek().location;
-        consume(TokenType::FUNC, "expected 'func'");
-        auto sig_name = consume(TokenType::IDENTIFIER, "expected method name").value;
-        consume(TokenType::LPAREN, "expected '('");
-        auto sig_params = parse_param_list();
-        consume(TokenType::RPAREN, "expected ')'");
-        std::optional<TypeRef> ret;
-        if (match(TokenType::ARROW)) {
-            ret = parse_type_ref();
-        }
-        expect_newline();
-        if (errors_.error_count() > error_count_before) {
-            synchronize();
-            continue;
-        }
-        node.methods.push_back(
-            {.name = sig_name, .params = std::move(sig_params), .return_type = std::move(ret), .location = sig_loc});
-    }
-
-    expect_dedent();
     return node;
 }
 

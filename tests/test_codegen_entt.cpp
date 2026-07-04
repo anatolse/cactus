@@ -1638,25 +1638,30 @@ TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
     //  which are tested in the actual editor-test.cactus example via test_example_cpp_compilation)
 }
 
+static constexpr const char* kViewportTrait =
+    "trait Viewport:\n"
+    "    var x: float\n"
+    "    var y: float\n"
+    "    var width: float\n"
+    "    var height: float\n"
+    "    var depth: int\n"
+    "    var clear: bool\n"
+    "    var clear_color: color\n"
+    "    var active: bool\n";
+
+static constexpr const char* kCameraFlatTrait =
+    "trait Camera:\n"
+    "    var zoom: float\n"
+    "    var offset: vec2\n"
+    "    var rotation: float\n";
+
 TEST_CASE("Codegen EnTT: std.camera.viewport emits viewport render loop and no camera-sync block",
           "[codegen-entt][camera][viewport]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "use std.camera.viewport\n"
-        "use std.camera.flat\n"
-        "trait Viewport:\n"
-        "    var x: float\n"
-        "    var y: float\n"
-        "    var width: float\n"
-        "    var height: float\n"
-        "    var depth: int\n"
-        "    var clear: bool\n"
-        "    var clear_color: color\n"
-        "    var active: bool\n"
-        "trait Camera:\n"
-        "    var zoom: float\n"
-        "    var offset: vec2\n"
-        "    var rotation: float\n",
+        std::string("use std.camera.viewport\n"
+                    "use std.camera.flat\n") +
+            kViewportTrait + kCameraFlatTrait,
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
@@ -1686,22 +1691,13 @@ TEST_CASE("Codegen EnTT: viewport loop sorts by depth (lower depth first)",
           "[codegen-entt][camera][viewport]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "use std.camera.viewport\n"
-        "trait Viewport:\n"
-        "    var x: float\n"
-        "    var y: float\n"
-        "    var width: float\n"
-        "    var height: float\n"
-        "    var depth: int\n"
-        "    var clear: bool\n"
-        "    var clear_color: color\n"
-        "    var active: bool\n",
+        std::string("use std.camera.viewport\n") + kViewportTrait,
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Depth-ordered collection and sort
-    CHECK(code.find("std::vector<std::pair<int,entt::entity>> __vps") != std::string::npos);
+    CHECK(code.find("static std::vector<std::pair<int,entt::entity>> __vps") != std::string::npos);
     CHECK(code.find("__vps.emplace_back(__vp.depth, __vp_e)") != std::string::npos);
     CHECK(code.find("std::ranges::sort(__vps)") != std::string::npos);
 }
@@ -1710,16 +1706,7 @@ TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths",
           "[codegen-entt][camera][viewport]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "use std.camera.viewport\n"
-        "trait Viewport:\n"
-        "    var x: float\n"
-        "    var y: float\n"
-        "    var width: float\n"
-        "    var height: float\n"
-        "    var depth: int\n"
-        "    var clear: bool\n"
-        "    var clear_color: color\n"
-        "    var active: bool\n",
+        std::string("use std.camera.viewport\n") + kViewportTrait,
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
@@ -1732,21 +1719,9 @@ TEST_CASE("Codegen EnTT: viewport loop emits scissor for each viewport (split-sc
           "[codegen-entt][camera][viewport]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "use std.camera.viewport\n"
-        "use std.camera.flat\n"
-        "trait Viewport:\n"
-        "    var x: float\n"
-        "    var y: float\n"
-        "    var width: float\n"
-        "    var height: float\n"
-        "    var depth: int\n"
-        "    var clear: bool\n"
-        "    var clear_color: color\n"
-        "    var active: bool\n"
-        "trait Camera:\n"
-        "    var zoom: float\n"
-        "    var offset: vec2\n"
-        "    var rotation: float\n",
+        std::string("use std.camera.viewport\n"
+                    "use std.camera.flat\n") +
+            kViewportTrait + kCameraFlatTrait,
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);

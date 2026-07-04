@@ -17,14 +17,8 @@ bool should_defer_to_raylib_enum(const std::string& name) {
     return name == "MouseButton" || name == "GamepadButton" || name == "GamepadAxis";
 }
 
-std::string viewport_default(const ResolvedField& field) {
-    if (field.name == "width" || field.name == "height") { return "{1.0F}"; }
-    if (field.name == "clear" || field.name == "active") { return "{true}"; }
-    if (field.name == "clear_color") { return "{.r = 0, .g = 0, .b = 0, .a = 255}"; }
-    return {};
-}
-
-std::string stdlib_collider_default(const ResolvedTrait& trait, const ResolvedField& field) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string stdlib_trait_default(const ResolvedTrait& trait, const ResolvedField& field) {
     if (!trait.is_stdlib) {
         return {};
     }
@@ -52,7 +46,11 @@ std::string stdlib_collider_default(const ResolvedTrait& trait, const ResolvedFi
             return "{1.0F}";
         }
     }
-    if (trait.name == "Viewport") { return viewport_default(field); }
+    if (trait.name == "Viewport") {
+        if (field.name == "width" || field.name == "height") { return "{1.0F}"; }
+        if (field.name == "clear" || field.name == "active") { return "{true}"; }
+        if (field.name == "clear_color") { return "{.r = 0, .g = 0, .b = 0, .a = 255}"; }
+    }
     return {};
 }
 
@@ -68,7 +66,7 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait) {
     out << "struct " << trait.name << " {\n";
     for (const auto& field : trait.fields) {
         out << "    " << entt_type_to_cpp(field.type) << " " << field.name;
-        const auto default_value = stdlib_collider_default(trait, field);
+        const auto default_value = stdlib_trait_default(trait, field);
         out << (default_value.empty() ? "{}" : default_value) << ";\n";
     }
     out << "};\n";

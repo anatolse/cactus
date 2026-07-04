@@ -1,0 +1,18 @@
+module std.physics.flat.query
+
+# 2D spatial query operations. Trait filters are supplied at each call site
+# as bracketed predicates; these declarations carry only the geometry arguments
+# required at every call site.
+
+# Nearest entity in 2D world space satisfying the query filter, or a stale
+# entity_id if no match exists.
+pub extern func nearest(from: vec2) entity_id
+
+# All entities whose 2D axis-aligned bounding box overlaps the given box.
+pub extern func overlap_box(center: vec2, size: vec2) list[entity_id]
+
+# All entities whose 2D shape overlaps the given circle.
+pub extern func overlap_circle(center: vec2, radius: float) list[entity_id]
+
+# All entities along the 2D ray within max_dist that satisfy the query filter.
+pub extern func raycast(origin: vec2, dir: vec2, max_dist: float) list[entity_id]

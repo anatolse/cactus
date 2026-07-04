@@ -1,6 +1,7 @@
 module shooter_slice
 
 use std.input
+use std.query as query
 
 const:
     PLAYER_SPEED = 8.0
@@ -127,7 +128,7 @@ system BulletHitSystem:
         Bullet as bullet
 
     on tick:
-        let enemy_id = get_test_enemy()
+        let enemy_id = query.first[Enemy]()
         if point_hits_enemy(pos.pos, enemy_id):
             emit EnemyHit to enemy_id:
                 amount = bullet.damage

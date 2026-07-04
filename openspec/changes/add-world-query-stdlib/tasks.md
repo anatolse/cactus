@@ -13,10 +13,10 @@
 
 ## 3. Stdlib surface
 
-- [ ] 3.1 Add `std.query` declarations for ECS/world query operations.
-- [ ] 3.2 Add `std.physics.flat.query` declarations for 2D spatial query operations.
-- [ ] 3.3 Add `std.physics.volume.query` declarations for 3D spatial query operations.
-- [ ] 3.4 Update examples or stubbed stdlib systems to reference the new query API where appropriate.
+- [x] 3.1 Add `std.query` declarations for ECS/world query operations.
+- [x] 3.2 Add `std.physics.flat.query` declarations for 2D spatial query operations.
+- [x] 3.3 Add `std.physics.volume.query` declarations for 3D spatial query operations.
+- [x] 3.4 Update examples or stubbed stdlib systems to reference the new query API where appropriate.
 
 ## 4. Backend code generation
 

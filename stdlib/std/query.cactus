@@ -1,0 +1,20 @@
+module std.query
+
+# World/ECS query operations. Trait filters are supplied at each call site
+# as bracketed predicates — these declarations carry only the value arguments
+# that every call must provide.
+
+# True if at least one live entity matches the query filter.
+pub extern func exists() bool
+
+# Number of live entities matching the query filter.
+pub extern func count() int
+
+# One live entity matching the query filter, or a stale entity_id if none match.
+pub extern func first() entity_id
+
+# All live entities matching the query filter.
+pub extern func all() list[entity_id]
+
+# Direct parent of the given entity, or a stale entity_id if no parent exists.
+pub extern func parent(of: entity_id) entity_id

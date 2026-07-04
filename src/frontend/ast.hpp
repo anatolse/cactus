@@ -84,6 +84,19 @@ struct SpawnExpr {
     SourceLocation location;
 };
 
+struct QueryFilterPredicate {
+    std::string trait_name;
+    bool negated = false;
+    SourceLocation location;
+};
+
+struct QueryCallExpr {
+    std::unique_ptr<ExprNode> callee;
+    std::vector<QueryFilterPredicate> filters;
+    std::vector<FieldAssignment> named_args;
+    SourceLocation location;
+};
+
 // ── Expression Nodes ────────────────────────────────────────────────────────
 
 struct LiteralExpr {
@@ -180,7 +193,8 @@ struct ExprNode {
                                  MatchExpr,
                                  IfExpr,
                                  ListExpr,
-                                 SpawnExpr>;
+                                 SpawnExpr,
+                                 QueryCallExpr>;
     Variant expr;
     SourceLocation location;
 

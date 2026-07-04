@@ -1,15 +1,15 @@
 ## 1. Parser and AST support
 
-- [ ] 1.1 Add AST nodes/fields for query filter predicates and query call named arguments.
-- [ ] 1.2 Extend postfix expression parsing to recognize module-qualified or aliased `member[query-filters](...)` query syntax.
-- [ ] 1.3 Add parser tests covering positive filters, negative filters, and named spatial query arguments.
+- [x] 1.1 Add AST nodes/fields for query filter predicates and query call named arguments.
+- [x] 1.2 Extend postfix expression parsing to recognize module-qualified or aliased `member[query-filters](...)` query syntax.
+- [x] 1.3 Add parser tests covering positive filters, negative filters, and named spatial query arguments.
 
 ## 2. Semantic analysis
 
-- [ ] 2.1 Resolve query callees through normal module-path or alias lookup and validate trait names used inside query filter brackets.
-- [ ] 2.2 Infer return types for recognized world and spatial query expressions.
-- [ ] 2.3 Enforce world-access restrictions and required named arguments for query expressions.
-- [ ] 2.4 Add semantic tests for invalid traits, invalid contexts, and query result typing.
+- [x] 2.1 Resolve query callees through normal module-path or alias lookup and validate trait names used inside query filter brackets.
+- [x] 2.2 Infer return types for recognized world and spatial query expressions.
+- [x] 2.3 Enforce world-access restrictions and required named arguments for query expressions.
+- [x] 2.4 Add semantic tests for invalid traits, invalid contexts, and query result typing.
 
 ## 3. Stdlib surface
 

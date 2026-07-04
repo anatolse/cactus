@@ -181,6 +181,8 @@ bool expr_contains_self(const ExprNode& expr) {
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 return std::ranges::any_of(
                     e.overrides, [](const auto& trait) { return field_assignments_contain_self(trait.assignments); });
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                return field_assignments_contain_self(e.named_args);
             } else {
                 return false;
             }
@@ -264,6 +266,16 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                 SpawnExpr copy{.template_name = e.template_name,
                                .overrides     = clone_archetype_trait_entries(e.overrides),
                                .location      = e.location};
+                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                QueryCallExpr copy;
+                copy.callee   = clone_expr(*e.callee);
+                copy.filters  = e.filters;
+                copy.location = e.location;
+                copy.named_args.reserve(e.named_args.size());
+                for (const auto& arg : e.named_args) {
+                    copy.named_args.push_back(clone_field_assignment(arg));
+                }
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             }
         },
@@ -878,6 +890,10 @@ void SemanticAnalyzer::check_const_strings_expr(const ExprNode& expr, bool in_co
                         check_const_strings_expr(*field.value, in_const);
                     }
                 }
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                for (auto& arg : e.named_args) {
+                    check_const_strings_expr(*arg.value, in_const);
+                }
             }
         },
         expr.expr);
@@ -955,6 +971,12 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
                     for (auto& field : trait.assignments) {
                         check_func_purity_expr(*field.value, func_name);
                     }
+                }
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                errors_.error(e.location,
+                              "query expressions require world access; only allowed inside system event handlers");
+                for (auto& arg : e.named_args) {
+                    check_func_purity_expr(*arg.value, func_name);
                 }
             }
         },
@@ -1981,6 +2003,100 @@ bool SemanticAnalyzer::is_std_text_format_callee(const ExprNode& callee) const {
     return false;
 }
 
+// ── Query expression helpers ──────────────────────────────────────────────────
+
+static std::optional<std::string> extract_dotted_path(const ExprNode& expr) {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->name;
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        auto prefix = extract_dotted_path(*member->object);
+        if (prefix) {
+            return *prefix + "." + member->member;
+        }
+    }
+    return std::nullopt;
+}
+
+static bool is_known_query_module(const std::string& name) {
+    return name == "std.query" || name == "std.physics.flat.query" || name == "std.physics.volume.query";
+}
+
+std::optional<std::string> SemanticAnalyzer::get_query_func_name(const ExprNode& callee) const {
+    if (result_.ast == nullptr) {
+        return std::nullopt;
+    }
+    const auto* member = std::get_if<MemberExpr>(&callee.expr);
+    if (!member) {
+        return std::nullopt;
+    }
+    const auto& func_name = member->member;
+    auto qualifier        = extract_dotted_path(*member->object);
+    if (!qualifier) {
+        return std::nullopt;
+    }
+    if (is_known_query_module(*qualifier)) {
+        return func_name;
+    }
+    for (const auto& decl : result_.ast->declarations) {
+        const auto* use_node = std::get_if<UseNode>(&decl);
+        if (!use_node || !is_known_query_module(use_node->module_name)) {
+            continue;
+        }
+        if (use_node->alias.has_value() && *use_node->alias == *qualifier) {
+            return func_name;
+        }
+        if (!use_node->alias.has_value()) {
+            auto last_dot       = use_node->module_name.rfind('.');
+            std::string last_comp = (last_dot != std::string::npos) ? use_node->module_name.substr(last_dot + 1)
+                                                                     : use_node->module_name;
+            if (last_comp == *qualifier) {
+                return func_name;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+void SemanticAnalyzer::validate_query_named_args(
+    const QueryCallExpr& qcall,
+    const std::string& func_name,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event) const {
+    auto has_arg = [&](const std::string& name) {
+        return std::ranges::any_of(qcall.named_args, [&](const auto& a) { return a.name == name; });
+    };
+    if (func_name == "nearest" && !has_arg("from")) {
+        errors_.error(qcall.location, "`nearest` requires a `from` named argument");
+    }
+    if (func_name == "overlap_box" && (!has_arg("center") || !has_arg("size"))) {
+        errors_.error(qcall.location, "`overlap_box` requires `center` and `size` named arguments");
+    }
+    if (func_name == "overlap_circle" && (!has_arg("center") || !has_arg("radius"))) {
+        errors_.error(qcall.location, "`overlap_circle` requires `center` and `radius` named arguments");
+    }
+    if (func_name == "overlap_sphere" && (!has_arg("center") || !has_arg("radius"))) {
+        errors_.error(qcall.location, "`overlap_sphere` requires `center` and `radius` named arguments");
+    }
+    if (func_name == "raycast" && (!has_arg("origin") || !has_arg("dir") || !has_arg("max_dist"))) {
+        errors_.error(qcall.location, "`raycast` requires `origin`, `dir`, and `max_dist` named arguments");
+    }
+    if (func_name == "parent") {
+        if (!has_arg("of")) {
+            errors_.error(qcall.location, "`parent` requires an `of` named argument");
+        } else {
+            auto of_it = std::ranges::find_if(qcall.named_args, [](const auto& a) { return a.name == "of"; });
+            if (of_it != qcall.named_args.end()) {
+                auto of_type = infer_expr_type(*of_it->value, filter_bindings, local_bindings, handler_event);
+                if (of_type.kind != TypeKind::EntityId && of_type.kind != TypeKind::Unknown) {
+                    errors_.error(of_it->location, "`parent` `of` argument must be of type `entity_id`");
+                }
+            }
+        }
+    }
+}
+
 // ── std.text.format validation ────────────────────────────────────────────────
 
 void SemanticAnalyzer::validate_one_text_format_call(
@@ -2074,6 +2190,10 @@ void SemanticAnalyzer::validate_text_format_in_expr(
     } else if (const auto* list = std::get_if<ListExpr>(&expr.expr)) {
         for (const auto& elem : list->elements) {
             validate_text_format_in_expr(*elem, filter_bindings, local_bindings, handler_event);
+        }
+    } else if (const auto* qcall = std::get_if<QueryCallExpr>(&expr.expr)) {
+        for (const auto& arg : qcall->named_args) {
+            validate_text_format_in_expr(*arg.value, filter_bindings, local_bindings, handler_event);
         }
     }
 }
@@ -2272,6 +2392,39 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
 
     if (std::holds_alternative<SpawnExpr>(expr.expr)) {
         return make_entity_id_type();
+    }
+    if (const auto* qcall = std::get_if<QueryCallExpr>(&expr.expr)) {
+        if (handler_event == nullptr) {
+            errors_.error(expr.location,
+                          "query expressions require world access; only allowed inside system event handlers");
+        }
+        for (const auto& pred : qcall->filters) {
+            if (!is_trait_declared(pred.trait_name)) {
+                errors_.error(pred.location, "undeclared trait '" + pred.trait_name + "' in query filter");
+            }
+        }
+        auto func_name_opt = get_query_func_name(*qcall->callee);
+        const std::string func_name = func_name_opt.value_or([&]() -> std::string {
+            if (const auto* m = std::get_if<MemberExpr>(&qcall->callee->expr)) {
+                return m->member;
+            }
+            return "";
+        }());
+        validate_query_named_args(*qcall, func_name, filter_bindings, local_bindings, handler_event);
+        if (func_name == "exists") {
+            return make_bool_type();
+        }
+        if (func_name == "count") {
+            return make_int_type();
+        }
+        if (func_name == "first" || func_name == "nearest" || func_name == "parent") {
+            return make_entity_id_type();
+        }
+        if (func_name == "all" || func_name == "overlap_box" || func_name == "overlap_circle" ||
+            func_name == "overlap_sphere" || func_name == "raycast") {
+            return make_list_type(make_entity_id_type());
+        }
+        return make_unknown_type();
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
         if (is_std_text_format_callee(*call->callee)) {

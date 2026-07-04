@@ -1087,4 +1087,137 @@ TEST_CASE("Semantic: spawn of entity rejected", "[semantic][entity]") {
     CHECK(err.find("Player") != std::string::npos);
     CHECK(err.find("entity") != std::string::npos);
 }
+// ── Query expression semantic tests ────────────────────────────────────────
+
+TEST_CASE("Semantic: query exists in system handler returns bool — no errors", "[semantic][query]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.query as query\n"
+        "trait Boss:\n"
+        "    var hp: int\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        if query.exists[Boss]():\n"
+        "            let x = 1\n"));
+}
+
+TEST_CASE("Semantic: query count in system handler returns int — no errors", "[semantic][query]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.query as query\n"
+        "trait Enemy:\n"
+        "    var hp: int\n"
+        "trait Dead\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        let n = query.count[Enemy, not Dead]()\n"));
+}
+
+TEST_CASE("Semantic: query first in system handler returns entity_id — no errors", "[semantic][query]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.query as query\n"
+        "trait Boss:\n"
+        "    var hp: int\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        let t = query.first[Boss]()\n"));
+}
+
+TEST_CASE("Semantic: query all in system handler returns list of entity_id — no errors", "[semantic][query]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.query as query\n"
+        "trait Enemy:\n"
+        "    var hp: int\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        let all = query.all[Enemy]()\n"));
+}
+
+TEST_CASE("Semantic: query expression inside pure func is rejected", "[semantic][query]") {
+    CHECK(analyze_has_errors(
+        "use std.query as query\n"
+        "trait Boss:\n"
+        "    var hp: int\n"
+        "func count_bosses() int:\n"
+        "    let n = query.count[Boss]()\n"
+        "    return n\n"));
+    CHECK(analyze_first_error(
+              "use std.query as query\n"
+              "trait Boss:\n"
+              "    var hp: int\n"
+              "func count_bosses() int:\n"
+              "    let n = query.count[Boss]()\n"
+              "    return n\n")
+              .find("world access") != std::string::npos);
+}
+
+TEST_CASE("Semantic: undeclared trait in query filter is rejected", "[semantic][query]") {
+    CHECK(analyze_first_error(
+              "use std.query as query\n" +
+              STDLIB_EVENTS +
+              "system S:\n"
+              "    on tick:\n"
+              "        let x = query.first[GhostBoss]()\n") ==
+          "undeclared trait 'GhostBoss' in query filter");
+}
+
+TEST_CASE("Semantic: valid traits in query filter are accepted", "[semantic][query]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.query as query\n"
+        "trait EnemyAI:\n"
+        "    var active: bool\n"
+        "trait Dead\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        let n = query.count[EnemyAI, not Dead]()\n"));
+}
+
+TEST_CASE("Semantic: query parent with entity_id of argument accepted", "[semantic][query]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.query as query\n"
+        "trait Child:\n"
+        "    var child_id: entity_id\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    filter:\n"
+        "        Child\n"
+        "    on tick:\n"
+        "        let p = query.parent(of = child_id)\n"));
+}
+
+TEST_CASE("Semantic: query parent of argument must be entity_id", "[semantic][query]") {
+    CHECK(analyze_first_error(
+              "use std.query as query\n" +
+              STDLIB_EVENTS +
+              "system S:\n"
+              "    on tick:\n"
+              "        let p = query.parent(of = 42)\n") ==
+          "`parent` `of` argument must be of type `entity_id`");
+}
+
+TEST_CASE("Semantic: query nearest requires from argument", "[semantic][query]") {
+    CHECK(analyze_first_error(
+              "use std.physics.flat.query as query\n" +
+              STDLIB_EVENTS +
+              "trait Transform:\n"
+              "    var pos: vec2\n"
+              "system S:\n"
+              "    on tick:\n"
+              "        let t = query.nearest[Transform]()\n")
+              .find("`nearest` requires") != std::string::npos);
+}
+
+TEST_CASE("Semantic: module-qualified query path accepted", "[semantic][query]") {
+    CHECK_FALSE(analyze_has_errors(
+        "use std.query\n"
+        "trait Boss:\n"
+        "    var hp: int\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        let t = std.query.first[Boss]()\n"));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1663,4 +1663,103 @@ TEST_CASE("Parser: event field named 'entity' produces reserved-keyword error", 
     }
     CHECK(has_kw_error);
 }
+TEST_CASE("Parser: query call — one positive filter", "[parser][query]") {
+    auto prog = parse(
+        "func test():\n"
+        "    let x = query.exists[Boss]()\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
+    REQUIRE(qcall != nullptr);
+    REQUIRE(qcall->filters.size() == 1);
+    CHECK(qcall->filters[0].trait_name == "Boss");
+    CHECK_FALSE(qcall->filters[0].negated);
+    CHECK(qcall->named_args.empty());
+    auto* callee = std::get_if<MemberExpr>(&qcall->callee->expr);
+    REQUIRE(callee != nullptr);
+    CHECK(callee->member == "exists");
+}
+
+TEST_CASE("Parser: query call — negative trait filter", "[parser][query]") {
+    auto prog = parse(
+        "func test():\n"
+        "    let x = query.count[EnemyAI, not Dead]()\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
+    REQUIRE(qcall != nullptr);
+    REQUIRE(qcall->filters.size() == 2);
+    CHECK(qcall->filters[0].trait_name == "EnemyAI");
+    CHECK_FALSE(qcall->filters[0].negated);
+    CHECK(qcall->filters[1].trait_name == "Dead");
+    CHECK(qcall->filters[1].negated);
+}
+
+TEST_CASE("Parser: query call — named spatial argument", "[parser][query]") {
+    auto prog = parse(
+        "func test():\n"
+        "    let x = query.nearest[Transform, Enemy](from = player_pos)\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
+    REQUIRE(qcall != nullptr);
+    REQUIRE(qcall->filters.size() == 2);
+    CHECK(qcall->filters[0].trait_name == "Transform");
+    CHECK(qcall->filters[1].trait_name == "Enemy");
+    REQUIRE(qcall->named_args.size() == 1);
+    CHECK(qcall->named_args[0].name == "from");
+}
+
+TEST_CASE("Parser: query call — multiple named arguments", "[parser][query]") {
+    auto prog = parse(
+        "func test():\n"
+        "    let x = query.overlap_box[Pickup](center = p, size = s)\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
+    REQUIRE(qcall != nullptr);
+    REQUIRE(qcall->named_args.size() == 2);
+    CHECK(qcall->named_args[0].name == "center");
+    CHECK(qcall->named_args[1].name == "size");
+}
+
+TEST_CASE("Parser: query call — named arg without filter bracket", "[parser][query]") {
+    auto prog = parse(
+        "func test():\n"
+        "    let x = query.parent(of = child_id)\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
+    REQUIRE(qcall != nullptr);
+    CHECK(qcall->filters.empty());
+    REQUIRE(qcall->named_args.size() == 1);
+    CHECK(qcall->named_args[0].name == "of");
+    auto* callee = std::get_if<MemberExpr>(&qcall->callee->expr);
+    REQUIRE(callee != nullptr);
+    CHECK(callee->member == "parent");
+}
+
+TEST_CASE("Parser: query call — module-qualified path", "[parser][query]") {
+    auto prog = parse(
+        "func test():\n"
+        "    let x = std.query.first[Boss]()\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
+    REQUIRE(qcall != nullptr);
+    REQUIRE(qcall->filters.size() == 1);
+    CHECK(qcall->filters[0].trait_name == "Boss");
+    auto* outer = std::get_if<MemberExpr>(&qcall->callee->expr);
+    REQUIRE(outer != nullptr);
+    CHECK(outer->member == "first");
+    auto* inner = std::get_if<MemberExpr>(&outer->object->expr);
+    REQUIRE(inner != nullptr);
+    CHECK(inner->member == "query");
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1722,6 +1722,27 @@ std::unique_ptr<ExprNode> Parser::parse_unary_expr() {
 }
 
 std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
+    // Named-arg names may be keywords (e.g. `from`); accept any non-structural token.
+    auto parse_named_arg_name = [this]() -> std::string {
+        if (check(TokenType::IDENTIFIER)) {
+            return advance().value;
+        }
+        const auto& tok     = peek();
+        const auto  tok_type = tok.type;
+        bool is_usable =
+            !tok.value.empty() && tok_type != TokenType::NEWLINE && tok_type != TokenType::DEDENT &&
+            tok_type != TokenType::EOF_TOKEN && tok_type != TokenType::COLON && tok_type != TokenType::INDENT &&
+            tok_type != TokenType::COMMA && tok_type != TokenType::DOT && tok_type != TokenType::LPAREN &&
+            tok_type != TokenType::RPAREN && tok_type != TokenType::LBRACKET && tok_type != TokenType::RBRACKET &&
+            tok_type != TokenType::ASSIGN && tok_type != TokenType::EQUALS && tok_type != TokenType::NOT_EQUALS;
+        if (is_usable) {
+            return advance().value;
+        }
+        errors_.error(tok.location,
+                      std::string("expected argument name, got ") + token_type_to_string(tok.type));
+        return "<error>";
+    };
+
     auto expr = parse_primary_expr();
 
     while (true) {
@@ -1753,8 +1774,76 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                 }
             }
 
+            // Check for query call: .member[filters](named_args)
+            if (check(TokenType::LBRACKET)) {
+                advance();  // consume '['
+                std::vector<QueryFilterPredicate> filters;
+                while (!check(TokenType::RBRACKET) && !check(TokenType::EOF_TOKEN)) {
+                    QueryFilterPredicate pred;
+                    pred.location = peek().location;
+                    if (match(TokenType::NOT)) {
+                        pred.negated = true;
+                    }
+                    pred.trait_name = consume(TokenType::IDENTIFIER, "expected trait name in query filter").value;
+                    filters.push_back(std::move(pred));
+                    if (!check(TokenType::RBRACKET)) {
+                        consume(TokenType::COMMA, "expected ',' or ']' in query filter");
+                    }
+                }
+                consume(TokenType::RBRACKET, "expected ']' after query filter");
+                consume(TokenType::LPAREN, "expected '(' after query filter");
+                std::vector<FieldAssignment> named_args;
+                while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
+                    auto arg_loc   = peek().location;
+                    auto arg_name  = parse_named_arg_name();
+                    consume(TokenType::ASSIGN, "expected '='");
+                    auto arg_value = parse_expression();
+                    named_args.push_back(FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
+                    if (!check(TokenType::RPAREN)) {
+                        consume(TokenType::COMMA, "expected ',' or ')'");
+                    }
+                }
+                consume(TokenType::RPAREN, "expected ')'");
+                MemberExpr mem;
+                mem.object   = std::move(expr);
+                mem.member   = member;
+                mem.location = loc;
+                QueryCallExpr qcall;
+                qcall.callee     = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
+                qcall.filters    = std::move(filters);
+                qcall.named_args = std::move(named_args);
+                qcall.location   = loc;
+                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
+            }
+            // Check for named-arg query call: .member(name = expr, ...) — no filter bracket
+            else if (check(TokenType::LPAREN) && current_ + 1 < tokens_.size() &&
+                     tokens_[current_ + 1].type == TokenType::IDENTIFIER &&
+                     current_ + 2 < tokens_.size() && tokens_[current_ + 2].type == TokenType::ASSIGN) {
+                advance();  // consume '('
+                std::vector<FieldAssignment> named_args;
+                while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
+                    auto arg_loc   = peek().location;
+                    auto arg_name  = parse_named_arg_name();
+                    consume(TokenType::ASSIGN, "expected '='");
+                    auto arg_value = parse_expression();
+                    named_args.push_back(FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
+                    if (!check(TokenType::RPAREN)) {
+                        consume(TokenType::COMMA, "expected ',' or ')'");
+                    }
+                }
+                consume(TokenType::RPAREN, "expected ')'");
+                MemberExpr mem;
+                mem.object   = std::move(expr);
+                mem.member   = member;
+                mem.location = loc;
+                QueryCallExpr qcall;
+                qcall.callee     = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
+                qcall.named_args = std::move(named_args);
+                qcall.location   = loc;
+                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
+            }
             // Check for method call: .member(args)
-            if (check(TokenType::LPAREN)) {
+            else if (check(TokenType::LPAREN)) {
                 advance();
                 std::vector<std::unique_ptr<ExprNode>> args;
                 if (!check(TokenType::RPAREN)) {

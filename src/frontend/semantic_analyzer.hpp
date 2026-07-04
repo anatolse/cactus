@@ -215,6 +215,14 @@ private:
 
     // Phase 3: std.text.format validation
     bool is_std_text_format_callee(const ExprNode& callee) const;
+
+    // Phase 3: query expression helpers
+    std::optional<std::string> get_query_func_name(const ExprNode& callee) const;
+    void validate_query_named_args(const QueryCallExpr& qcall,
+                                   const std::string& func_name,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                   const ResolvedStruct* handler_event) const;
     void validate_text_format_calls(ProgramNode& program);
     void validate_text_format_in_stmts(
         const std::vector<std::unique_ptr<StmtNode>>& stmts,

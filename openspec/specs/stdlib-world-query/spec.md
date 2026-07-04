@@ -1,4 +1,6 @@
-## ADDED Requirements
+## Purpose
+Define the required behavior of the `std.query`, `std.physics.flat.query`, and `std.physics.volume.query` stdlib namespaces for ECS/world and spatial query expressions.
+## Requirements
 
 ### Requirement: `std.query` provides ECS/world query expressions
 The stdlib SHALL provide a `std.query` namespace for world/ECS query expressions. The namespace SHALL include at least `exists`, `count`, `first`, and `all` query operations that accept bracketed trait-filter arguments.

@@ -695,6 +695,273 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
     return out.str();
 }
 
+// ── Query call lowering ─────────────────────────────────────────────────────
+
+static std::optional<std::string> extract_dotted_qualifier(const ExprNode& expr) {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->name;
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        if (auto prefix = extract_dotted_qualifier(*member->object)) {
+            return *prefix + "." + member->member;
+        }
+    }
+    return std::nullopt;
+}
+
+static bool is_known_query_module_name(const std::string& name) {
+    return name == "std.query" || name == "std.physics.flat.query" || name == "std.physics.volume.query";
+}
+
+// Returns the full module name if `use` declares a known query module whose qualifier or alias
+// matches `qualifier`; otherwise returns empty.
+static std::string match_query_use_node(const UseNode& use, const std::string& qualifier) {
+    if (!is_known_query_module_name(use.module_name)) {
+        return {};
+    }
+    if (use.alias.has_value() && *use.alias == qualifier) {
+        return use.module_name;
+    }
+    if (!use.alias.has_value()) {
+        const auto last_dot      = use.module_name.rfind('.');
+        const std::string last_comp = (last_dot != std::string::npos)
+                                          ? use.module_name.substr(last_dot + 1)
+                                          : use.module_name;
+        if (last_comp == qualifier) {
+            return use.module_name;
+        }
+    }
+    return {};
+}
+
+static std::string resolve_query_module(const QueryCallExpr& qcall, const ProgramNode* ast) {
+    const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr);
+    if (member == nullptr) {
+        return {};
+    }
+    const auto qualifier = extract_dotted_qualifier(*member->object);
+    if (!qualifier.has_value()) {
+        return {};
+    }
+    if (is_known_query_module_name(*qualifier)) {
+        return *qualifier;
+    }
+    if (ast == nullptr) {
+        return {};
+    }
+    for (const auto& decl : ast->declarations) {
+        const auto* use = std::get_if<UseNode>(&decl);
+        if (use == nullptr) {
+            continue;
+        }
+        if (auto matched = match_query_use_node(*use, *qualifier); !matched.empty()) {
+            return matched;
+        }
+    }
+    return {};
+}
+
+static std::string get_query_func_name_from_call(const QueryCallExpr& qcall) {
+    const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr);
+    return member != nullptr ? member->member : std::string{};
+}
+
+// Build "<T1, T2>(entt::exclude<N1, N2>)" from filter predicates.
+// prepend_include is added first and deduplicated against positive filters.
+static std::string build_view_suffix(const std::vector<QueryFilterPredicate>& filters,
+                                     const std::string& prepend_include = {}) {
+    std::string include_list = prepend_include;
+    std::string exclude_list;
+    for (const auto& f : filters) {
+        if (f.negated) {
+            if (!exclude_list.empty()) {
+                exclude_list += ", ";
+            }
+            exclude_list += f.trait_name;
+        } else if (f.trait_name != prepend_include) {
+            if (!include_list.empty()) {
+                include_list += ", ";
+            }
+            include_list += f.trait_name;
+        }
+    }
+    std::string result = "<" + include_list + ">(";
+    if (!exclude_list.empty()) {
+        result += "entt::exclude<" + exclude_list + ">";
+    }
+    result += ")";
+    return result;
+}
+
+static std::string find_named_arg_value(const std::vector<FieldAssignment>& named_args,
+                                        const std::string& name,
+                                        const auto& emit_arg) {
+    for (const auto& a : named_args) {
+        if (a.name == name) {
+            return emit_arg(*a.value);
+        }
+    }
+    return "/* missing:" + name + " */";
+}
+
+static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
+                                        const std::string& func_name,
+                                        const auto& emit_arg) {
+    const std::string view = "registry.view" + build_view_suffix(qcall.filters);
+    if (func_name == "exists") {
+        return "[&]{ auto __v = " + view + "; return __v.begin() != __v.end(); }()";
+    }
+    if (func_name == "count") {
+        return "[&]{ int __n = 0; for ([[maybe_unused]] auto __e : " + view + ") ++__n; return __n; }()";
+    }
+    if (func_name == "first") {
+        return "[&]{ auto __v = " + view +
+               "; auto __it = __v.begin(); return __it != __v.end() ? "
+               "static_cast<entt::entity>(*__it) : entt::entity{entt::null}; }()";
+    }
+    if (func_name == "all") {
+        return "[&]{ std::vector<entt::entity> __r; for (auto __e : " + view +
+               ") __r.push_back(__e); return __r; }()";
+    }
+    if (func_name == "parent") {
+        const std::string of_expr = find_named_arg_value(qcall.named_args, "of", emit_arg);
+        return "[&]{ if (auto* __p = registry.try_get<Parent>(" + of_expr +
+               "); __p != nullptr) return __p->parent; return entt::entity{entt::null}; }()";
+    }
+    return "/* unsupported std.query func: " + func_name + " */";
+}
+
+static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
+                                            const std::string& func_name,
+                                            const auto& emit_arg) {
+    const std::string view = "registry.view" + build_view_suffix(qcall.filters, "WorldTransform");
+    if (func_name == "nearest") {
+        const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
+        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __dx = __wt.position.x - (" + from + ").x, "
+               "__dy = __wt.position.y - (" + from + ").y; "
+               "float __d = __dx * __dx + __dy * __dy; "
+               "if (__d < __best_d) { __best_d = __d; __best = __e; } } return __best; }()";
+    }
+    if (func_name == "overlap_box") {
+        const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
+        const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
+        return "[&]{ std::vector<entt::entity> __r; "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __hx = (" + size + ").x * 0.5F, __hy = (" + size + ").y * 0.5F; "
+               "if (std::abs(__wt.position.x - (" + center + ").x) <= __hx && "
+               "std::abs(__wt.position.y - (" + center + ").y) <= __hy) "
+               "__r.push_back(__e); } return __r; }()";
+    }
+    if (func_name == "overlap_circle") {
+        const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
+        const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
+        return "[&]{ std::vector<entt::entity> __r; "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __dx = __wt.position.x - (" + center + ").x, "
+               "__dy = __wt.position.y - (" + center + ").y; "
+               "if ((__dx * __dx + __dy * __dy) <= (" + radius + ") * (" + radius + ")) "
+               "__r.push_back(__e); } return __r; }()";
+    }
+    if (func_name == "raycast") {
+        const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
+        const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
+        const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
+        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __dx = __wt.position.x - (" + origin + ").x, "
+               "__dy = __wt.position.y - (" + origin + ").y; "
+               "float __proj = __dx * (" + dir + ").x + __dy * (" + dir + ").y; "
+               "if (__proj >= 0.0F && __proj <= (" + max_dist + ")) { "
+               "float __perp = __dx * (" + dir + ").y - __dy * (" + dir + ").x; "
+               "if (std::abs(__perp) < 0.5F && __proj < __best_d) { __best_d = __proj; __best = __e; } } } "
+               "return __best; }()";
+    }
+    return "/* unsupported std.physics.flat.query func: " + func_name + " */";
+}
+
+static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
+                                              const std::string& func_name,
+                                              const auto& emit_arg) {
+    const std::string view = "registry.view" + build_view_suffix(qcall.filters, "WorldTransform");
+    if (func_name == "nearest") {
+        const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
+        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __dx = __wt.position.x - (" + from + ").x, "
+               "__dy = __wt.position.y - (" + from + ").y, "
+               "__dz = __wt.position.z - (" + from + ").z; "
+               "float __d = __dx * __dx + __dy * __dy + __dz * __dz; "
+               "if (__d < __best_d) { __best_d = __d; __best = __e; } } return __best; }()";
+    }
+    if (func_name == "overlap_box") {
+        const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
+        const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
+        return "[&]{ std::vector<entt::entity> __r; "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __hx = (" + size + ").x * 0.5F, __hy = (" + size + ").y * 0.5F, __hz = (" + size + ").z * 0.5F; "
+               "if (std::abs(__wt.position.x - (" + center + ").x) <= __hx && "
+               "std::abs(__wt.position.y - (" + center + ").y) <= __hy && "
+               "std::abs(__wt.position.z - (" + center + ").z) <= __hz) "
+               "__r.push_back(__e); } return __r; }()";
+    }
+    if (func_name == "overlap_sphere") {
+        const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
+        const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
+        return "[&]{ std::vector<entt::entity> __r; "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __dx = __wt.position.x - (" + center + ").x, "
+               "__dy = __wt.position.y - (" + center + ").y, "
+               "__dz = __wt.position.z - (" + center + ").z; "
+               "if ((__dx * __dx + __dy * __dy + __dz * __dz) <= (" + radius + ") * (" + radius + ")) "
+               "__r.push_back(__e); } return __r; }()";
+    }
+    if (func_name == "raycast") {
+        const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
+        const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
+        const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
+        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+               "for (auto __e : " + view + ") { "
+               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "float __dx = __wt.position.x - (" + origin + ").x, "
+               "__dy = __wt.position.y - (" + origin + ").y, "
+               "__dz = __wt.position.z - (" + origin + ").z; "
+               "float __proj = __dx * (" + dir + ").x + __dy * (" + dir + ").y + __dz * (" + dir + ").z; "
+               "if (__proj >= 0.0F && __proj <= (" + max_dist + ")) { "
+               "float __perp_x = __dy * (" + dir + ").z - __dz * (" + dir + ").y, "
+               "__perp_y = __dz * (" + dir + ").x - __dx * (" + dir + ").z, "
+               "__perp_z = __dx * (" + dir + ").y - __dy * (" + dir + ").x; "
+               "if ((__perp_x * __perp_x + __perp_y * __perp_y + __perp_z * __perp_z) < 0.25F "
+               "&& __proj < __best_d) { __best_d = __proj; __best = __e; } } } return __best; }()";
+    }
+    return "/* unsupported std.physics.volume.query func: " + func_name + " */";
+}
+
+static std::string lower_query_call_expr(const QueryCallExpr& qcall,
+                                         const DecoratedProgram& program,
+                                         const auto& emit_arg) {
+    const std::string module    = resolve_query_module(qcall, program.ast);
+    const std::string func_name = get_query_func_name_from_call(qcall);
+    if (module == "std.query") {
+        return lower_ecs_query_call(qcall, func_name, emit_arg);
+    }
+    if (module == "std.physics.flat.query") {
+        return lower_flat_spatial_query(qcall, func_name, emit_arg);
+    }
+    if (module == "std.physics.volume.query") {
+        return lower_volume_spatial_query(qcall, func_name, emit_arg);
+    }
+    return "/* unresolved query module */";
+}
+
 static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          int indent,
                                          const std::vector<std::string>& trait_names,
@@ -872,6 +1139,10 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 }
                 result += "}";
                 return result;
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                return lower_query_call_expr(e, program, [&](const ExprNode& arg) {
+                    return rewrite_expr(arg, trait_names, program, pointer_aliases);
+                });
             } else {
                 return "/* unsupported expr */";
             }

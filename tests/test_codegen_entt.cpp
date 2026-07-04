@@ -1756,4 +1756,250 @@ TEST_CASE("Codegen EnTT: Camera trait no longer has active field after multi-vie
     CHECK(code.find("struct Camera") != std::string::npos);
 }
 
+// ── Query expression backend codegen tests ──────────────────────────────────
+
+static const char* const kQueryPreamble =
+    "use std.query as query\n"
+    "pub event tick:\n"
+    "    dt: float\n"
+    "trait Boss:\n"
+    "    var hp: int\n"
+    "trait Enemy:\n"
+    "    var hp: int\n"
+    "trait Dead\n";
+
+TEST_CASE("Codegen EnTT: query.exists lowers to entt view begin/end check", "[codegen-entt][query]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        if query.exists[Boss]():\n"
+            "            let x = 1\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<Boss>()") != std::string::npos);
+    CHECK(code.find("__v.begin() != __v.end()") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[codegen-entt][query]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        if query.exists[Enemy, not Dead]():\n"
+            "            let x = 1\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<Enemy>(entt::exclude<Dead>)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][query]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let n = query.count[Enemy, not Dead]()\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<Enemy>(entt::exclude<Dead>)") != std::string::npos);
+    CHECK(code.find("++__n") != std::string::npos);
+    CHECK(code.find("int __n = 0") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[codegen-entt][query]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let t = query.first[Boss]()\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<Boss>()") != std::string::npos);
+    CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
+    // empty result returns null sentinel (total entity_id semantics)
+    CHECK(code.find("__it != __v.end()") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-entt][query]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let all = query.all[Enemy]()\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<Enemy>()") != std::string::npos);
+    CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
+    CHECK(code.find("__r.push_back(__e)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[codegen-entt][query]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.query as query\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Child:\n"
+        "    var child_id: entity_id\n"
+        "system S:\n"
+        "    filter:\n"
+        "        Child\n"
+        "    on tick:\n"
+        "        let p = query.parent(of = child_id)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.try_get<Parent>") != std::string::npos);
+    CHECK(code.find("__p->parent") != std::string::npos);
+    CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: fully qualified std.query path is lowered correctly", "[codegen-entt][query]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.query\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Boss:\n"
+        "    var hp: int\n"
+        "system S:\n"
+        "    on tick:\n"
+        "        let t = std.query.first[Boss]()\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<Boss>()") != std::string::npos);
+    CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
+}
+
+static const char* const kFlatQueryPreamble =
+    "use std.physics.flat.query as query\n"
+    "pub event tick:\n"
+    "    dt: float\n"
+    "trait WorldTransform:\n"
+    "    var position: vec2\n"
+    "trait Enemy:\n"
+    "    var hp: int\n"
+    "trait Pickup\n"
+    "trait Collected\n"
+    "trait Wall\n";
+
+TEST_CASE("Codegen EnTT: flat query.nearest lowers to WorldTransform distance search",
+          "[codegen-entt][query][spatial]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kFlatQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let p = query.nearest[Enemy](from = tick.dt)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
+    CHECK(code.find("registry.get<WorldTransform>(__e)") != std::string::npos);
+    CHECK(code.find("std::numeric_limits<float>::max()") != std::string::npos);
+    // empty result returns null sentinel (total entity_id semantics) via __best initialization
+    CHECK(code.find("__best{entt::null}") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches",
+          "[codegen-entt][query][spatial]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kFlatQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let p = query.overlap_box[Pickup, not Collected](center = tick.dt, size = tick.dt)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<WorldTransform, Pickup>(entt::exclude<Collected>)") != std::string::npos);
+    CHECK(code.find("* 0.5F") != std::string::npos);
+    CHECK(code.find("std::abs") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search",
+          "[codegen-entt][query][spatial]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kFlatQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let hits = query.overlap_circle[Enemy](center = tick.dt, radius = tick.dt)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
+    CHECK(code.find("__dx * __dx + __dy * __dy") != std::string::npos);
+    CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search",
+          "[codegen-entt][query][spatial]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kFlatQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let hit = query.raycast[Wall](origin = tick.dt, dir = tick.dt, max_dist = tick.dt)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<WorldTransform, Wall>()") != std::string::npos);
+    CHECK(code.find("__proj") != std::string::npos);
+    CHECK(code.find("__best{entt::null}") != std::string::npos);
+}
+
+static const char* const kVolumeQueryPreamble =
+    "use std.physics.volume.query as query\n"
+    "pub event tick:\n"
+    "    dt: float\n"
+    "trait WorldTransform:\n"
+    "    var position: vec3\n"
+    "trait Enemy:\n"
+    "    var hp: int\n"
+    "trait Pickup\n";
+
+TEST_CASE("Codegen EnTT: volume query.nearest lowers to 3D distance search",
+          "[codegen-entt][query][spatial][3d]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kVolumeQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let e = query.nearest[Enemy](from = tick.dt)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
+    CHECK(code.find("__dz = __wt.position.z") != std::string::npos);
+    CHECK(code.find("__best{entt::null}") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search",
+          "[codegen-entt][query][spatial][3d]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string(kVolumeQueryPreamble) +
+            "system S:\n"
+            "    on tick:\n"
+            "        let hits = query.overlap_sphere[Enemy](center = tick.dt, radius = tick.dt)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
+    CHECK(code.find("__dz = __wt.position.z - (") != std::string::npos);
+    CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

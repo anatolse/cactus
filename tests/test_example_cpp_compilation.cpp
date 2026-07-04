@@ -172,6 +172,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_EDITOR_TEST_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_EDITOR_TEST_TARGET,
         },
+        ExampleCase{
+            .name           = "split-screen",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_SPLIT_SCREEN_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_SPLIT_SCREEN_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_SPLIT_SCREEN_TARGET,
+        },
     };
 }
 

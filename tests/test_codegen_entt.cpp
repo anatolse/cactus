@@ -1638,4 +1638,147 @@ TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
     //  which are tested in the actual editor-test.cactus example via test_example_cpp_compilation)
 }
 
+TEST_CASE("Codegen EnTT: std.camera.viewport emits viewport render loop and no camera-sync block",
+          "[codegen-entt][camera][viewport]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.camera.viewport\n"
+        "use std.camera.flat\n"
+        "trait Viewport:\n"
+        "    var x: float\n"
+        "    var y: float\n"
+        "    var width: float\n"
+        "    var height: float\n"
+        "    var depth: int\n"
+        "    var clear: bool\n"
+        "    var clear_color: color\n"
+        "    var active: bool\n"
+        "trait Camera:\n"
+        "    var zoom: float\n"
+        "    var offset: vec2\n"
+        "    var rotation: float\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Viewport loop is in generated_render_project
+    CHECK(code.find("registry.view<Viewport>()") != std::string::npos);
+    CHECK(code.find("BeginScissorMode") != std::string::npos);
+    CHECK(code.find("EndScissorMode") != std::string::npos);
+    CHECK(code.find("std::ranges::sort") != std::string::npos);
+    CHECK(code.find("__vp.active") != std::string::npos);
+    CHECK(code.find("__vp.depth") != std::string::npos);
+    CHECK(code.find("if (__vp.clear) { ClearBackground") != std::string::npos);
+
+    // 2D camera set per viewport via translate helper
+    CHECK(code.find("__translate_camera_2d") != std::string::npos);
+    CHECK(code.find("set_active_camera_2d") != std::string::npos);
+
+    // No legacy camera-sync block in generated_update_project
+    CHECK(code.find("__cam.active") == std::string::npos);
+    CHECK(code.find("registry.view<Camera>()") == std::string::npos);
+
+    // #include <algorithm> is present for std::sort
+    CHECK(code.find("#include <algorithm>") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: viewport loop sorts by depth (lower depth first)",
+          "[codegen-entt][camera][viewport]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.camera.viewport\n"
+        "trait Viewport:\n"
+        "    var x: float\n"
+        "    var y: float\n"
+        "    var width: float\n"
+        "    var height: float\n"
+        "    var depth: int\n"
+        "    var clear: bool\n"
+        "    var clear_color: color\n"
+        "    var active: bool\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Depth-ordered collection and sort
+    CHECK(code.find("std::vector<std::pair<int,entt::entity>> __vps") != std::string::npos);
+    CHECK(code.find("__vps.emplace_back(__vp.depth, __vp_e)") != std::string::npos);
+    CHECK(code.find("std::ranges::sort(__vps)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths",
+          "[codegen-entt][camera][viewport]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.camera.viewport\n"
+        "trait Viewport:\n"
+        "    var x: float\n"
+        "    var y: float\n"
+        "    var width: float\n"
+        "    var height: float\n"
+        "    var depth: int\n"
+        "    var clear: bool\n"
+        "    var clear_color: color\n"
+        "    var active: bool\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // clear path: conditional ClearBackground per viewport
+    CHECK(code.find("if (__vp.clear) { ClearBackground(__vp.clear_color); }") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: viewport loop emits scissor for each viewport (split-screen)",
+          "[codegen-entt][camera][viewport]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.camera.viewport\n"
+        "use std.camera.flat\n"
+        "trait Viewport:\n"
+        "    var x: float\n"
+        "    var y: float\n"
+        "    var width: float\n"
+        "    var height: float\n"
+        "    var depth: int\n"
+        "    var clear: bool\n"
+        "    var clear_color: color\n"
+        "    var active: bool\n"
+        "trait Camera:\n"
+        "    var zoom: float\n"
+        "    var offset: vec2\n"
+        "    var rotation: float\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Each viewport iteration sets scissor region based on normalized rect
+    CHECK(code.find("BeginScissorMode(\n"
+                    "                static_cast<int>(__vp.x * static_cast<float>(__sw))") != std::string::npos);
+    CHECK(code.find("static_cast<int>(__vp.width * static_cast<float>(__sw))") != std::string::npos);
+    CHECK(code.find("static_cast<int>(__vp.height * static_cast<float>(__sh))") != std::string::npos);
+
+    // Per-viewport camera is set with the entity's Camera component
+    CHECK(code.find("registry.all_of<Camera>(__vp_ent)") != std::string::npos);
+    CHECK(code.find("__translate_camera_2d(__cam, __sw, __sh)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: Camera trait no longer has active field after multi-viewport change",
+          "[codegen-entt][camera][viewport]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.camera.flat\n"
+        "trait Camera:\n"
+        "    var zoom: float\n"
+        "    var offset: vec2\n"
+        "    var rotation: float\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Camera struct without active field — no camera-sync block is emitted
+    CHECK(code.find("__cam.active") == std::string::npos);
+    // Camera struct is still generated
+    CHECK(code.find("struct Camera") != std::string::npos);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

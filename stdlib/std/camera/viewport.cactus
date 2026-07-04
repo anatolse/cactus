@@ -1,0 +1,19 @@
+module std.camera.viewport
+
+# ── Viewport Trait ────────────────────────────────────────────────────────────
+
+# Normalized screen-space render region.
+# x, y, width, height: 0.0–1.0 rect (resolution-independent)
+# depth:  draw order — lower depth is drawn first (underneath)
+# clear:  fill viewport region before rendering its contents
+# clear_color: color to fill when clear = true
+# active: when false, this viewport is skipped each frame
+pub trait Viewport:
+    var x: float = 0.0
+    var y: float = 0.0
+    var width: float = 1.0
+    var height: float = 1.0
+    var depth: int = 0
+    var clear: bool = true
+    var clear_color: color = #000000FF
+    var active: bool = true

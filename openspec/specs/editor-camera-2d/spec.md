@@ -1,5 +1,5 @@
 ## Purpose
-Define the runtime active camera state API for the 2D editor, including frame-local camera state management, codegen-emitted camera-sync blocks, and symmetric 3D camera stubs.
+Define the runtime active camera state API for the 2D editor, including frame-local camera state management and symmetric 3D camera stubs. Active-camera driving has moved to the per-viewport render loop in `generated_render_project` (see `stdlib-viewport`).
 
 ## Requirements
 
@@ -10,24 +10,9 @@ The backend runtime SHALL expose `set_active_camera_2d(Camera2D)` and `get_activ
 - **WHEN** no Camera entity exists in the registry and no code calls `set_active_camera_2d`
 - **THEN** `get_active_camera_2d()` returns a Camera2D with zoom=1.0, offset=(0,0), target=(0,0), rotation=0
 
-#### Scenario: Camera sync from entity
-- **WHEN** a Camera entity with `active=true`, `zoom=64.0`, and `offset=vec2(0,0)` exists
-- **THEN** after the camera-sync codegen block runs, `get_active_camera_2d()` returns a Camera2D with zoom=64.0
-
-#### Scenario: Only the first active camera is used
-- **WHEN** multiple Camera entities exist with `active=true`
-- **THEN** `set_active_camera_2d` is called exactly once (for the first active camera found)
-
-### Requirement: Codegen emits camera-sync block at top of generated_update_project
-When a module imports `std.camera.flat`, the codegen SHALL emit a camera-sync block as the first statement of `generated_update_project`. The block SHALL iterate `registry.view<Camera>()` and call `set_active_camera_2d` with a `Camera2D` derived from the first entity where `Camera.active == true`. The Camera2D SHALL set `target` from `Camera.offset`, `zoom` from `Camera.zoom`, `rotation` from `Camera.rotation` (converted degrees to radians), and `offset` to `{screenWidth/2, screenHeight/2}` (world origin maps to screen center).
-
-#### Scenario: Camera sync runs before editor selection
-- **WHEN** a module uses both `std.camera.flat` and `std.editor`
-- **THEN** the camera-sync block appears before any `editor_*_input` call in `generated_update_project`
-
-#### Scenario: No camera sync emitted without import
-- **WHEN** a module does not import `std.camera.flat`
-- **THEN** no camera-sync block is emitted and the active camera remains at its identity default
+#### Scenario: Camera set by viewport loop
+- **WHEN** a Viewport entity with a `std.camera.flat.Camera` (zoom=64.0) is active
+- **THEN** the viewport render loop calls `set_active_camera_2d` and `get_active_camera_2d()` returns Camera2D with zoom=64.0 within that viewport's render pass
 
 ### Requirement: Runtime provides symmetric 3D camera state stubs
 The runtime SHALL expose `set_active_camera_3d(Camera3D)` and `get_active_camera_3d()` functions for future 3D editor symmetry. The default Camera3D SHALL match the hardcoded camera previously used in `flush_mesh_queue` (position=(6,6,6), target=(0,0,0), up=(0,1,0), fovy=45). `flush_mesh_queue` SHALL use `get_active_camera_3d()` instead of a hardcoded literal.

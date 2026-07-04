@@ -6,12 +6,11 @@ module std.camera.flat
 # zoom:     magnification factor (1.0 = normal, 2.0 = 2x zoom in)
 # offset:   camera origin offset in world units (controls what is centered)
 # rotation: camera rotation in radians
-# active:   only the active camera is used for rendering
+# Active camera selection is governed by std.camera.viewport.Viewport.
 pub trait Camera:
     var zoom: float = 1.0
     var offset: vec2 = vec2(0.0, 0.0)
     var rotation: float = 0.0
-    var active: bool = true
 
 # Smooth-follow camera that tracks a target entity's position.
 # follow_entity: entity_id of the entity to follow

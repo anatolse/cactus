@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: std.camera.flat provides 2D camera traits
 The `std.camera.flat` module SHALL provide a `Camera` trait for 2D orthographic rendering. A `FollowCamera` trait is provided for camera-entity tracking; the associated `FollowCameraSystem` updates the `Camera` offset on `late_tick`. Active camera selection is governed by `std.camera.viewport.Viewport` — the `active` field has been removed from `Camera`.
@@ -32,9 +32,12 @@ The `std.camera.volume` module SHALL provide a `Camera` trait for 3D perspective
 
 ---
 
-### Requirement: Camera systems are stubbed pending entity query mechanism
-The active camera systems (`FollowCameraSystem`, `FirstPersonCameraSystem`, `ThirdPersonCameraSystem`) SHALL be declared in the module files but their implementation bodies SHALL be stubbed with a `# TODO: requires entity query` comment. The trait definitions SHALL be complete and usable. Users may implement camera logic manually in the interim using the camera traits directly.
+## REMOVED Requirements
 
-#### Scenario: Camera traits usable before systems are implemented
-- **WHEN** a user imports `std.camera.volume` and applies `Camera` and `FirstPersonCamera` to an entity
-- **THEN** the compiler accepts the unit and filter clauses referencing these traits, even if the active systems are stubs
+### Requirement: Only one active camera is used
+**Reason**: The `active: bool` field on `Camera` is removed. Multiple viewports are now supported through `std.camera.viewport.Viewport`. Each Viewport entity selects its own camera by composition; there is no single "active" boolean anymore.
+**Migration**: Remove `Camera.active` field access from user code. Add a `Viewport` trait to any entity that should render. `Viewport.active` controls whether a viewport renders each frame.
+
+### Requirement: std.camera.flat.Camera entity drives the runtime active camera
+**Reason**: Active-camera driving is now handled by the codegen-emitted viewport render loop (see `stdlib-viewport`). The camera-sync block in `generated_update_project` is only emitted on the legacy path (no `std.camera.viewport` import).
+**Migration**: Import `std.camera.viewport` and add `Viewport` to camera entities. The viewport loop handles `set_active_camera_2d` automatically.

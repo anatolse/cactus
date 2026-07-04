@@ -42,6 +42,34 @@ bool module_uses_camera_flat(const DecoratedProgram& program) {
     return false;
 }
 
+bool module_uses_camera_viewport(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
+            if (use->module_name == "std.camera.viewport") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool module_uses_camera_volume(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* use = std::get_if<UseNode>(&decl)) {
+            if (use->module_name == "std.camera.volume") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool module_uses_editor(const DecoratedProgram& program) {
     if (program.ast == nullptr) {
         return false;
@@ -965,11 +993,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // raylib defines `typedef Camera3D Camera;` which conflicts with the Camera DSL
     // component struct. Redirect the token so struct Camera becomes struct CactusCamera.
     // Use Camera3D directly for any raylib 3D-camera uses.
-    if (module_uses_camera_flat(program)) {
+    if (module_uses_camera_flat(program) || module_uses_camera_volume(program)) {
         out << "// Suppress raylib Camera typedef; DSL Camera struct takes this name\n";
         out << "#define Camera CactusCamera\n";
     }
     out << "\n";
+    if (module_uses_camera_viewport(program)) {
+        out << "#include <algorithm>\n";
+    }
     out << "#include <array>\n";
     out << "#include <cmath>\n";
     out << "#include <cstdint>\n";
@@ -1446,26 +1477,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << "    (void)dt;\n\n";
 
-    // Camera-sync block: derive active Camera2D from the first active Camera entity
-    if (module_uses_camera_flat(program)) {
-        out << "    {\n";
-        out << "        auto __cam_view = registry.view<Camera>();\n";
-        out << "        for (auto __cam_ent : __cam_view) {\n";
-        out << "            const auto& __cam = __cam_view.get<Camera>(__cam_ent);\n";
-        out << "            if (__cam.active) {\n";
-        out << "                Camera2D __cam2d{};\n";
-        out << "                __cam2d.target   = __cam.offset;\n";
-        out << "                __cam2d.zoom     = __cam.zoom;\n";
-        out << "                __cam2d.rotation = __cam.rotation * (180.0F / 3.14159265F);\n";
-        out << "                __cam2d.offset   = {.x = static_cast<float>(GetScreenWidth()) * 0.5F,\n";
-        out << "                                    .y = static_cast<float>(GetScreenHeight()) * 0.5F};\n";
-        out << "                cactus::runtime::entt_backend::set_active_camera_2d(__cam2d);\n";
-        out << "                break;\n";
-        out << "            }\n";
-        out << "        }\n";
-        out << "    }\n\n";
-    }
-
     // Call system input handlers
     if (program.ast != nullptr) {
         bool emits_input_handler = false;
@@ -1526,19 +1537,106 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    dispatcher.update();\n";
     out << "}\n\n";
 
+    // ── translate_camera helpers (emitted when viewport loop is active) ──────
+    if (module_uses_camera_viewport(program) && module_uses_camera_flat(program)) {
+        out << "namespace {\n";
+        out << "Camera2D __translate_camera_2d(const Camera& cam, int sw, int sh) noexcept {\n";
+        out << "    Camera2D cam2d{};\n";
+        out << "    cam2d.target   = cam.offset;\n";
+        out << "    cam2d.zoom     = cam.zoom;\n";
+        out << "    cam2d.rotation = cam.rotation * (180.0F / 3.14159265F);\n";
+        out << "    cam2d.offset   = {.x = static_cast<float>(sw) * 0.5F,\n";
+        out << "                      .y = static_cast<float>(sh) * 0.5F};\n";
+        out << "    return cam2d;\n";
+        out << "}\n";
+        out << "}  // namespace\n\n";
+    }
+    if (module_uses_camera_viewport(program) && module_uses_camera_volume(program) &&
+        trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3)) {
+        out << "namespace {\n";
+        out << "Camera3D __translate_camera_3d(entt::entity entity, const Camera& cam, entt::registry& registry) noexcept {\n";
+        out << "    Camera3D cam3d{};\n";
+        out << "    cam3d.fovy       = cam.fov_y;\n";
+        out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
+        out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
+        out << "    if (registry.all_of<WorldTransform>(entity)) {\n";
+        out << "        const auto& xform = registry.get<WorldTransform>(entity);\n";
+        out << "        cam3d.position = xform.position;\n";
+        out << "        const auto& q  = xform.rotation;\n";
+        out << "        cam3d.target   = {.x = xform.position.x + (-2.0F*(q.x*q.z + q.w*q.y)),\n";
+        out << "                          .y = xform.position.y + ( 2.0F*(q.w*q.x - q.y*q.z)),\n";
+        out << "                          .z = xform.position.z + (-(1.0F - 2.0F*(q.x*q.x + q.y*q.y)))};\n";
+        out << "    }\n";
+        out << "    return cam3d;\n";
+        out << "}\n";
+        out << "}  // namespace\n\n";
+    }
+
     out << "void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher) {\n";
-    out << "    (void)registry;\n";
     out << "    (void)dispatcher;\n";
+    if (!module_uses_camera_viewport(program)) {
+        out << "    (void)registry;\n";
+    }
     out << "    cactus::runtime::entt_backend::begin_render_frame();\n";
-    if (program.ast != nullptr) {
-        for (auto& decl : program.ast->declarations) {
-            if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-                if (is_render_phase_extern(*sys, program)) {
-                    out << "    " << system_function_name(sys->name, "tick") << "(registry);\n";
+
+    if (module_uses_camera_viewport(program)) {
+        out << "    {\n";
+        out << "        std::vector<std::pair<int,entt::entity>> __vps;\n";
+        out << "        for (const auto& [__vp_e, __vp] : registry.view<Viewport>().each()) {\n";
+        out << "            if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
+        out << "        }\n";
+        out << "        std::ranges::sort(__vps);\n";
+        out << "        for (auto& [__depth, __vp_ent] : __vps) {\n";
+        out << "            (void)__depth;\n";
+        out << "            const auto& __vp = registry.get<Viewport>(__vp_ent);\n";
+        out << "            const int __sw = GetScreenWidth();\n";
+        out << "            const int __sh = GetScreenHeight();\n";
+        out << "            BeginScissorMode(\n";
+        out << "                static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
+        out << "                static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
+        out << "                static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
+        out << "                static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
+        out << "            if (__vp.clear) { ClearBackground(__vp.clear_color); }\n";
+        if (module_uses_camera_flat(program)) {
+            out << "            if (registry.all_of<Camera>(__vp_ent)) {\n";
+            out << "                const auto& __cam = registry.get<Camera>(__vp_ent);\n";
+            out << "                cactus::runtime::entt_backend::set_active_camera_2d(\n";
+            out << "                    __translate_camera_2d(__cam, __sw, __sh));\n";
+            out << "            }\n";
+        }
+        if (module_uses_camera_volume(program) &&
+            trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3)) {
+            const char* kw = module_uses_camera_flat(program) ? "else if" : "if";
+            out << "            " << kw << " (registry.all_of<Camera>(__vp_ent)) {\n";
+            out << "                const auto& __cam = registry.get<Camera>(__vp_ent);\n";
+            out << "                cactus::runtime::entt_backend::set_active_camera_3d(\n";
+            out << "                    __translate_camera_3d(__vp_ent, __cam, registry));\n";
+            out << "            }\n";
+        }
+        if (program.ast != nullptr) {
+            for (auto& decl : program.ast->declarations) {
+                if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+                    if (is_render_phase_extern(*sys, program)) {
+                        out << "            " << system_function_name(sys->name, "tick") << "(registry);\n";
+                    }
+                }
+            }
+        }
+        out << "            EndScissorMode();\n";
+        out << "        }\n";
+        out << "    }\n";
+    } else {
+        if (program.ast != nullptr) {
+            for (auto& decl : program.ast->declarations) {
+                if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+                    if (is_render_phase_extern(*sys, program)) {
+                        out << "    " << system_function_name(sys->name, "tick") << "(registry);\n";
+                    }
                 }
             }
         }
     }
+
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
 
     // Edit-mode overlay drawn after end_render_frame (screen-space, no camera transform)

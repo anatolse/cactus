@@ -3,6 +3,7 @@ module editor_test
 use std.transform.flat
 use std.physics.flat
 use std.camera.flat
+use std.camera.viewport
 use std.render.shapes
 use std.editor
 
@@ -36,7 +37,7 @@ pub entity EditorCamera:
     Camera:
         zoom = 64.0
         offset = vec2(0.0, 0.0)
-        active = true
+    Viewport
 
 # ── Initial Scene Entities ────────────────────────────────────────────────────
 

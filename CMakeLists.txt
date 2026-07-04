@@ -232,6 +232,7 @@ set(CACTUS_SHOP_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/cactus-shop.gene
 set(WAVING_LABEL_2D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-2d.generated.cpp")
 set(WAVING_LABEL_3D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/waving-label-3d.generated.cpp")
 set(EDITOR_TEST_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/editor-test.generated.cpp")
+set(SPLIT_SCREEN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/split-screen.generated.cpp")
 
 cactus_add_example(example_blue_square_generated
     SOURCE "examples/blue-square/square.cactus"
@@ -288,6 +289,13 @@ cactus_add_example(example_editor_test_generated
     SOURCE "examples/editor-test/editor-test.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${EDITOR_TEST_GENERATED_CPP}"
+    EXCLUDE_FROM_ALL
+)
+
+cactus_add_example(example_split_screen_generated
+    SOURCE "examples/split-screen/split_screen.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${SPLIT_SCREEN_GENERATED_CPP}"
     EXCLUDE_FROM_ALL
 )
 

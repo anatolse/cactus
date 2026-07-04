@@ -812,7 +812,7 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         return "[&]{ auto __v = " + view + "; return __v.begin() != __v.end(); }()";
     }
     if (func_name == "count") {
-        return "[&]{ int __n = 0; for ([[maybe_unused]] auto __e : " + view + ") ++__n; return __n; }()";
+        return "[&]{ return static_cast<int>(std::ranges::distance(" + view + ")); }()";
     }
     if (func_name == "first") {
         return "[&]{ auto __v = " + view +
@@ -837,48 +837,52 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
     const std::string view = "registry.view" + build_view_suffix(qcall.filters, "WorldTransform");
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+        return "[&]{ const auto __from = (" + from + "); "
+               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __dx = __wt.position.x - (" + from + ").x, "
-               "__dy = __wt.position.y - (" + from + ").y; "
+               "float __dx = __wt.position.x - __from.x, "
+               "__dy = __wt.position.y - __from.y; "
                "float __d = __dx * __dx + __dy * __dy; "
                "if (__d < __best_d) { __best_d = __d; __best = __e; } } return __best; }()";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "[&]{ std::vector<entt::entity> __r; "
+        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size + "); "
+               "std::vector<entt::entity> __r; "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __hx = (" + size + ").x * 0.5F, __hy = (" + size + ").y * 0.5F; "
-               "if (std::abs(__wt.position.x - (" + center + ").x) <= __hx && "
-               "std::abs(__wt.position.y - (" + center + ").y) <= __hy) "
+               "float __hx = __sz.x * 0.5F, __hy = __sz.y * 0.5F; "
+               "if (std::abs(__wt.position.x - __ct.x) <= __hx && "
+               "std::abs(__wt.position.y - __ct.y) <= __hy) "
                "__r.push_back(__e); } return __r; }()";
     }
     if (func_name == "overlap_circle") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "[&]{ std::vector<entt::entity> __r; "
+        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius + "); "
+               "std::vector<entt::entity> __r; "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __dx = __wt.position.x - (" + center + ").x, "
-               "__dy = __wt.position.y - (" + center + ").y; "
-               "if ((__dx * __dx + __dy * __dy) <= (" + radius + ") * (" + radius + ")) "
+               "float __dx = __wt.position.x - __ct.x, "
+               "__dy = __wt.position.y - __ct.y; "
+               "if ((__dx * __dx + __dy * __dy) <= __rad * __rad) "
                "__r.push_back(__e); } return __r; }()";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" + max_dist + "); "
+               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __dx = __wt.position.x - (" + origin + ").x, "
-               "__dy = __wt.position.y - (" + origin + ").y; "
-               "float __proj = __dx * (" + dir + ").x + __dy * (" + dir + ").y; "
-               "if (__proj >= 0.0F && __proj <= (" + max_dist + ")) { "
-               "float __perp = __dx * (" + dir + ").y - __dy * (" + dir + ").x; "
+               "float __dx = __wt.position.x - __org.x, "
+               "__dy = __wt.position.y - __org.y; "
+               "float __proj = __dx * __dir.x + __dy * __dir.y; "
+               "if (__proj >= 0.0F && __proj <= __md) { "
+               "float __perp = __dx * __dir.y - __dy * __dir.x; "
                "if (std::abs(__perp) < 0.5F && __proj < __best_d) { __best_d = __proj; __best = __e; } } } "
                "return __best; }()";
     }
@@ -891,54 +895,58 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
     const std::string view = "registry.view" + build_view_suffix(qcall.filters, "WorldTransform");
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+        return "[&]{ const auto __from = (" + from + "); "
+               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __dx = __wt.position.x - (" + from + ").x, "
-               "__dy = __wt.position.y - (" + from + ").y, "
-               "__dz = __wt.position.z - (" + from + ").z; "
+               "float __dx = __wt.position.x - __from.x, "
+               "__dy = __wt.position.y - __from.y, "
+               "__dz = __wt.position.z - __from.z; "
                "float __d = __dx * __dx + __dy * __dy + __dz * __dz; "
                "if (__d < __best_d) { __best_d = __d; __best = __e; } } return __best; }()";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "[&]{ std::vector<entt::entity> __r; "
+        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size + "); "
+               "std::vector<entt::entity> __r; "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __hx = (" + size + ").x * 0.5F, __hy = (" + size + ").y * 0.5F, __hz = (" + size + ").z * 0.5F; "
-               "if (std::abs(__wt.position.x - (" + center + ").x) <= __hx && "
-               "std::abs(__wt.position.y - (" + center + ").y) <= __hy && "
-               "std::abs(__wt.position.z - (" + center + ").z) <= __hz) "
+               "float __hx = __sz.x * 0.5F, __hy = __sz.y * 0.5F, __hz = __sz.z * 0.5F; "
+               "if (std::abs(__wt.position.x - __ct.x) <= __hx && "
+               "std::abs(__wt.position.y - __ct.y) <= __hy && "
+               "std::abs(__wt.position.z - __ct.z) <= __hz) "
                "__r.push_back(__e); } return __r; }()";
     }
     if (func_name == "overlap_sphere") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "[&]{ std::vector<entt::entity> __r; "
+        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius + "); "
+               "std::vector<entt::entity> __r; "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __dx = __wt.position.x - (" + center + ").x, "
-               "__dy = __wt.position.y - (" + center + ").y, "
-               "__dz = __wt.position.z - (" + center + ").z; "
-               "if ((__dx * __dx + __dy * __dy + __dz * __dz) <= (" + radius + ") * (" + radius + ")) "
+               "float __dx = __wt.position.x - __ct.x, "
+               "__dy = __wt.position.y - __ct.y, "
+               "__dz = __wt.position.z - __ct.z; "
+               "if ((__dx * __dx + __dy * __dy + __dz * __dz) <= __rad * __rad) "
                "__r.push_back(__e); } return __r; }()";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "[&]{ entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
+        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" + max_dist + "); "
+               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
                "for (auto __e : " + view + ") { "
                "const auto& __wt = registry.get<WorldTransform>(__e); "
-               "float __dx = __wt.position.x - (" + origin + ").x, "
-               "__dy = __wt.position.y - (" + origin + ").y, "
-               "__dz = __wt.position.z - (" + origin + ").z; "
-               "float __proj = __dx * (" + dir + ").x + __dy * (" + dir + ").y + __dz * (" + dir + ").z; "
-               "if (__proj >= 0.0F && __proj <= (" + max_dist + ")) { "
-               "float __perp_x = __dy * (" + dir + ").z - __dz * (" + dir + ").y, "
-               "__perp_y = __dz * (" + dir + ").x - __dx * (" + dir + ").z, "
-               "__perp_z = __dx * (" + dir + ").y - __dy * (" + dir + ").x; "
+               "float __dx = __wt.position.x - __org.x, "
+               "__dy = __wt.position.y - __org.y, "
+               "__dz = __wt.position.z - __org.z; "
+               "float __proj = __dx * __dir.x + __dy * __dir.y + __dz * __dir.z; "
+               "if (__proj >= 0.0F && __proj <= __md) { "
+               "float __perp_x = __dy * __dir.z - __dz * __dir.y, "
+               "__perp_y = __dz * __dir.x - __dx * __dir.z, "
+               "__perp_z = __dx * __dir.y - __dy * __dir.x; "
                "if ((__perp_x * __perp_x + __perp_y * __perp_y + __perp_z * __perp_z) < 0.25F "
                "&& __proj < __best_d) { __best_d = __proj; __best = __e; } } } return __best; }()";
     }

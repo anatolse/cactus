@@ -165,8 +165,9 @@ TEST_CASE("Runtime stdlib: backend hierarchy runtime sources enforce pmr allocat
     REQUIRE_FALSE(entt_runtime.empty());
 
     CHECK(entt_runtime.find("std::pmr::monotonic_buffer_resource scratch_resource") != std::string::npos);
-    CHECK(entt_runtime.find("std::pmr::vector<entt::entity> active_entities") != std::string::npos);
+    CHECK(entt_runtime.find("std::pmr::unordered_set<entt::entity> active_entities") != std::string::npos);
     CHECK(entt_runtime.find("std::pmr::unsynchronized_pool_resource destroying_resource") != std::string::npos);
+    CHECK(entt_runtime.find("std::pmr::unordered_set<entt::entity> destroying_entities") != std::string::npos);
     CHECK(entt_runtime.find("std::pmr::vector<entt::entity> child_entities") != std::string::npos);
 }
 

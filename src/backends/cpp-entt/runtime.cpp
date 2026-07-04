@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace cactus::runtime::entt_backend {
 
@@ -702,6 +703,7 @@ void flush_text_3d_queue() noexcept {
 
     Mesh& plane = text_plane_mesh();
 
+    Material mat = LoadMaterialDefault();
     BeginMode3D(camera);
     for (const auto& sub : text_3d_queue()) {
         if (sub.text.empty()) {
@@ -711,7 +713,6 @@ void flush_text_3d_queue() noexcept {
         if (it == text_label_3d_cache().end() || !it->second.loaded) {
             continue;
         }
-        Material mat                           = LoadMaterialDefault();
         mat.maps[MATERIAL_MAP_DIFFUSE].texture = it->second.rt.texture;
 
         const Matrix xform = mesh_transform_matrix(MeshSubmission{
@@ -720,12 +721,10 @@ void flush_text_3d_queue() noexcept {
             .scale    = sub.scale,
         });
         DrawMesh(plane, mat, xform);
-
-        // Detach texture before unloading the transient material to avoid freeing the cached RT
         mat.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{};
-        UnloadMaterial(mat);
     }
     EndMode3D();
+    UnloadMaterial(mat);
 }
 
 void flush_sprite_queue() noexcept {
@@ -985,16 +984,15 @@ void propagate_hierarchy(entt::registry& registry,
                          const std::function<void(entt::entity)>& copy_local,
                          const std::function<void(entt::entity, entt::entity)>& accumulate_from_parent) {
     std::pmr::monotonic_buffer_resource scratch_resource;
-    std::pmr::vector<entt::entity> active_entities{&scratch_resource};
+    std::pmr::unordered_set<entt::entity> active_entities{&scratch_resource};
 
     std::function<void(entt::entity)> resolve;
     resolve = [&](entt::entity entity) -> void {
-        const bool already_active = std::ranges::find(active_entities, entity) != active_entities.end();
-        if (!registry.valid(entity) || already_active || !has_local_world(entity)) {
+        if (!registry.valid(entity) || active_entities.contains(entity) || !has_local_world(entity)) {
             return;
         }
 
-        active_entities.push_back(entity);
+        active_entities.insert(entity);
         bool copied_local         = false;
         const entt::entity parent = get_parent(entity);
         if (parent != entt::null && registry.valid(parent) && has_local_world(parent)) {
@@ -1007,9 +1005,7 @@ void propagate_hierarchy(entt::registry& registry,
         if (!copied_local) {
             copy_local(entity);
         }
-        if (!active_entities.empty()) {
-            active_entities.pop_back();
-        }
+        active_entities.erase(entity);
     };
 
     auto& storage = registry.storage<entt::entity>();
@@ -1023,13 +1019,12 @@ void destroy_entity_recursive(
     entt::entity entity,
     const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children) {
     static std::pmr::unsynchronized_pool_resource destroying_resource;
-    static std::pmr::vector<entt::entity> destroying_entities{&destroying_resource};
-    const bool already_destroying = std::ranges::find(destroying_entities, entity) != destroying_entities.end();
-    if (!registry.valid(entity) || already_destroying) {
+    static std::pmr::unordered_set<entt::entity> destroying_entities{&destroying_resource};
+    if (!registry.valid(entity) || destroying_entities.contains(entity)) {
         return;
     }
 
-    destroying_entities.push_back(entity);
+    destroying_entities.insert(entity);
     std::pmr::monotonic_buffer_resource child_resource;
     std::pmr::vector<entt::entity> child_entities{&child_resource};
     visit_children(entity, [&](entt::entity child) { child_entities.push_back(child); });
@@ -1039,9 +1034,7 @@ void destroy_entity_recursive(
     if (registry.valid(entity)) {
         registry.destroy(entity);
     }
-    if (!destroying_entities.empty()) {
-        destroying_entities.pop_back();
-    }
+    destroying_entities.erase(entity);
 }
 
 // ── Active camera state ───────────────────────────────────────────────────────

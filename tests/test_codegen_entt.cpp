@@ -1808,8 +1808,7 @@ TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][q
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Enemy>(entt::exclude<Dead>)") != std::string::npos);
-    CHECK(code.find("++__n") != std::string::npos);
-    CHECK(code.find("int __n = 0") != std::string::npos);
+    CHECK(code.find("std::ranges::distance") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[codegen-entt][query]") {
@@ -1998,7 +1997,7 @@ TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search"
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("__dz = __wt.position.z - (") != std::string::npos);
+    CHECK(code.find("__dz = __wt.position.z - __ct.z") != std::string::npos);
     CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
 }
 

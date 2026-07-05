@@ -278,7 +278,7 @@ std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
         if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
             if (ident->name == "Key") {
-                return "KEY_" + upper_copy(member->member);
+                return "KEY_" + upper_copy(snake_case(member->member));
             }
         }
     }

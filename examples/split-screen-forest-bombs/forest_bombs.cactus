@@ -34,24 +34,24 @@ const:
     START_BOMBS    = 8
     THROW_COOLDOWN = 0.4
 
-    # Authored projectile launch (up + forward) and gravity for the bomb arc.
-    # Cameras look down the -Z axis, so bombs fly toward -Z (into the forest).
+    # Authored projectile launch and gravity for the bomb arc.
     THROW_UP       = 6.0
-    THROW_FORWARD  = -9.0
+    THROW_SPEED    = 9.0
     BOMB_GRAVITY   = 12.0
     BOMB_RADIUS    = 3.5
 
-    # The camera is a separate chase entity so it does not sit inside the
-    # player mesh. It moves with the matching player input and looks down -Z.
+    # Player locomotion and first-person camera.
     PLAYER_BODY_Y  = 0.6
-    CAMERA_HEIGHT  = 5.0
-    CAMERA_BACK    = 5.0
-    CAMERA_PITCH   = -0.35
+    EYE_HEIGHT     = 1.5
+    TURN_SPEED     = 2.5
+    FLY_SPEED      = 4.0
 
 # ── Assets (placeholder mesh/material handles) ────────────────────────────────
 # Task 1.3 — a shared unit box mesh plus one material per themed surface.
 
 asset BoxMesh:          mesh     = "models/box.mesh"
+asset CapsuleMesh:      mesh     = "models/capsule.mesh"
+asset SphereMesh:       mesh     = "models/sphere_lowpoly.mesh"
 asset GroundMaterial:   material = "materials/ground_green.mat"
 asset PlayerMaterial:   material = "materials/player_blue.mat"
 asset BombMaterial:     material = "materials/bomb_orange.mat"
@@ -73,6 +73,10 @@ input P1MoveZ: axis
 input P1Throw: button
     key = Key.Space
 
+input P1FlyAxis: axis
+    negative = Key.R
+    positive = Key.F
+
 # Player 2: arrow keys to move, Enter to throw.
 input P2MoveX: axis
     negative = Key.Left
@@ -85,6 +89,10 @@ input P2MoveZ: axis
 input P2Throw: button
     key = Key.Enter
 
+input P2FlyAxis: axis
+    negative = Key.PageUp
+    positive = Key.PageDown
+
 # ── Gameplay traits ───────────────────────────────────────────────────────────
 
 # Task 1.4 — player traits: identity markers, movement input, bomb inventory,
@@ -96,6 +104,7 @@ trait PlayerInput:
     var move_x: float = 0.0
     var move_z: float = 0.0
     var throw_pressed: bool = false
+    var fly: float = 0.0
 
 trait BombInventory:
     var bombs_left: int = 8
@@ -143,12 +152,12 @@ template BombTemplate:
         rotation = quat.identity()
         scale    = vec3(0.6, 0.6, 0.6)
     Renderer:
-        mesh        = BoxMesh
+        mesh        = SphereMesh
         material    = BombMaterial
         visible     = true
         cast_shadow = true
     Bomb:
-        velocity = vec3(0.0, THROW_UP, THROW_FORWARD)
+        velocity = vec3(0.0, THROW_UP, -THROW_SPEED)
         exploded = false
 
 # Tree instance parts. A tree is a brown trunk root plus a green crown box that
@@ -196,9 +205,9 @@ pub entity Player1:
     WorldTransform:
         position = vec3(-3.0, PLAYER_BODY_Y, 8.0)
         rotation = quat.identity()
-        scale    = vec3(0.8, 1.2, 0.8)
+        scale    = vec3(0.5, 0.5, 0.5)
     Renderer:
-        mesh        = BoxMesh
+        mesh        = CapsuleMesh
         material    = PlayerMaterial
         visible     = true
         cast_shadow = true
@@ -215,8 +224,8 @@ pub entity Player1:
 
 pub entity Player1Camera:
     WorldTransform:
-        position = vec3(-3.0, CAMERA_HEIGHT, 8.0 + CAMERA_BACK)
-        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), CAMERA_PITCH)
+        position = vec3(-3.0, PLAYER_BODY_Y + EYE_HEIGHT, 8.0)
+        rotation = quat.identity()
         scale    = vec3(1.0, 1.0, 1.0)
     Camera:
         fov_y = 60.0
@@ -239,9 +248,9 @@ pub entity Player2:
     WorldTransform:
         position = vec3(3.0, PLAYER_BODY_Y, 8.0)
         rotation = quat.identity()
-        scale    = vec3(0.8, 1.2, 0.8)
+        scale    = vec3(0.5, 0.5, 0.5)
     Renderer:
-        mesh        = BoxMesh
+        mesh        = CapsuleMesh
         material    = PlayerMaterial
         visible     = true
         cast_shadow = true
@@ -258,8 +267,8 @@ pub entity Player2:
 
 pub entity Player2Camera:
     WorldTransform:
-        position = vec3(3.0, CAMERA_HEIGHT, 8.0 + CAMERA_BACK)
-        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), CAMERA_PITCH)
+        position = vec3(3.0, PLAYER_BODY_Y + EYE_HEIGHT, 8.0)
+        rotation = quat.identity()
         scale    = vec3(1.0, 1.0, 1.0)
     Camera:
         fov_y = 60.0
@@ -443,6 +452,7 @@ system ReadPlayer1Input:
         move_x = input.axis(P1MoveX)
         move_z = input.axis(P1MoveZ)
         throw_pressed = input.down(P1Throw)
+        fly = input.axis(P1FlyAxis)
 
 system ReadPlayer2Input:
     filter:
@@ -453,6 +463,7 @@ system ReadPlayer2Input:
         move_x = input.axis(P2MoveX)
         move_z = input.axis(P2MoveZ)
         throw_pressed = input.down(P2Throw)
+        fly = input.axis(P2FlyAxis)
 
 # Task 3.3 — move both players on the X/Z ground plane. The camera follows for
 # free because each player entity owns its own viewport camera.
@@ -462,7 +473,9 @@ system PlayerMoveSystem:
         PlayerInput
 
     on tick:
-        position = vec3(position.x + move_x * PLAYER_SPEED * tick.dt, position.y, position.z + move_z * PLAYER_SPEED * tick.dt)
+        rotation = quat.multiply(rotation, quat.from_euler(0, -move_x * TURN_SPEED * tick.dt, 0))
+        let fwd = quat.forward(rotation)
+        position = vec3(position.x + fwd.x * move_z * PLAYER_SPEED * tick.dt, position.y + fly * FLY_SPEED * tick.dt, position.z + fwd.z * move_z * PLAYER_SPEED * tick.dt)
 
 # Task 3.2 — grow trees over time. Trunk and crown each scale from their own
 # growth data; slowdown stretches how long a tree takes to reach full size.
@@ -489,6 +502,7 @@ system ThrowSystem:
             throw_cooldown = throw_cooldown - tick.dt
 
         if throw_pressed and bombs_left > 0 and throw_cooldown <= 0.0:
+            let fwd = quat.forward(rotation)
             spawn BombTemplate:
                 WorldTransform:
                     position = vec3(position.x, position.y + 1.0, position.z)
@@ -496,7 +510,7 @@ system ThrowSystem:
                     scale    = vec3(0.6, 0.6, 0.6)
                 Bomb:
                     owner    = self
-                    velocity = vec3(0.0, THROW_UP, THROW_FORWARD)
+                    velocity = vec3(fwd.x * THROW_SPEED, THROW_UP, fwd.z * THROW_SPEED)
                     exploded = false
             bombs_left     = bombs_left - 1
             throw_cooldown = THROW_COOLDOWN

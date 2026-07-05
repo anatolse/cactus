@@ -132,3 +132,13 @@ Example-compilation integration coverage SHALL remain compatible with the regula
 - **WHEN** a new Cactus example is added to both regular example targets and curated compilation coverage
 - **THEN** maintainers can reuse the regular example target registration metadata instead of hand-writing another generated executable target solely in the test CMake file
 
+### Requirement: Split-screen forest bombs example is curated for cpp-entt compilation
+Automated example-compilation integration coverage SHALL include the split-screen forest bombs example as a named curated cpp-entt case.
+
+#### Scenario: Curated example list includes split-screen forest bombs
+- **WHEN** `ExampleCppCompilationTests` enumerates curated examples
+- **THEN** it includes a case named `split-screen-forest-bombs` with source `examples/split-screen-forest-bombs/forest_bombs.cactus` and backend `cpp-entt`
+
+#### Scenario: Split-screen forest bombs generated output is compiled
+- **WHEN** the curated example compilation test runs the `split-screen-forest-bombs` case
+- **THEN** it invokes the compiler for the example, verifies the generated C++ exists, builds the registered example target, and runs the standard formatting and tidy validation steps

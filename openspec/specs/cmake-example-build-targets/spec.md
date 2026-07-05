@@ -77,3 +77,18 @@ Registered example target names and generated output paths SHALL be stable and d
 #### Scenario: Developer can build a single example target
 - **WHEN** a developer invokes the selected build tool with a registered example target name
 - **THEN** that target generates the example C++ output if needed and compiles the example executable
+
+### Requirement: Split-screen forest bombs example target is registered
+The CMake build configuration SHALL register the split-screen forest bombs example through the reusable Cactus example target helper with stable generated output and target metadata.
+
+#### Scenario: CMake registers split-screen forest bombs target
+- **WHEN** CMake configures generated example targets
+- **THEN** it registers `example_split_screen_forest_bombs_generated` for `examples/split-screen-forest-bombs/forest_bombs.cactus` using the `cpp-entt` backend
+
+#### Scenario: Generated output path is stable
+- **WHEN** tests need to reference the split-screen forest bombs generated output
+- **THEN** CMake exposes a stable generated C++ path for the example under `${CACTUS_GENERATED_EXAMPLES_DIR}`
+
+#### Scenario: Integration tests receive example metadata
+- **WHEN** `test_example_cpp_compilation` is compiled
+- **THEN** its compile definitions include the split-screen forest bombs source path, generated C++ path, and registered example target name

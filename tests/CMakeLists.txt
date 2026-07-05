@@ -112,6 +112,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_SPLIT_SCREEN_SOURCE="examples/split-screen/split_screen.cactus"
     CACTUS_EXAMPLE_SPLIT_SCREEN_GENERATED_CPP="${SPLIT_SCREEN_GENERATED_CPP}"
     CACTUS_EXAMPLE_SPLIT_SCREEN_TARGET="example_split_screen_generated"
+
+    CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_SOURCE="examples/split-screen-forest-bombs/forest_bombs.cactus"
+    CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP="${SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP}"
+    CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_TARGET="example_split_screen_forest_bombs_generated"
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)

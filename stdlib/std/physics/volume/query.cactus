@@ -5,8 +5,10 @@ module std.physics.volume.query
 # required at every call site.
 
 # Nearest entity in 3D world space satisfying the query filter, or a stale
-# entity_id if no match exists.
-pub extern func nearest(from: vec3) entity_id
+# entity_id if no match exists. (Call sites pass this as the `from` named
+# argument; the parameter is named `point` here because `from` is a reserved
+# keyword and cannot appear as an identifier in a declaration.)
+pub extern func nearest(point: vec3) entity_id
 
 # All entities whose 3D axis-aligned bounding box overlaps the given box.
 pub extern func overlap_box(center: vec3, size: vec3) list[entity_id]

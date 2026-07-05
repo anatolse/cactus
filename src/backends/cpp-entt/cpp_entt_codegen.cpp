@@ -932,7 +932,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "// NOLINTBEGIN(modernize-use-std-numbers,readability-function-cognitive-complexity,"
            "bugprone-branch-clone,bugprone-reserved-identifier,bugprone-throwing-static-initialization,"
            "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
-           "readability-redundant-member-init,readability-simplify-boolean-expr)\n";
+           "readability-redundant-member-init,readability-simplify-boolean-expr,"
+           "readability-braces-around-statements,readability-isolate-declaration,"
+           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses)\n";
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
     out << "\n";
@@ -1508,7 +1510,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "}\n";
         }
         if (emit_3d_helper) {
-            out << "Camera3D __translate_camera_3d(entt::entity entity, const Camera& cam, entt::registry& registry) noexcept {\n";
+            out << "Camera3D __translate_camera_3d(entt::entity entity, const Camera& cam, entt::registry& registry) {\n";
             out << "    Camera3D cam3d{};\n";
             out << "    cam3d.fovy       = cam.fov_y;\n";
             out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
@@ -1517,9 +1519,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "        const auto& xform = registry.get<WorldTransform>(entity);\n";
             out << "        cam3d.position = xform.position;\n";
             out << "        const auto& q  = xform.rotation;\n";
-            out << "        cam3d.target   = {.x = xform.position.x + (-2.0F*(q.x*q.z + q.w*q.y)),\n";
-            out << "                          .y = xform.position.y + ( 2.0F*(q.w*q.x - q.y*q.z)),\n";
-            out << "                          .z = xform.position.z + (-(1.0F - 2.0F*(q.x*q.x + q.y*q.y)))};\n";
+            out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
+            out << "                          .y = xform.position.y + (2.0F * ((q.w * q.x) - (q.y * q.z))),\n";
+            out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * q.y)))))};\n";
             out << "    }\n";
             out << "    return cam3d;\n";
             out << "}\n";
@@ -1583,6 +1585,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "            }\n";
         }
         emit_render_phase_calls("            ");
+        if (emit_3d_helper) {
+            // Draw this viewport's 3D meshes now (inside its scissor + camera) so
+            // each split-screen region renders the world from its own camera.
+            out << "            cactus::runtime::entt_backend::flush_viewport_3d();\n";
+        }
         out << "            EndScissorMode();\n";
         out << "        }\n";
         out << "    }\n";
@@ -1625,7 +1632,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "\n// NOLINTEND(modernize-use-std-numbers,readability-function-cognitive-complexity,"
            "bugprone-branch-clone,bugprone-reserved-identifier,bugprone-throwing-static-initialization,"
            "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
-           "readability-redundant-member-init,readability-simplify-boolean-expr)\n";
+           "readability-redundant-member-init,readability-simplify-boolean-expr,"
+           "readability-braces-around-statements,readability-isolate-declaration,"
+           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses)\n";
 
     return out.str();
 }

@@ -93,21 +93,24 @@ AssetResolution AssetRegistry::resolve(const AssetKind kind, const AssetHandle h
             .kind       = kind,
             .status     = it->second.materialized ? AssetStatus::Materialized : AssetStatus::Registered,
             .runtime_id = it->second.runtime_id,
+            .asset_id   = it->second.asset_id,
         };
     }
 
     auto& resolver = resolver_for(kind);
     if (resolver) {
         if (auto loaded = resolver(handle); loaded.has_value()) {
-            AssetRecord record = std::move(*loaded);
-            record.handle      = handle;
-            record.kind        = kind;
-            assets.emplace(handle, record);
+            AssetRecord record  = std::move(*loaded);
+            record.handle       = handle;
+            record.kind         = kind;
+            auto [it, inserted] = assets.emplace(handle, std::move(record));
+            (void)inserted;
             return AssetResolution{
                 .handle     = handle,
                 .kind       = kind,
-                .status     = record.materialized ? AssetStatus::Materialized : AssetStatus::Registered,
-                .runtime_id = record.runtime_id,
+                .status     = it->second.materialized ? AssetStatus::Materialized : AssetStatus::Registered,
+                .runtime_id = it->second.runtime_id,
+                .asset_id   = it->second.asset_id,
             };
         }
     }

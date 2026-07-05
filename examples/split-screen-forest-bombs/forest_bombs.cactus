@@ -1,0 +1,538 @@
+module forest_bombs
+
+# Split-screen forest bombs — a small 3D gameplay slice.
+#
+# Two local players share the screen (left/right viewports). Each player runs
+# around a bounded 3D forest of growing blocky trees and throws orange bombs.
+# A bomb flies on an authored projectile arc; when it hits the ground it
+# explodes, using a 3D overlap-sphere world query to find nearby tree roots and
+# destroy the whole trees it caught, scoring one point per felled tree.
+#
+# Kept intentionally minimal: no minimap, no arrow indicator, no
+# render-to-texture, and no UI DSL dependency.
+
+# Task 1.2 — required stdlib surfaces.
+use std.input
+use std.math as math
+use std.math.quat as quat
+use std.transform.volume
+use std.render.meshes
+use std.camera.volume
+use std.camera.viewport
+use std.physics.volume.query as query
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+const:
+    WINDOW_TITLE  = "Split-Screen Forest Bombs"
+    WINDOW_WIDTH  = 1280
+    WINDOW_HEIGHT = 720
+    TARGET_FPS    = 60
+
+    PLAYER_SPEED   = 6.0
+    GROUND_Y       = 0.0
+    START_BOMBS    = 8
+    THROW_COOLDOWN = 0.4
+
+    # Authored projectile launch (up + forward) and gravity for the bomb arc.
+    # Cameras look down the -Z axis, so bombs fly toward -Z (into the forest).
+    THROW_UP       = 6.0
+    THROW_FORWARD  = -9.0
+    BOMB_GRAVITY   = 12.0
+    BOMB_RADIUS    = 3.5
+
+    # The camera is a separate chase entity so it does not sit inside the
+    # player mesh. It moves with the matching player input and looks down -Z.
+    PLAYER_BODY_Y  = 0.6
+    CAMERA_HEIGHT  = 5.0
+    CAMERA_BACK    = 5.0
+    CAMERA_PITCH   = -0.35
+
+# ── Assets (placeholder mesh/material handles) ────────────────────────────────
+# Task 1.3 — a shared unit box mesh plus one material per themed surface.
+
+asset BoxMesh:          mesh     = "models/box.mesh"
+asset GroundMaterial:   material = "materials/ground_green.mat"
+asset PlayerMaterial:   material = "materials/player_blue.mat"
+asset BombMaterial:     material = "materials/bomb_orange.mat"
+asset TrunkMaterial:    material = "materials/trunk_brown.mat"
+asset CrownMaterial:    material = "materials/crown_green.mat"
+
+# ── Input actions ─────────────────────────────────────────────────────────────
+# Task 2.1 — distinct keyboard mappings per player.
+
+# Player 1: WASD to move, Space to throw.
+input P1MoveX: axis
+    negative = Key.A
+    positive = Key.D
+
+input P1MoveZ: axis
+    negative = Key.W
+    positive = Key.S
+
+input P1Throw: button
+    key = Key.Space
+
+# Player 2: arrow keys to move, Enter to throw.
+input P2MoveX: axis
+    negative = Key.Left
+    positive = Key.Right
+
+input P2MoveZ: axis
+    negative = Key.Up
+    positive = Key.Down
+
+input P2Throw: button
+    key = Key.Enter
+
+# ── Gameplay traits ───────────────────────────────────────────────────────────
+
+# Task 1.4 — player traits: identity markers, movement input, bomb inventory,
+# and a tree-hit score counter.
+trait Player1Tag
+trait Player2Tag
+
+trait PlayerInput:
+    var move_x: float = 0.0
+    var move_z: float = 0.0
+    var throw_pressed: bool = false
+
+trait BombInventory:
+    var bombs_left: int = 8
+    var throw_cooldown: float = 0.0
+
+trait Score:
+    var trees_hit: int = 0
+
+# Task 1.5 — tree traits. The logical root is the queryable/destructible tree;
+# it also carries this instance's growth data. The crown is a paired visual box
+# sharing the same logical tree instance id.
+trait TreeRoot:
+    var instance: int = 0
+
+trait TreeCrown:
+    var instance: int = 0
+
+trait TreeGrowth:
+    var progress: float = 0.0
+    let target_scale: float = 1.0
+    let slowdown: float = 3.0
+    let base_scale: vec3 = vec3(1.0, 1.0, 1.0)
+
+# Task 1.6 — bomb traits: owning player, authored velocity, gravity, blast
+# radius, and an explosion latch.
+trait Bomb:
+    var owner: entity_id
+    var velocity: vec3 = vec3(0.0, 0.0, 0.0)
+    let gravity: float = 12.0
+    let radius: float = 3.0
+    var exploded: bool = false
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+# Sent to the throwing player when its bomb fells a tree.
+event TreeHit:
+    count: int
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+
+# Spawned when a player throws. Orange box on an authored projectile arc.
+template BombTemplate:
+    WorldTransform:
+        position = vec3(0.0, 0.0, 0.0)
+        rotation = quat.identity()
+        scale    = vec3(0.6, 0.6, 0.6)
+    Renderer:
+        mesh        = BoxMesh
+        material    = BombMaterial
+        visible     = true
+        cast_shadow = true
+    Bomb:
+        velocity = vec3(0.0, THROW_UP, THROW_FORWARD)
+        exploded = false
+
+# Tree instance parts. A tree is a brown trunk root plus a green crown box that
+# share an `instance` id and grow from their own TreeGrowth data.
+template TrunkTemplate:
+    WorldTransform:
+        rotation = quat.identity()
+        scale    = vec3(0.4, 1.2, 0.4)
+    Renderer:
+        mesh        = BoxMesh
+        material    = TrunkMaterial
+        visible     = true
+        cast_shadow = true
+    TreeRoot:
+        instance = 0
+    TreeGrowth:
+        progress     = 0.0
+        target_scale = 1.0
+        slowdown     = 3.0
+        base_scale   = vec3(0.4, 1.2, 0.4)
+
+template CrownTemplate:
+    WorldTransform:
+        rotation = quat.identity()
+        scale    = vec3(1.4, 1.4, 1.4)
+    Renderer:
+        mesh        = BoxMesh
+        material    = CrownMaterial
+        visible     = true
+        cast_shadow = true
+    TreeCrown:
+        instance = 0
+    TreeGrowth:
+        progress     = 0.0
+        target_scale = 1.0
+        slowdown     = 3.0
+        base_scale   = vec3(1.4, 1.4, 1.4)
+
+# ── Scene: players + split-screen cameras ─────────────────────────────────────
+# Task 2.1/2.2/2.3 — each player has a visible gameplay body plus a separate
+# chase camera entity. The camera carries the same player input tag so it moves
+# with the player, but it does not render a mesh or throw bombs.
+
+pub entity Player1:
+    WorldTransform:
+        position = vec3(-3.0, PLAYER_BODY_Y, 8.0)
+        rotation = quat.identity()
+        scale    = vec3(0.8, 1.2, 0.8)
+    Renderer:
+        mesh        = BoxMesh
+        material    = PlayerMaterial
+        visible     = true
+        cast_shadow = true
+    PlayerInput:
+        move_x        = 0.0
+        move_z        = 0.0
+        throw_pressed = false
+    BombInventory:
+        bombs_left    = START_BOMBS
+        throw_cooldown = 0.0
+    Score:
+        trees_hit = 0
+    Player1Tag
+
+pub entity Player1Camera:
+    WorldTransform:
+        position = vec3(-3.0, CAMERA_HEIGHT, 8.0 + CAMERA_BACK)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), CAMERA_PITCH)
+        scale    = vec3(1.0, 1.0, 1.0)
+    Camera:
+        fov_y = 60.0
+        near  = 0.1
+        far   = 500.0
+    Viewport:
+        x           = 0.0
+        y           = 0.0
+        width       = 0.5
+        height      = 1.0
+        depth       = 0
+        clear_color = #223047FF
+    PlayerInput:
+        move_x        = 0.0
+        move_z        = 0.0
+        throw_pressed = false
+    Player1Tag
+
+pub entity Player2:
+    WorldTransform:
+        position = vec3(3.0, PLAYER_BODY_Y, 8.0)
+        rotation = quat.identity()
+        scale    = vec3(0.8, 1.2, 0.8)
+    Renderer:
+        mesh        = BoxMesh
+        material    = PlayerMaterial
+        visible     = true
+        cast_shadow = true
+    PlayerInput:
+        move_x        = 0.0
+        move_z        = 0.0
+        throw_pressed = false
+    BombInventory:
+        bombs_left    = START_BOMBS
+        throw_cooldown = 0.0
+    Score:
+        trees_hit = 0
+    Player2Tag
+
+pub entity Player2Camera:
+    WorldTransform:
+        position = vec3(3.0, CAMERA_HEIGHT, 8.0 + CAMERA_BACK)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), CAMERA_PITCH)
+        scale    = vec3(1.0, 1.0, 1.0)
+    Camera:
+        fov_y = 60.0
+        near  = 0.1
+        far   = 500.0
+    Viewport:
+        x           = 0.5
+        y           = 0.0
+        width       = 0.5
+        height      = 1.0
+        depth       = 0
+        clear_color = #2A2440FF
+    PlayerInput:
+        move_x        = 0.0
+        move_z        = 0.0
+        throw_pressed = false
+    Player2Tag
+
+# Task 2.4 — ground plane and a sun light for a readable 3D scene.
+pub entity Ground:
+    WorldTransform:
+        position = vec3(0.0, -0.5, 0.0)
+        rotation = quat.identity()
+        scale    = vec3(60.0, 1.0, 60.0)
+    Renderer:
+        mesh        = BoxMesh
+        material    = GroundMaterial
+        visible     = true
+        cast_shadow = false
+
+pub entity SunLight:
+    WorldTransform:
+        position = vec3(0.0, 20.0, 0.0)
+        rotation = quat.identity()
+        scale    = vec3(1.0, 1.0, 1.0)
+    DirectionalLight:
+        direction = vec3(-0.3, -1.0, -0.2)
+        color     = #FFF3D6FF
+        intensity = 1.1
+        enabled   = true
+    PointLight:
+        color     = #FFF3D6FF
+        intensity = 2.8
+        range     = 45.0
+        enabled   = true
+
+pub entity FillLight:
+    WorldTransform:
+        position = vec3(-8.0, 6.0, 10.0)
+        rotation = quat.identity()
+        scale    = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color     = #BBD7FFFF
+        intensity = 1.4
+        range     = 35.0
+        enabled   = true
+
+# ── Scene: the forest ─────────────────────────────────────────────────────────
+# Task 2.5/3.1 — a bounded, deterministically-varied forest. Each tree is one
+# TrunkTemplate root plus one CrownTemplate crown sharing an `instance` id, with
+# varied X/Z positions, target scale factors, and growth slowdown values.
+# (A random helper is not yet available in stdlib, so the scatter is authored.)
+
+pub entity Trunk1 from TrunkTemplate:
+    WorldTransform:
+        position = vec3(-7.0, 0.0, 2.0)
+    TreeRoot:
+        instance = 1
+    TreeGrowth:
+        target_scale = 1.0
+        slowdown     = 2.5
+
+pub entity Crown1 from CrownTemplate:
+    WorldTransform:
+        position = vec3(-7.0, 1.6, 2.0)
+    TreeCrown:
+        instance = 1
+    TreeGrowth:
+        target_scale = 1.0
+        slowdown     = 2.5
+
+pub entity Trunk2 from TrunkTemplate:
+    WorldTransform:
+        position = vec3(-3.0, 0.0, -1.0)
+    TreeRoot:
+        instance = 2
+    TreeGrowth:
+        target_scale = 1.3
+        slowdown     = 3.5
+
+pub entity Crown2 from CrownTemplate:
+    WorldTransform:
+        position = vec3(-3.0, 1.6, -1.0)
+    TreeCrown:
+        instance = 2
+    TreeGrowth:
+        target_scale = 1.3
+        slowdown     = 3.5
+
+pub entity Trunk3 from TrunkTemplate:
+    WorldTransform:
+        position = vec3(2.0, 0.0, 1.0)
+    TreeRoot:
+        instance = 3
+    TreeGrowth:
+        target_scale = 0.8
+        slowdown     = 2.0
+
+pub entity Crown3 from CrownTemplate:
+    WorldTransform:
+        position = vec3(2.0, 1.6, 1.0)
+    TreeCrown:
+        instance = 3
+    TreeGrowth:
+        target_scale = 0.8
+        slowdown     = 2.0
+
+pub entity Trunk4 from TrunkTemplate:
+    WorldTransform:
+        position = vec3(6.0, 0.0, -3.0)
+    TreeRoot:
+        instance = 4
+    TreeGrowth:
+        target_scale = 1.5
+        slowdown     = 4.0
+
+pub entity Crown4 from CrownTemplate:
+    WorldTransform:
+        position = vec3(6.0, 1.6, -3.0)
+    TreeCrown:
+        instance = 4
+    TreeGrowth:
+        target_scale = 1.5
+        slowdown     = 4.0
+
+pub entity Trunk5 from TrunkTemplate:
+    WorldTransform:
+        position = vec3(-5.0, 0.0, -5.0)
+    TreeRoot:
+        instance = 5
+    TreeGrowth:
+        target_scale = 1.1
+        slowdown     = 3.0
+
+pub entity Crown5 from CrownTemplate:
+    WorldTransform:
+        position = vec3(-5.0, 1.6, -5.0)
+    TreeCrown:
+        instance = 5
+    TreeGrowth:
+        target_scale = 1.1
+        slowdown     = 3.0
+
+pub entity Trunk6 from TrunkTemplate:
+    WorldTransform:
+        position = vec3(3.0, 0.0, -7.0)
+    TreeRoot:
+        instance = 6
+    TreeGrowth:
+        target_scale = 0.9
+        slowdown     = 2.2
+
+pub entity Crown6 from CrownTemplate:
+    WorldTransform:
+        position = vec3(3.0, 1.6, -7.0)
+    TreeCrown:
+        instance = 6
+    TreeGrowth:
+        target_scale = 0.9
+        slowdown     = 2.2
+
+# ── Systems ───────────────────────────────────────────────────────────────────
+
+# Task 3.3 — read each player's own keyboard mapping into shared input state.
+system ReadPlayer1Input:
+    filter:
+        PlayerInput
+        Player1Tag
+
+    on input:
+        move_x = input.axis(P1MoveX)
+        move_z = input.axis(P1MoveZ)
+        throw_pressed = input.down(P1Throw)
+
+system ReadPlayer2Input:
+    filter:
+        PlayerInput
+        Player2Tag
+
+    on input:
+        move_x = input.axis(P2MoveX)
+        move_z = input.axis(P2MoveZ)
+        throw_pressed = input.down(P2Throw)
+
+# Task 3.3 — move both players on the X/Z ground plane. The camera follows for
+# free because each player entity owns its own viewport camera.
+system PlayerMoveSystem:
+    filter:
+        WorldTransform
+        PlayerInput
+
+    on tick:
+        position = vec3(position.x + move_x * PLAYER_SPEED * tick.dt, position.y, position.z + move_z * PLAYER_SPEED * tick.dt)
+
+# Task 3.2 — grow trees over time. Trunk and crown each scale from their own
+# growth data; slowdown stretches how long a tree takes to reach full size.
+system TreeGrowthSystem:
+    filter:
+        WorldTransform
+        TreeGrowth
+
+    on tick:
+        progress = math.min(progress + tick.dt / slowdown, 1.0)
+        let s = target_scale * (0.35 + 0.65 * progress)
+        scale = vec3(base_scale.x * s, base_scale.y * s, base_scale.z * s)
+
+# Task 3.4 — throw a bomb: consume one from inventory and spawn an orange bomb
+# with authored launch velocity, tagged with its owning player.
+system ThrowSystem:
+    filter:
+        WorldTransform
+        PlayerInput
+        BombInventory
+
+    on tick:
+        if throw_cooldown > 0.0:
+            throw_cooldown = throw_cooldown - tick.dt
+
+        if throw_pressed and bombs_left > 0 and throw_cooldown <= 0.0:
+            spawn BombTemplate:
+                WorldTransform:
+                    position = vec3(position.x, position.y + 1.0, position.z)
+                    rotation = quat.identity()
+                    scale    = vec3(0.6, 0.6, 0.6)
+                Bomb:
+                    owner    = self
+                    velocity = vec3(0.0, THROW_UP, THROW_FORWARD)
+                    exploded = false
+            bombs_left     = bombs_left - 1
+            throw_cooldown = THROW_COOLDOWN
+
+# Task 3.5/3.6/3.7 — simulate bomb flight; on ground impact, explode: query the
+# tree roots inside the blast radius, destroy whole trees (root + co-located
+# crown), and score one point per felled tree for the throwing player.
+system BombSystem:
+    filter:
+        WorldTransform
+        Bomb
+
+    on tick:
+        velocity = vec3(velocity.x, velocity.y - gravity * tick.dt, velocity.z)
+        position = vec3(position.x + velocity.x * tick.dt, position.y + velocity.y * tick.dt, position.z + velocity.z * tick.dt)
+
+        if position.y <= GROUND_Y:
+            let center = vec3(position.x, GROUND_Y, position.z)
+
+            let trunks = query.overlap_sphere[TreeRoot](center = center, radius = radius)
+            for hit_root in trunks:
+                destroy hit_root
+                emit TreeHit to owner:
+                    count = 1
+
+            # Destroy the paired crown visuals caught by the same blast sphere.
+            let crowns = query.overlap_sphere[TreeCrown](center = center, radius = radius)
+            for hit_crown in crowns:
+                destroy hit_crown
+
+            destroy
+
+# Task 3.7 — apply tree-hit deltas to the throwing player's score.
+system ScoreSystem:
+    filter:
+        Score
+
+    on TreeHit as hit:
+        trees_hit = trees_hit + hit.count

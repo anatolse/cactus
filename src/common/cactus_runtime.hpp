@@ -40,6 +40,7 @@ struct AssetResolution {
     AssetKind kind{AssetKind::Texture};
     AssetStatus status{AssetStatus::Missing};
     int runtime_id{-1};
+    std::string_view asset_id;
 
     [[nodiscard]] constexpr bool valid() const noexcept {
         return status != AssetStatus::Missing;
@@ -106,7 +107,7 @@ struct GeneratedProjectInfo {
 
 [[nodiscard]] constexpr GeneratedProjectInfo make_project_info(std::string_view backend,
                                                                std::string_view project_name) noexcept {
-    return GeneratedProjectInfo{backend, project_name};
+    return GeneratedProjectInfo{.backend = backend, .project_name = project_name};
 }
 
 namespace stdlib::math {
@@ -115,7 +116,13 @@ namespace stdlib::math {
     return a + ((b - a) * t);
 }
 [[nodiscard]] constexpr float clamp(float x, float lo, float hi) noexcept {
-    return (x < lo) ? lo : ((x > hi) ? hi : x);
+    if (x < lo) {
+        return lo;
+    }
+    if (x > hi) {
+        return hi;
+    }
+    return x;
 }
 [[nodiscard]] constexpr float abs(float v) noexcept {
     return (v < 0.0F) ? -v : v;

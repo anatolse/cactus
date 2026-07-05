@@ -58,6 +58,7 @@ struct MeshSubmission {
     Vector3 scale{};
     int mesh_runtime_id{-1};
     int material_runtime_id{-1};
+    Color diffuse_color{WHITE};
 };
 
 struct PointLightSubmission {
@@ -69,28 +70,28 @@ struct PointLightSubmission {
 
 struct TextSubmission2D {
     Vector2 position{};
-    float   rotation_deg{0.0F};
-    int     font_size{32};
-    Color   color{};
+    float rotation_deg{0.0F};
+    int font_size{32};
+    Color color{};
     std::string text;
 };
 
 struct TextSubmission3D {
-    uint32_t    entity_id{0};
-    Vector3     position{};
-    Quat        rotation{};
-    Vector3     scale{};
-    int         font_size{1};
-    Color       color{};
+    uint32_t entity_id{0};
+    Vector3 position{};
+    Quat rotation{};
+    Vector3 scale{};
+    int font_size{1};
+    Color color{};
     std::string text;
 };
 
 struct TextLabel3DEntry {
     RenderTexture2D rt{};
-    std::string     cached_text;
-    int             cached_font_size{0};
-    Color           cached_color{};
-    bool            loaded{false};
+    std::string cached_text;
+    int cached_font_size{0};
+    Color cached_color{};
+    bool loaded{false};
 };
 
 struct TextureResourceEntry {
@@ -456,6 +457,25 @@ void note_missing_asset() noexcept {
     ++render_debug_state_storage().missing_assets;
 }
 
+Color placeholder_material_color(const std::string_view asset_id) noexcept {
+    if (asset_id.find("ground") != std::string_view::npos) {
+        return Color{.r = 76, .g = 154, .b = 74, .a = 255};
+    }
+    if (asset_id.find("bomb") != std::string_view::npos || asset_id.find("orange") != std::string_view::npos) {
+        return Color{.r = 255, .g = 149, .b = 32, .a = 255};
+    }
+    if (asset_id.find("trunk") != std::string_view::npos || asset_id.find("brown") != std::string_view::npos) {
+        return Color{.r = 129, .g = 82, .b = 45, .a = 255};
+    }
+    if (asset_id.find("crown") != std::string_view::npos || asset_id.find("green") != std::string_view::npos) {
+        return Color{.r = 50, .g = 180, .b = 75, .a = 255};
+    }
+    if (asset_id.find("player") != std::string_view::npos || asset_id.find("blue") != std::string_view::npos) {
+        return Color{.r = 66, .g = 139, .b = 255, .a = 255};
+    }
+    return WHITE;
+}
+
 void clear_texture_store() noexcept {
     for (auto& [runtime_id, entry] : textures()) {
         (void)runtime_id;
@@ -537,7 +557,7 @@ Material* ensure_material_resource(const int runtime_id) {
     if (Shader* shader = ensure_lighting_shader(); shader != nullptr) {
         entry.material.shader = *shader;
     }
-    entry.material.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
+    entry.material.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     return &entry.material;
 }
 
@@ -572,6 +592,7 @@ void flush_mesh_queue() noexcept {
         if (mesh == nullptr || material == nullptr) {
             continue;
         }
+        material->maps[MATERIAL_MAP_DIFFUSE].color = submission.diffuse_color;
         DrawMesh(*mesh, *material, mesh_transform_matrix(submission));
     }
     EndMode3D();
@@ -598,23 +619,43 @@ Mesh& text_plane_mesh() noexcept {
         // Positions: XY plane, centred, counter-clockwise when viewed from +Z
         // [0] bottom-left  [1] bottom-right  [2] top-right  [3] top-left
         const std::array<float, 12> verts = {
-            -0.5F, -0.5F, 0.0F,
-             0.5F, -0.5F, 0.0F,
-             0.5F,  0.5F, 0.0F,
-            -0.5F,  0.5F, 0.0F,
+            -0.5F,
+            -0.5F,
+            0.0F,
+            0.5F,
+            -0.5F,
+            0.0F,
+            0.5F,
+            0.5F,
+            0.0F,
+            -0.5F,
+            0.5F,
+            0.0F,
         };
         // UVs: V=0 at top, V=1 at bottom — cancels RenderTexture2D Y-flip
         const std::array<float, 8> uvs = {
-            0.0F, 1.0F,
-            1.0F, 1.0F,
-            1.0F, 0.0F,
-            0.0F, 0.0F,
+            0.0F,
+            1.0F,
+            1.0F,
+            1.0F,
+            1.0F,
+            0.0F,
+            0.0F,
+            0.0F,
         };
         const std::array<float, 12> normals = {
-            0.0F, 0.0F, 1.0F,
-            0.0F, 0.0F, 1.0F,
-            0.0F, 0.0F, 1.0F,
-            0.0F, 0.0F, 1.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+            0.0F,
+            0.0F,
+            1.0F,
         };
         const std::array<unsigned short, 6> indices = {0, 1, 2, 0, 2, 3};
 
@@ -824,6 +865,12 @@ void end_render_frame() noexcept {
     text_3d_queue().clear();
 }
 
+void flush_viewport_3d() noexcept {
+    flush_mesh_queue();
+    mesh_queue().clear();
+    point_light_queue().clear();
+}
+
 void submit_sprite(const Vector2 position,
                    const Vector2 size,
                    const Color color,
@@ -892,6 +939,7 @@ void submit_mesh(const Vector3 position,
         .scale               = scale,
         .mesh_runtime_id     = mesh_resolved.runtime_id,
         .material_runtime_id = material_resolved.runtime_id,
+        .diffuse_color       = placeholder_material_color(material_resolved.asset_id),
     });
     ++render_debug_state_storage().submitted_meshes;
 }
@@ -1096,8 +1144,8 @@ Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept {
 }
 
 Vector2 editor_mouse_delta_2d() noexcept {
-    const Camera2D cam   = get_active_camera_2d();
-    const Vector2  delta = GetMouseDelta();
+    const Camera2D cam  = get_active_camera_2d();
+    const Vector2 delta = GetMouseDelta();
     return Vector2{.x = delta.x / cam.zoom, .y = delta.y / cam.zoom};
 }
 

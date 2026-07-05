@@ -179,6 +179,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_SPLIT_SCREEN_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_SPLIT_SCREEN_TARGET,
         },
+        ExampleCase{
+            .name           = "split-screen-forest-bombs",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_TARGET,
+        },
     };
 }
 

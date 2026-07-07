@@ -636,8 +636,14 @@ TypeRef Parser::parse_type_ref() {
     auto loc  = peek().location;
     auto name = consume(TokenType::IDENTIFIER, "expected type name").value;
     TypeRef ref;
-    ref.name     = name;
     ref.location = loc;
+    // Support qualified type names: "qualifier.Symbol" (e.g. "rand.Rng").
+    if (match(TokenType::DOT)) {
+        auto sym = consume(TokenType::IDENTIFIER, "expected type name after '.'").value;
+        ref.name = name + "." + sym;
+    } else {
+        ref.name = name;
+    }
     if (match(TokenType::LBRACKET)) {
         ref.param = std::make_unique<TypeRef>(parse_type_ref());
         consume(TokenType::RBRACKET, "expected ']'");

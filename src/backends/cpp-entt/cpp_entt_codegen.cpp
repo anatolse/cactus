@@ -1197,8 +1197,22 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
-    // POD structs
+    // stdlib::random types are defined in cactus_runtime.hpp; expose them at file scope.
+    const bool uses_random = program_uses_module(program, "std.random");
+    if (uses_random) {
+        out << "using Rng        = cactus::runtime::stdlib::random::Rng;\n";
+        out << "using Uniform    = cactus::runtime::stdlib::random::Uniform;\n";
+        out << "using UniformInt = cactus::runtime::stdlib::random::UniformInt;\n";
+        out << "using Normal     = cactus::runtime::stdlib::random::Normal;\n";
+        out << "\n";
+    }
+
+    // POD structs (stdlib::random struct types are suppressed — they come from the runtime header).
+    static const std::unordered_set<std::string> kRandomRuntimeTypes{"Rng", "Uniform", "UniformInt", "Normal"};
     for (const auto& [name, s] : program.structs) {
+        if (uses_random && kRandomRuntimeTypes.contains(name)) {
+            continue;
+        }
         out << EnttComponentEmitter::emit_pod_struct(s) << "\n";
     }
 

@@ -41,6 +41,9 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.input") {
         return "cactus::runtime::entt_backend";
     }
+    if (module_name == "std.random") {
+        return "cactus::runtime::stdlib::random";
+    }
     return {};
 }
 
@@ -67,6 +70,11 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
     if (module_name == "std.input") {
         return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
                func_name == "axis2" || func_name == "mouse_position";
+    }
+    if (module_name == "std.random") {
+        return func_name == "seeded" || func_name == "uniform" || func_name == "uniform_int" ||
+               func_name == "normal" || func_name == "advance" || func_name == "sample" ||
+               func_name == "sample_int" || func_name == "sample_normal" || func_name == "chance";
     }
     return false;
 }
@@ -228,7 +236,11 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
             return "std::uint8_t";
         case TypeKind::Struct:
         case TypeKind::Enum:
-            return type.name;
+        {
+            // Strip module-alias qualifier (e.g. "rand.Rng" → "Rng").
+            const auto dot = type.name.rfind('.');
+            return dot != std::string::npos ? type.name.substr(dot + 1U) : type.name;
+        }
         case TypeKind::List:
             if (type.element) {
                 return "std::vector<" + type_to_cpp(*type.element) + ">";

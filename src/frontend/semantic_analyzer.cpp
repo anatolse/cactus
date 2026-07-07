@@ -1084,6 +1084,12 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
                                     allowed_ctor =
                                         ident->name == "vec2" || ident->name == "vec3" || ident->name == "quat";
                                 }
+                                // Allow qualified stdlib constructor calls (e.g. rand.seeded, rand.uniform).
+                                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
+                                    allowed_ctor = member->member == "seeded" || member->member == "uniform" ||
+                                                   member->member == "uniform_int" ||
+                                                   member->member == "normal" || member->member == "identity";
+                                }
                                 if (allowed_ctor) {
                                     for (const auto& arg : e.args) {
                                         check_const(*arg);

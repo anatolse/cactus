@@ -1,0 +1,38 @@
+module std.random
+
+# ── Generator type ────────────────────────────────────────────────────────────
+
+pub struct Rng:
+    state: int
+
+# ── Distribution types ────────────────────────────────────────────────────────
+
+pub struct Uniform:
+    lo: float
+    hi: float
+
+pub struct UniformInt:
+    lo: int
+    hi: int
+
+pub struct Normal:
+    mean: float
+    stddev: float
+
+# ── Constructors ──────────────────────────────────────────────────────────────
+
+pub extern func seeded(s: int) Rng
+pub extern func uniform(lo: float, hi: float) Uniform
+pub extern func uniform_int(lo: int, hi: int) UniformInt
+pub extern func normal(mean: float, stddev: float) Normal
+
+# ── Generator advancement ─────────────────────────────────────────────────────
+
+pub extern func advance(rng: Rng) Rng
+
+# ── Sampling ──────────────────────────────────────────────────────────────────
+
+pub extern func sample(rng: Rng, dist: Uniform) float
+pub extern func sample_int(rng: Rng, dist: UniformInt) int
+pub extern func sample_normal(rng: Rng, dist: Normal) float
+pub extern func chance(rng: Rng, p: float) bool

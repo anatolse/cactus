@@ -49,6 +49,9 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.editor") {
         return "cactus::runtime::entt_backend";
     }
+    if (module_name == "std.random") {
+        return "cactus::runtime::stdlib::random";
+    }
     return {};
 }
 
@@ -85,6 +88,11 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
                func_name == "editor_raycast_3d" || func_name == "editor_screen_to_world_2d" ||
                func_name == "editor_mouse_delta_2d" || func_name == "editor_plane_project_3d" ||
                func_name == "editor_mouse_delta_3d";
+    }
+    if (module_name == "std.random") {
+        return func_name == "seeded" || func_name == "uniform" || func_name == "uniform_int" ||
+               func_name == "normal" || func_name == "advance" || func_name == "sample" ||
+               func_name == "sample_int" || func_name == "sample_normal" || func_name == "chance";
     }
     return false;
 }

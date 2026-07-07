@@ -210,4 +210,37 @@ namespace quat {
 
 }  // namespace stdlib::math
 
+namespace stdlib::random {
+
+struct Rng {
+    int state{};
+};
+
+struct Uniform {
+    float lo{};
+    float hi{};
+};
+
+struct UniformInt {
+    int lo{};
+    int hi{};
+};
+
+struct Normal {
+    float mean{};
+    float stddev{};
+};
+
+[[nodiscard]] Rng seeded(int s) noexcept;
+[[nodiscard]] Uniform uniform(float lo, float hi) noexcept;
+[[nodiscard]] UniformInt uniform_int(int lo, int hi) noexcept;
+[[nodiscard]] Normal normal(float mean, float stddev) noexcept;
+[[nodiscard]] Rng advance(Rng rng) noexcept;
+[[nodiscard]] float sample(Rng rng, Uniform dist) noexcept;
+[[nodiscard]] int sample_int(Rng rng, UniformInt dist) noexcept;
+[[nodiscard]] float sample_normal(Rng rng, Normal dist) noexcept;
+[[nodiscard]] bool chance(Rng rng, float p) noexcept;
+
+}  // namespace stdlib::random
+
 }  // namespace cactus::runtime

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <raymath.h>
 #include <sstream>
 
@@ -280,5 +281,82 @@ Quat inverse(Quat q) noexcept {
 }  // namespace quat
 
 }  // namespace stdlib::math
+
+namespace stdlib::random {
+
+namespace {
+
+// 32-bit hash mix used by both seeded() and advance().
+[[nodiscard]] constexpr std::uint32_t mix32(std::uint32_t v) noexcept {
+    v = (v ^ (v >> 16U)) * 0x45D9F3BU;
+    v = (v ^ (v >> 16U)) * 0x45D9F3BU;
+    return v ^ (v >> 16U);
+}
+
+// Convert a 32-bit integer to a float in [0, 1).
+[[nodiscard]] constexpr float to_unit(std::uint32_t v) noexcept {
+    return static_cast<float>(v) * (1.0F / 4294967296.0F);
+}
+
+}  // namespace
+
+Rng seeded(int s) noexcept {
+    return Rng{static_cast<int>(mix32(static_cast<std::uint32_t>(s)))};
+}
+
+Uniform uniform(float lo, float hi) noexcept {
+    return Uniform{.lo = lo, .hi = hi};
+}
+
+UniformInt uniform_int(int lo, int hi) noexcept {
+    return UniformInt{.lo = lo, .hi = hi};
+}
+
+Normal normal(float mean, float stddev) noexcept {
+    return Normal{.mean = mean, .stddev = stddev};
+}
+
+Rng advance(Rng rng) noexcept {
+    // Splitmix32-like: additive state advancement followed by mixing.
+    const std::uint32_t next = static_cast<std::uint32_t>(rng.state) + 0x9E3779B9U;
+    return Rng{static_cast<int>(mix32(next))};
+}
+
+float sample(Rng rng, Uniform dist) noexcept {
+    const float unit = to_unit(static_cast<std::uint32_t>(rng.state));
+    return dist.lo + (unit * (dist.hi - dist.lo));
+}
+
+int sample_int(Rng rng, UniformInt dist) noexcept {
+    const int range = dist.hi - dist.lo + 1;
+    if (range <= 1) {
+        return dist.lo;
+    }
+    const auto state = static_cast<std::uint32_t>(rng.state);
+    const auto idx   = static_cast<int>(state % static_cast<std::uint32_t>(range));
+    return dist.lo + idx;
+}
+
+float sample_normal(Rng rng, Normal dist) noexcept {
+    // Box-Muller using the state and a derived companion value.
+    const auto s1   = static_cast<std::uint32_t>(rng.state);
+    const std::uint32_t s2 = mix32(s1 ^ 0x2D98D6C9U);
+    const float u1  = ((static_cast<float>(s1) + 0.5F) * (1.0F / 4294967296.0F));
+    const float u2  = ((static_cast<float>(s2) + 0.5F) * (1.0F / 4294967296.0F));
+    const float z   = std::sqrt(-2.0F * std::log(u1)) * std::cos(2.0F * std::numbers::pi_v<float> * u2);
+    return dist.mean + (dist.stddev * z);
+}
+
+bool chance(Rng rng, float p) noexcept {
+    if (p >= 1.0F) {
+        return true;
+    }
+    if (p <= 0.0F) {
+        return false;
+    }
+    return to_unit(static_cast<std::uint32_t>(rng.state)) < p;
+}
+
+}  // namespace stdlib::random
 
 }  // namespace cactus::runtime

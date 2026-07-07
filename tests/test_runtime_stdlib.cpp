@@ -7,7 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <numbers>
@@ -301,5 +301,82 @@ TEST_CASE("Runtime stdlib: EnTT point lights participate in lit mesh frame state
     CHECK(cactus::runtime::entt_backend::render_debug_state().active_point_lights == 2);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_lit_mesh_shader);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_3d_camera);
+}
+
+// ── std.random tests ──────────────────────────────────────────────────────────
+
+TEST_CASE("Runtime stdlib: seeded is deterministic", "[runtime][stdlib][random]") {
+    const auto a = stdlib::random::seeded(42);
+    const auto b = stdlib::random::seeded(42);
+    CHECK(a.state == b.state);
+
+    const auto c = stdlib::random::seeded(99);
+    const auto d = stdlib::random::seeded(99);
+    CHECK(c.state == d.state);
+
+    // Different seeds should (almost certainly) produce different states.
+    CHECK(a.state != c.state);
+}
+
+TEST_CASE("Runtime stdlib: advance is deterministic", "[runtime][stdlib][random]") {
+    const auto rng = stdlib::random::seeded(1);
+
+    const auto a = stdlib::random::advance(rng);
+    const auto b = stdlib::random::advance(rng);
+    CHECK(a.state == b.state);
+
+    // Advance must change the state.
+    CHECK(a.state != rng.state);
+}
+
+TEST_CASE("Runtime stdlib: sample is in [lo, hi)", "[runtime][stdlib][random]") {
+    const auto dist = stdlib::random::uniform(0.0F, 10.0F);
+    auto rng        = stdlib::random::seeded(7);
+
+    for (int i = 0; i < 200; ++i) {
+        rng          = stdlib::random::advance(rng);
+        const float v = stdlib::random::sample(rng, dist);
+        CHECK(v >= 0.0F);
+        CHECK(v < 10.0F);
+    }
+}
+
+TEST_CASE("Runtime stdlib: sample_int is in [lo, hi] inclusive", "[runtime][stdlib][random]") {
+    const auto dist = stdlib::random::uniform_int(1, 6);
+    auto rng        = stdlib::random::seeded(13);
+
+    std::array<bool, 7> seen{};
+    for (int i = 0; i < 500; ++i) {
+        rng         = stdlib::random::advance(rng);
+        const int v = stdlib::random::sample_int(rng, dist);
+        CHECK(v >= 1);
+        CHECK(v <= 6);
+        if (v >= 1 && v <= 6) {
+            seen[static_cast<std::size_t>(v)] = true;
+        }
+    }
+    for (int k = 1; k <= 6; ++k) {
+        CHECK(seen[static_cast<std::size_t>(k)]);
+    }
+}
+
+TEST_CASE("Runtime stdlib: chance boundaries", "[runtime][stdlib][random]") {
+    const auto rng = stdlib::random::seeded(0);
+    CHECK(stdlib::random::chance(rng, 0.0F) == false);
+    CHECK(stdlib::random::chance(rng, 1.0F) == true);
+}
+
+TEST_CASE("Runtime stdlib: sequence reproducibility", "[runtime][stdlib][random]") {
+    auto rng_a = stdlib::random::seeded(5);
+    auto rng_b = stdlib::random::seeded(5);
+
+    const auto dist = stdlib::random::uniform(0.0F, 1.0F);
+    for (int i = 0; i < 20; ++i) {
+        rng_a           = stdlib::random::advance(rng_a);
+        rng_b           = stdlib::random::advance(rng_b);
+        const float va  = stdlib::random::sample(rng_a, dist);
+        const float vb  = stdlib::random::sample(rng_b, dist);
+        CHECK(va == Catch::Approx(vb));
+    }
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

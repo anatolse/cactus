@@ -690,10 +690,120 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
     return out.str();
 }
 
+// ── Hierarchical spawn expansion (dsl-hierarchical-entity-templates D9) ─────
+
+// Per-node creation helper names emitted by the codegen for hierarchical
+// archetypes (create_<t>__node, create_<t>__node__<role path>).
+static std::string archetype_node_create_function_name(const std::string& archetype_name,
+                                                       const std::vector<std::string>& role_path) {
+    std::string name = "create_" + snake_case(archetype_name) + "__node";
+    for (const auto& role : role_path) {
+        name += "__" + snake_case(role);
+    }
+    return name;
+}
+
+static const std::vector<ChildArchetypeNode>* find_template_children(const DecoratedProgram& program,
+                                                                     const std::string& template_name) {
+    if (program.ast == nullptr) {
+        return nullptr;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        const auto* tmpl = std::get_if<TemplateNode>(&decl);
+        if (tmpl != nullptr && tmpl->name == template_name && !tmpl->children.empty()) {
+            return &tmpl->children;
+        }
+    }
+    return nullptr;
+}
+
+// Spawn sites with child overrides expand the tree inline: create each node
+// via its per-node helper in parent-first preorder, emplace Parent on non-root
+// nodes, and apply that node's overrides in handler scope.
+static void emit_spawn_child_expansion(std::ostringstream& out,
+                                       const std::string& template_name,
+                                       const std::vector<ChildArchetypeNode>& children,
+                                       const std::vector<ChildOverrideNode>& overrides,
+                                       const std::string& parent_var,
+                                       const std::string& var_prefix,
+                                       std::vector<std::string>& role_path,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_set<std::string>& pointer_aliases) {
+    static const std::vector<ChildOverrideNode> NO_OVERRIDES;
+    std::size_t index = 0;
+    for (const auto& child : children) {
+        const std::string var = var_prefix + "_" + std::to_string(index);
+        role_path.push_back(child.role);
+        out << "    auto " << var << " = " << archetype_node_create_function_name(template_name, role_path)
+            << "(registry);\n";
+        out << "    registry.emplace_or_replace<Parent>(" << var << ", Parent{.parent = " << parent_var << "});\n";
+
+        const ChildOverrideNode* override_node = nullptr;
+        for (const auto& candidate : overrides) {
+            if (candidate.role == child.role) {
+                override_node = &candidate;
+                break;
+            }
+        }
+        if (override_node != nullptr) {
+            out << emit_spawn_overrides(var, override_node->traits, 1, trait_names, program, pointer_aliases);
+        }
+
+        emit_spawn_child_expansion(out,
+                                   template_name,
+                                   child.children,
+                                   override_node != nullptr ? override_node->children : NO_OVERRIDES,
+                                   var,
+                                   var,
+                                   role_path,
+                                   trait_names,
+                                   program,
+                                   pointer_aliases);
+        role_path.pop_back();
+        ++index;
+    }
+}
+
+static std::string emit_hierarchical_spawn_expansion(const std::string& template_name,
+                                                     const std::vector<ArchetypeTraitEntry>& root_overrides,
+                                                     const std::vector<ChildOverrideNode>& child_overrides,
+                                                     const std::vector<ChildArchetypeNode>& children,
+                                                     const std::vector<std::string>& trait_names,
+                                                     const DecoratedProgram& program,
+                                                     const std::unordered_set<std::string>& pointer_aliases) {
+    std::ostringstream out;
+    std::vector<std::string> role_path;
+    out << "([&]() {\n";
+    out << "    auto __spawned = " << archetype_node_create_function_name(template_name, role_path)
+        << "(registry);\n";
+    out << emit_spawn_overrides("__spawned", root_overrides, 1, trait_names, program, pointer_aliases);
+    emit_spawn_child_expansion(out,
+                               template_name,
+                               children,
+                               child_overrides,
+                               "__spawned",
+                               "__child",
+                               role_path,
+                               trait_names,
+                               program,
+                               pointer_aliases);
+    out << "    return __spawned;\n";
+    out << "})()";
+    return out.str();
+}
+
 static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
                                          const std::unordered_set<std::string>& pointer_aliases) {
+    if (!spawn.child_overrides.empty()) {
+        if (const auto* children = find_template_children(program, spawn.template_name)) {
+            return emit_hierarchical_spawn_expansion(
+                spawn.template_name, spawn.overrides, spawn.child_overrides, *children, trait_names, program,
+                pointer_aliases);
+        }
+    }
     std::ostringstream out;
     out << "([&]() {\n";
     out << "    auto __spawned = " << archetype_create_function_name(spawn.template_name) << "(registry);\n";
@@ -1286,6 +1396,19 @@ static std::string rewrite_stmt(
                 }
                 return ind + emit_call + "\n";
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                if (!s.child_overrides.empty()) {
+                    if (const auto* children = find_template_children(program, s.template_name)) {
+                        return ind +
+                               emit_hierarchical_spawn_expansion(s.template_name,
+                                                                 s.overrides,
+                                                                 s.child_overrides,
+                                                                 *children,
+                                                                 trait_names,
+                                                                 program,
+                                                                 pointer_aliases) +
+                               ";\n";
+                    }
+                }
                 std::ostringstream result;
                 result << ind << "{\n";
                 result << ind << "    auto __spawned = " << archetype_create_function_name(s.template_name)

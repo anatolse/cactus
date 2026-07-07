@@ -78,9 +78,36 @@ struct ArchetypeBodyEntry {
     SourceLocation location;
 };
 
+// ── Hierarchical child archetypes (dsl-hierarchical-entity-templates) ───────
+
+// Override entry inside a `children:` block of a template-backed entity, a
+// spawn site, or a `from`-template child. Role names address existing child
+// roles of the referenced template; overrides merge field-by-field.
+struct ChildOverrideNode {
+    std::string role;
+    std::vector<ArchetypeTraitEntry> traits;   // trait field overrides for this child
+    std::vector<ChildOverrideNode> children;   // nested overrides for this child's children
+    SourceLocation location;
+};
+
+// Child declaration inside a `children:` block of an entity/template archetype
+// body. Role names are sibling-scoped; they do not introduce global entity
+// declarations or author-visible entity_id constants.
+struct ChildArchetypeNode {
+    std::string role;
+    std::optional<std::string> template_ref;  // set when "entity Role from TemplateName:"
+    std::vector<ArchetypeBodyEntry> body_entries;
+    std::vector<ArchetypeTemplateUseEntry> template_uses;
+    std::vector<ArchetypeTraitEntry> traits;
+    std::vector<ChildArchetypeNode> children;        // declared children (no template_ref)
+    std::vector<ChildOverrideNode> child_overrides;  // overrides (template_ref set)
+    SourceLocation location;
+};
+
 struct SpawnExpr {
     std::string template_name;
     std::vector<ArchetypeTraitEntry> overrides;
+    std::vector<ChildOverrideNode> child_overrides;
     SourceLocation location;
 };
 
@@ -273,6 +300,7 @@ struct TraitMatchStmt {
 struct SpawnStmt {
     std::string template_name;
     std::vector<ArchetypeTraitEntry> overrides;
+    std::vector<ChildOverrideNode> child_overrides;
     SourceLocation location;
 };
 
@@ -401,6 +429,8 @@ struct EntityNode {
     std::vector<ArchetypeBodyEntry> body_entries;
     std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
+    std::vector<ChildArchetypeNode> children;        // declared children (no template_ref)
+    std::vector<ChildOverrideNode> child_overrides;  // child overrides (template_ref set)
     SourceLocation location;
 };
 
@@ -412,6 +442,7 @@ struct TemplateNode {
     std::vector<ArchetypeBodyEntry> body_entries;
     std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
+    std::vector<ChildArchetypeNode> children;
     SourceLocation location;
 };
 

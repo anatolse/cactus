@@ -179,6 +179,23 @@ private:
     void flatten_template_compositions(ProgramNode& program);
     void validate_template_backed_entity_overrides(ProgramNode& program);
     void validate_spawn_sites(ProgramNode& program);
+
+    // Hierarchical entity templates (dsl-hierarchical-entity-templates)
+    void validate_archetype_template_ref(const std::string& tmpl_ref,
+                                         const SourceLocation& location,
+                                         const std::string& owner_desc);
+    void validate_child_archetypes(const std::vector<ChildArchetypeNode>& children,
+                                   const std::string& archetype_kind,
+                                   const std::string& archetype_name);
+    void validate_child_override_tree(const std::vector<ChildOverrideNode>& overrides,
+                                      const std::vector<ChildArchetypeNode>& base_children,
+                                      const std::string& site_desc,
+                                      bool allow_self);
+    void validate_child_required_fields(const std::vector<ChildArchetypeNode>& children,
+                                        const std::vector<ChildOverrideNode>& overrides,
+                                        const std::string& site_desc,
+                                        const SourceLocation& site_loc);
+    void validate_hierarchical_entities(ProgramNode& program);
     void validate_stmt_contexts(ProgramNode& program);
     void validate_trait_modifier_rules(ProgramNode& program);
     void validate_exclude_clause(const auto& node);
@@ -283,6 +300,10 @@ private:
 
     // Archetype trait entries: archetype_name → nested trait entries list
     std::unordered_map<std::string, const std::vector<ArchetypeTraitEntry>*> archetype_traits_;
+
+    // Flattened child archetype trees: archetype_name → flattened children
+    // (dsl-hierarchical-entity-templates)
+    std::unordered_map<std::string, const std::vector<ChildArchetypeNode>*> archetype_children_;
 
     // Template required fields (var with no default and not in config):
     // template_name → set of field names that must be provided at spawn site

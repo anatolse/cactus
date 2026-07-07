@@ -11,7 +11,9 @@ module forest_bombs
 # Kept intentionally minimal: no minimap, no arrow indicator, no
 # render-to-texture, and no UI DSL dependency.
 
-# Task 1.2 — required stdlib surfaces.
+# Task 1.2 — required stdlib surfaces. std.core provides the Parent trait that
+# hierarchical `children:` templates wire on generated child entities.
+use std.core
 use std.input
 use std.math as math
 use std.math.quat as quat
@@ -115,13 +117,12 @@ trait Score:
     var trees_hit: int = 0
 
 # Task 1.5 — tree traits. The logical root is the queryable/destructible tree;
-# it also carries this instance's growth data. The crown is a paired visual box
-# sharing the same logical tree instance id.
-trait TreeRoot:
-    var instance: int = 0
+# it also carries the trunk's growth data. The crown is a child entity created
+# by the hierarchical TreeTemplate with a generated `Parent` relation, so
+# destroying the root fells the whole tree — no shared instance ids needed.
+trait TreeRoot
 
-trait TreeCrown:
-    var instance: int = 0
+trait TreeCrown
 
 trait TreeGrowth:
     var progress: float = 0.0
@@ -167,9 +168,12 @@ template BombTemplate:
         radius   = BOMB_RADIUS
         exploded = false
 
-# Tree instance parts. A tree is a brown trunk root plus a green crown box that
-# share an `instance` id and grow from their own TreeGrowth data.
-template TrunkTemplate:
+# A whole tree is one hierarchical template: the brown trunk is the root node
+# the gameplay queries and destroys, and the green crown box is a `children:`
+# entity that receives a generated `Parent` relation to the trunk. Each node
+# grows from its own TreeGrowth data. Parentage does not move the crown —
+# crown positions stay authored per tree.
+template TreeTemplate:
     WorldTransform:
         rotation = quat.identity()
         scale    = vec3(0.4, 1.2, 0.4)
@@ -178,8 +182,7 @@ template TrunkTemplate:
         material    = TrunkMaterial
         visible     = true
         cast_shadow = true
-    TreeRoot:
-        instance = 0
+    TreeRoot
     TreeGrowth:
         progress     = 0.0
         target_scale = 1.0
@@ -189,25 +192,25 @@ template TrunkTemplate:
         rng    = rand.seeded(0)
         wobble = rand.uniform(-0.04, 0.04)
 
-template CrownTemplate:
-    WorldTransform:
-        rotation = quat.identity()
-        scale    = vec3(1.4, 1.4, 1.4)
-    Renderer:
-        mesh        = BoxMesh
-        material    = CrownMaterial
-        visible     = true
-        cast_shadow = true
-    TreeCrown:
-        instance = 0
-    TreeGrowth:
-        progress     = 0.0
-        target_scale = 1.0
-        slowdown     = 3.0
-        base_scale   = vec3(1.4, 1.4, 1.4)
-    TreeRng:
-        rng    = rand.seeded(0)
-        wobble = rand.uniform(-0.04, 0.04)
+    children:
+        entity Crown:
+            WorldTransform:
+                rotation = quat.identity()
+                scale    = vec3(1.4, 1.4, 1.4)
+            Renderer:
+                mesh        = BoxMesh
+                material    = CrownMaterial
+                visible     = true
+                cast_shadow = true
+            TreeCrown
+            TreeGrowth:
+                progress     = 0.0
+                target_scale = 1.0
+                slowdown     = 3.0
+                base_scale   = vec3(1.4, 1.4, 1.4)
+            TreeRng:
+                rng    = rand.seeded(0)
+                wobble = rand.uniform(-0.04, 0.04)
 
 # ── Scene: players + split-screen cameras ─────────────────────────────────────
 # Task 2.1/2.2/2.3 — each player has a visible gameplay body plus a separate
@@ -341,142 +344,120 @@ pub entity FillLight:
 
 # ── Scene: the forest ─────────────────────────────────────────────────────────
 # Task 2.5/3.1 — a bounded, deterministically-varied forest. Each tree is one
-# TrunkTemplate root plus one CrownTemplate crown sharing an `instance` id, with
-# varied X/Z positions, target scale factors, and growth slowdown values.
-# Scatter positions are authored; per-tree Rng (from std.random) drives independent
-# growth-rate wobble so each entity grows at a slightly different pace.
+# hierarchical TreeTemplate instance: the trunk root plus a Crown child wired
+# by a generated Parent relation, with varied X/Z positions, target scale
+# factors, and growth slowdown values. Scatter positions are authored; per-node
+# Rng (from std.random) drives independent growth-rate wobble so each entity
+# grows at a slightly different pace. Nested `children:` overrides address the
+# crown by role.
 
-pub entity Trunk1 from TrunkTemplate:
+pub entity Tree1 from TreeTemplate:
     WorldTransform:
         position = vec3(-7.0, 0.0, 2.0)
-    TreeRoot:
-        instance = 1
     TreeGrowth:
         target_scale = 1.0
         slowdown     = 2.5
     TreeRng:
         rng = rand.seeded(1)
+    children:
+        Crown:
+            WorldTransform:
+                position = vec3(-7.0, 1.6, 2.0)
+            TreeGrowth:
+                target_scale = 1.0
+                slowdown     = 2.5
+            TreeRng:
+                rng = rand.seeded(101)
 
-pub entity Crown1 from CrownTemplate:
-    WorldTransform:
-        position = vec3(-7.0, 1.6, 2.0)
-    TreeCrown:
-        instance = 1
-    TreeGrowth:
-        target_scale = 1.0
-        slowdown     = 2.5
-    TreeRng:
-        rng = rand.seeded(101)
-
-pub entity Trunk2 from TrunkTemplate:
+pub entity Tree2 from TreeTemplate:
     WorldTransform:
         position = vec3(-3.0, 0.0, -1.0)
-    TreeRoot:
-        instance = 2
     TreeGrowth:
         target_scale = 1.3
         slowdown     = 3.5
     TreeRng:
         rng = rand.seeded(2)
+    children:
+        Crown:
+            WorldTransform:
+                position = vec3(-3.0, 1.6, -1.0)
+            TreeGrowth:
+                target_scale = 1.3
+                slowdown     = 3.5
+            TreeRng:
+                rng = rand.seeded(102)
 
-pub entity Crown2 from CrownTemplate:
-    WorldTransform:
-        position = vec3(-3.0, 1.6, -1.0)
-    TreeCrown:
-        instance = 2
-    TreeGrowth:
-        target_scale = 1.3
-        slowdown     = 3.5
-    TreeRng:
-        rng = rand.seeded(102)
-
-pub entity Trunk3 from TrunkTemplate:
+pub entity Tree3 from TreeTemplate:
     WorldTransform:
         position = vec3(2.0, 0.0, 1.0)
-    TreeRoot:
-        instance = 3
     TreeGrowth:
         target_scale = 0.8
         slowdown     = 2.0
     TreeRng:
         rng = rand.seeded(3)
+    children:
+        Crown:
+            WorldTransform:
+                position = vec3(2.0, 1.6, 1.0)
+            TreeGrowth:
+                target_scale = 0.8
+                slowdown     = 2.0
+            TreeRng:
+                rng = rand.seeded(103)
 
-pub entity Crown3 from CrownTemplate:
-    WorldTransform:
-        position = vec3(2.0, 1.6, 1.0)
-    TreeCrown:
-        instance = 3
-    TreeGrowth:
-        target_scale = 0.8
-        slowdown     = 2.0
-    TreeRng:
-        rng = rand.seeded(103)
-
-pub entity Trunk4 from TrunkTemplate:
+pub entity Tree4 from TreeTemplate:
     WorldTransform:
         position = vec3(6.0, 0.0, -3.0)
-    TreeRoot:
-        instance = 4
     TreeGrowth:
         target_scale = 1.5
         slowdown     = 4.0
     TreeRng:
         rng = rand.seeded(4)
+    children:
+        Crown:
+            WorldTransform:
+                position = vec3(6.0, 1.6, -3.0)
+            TreeGrowth:
+                target_scale = 1.5
+                slowdown     = 4.0
+            TreeRng:
+                rng = rand.seeded(104)
 
-pub entity Crown4 from CrownTemplate:
-    WorldTransform:
-        position = vec3(6.0, 1.6, -3.0)
-    TreeCrown:
-        instance = 4
-    TreeGrowth:
-        target_scale = 1.5
-        slowdown     = 4.0
-    TreeRng:
-        rng = rand.seeded(104)
-
-pub entity Trunk5 from TrunkTemplate:
+pub entity Tree5 from TreeTemplate:
     WorldTransform:
         position = vec3(-5.0, 0.0, -5.0)
-    TreeRoot:
-        instance = 5
     TreeGrowth:
         target_scale = 1.1
         slowdown     = 3.0
     TreeRng:
         rng = rand.seeded(5)
+    children:
+        Crown:
+            WorldTransform:
+                position = vec3(-5.0, 1.6, -5.0)
+            TreeGrowth:
+                target_scale = 1.1
+                slowdown     = 3.0
+            TreeRng:
+                rng = rand.seeded(105)
 
-pub entity Crown5 from CrownTemplate:
-    WorldTransform:
-        position = vec3(-5.0, 1.6, -5.0)
-    TreeCrown:
-        instance = 5
-    TreeGrowth:
-        target_scale = 1.1
-        slowdown     = 3.0
-    TreeRng:
-        rng = rand.seeded(105)
-
-pub entity Trunk6 from TrunkTemplate:
+pub entity Tree6 from TreeTemplate:
     WorldTransform:
         position = vec3(3.0, 0.0, -7.0)
-    TreeRoot:
-        instance = 6
     TreeGrowth:
         target_scale = 0.9
         slowdown     = 2.2
     TreeRng:
         rng = rand.seeded(6)
-
-pub entity Crown6 from CrownTemplate:
-    WorldTransform:
-        position = vec3(3.0, 1.6, -7.0)
-    TreeCrown:
-        instance = 6
-    TreeGrowth:
-        target_scale = 0.9
-        slowdown     = 2.2
-    TreeRng:
-        rng = rand.seeded(106)
+    children:
+        Crown:
+            WorldTransform:
+                position = vec3(3.0, 1.6, -7.0)
+            TreeGrowth:
+                target_scale = 0.9
+                slowdown     = 2.2
+            TreeRng:
+                rng = rand.seeded(106)
 
 # ── Systems ───────────────────────────────────────────────────────────────────
 
@@ -559,8 +540,9 @@ system ThrowSystem:
             throw_cooldown = THROW_COOLDOWN
 
 # Task 3.5/3.6/3.7 — simulate bomb flight; on ground impact, explode: query the
-# tree roots inside the blast radius, destroy whole trees (root + co-located
-# crown), and score one point per felled tree for the throwing player.
+# tree roots inside the blast radius and destroy each root. The crown is a
+# hierarchy child of the root, so the existing Parent-based recursive destroy
+# fells the whole tree. Score one point per felled tree for the thrower.
 system BombSystem:
     filter:
         WorldTransform
@@ -578,11 +560,6 @@ system BombSystem:
                 destroy hit_root
                 emit TreeHit to owner:
                     count = 1
-
-            # Destroy the paired crown visuals caught by the same blast sphere.
-            let crowns = query.overlap_sphere[TreeCrown](center = center, radius = radius)
-            for hit_crown in crowns:
-                destroy hit_crown
 
             destroy
 

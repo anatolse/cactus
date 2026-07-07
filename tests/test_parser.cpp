@@ -1762,4 +1762,184 @@ TEST_CASE("Parser: query call — module-qualified path", "[parser][query]") {
     REQUIRE(inner != nullptr);
     CHECK(inner->member == "query");
 }
+
+// ── Hierarchical entity templates (dsl-hierarchical-entity-templates) ───────
+
+TEST_CASE("Parser: template with direct children", "[parser][hierarchy]") {
+    auto prog = parse(
+        "template TreeTemplate:\n"
+        "    LocalTransform\n"
+        "    children:\n"
+        "        entity Trunk:\n"
+        "            Renderer\n"
+        "        entity Crown from CrownTemplate:\n"
+        "            LocalTransform:\n"
+        "                offset = 2.0\n");
+    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
+    REQUIRE(tmpl.traits.size() == 1);
+    CHECK(tmpl.traits[0].trait_name == "LocalTransform");
+    REQUIRE(tmpl.children.size() == 2);
+    CHECK(tmpl.children[0].role == "Trunk");
+    CHECK_FALSE(tmpl.children[0].template_ref.has_value());
+    REQUIRE(tmpl.children[0].traits.size() == 1);
+    CHECK(tmpl.children[0].traits[0].trait_name == "Renderer");
+    CHECK(tmpl.children[1].role == "Crown");
+    REQUIRE(tmpl.children[1].template_ref.has_value());
+    CHECK(*tmpl.children[1].template_ref == "CrownTemplate");
+    REQUIRE(tmpl.children[1].traits.size() == 1);
+    REQUIRE(tmpl.children[1].traits[0].assignments.size() == 1);
+    CHECK(tmpl.children[1].traits[0].assignments[0].name == "offset");
+}
+
+TEST_CASE("Parser: template with grandchildren", "[parser][hierarchy]") {
+    auto prog = parse(
+        "template PlayerRig:\n"
+        "    LocalTransform\n"
+        "    children:\n"
+        "        entity WeaponSocket:\n"
+        "            LocalTransform\n"
+        "            children:\n"
+        "                entity Sword from SwordTemplate:\n"
+        "                    LocalTransform\n");
+    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
+    REQUIRE(tmpl.children.size() == 1);
+    auto& socket = tmpl.children[0];
+    CHECK(socket.role == "WeaponSocket");
+    REQUIRE(socket.children.size() == 1);
+    CHECK(socket.children[0].role == "Sword");
+    REQUIRE(socket.children[0].template_ref.has_value());
+    CHECK(*socket.children[0].template_ref == "SwordTemplate");
+    // Grandchild is nested, not a sibling of the root's children.
+    CHECK(socket.children[0].children.empty());
+}
+
+TEST_CASE("Parser: child body can mix use entries and traits", "[parser][hierarchy]") {
+    auto prog = parse(
+        "template Rig:\n"
+        "    Tag\n"
+        "    children:\n"
+        "        entity Body:\n"
+        "            use RenderableBase\n"
+        "            Health:\n"
+        "                hp = 10\n");
+    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
+    REQUIRE(tmpl.children.size() == 1);
+    auto& body = tmpl.children[0];
+    REQUIRE(body.template_uses.size() == 1);
+    CHECK(body.template_uses[0].template_name == "RenderableBase");
+    REQUIRE(body.traits.size() == 1);
+    CHECK(body.traits[0].trait_name == "Health");
+}
+
+TEST_CASE("Parser: template-backed entity with nested child overrides", "[parser][hierarchy]") {
+    auto prog = parse(
+        "entity Player1 from PlayerRig:\n"
+        "    LocalTransform:\n"
+        "        position = vec3(0.0, 0.0, 0.0)\n"
+        "    children:\n"
+        "        WeaponSocket:\n"
+        "            LocalTransform:\n"
+        "                position = vec3(0.5, 1.1, 0.0)\n"
+        "            children:\n"
+        "                Sword:\n"
+        "                    Renderer:\n"
+        "                        material = BlueSwordMaterial\n");
+    auto& entity = std::get<EntityNode>(prog.declarations[0]);
+    REQUIRE(entity.template_ref.has_value());
+    REQUIRE(entity.traits.size() == 1);
+    CHECK(entity.traits[0].trait_name == "LocalTransform");
+    CHECK(entity.children.empty());
+    REQUIRE(entity.child_overrides.size() == 1);
+    auto& socket = entity.child_overrides[0];
+    CHECK(socket.role == "WeaponSocket");
+    REQUIRE(socket.traits.size() == 1);
+    CHECK(socket.traits[0].trait_name == "LocalTransform");
+    REQUIRE(socket.children.size() == 1);
+    CHECK(socket.children[0].role == "Sword");
+    REQUIRE(socket.children[0].traits.size() == 1);
+    CHECK(socket.children[0].traits[0].trait_name == "Renderer");
+    REQUIRE(socket.children[0].traits[0].assignments.size() == 1);
+    CHECK(socket.children[0].traits[0].assignments[0].name == "material");
+}
+
+TEST_CASE("Parser: spawn statement with child overrides", "[parser][hierarchy]") {
+    auto prog = parse(
+        "system Spawner:\n"
+        "    on tick:\n"
+        "        spawn PlayerRig:\n"
+        "            LocalTransform:\n"
+        "                position = vec3(1.0, 0.0, 0.0)\n"
+        "            children:\n"
+        "                WeaponSocket:\n"
+        "                    LocalTransform:\n"
+        "                        position = vec3(0.5, 1.1, 0.0)\n");
+    auto& sys   = std::get<SystemNode>(prog.declarations[0]);
+    auto* spawn = std::get_if<SpawnStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(spawn != nullptr);
+    REQUIRE(spawn->overrides.size() == 1);
+    CHECK(spawn->overrides[0].trait_name == "LocalTransform");
+    REQUIRE(spawn->child_overrides.size() == 1);
+    CHECK(spawn->child_overrides[0].role == "WeaponSocket");
+    REQUIRE(spawn->child_overrides[0].traits.size() == 1);
+    CHECK(spawn->child_overrides[0].traits[0].trait_name == "LocalTransform");
+}
+
+TEST_CASE("Parser: spawn expression with child overrides", "[parser][hierarchy]") {
+    auto prog = parse(
+        "system Spawner:\n"
+        "    on tick:\n"
+        "        let root = spawn PlayerRig:\n"
+        "            Tag\n"
+        "            children:\n"
+        "                WeaponSocket:\n"
+        "                    children:\n"
+        "                        Sword:\n"
+        "                            Renderer:\n"
+        "                                tint = 1.0\n");
+    auto& sys  = std::get<SystemNode>(prog.declarations[0]);
+    auto* let  = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* spawn = std::get_if<SpawnExpr>(&let->value->expr);
+    REQUIRE(spawn != nullptr);
+    REQUIRE(spawn->overrides.size() == 1);
+    CHECK(spawn->overrides[0].trait_name == "Tag");
+    REQUIRE(spawn->child_overrides.size() == 1);
+    REQUIRE(spawn->child_overrides[0].children.size() == 1);
+    CHECK(spawn->child_overrides[0].children[0].role == "Sword");
+    REQUIRE(spawn->child_overrides[0].children[0].traits.size() == 1);
+    CHECK(spawn->child_overrides[0].children[0].traits[0].trait_name == "Renderer");
+}
+
+TEST_CASE("Parser: flat archetype bodies remain valid with no children", "[parser][hierarchy]") {
+    auto prog = parse(
+        "template Flat:\n"
+        "    Health:\n"
+        "        hp = 5\n"
+        "entity Static:\n"
+        "    use Flat\n"
+        "    Tag\n");
+    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
+    CHECK(tmpl.children.empty());
+    auto& entity = std::get<EntityNode>(prog.declarations[1]);
+    CHECK(entity.children.empty());
+    CHECK(entity.child_overrides.empty());
+}
+
+TEST_CASE("Parser: children is not reserved outside archetype bodies", "[parser][hierarchy]") {
+    auto prog = parse(
+        "func children() int:\n"
+        "    return 3\n"
+        "func test():\n"
+        "    let child = children()\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    CHECK(func.name == "children");
+}
+
+TEST_CASE("Parser: children declaration block requires entity keyword", "[parser][hierarchy]") {
+    parse_expect_errors(
+        "template Broken:\n"
+        "    children:\n"
+        "        Trunk:\n"
+        "            Renderer\n");
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

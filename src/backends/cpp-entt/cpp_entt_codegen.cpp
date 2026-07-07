@@ -347,6 +347,90 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
     return out.str();
 }
 
+// ── Hierarchical archetype creation (dsl-hierarchical-entity-templates) ──────
+
+// Internal per-node creation helper name: create_<archetype>__node for the
+// root, create_<archetype>__node__<role path> for descendants. These are not
+// registered in the editor template palette.
+std::string archetype_node_create_function_name(const std::string& archetype_name,
+                                                const std::vector<std::string>& role_path) {
+    std::string name = "create_" + snake_case(archetype_name) + "__node";
+    for (const auto& role : role_path) {
+        name += "__" + snake_case(role);
+    }
+    return name;
+}
+
+void emit_archetype_node_helpers(std::ostringstream& out,
+                                 const std::string& archetype_name,
+                                 const std::vector<ChildArchetypeNode>& children,
+                                 const DecoratedProgram& program,
+                                 std::vector<std::string>& role_path) {
+    for (const auto& child : children) {
+        role_path.push_back(child.role);
+        out << "static entt::entity " << archetype_node_create_function_name(archetype_name, role_path)
+            << "(entt::registry& registry) {\n";
+        out << "    auto entity = registry.create();\n";
+        emit_archetype_trait_initializers(out, child.traits, program, "entity", 1);
+        out << "    return entity;\n";
+        out << "}\n\n";
+        emit_archetype_node_helpers(out, archetype_name, child.children, program, role_path);
+        role_path.pop_back();
+    }
+}
+
+// Emit deterministic parent-first preorder creation of descendants: each child
+// is created via its per-node helper, receives a generated Parent relation to
+// its immediate parent, and then its own descendants follow (D3/D8).
+void emit_child_creation_sequence(std::ostringstream& out,
+                                  const std::string& archetype_name,
+                                  const std::vector<ChildArchetypeNode>& children,
+                                  const std::string& parent_var,
+                                  const std::string& var_prefix,
+                                  std::vector<std::string>& role_path) {
+    std::size_t index = 0;
+    for (const auto& child : children) {
+        const std::string var = var_prefix + "_" + std::to_string(index);
+        role_path.push_back(child.role);
+        out << "    auto " << var << " = " << archetype_node_create_function_name(archetype_name, role_path)
+            << "(registry);\n";
+        out << "    registry.emplace_or_replace<Parent>(" << var << ", Parent{.parent = " << parent_var << "});\n";
+        emit_child_creation_sequence(out, archetype_name, child.children, var, var, role_path);
+        role_path.pop_back();
+        ++index;
+    }
+}
+
+// For hierarchical archetypes, emit per-node helpers plus a canonical
+// create_<archetype> wrapper that expands the override-free tree and returns
+// the root entity (D9). Flat archetypes generate the same code as before.
+std::string emit_archetype_creation_functions(const std::string& archetype_name,
+                                              const std::vector<ArchetypeTraitEntry>& traits,
+                                              const std::vector<ChildArchetypeNode>& children,
+                                              const DecoratedProgram& program) {
+    if (children.empty()) {
+        return emit_archetype_creation_function(archetype_name, traits, program);
+    }
+
+    std::ostringstream out;
+    std::vector<std::string> role_path;
+
+    out << "static entt::entity " << archetype_node_create_function_name(archetype_name, role_path)
+        << "(entt::registry& registry) {\n";
+    out << "    auto entity = registry.create();\n";
+    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    out << "    return entity;\n";
+    out << "}\n\n";
+    emit_archetype_node_helpers(out, archetype_name, children, program, role_path);
+
+    out << "entt::entity " << archetype_create_function_name(archetype_name) << "(entt::registry& registry) {\n";
+    out << "    auto entity = " << archetype_node_create_function_name(archetype_name, role_path) << "(registry);\n";
+    emit_child_creation_sequence(out, archetype_name, children, "entity", "__child", role_path);
+    out << "    return entity;\n";
+    out << "}\n\n";
+    return out.str();
+}
+
 const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::string& name) {
     auto it = program.traits.find(name);
     return it == program.traits.end() ? nullptr : &it->second;
@@ -1314,12 +1398,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
-                out << emit_archetype_creation_function(tmpl->name, tmpl->traits, program);
+                out << emit_archetype_creation_functions(tmpl->name, tmpl->traits, tmpl->children, program);
             }
         }
         for (auto& decl : program.ast->declarations) {
             if (auto* entity = std::get_if<EntityNode>(&decl)) {
-                out << emit_archetype_creation_function(entity->name, entity->traits, program);
+                out << emit_archetype_creation_functions(entity->name, entity->traits, entity->children, program);
             }
         }
     }

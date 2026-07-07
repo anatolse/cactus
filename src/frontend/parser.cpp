@@ -740,7 +740,14 @@ ArchetypeTemplateUseEntry Parser::parse_archetype_template_use_entry() {
     return {.template_name = template_name, .location = loc};
 }
 
-Parser::ParsedArchetypeBody Parser::parse_archetype_body_entries() {
+// `children:` is contextual inside archetype bodies: an identifier named
+// `children` directly followed by ':'. Neither `child` nor `children` is a
+// reserved keyword elsewhere.
+bool Parser::at_children_block() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "children" && peek_next().type == TokenType::COLON;
+}
+
+Parser::ParsedArchetypeBody Parser::parse_archetype_body_entries(ChildBlockMode child_mode) {
     ParsedArchetypeBody body;
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
@@ -761,6 +768,23 @@ Parser::ParsedArchetypeBody Parser::parse_archetype_body_entries() {
             continue;
         }
 
+        if (at_children_block()) {
+            advance();  // 'children'
+            advance();  // ':'
+            if (child_mode == ChildBlockMode::Overrides) {
+                auto overrides = parse_children_override_block();
+                for (auto& override_node : overrides) {
+                    body.child_overrides.push_back(std::move(override_node));
+                }
+            } else {
+                auto children = parse_children_declaration_block();
+                for (auto& child : children) {
+                    body.children.push_back(std::move(child));
+                }
+            }
+            continue;
+        }
+
         auto trait_entry = parse_archetype_trait_entry();
         if (errors_.error_count() > error_count_before) {
             synchronize();
@@ -773,30 +797,145 @@ Parser::ParsedArchetypeBody Parser::parse_archetype_body_entries() {
     return body;
 }
 
-std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entries() {
-    std::vector<ArchetypeTraitEntry> entries;
+std::vector<ChildArchetypeNode> Parser::parse_children_declaration_block() {
+    expect_newline();
+    expect_indent();
+    std::vector<ChildArchetypeNode> children;
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
         auto error_count_before = errors_.error_count();
-        auto entry              = parse_archetype_trait_entry();
+        auto child              = parse_child_declaration();
         if (errors_.error_count() > error_count_before) {
             synchronize();
             continue;
         }
-        entries.push_back(std::move(entry));
+        children.push_back(std::move(child));
     }
-    return entries;
+    expect_dedent();
+    return children;
 }
 
-std::vector<ArchetypeTraitEntry> Parser::parse_archetype_trait_entry_block() {
+ChildArchetypeNode Parser::parse_child_declaration() {
+    auto loc = peek().location;
+    consume(TokenType::ENTITY, "expected 'entity' to declare a child archetype");
+
+    ChildArchetypeNode node;
+    node.location = loc;
+    node.role     = consume(TokenType::IDENTIFIER, "expected child role name").value;
+
+    if (match(TokenType::FROM)) {
+        node.template_ref = parse_dotted_name();
+    }
+
+    consume(TokenType::COLON, "expected ':'");
     expect_newline();
     expect_indent();
-    auto entries = parse_archetype_trait_entries();
+
+    // A `from`-template child body overrides the template, so its nested
+    // `children:` entries address existing roles; a plain child declares them.
+    auto body = parse_archetype_body_entries(node.template_ref.has_value() ? ChildBlockMode::Overrides
+                                                                           : ChildBlockMode::Declarations);
+    node.body_entries    = std::move(body.entries);
+    node.template_uses   = std::move(body.template_uses);
+    node.traits          = std::move(body.traits);
+    node.children        = std::move(body.children);
+    node.child_overrides = std::move(body.child_overrides);
+
+    skip_newlines();
     expect_dedent();
-    return entries;
+    return node;
+}
+
+std::vector<ChildOverrideNode> Parser::parse_children_override_block() {
+    expect_newline();
+    expect_indent();
+    std::vector<ChildOverrideNode> overrides;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        auto error_count_before = errors_.error_count();
+        auto override_node      = parse_child_override();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        overrides.push_back(std::move(override_node));
+    }
+    expect_dedent();
+    return overrides;
+}
+
+ChildOverrideNode Parser::parse_child_override() {
+    auto loc = peek().location;
+
+    ChildOverrideNode node;
+    node.location = loc;
+    node.role     = consume(TokenType::IDENTIFIER, "expected child role name").value;
+    consume(TokenType::COLON, "expected ':' after child role name");
+    expect_newline();
+    expect_indent();
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        auto error_count_before = errors_.error_count();
+        if (at_children_block()) {
+            advance();  // 'children'
+            advance();  // ':'
+            auto nested = parse_children_override_block();
+            for (auto& nested_node : nested) {
+                node.children.push_back(std::move(nested_node));
+            }
+            continue;
+        }
+        auto trait_entry = parse_archetype_trait_entry();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        node.traits.push_back(std::move(trait_entry));
+    }
+    expect_dedent();
+    return node;
+}
+
+// Spawn-site override block: trait override entries plus an optional
+// contextual `children:` block of nested child overrides.
+Parser::ParsedOverrideBody Parser::parse_archetype_override_block() {
+    expect_newline();
+    expect_indent();
+    ParsedOverrideBody body;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        auto error_count_before = errors_.error_count();
+        if (at_children_block()) {
+            advance();  // 'children'
+            advance();  // ':'
+            auto overrides = parse_children_override_block();
+            for (auto& override_node : overrides) {
+                body.child_overrides.push_back(std::move(override_node));
+            }
+            continue;
+        }
+        auto entry = parse_archetype_trait_entry();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        body.traits.push_back(std::move(entry));
+    }
+    expect_dedent();
+    return body;
 }
 
 // ── Entity ───────────────────────────────────────────────────────────────────
@@ -819,10 +958,15 @@ EntityNode Parser::parse_entity(bool is_pub) {
     expect_newline();
     expect_indent();
 
-    auto body          = parse_archetype_body_entries();
-    node.body_entries  = std::move(body.entries);
-    node.template_uses = std::move(body.template_uses);
-    node.traits        = std::move(body.traits);
+    // Template-backed entity bodies override the template, so their
+    // `children:` entries address existing roles; plain entities declare them.
+    auto body            = parse_archetype_body_entries(node.template_ref.has_value() ? ChildBlockMode::Overrides
+                                                                                      : ChildBlockMode::Declarations);
+    node.body_entries    = std::move(body.entries);
+    node.template_uses   = std::move(body.template_uses);
+    node.traits          = std::move(body.traits);
+    node.children        = std::move(body.children);
+    node.child_overrides = std::move(body.child_overrides);
 
     skip_newlines();
     expect_dedent();
@@ -843,10 +987,11 @@ TemplateNode Parser::parse_template(bool is_pub) {
     node.is_pub   = is_pub;
     node.location = loc;
 
-    auto body          = parse_archetype_body_entries();
+    auto body          = parse_archetype_body_entries(ChildBlockMode::Declarations);
     node.body_entries  = std::move(body.entries);
     node.template_uses = std::move(body.template_uses);
     node.traits        = std::move(body.traits);
+    node.children      = std::move(body.children);
 
     skip_newlines();
     expect_dedent();
@@ -1440,7 +1585,10 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
         auto name = consume(TokenType::IDENTIFIER, "expected binding name").value;
         consume(TokenType::ASSIGN, "expected '='");
         auto value = parse_expression();
-        expect_newline();
+        // Block-structured spawn expressions consume their own newline/dedents.
+        if (!std::holds_alternative<SpawnExpr>(value->expr)) {
+            expect_newline();
+        }
         LetStmt let_stmt;
         let_stmt.name     = name;
         let_stmt.value    = std::move(value);
@@ -1532,7 +1680,9 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
         spawn_stmt.template_name = template_name;
         spawn_stmt.location      = loc;
         consume(TokenType::COLON, "expected ':'");
-        spawn_stmt.overrides = parse_archetype_trait_entry_block();
+        auto overrides             = parse_archetype_override_block();
+        spawn_stmt.overrides       = std::move(overrides.traits);
+        spawn_stmt.child_overrides = std::move(overrides.child_overrides);
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(spawn_stmt)}, loc);
     }
 
@@ -1908,8 +2058,10 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {  // NOLINT(readability-
         consume(TokenType::COLON, "expected ':'");
         SpawnExpr spawn;
         spawn.template_name = template_name;
-        spawn.overrides     = parse_archetype_trait_entry_block();
-        spawn.location      = loc;
+        auto overrides        = parse_archetype_override_block();
+        spawn.overrides       = std::move(overrides.traits);
+        spawn.child_overrides = std::move(overrides.child_overrides);
+        spawn.location        = loc;
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(spawn)}, loc);
     }
 

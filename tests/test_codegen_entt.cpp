@@ -2001,4 +2001,177 @@ TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search"
     CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
 }
 
+// ── Hierarchical entity templates (dsl-hierarchical-entity-templates) ───────
+
+static const std::string HIERARCHY_SOURCE_PREFIX =
+    "pub event tick:\n"
+    "    dt: float\n"
+    "trait Parent:\n"
+    "    var parent: entity_id\n"
+    "trait Tag:\n"
+    "    var value: int = 0\n"
+    "trait Growth:\n"
+    "    var target_scale: float = 1.0\n"
+    "template Rig:\n"
+    "    Tag\n"
+    "    children:\n"
+    "        entity Socket:\n"
+    "            Tag:\n"
+    "                value = 1\n"
+    "            children:\n"
+    "                entity Gem:\n"
+    "                    Growth\n";
+
+TEST_CASE("Codegen EnTT: hierarchical template emits per-node helpers and canonical wrapper",
+          "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX, program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK(code.find("static entt::entity create_rig__node(entt::registry& registry)") != std::string::npos);
+    CHECK(code.find("static entt::entity create_rig__node__socket(entt::registry& registry)") != std::string::npos);
+    CHECK(code.find("static entt::entity create_rig__node__socket__gem(entt::registry& registry)") !=
+          std::string::npos);
+
+    const auto wrapper = generated_function(code, "entt::entity create_rig(entt::registry& registry)");
+    CHECK(wrapper.find("auto entity = create_rig__node(registry);") != std::string::npos);
+    CHECK(wrapper.find("return entity;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: hierarchical creation assigns Parent to the immediate parent",
+          "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX, program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto wrapper = generated_function(code, "entt::entity create_rig(entt::registry& registry)");
+    // Direct child points at the root; grandchild points at the child, not the root.
+    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(__child_0, Parent{.parent = entity});") !=
+          std::string::npos);
+    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(__child_0_0, Parent{.parent = __child_0});") !=
+          std::string::npos);
+    // The root never receives a generated Parent relation.
+    CHECK(wrapper.find("Parent>(entity") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: hierarchical creation is parent-first preorder", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                       "template Pair:\n"
+                                       "    Tag\n"
+                                       "    children:\n"
+                                       "        entity First:\n"
+                                       "            Tag\n"
+                                       "            children:\n"
+                                       "                entity Deep:\n"
+                                       "                    Tag\n"
+                                       "        entity Second:\n"
+                                       "            Tag\n",
+                                   program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto wrapper = generated_function(code, "entt::entity create_pair(entt::registry& registry)");
+    const auto root    = wrapper.find("create_pair__node(registry)");
+    const auto first   = wrapper.find("create_pair__node__first(registry)");
+    const auto deep    = wrapper.find("create_pair__node__first__deep(registry)");
+    const auto second  = wrapper.find("create_pair__node__second(registry)");
+    REQUIRE(root != std::string::npos);
+    REQUIRE(first != std::string::npos);
+    REQUIRE(deep != std::string::npos);
+    REQUIRE(second != std::string::npos);
+    // Root, then first child and its whole subtree, then the next sibling.
+    CHECK(root < first);
+    CHECK(first < deep);
+    CHECK(deep < second);
+}
+
+TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls canonical wrapper and returns root",
+          "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        let root = spawn Rig:\n"
+                                       "            Tag:\n"
+                                       "                value = 3\n",
+                                   program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK(code.find("auto __spawned = create_rig(registry);") != std::string::npos);
+    CHECK(code.find("return __spawned;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        let root = spawn Rig:\n"
+                                       "            Tag:\n"
+                                       "                value = 3\n"
+                                       "            children:\n"
+                                       "                Socket:\n"
+                                       "                    Tag:\n"
+                                       "                        value = 4\n"
+                                       "                    children:\n"
+                                       "                        Gem:\n"
+                                       "                            Growth:\n"
+                                       "                                target_scale = 2.0\n",
+                                   program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Inline expansion uses the per-node helpers, not the canonical wrapper.
+    CHECK(code.find("auto __spawned = create_rig__node(registry);") != std::string::npos);
+    CHECK(code.find("auto __child_0 = create_rig__node__socket(registry);") != std::string::npos);
+    CHECK(code.find("registry.emplace_or_replace<Parent>(__child_0, Parent{.parent = __spawned});") !=
+          std::string::npos);
+    CHECK(code.find("auto __child_0_0 = create_rig__node__socket__gem(registry);") != std::string::npos);
+    CHECK(code.find("registry.emplace_or_replace<Parent>(__child_0_0, Parent{.parent = __child_0});") !=
+          std::string::npos);
+    // Per-node overrides applied to the matching created entity.
+    CHECK(code.find("registry.try_get<Tag>(__child_0)") != std::string::npos);
+    CHECK(code.find("registry.try_get<Growth>(__child_0_0)") != std::string::npos);
+    CHECK(code.find("return __spawned;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in setup", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                       "entity Rig1 from Rig:\n"
+                                       "    Tag:\n"
+                                       "        value = 5\n"
+                                       "    children:\n"
+                                       "        Socket:\n"
+                                       "            Tag:\n"
+                                       "                value = 7\n",
+                                   program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // generated_init_project creates the whole tree through the entity wrapper.
+    CHECK(code.find("create_rig1(registry);") != std::string::npos);
+    const auto wrapper = generated_function(code, "entt::entity create_rig1(entt::registry& registry)");
+    CHECK(wrapper.find("create_rig1__node__socket(registry)") != std::string::npos);
+    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(__child_0, Parent{.parent = entity});") !=
+          std::string::npos);
+    // Child override value is baked into the per-node helper.
+    const auto socket_fn = generated_function(code, "entt::entity create_rig1__node__socket(entt::registry&");
+    CHECK(socket_fn.find("component.value = 7") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creation", "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                       "system S:\n"
+                                       "    filter:\n"
+                                       "        Tag\n"
+                                       "    on tick:\n"
+                                       "        destroy self\n",
+                                   program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // The existing Parent-based recursive destroy support keys off the Parent
+    // trait, which hierarchical templates rely on unchanged.
+    CHECK(code.find("registry.view<Parent>()") != std::string::npos);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -143,6 +143,10 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr);
 FieldAssignment clone_field_assignment(const FieldAssignment& assignment);
 ArchetypeTraitEntry clone_archetype_trait_entry(const ArchetypeTraitEntry& entry);
 std::vector<ArchetypeTraitEntry> clone_archetype_trait_entries(const std::vector<ArchetypeTraitEntry>& entries);
+ChildOverrideNode clone_child_override_node(const ChildOverrideNode& node);
+std::vector<ChildOverrideNode> clone_child_override_nodes(const std::vector<ChildOverrideNode>& nodes);
+ChildArchetypeNode clone_child_archetype_node(const ChildArchetypeNode& node);
+std::vector<ChildArchetypeNode> clone_child_archetype_nodes(const std::vector<ChildArchetypeNode>& nodes);
 
 template <typename ExprContainer>
 bool any_expr_contains_self(const ExprContainer& expressions) {
@@ -263,9 +267,10 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                 }
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                SpawnExpr copy{.template_name = e.template_name,
-                               .overrides     = clone_archetype_trait_entries(e.overrides),
-                               .location      = e.location};
+                SpawnExpr copy{.template_name   = e.template_name,
+                               .overrides       = clone_archetype_trait_entries(e.overrides),
+                               .child_overrides = clone_child_override_nodes(e.child_overrides),
+                               .location        = e.location};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 QueryCallExpr copy;
@@ -305,6 +310,107 @@ std::vector<ArchetypeTraitEntry> clone_archetype_trait_entries(const std::vector
         copy.push_back(clone_archetype_trait_entry(entry));
     }
     return copy;
+}
+
+ChildOverrideNode clone_child_override_node(const ChildOverrideNode& node) {
+    ChildOverrideNode copy;
+    copy.role     = node.role;
+    copy.location = node.location;
+    copy.traits   = clone_archetype_trait_entries(node.traits);
+    copy.children = clone_child_override_nodes(node.children);
+    return copy;
+}
+
+std::vector<ChildOverrideNode> clone_child_override_nodes(const std::vector<ChildOverrideNode>& nodes) {
+    std::vector<ChildOverrideNode> copy;
+    copy.reserve(nodes.size());
+    for (const auto& node : nodes) {
+        copy.push_back(clone_child_override_node(node));
+    }
+    return copy;
+}
+
+ChildArchetypeNode clone_child_archetype_node(const ChildArchetypeNode& node) {
+    ChildArchetypeNode copy;
+    copy.role         = node.role;
+    copy.template_ref = node.template_ref;
+    copy.location     = node.location;
+    copy.body_entries = node.body_entries;
+    for (const auto& use : node.template_uses) {
+        copy.template_uses.push_back(use);
+    }
+    copy.traits          = clone_archetype_trait_entries(node.traits);
+    copy.children        = clone_child_archetype_nodes(node.children);
+    copy.child_overrides = clone_child_override_nodes(node.child_overrides);
+    return copy;
+}
+
+std::vector<ChildArchetypeNode> clone_child_archetype_nodes(const std::vector<ChildArchetypeNode>& nodes) {
+    std::vector<ChildArchetypeNode> copy;
+    copy.reserve(nodes.size());
+    for (const auto& node : nodes) {
+        copy.push_back(clone_child_archetype_node(node));
+    }
+    return copy;
+}
+
+// ── Hierarchical merge helpers (dsl-hierarchical-entity-templates) ──────────
+
+// Merge one trait entry into a flattened trait list: new traits append, existing
+// traits merge field-by-field with later assignments overriding earlier ones.
+void merge_trait_entry_into(std::vector<ArchetypeTraitEntry>& merged, const ArchetypeTraitEntry& entry) {
+    auto existing = std::ranges::find_if(
+        merged, [&entry](const auto& candidate) { return candidate.trait_name == entry.trait_name; });
+    if (existing == merged.end()) {
+        merged.push_back(clone_archetype_trait_entry(entry));
+        return;
+    }
+
+    for (const auto& assignment : entry.assignments) {
+        auto field = std::ranges::find_if(existing->assignments, [&assignment](const auto& candidate) {
+            return candidate.name == assignment.name;
+        });
+        if (field == existing->assignments.end()) {
+            existing->assignments.push_back(clone_field_assignment(assignment));
+        } else {
+            *field = clone_field_assignment(assignment);
+        }
+    }
+}
+
+// Merge one flattened child node into a flattened child list, keyed by role.
+// Same-role children merge traits field-by-field and children recursively.
+void merge_child_archetype_into(std::vector<ChildArchetypeNode>& merged, const ChildArchetypeNode& child) {
+    auto existing =
+        std::ranges::find_if(merged, [&child](const auto& candidate) { return candidate.role == child.role; });
+    if (existing == merged.end()) {
+        merged.push_back(clone_child_archetype_node(child));
+        return;
+    }
+
+    for (const auto& trait : child.traits) {
+        merge_trait_entry_into(existing->traits, trait);
+    }
+    for (const auto& grandchild : child.children) {
+        merge_child_archetype_into(existing->children, grandchild);
+    }
+}
+
+// Apply a child override tree onto flattened children. Unknown roles are
+// skipped here; validation reports them separately.
+void apply_child_overrides_onto(std::vector<ChildArchetypeNode>& children,
+                                const std::vector<ChildOverrideNode>& overrides) {
+    for (const auto& override_node : overrides) {
+        auto target = std::ranges::find_if(
+            children, [&override_node](const auto& candidate) { return candidate.role == override_node.role; });
+        if (target == children.end()) {
+            continue;
+        }
+        for (const auto& trait : override_node.traits) {
+            merge_trait_entry_into(target->traits, trait);
+        }
+        apply_child_overrides_onto(target->children, override_node.children);
+    }
 }
 
 // ── std.text.format helpers ────────────────────────────────────────────────────
@@ -482,6 +588,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_template_use_cycles(program);
     flatten_template_compositions(program);
     validate_template_backed_entity_overrides(program);
+    validate_hierarchical_entities(program);
     validate_spawn_sites(program);
     validate_stmt_contexts(program);
     validate_trait_default_values(program);
@@ -2513,71 +2620,22 @@ void SemanticAnalyzer::validate_template_unit_declarations(
                 if constexpr (std::is_same_v<T, TemplateNode> || std::is_same_v<T, EntityNode>) {
                     const std::string KIND = std::is_same_v<T, TemplateNode> ? "template" : "entity";
 
+                    // Hierarchical children require the Parent trait for generated
+                    // parent relations (dsl-hierarchical-entity-templates D6).
+                    if (!node.children.empty() && !is_trait_declared("Parent")) {
+                        errors_.error(node.location,
+                                      "hierarchical `children:` requires the `Parent` trait to be available; "
+                                      "add `use std.core` (or another module providing `Parent`)");
+                    }
+
+                    validate_child_archetypes(node.children, KIND, node.name);
+
                     // For template-backed entities, validate the template reference; body entries are
                     // overrides (not inline traits), so skip the standard trait/field checks below.
                     if constexpr (std::is_same_v<T, EntityNode>) {
                         if (node.template_ref.has_value()) {
-                            const auto& tmpl_ref = *node.template_ref;
-                            const auto dot       = tmpl_ref.rfind('.');
-                            if (dot != std::string::npos) {
-                                const auto qualifier     = tmpl_ref.substr(0, dot);
-                                const auto template_name = tmpl_ref.substr(dot + 1);
-                                auto module_it           = imports_.modules.find(qualifier);
-                                if (module_it == imports_.modules.end()) {
-                                    errors_.error(node.location,
-                                                  "unknown module qualifier '" + qualifier +
-                                                      "' in 'from' clause of entity '" + node.name + "'");
-                                } else if (!module_it->second.templates.contains(template_name)) {
-                                    auto non_pub_it = imports_.non_pub_template_names.find(qualifier);
-                                    if (non_pub_it != imports_.non_pub_template_names.end() &&
-                                        non_pub_it->second.contains(template_name)) {
-                                        errors_.error(node.location,
-                                                      "template '" + template_name + "' is not public in module '" +
-                                                          qualifier + "'");
-                                    } else if (imported_symbols_contain_non_template(module_it->second,
-                                                                                     template_name)) {
-                                        errors_.error(node.location,
-                                                      "'" + template_name +
-                                                          "' is not a template; entity 'from' clause must reference "
-                                                          "a template");
-                                    } else {
-                                        errors_.error(
-                                            node.location,
-                                            "undefined template '" + template_name + "' in module '" + qualifier + "'");
-                                    }
-                                }
-                            } else if (template_names_.contains(tmpl_ref)) {
-                                // valid local template — override validation happens after flattening
-                            } else if (local_non_template_symbol_exists(tmpl_ref)) {
-                                errors_.error(node.location,
-                                              "'" + tmpl_ref +
-                                                  "' is not a template; entity 'from' clause must reference "
-                                                  "a template");
-                            } else if (!imports_.empty()) {
-                                auto provider_it = imports_.template_providers.find(tmpl_ref);
-                                if (provider_it != imports_.template_providers.end()) {
-                                    // valid imported template
-                                } else {
-                                    bool found_non_pub = false;
-                                    for (const auto& [q, names] : imports_.non_pub_template_names) {
-                                        if (names.contains(tmpl_ref)) {
-                                            errors_.error(
-                                                node.location,
-                                                "template '" + tmpl_ref + "' is not public in module '" + q + "'");
-                                            found_non_pub = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!found_non_pub) {
-                                        errors_.error(
-                                            node.location,
-                                            "undefined template '" + tmpl_ref + "' in entity '" + node.name + "'");
-                                    }
-                                }
-                            } else {
-                                errors_.error(node.location,
-                                              "undefined template '" + tmpl_ref + "' in entity '" + node.name + "'");
-                            }
+                            validate_archetype_template_ref(
+                                *node.template_ref, node.location, "entity '" + node.name + "'");
                             return;  // skip inline-entity trait validation for template-backed entities
                         }
                     }
@@ -2650,6 +2708,255 @@ void SemanticAnalyzer::validate_template_unit_declarations(
     }
 }
 
+// ── Hierarchical entity templates (dsl-hierarchical-entity-templates) ────────
+
+// Validate a `from TemplateName` reference using the same local/imported
+// resolution rules as top-level template-backed entities.
+void SemanticAnalyzer::validate_archetype_template_ref(const std::string& tmpl_ref,
+                                                       const SourceLocation& location,
+                                                       const std::string& owner_desc) {
+    const auto dot = tmpl_ref.rfind('.');
+    if (dot != std::string::npos) {
+        const auto qualifier     = tmpl_ref.substr(0, dot);
+        const auto template_name = tmpl_ref.substr(dot + 1);
+        auto module_it           = imports_.modules.find(qualifier);
+        if (module_it == imports_.modules.end()) {
+            errors_.error(location, "unknown module qualifier '" + qualifier + "' in 'from' clause of " + owner_desc);
+        } else if (!module_it->second.templates.contains(template_name)) {
+            auto non_pub_it = imports_.non_pub_template_names.find(qualifier);
+            if (non_pub_it != imports_.non_pub_template_names.end() && non_pub_it->second.contains(template_name)) {
+                errors_.error(location,
+                              "template '" + template_name + "' is not public in module '" + qualifier + "'");
+            } else if (imported_symbols_contain_non_template(module_it->second, template_name)) {
+                errors_.error(location,
+                              "'" + template_name + "' is not a template; 'from' clause must reference a template");
+            } else {
+                errors_.error(location,
+                              "undefined template '" + template_name + "' in module '" + qualifier + "'");
+            }
+        }
+        return;
+    }
+
+    if (template_names_.contains(tmpl_ref)) {
+        return;  // valid local template — override validation happens after flattening
+    }
+    if (local_non_template_symbol_exists(tmpl_ref)) {
+        errors_.error(location, "'" + tmpl_ref + "' is not a template; 'from' clause must reference a template");
+        return;
+    }
+    if (!imports_.empty()) {
+        if (imports_.template_providers.contains(tmpl_ref)) {
+            return;  // valid imported template
+        }
+        for (const auto& [qualifier, names] : imports_.non_pub_template_names) {
+            if (names.contains(tmpl_ref)) {
+                errors_.error(location, "template '" + tmpl_ref + "' is not public in module '" + qualifier + "'");
+                return;
+            }
+        }
+    }
+    errors_.error(location, "undefined template '" + tmpl_ref + "' in " + owner_desc);
+}
+
+// Validate authored child declarations: sibling role uniqueness, no manual
+// Parent trait blocks (D8), and root-archetype trait/field rules for inline
+// (non-`from`) children. `from`-child bodies are overrides and are validated
+// against the flattened template during flattening.
+void SemanticAnalyzer::validate_child_archetypes(  // NOLINT(readability-function-cognitive-complexity)
+    const std::vector<ChildArchetypeNode>& children,
+    const std::string& archetype_kind,
+    const std::string& archetype_name) {
+    std::unordered_set<std::string> sibling_roles;
+    for (const auto& child : children) {
+        if (!sibling_roles.insert(child.role).second) {
+            errors_.error(child.location,
+                          "duplicate child role '" + child.role + "' in " + archetype_kind + " '" + archetype_name +
+                              "'; sibling child roles must be unique");
+        }
+
+        for (const auto& entry : child.traits) {
+            if (entry.trait_name == "Parent") {
+                errors_.error(entry.location,
+                              "child '" + child.role +
+                                  "' declares a manual `Parent` trait; the `children:` nesting itself assigns "
+                                  "the parent relation");
+            }
+        }
+
+        if (child.template_ref.has_value()) {
+            validate_archetype_template_ref(*child.template_ref,
+                                            child.location,
+                                            "child '" + child.role + "' of " + archetype_kind + " '" +
+                                                archetype_name + "'");
+        } else {
+            for (const auto& entry : child.traits) {
+                if (entry.trait_name == "Parent") {
+                    continue;  // already reported above
+                }
+                if (!is_trait_declared(entry.trait_name)) {
+                    errors_.error(entry.location,
+                                  "undeclared trait '" + entry.trait_name + "' in child '" + child.role + "' of " +
+                                      archetype_kind + " '" + archetype_name + "'");
+                }
+            }
+
+            for (const auto& template_use : child.template_uses) {
+                resolve_archetype_template_use(template_use, "child", child.role);
+            }
+
+            for (const auto& entry : child.traits) {
+                const auto* trait = find_resolved_trait(entry.trait_name);
+                if (trait == nullptr) {
+                    continue;
+                }
+                std::unordered_set<std::string> trait_fields;
+                for (const auto& field : trait->fields) {
+                    trait_fields.insert(field.name);
+                }
+                for (const auto& assign : entry.assignments) {
+                    if (!trait_fields.contains(assign.name)) {
+                        errors_.error(assign.location,
+                                      "unknown field '" + assign.name + "' for trait '" + entry.trait_name +
+                                          "' in child '" + child.role + "'");
+                    }
+                    if (expr_contains_self(*assign.value)) {
+                        errors_.error(assign.location, "`self` only allowed inside system event handlers");
+                    }
+                }
+            }
+        }
+
+        validate_child_archetypes(child.children, archetype_kind, archetype_name);
+    }
+}
+
+// Validate a nested child override tree against a flattened child list:
+// unknown roles, traits not present on the child, unknown fields, and `self`
+// usage outside handlers (declaration sites only).
+void SemanticAnalyzer::validate_child_override_tree(  // NOLINT(readability-function-cognitive-complexity)
+    const std::vector<ChildOverrideNode>& overrides,
+    const std::vector<ChildArchetypeNode>& base_children,
+    const std::string& site_desc,
+    bool allow_self) {
+    for (const auto& override_node : overrides) {
+        auto target = std::ranges::find_if(
+            base_children, [&override_node](const auto& candidate) { return candidate.role == override_node.role; });
+        if (target == base_children.end()) {
+            std::string known;
+            for (const auto& child : base_children) {
+                if (!known.empty()) {
+                    known += ", ";
+                }
+                known += "'" + child.role + "'";
+            }
+            errors_.error(override_node.location,
+                          "unknown child role '" + override_node.role + "' in " + site_desc +
+                              (known.empty() ? "; it has no child roles" : "; known child roles: " + known));
+            continue;
+        }
+
+        std::unordered_set<std::string> child_trait_names;
+        for (const auto& entry : target->traits) {
+            child_trait_names.insert(entry.trait_name);
+        }
+
+        for (const auto& entry : override_node.traits) {
+            if (!child_trait_names.contains(entry.trait_name)) {
+                errors_.error(entry.location,
+                              "trait '" + entry.trait_name + "' is not part of child '" + override_node.role +
+                                  "' in " + site_desc + "; cannot override it");
+                continue;
+            }
+            const auto* trait = find_resolved_trait(entry.trait_name);
+            if (trait == nullptr) {
+                continue;
+            }
+            std::unordered_set<std::string> trait_fields;
+            for (const auto& field : trait->fields) {
+                trait_fields.insert(field.name);
+            }
+            for (const auto& assign : entry.assignments) {
+                if (!trait_fields.contains(assign.name)) {
+                    errors_.error(assign.location,
+                                  "unknown field '" + assign.name + "' for trait '" + entry.trait_name +
+                                      "' in child override '" + override_node.role + "'");
+                }
+                if (!allow_self && expr_contains_self(*assign.value)) {
+                    errors_.error(assign.location, "`self` only allowed inside system event handlers");
+                }
+            }
+        }
+
+        validate_child_override_tree(override_node.children, target->children, site_desc, allow_self);
+    }
+}
+
+// Check that every required field (var, no default) of each descendant is
+// satisfied by the flattened child traits or by creation-site overrides.
+void SemanticAnalyzer::validate_child_required_fields(const std::vector<ChildArchetypeNode>& children,
+                                                      const std::vector<ChildOverrideNode>& overrides,
+                                                      const std::string& site_desc,
+                                                      const SourceLocation& site_loc) {
+    for (const auto& child : children) {
+        const ChildOverrideNode* override_node = nullptr;
+        for (const auto& candidate : overrides) {
+            if (candidate.role == child.role) {
+                override_node = &candidate;
+                break;
+            }
+        }
+
+        std::unordered_set<std::string> provided;
+        for (const auto& entry : child.traits) {
+            for (const auto& assign : entry.assignments) {
+                provided.insert(assign.name);
+            }
+        }
+        if (override_node != nullptr) {
+            for (const auto& entry : override_node->traits) {
+                for (const auto& assign : entry.assignments) {
+                    provided.insert(assign.name);
+                }
+            }
+        }
+
+        for (const auto& entry : child.traits) {
+            const auto* trait = find_resolved_trait(entry.trait_name);
+            if (trait == nullptr) {
+                continue;
+            }
+            for (const auto& field : trait->fields) {
+                if (field.is_var && !field.has_default && !provided.contains(field.name)) {
+                    errors_.error(site_loc,
+                                  "required field '" + field.name + "' not set for child '" + child.role + "' in " +
+                                      site_desc);
+                }
+            }
+        }
+
+        static const std::vector<ChildOverrideNode> NO_OVERRIDES;
+        validate_child_required_fields(child.children,
+                                       override_node != nullptr ? override_node->children : NO_OVERRIDES,
+                                       site_desc,
+                                       site_loc);
+    }
+}
+
+// Load-time entities create their descendants at module load, so every
+// descendant's required fields must be satisfied by the flattened tree.
+void SemanticAnalyzer::validate_hierarchical_entities(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        auto* entity = std::get_if<EntityNode>(&decl);
+        if (entity == nullptr || entity->children.empty()) {
+            continue;
+        }
+        static const std::vector<ChildOverrideNode> NO_OVERRIDES;
+        validate_child_required_fields(
+            entity->children, NO_OVERRIDES, "entity '" + entity->name + "'", entity->location);
+    }
+}
+
 void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
     struct TemplateUseEdge {
         std::string target;
@@ -2667,13 +2974,37 @@ void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
 
         template_order.push_back(tmpl->name);
         auto& edges = graph[tmpl->name];
+
+        auto add_edge = [this, &edges](const std::string& target, const SourceLocation& location) {
+            if (target.find('.') != std::string::npos) {
+                return;
+            }
+            if (template_names_.contains(target)) {
+                edges.push_back({.target = target, .location = location});
+            }
+        };
+
         for (const auto& use : tmpl->template_uses) {
-            if (use.template_name.find('.') != std::string::npos) {
-                continue;
-            }
-            if (template_names_.contains(use.template_name)) {
-                edges.push_back({.target = use.template_name, .location = use.location});
-            }
+            add_edge(use.template_name, use.location);
+        }
+
+        // Child `from` references and child body `use` entries are template
+        // dependency edges too: creating the template creates its children
+        // (dsl-hierarchical-entity-templates D7/D11).
+        std::function<void(const ChildArchetypeNode&)> collect_child_edges =
+            [&add_edge, &collect_child_edges](const ChildArchetypeNode& child) {
+                if (child.template_ref.has_value()) {
+                    add_edge(*child.template_ref, child.location);
+                }
+                for (const auto& use : child.template_uses) {
+                    add_edge(use.template_name, use.location);
+                }
+                for (const auto& grandchild : child.children) {
+                    collect_child_edges(grandchild);
+                }
+            };
+        for (const auto& child : tmpl->children) {
+            collect_child_edges(child);
         }
     }
 
@@ -2755,36 +3086,30 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         }
     }
 
-    auto merge_trait_entry = [](std::vector<ArchetypeTraitEntry>& merged, const ArchetypeTraitEntry& entry) {
-        auto existing = std::ranges::find_if(
-            merged, [&entry](const auto& candidate) { return candidate.trait_name == entry.trait_name; });
-        if (existing == merged.end()) {
-            merged.push_back(clone_archetype_trait_entry(entry));
-            return;
-        }
-
-        for (const auto& assignment : entry.assignments) {
-            auto field = std::ranges::find_if(existing->assignments, [&assignment](const auto& candidate) {
-                return candidate.name == assignment.name;
-            });
-            if (field == existing->assignments.end()) {
-                existing->assignments.push_back(clone_field_assignment(assignment));
-            } else {
-                *field = clone_field_assignment(assignment);
-            }
-        }
+    // Flattened archetypes carry both merged traits and recursively flattened
+    // child trees (dsl-hierarchical-entity-templates D2).
+    struct FlattenedArchetype {
+        std::vector<ArchetypeTraitEntry> traits;
+        std::vector<ChildArchetypeNode> children;
     };
 
-    std::unordered_map<std::string, std::vector<ArchetypeTraitEntry>> flattened_templates;
+    auto clone_flattened = [](const FlattenedArchetype& flattened) {
+        return FlattenedArchetype{.traits   = clone_archetype_trait_entries(flattened.traits),
+                                  .children = clone_child_archetype_nodes(flattened.children)};
+    };
+
+    std::unordered_map<std::string, FlattenedArchetype> flattened_templates;
     std::unordered_set<std::string> visiting;
 
-    std::function<std::vector<ArchetypeTraitEntry>(TemplateNode&)> flatten_template;
-    std::function<std::vector<ArchetypeTraitEntry>(const std::vector<ArchetypeBodyEntry>&,
-                                                   const std::vector<ArchetypeTemplateUseEntry>&,
-                                                   const std::vector<ArchetypeTraitEntry>&)>
+    std::function<FlattenedArchetype(TemplateNode&)> flatten_template;
+    std::function<FlattenedArchetype(const std::vector<ArchetypeBodyEntry>&,
+                                     const std::vector<ArchetypeTemplateUseEntry>&,
+                                     const std::vector<ArchetypeTraitEntry>&,
+                                     const std::vector<ChildArchetypeNode>&)>
         flatten_body;
+    std::function<ChildArchetypeNode(const ChildArchetypeNode&)> flatten_child;
 
-    auto append_template_use = [&](std::vector<ArchetypeTraitEntry>& merged, const ArchetypeTemplateUseEntry& use) {
+    auto append_template_use = [&](FlattenedArchetype& merged, const ArchetypeTemplateUseEntry& use) {
         if (use.template_name.find('.') != std::string::npos) {
             // Imported templates are resolved during validation. Their concrete
             // archetype bodies are not present in this compilation unit, so they
@@ -2798,16 +3123,20 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
             return;
         }
 
-        auto used_traits = flatten_template(*template_it->second);
-        for (const auto& used_trait : used_traits) {
-            merge_trait_entry(merged, used_trait);
+        auto used = flatten_template(*template_it->second);
+        for (const auto& used_trait : used.traits) {
+            merge_trait_entry_into(merged.traits, used_trait);
+        }
+        for (const auto& used_child : used.children) {
+            merge_child_archetype_into(merged.children, used_child);
         }
     };
 
     flatten_body = [&](const std::vector<ArchetypeBodyEntry>& body_entries,
                        const std::vector<ArchetypeTemplateUseEntry>& template_uses,
-                       const std::vector<ArchetypeTraitEntry>& traits) {
-        std::vector<ArchetypeTraitEntry> merged;
+                       const std::vector<ArchetypeTraitEntry>& traits,
+                       const std::vector<ChildArchetypeNode>& children) {
+        FlattenedArchetype merged;
 
         if (body_entries.empty()) {
             // Some tests construct AST nodes directly and predate body_entries.
@@ -2817,43 +3146,94 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
                 append_template_use(merged, template_use);
             }
             for (const auto& trait : traits) {
-                merge_trait_entry(merged, trait);
+                merge_trait_entry_into(merged.traits, trait);
             }
-            return merged;
+        } else {
+            for (const auto& entry : body_entries) {
+                if (entry.kind == ArchetypeBodyEntry::Kind::TemplateUse) {
+                    if (entry.index < template_uses.size()) {
+                        append_template_use(merged, template_uses[entry.index]);
+                    }
+                    continue;
+                }
+                if (entry.index < traits.size()) {
+                    merge_trait_entry_into(merged.traits, traits[entry.index]);
+                }
+            }
         }
 
-        for (const auto& entry : body_entries) {
-            if (entry.kind == ArchetypeBodyEntry::Kind::TemplateUse) {
-                if (entry.index < template_uses.size()) {
-                    append_template_use(merged, template_uses[entry.index]);
-                }
-                continue;
-            }
-            if (entry.index < traits.size()) {
-                merge_trait_entry(merged, traits[entry.index]);
-            }
+        // Declared children flatten recursively and merge by role with any
+        // children contributed by body-level `use` templates.
+        for (const auto& child : children) {
+            merge_child_archetype_into(merged.children, flatten_child(child));
         }
 
         return merged;
     };
 
-    flatten_template = [&](TemplateNode& tmpl) -> std::vector<ArchetypeTraitEntry> {
+    flatten_child = [&](const ChildArchetypeNode& node) {
+        ChildArchetypeNode flat;
+        flat.role     = node.role;
+        flat.location = node.location;
+
+        auto own = flatten_body(node.body_entries, node.template_uses, node.traits, node.children);
+        if (!node.template_ref.has_value()) {
+            flat.traits   = std::move(own.traits);
+            flat.children = std::move(own.children);
+            return flat;
+        }
+
+        // D11: a `from`-template child splices the template's flattened subtree
+        // (traits and descendants), then applies the child body and nested
+        // overrides on top.
+        FlattenedArchetype base;
+        bool base_available   = false;
+        const auto dot        = node.template_ref->rfind('.');
+        const auto lookup_key = dot != std::string::npos ? node.template_ref->substr(dot + 1) : *node.template_ref;
+        if (auto template_it = local_templates.find(lookup_key);
+            template_it != local_templates.end() && template_it->second != nullptr) {
+            base           = flatten_template(*template_it->second);
+            base_available = true;
+        }
+
+        for (const auto& trait : own.traits) {
+            merge_trait_entry_into(base.traits, trait);
+        }
+        for (const auto& child : own.children) {
+            merge_child_archetype_into(base.children, child);
+        }
+        if (base_available) {
+            validate_child_override_tree(node.child_overrides,
+                                         base.children,
+                                         "child '" + node.role + "' (from template '" + *node.template_ref + "')",
+                                         /*allow_self=*/false);
+        }
+        apply_child_overrides_onto(base.children, node.child_overrides);
+
+        flat.traits   = std::move(base.traits);
+        flat.children = std::move(base.children);
+        return flat;
+    };
+
+    flatten_template = [&](TemplateNode& tmpl) -> FlattenedArchetype {
         if (auto flattened_it = flattened_templates.find(tmpl.name); flattened_it != flattened_templates.end()) {
-            return clone_archetype_trait_entries(flattened_it->second);
+            return clone_flattened(flattened_it->second);
         }
 
         if (!visiting.insert(tmpl.name).second) {
             // Cycle diagnostics are emitted by validate_template_use_cycles().
             // Avoid recursing indefinitely if analysis continues after errors.
-            return clone_archetype_trait_entries(tmpl.traits);
+            return FlattenedArchetype{.traits = clone_archetype_trait_entries(tmpl.traits), .children = {}};
         }
 
-        auto flattened = flatten_body(tmpl.body_entries, tmpl.template_uses, tmpl.traits);
+        auto flattened = flatten_body(tmpl.body_entries, tmpl.template_uses, tmpl.traits, tmpl.children);
         visiting.erase(tmpl.name);
 
-        flattened_templates[tmpl.name] = clone_archetype_trait_entries(flattened);
-        tmpl.traits                    = clone_archetype_trait_entries(flattened);
+        flattened_templates[tmpl.name] = clone_flattened(flattened);
+        tmpl.traits                    = clone_archetype_trait_entries(flattened.traits);
+        tmpl.children                  = clone_child_archetype_nodes(flattened.children);
         archetype_traits_[tmpl.name]   = &tmpl.traits;
+        archetype_children_[tmpl.name] = &tmpl.children;
         return flattened;
     };
 
@@ -2875,16 +3255,28 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
                 if (tmpl_it != archetype_traits_.end() && tmpl_it->second != nullptr) {
                     auto merged = clone_archetype_trait_entries(*tmpl_it->second);
                     for (const auto& override_entry : entity->traits) {
-                        merge_trait_entry(merged, override_entry);
+                        merge_trait_entry_into(merged, override_entry);
                     }
                     entity->traits = std::move(merged);
                 }
+                // Splice the template's flattened child tree and apply the
+                // entity's nested child overrides (validated afterwards in
+                // validate_template_backed_entity_overrides).
+                if (auto children_it = archetype_children_.find(lookup_key);
+                    children_it != archetype_children_.end() && children_it->second != nullptr) {
+                    auto merged_children = clone_child_archetype_nodes(*children_it->second);
+                    apply_child_overrides_onto(merged_children, entity->child_overrides);
+                    entity->children = std::move(merged_children);
+                }
                 // (If template not found, validation already reported the error; leave traits as-is)
             } else {
-                auto flattened = flatten_body(entity->body_entries, entity->template_uses, entity->traits);
-                entity->traits = clone_archetype_trait_entries(flattened);
+                auto flattened =
+                    flatten_body(entity->body_entries, entity->template_uses, entity->traits, entity->children);
+                entity->traits   = clone_archetype_trait_entries(flattened.traits);
+                entity->children = clone_child_archetype_nodes(flattened.children);
             }
-            archetype_traits_[entity->name] = &entity->traits;
+            archetype_traits_[entity->name]   = &entity->traits;
+            archetype_children_[entity->name] = &entity->children;
         }
     }
 
@@ -2991,6 +3383,16 @@ void SemanticAnalyzer::validate_template_backed_entity_overrides(
                 }
             }
         }
+
+        // Validate nested child overrides against the template's flattened
+        // child tree (dsl-hierarchical-entity-templates D5).
+        if (auto children_it = archetype_children_.find(tmpl_key);
+            children_it != archetype_children_.end() && children_it->second != nullptr) {
+            validate_child_override_tree(entity->child_overrides,
+                                         *children_it->second,
+                                         "entity '" + entity->name + "' (from template '" + tmpl_ref + "')",
+                                         /*allow_self=*/false);
+        }
     }
 }
 
@@ -3062,6 +3464,20 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
                             }
                         }
                     }
+
+                    // Hierarchical child overrides at the spawn site (only
+                    // meaningful once flattening has registered child trees).
+                    if (auto children_it = archetype_children_.find(s.template_name);
+                        children_it != archetype_children_.end() && children_it->second != nullptr) {
+                        validate_child_override_tree(s.child_overrides,
+                                                     *children_it->second,
+                                                     "template '" + s.template_name + "'",
+                                                     /*allow_self=*/true);
+                        validate_child_required_fields(*children_it->second,
+                                                       s.child_overrides,
+                                                       "spawn of template '" + s.template_name + "'",
+                                                       s.location);
+                    }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     validate_spawn_stmts(s.then_body, context_name);
                     validate_spawn_stmts(s.else_body, context_name);
@@ -3119,6 +3535,22 @@ void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceL
                               "required field '" + req + "' not set for template '" + spawn.template_name + "'");
             }
         }
+    }
+
+    // Hierarchical child overrides at the spawn site. archetype_children_ is
+    // populated during flattening, so this only runs in the post-flattening
+    // validate_spawn_sites pass (validate_event_usage also reaches here
+    // earlier, before child trees exist).
+    if (auto children_it = archetype_children_.find(spawn.template_name);
+        children_it != archetype_children_.end() && children_it->second != nullptr) {
+        validate_child_override_tree(spawn.child_overrides,
+                                     *children_it->second,
+                                     "template '" + spawn.template_name + "'",
+                                     /*allow_self=*/true);
+        validate_child_required_fields(*children_it->second,
+                                       spawn.child_overrides,
+                                       "spawn of template '" + spawn.template_name + "'",
+                                       location);
     }
 }
 

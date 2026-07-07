@@ -272,6 +272,89 @@ Template-backed entities (`entity Name from Template:`) are the declarative load
 
 Deferred grouped syntax (`entities from Template:` with multiple named instances in one block) is not part of this version of the language.
 
+#### Hierarchical children (`children:` blocks)
+
+Archetype bodies may contain a contextual `children:` block that declares a tree of related entities. `children` is recognized only inside archetype bodies (an identifier named `children` directly followed by `:`); neither `child` nor `children` is a reserved keyword elsewhere.
+
+```ebnf
+archetype_entry = template_use_entry | archetype_trait_entry | children_block ;
+
+children_block  = "children" ":" NEWLINE INDENT
+                  { child_decl }
+                  DEDENT ;
+
+child_decl      = "entity" IDENTIFIER [ "from" dotted_name ] ":" NEWLINE INDENT
+                  { archetype_entry }        (* overrides when `from` is present *)
+                  DEDENT ;
+
+(* In template-backed entity bodies and spawn bodies, `children:` entries are
+   overrides addressing existing roles instead of declarations: *)
+child_override  = IDENTIFIER ":" NEWLINE INDENT
+                  { archetype_trait_entry | children_block(child_override) }
+                  DEDENT ;
+```
+
+```cactus
+template PlayerRig:
+    LocalTransform
+    WorldTransform
+
+    children:
+        entity WeaponSocket:
+            LocalTransform:
+                position = vec3(0.4, 1.0, 0.0)
+            WorldTransform
+
+            children:
+                entity Sword from SwordTemplate:
+                    LocalTransform
+```
+
+Creation semantics (all creation paths — `spawn`, `entity … from …`, and the editor template palette):
+
+- Creating a hierarchical archetype creates one entity per node and returns/exposes the **root** entity. Descendants are implementation-owned; child role names do not introduce global entity declarations or `entity_id` constants.
+- Every non-root node receives a generated `Parent` relation whose `parent` field references the entity created for its **immediate** containing node (grandchildren point at their parent, not the root).
+- Creation order is deterministic parent-first preorder: the root, then each child in source order, each child's descendants before the next sibling.
+- Hierarchical archetypes are pure syntactic sugar for the equivalent hand-written flat archetypes plus `Parent` traits plus sequential creation. Lifecycle events fire exactly as they would for that hand-written sequence; no whole-tree deferral is introduced.
+
+Rules:
+
+- Child role names are **sibling-scoped**: duplicates within one `children:` block are rejected; the same role may appear under different parents.
+- A manual `Parent` trait entry inside a child declaration is rejected — the `children:` nesting itself assigns the parent relation.
+- A child declared `from SomeTemplate` splices that template's fully flattened tree (traits **and** descendants) at that node, then applies the child body as overrides. Roles inherited this way are override-addressable through that child.
+- Body-level `use OtherTemplate` merges the used template's traits and child declarations into the current node, merging same-role children field-by-field.
+- Template dependency cycles through child `from` references (direct or indirect) are rejected, like `use` cycles.
+- Hierarchical syntax requires the standard `Parent` trait (from `std.core`) to be resolvable; the compiler reports an error otherwise.
+
+Template-backed entities and spawn sites override nested children by role, mirroring the declaration structure. Unknown roles, traits not present on the child, unknown fields, and unsatisfied required fields are semantic errors:
+
+```cactus
+entity Player1 from PlayerRig:
+    LocalTransform:
+        position = vec3(0.0, 0.0, 0.0)
+
+    children:
+        WeaponSocket:
+            LocalTransform:
+                position = vec3(0.5, 1.1, 0.0)
+
+            children:
+                Sword:
+                    Renderer:
+                        material = BlueSwordMaterial
+```
+
+The four composition/creation constructs at a glance:
+
+| Construct | What it does | When |
+|---|---|---|
+| `use Template` (body-level) | merges another template's traits and children into **this node** — no extra entity | compile time |
+| `children:` | declares **separate child entities** created with this archetype, wired via `Parent` | creation time |
+| `entity Name from Template:` | one load-time instance of a template (whole tree if hierarchical) plus overrides | module/scene load |
+| `spawn Template:` | one runtime instance of a template (whole tree if hierarchical) plus overrides; evaluates to the root | handler execution |
+
+Hierarchy syntax creates parent-child **relations only**. It does not by itself imply transform propagation, rendering, or physics attachment: a child follows its parent's transform only when the child carries the transform traits (`LocalTransform`/`WorldTransform`) required by the active transform propagation system. Destroying a root uses the existing `Parent`-based recursive destroy, so generated descendants are destroyed with it on backends that support the cascade.
+
 ### 3.8 Systems
 
 Systems contain gameplay logic over filtered entities.

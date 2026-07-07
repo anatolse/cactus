@@ -1003,4 +1003,338 @@ TEST_CASE("Semantic: extern system GizmoRenderer3D filter on EditorGizmo3D is va
                        "        EditorGizmo3D\n"));
 }
 
+// ── Hierarchical entity templates (dsl-hierarchical-entity-templates) ───────
+
+// Shared preamble: Parent + simple traits used by hierarchy tests.
+static const std::string HIERARCHY_TRAITS =
+    "trait Parent:\n"
+    "    var parent: entity_id\n"
+    "trait Tag:\n"
+    "    var value: int = 0\n"
+    "trait Growth:\n"
+    "    var target_scale: float = 1.0\n"
+    "trait Health:\n"
+    "    var hp: int\n";
+
+TEST_CASE("Semantic: valid recursive hierarchy flattens child trees", "[semantic][hierarchy]") {
+    auto prog = analyze_ast(HIERARCHY_TRAITS +
+                            "template SwordTemplate:\n"
+                            "    Tag\n"
+                            "    children:\n"
+                            "        entity GlowFx:\n"
+                            "            Growth\n"
+                            "template PlayerRig:\n"
+                            "    Tag\n"
+                            "    children:\n"
+                            "        entity WeaponSocket:\n"
+                            "            Tag:\n"
+                            "                value = 1\n"
+                            "            children:\n"
+                            "                entity Sword from SwordTemplate:\n"
+                            "                    Tag:\n"
+                            "                        value = 2\n");
+    const auto& rig = find_template(prog, "PlayerRig");
+    REQUIRE(rig.children.size() == 1);
+    const auto& socket = rig.children[0];
+    CHECK(socket.role == "WeaponSocket");
+    REQUIRE(socket.children.size() == 1);
+    const auto& sword = socket.children[0];
+    CHECK(sword.role == "Sword");
+    // D11: the `from` template's flattened subtree is spliced under the child.
+    REQUIRE(sword.children.size() == 1);
+    CHECK(sword.children[0].role == "GlowFx");
+    // The child body overrides merged onto the spliced template traits.
+    const auto& tag = find_archetype_trait(sword.traits, "Tag");
+    REQUIRE(tag.assignments.size() == 1);
+    CHECK(tag.assignments[0].name == "value");
+}
+
+TEST_CASE("Semantic: body-level use contributes children to the flattened tree", "[semantic][hierarchy]") {
+    auto prog = analyze_ast(HIERARCHY_TRAITS +
+                            "template TrunkBase:\n"
+                            "    Tag\n"
+                            "    children:\n"
+                            "        entity Trunk:\n"
+                            "            Growth\n"
+                            "template Tree:\n"
+                            "    use TrunkBase\n"
+                            "    children:\n"
+                            "        entity Crown:\n"
+                            "            Growth\n");
+    const auto& tree = find_template(prog, "Tree");
+    REQUIRE(tree.children.size() == 2);
+    CHECK(tree.children[0].role == "Trunk");
+    CHECK(tree.children[1].role == "Crown");
+}
+
+TEST_CASE("Semantic: duplicate sibling child roles rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Car:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Wheel:\n"
+                           "            Tag\n"
+                           "        entity Wheel:\n"
+                           "            Growth\n");
+    CHECK(err.find("duplicate child role 'Wheel'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: same child role under different parents accepted", "[semantic][hierarchy]") {
+    CHECK_FALSE(analyze_errors(HIERARCHY_TRAITS +
+                               "template Car:\n"
+                               "    Tag\n"
+                               "    children:\n"
+                               "        entity LeftDoor:\n"
+                               "            Tag\n"
+                               "            children:\n"
+                               "                entity Handle:\n"
+                               "                    Tag\n"
+                               "        entity RightDoor:\n"
+                               "            Tag\n"
+                               "            children:\n"
+                               "                entity Handle:\n"
+                               "                    Tag\n"));
+}
+
+TEST_CASE("Semantic: child role is not a spawnable or entity_id symbol", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            Tag\n"
+                           "system S:\n"
+                           "    on tick:\n"
+                           "        spawn Crown:\n"
+                           "            Tag:\n"
+                           "                value = 1\n");
+    CHECK(err.find("undefined template 'Crown'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: manual Parent trait in child declaration rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            Parent\n");
+    CHECK(err.find("manual `Parent` trait") != std::string::npos);
+}
+
+TEST_CASE("Semantic: hierarchy requires Parent trait availability", "[semantic][hierarchy]") {
+    auto err = first_error(
+        "trait Tag:\n"
+        "    var value: int = 0\n"
+        "template Rig:\n"
+        "    Tag\n"
+        "    children:\n"
+        "        entity Crown:\n"
+        "            Tag\n");
+    CHECK(err.find("requires the `Parent` trait") != std::string::npos);
+}
+
+TEST_CASE("Semantic: unknown child role override rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            Growth\n"
+                           "entity Rig1 from Rig:\n"
+                           "    Tag:\n"
+                           "        value = 3\n"
+                           "    children:\n"
+                           "        MissingChild:\n"
+                           "            Growth:\n"
+                           "                target_scale = 2.0\n");
+    CHECK(err.find("unknown child role 'MissingChild'") != std::string::npos);
+    CHECK(err.find("'Crown'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: child override of trait not on child rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            Growth\n"
+                           "entity Rig1 from Rig:\n"
+                           "    children:\n"
+                           "        Crown:\n"
+                           "            Tag:\n"
+                           "                value = 3\n");
+    CHECK(err.find("trait 'Tag' is not part of child 'Crown'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: unknown field in child override rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            Growth\n"
+                           "entity Rig1 from Rig:\n"
+                           "    children:\n"
+                           "        Crown:\n"
+                           "            Growth:\n"
+                           "                nonsense = 2.0\n");
+    CHECK(err.find("unknown field 'nonsense'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: entity child override merges into flattened children", "[semantic][hierarchy]") {
+    auto prog = analyze_ast(HIERARCHY_TRAITS +
+                            "template Rig:\n"
+                            "    Tag\n"
+                            "    children:\n"
+                            "        entity Crown:\n"
+                            "            Growth:\n"
+                            "                target_scale = 1.0\n"
+                            "entity Rig1 from Rig:\n"
+                            "    children:\n"
+                            "        Crown:\n"
+                            "            Growth:\n"
+                            "                target_scale = 1.25\n");
+    const auto& entity = find_entity(prog, "Rig1");
+    REQUIRE(entity.children.size() == 1);
+    const auto& growth = find_archetype_trait(entity.children[0].traits, "Growth");
+    REQUIRE(growth.assignments.size() == 1);
+    CHECK(growth.assignments[0].name == "target_scale");
+    // The template's own flattened children remain unmodified.
+    const auto& tmpl         = find_template(prog, "Rig");
+    const auto& tmpl_growth  = find_archetype_trait(tmpl.children[0].traits, "Growth");
+    REQUIRE(tmpl_growth.assignments.size() == 1);
+}
+
+TEST_CASE("Semantic: missing required field on child rejected at load-time entity", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            Health\n"
+                           "entity Rig1 from Rig:\n"
+                           "    Tag:\n"
+                           "        value = 1\n");
+    CHECK(err.find("required field 'hp' not set for child 'Crown'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: spawn missing required child field rejected, override satisfies it", "[semantic][hierarchy]") {
+    const std::string TEMPLATE_SRC = HIERARCHY_TRAITS +
+                                     "template Rig:\n"
+                                     "    Tag\n"
+                                     "    children:\n"
+                                     "        entity Crown:\n"
+                                     "            Health\n";
+    auto err = first_error(TEMPLATE_SRC +
+                           "system S:\n"
+                           "    on tick:\n"
+                           "        spawn Rig:\n"
+                           "            Tag:\n"
+                           "                value = 1\n");
+    CHECK(err.find("required field 'hp' not set for child 'Crown'") != std::string::npos);
+
+    CHECK_FALSE(analyze_errors(TEMPLATE_SRC +
+                               "system S:\n"
+                               "    on tick:\n"
+                               "        spawn Rig:\n"
+                               "            children:\n"
+                               "                Crown:\n"
+                               "                    Health:\n"
+                               "                        hp = 10\n"));
+}
+
+TEST_CASE("Semantic: spawn child override of unknown role rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            Growth\n"
+                           "system S:\n"
+                           "    on tick:\n"
+                           "        spawn Rig:\n"
+                           "            children:\n"
+                           "                Stem:\n"
+                           "                    Growth:\n"
+                           "                        target_scale = 2.0\n");
+    CHECK(err.find("unknown child role 'Stem'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: nested spawn override reaches roles spliced from child templates", "[semantic][hierarchy]") {
+    CHECK_FALSE(analyze_errors(HIERARCHY_TRAITS +
+                               "template SwordTemplate:\n"
+                               "    Tag\n"
+                               "    children:\n"
+                               "        entity GlowFx:\n"
+                               "            Growth\n"
+                               "template PlayerRig:\n"
+                               "    Tag\n"
+                               "    children:\n"
+                               "        entity Sword from SwordTemplate:\n"
+                               "            Tag:\n"
+                               "                value = 1\n"
+                               "system S:\n"
+                               "    on tick:\n"
+                               "        spawn PlayerRig:\n"
+                               "            children:\n"
+                               "                Sword:\n"
+                               "                    children:\n"
+                               "                        GlowFx:\n"
+                               "                            Growth:\n"
+                               "                                target_scale = 3.0\n"));
+}
+
+TEST_CASE("Semantic: direct child-template cycle rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template A:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Again from A:\n"
+                           "            Tag:\n"
+                           "                value = 1\n");
+    CHECK(err.find("cyclic template-use graph detected") != std::string::npos);
+    CHECK(err.find("A") != std::string::npos);
+}
+
+TEST_CASE("Semantic: indirect child-template cycle rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template A:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity ChildB from B:\n"
+                           "            Tag:\n"
+                           "                value = 1\n"
+                           "template B:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity ChildA from A:\n"
+                           "            Tag:\n"
+                           "                value = 2\n");
+    CHECK(err.find("cyclic template-use graph detected") != std::string::npos);
+    CHECK(err.find("A") != std::string::npos);
+    CHECK(err.find("B") != std::string::npos);
+}
+
+TEST_CASE("Semantic: undeclared trait in child rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown:\n"
+                           "            NoSuchTrait\n");
+    CHECK(err.find("undeclared trait 'NoSuchTrait'") != std::string::npos);
+    CHECK(err.find("'Crown'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: child from undefined template rejected", "[semantic][hierarchy]") {
+    auto err = first_error(HIERARCHY_TRAITS +
+                           "template Rig:\n"
+                           "    Tag\n"
+                           "    children:\n"
+                           "        entity Crown from NoSuchTemplate:\n"
+                           "            Tag:\n"
+                           "                value = 1\n");
+    CHECK(err.find("undefined template 'NoSuchTemplate'") != std::string::npos);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

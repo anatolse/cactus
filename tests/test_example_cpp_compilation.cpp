@@ -327,6 +327,38 @@ TEST_CASE("integration: explicit std.core import with lifecycle handler generate
     REQUIRE(fs::exists(example.generated_cpp));
 }
 
+TEST_CASE("integration: hierarchical entity templates example generates cpp-entt output",
+          "[integration][examples][hierarchy]") {
+    ensure_tools_present();
+
+    const ExampleCase example{
+        .name           = "hierarchical-entities",
+        .source_file    = repo_root() / "examples" / "hierarchical_entities.cactus",
+        .backend        = "cpp-entt",
+        .generated_cpp  = build_root() / "generated_examples" / "hierarchical-entities.generated.cpp",
+        .compile_target = {},
+    };
+
+    reset_generated_output(example);
+    require_success(example,
+                    "parse-semantic-codegen",
+                    repo_root(),
+                    quote(compiler_path()) + " " + quote(example.source_file) + " --backend " + quote(example.backend) +
+                        " --output " + quote(example.generated_cpp));
+
+    REQUIRE(fs::exists(example.generated_cpp));
+
+    std::ifstream in(example.generated_cpp);
+    std::ostringstream generated;
+    generated << in.rdbuf();
+    const auto code = generated.str();
+
+    // Tree creation wires Parent on every non-root node to its immediate parent.
+    CHECK(code.find("create_tree__node__crown__gem__sparkle") != std::string::npos);
+    CHECK(code.find("registry.emplace_or_replace<Parent>(__child_0, Parent{.parent = entity});") !=
+          std::string::npos);
+}
+
 TEST_CASE("integration: removed cpp-manual backend is rejected", "[integration][cli][backend]") {
     REQUIRE(fs::exists(compiler_path()));
 

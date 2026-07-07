@@ -1,0 +1,72 @@
+module hierarchical_entities
+
+# Demonstrates hierarchical entity templates: recursive `children:` blocks
+# inside templates and entities. Creating a hierarchical archetype creates one
+# entity per node, assigns `Parent.parent` on every non-root node to its
+# immediate parent, and returns the root entity.
+#
+# Parentage alone does not imply transform propagation — that still requires
+# `LocalTransform`/`WorldTransform` and the transform propagation system.
+
+use std.core
+
+trait Label:
+    var text_id: int = 0
+
+trait Growth:
+    var target_scale: float = 1.0
+
+# A reusable subtree: any child declared `from GemTemplate` splices this
+# template's traits and descendants at that node.
+template GemTemplate:
+    Label:
+        text_id = 30
+    children:
+        entity Sparkle:
+            Growth
+
+# Parent -> child -> grandchild declared inline. Roles (Crown, Gem, Sparkle)
+# are sibling-scoped names used for diagnostics and overrides; they are not
+# global entity identifiers.
+pub template Tree:
+    Label:
+        text_id = 10
+    children:
+        entity Trunk:
+            Label:
+                text_id = 11
+        entity Crown:
+            Label:
+                text_id = 12
+            Growth:
+                target_scale = 1.5
+            children:
+                entity Gem from GemTemplate:
+                    Label:
+                        text_id = 31
+
+# Load-time hierarchical entity: module load creates the whole tree.
+# Nested overrides address children by role path.
+entity Tree1 from Tree:
+    Label:
+        text_id = 100
+    children:
+        Crown:
+            Growth:
+                target_scale = 2.0
+            children:
+                Gem:
+                    Label:
+                        text_id = 131
+
+system TreeSpawner:
+    on tick:
+        # Spawning returns the root of the created tree. Child overrides at the
+        # spawn site follow the same nested role structure as declarations.
+        let tree = spawn Tree:
+            Label:
+                text_id = 200
+            children:
+                Crown:
+                    Growth:
+                        target_scale = 3.0

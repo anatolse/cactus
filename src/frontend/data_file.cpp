@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <sstream>
 
 namespace cactus {
@@ -391,45 +392,63 @@ std::vector<EntityInstanceData> DataFileWriter::build_records() {  // NOLINT(rea
 
     std::vector<EntityInstanceData> records;
 
+    auto build_record = [this](const std::string& name, const std::vector<ArchetypeTraitEntry>& traits) {
+        EntityInstanceData rec;
+        rec.name       = name;
+        rec.trait_mask = compute_trait_mask(traits);
+
+        // Build config map from nested trait assignments: field_name → evaluated value
+        std::unordered_map<std::string, FieldValue> config_vals;
+        for (const auto& trait : traits) {
+            for (const auto& assign : trait.assignments) {
+                auto val = eval_expr(*assign.value);
+                if (val) {
+                    config_vals[assign.name] = *val;
+                }
+            }
+        }
+
+        // For each declared trait entry, emit all fields in declaration order
+        for (const auto& entry : traits) {
+            auto it = decorated_.traits.find(entry.trait_name);
+            if (it == decorated_.traits.end()) {
+                continue;
+            }
+
+            for (const auto& field : it->second.fields) {
+                auto cfg_it = config_vals.find(field.name);
+                std::optional<FieldValue> cfg_val;
+                if (cfg_it != config_vals.end()) {
+                    cfg_val = cfg_it->second;
+                }
+
+                FieldValue fv = make_field_value(field, cfg_val);
+                if (fv.is_serializable()) {
+                    rec.fields.emplace_back(field.name, fv);
+                }
+            }
+        }
+        return rec;
+    };
+
+    // Hierarchical load-time entities serialize as one ordinary flat record per
+    // node in preorder; the format is unchanged and Parent wiring stays in
+    // generated setup code (dsl-hierarchical-entity-templates D10).
+    std::function<void(const ChildArchetypeNode&, const std::string&)> add_child_records =
+        [&](const ChildArchetypeNode& child, const std::string& parent_name) {
+            const auto node_name = parent_name + "." + child.role;
+            records.push_back(build_record(node_name, child.traits));
+            for (const auto& grandchild : child.children) {
+                add_child_records(grandchild, node_name);
+            }
+        };
+
     for (const auto& decl : ast_.declarations) {
         if (const auto* entity = std::get_if<EntityNode>(&decl)) {
-            EntityInstanceData rec;
-            rec.name       = entity->name;
-            rec.trait_mask = compute_trait_mask(entity->traits);
-
-            // Build config map from nested trait assignments: field_name → evaluated value
-            std::unordered_map<std::string, FieldValue> config_vals;
-            for (const auto& trait : entity->traits) {
-                for (const auto& assign : trait.assignments) {
-                    auto val = eval_expr(*assign.value);
-                    if (val) {
-                        config_vals[assign.name] = *val;
-                    }
-                }
+            records.push_back(build_record(entity->name, entity->traits));
+            for (const auto& child : entity->children) {
+                add_child_records(child, entity->name);
             }
-
-            // For each declared trait entry, emit all fields in declaration order
-            for (const auto& entry : entity->traits) {
-                auto it = decorated_.traits.find(entry.trait_name);
-                if (it == decorated_.traits.end()) {
-                    continue;
-                }
-
-                for (const auto& field : it->second.fields) {
-                    auto cfg_it = config_vals.find(field.name);
-                    std::optional<FieldValue> cfg_val;
-                    if (cfg_it != config_vals.end()) {
-                        cfg_val = cfg_it->second;
-                    }
-
-                    FieldValue fv = make_field_value(field, cfg_val);
-                    if (fv.is_serializable()) {
-                        rec.fields.emplace_back(field.name, fv);
-                    }
-                }
-            }
-
-            records.push_back(std::move(rec));
         }
         // TemplateNode → skip (templates produce no data file entries on their own)
     }

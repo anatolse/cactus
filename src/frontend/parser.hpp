@@ -4,6 +4,7 @@
 #include "frontend/ast.hpp"
 #include "frontend/token.hpp"
 
+#include <cstdint>
 #include <vector>
 
 namespace cactus {
@@ -59,10 +60,22 @@ private:
     // Helpers
     std::string parse_dotted_name();
 
+    // How a contextual `children:` block inside an archetype body is read:
+    // declarations for templates/inline entities, overrides for template-backed
+    // entities and spawn sites.
+    enum class ChildBlockMode : std::uint8_t { Declarations, Overrides };
+
     struct ParsedArchetypeBody {
         std::vector<ArchetypeBodyEntry> entries;
         std::vector<ArchetypeTemplateUseEntry> template_uses;
         std::vector<ArchetypeTraitEntry> traits;
+        std::vector<ChildArchetypeNode> children;
+        std::vector<ChildOverrideNode> child_overrides;
+    };
+
+    struct ParsedOverrideBody {
+        std::vector<ArchetypeTraitEntry> traits;
+        std::vector<ChildOverrideNode> child_overrides;
     };
 
     // Sub-parsers
@@ -76,9 +89,13 @@ private:
     std::vector<FieldAssignment> parse_field_assignment_block();
     ArchetypeTemplateUseEntry parse_archetype_template_use_entry();
     ArchetypeTraitEntry parse_archetype_trait_entry();
-    ParsedArchetypeBody parse_archetype_body_entries();
-    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entries();
-    std::vector<ArchetypeTraitEntry> parse_archetype_trait_entry_block();
+    ParsedArchetypeBody parse_archetype_body_entries(ChildBlockMode child_mode);
+    ParsedOverrideBody parse_archetype_override_block();
+    [[nodiscard]] bool at_children_block() const;
+    std::vector<ChildArchetypeNode> parse_children_declaration_block();
+    ChildArchetypeNode parse_child_declaration();
+    std::vector<ChildOverrideNode> parse_children_override_block();
+    ChildOverrideNode parse_child_override();
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();
     std::vector<SortKey> parse_order_by_clause();

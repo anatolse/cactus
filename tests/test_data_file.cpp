@@ -313,4 +313,52 @@ TEST_CASE("DataFile: data_filename helper", "[datafile]") {
     CHECK(DataFileWriter::data_filename("levels.level1").string() == "levels.level1_data.bin");
     CHECK(DataFileWriter::data_filename("mini_shop").string() == "mini_shop_data.bin");
 }
+
+// ── Hierarchical entity templates (dsl-hierarchical-entity-templates D10) ───
+
+TEST_CASE("DataFile: hierarchical entity serializes flat per-node records in preorder", "[datafile][hierarchy]") {
+    auto [program, decorated] = compile(
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait Tag:\n"
+        "    var value: int = 0\n"
+        "template Rig:\n"
+        "    Tag\n"
+        "    children:\n"
+        "        entity Socket:\n"
+        "            Tag:\n"
+        "                value = 1\n"
+        "            children:\n"
+        "                entity Gem:\n"
+        "                    Tag:\n"
+        "                        value = 2\n"
+        "entity Rig1 from Rig:\n"
+        "    Tag:\n"
+        "        value = 5\n");
+
+    ErrorReporter errors;
+    DataFileWriter writer(program, decorated, errors);
+    auto records = writer.build_records();
+
+    // One ordinary flat record per node, root first, preorder — no format change.
+    REQUIRE(records.size() == 3);
+    CHECK(records[0].name == "Rig1");
+    CHECK(records[1].name == "Rig1.Socket");
+    CHECK(records[2].name == "Rig1.Socket.Gem");
+
+    // Node records carry their own flattened field values.
+    REQUIRE(records[0].fields.size() == 1);
+    CHECK(records[0].fields[0].second.i32 == 5);
+    REQUIRE(records[1].fields.size() == 1);
+    CHECK(records[1].fields[0].second.i32 == 1);
+    REQUIRE(records[2].fields.size() == 1);
+    CHECK(records[2].fields[0].second.i32 == 2);
+
+    // No record-to-record Parent references appear in the data file.
+    for (const auto& rec : records) {
+        for (const auto& [field_name, value] : rec.fields) {
+            CHECK(field_name != "parent");
+        }
+    }
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

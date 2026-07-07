@@ -51,9 +51,9 @@ void reset_render_debug_state() noexcept;
 [[nodiscard]] const RenderDebugState& render_debug_state() noexcept;
 void begin_render_frame() noexcept;
 void end_render_frame() noexcept;
-// Draws and clears the queued 3D meshes immediately, using the currently active
-// 3D camera. Called once per viewport so each split-screen region renders the
-// world from its own camera (within that viewport's scissor rect).
+// Draws and clears the queued 3D meshes, sprites, and 2D text immediately,
+// using the currently active cameras. Called once per viewport so each
+// split-screen region renders within its scissor rect.
 void flush_viewport_3d() noexcept;
 
 void submit_sprite(Vector2 position, Vector2 size, Color color, AssetHandle texture, bool visible, int layer) noexcept;

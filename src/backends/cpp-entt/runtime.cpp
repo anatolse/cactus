@@ -110,6 +110,8 @@ struct MaterialResourceEntry {
     Material material{};
     bool loaded{false};
     bool owned{false};
+    Color diffuse_color{WHITE};
+    bool diffuse_color_set{false};
 };
 
 std::pmr::unsynchronized_pool_resource& render_queue_resource() noexcept {
@@ -557,7 +559,6 @@ Material* ensure_material_resource(const int runtime_id) {
     if (Shader* shader = ensure_lighting_shader(); shader != nullptr) {
         entry.material.shader = *shader;
     }
-    entry.material.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     return &entry.material;
 }
 
@@ -867,8 +868,12 @@ void end_render_frame() noexcept {
 
 void flush_viewport_3d() noexcept {
     flush_mesh_queue();
+    flush_sprite_queue();
+    flush_text_2d_queue();
     mesh_queue().clear();
+    sprite_queue().clear();
     point_light_queue().clear();
+    text_2d_queue().clear();
 }
 
 void submit_sprite(const Vector2 position,
@@ -933,13 +938,18 @@ void submit_mesh(const Vector3 position,
         note_missing_asset();
         return;
     }
+    auto& mat_entry = materials()[material_resolved.runtime_id];
+    if (!mat_entry.diffuse_color_set) {
+        mat_entry.diffuse_color     = placeholder_material_color(material_resolved.asset_id);
+        mat_entry.diffuse_color_set = true;
+    }
     mesh_queue().push_back(MeshSubmission{
         .position            = position,
         .rotation            = rotation,
         .scale               = scale,
         .mesh_runtime_id     = mesh_resolved.runtime_id,
         .material_runtime_id = material_resolved.runtime_id,
-        .diffuse_color       = placeholder_material_color(material_resolved.asset_id),
+        .diffuse_color       = mat_entry.diffuse_color,
     });
     ++render_debug_state_storage().submitted_meshes;
 }
@@ -1047,8 +1057,6 @@ void propagate_hierarchy(entt::registry& registry,
             resolve(parent);
             accumulate_from_parent(parent, entity);
             copied_local = true;
-        } else {
-            copy_local(entity);
         }
         if (!copied_local) {
             copy_local(entity);

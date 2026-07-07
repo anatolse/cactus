@@ -553,9 +553,9 @@ system ThrowSystem:
                     scale    = vec3(0.6, 0.6, 0.6)
                 Bomb:
                     owner    = self
-                    velocity = vec3(fwd.x * THROW_SPEED, fwd.y + THROW_SPEED, fwd.z * THROW_SPEED)
+                    velocity = vec3(fwd.x * THROW_SPEED, fwd.y * THROW_SPEED + THROW_UP, fwd.z * THROW_SPEED)
                     exploded = false
-            # bombs_left     = bombs_left - 1
+            bombs_left     = bombs_left - 1
             throw_cooldown = THROW_COOLDOWN
 
 # Task 3.5/3.6/3.7 — simulate bomb flight; on ground impact, explode: query the

@@ -18,7 +18,7 @@ The repository SHALL provide `examples/split-screen-forest-bombs/forest_bombs.ca
 - **THEN** it imports the stdlib modules needed for 3D transforms, 3D mesh rendering, 3D cameras, viewports, input, and 3D physics volume queries
 
 ### Requirement: Example demonstrates split-screen 3D player presentation
-The split-screen forest bombs example SHALL declare two local player-controlled gameplay entities and two 3D camera viewport entities that render the scene in left and right screen halves.
+The split-screen forest bombs example SHALL declare two local player-controlled gameplay entities and two 3D camera viewport entities that render the scene in left and right screen halves. Each player SHALL be rendered as a capsule mesh. Each camera SHALL be positioned at the player's eye level (first-person) with no back-offset and identity initial rotation.
 
 #### Scenario: Two viewport cameras are declared
 - **WHEN** the example scene entities are analyzed
@@ -27,6 +27,14 @@ The split-screen forest bombs example SHALL declare two local player-controlled 
 #### Scenario: Two player entities are declared
 - **WHEN** the example scene entities are analyzed
 - **THEN** it contains two player gameplay entities with movement input state, bomb inventory state, and tree-hit counter state
+
+#### Scenario: Player entities use capsule mesh
+- **WHEN** the example scene entities are analyzed
+- **THEN** both player body entities reference a capsule mesh asset in their `Renderer` component
+
+#### Scenario: Camera entities are positioned at eye height with no back-offset
+- **WHEN** the example scene entities are analyzed
+- **THEN** each camera entity's initial position is directly above its corresponding player body at `EYE_HEIGHT` with zero Z offset relative to the player
 
 ### Requirement: Example demonstrates randomly varied growing blocky trees
 The split-screen forest bombs example SHALL model trees as gameplay-destructible tree roots with randomized placement/growth data and simple brown/green box visuals.
@@ -44,11 +52,19 @@ The split-screen forest bombs example SHALL model trees as gameplay-destructible
 - **THEN** tree instances use varied X/Z positions, scale factors, and growth slowdown values within bounded ranges
 
 ### Requirement: Example demonstrates bomb explosions through 3D volume queries
-The split-screen forest bombs example SHALL demonstrate orange thrown bombs that explode and destroy nearby tree roots using `std.physics.volume.query.overlap_sphere[...]`.
+The split-screen forest bombs example SHALL demonstrate low-polygon sphere bombs thrown in the player's current facing direction that explode and destroy nearby tree roots using `std.physics.volume.query.overlap_sphere[...]`.
 
 #### Scenario: Bomb uses authored projectile motion
 - **WHEN** a player throws a bomb in the example
-- **THEN** the example spawns or activates an orange bomb entity with velocity/gravity state that advances through ordinary gameplay systems
+- **THEN** the example spawns an orange bomb entity with velocity/gravity state that advances through ordinary gameplay systems
+
+#### Scenario: Bomb initial velocity follows player facing direction
+- **WHEN** a player throws a bomb
+- **THEN** the spawned bomb's initial XZ velocity is derived from `quat.forward` applied to the throwing player's current rotation, not a fixed world-Z constant
+
+#### Scenario: Bomb is rendered as a low-polygon sphere
+- **WHEN** a bomb entity is spawned
+- **THEN** it uses a low-polygon sphere mesh asset rather than a box mesh
 
 #### Scenario: Explosion queries nearby trees
 - **WHEN** a bomb impact creates an explosion

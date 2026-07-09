@@ -142,3 +142,11 @@ Automated example-compilation integration coverage SHALL include the split-scree
 #### Scenario: Split-screen forest bombs generated output is compiled
 - **WHEN** the curated example compilation test runs the `split-screen-forest-bombs` case
 - **THEN** it invokes the compiler for the example, verifies the generated C++ exists, builds the registered example target, and runs the standard formatting and tidy validation steps
+
+### Requirement: Curated examples may validate template-backed entities
+
+After template-backed entity support is implemented, curated example compilation coverage SHALL be able to include examples that use `entity Name from TemplateName:` declarations to instantiate template-backed content.
+
+#### Scenario: Template-backed entity example compiles through backend
+- **WHEN** a supported example uses `entity Gem1 from BlueGem:` and targets cpp-entt
+- **THEN** curated example compilation coverage generates and compiles backend output for the template-backed entity setup

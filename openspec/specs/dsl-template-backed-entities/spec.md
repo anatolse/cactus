@@ -1,4 +1,9 @@
-## ADDED Requirements
+# dsl-template-backed-entities Specification
+
+## Purpose
+Define the language semantics for template-backed entity declarations (`entity Name from TemplateName:`), which create module/scene-load entity instances from a named template's flattened archetype with optional nested trait override entries.
+
+## Requirements
 
 ### Requirement: Template-backed entities create load-time instances from templates
 

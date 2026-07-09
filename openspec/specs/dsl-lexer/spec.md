@@ -16,9 +16,9 @@ The lexer SHALL maintain an indent stack and emit explicit INDENT and DEDENT tok
 - **THEN** the lexer reports an error with the source location
 
 ### Requirement: Keyword recognition
-The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `unit`, `system`, `view`, `event`, `func`, `let`, `var`, `persist`, `sync`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `filter`, `target`, `map`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`, `extern`.
+The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `entity`, `system`, `view`, `event`, `func`, `let`, `var`, `persist`, `sync`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `filter`, `target`, `map`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`, `extern`.
 
-`interface` is NOT a reserved keyword and SHALL lex as `IDENTIFIER`.
+The legacy `unit` spelling is no longer part of the active top-level declaration surface; implementations MAY reserve it to provide a targeted migration diagnostic, but authors SHALL use `entity`.
 
 #### Scenario: Keyword vs identifier
 - **WHEN** the source contains the text `system`
@@ -36,9 +36,9 @@ The lexer SHALL recognize all Cactus keywords and produce the corresponding Toke
 - **WHEN** the source contains the text `extern_value`
 - **THEN** the lexer produces a token with type IDENTIFIER
 
-#### Scenario: interface lexes as identifier
-- **WHEN** the source contains the text `interface`
-- **THEN** the lexer produces a token with type IDENTIFIER (not a keyword token)
+#### Scenario: entity keyword tokenized
+- **WHEN** the source contains the text `entity Player:`
+- **THEN** the lexer produces a token with type ENTITY followed by IDENTIFIER("Player") and COLON
 
 ### Requirement: Numeric literal tokenization
 The lexer SHALL distinguish integer literals from float literals. A number containing a decimal point SHALL be tokenized as FLOAT_LITERAL; otherwise as INT_LITERAL.
@@ -101,6 +101,8 @@ The lexer SHALL recognize the following additional reserved keywords:
 | `disable` | `DISABLE` |
 | `exclude` | `EXCLUDE` |
 | `disabled` | `DISABLED` |
+| `to` | `TO` |
+| `from` | `FROM` |
 
 These keywords are reserved and SHALL NOT be usable as identifiers.
 
@@ -132,8 +134,12 @@ These keywords are reserved and SHALL NOT be usable as identifiers.
 - **WHEN** the source contains `Frozen: disabled` inside an `apply:` block
 - **THEN** the lexer emits `IDENTIFIER("Frozen") COLON DISABLED`
 
+#### Scenario: from keyword tokenized
+- **WHEN** the source contains `entity Gem1 from BlueGem:`
+- **THEN** the lexer emits `ENTITY IDENTIFIER("Gem1") FROM IDENTIFIER("BlueGem") COLON`
+
 #### Scenario: New keywords rejected as identifiers
-- **WHEN** a declaration uses `template`, `spawn`, `destroy`, `load`, `enable`, `disable`, `exclude`, or `disabled` as an identifier name
+- **WHEN** a declaration uses `entity`, `template`, `spawn`, `destroy`, `load`, `enable`, `disable`, `exclude`, `disabled`, `to`, or `from` as an identifier name
 - **THEN** the lexer emits the reserved keyword token, and the parser SHALL report an error
 
 ### Requirement: `extern` reserved keyword

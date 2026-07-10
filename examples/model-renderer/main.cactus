@@ -30,7 +30,7 @@ pub entity PlayerModel:
         cast_shadow = true
 
 # Raylib robot: 19 skinned primitives across 3 embedded materials, rendered
-# statically (animation lands with dsl-model-animation).
+# at bind pose (no ModelAnimator; see the model-animation example for playback).
 pub entity RobotModel:
     WorldTransform:
         position = vec3(2.5, 0.0, 0.0)

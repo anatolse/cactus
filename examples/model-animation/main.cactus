@@ -1,0 +1,228 @@
+module model_animation
+
+use std.input
+use std.math.quat as quat
+use std.query as query
+use std.transform.volume
+use std.render.meshes
+use std.render.models as models
+use std.render.text
+use std.text
+use std.camera.volume
+use std.camera.viewport
+
+const:
+    WINDOW_WIDTH = 960
+    WINDOW_HEIGHT = 540
+    WINDOW_TITLE = "Model Animation Example"
+    TARGET_FPS = 60
+    ROTATION_SPEED = 1.75
+    ROBOT_COUNT = 3
+
+# Shared with the model-renderer example — one CC0 robot GLB, 14 named clips.
+asset Robot: model = "../model-renderer/art/robot.glb"
+
+input CycleSelected: button
+    key = Key.Tab
+
+input NextClip: button
+    key = Key.Space
+
+# Arrows and WASD both rotate; each direction is two axis declarations, summed.
+input RotateHorizontalKeys: axis
+    negative = Key.A
+    positive = Key.D
+
+input RotateHorizontalArrows: axis
+    negative = Key.Left
+    positive = Key.Right
+
+input RotateVerticalKeys: axis
+    negative = Key.S
+    positive = Key.W
+
+input RotateVerticalArrows: axis
+    negative = Key.Down
+    positive = Key.Up
+
+# Lock-step selection state: every robot sees the same TAB press and advances
+# its own `selected` copy, so "am I selected" is just `index == selected` —
+# no cross-entity reads needed.
+trait RobotState:
+    var index: int = 0
+    var selected: int = 0
+
+trait ControlInput:
+    var horizontal: float = 0.0
+    var vertical: float = 0.0
+    var cycle_pressed: bool = false
+    var clip_pressed: bool = false
+
+pub entity RobotLeft:
+    WorldTransform:
+        position = vec3(-2.5, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    ModelRenderer:
+        model = Robot
+        visible = true
+        cast_shadow = true
+    ModelAnimator:
+        clip = 0
+        playing = true
+        speed = 1.0
+        time = 0.0
+    RobotState:
+        index = 0
+        selected = 0
+    ControlInput
+
+pub entity RobotCenter:
+    WorldTransform:
+        position = vec3(0.0, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    ModelRenderer:
+        model = Robot
+        visible = true
+        cast_shadow = true
+    ModelAnimator:
+        clip = 1
+        playing = true
+        speed = 1.0
+        time = 0.0
+    RobotState:
+        index = 1
+        selected = 0
+    ControlInput
+
+pub entity RobotRight:
+    WorldTransform:
+        position = vec3(2.5, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    ModelRenderer:
+        model = Robot
+        visible = true
+        cast_shadow = true
+    ModelAnimator:
+        clip = 2
+        playing = true
+        speed = 1.0
+        time = 0.0
+    RobotState:
+        index = 2
+        selected = 0
+    ControlInput
+
+pub entity Hud:
+    ScreenLabel:
+        text = ""
+        position = vec2(16.0, 16.0)
+        font_size = 24
+        color = #FFFFFFFF
+        visible = true
+
+pub entity KeyLight:
+    WorldTransform:
+        position = vec3(-3.0, 4.0, 4.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #FFF4E0
+        intensity = 1.5
+        range = 20.0
+        enabled = true
+
+pub entity FillLight:
+    WorldTransform:
+        position = vec3(4.0, 2.5, 3.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #C0D8FF
+        intensity = 1.0
+        range = 18.0
+        enabled = true
+
+pub entity MainCamera:
+    WorldTransform:
+        position = vec3(0.0, 2.5, 8.0)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -0.15)
+        scale = vec3(1.0, 1.0, 1.0)
+    Camera:
+        fov_y = 60.0
+        near = 0.1
+        far = 500.0
+    Viewport:
+        x = 0.0
+        y = 0.0
+        width = 1.0
+        height = 1.0
+        depth = 0
+        clear_color = #223047FF
+
+system ReadControls:
+    filter:
+        ControlInput
+
+    on input:
+        horizontal = input.axis(RotateHorizontalKeys) + input.axis(RotateHorizontalArrows)
+        vertical = input.axis(RotateVerticalKeys) + input.axis(RotateVerticalArrows)
+        cycle_pressed = input.pressed(CycleSelected)
+        clip_pressed = input.pressed(NextClip)
+
+system CycleSelection:
+    filter:
+        RobotState
+        ControlInput
+
+    on tick:
+        if cycle_pressed:
+            selected = (selected + 1) % ROBOT_COUNT
+
+system RotateSelected:
+    filter:
+        WorldTransform
+        RobotState
+        ControlInput
+    after:
+        CycleSelection
+
+    on tick:
+        if index == selected:
+           # let yaw_axis = quat.up(rotation)
+            let pitch_axis = quat.right(rotation)
+            #let yaw_delta = quat.from_axis_angle(yaw_axis, horizontal * ROTATION_SPEED * tick.dt)
+            let pitch_delta = quat.from_axis_angle(pitch_axis, vertical * ROTATION_SPEED * tick.dt)
+            rotation = pitch_delta
+            # rotation = quat.multiply(pitch_delta, quat.multiply(yaw_delta, rotation))
+
+system CycleClip:
+    filter:
+        RobotState
+        ControlInput
+        ModelAnimator
+    after:
+        CycleSelection
+
+    on tick:
+        if clip_pressed and index == selected:
+            let count = models.animation_count(Robot)
+            if count > 0:
+                clip = (clip + 1) % count
+                time = 0.0
+
+system UpdateHud:
+    filter:
+        RobotState
+        ModelAnimator
+    after:
+        CycleClip
+
+    on tick:
+        if index == selected:
+            let hud = query.first[ScreenLabel]()
+            project ScreenLabel to hud:
+                position = vec2(16.0, 16.0)
+                text = format("Robot {} - {}", index + 1, models.animation_name(Robot, clip))

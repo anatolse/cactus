@@ -97,3 +97,37 @@ The 3D backend path SHALL draw text on a plane mesh whose orientation tracks `st
 #### Scenario: Identity rotation produces a vertical plane
 - **WHEN** a volume-world entity has `WorldTransform.rotation = quat.identity()` and a visible `TextLabel`
 - **THEN** the 3D backend draws an upright plane (XY-oriented, normal along +Z)
+
+---
+
+### Requirement: std.render.text exposes a ScreenLabel trait for window-space text
+The `std.render.text` module SHALL expose a `pub trait ScreenLabel` with fields `var text: string = ""`, `var position: vec2` (screen pixels, top-left origin), `var font_size: int = 32` (screen pixels), `var color: color = #FFFFFFFF`, and `var visible: bool = true`. The trait SHALL NOT require any `WorldTransform`.
+
+#### Scenario: ScreenLabel fields accessible after import
+- **WHEN** authored code contains `use std.render.text` and a unit body applies `ScreenLabel`
+- **THEN** the entity has writable fields `text`, `position`, `font_size`, `color`, and `visible` with the specified types and defaults
+
+#### Scenario: ScreenLabel entity needs no WorldTransform
+- **WHEN** an entity declares only `ScreenLabel` and no transform trait
+- **THEN** semantic analysis accepts the entity and the label renders
+
+---
+
+### Requirement: ScreenLabelSystem renders window-space text in any transform flavor
+The `std.render.text` module SHALL declare `extern system ScreenLabelSystem` filtered on `ScreenLabel` alone, recognized by the backend as a render-phase system. The backend SHALL draw visible labels at `position` in window pixel coordinates (top-left origin), after all viewport/world rendering so labels overlay 2D and 3D content. The system SHALL be functional in programs using either `std.transform.flat` or `std.transform.volume` — unlike `TextRenderer2D`, it SHALL NOT be disabled by the program's `WorldTransform` flavor.
+
+#### Scenario: HUD label over a 3D scene
+- **WHEN** a `volume`-flavor program has an entity with `ScreenLabel { text = "hello", position = vec2(16.0, 16.0) }`
+- **THEN** the text draws at 16,16 window pixels on top of the rendered 3D scene
+
+#### Scenario: ScreenLabel also works in flat programs
+- **WHEN** a `flat`-flavor program has a visible `ScreenLabel` entity
+- **THEN** the text draws at its window position over the 2D scene
+
+#### Scenario: Invisible screen label skipped
+- **WHEN** an entity's `ScreenLabel.visible` is `false`
+- **THEN** no text is drawn for that entity
+
+#### Scenario: Label text updates take effect same frame
+- **WHEN** a system writes `ScreenLabel.text` during the update phase
+- **THEN** the label rendered that frame shows the new text

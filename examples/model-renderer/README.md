@@ -6,8 +6,9 @@ lighting pipeline.
 
 - The **player** model renders with a red body, white eyes, and black pupils —
   three primitives, each bound to its own flat-color embedded material.
-- The **robot** model renders statically with its three embedded materials
-  (skeletal animation is a follow-up change, `dsl-model-animation`).
+- The **robot** model renders at its bind pose with its three embedded
+  materials — no `ModelAnimator`, so it stays static; see the
+  `model-animation` example for skeletal animation playback.
 
 Build and run from the project root (asset paths resolve against the process
 working directory):

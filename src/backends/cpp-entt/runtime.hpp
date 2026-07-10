@@ -36,6 +36,7 @@ struct RenderDebugState {
     int submitted_models{0};
     int drawn_models{0};
     int submitted_billboards{0};
+    int submitted_screen_labels{0};
     int registered_point_lights{0};
     int registered_directional_lights{0};
     int active_point_lights{0};
@@ -117,6 +118,13 @@ void submit_text_2d(Vector2 position,
                     Color color,
                     const std::string& text,
                     bool visible) noexcept;
+// Window-space HUD label (std.render.text ScreenLabel): window-global pixel
+// coordinates with top-left origin, drawn after all viewport/world rendering.
+void submit_screen_label(Vector2 position,
+                         int font_size,
+                         Color color,
+                         const std::string& text,
+                         bool visible) noexcept;
 void submit_text_3d(std::uint32_t entity_id,
                     Vector3 position,
                     Quat rotation,

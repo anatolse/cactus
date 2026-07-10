@@ -102,6 +102,16 @@ struct TextSubmission3D {
     std::string text;
 };
 
+// Window-space HUD text (dsl-model-animation D5): window-global, top-left
+// origin pixels, flushed after all viewport rendering so labels overlay both
+// 2D and 3D content in any WorldTransform flavor.
+struct ScreenLabelSubmission {
+    Vector2 position{};
+    int font_size{32};
+    Color color{};
+    std::string text;
+};
+
 struct TextLabel3DEntry {
     RenderTexture2D rt{};
     std::string cached_text;
@@ -179,6 +189,11 @@ std::vector<TextSubmission2D>& text_2d_queue() noexcept {
 
 std::vector<TextSubmission3D>& text_3d_queue() noexcept {
     static std::vector<TextSubmission3D> queue;
+    return queue;
+}
+
+std::vector<ScreenLabelSubmission>& screen_label_queue() noexcept {
+    static std::vector<ScreenLabelSubmission> queue;
     return queue;
 }
 
@@ -1106,6 +1121,17 @@ void flush_text_2d_queue() noexcept {
     EndMode2D();
 }
 
+void flush_screen_label_queue() noexcept {
+    if (screen_label_queue().empty() || !IsWindowReady()) {
+        return;
+    }
+    const Font font          = GetFontDefault();
+    constexpr float kSpacing = 1.0F;
+    for (const auto& sub : screen_label_queue()) {
+        DrawTextEx(font, sub.text.c_str(), sub.position, static_cast<float>(sub.font_size), kSpacing, sub.color);
+    }
+}
+
 void flush_text_3d_queue() noexcept {
     if (text_3d_queue().empty() || !IsWindowReady()) {
         return;
@@ -1272,6 +1298,7 @@ void reset_render_debug_state() noexcept {
     point_light_queue().clear();
     text_2d_queue().clear();
     text_3d_queue().clear();
+    screen_label_queue().clear();
     if (IsWindowReady()) {
         for (auto& [id, entry] : text_label_3d_cache()) {
             if (entry.loaded) {
@@ -1299,6 +1326,7 @@ void begin_render_frame() noexcept {
     point_light_queue().clear();
     text_2d_queue().clear();
     text_3d_queue().clear();
+    screen_label_queue().clear();
     render_debug_state_storage().used_default_2d_camera = false;
     render_debug_state_storage().used_default_3d_camera = false;
     render_debug_state_storage().active_point_lights    = 0;
@@ -1313,12 +1341,16 @@ void end_render_frame() noexcept {
     flush_text_3d_queue();
     flush_sprite_queue();
     flush_text_2d_queue();
+    // Screen labels are window-global: drawn last, after all viewport/world
+    // rendering, so they overlay every view (never flushed per viewport).
+    flush_screen_label_queue();
     mesh_queue().clear();
     model_queue().clear();
     sprite_queue().clear();
     point_light_queue().clear();
     text_2d_queue().clear();
     text_3d_queue().clear();
+    screen_label_queue().clear();
 }
 
 void flush_viewport_3d() noexcept {
@@ -1522,6 +1554,23 @@ void submit_text_2d(const Vector2 position,
         .color        = color,
         .text         = text,
     });
+}
+
+void submit_screen_label(const Vector2 position,
+                         const int font_size,
+                         const Color color,
+                         const std::string& text,
+                         const bool visible) noexcept {
+    if (!visible) {
+        return;
+    }
+    screen_label_queue().push_back(ScreenLabelSubmission{
+        .position  = position,
+        .font_size = font_size,
+        .color     = color,
+        .text      = text,
+    });
+    ++render_debug_state_storage().submitted_screen_labels;
 }
 
 void submit_text_3d(const uint32_t entity_id,

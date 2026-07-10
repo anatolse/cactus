@@ -26,6 +26,8 @@ std::string asset_kind_name(const AssetKind kind) {
             return "mesh";
         case AssetKind::Material:
             return "material";
+        case AssetKind::Model:
+            return "model";
     }
     return "asset";
 }
@@ -35,9 +37,11 @@ void AssetRegistry::clear() {
     textures_.clear();
     meshes_.clear();
     materials_.clear();
+    models_.clear();
     texture_resolver_  = {};
     mesh_resolver_     = {};
     material_resolver_ = {};
+    model_resolver_    = {};
     clear_diagnostics();
 }
 
@@ -79,6 +83,13 @@ void AssetRegistry::register_material(const AssetHandle handle,
                                       const int runtime_id,
                                       const bool materialized) {
     register_asset(AssetKind::Material, handle, std::move(asset_id), runtime_id, materialized);
+}
+
+void AssetRegistry::register_model(const AssetHandle handle,
+                                   std::string asset_id,
+                                   const int runtime_id,
+                                   const bool materialized) {
+    register_asset(AssetKind::Model, handle, std::move(asset_id), runtime_id, materialized);
 }
 
 void AssetRegistry::set_lazy_resolver(const AssetKind kind, LazyResolver resolver) {
@@ -130,6 +141,8 @@ AssetRegistry::AssetMap& AssetRegistry::map_for(const AssetKind kind) noexcept {
             return meshes_;
         case AssetKind::Material:
             return materials_;
+        case AssetKind::Model:
+            return models_;
     }
     return textures_;
 }
@@ -142,6 +155,8 @@ const AssetRegistry::AssetMap& AssetRegistry::map_for(const AssetKind kind) cons
             return meshes_;
         case AssetKind::Material:
             return materials_;
+        case AssetKind::Model:
+            return models_;
     }
     return textures_;
 }
@@ -154,6 +169,8 @@ AssetRegistry::LazyResolver& AssetRegistry::resolver_for(const AssetKind kind) n
             return mesh_resolver_;
         case AssetKind::Material:
             return material_resolver_;
+        case AssetKind::Model:
+            return model_resolver_;
     }
     return texture_resolver_;
 }

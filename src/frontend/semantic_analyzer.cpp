@@ -37,6 +37,7 @@ const std::unordered_set<std::string>& builtin_types() {
                                                           "list",
                                                           // Asset opaque ID types (spec 5.1 - dsl-spec-new-features)
                                                           "mesh_id",
+                                                          "model_id",
                                                           "texture_id",
                                                           "sound_id",
                                                           "music_id",
@@ -83,6 +84,9 @@ TypeKind type_kind_from_name(const std::string& name) {
     if (name == "mesh_id") {
         return TypeKind::MeshId;
     }
+    if (name == "model_id") {
+        return TypeKind::ModelId;
+    }
     if (name == "texture_id") {
         return TypeKind::TextureId;
     }
@@ -113,6 +117,8 @@ TypeKind asset_kind_to_type_kind(AssetKind ak) {
     switch (ak) {
         case AssetKind::Mesh:
             return TypeKind::MeshId;
+        case AssetKind::Model:
+            return TypeKind::ModelId;
         case AssetKind::Texture:
             return TypeKind::TextureId;
         case AssetKind::Sound:
@@ -490,6 +496,7 @@ bool is_format_supported_type(TypeKind kind) {
         case TypeKind::String:
         case TypeKind::EntityId:
         case TypeKind::MeshId:
+        case TypeKind::ModelId:
         case TypeKind::TextureId:
         case TypeKind::SoundId:
         case TypeKind::MusicId:
@@ -2448,6 +2455,8 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             switch (asset_it->second) {
                 case TypeKind::MeshId:
                     return make_mesh_id_type();
+                case TypeKind::ModelId:
+                    return make_model_id_type();
                 case TypeKind::TextureId:
                     return make_texture_id_type();
                 case TypeKind::SoundId:

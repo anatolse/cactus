@@ -93,6 +93,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_MESH_RENDERER_GENERATED_CPP="${MESH_RENDERER_GENERATED_CPP}"
     CACTUS_EXAMPLE_MESH_RENDERER_TARGET="example_mesh_renderer_generated"
 
+    CACTUS_EXAMPLE_MODEL_RENDERER_SOURCE="examples/model-renderer/main.cactus"
+    CACTUS_EXAMPLE_MODEL_RENDERER_GENERATED_CPP="${MODEL_RENDERER_GENERATED_CPP}"
+    CACTUS_EXAMPLE_MODEL_RENDERER_TARGET="example_model_renderer_generated"
+
     CACTUS_EXAMPLE_PLATFORMER_SOURCE="examples/platformer/platformer.cactus"
     CACTUS_EXAMPLE_PLATFORMER_GENERATED_CPP="${PLATFORMER_GENERATED_CPP}"
     CACTUS_EXAMPLE_PLATFORMER_TARGET="example_platformer_generated"

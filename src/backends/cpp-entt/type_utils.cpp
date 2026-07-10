@@ -228,6 +228,7 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
         case TypeKind::EntityId:
             return "uint32_t";
         case TypeKind::MeshId:
+        case TypeKind::ModelId:
         case TypeKind::TextureId:
         case TypeKind::MaterialId:
             return "std::uint32_t";

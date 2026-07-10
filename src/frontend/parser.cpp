@@ -2388,13 +2388,16 @@ AssetDeclNode Parser::parse_asset_decl(bool is_pub) {
     auto name = consume(TokenType::IDENTIFIER, "expected asset name").value;
     consume(TokenType::COLON, "expected ':'");
 
-    // Parse asset type: mesh | texture | sound | music | font | material
+    // Parse asset type: mesh | model | texture | sound | music | font | material
     AssetKind kind = AssetKind::Mesh;
     if (check(TokenType::IDENTIFIER)) {
         auto type_val = peek().value;
         if (type_val == "mesh") {
             advance();
             kind = AssetKind::Mesh;
+        } else if (type_val == "model") {
+            advance();
+            kind = AssetKind::Model;
         } else if (type_val == "texture") {
             advance();
             kind = AssetKind::Texture;
@@ -2412,7 +2415,8 @@ AssetDeclNode Parser::parse_asset_decl(bool is_pub) {
             kind = AssetKind::Material;
         } else {
             errors_.error(peek().location,
-                          "expected asset type (mesh, texture, sound, music, font, material), got '" + type_val + "'");
+                          "expected asset type (mesh, model, texture, sound, music, font, material), got '" + type_val +
+                              "'");
             advance();
         }
     } else {

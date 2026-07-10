@@ -1,11 +1,15 @@
-## ADDED Requirements
+## Purpose
+
+Define the `asset` declaration form in the Cactus DSL: syntax, typed opaque ID resolution, path semantics, visibility, and scoping rules for binding compile-time identifiers to external resource files.
+
+## Requirements
 
 ### Requirement: Asset declaration syntax
 The parser SHALL accept `asset` as a top-level declaration form. An `asset` declaration binds a compile-time identifier to a typed external resource file path.
 
 ```ebnf
 asset_decl  = [ "pub" ] "asset" IDENTIFIER ":" asset_type "=" STRING_LITERAL NEWLINE ;
-asset_type  = "mesh" | "texture" | "sound" | "music" | "font" | "material" ;
+asset_type  = "mesh" | "model" | "texture" | "sound" | "music" | "font" | "material" ;
 ```
 
 The keyword `asset` SHALL be added to the keyword list and to the `declaration` production.
@@ -14,12 +18,16 @@ The keyword `asset` SHALL be added to the keyword list and to the `declaration` 
 - **WHEN** `asset PlayerMesh: mesh = "models/player.glb"` appears at the top level
 - **THEN** the parser produces an `AssetDecl` node with `name = "PlayerMesh"`, `asset_type = mesh`, and `path = "models/player.glb"`
 
+#### Scenario: Model asset declaration parsed
+- **WHEN** `asset Robot: model = "art/robot.glb"` appears at the top level
+- **THEN** the parser produces an `AssetDecl` node with `name = "Robot"`, `asset_type = model`, and `path = "art/robot.glb"`
+
 #### Scenario: Pub asset declaration parsed
 - **WHEN** `pub asset HudFont: font = "fonts/hud.ttf"` appears at the top level
 - **THEN** the parser produces an `AssetDecl` node with `is_pub = true`, `name = "HudFont"`, `asset_type = font`
 
 #### Scenario: All asset types accepted
-- **WHEN** asset declarations use each of `mesh`, `texture`, `sound`, `music`, `font`, `material` as the type
+- **WHEN** asset declarations use each of `mesh`, `model`, `texture`, `sound`, `music`, `font`, `material` as the type
 - **THEN** the parser accepts each and produces an `AssetDecl` with the corresponding asset type
 
 #### Scenario: Invalid asset type rejected
@@ -32,6 +40,7 @@ The semantic analyzer SHALL resolve asset declaration names to their correspondi
 | Declaration type | Resolved type |
 |-----------------|---------------|
 | `mesh`          | `mesh_id`     |
+| `model`         | `model_id`    |
 | `texture`       | `texture_id`  |
 | `sound`         | `sound_id`    |
 | `music`         | `music_id`    |
@@ -42,8 +51,16 @@ The semantic analyzer SHALL resolve asset declaration names to their correspondi
 - **WHEN** a trait field `let mesh: mesh_id` is configured as `mesh = PlayerMesh` in a `unit` config block, and `PlayerMesh` is declared as `asset PlayerMesh: mesh = "..."`
 - **THEN** the semantic analyzer resolves `PlayerMesh` to type `mesh_id` and accepts the assignment
 
+#### Scenario: Model asset name resolves to model_id
+- **WHEN** a trait field `let model: model_id` is configured as `model = Robot`, and `Robot` is declared as `asset Robot: model = "art/robot.glb"`
+- **THEN** the semantic analyzer resolves `Robot` to type `model_id` and accepts the assignment
+
 #### Scenario: Type mismatch between asset kinds rejected
 - **WHEN** `asset ShotSound: sound = "audio/shot.wav"` is used where a `mesh_id` is expected
+- **THEN** the semantic analyzer reports a type mismatch error
+
+#### Scenario: Mesh asset rejected where model_id expected
+- **WHEN** `asset Rock: mesh = "rock.glb"` is used where a `model_id` is expected
 - **THEN** the semantic analyzer reports a type mismatch error
 
 #### Scenario: Undeclared asset identifier rejected
@@ -82,3 +99,14 @@ Asset declarations SHALL be permitted only at the top level of a module. They SH
 #### Scenario: Asset inside system body rejected
 - **WHEN** `asset Snd: sound = "hit.wav"` appears inside a `system` block
 - **THEN** the parser reports an error: asset declarations are only allowed at module top level
+
+### Requirement: Asset paths are module-relative
+The path string in an `asset` declaration SHALL be interpreted relative to the directory of the source file containing the declaration. The compiler SHALL normalize the joined path (declaring module directory + declared relative path) and emit the normalized project-root-relative path into generated registration code.
+
+#### Scenario: Path resolved against declaring module directory
+- **WHEN** module file `examples/robot/game.cactus` declares `asset Robot: model = "art/robot.glb"`
+- **THEN** the generated registration code carries the normalized path `examples/robot/art/robot.glb`
+
+#### Scenario: Imported asset keeps its declaring module's path base
+- **WHEN** module A declares `pub asset SharedModel: model = "art/m.glb"` and module B in a different directory imports and uses it
+- **THEN** the registered path is resolved relative to module A's directory, not module B's

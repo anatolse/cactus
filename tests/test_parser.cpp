@@ -840,7 +840,7 @@ TEST_CASE("Parser: pub marker trait", "[parser][dynamic-ecs]") {
 
 // ── dsl-spec-new-features parser tests ─────────────────────────────────────
 
-// Task 4.8: asset_decl - all six asset types
+// Task 4.8: asset_decl - all seven asset types
 TEST_CASE("Parser: asset declaration mesh type", "[parser][dsl-spec-new-features]") {
     auto prog = parse("asset PlayerMesh: mesh = \"models/player.glb\"\n");
     REQUIRE(prog.declarations.size() == 1);
@@ -849,6 +849,16 @@ TEST_CASE("Parser: asset declaration mesh type", "[parser][dsl-spec-new-features
     CHECK(node.is_pub == false);
     CHECK(node.asset_kind == AssetKind::Mesh);
     CHECK(node.path == "models/player.glb");
+}
+
+TEST_CASE("Parser: asset declaration model type", "[parser][dsl-model-assets]") {
+    auto prog = parse("asset Robot: model = \"art/robot.glb\"\n");
+    REQUIRE(prog.declarations.size() == 1);
+    auto& node = std::get<AssetDeclNode>(prog.declarations[0]);
+    CHECK(node.name == "Robot");
+    CHECK(node.is_pub == false);
+    CHECK(node.asset_kind == AssetKind::Model);
+    CHECK(node.path == "art/robot.glb");
 }
 
 TEST_CASE("Parser: pub asset declaration texture type", "[parser][dsl-spec-new-features]") {

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <optional>
 #include <sstream>
 
@@ -180,12 +181,38 @@ std::string cpp_string_literal(const std::string& value) {
     return escaped;
 }
 
+// Asset paths are module-relative (dsl-model-assets D5): join the declaring
+// module's directory with the declared path and normalize. Absolute module
+// paths (e.g. from build tooling) are relativized against the compiler's
+// working directory — the project root — so generated registration code stays
+// portable and the runtime resolves against the process working directory.
+std::string normalized_asset_path(const AssetDeclNode& asset) {
+    namespace fs = std::filesystem;
+    const fs::path declared{asset.path};
+    const auto module_dir = fs::path{asset.location.filename}.parent_path();
+    auto joined           = (module_dir / declared).lexically_normal();
+    if (joined.is_absolute()) {
+        std::error_code ec;
+        const auto cwd = fs::current_path(ec);
+        if (!ec) {
+            auto relative = joined.lexically_proximate(cwd);
+            if (!relative.empty() && relative.begin()->string() != "..") {
+                joined = std::move(relative);
+            }
+        }
+    }
+    return joined.generic_string();
+}
+
 std::string asset_register_call(const AssetDeclNode& asset) {
-    const auto path_literal = cpp_string_literal(asset.path);
+    const auto path_literal = cpp_string_literal(normalized_asset_path(asset));
     switch (asset.asset_kind) {
         case AssetKind::Mesh:
             return "shared_asset_registry().register_mesh(" + asset.name + ", " + path_literal + ", static_cast<int>(" +
                    asset.name + "));";
+        case AssetKind::Model:
+            return "shared_asset_registry().register_model(" + asset.name + ", " + path_literal +
+                   ", static_cast<int>(" + asset.name + "));";
         case AssetKind::Texture:
             return "shared_asset_registry().register_texture(" + asset.name + ", " + path_literal +
                    ", static_cast<int>(" + asset.name + "));";
@@ -219,10 +246,10 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
         return true;
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
-        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
-        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" ||
-        sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
-        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
+        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "ModelRendererSystem" ||
+        sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
+        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" ||
+        sys.name == "GizmoRenderer3D" || sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -245,6 +272,10 @@ bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     if (sys.name == "MeshRenderer") {
         return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
                filter_has_trait(sys.filter, "std.render.meshes.Renderer", "Renderer");
+    }
+    if (sys.name == "ModelRendererSystem") {
+        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+               filter_has_trait(sys.filter, "std.render.models.ModelRenderer", "ModelRenderer");
     }
     if (sys.name == "BillboardRenderer") {
         return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&

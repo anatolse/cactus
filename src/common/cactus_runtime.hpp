@@ -19,6 +19,7 @@ enum class AssetKind : std::uint8_t {
     Texture,
     Mesh,
     Material,
+    Model,
 };
 
 enum class AssetStatus : std::uint8_t {
@@ -66,6 +67,7 @@ public:
     void register_texture(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
     void register_mesh(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
     void register_material(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
+    void register_model(AssetHandle handle, std::string asset_id, int runtime_id, bool materialized = true);
 
     void set_lazy_resolver(AssetKind kind, LazyResolver resolver);
     [[nodiscard]] AssetResolution resolve(AssetKind kind, AssetHandle handle);
@@ -87,9 +89,11 @@ private:
     AssetMap textures_;
     AssetMap meshes_;
     AssetMap materials_;
+    AssetMap models_;
     LazyResolver texture_resolver_;
     LazyResolver mesh_resolver_;
     LazyResolver material_resolver_;
+    LazyResolver model_resolver_;
     std::vector<std::string> diagnostics_;
     std::size_t missing_count_{0};
 };

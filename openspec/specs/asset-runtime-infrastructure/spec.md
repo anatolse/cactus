@@ -5,10 +5,10 @@ Define the shared runtime asset infrastructure used by backend-owned stdlib rend
 ## Requirements
 
 ### Requirement: Shared runtime asset infrastructure defines stable handle resolution semantics
-The runtime SHALL provide a shared asset infrastructure layer that defines registration, resolution, validity, and failure semantics for authored asset-handle types used by stdlib render systems, including at minimum texture, mesh, and material handles.
+The runtime SHALL provide a shared asset infrastructure layer that defines registration, resolution, validity, and failure semantics for authored asset-handle types used by stdlib render systems, including at minimum texture, mesh, material, and model handles.
 
 #### Scenario: Asset handle resolves through runtime registry
-- **WHEN** a backend-owned stdlib render system needs to consume a `texture_id`, `mesh_id`, or `material_id`
+- **WHEN** a backend-owned stdlib render system needs to consume a `texture_id`, `mesh_id`, `material_id`, or `model_id`
 - **THEN** it resolves that handle through a stable runtime asset infrastructure API rather than ad hoc generated-code logic
 
 #### Scenario: Missing asset behavior is defined
@@ -32,3 +32,18 @@ The asset runtime infrastructure SHALL provide a testable registration/lookup pa
 #### Scenario: Backend test registers fake assets
 - **WHEN** backend conformance or runtime tests execute against stdlib-owned render systems
 - **THEN** they can register or substitute controlled asset records through the shared asset infrastructure
+
+### Requirement: Model assets materialize lazily from their registered path
+Model asset registration SHALL store the asset's path without performing file I/O. The runtime SHALL load the model file on first materialization (first render-time resolution of the handle), after the graphics context exists. Load failure (missing file, unreadable file, or a file yielding zero meshes) SHALL mark the record as failed so subsequent resolutions return the defined failure result without retrying the load every frame.
+
+#### Scenario: Registration performs no file I/O
+- **WHEN** generated startup code registers a model asset whose file does not exist
+- **THEN** registration succeeds and no error occurs until the handle is first materialized
+
+#### Scenario: First materialization loads the file once
+- **WHEN** a registered model handle is resolved for rendering across multiple frames
+- **THEN** the model file is loaded exactly once and subsequent resolutions reuse the loaded resource
+
+#### Scenario: Failed load is recorded and not retried per frame
+- **WHEN** materialization of a model handle fails
+- **THEN** the record is marked failed, subsequent resolutions return the failure result, and the file is not re-read on every frame

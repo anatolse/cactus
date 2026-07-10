@@ -1220,4 +1220,51 @@ TEST_CASE("Semantic: module-qualified query path accepted", "[semantic][query]")
         "    on tick:\n"
         "        let t = std.query.first[Boss]()\n"));
 }
+
+// dsl-model-assets: model asset declarations resolve to model_id
+TEST_CASE("Semantic: model asset name resolves to model_id", "[semantic][dsl-model-assets]") {
+    CHECK_FALSE(
+        analyze_has_errors("asset Robot: model = \"art/robot.glb\"\n"
+                           "trait ModelRenderer:\n"
+                           "    let model: model_id\n"
+                           "entity Bot:\n"
+                           "    ModelRenderer:\n"
+                           "        model = Robot\n"));
+}
+
+TEST_CASE("Semantic: mesh asset rejected where model_id expected", "[semantic][dsl-model-assets]") {
+    CHECK(analyze_has_errors(
+        "asset Rock: mesh = \"rock.glb\"\n"
+        "trait ModelRenderer:\n"
+        "    var model: model_id\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        add ModelRenderer:\n"
+        "            model = Rock\n"));
+}
+
+TEST_CASE("Semantic: model asset rejected where mesh_id expected", "[semantic][dsl-model-assets]") {
+    CHECK(analyze_has_errors(
+        "asset Robot: model = \"art/robot.glb\"\n"
+        "trait Renderer:\n"
+        "    var mesh: mesh_id\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        add Renderer:\n"
+        "            mesh = Robot\n"));
+}
+
+TEST_CASE("Semantic: model asset accepted where model_id expected in add", "[semantic][dsl-model-assets]") {
+    CHECK_FALSE(analyze_has_errors(
+        "asset Robot: model = \"art/robot.glb\"\n"
+        "trait ModelRenderer:\n"
+        "    var model: model_id\n" +
+        STDLIB_EVENTS +
+        "system S:\n"
+        "    on tick:\n"
+        "        add ModelRenderer:\n"
+        "            model = Robot\n"));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1,0 +1,81 @@
+module model_renderer
+
+use std.math.quat as quat
+use std.transform.volume
+use std.render.meshes
+use std.render.models
+use std.camera.volume
+use std.camera.viewport
+
+const:
+    WINDOW_WIDTH = 960
+    WINDOW_HEIGHT = 540
+    WINDOW_TITLE = "Model Renderer Example"
+    TARGET_FPS = 60
+
+asset Player: model = "art/player.glb"
+asset Robot: model = "art/robot.glb"
+
+# Godot "Squash the Creeps" player: 3 primitives with flat-color embedded
+# materials (red body, white eyes, black pupils).
+pub entity PlayerModel:
+    WorldTransform:
+        position = vec3(-2.5, 0.0, 0.0)
+        # Stand the model upright: its GLB rest orientation is tipped back.
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), 1.5708)
+        scale = vec3(1.0, 1.0, 1.0)
+    ModelRenderer:
+        model = Player
+        visible = true
+        cast_shadow = true
+
+# Raylib robot: 19 skinned primitives across 3 embedded materials, rendered
+# statically (animation lands with dsl-model-animation).
+pub entity RobotModel:
+    WorldTransform:
+        position = vec3(2.5, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    ModelRenderer:
+        model = Robot
+        visible = true
+        cast_shadow = true
+
+pub entity KeyLight:
+    WorldTransform:
+        position = vec3(-3.0, 4.0, 4.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #FFF4E0
+        intensity = 1.5
+        range = 20.0
+        enabled = true
+
+pub entity FillLight:
+    WorldTransform:
+        position = vec3(4.0, 2.5, 3.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #C0D8FF
+        intensity = 1.0
+        range = 18.0
+        enabled = true
+
+pub entity MainCamera:
+    WorldTransform:
+        position = vec3(0.0, 2.5, 8.0)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -0.15)
+        scale = vec3(1.0, 1.0, 1.0)
+    Camera:
+        fov_y = 60.0
+        near = 0.1
+        far = 500.0
+    Viewport:
+        x = 0.0
+        y = 0.0
+        width = 1.0
+        height = 1.0
+        depth = 0
+        clear_color = #223047FF

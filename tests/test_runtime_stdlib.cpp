@@ -196,6 +196,44 @@ TEST_CASE("Runtime stdlib: shared asset registry supports eager and lazy resolut
     CHECK(registry.missing_count() >= 1);
 }
 
+TEST_CASE("Runtime stdlib: shared asset registry resolves fake model records through the shared contract",
+          "[runtime][assets][dsl-model-assets]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+
+    // Eager fake record (test seam): no filesystem access involved.
+    registry.register_model(11U, "art/robot.glb", 501);
+    const auto eager = registry.resolve(AssetKind::Model, 11U);
+    CHECK(eager.ready());
+    CHECK(eager.runtime_id == 501);
+    CHECK(eager.asset_id == "art/robot.glb");
+
+    // Registered-but-unmaterialized record mirrors lazy-load registration.
+    registry.register_model(12U, "art/player.glb", 502, false);
+    const auto registered = registry.resolve(AssetKind::Model, 12U);
+    CHECK(registered.valid());
+    CHECK_FALSE(registered.ready());
+    CHECK(registered.runtime_id == 502);
+
+    // Lazy resolver slot works for models like other kinds.
+    registry.set_lazy_resolver(AssetKind::Model, [](AssetHandle handle) -> std::optional<AssetRecord> {
+        if (handle != 13U) {
+            return std::nullopt;
+        }
+        return AssetRecord{
+            .handle = handle, .kind = AssetKind::Model, .asset_id = "lazy", .runtime_id = 503, .materialized = true};
+    });
+    const auto lazy = registry.resolve(AssetKind::Model, 13U);
+    CHECK(lazy.ready());
+    CHECK(lazy.runtime_id == 503);
+
+    // Missing model handles follow the defined diagnostic path.
+    const auto missing = registry.resolve(AssetKind::Model, 99U);
+    CHECK_FALSE(missing.valid());
+    CHECK(registry.missing_count() >= 1);
+    registry.clear();
+}
+
 TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing assets", "[runtime][assets][entt]") {
     auto& registry = shared_asset_registry();
     registry.clear();
@@ -229,6 +267,70 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
                                                true,
                                                true);
     CHECK(cactus::runtime::entt_backend::render_debug_state().missing_assets >= 1);
+}
+
+TEST_CASE("Runtime stdlib: EnTT model submissions count visible entities and respect visibility",
+          "[runtime][assets][entt][dsl-model-assets]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_model(61U, "art/robot.glb", 61);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    const auto identity = stdlib::math::quat::identity();
+    const auto origin   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto unit     = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
+
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 61U, true, true);
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 61U, true, true);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_models == 2);
+
+    // Invisible models are not submitted.
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 61U, false, true);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_models == 2);
+}
+
+TEST_CASE("Runtime stdlib: EnTT missing model file skips draw without placeholder and reports one diagnostic",
+          "[runtime][assets][entt][dsl-model-assets]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_model(71U, "does/not/exist.glb", 71);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    const auto identity = stdlib::math::quat::identity();
+    const auto origin   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto unit     = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
+
+    // Repeated frames must not repeat the diagnostic or retry the load.
+    for (int frame = 0; frame < 3; ++frame) {
+        cactus::runtime::entt_backend::begin_render_frame();
+        cactus::runtime::entt_backend::submit_model(origin, identity, unit, 71U, true, true);
+        cactus::runtime::entt_backend::end_render_frame();
+    }
+
+    const auto& debug = cactus::runtime::entt_backend::render_debug_state();
+    CHECK(debug.submitted_models == 3);
+    CHECK(debug.drawn_models == 0);
+    REQUIRE(debug.model_diagnostics.size() == 1);
+    CHECK(debug.model_diagnostics[0].find("does/not/exist.glb") != std::string::npos);
+}
+
+TEST_CASE("Runtime stdlib: EnTT unregistered model handle reports one diagnostic across submissions",
+          "[runtime][assets][entt][dsl-model-assets]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    const auto identity = stdlib::math::quat::identity();
+    const auto origin   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto unit     = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
+
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 999U, true, true);
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 999U, true, true);
+
+    const auto& debug = cactus::runtime::entt_backend::render_debug_state();
+    CHECK(debug.submitted_models == 0);
+    CHECK(debug.missing_assets >= 2);
+    CHECK(debug.model_diagnostics.size() == 1);
 }
 
 TEST_CASE("Runtime stdlib: EnTT sprite submissions preserve layer ordering and default 2D camera fallback",

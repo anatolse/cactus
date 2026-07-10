@@ -18,6 +18,7 @@ enum class TypeKind {
     EntityId,
     // Asset opaque ID types (§5.1)
     MeshId,
+    ModelId,
     TextureId,
     SoundId,
     MusicId,
@@ -85,6 +86,9 @@ inline TypeInfo make_entity_id_type() {
 }
 inline TypeInfo make_mesh_id_type() {
     return make_type_info(TypeKind::MeshId, "mesh_id");
+}
+inline TypeInfo make_model_id_type() {
+    return make_type_info(TypeKind::ModelId, "model_id");
 }
 inline TypeInfo make_texture_id_type() {
     return make_type_info(TypeKind::TextureId, "texture_id");

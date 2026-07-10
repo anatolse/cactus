@@ -32,9 +32,11 @@ static std::string generated_function(const std::string& code, const std::string
     return code.substr(start, end - start + 3);
 }
 
-static DecoratedProgram full_pipeline(const std::string& source, ProgramNode& program_out) {
+static DecoratedProgram full_pipeline_from_file(const std::string& source,
+                                                const std::string& filename,
+                                                ProgramNode& program_out) {
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    Lexer lexer(source, filename, errors);
     auto tokens = lexer.tokenize();
     REQUIRE_FALSE(errors.has_errors());
     Parser parser(std::move(tokens), errors);
@@ -44,6 +46,10 @@ static DecoratedProgram full_pipeline(const std::string& source, ProgramNode& pr
     auto result = analyzer.analyze(program_out);
     REQUIRE_FALSE(errors.has_errors());
     return result;
+}
+
+static DecoratedProgram full_pipeline(const std::string& source, ProgramNode& program_out) {
+    return full_pipeline_from_file(source, "test.cactus", program_out);
 }
 
 TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
@@ -465,6 +471,29 @@ TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime wi
     CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: model renderer extern system binds to backend runtime without user callback",
+          "[codegen-entt][assets][dsl-model-assets]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait ModelRenderer:\n"
+        "    let model: model_id\n"
+        "    var visible: bool\n"
+        "    var cast_shadow: bool\n"
+        "extern system ModelRendererSystem:\n"
+        "    filter:\n"
+        "        std.transform.volume.WorldTransform\n"
+        "        std.render.models.ModelRenderer\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::submit_model(") != std::string::npos);
+    CHECK(code.find("void model_renderer_system_update(") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -480,6 +509,72 @@ TEST_CASE("Codegen EnTT: generated init registers declared mesh and material ass
                     "static_cast<int>(BlueCubeMesh));") != std::string::npos);
     CHECK(code.find("shared_asset_registry().register_material(BlueCubeMaterial, \"materials/blue_cube.mat\", "
                     "static_cast<int>(BlueCubeMaterial));") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: generated init registers declared model assets", "[codegen-entt][assets][dsl-model-assets]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "asset Robot: model = \"art/robot.glb\"\n"
+        "trait Marker\n"
+        "entity Bot:\n"
+        "    Marker\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("shared_asset_registry().register_model(Robot, \"art/robot.glb\", "
+                    "static_cast<int>(Robot));") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: asset paths resolve relative to the declaring module directory",
+          "[codegen-entt][assets][dsl-model-assets]") {
+    ProgramNode program;
+    auto decorated = full_pipeline_from_file(
+        "asset Robot: model = \"art/robot.glb\"\n"
+        "asset PlayerMesh: mesh = \"../shared/player.mesh\"\n"
+        "trait Marker\n"
+        "entity Bot:\n"
+        "    Marker\n",
+        "examples/robot/game.cactus",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("shared_asset_registry().register_model(Robot, \"examples/robot/art/robot.glb\", "
+                    "static_cast<int>(Robot));") != std::string::npos);
+    CHECK(code.find("shared_asset_registry().register_mesh(PlayerMesh, \"examples/shared/player.mesh\", "
+                    "static_cast<int>(PlayerMesh));") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: imported pub asset keeps its declaring module's path base",
+          "[codegen-entt][assets][dsl-model-assets]") {
+    // Mirrors the multi-module pipeline: the merged codegen AST holds each
+    // module's declarations with their original source locations, so an asset
+    // imported from module A resolves against A's directory, not the importer's.
+    ErrorReporter errors;
+    Lexer lexer_a("pub asset SharedModel: model = \"art/m.glb\"\n", "mods/shared/assets.cactus", errors);
+    Parser parser_a(lexer_a.tokenize(), errors);
+    auto prog_a = parser_a.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+
+    Lexer lexer_b(
+        "trait Marker\n"
+        "entity Bot:\n"
+        "    Marker\n",
+        "game/main.cactus",
+        errors);
+    Parser parser_b(lexer_b.tokenize(), errors);
+    auto merged = parser_b.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    for (auto& decl : prog_a.declarations) {
+        merged.declarations.push_back(std::move(decl));
+    }
+
+    SemanticAnalyzer analyzer(errors);
+    auto decorated = analyzer.analyze(merged);
+    REQUIRE_FALSE(errors.has_errors());
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("shared_asset_registry().register_model(SharedModel, \"mods/shared/art/m.glb\", "
+                    "static_cast<int>(SharedModel));") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: entity creation from unit", "[codegen-entt]") {

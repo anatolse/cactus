@@ -28,6 +28,8 @@ struct RenderDebugState {
     int submitted_sprites{0};
     int advanced_animated_sprites{0};
     int submitted_meshes{0};
+    int submitted_models{0};
+    int drawn_models{0};
     int submitted_billboards{0};
     int registered_point_lights{0};
     int registered_directional_lights{0};
@@ -37,6 +39,8 @@ struct RenderDebugState {
     bool used_default_3d_camera{false};
     bool used_lit_mesh_shader{false};
     std::vector<int> drawn_sprite_layers;
+    // Missing/failed model diagnostics, recorded at most once per model asset.
+    std::vector<std::string> model_diagnostics;
 };
 
 struct ProjectConfig {
@@ -70,6 +74,12 @@ void submit_mesh(Vector3 position,
                  AssetHandle material,
                  bool visible,
                  bool cast_shadow) noexcept;
+void submit_model(Vector3 position,
+                  Quat rotation,
+                  Vector3 scale,
+                  AssetHandle model,
+                  bool visible,
+                  bool cast_shadow) noexcept;
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;

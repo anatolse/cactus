@@ -61,6 +61,14 @@ struct MeshSubmission {
     Color diffuse_color{WHITE};
 };
 
+struct ModelSubmission {
+    Vector3 position{};
+    Quat rotation{};
+    Vector3 scale{};
+    int model_runtime_id{-1};
+    bool cast_shadow{true};
+};
+
 struct PointLightSubmission {
     Vector3 position{};
     Color color{};
@@ -114,6 +122,16 @@ struct MaterialResourceEntry {
     bool diffuse_color_set{false};
 };
 
+// Model assets materialize lazily (dsl-model-assets D3/D4): registration only
+// stores the path; the GLB is loaded on first render-time use, and a failed
+// load is recorded so it is never retried.
+struct ModelResourceEntry {
+    Model model{};
+    std::string path;
+    bool loaded{false};
+    bool failed{false};
+};
+
 std::pmr::unsynchronized_pool_resource& render_queue_resource() noexcept {
     static std::pmr::unsynchronized_pool_resource resource;
     return resource;
@@ -126,6 +144,11 @@ std::pmr::vector<SpriteSubmission>& sprite_queue() noexcept {
 
 std::pmr::vector<MeshSubmission>& mesh_queue() noexcept {
     static std::pmr::vector<MeshSubmission> queue{&render_queue_resource()};
+    return queue;
+}
+
+std::pmr::vector<ModelSubmission>& model_queue() noexcept {
+    static std::pmr::vector<ModelSubmission> queue{&render_queue_resource()};
     return queue;
 }
 
@@ -162,6 +185,17 @@ std::unordered_map<int, MeshResourceEntry>& meshes() noexcept {
 std::unordered_map<int, MaterialResourceEntry>& materials() noexcept {
     static std::unordered_map<int, MaterialResourceEntry> entries;
     return entries;
+}
+
+std::unordered_map<int, ModelResourceEntry>& models() noexcept {
+    static std::unordered_map<int, ModelResourceEntry> entries;
+    return entries;
+}
+
+// Handles that already produced a missing-model diagnostic (at most one per asset).
+std::unordered_set<std::uint32_t>& diagnosed_missing_model_handles() noexcept {
+    static std::unordered_set<std::uint32_t> handles;
+    return handles;
 }
 
 constexpr int kMaxMeshLights  = 4;
@@ -508,6 +542,17 @@ void clear_material_store() noexcept {
     materials().clear();
 }
 
+void clear_model_store() noexcept {
+    for (auto& [runtime_id, entry] : models()) {
+        (void)runtime_id;
+        if (entry.loaded && IsWindowReady()) {
+            UnloadModel(entry.model);
+        }
+    }
+    models().clear();
+    diagnosed_missing_model_handles().clear();
+}
+
 Texture2D* ensure_texture_resource(const int runtime_id) {
     if (runtime_id < 0) {
         return nullptr;
@@ -562,6 +607,57 @@ Material* ensure_material_resource(const int runtime_id) {
     return &entry.material;
 }
 
+// Record a diagnostic for a model load failure. Callers guarantee this runs at
+// most once per asset (the entry's `failed` flag flips exactly once).
+void record_model_load_failure(const std::string& message) {
+    render_debug_state_storage().model_diagnostics.push_back(message);
+    note_missing_asset();
+}
+
+// Lazily load a registered model on first render-time use (dsl-model-assets
+// D3/D4/D6). Missing or empty files mark the entry failed — the draw is
+// skipped without placeholder geometry and the load is never retried.
+Model* ensure_model_resource(const int runtime_id) {
+    if (runtime_id < 0) {
+        return nullptr;
+    }
+    const auto it = models().find(runtime_id);
+    if (it == models().end()) {
+        return nullptr;
+    }
+    auto& entry = it->second;
+    if (entry.failed) {
+        return nullptr;
+    }
+    if (entry.loaded) {
+        return &entry.model;
+    }
+    if (entry.path.empty() || !FileExists(entry.path.c_str())) {
+        entry.failed = true;
+        record_model_load_failure("model file missing: " + entry.path);
+        return nullptr;
+    }
+    if (!IsWindowReady()) {
+        return nullptr;
+    }
+    entry.model = LoadModel(entry.path.c_str());
+    if (entry.model.meshCount == 0) {
+        entry.failed = true;
+        record_model_load_failure("model load failed: " + entry.path);
+        return nullptr;
+    }
+    // Bind the lit shader to every embedded material; raylib already mapped
+    // each material's baseColorFactor into the albedo map color, which the
+    // lit shader multiplies through (D6).
+    if (Shader* shader = ensure_lighting_shader(); shader != nullptr) {
+        for (int i = 0; i < entry.model.materialCount; ++i) {
+            entry.model.materials[i].shader = *shader;
+        }
+    }
+    entry.loaded = true;
+    return &entry.model;
+}
+
 Matrix mesh_transform_matrix(const MeshSubmission& submission) noexcept {
     const Matrix scale       = MatrixScale(submission.scale.x, submission.scale.y, submission.scale.z);
     const Matrix rotation    = QuaternionToMatrix(submission.rotation);
@@ -597,6 +693,46 @@ void flush_mesh_queue() noexcept {
         DrawMesh(*mesh, *material, mesh_transform_matrix(submission));
     }
     EndMode3D();
+}
+
+void flush_model_queue() noexcept {
+    if (model_queue().empty()) {
+        return;
+    }
+
+    render_debug_state_storage().used_default_3d_camera = true;
+    render_debug_state_storage().active_point_lights =
+        std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
+    render_debug_state_storage().used_lit_mesh_shader = render_debug_state_storage().active_point_lights > 0;
+
+    // Materialization still runs headless so failure bookkeeping stays
+    // test-observable; only the draw calls require a window.
+    const bool window_ready = IsWindowReady();
+    if (window_ready) {
+        const Camera3D camera = get_active_camera_3d();
+        apply_point_lights(camera);
+        BeginMode3D(camera);
+    }
+    for (const auto& submission : model_queue()) {
+        Model* model = ensure_model_resource(submission.model_runtime_id);
+        if (model == nullptr || !window_ready) {
+            continue;
+        }
+        const Matrix xform = mesh_transform_matrix(MeshSubmission{
+            .position = submission.position,
+            .rotation = submission.rotation,
+            .scale    = submission.scale,
+        });
+        // Draw every submesh with the embedded material bound to it in the file.
+        for (int i = 0; i < model->meshCount; ++i) {
+            const int material_index = model->meshMaterial[i];
+            DrawMesh(model->meshes[i], model->materials[material_index], xform);
+        }
+        ++render_debug_state_storage().drawn_models;
+    }
+    if (window_ready) {
+        EndMode3D();
+    }
 }
 
 // Shared 1×1 XY-plane mesh (normal = +Z). V coordinates are pre-flipped to
@@ -819,6 +955,7 @@ void reset_render_debug_state() noexcept {
     render_debug_state_storage() = {};
     sprite_queue().clear();
     mesh_queue().clear();
+    model_queue().clear();
     point_light_queue().clear();
     text_2d_queue().clear();
     text_3d_queue().clear();
@@ -833,6 +970,7 @@ void reset_render_debug_state() noexcept {
     clear_texture_store();
     clear_mesh_store();
     clear_material_store();
+    clear_model_store();
     clear_lighting_shader();
     shared_asset_registry().clear_diagnostics();
 }
@@ -844,6 +982,7 @@ const RenderDebugState& render_debug_state() noexcept {
 void begin_render_frame() noexcept {
     sprite_queue().clear();
     mesh_queue().clear();
+    model_queue().clear();
     point_light_queue().clear();
     text_2d_queue().clear();
     text_3d_queue().clear();
@@ -856,10 +995,12 @@ void begin_render_frame() noexcept {
 
 void end_render_frame() noexcept {
     flush_mesh_queue();
+    flush_model_queue();
     flush_text_3d_queue();
     flush_sprite_queue();
     flush_text_2d_queue();
     mesh_queue().clear();
+    model_queue().clear();
     sprite_queue().clear();
     point_light_queue().clear();
     text_2d_queue().clear();
@@ -868,9 +1009,11 @@ void end_render_frame() noexcept {
 
 void flush_viewport_3d() noexcept {
     flush_mesh_queue();
+    flush_model_queue();
     flush_sprite_queue();
     flush_text_2d_queue();
     mesh_queue().clear();
+    model_queue().clear();
     sprite_queue().clear();
     point_light_queue().clear();
     text_2d_queue().clear();
@@ -952,6 +1095,38 @@ void submit_mesh(const Vector3 position,
         .diffuse_color       = mat_entry.diffuse_color,
     });
     ++render_debug_state_storage().submitted_meshes;
+}
+
+void submit_model(const Vector3 position,
+                  const Quat rotation,
+                  const Vector3 scale,
+                  const AssetHandle model,
+                  const bool visible,
+                  const bool cast_shadow) noexcept {
+    if (!visible) {
+        return;
+    }
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
+    if (!resolved.valid()) {
+        note_missing_asset();
+        if (diagnosed_missing_model_handles().insert(model).second) {
+            render_debug_state_storage().model_diagnostics.push_back("missing model asset handle " +
+                                                                     std::to_string(model));
+        }
+        return;
+    }
+    auto& entry = models()[resolved.runtime_id];
+    if (entry.path.empty()) {
+        entry.path = std::string{resolved.asset_id};
+    }
+    model_queue().push_back(ModelSubmission{
+        .position         = position,
+        .rotation         = rotation,
+        .scale            = scale,
+        .model_runtime_id = resolved.runtime_id,
+        .cast_shadow      = cast_shadow,
+    });
+    ++render_debug_state_storage().submitted_models;
 }
 
 void submit_billboard(const Vector3 /*position*/,

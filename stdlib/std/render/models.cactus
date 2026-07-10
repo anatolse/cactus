@@ -1,0 +1,23 @@
+module std.render.models
+
+use std.transform.volume
+
+# ── 3D Model Rendering Traits ─────────────────────────────────────────────────
+# Passive traits — the backend reads these and renders automatically.
+# No user system is needed. An entity with WorldTransform + ModelRenderer is
+# drawn with every submesh bound to its embedded material from the model file.
+
+# Renders a model file (e.g. GLB) at the entity's transform position.
+# Materials come from the model file itself; there is no material override.
+# model:       asset handle for the model file (immutable after spawn)
+# visible:     set false to skip rendering without removing the trait
+# cast_shadow: whether this model contributes to shadow maps
+pub trait ModelRenderer:
+    let model: model_id
+    var visible: bool = true
+    var cast_shadow: bool = true
+
+extern system ModelRendererSystem:
+    filter:
+        std.transform.volume.WorldTransform
+        ModelRenderer

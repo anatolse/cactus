@@ -145,6 +145,13 @@ std::vector<ExampleCase> curated_examples() {
             .compile_target = CACTUS_EXAMPLE_MESH_RENDERER_TARGET,
         },
         ExampleCase{
+            .name           = "model-renderer",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_MODEL_RENDERER_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_MODEL_RENDERER_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_MODEL_RENDERER_TARGET,
+        },
+        ExampleCase{
             .name           = "platformer",
             .source_file    = repo_root() / CACTUS_EXAMPLE_PLATFORMER_SOURCE,
             .backend        = "cpp-entt",

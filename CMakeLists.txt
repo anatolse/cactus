@@ -226,6 +226,7 @@ endfunction()
 set(BLUE_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/blue-square.generated.cpp")
 set(STDLIB_EXTERN_ENTT_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/stdlib-extern-entt.generated.cpp")
 set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.generated.cpp")
+set(MODEL_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-renderer.generated.cpp")
 set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
 set(SHOOTER_SLICE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/shooter-slice.generated.cpp")
 set(CACTUS_SHOP_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/cactus-shop.generated.cpp")
@@ -251,6 +252,12 @@ cactus_add_example(example_mesh_renderer_generated
     SOURCE "examples/mesh-renderer/main.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${MESH_RENDERER_GENERATED_CPP}"
+)
+
+cactus_add_example(example_model_renderer_generated
+    SOURCE "examples/model-renderer/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${MODEL_RENDERER_GENERATED_CPP}"
 )
 
 cactus_add_example(example_platformer_generated

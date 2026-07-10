@@ -530,7 +530,7 @@ struct FuncSignature {
 // ── Asset Declaration ────────────────────────────────────────────────────────
 
 /// Asset type kinds for asset_decl
-enum class AssetKind { Mesh, Texture, Sound, Music, Font, Material };
+enum class AssetKind { Mesh, Model, Texture, Sound, Music, Font, Material };
 
 /// asset [pub] Name: asset_type = "path"
 struct AssetDeclNode {

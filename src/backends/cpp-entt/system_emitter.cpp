@@ -392,10 +392,10 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
         return true;
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
-        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "BillboardRenderer" ||
-        sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" ||
-        sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
-        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
+        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "ModelRendererSystem" ||
+        sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
+        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" ||
+        sys.name == "GizmoRenderer3D" || sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -433,6 +433,12 @@ bool is_mesh_renderer(const ExternSystemNode& sys) {
     return uses_stdlib_extern_contract(sys) && sys.name == "MeshRenderer" &&
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
            filter_has_trait(sys.filter, "std.render.meshes.Renderer", "Renderer");
+}
+
+bool is_model_renderer_system(const ExternSystemNode& sys) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "ModelRendererSystem" &&
+           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
+           filter_has_trait(sys.filter, "std.render.models.ModelRenderer", "ModelRenderer");
 }
 
 bool is_billboard_renderer(const ExternSystemNode& sys) {
@@ -1587,6 +1593,7 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
     return out.str();
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
 
@@ -1730,6 +1737,20 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << "        cactus::runtime::entt_backend::submit_mesh(WorldTransform_comp.position, "
                "WorldTransform_comp.rotation, WorldTransform_comp.scale, Renderer_comp.mesh, Renderer_comp.material, "
                "Renderer_comp.visible, Renderer_comp.cast_shadow);\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_model_renderer_system(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<WorldTransform, ModelRenderer>();\n";
+        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const ModelRenderer& "
+               "ModelRenderer_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        cactus::runtime::entt_backend::submit_model(WorldTransform_comp.position, "
+               "WorldTransform_comp.rotation, WorldTransform_comp.scale, ModelRenderer_comp.model, "
+               "ModelRenderer_comp.visible, ModelRenderer_comp.cast_shadow);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();

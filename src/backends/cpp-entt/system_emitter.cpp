@@ -52,7 +52,19 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.random") {
         return "cactus::runtime::stdlib::random";
     }
+    if (module_name == "std.render.models") {
+        return "cactus::runtime::entt_backend";
+    }
     return {};
+}
+
+// std.render.models extern funcs bind to the model_-prefixed runtime bridges
+// (the bare names would collide with other asset kinds' introspection).
+std::string stdlib_runtime_func_name(const std::string& module_name, const std::string& func_name) {
+    if (module_name == "std.render.models" && (func_name == "animation_count" || func_name == "animation_name")) {
+        return "model_" + func_name;
+    }
+    return func_name;
 }
 
 bool module_exports_stdlib_func(const std::string& module_name, const std::string& func_name) {
@@ -93,6 +105,9 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
         return func_name == "seeded" || func_name == "uniform" || func_name == "uniform_int" ||
                func_name == "normal" || func_name == "advance" || func_name == "sample" ||
                func_name == "sample_int" || func_name == "sample_normal" || func_name == "chance";
+    }
+    if (module_name == "std.render.models") {
+        return func_name == "animation_count" || func_name == "animation_name";
     }
     return false;
 }
@@ -144,9 +159,10 @@ std::string lower_unqualified_stdlib_func(const DecoratedProgram& program,
         if (use->module_name == "std.physics.flat" && is_stdlib_physics_flat_query(func_name)) {
             continue;
         }
+        const std::string runtime_name = stdlib_runtime_func_name(use->module_name, func_name);
         std::string result;
-        result.reserve(prefix.size() + func_name.size() + 2U);
-        result.append(prefix).append("::").append(func_name);
+        result.reserve(prefix.size() + runtime_name.size() + 2U);
+        result.append(prefix).append("::").append(runtime_name);
         return result;
     }
     return {};
@@ -182,9 +198,11 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
         is_stdlib_physics_flat_query(member.member)) {
         return stdlib_physics_flat_query_call(member.member, args, emit_arg);
     }
+    const std::string runtime_name =
+        stdlib_runtime_func_name(imported_module_name(program.ast, object->name), member.member);
     std::string result;
-    result.reserve(prefix.size() + member.member.size() + 3U);
-    result.append(prefix).append("::").append(member.member).push_back('(');
+    result.reserve(prefix.size() + runtime_name.size() + 3U);
+    result.append(prefix).append("::").append(runtime_name).push_back('(');
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
             result += ", ";
@@ -393,9 +411,10 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "ModelRendererSystem" ||
-        sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
-        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" ||
-        sys.name == "GizmoRenderer3D" || sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
+        sys.name == "ModelAnimationSystem" || sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" ||
+        sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" ||
+        sys.name == "ScreenLabelSystem" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
+        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -441,6 +460,12 @@ bool is_model_renderer_system(const ExternSystemNode& sys) {
            filter_has_trait(sys.filter, "std.render.models.ModelRenderer", "ModelRenderer");
 }
 
+bool is_model_animation_system(const ExternSystemNode& sys) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "ModelAnimationSystem" &&
+           filter_has_trait(sys.filter, "std.render.models.ModelRenderer", "ModelRenderer") &&
+           filter_has_trait(sys.filter, "std.render.models.ModelAnimator", "ModelAnimator");
+}
+
 bool is_billboard_renderer(const ExternSystemNode& sys) {
     return uses_stdlib_extern_contract(sys) && sys.name == "BillboardRenderer" &&
            filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
@@ -476,6 +501,11 @@ bool is_any_text_renderer_2d(const ExternSystemNode& sys) {
 bool is_any_text_renderer_3d(const ExternSystemNode& sys) {
     return uses_stdlib_extern_contract(sys) && sys.name == "TextRenderer3D" &&
            filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
+}
+
+bool is_screen_label_system(const ExternSystemNode& sys) {
+    return uses_stdlib_extern_contract(sys) && sys.name == "ScreenLabelSystem" &&
+           filter_has_trait(sys.filter, "std.render.text.ScreenLabel", "ScreenLabel");
 }
 
 bool is_editor_extern_system(const ExternSystemNode& sys) {
@@ -1728,6 +1758,30 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
+    if (is_model_animation_system(sys)) {
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<ModelRenderer, ModelAnimator>();\n";
+        out << "    view.each([&](entt::entity entity, const ModelRenderer& ModelRenderer_comp, ModelAnimator& "
+               "ModelAnimator_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        if (!ModelAnimator_comp.playing) {\n";
+        out << "            return;\n";
+        out << "        }\n";
+        out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
+        out << "        ModelAnimator_comp.time += kFixedDt * ModelAnimator_comp.speed;\n";
+        out << "        const float duration = cactus::runtime::entt_backend::model_animation_duration("
+               "ModelRenderer_comp.model, ModelAnimator_comp.clip);\n";
+        out << "        if (duration > 0.0F) {\n";
+        out << "            ModelAnimator_comp.time = std::fmod(ModelAnimator_comp.time, duration);\n";
+        out << "            if (ModelAnimator_comp.time < 0.0F) {\n";
+        out << "                ModelAnimator_comp.time += duration;\n";
+        out << "            }\n";
+        out << "        }\n";
+        out << "    });\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
     if (is_mesh_renderer(sys)) {
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
@@ -1748,6 +1802,14 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const ModelRenderer& "
                "ModelRenderer_comp) {\n";
         out << "        (void)entity;\n";
+        if (program.traits.contains("ModelAnimator")) {
+            out << "        if (const auto* animator = registry.try_get<ModelAnimator>(entity)) {\n";
+            out << "            cactus::runtime::entt_backend::submit_model(WorldTransform_comp.position, "
+                   "WorldTransform_comp.rotation, WorldTransform_comp.scale, ModelRenderer_comp.model, "
+                   "ModelRenderer_comp.visible, ModelRenderer_comp.cast_shadow, animator->clip, animator->time);\n";
+            out << "            return;\n";
+            out << "        }\n";
+        }
         out << "        cactus::runtime::entt_backend::submit_model(WorldTransform_comp.position, "
                "WorldTransform_comp.rotation, WorldTransform_comp.scale, ModelRenderer_comp.model, "
                "ModelRenderer_comp.visible, ModelRenderer_comp.cast_shadow);\n";
@@ -1826,6 +1888,21 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         } else {
             out << "    (void)registry;\n";
         }
+        out << "}\n\n";
+        return out.str();
+    }
+
+    if (is_screen_label_system(sys)) {
+        // Window-space HUD text: no WorldTransform and no flavor gating — the
+        // same emission serves flat and volume programs (dsl-model-animation D5).
+        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<ScreenLabel>();\n";
+        out << "    view.each([&](entt::entity entity, const ScreenLabel& ScreenLabel_comp) {\n";
+        out << "        (void)entity;\n";
+        out << "        cactus::runtime::entt_backend::submit_screen_label(ScreenLabel_comp.position, "
+               "ScreenLabel_comp.font_size, ScreenLabel_comp.color, ScreenLabel_comp.text, "
+               "ScreenLabel_comp.visible);\n";
+        out << "    });\n";
         out << "}\n\n";
         return out.str();
     }

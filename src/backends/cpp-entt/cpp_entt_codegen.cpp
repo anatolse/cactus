@@ -247,9 +247,10 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     }
     if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
         sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "ModelRendererSystem" ||
-        sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" || sys.name == "DirectionalLightSystem" ||
-        sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" || sys.name == "GizmoRenderer2D" ||
-        sys.name == "GizmoRenderer3D" || sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
+        sys.name == "ModelAnimationSystem" || sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" ||
+        sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" ||
+        sys.name == "ScreenLabelSystem" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
+        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
         return true;
     }
     return std::ranges::any_of(sys.filter.entries,
@@ -261,6 +262,8 @@ bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     if (!uses_stdlib_extern_contract(sys)) {
         return false;
     }
+    // ModelAnimationSystem is deliberately absent: it advances ModelAnimator
+    // time and must run in the update phase (the default for externs).
     if (sys.name == "ShapeRenderer") {
         return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
                filter_has_trait(sys.filter, "std.render.shapes.Shape", "Shape");
@@ -293,6 +296,9 @@ bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     }
     if (sys.name == "TextRenderer3D") {
         return filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
+    }
+    if (sys.name == "ScreenLabelSystem") {
+        return filter_has_trait(sys.filter, "std.render.text.ScreenLabel", "ScreenLabel");
     }
     if (sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
         sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {

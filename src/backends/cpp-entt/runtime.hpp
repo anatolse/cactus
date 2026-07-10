@@ -109,6 +109,10 @@ void submit_model(Vector3 position,
 
 /// Clip name as stored in the model file; "" for a bad handle or index.
 [[nodiscard]] std::string model_animation_name(AssetHandle model, int clip) noexcept;
+
+/// Clip duration in seconds (keyframes / glTF sampling rate); 0 for a bad
+/// handle or index. The generated ModelAnimationSystem wraps time by this.
+[[nodiscard]] float model_animation_duration(AssetHandle model, int clip) noexcept;
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;

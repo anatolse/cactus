@@ -1496,6 +1496,23 @@ std::string model_animation_name(const AssetHandle model, const int clip) noexce
     return std::string{anim.name, strnlen(anim.name, sizeof(anim.name))};
 }
 
+float model_animation_duration(const AssetHandle model, const int clip) noexcept {
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
+    if (!resolved.valid()) {
+        return 0.0F;
+    }
+    auto& entry = models()[resolved.runtime_id];
+    if (entry.path.empty()) {
+        entry.path = std::string{resolved.asset_id};
+    }
+    (void)ensure_model_resource(resolved.runtime_id);
+    ensure_model_animations(entry);
+    if (clip < 0 || clip >= entry.animation_count) {
+        return 0.0F;
+    }
+    return static_cast<float>(entry.animations[clip].keyframeCount) / kGltfKeyframesPerSecond;
+}
+
 void submit_billboard(const Vector3 /*position*/,
                       const Vector2 /*size*/,
                       const Color /*color*/,

@@ -44,7 +44,19 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.random") {
         return "cactus::runtime::stdlib::random";
     }
+    if (module_name == "std.render.models") {
+        return "cactus::runtime::entt_backend";
+    }
     return {};
+}
+
+// std.render.models extern funcs bind to the model_-prefixed runtime bridges
+// (the bare names would collide with other asset kinds' introspection).
+std::string stdlib_runtime_func_name(const std::string& module_name, const std::string& func_name) {
+    if (module_name == "std.render.models" && (func_name == "animation_count" || func_name == "animation_name")) {
+        return "model_" + func_name;
+    }
+    return func_name;
 }
 
 bool module_exports_stdlib_func(const std::string& module_name, const std::string& func_name) {
@@ -75,6 +87,9 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
         return func_name == "seeded" || func_name == "uniform" || func_name == "uniform_int" ||
                func_name == "normal" || func_name == "advance" || func_name == "sample" ||
                func_name == "sample_int" || func_name == "sample_normal" || func_name == "chance";
+    }
+    if (module_name == "std.render.models") {
+        return func_name == "animation_count" || func_name == "animation_name";
     }
     return false;
 }
@@ -113,9 +128,10 @@ std::string lower_unqualified_stdlib_func(const ProgramNode* ast,
         if (prefix.empty()) {
             continue;
         }
+        const std::string runtime_name = stdlib_runtime_func_name(use->module_name, func_name);
         std::string result;
-        result.reserve(prefix.size() + func_name.size() + 3U);
-        result.append(prefix).append("::").append(func_name).push_back('(');
+        result.reserve(prefix.size() + runtime_name.size() + 3U);
+        result.append(prefix).append("::").append(runtime_name).push_back('(');
         for (size_t i = 0; i < args.size(); ++i) {
             if (i > 0) {
                 result += ", ";
@@ -154,9 +170,11 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
         return {};
     }
 
+    const std::string runtime_name =
+        stdlib_runtime_func_name(imported_module_name(ast, object_ident->name), member.member);
     std::string result;
-    result.reserve(prefix.size() + member.member.size() + 3U);
-    result.append(prefix).append("::").append(member.member).push_back('(');
+    result.reserve(prefix.size() + runtime_name.size() + 3U);
+    result.append(prefix).append("::").append(runtime_name).push_back('(');
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
             result += ", ";

@@ -333,6 +333,173 @@ TEST_CASE("Runtime stdlib: EnTT unregistered model handle reports one diagnostic
     CHECK(debug.model_diagnostics.size() == 1);
 }
 
+TEST_CASE("Runtime stdlib: EnTT animation introspection stays total on fake records and missing handles",
+          "[runtime][assets][entt][dsl-model-animation]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+
+    // Unregistered handle: count 0, empty name, no crash.
+    CHECK(cactus::runtime::entt_backend::model_animation_count(999U) == 0);
+    CHECK(cactus::runtime::entt_backend::model_animation_name(999U, 0).empty());
+    CHECK(cactus::runtime::entt_backend::model_animation_duration(999U, 0) == 0.0F);
+
+    // Fake record (test seam) pointing at a missing file: same degradation.
+    registry.register_model(81U, "does/not/exist.glb", 81);
+    CHECK(cactus::runtime::entt_backend::model_animation_count(81U) == 0);
+    CHECK(cactus::runtime::entt_backend::model_animation_name(81U, 0).empty());
+    CHECK(cactus::runtime::entt_backend::model_animation_duration(81U, 0) == 0.0F);
+    registry.clear();
+}
+
+TEST_CASE("Runtime stdlib: EnTT animation introspection reads real GLB clips before first draw",
+          "[runtime][assets][entt][dsl-model-animation]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    const auto robot_path = (repo_root() / "examples/model-renderer/art/robot.glb").string();
+    REQUIRE(fs::exists(robot_path));
+    registry.register_model(82U, robot_path, 82);
+
+    // No begin/end render frame has run: introspection triggers the lazy load
+    // itself (animation data is CPU-side, so this works headless too).
+    const int count = cactus::runtime::entt_backend::model_animation_count(82U);
+    CHECK(count == 14);
+    const auto first_clip = cactus::runtime::entt_backend::model_animation_name(82U, 0);
+    CHECK_FALSE(first_clip.empty());
+    CHECK(first_clip.rfind("Robot_", 0) == 0);
+    CHECK(cactus::runtime::entt_backend::model_animation_duration(82U, 0) > 0.0F);
+
+    // Out-of-range indices degrade to empty/zero, never crash.
+    CHECK(cactus::runtime::entt_backend::model_animation_name(82U, count).empty());
+    CHECK(cactus::runtime::entt_backend::model_animation_name(82U, -1).empty());
+    CHECK(cactus::runtime::entt_backend::model_animation_duration(82U, count) == 0.0F);
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+}
+
+TEST_CASE("Runtime stdlib: EnTT invalid animation clip degrades to bind pose with one diagnostic per (asset, clip)",
+          "[runtime][assets][entt][dsl-model-animation]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    const auto robot_path = (repo_root() / "examples/model-renderer/art/robot.glb").string();
+    registry.register_model(83U, robot_path, 83);
+
+    const auto identity = stdlib::math::quat::identity();
+    const auto origin   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto unit     = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
+
+    // Repeated frames with the same out-of-range clip: exactly one diagnostic.
+    for (int frame = 0; frame < 3; ++frame) {
+        cactus::runtime::entt_backend::begin_render_frame();
+        cactus::runtime::entt_backend::submit_model(origin, identity, unit, 83U, true, true, 99, 0.0F);
+        cactus::runtime::entt_backend::end_render_frame();
+    }
+    const auto& debug = cactus::runtime::entt_backend::render_debug_state();
+    REQUIRE(debug.model_diagnostics.size() == 1);
+    CHECK(debug.model_diagnostics[0].find("invalid animation clip 99") != std::string::npos);
+
+    // A different invalid clip on the same asset gets its own diagnostic.
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 83U, true, true, -1, 0.0F);
+    cactus::runtime::entt_backend::end_render_frame();
+    CHECK(debug.model_diagnostics.size() == 2);
+
+    // A valid clip produces no diagnostic.
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 83U, true, true, 0, 0.25F);
+    cactus::runtime::entt_backend::end_render_frame();
+    CHECK(debug.model_diagnostics.size() == 2);
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+}
+
+TEST_CASE("Runtime stdlib: EnTT animator on a clip-less model reports a single bind-pose diagnostic",
+          "[runtime][assets][entt][dsl-model-animation]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+
+    // A present file that carries no animation clips (junk .glb: the loader
+    // yields zero clips, mirroring an animation-less model).
+    const auto junk_path = fs::temp_directory_path() / "cactus_test_clipless.glb";
+    {
+        std::ofstream junk(junk_path);
+        junk << "not a model";
+    }
+    registry.register_model(84U, junk_path.string(), 84);
+
+    const auto identity = stdlib::math::quat::identity();
+    const auto origin   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto unit     = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
+
+    for (int frame = 0; frame < 3; ++frame) {
+        cactus::runtime::entt_backend::begin_render_frame();
+        cactus::runtime::entt_backend::submit_model(origin, identity, unit, 84U, true, true, 0, 0.0F);
+        cactus::runtime::entt_backend::end_render_frame();
+    }
+
+    const auto& debug = cactus::runtime::entt_backend::render_debug_state();
+    REQUIRE(debug.model_diagnostics.size() == 1);
+    CHECK(debug.model_diagnostics[0].find("invalid animation clip 0 (model has 0)") != std::string::npos);
+    fs::remove(junk_path);
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+}
+
+TEST_CASE("Runtime stdlib: EnTT entities sharing a model asset submit independent animator poses",
+          "[runtime][assets][entt][dsl-model-animation]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    registry.register_model(85U, "art/robot.glb", 85);
+
+    const auto identity = stdlib::math::quat::identity();
+    const auto origin   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto unit     = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
+
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 85U, true, true, 0, 0.0F);
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 85U, true, true, 3, 0.5F);
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 85U, true, true, 7, 1.25F);
+    // A fourth entity without ModelAnimator shares the asset at bind pose.
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 85U, true, true);
+
+    const auto& debug = cactus::runtime::entt_backend::render_debug_state();
+    CHECK(debug.submitted_models == 4);
+    REQUIRE(debug.animated_model_submissions.size() == 3);
+    CHECK(debug.animated_model_submissions[0].clip == 0);
+    CHECK(debug.animated_model_submissions[0].time == Catch::Approx(0.0F));
+    CHECK(debug.animated_model_submissions[1].clip == 3);
+    CHECK(debug.animated_model_submissions[1].time == Catch::Approx(0.5F));
+    CHECK(debug.animated_model_submissions[2].clip == 7);
+    CHECK(debug.animated_model_submissions[2].time == Catch::Approx(1.25F));
+    cactus::runtime::entt_backend::end_render_frame();
+
+    // The per-frame pose record clears with the other render queues.
+    cactus::runtime::entt_backend::begin_render_frame();
+    CHECK(debug.animated_model_submissions.empty());
+    cactus::runtime::entt_backend::end_render_frame();
+    registry.clear();
+}
+
+TEST_CASE("Runtime stdlib: EnTT screen label submissions count visible labels only",
+          "[runtime][assets][entt][dsl-model-animation]") {
+    cactus::runtime::entt_backend::reset_render_debug_state();
+
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_screen_label(
+        Vector2{.x = 16.0F, .y = 16.0F}, 32, WHITE, "Robot 1 - Idle", true);
+    cactus::runtime::entt_backend::submit_screen_label(
+        Vector2{.x = 16.0F, .y = 48.0F}, 32, WHITE, "hidden", false);
+    cactus::runtime::entt_backend::submit_screen_label(
+        Vector2{.x = 16.0F, .y = 80.0F}, 24, WHITE, "second", true);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_screen_labels == 2);
+}
+
 TEST_CASE("Runtime stdlib: EnTT sprite submissions preserve layer ordering and default 2D camera fallback",
           "[runtime][assets][entt]") {
     auto& registry = shared_asset_registry();

@@ -492,6 +492,144 @@ TEST_CASE("Codegen EnTT: model renderer extern system binds to backend runtime w
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("cactus::runtime::entt_backend::submit_model(") != std::string::npos);
     CHECK(code.find("void model_renderer_system_update(") == std::string::npos);
+    // No ModelAnimator trait in the program: the plain submission path only.
+    CHECK(code.find("try_get<ModelAnimator>") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: model animation extern system advances time in the update phase",
+          "[codegen-entt][assets][dsl-model-animation]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait ModelRenderer:\n"
+        "    let model: model_id\n"
+        "    var visible: bool\n"
+        "    var cast_shadow: bool\n"
+        "trait ModelAnimator:\n"
+        "    var clip: int\n"
+        "    var playing: bool\n"
+        "    var speed: float\n"
+        "    var time: float\n"
+        "extern system ModelAnimationSystem:\n"
+        "    filter:\n"
+        "        std.render.models.ModelRenderer\n"
+        "        std.render.models.ModelAnimator\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void model_animation_system_tick");
+    CHECK(tick.find("registry.view<ModelRenderer, ModelAnimator>()") != std::string::npos);
+    CHECK(tick.find("if (!ModelAnimator_comp.playing)") != std::string::npos);
+    CHECK(tick.find("ModelAnimator_comp.time += kFixedDt * ModelAnimator_comp.speed;") != std::string::npos);
+    CHECK(tick.find("cactus::runtime::entt_backend::model_animation_duration(") != std::string::npos);
+    CHECK(tick.find("std::fmod(ModelAnimator_comp.time, duration)") != std::string::npos);
+
+    // Time advancement runs in the update phase, never the render phase.
+    const auto update = generated_function(code, "void generated_update_project");
+    CHECK(update.find("model_animation_system_tick(registry);") != std::string::npos);
+    const auto render = generated_function(code, "void generated_render_project");
+    CHECK(render.find("model_animation_system_tick") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the entity carries one",
+          "[codegen-entt][assets][dsl-model-animation]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait ModelRenderer:\n"
+        "    let model: model_id\n"
+        "    var visible: bool\n"
+        "    var cast_shadow: bool\n"
+        "trait ModelAnimator:\n"
+        "    var clip: int\n"
+        "    var playing: bool\n"
+        "    var speed: float\n"
+        "    var time: float\n"
+        "extern system ModelRendererSystem:\n"
+        "    filter:\n"
+        "        std.transform.volume.WorldTransform\n"
+        "        std.render.models.ModelRenderer\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void model_renderer_system_tick");
+    // Animated entities go through the extended submit_model signature...
+    CHECK(tick.find("registry.try_get<ModelAnimator>(entity)") != std::string::npos);
+    CHECK(tick.find("animator->clip, animator->time);") != std::string::npos);
+    // ...while entities without ModelAnimator keep the plain submission.
+    CHECK(tick.find("ModelRenderer_comp.cast_shadow);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: screen label extern system renders window-space text in flat and volume programs",
+          "[codegen-entt][assets][dsl-model-animation]") {
+    const std::string screen_label_decls =
+        "trait ScreenLabel:\n"
+        "    var text: string\n"
+        "    var position: vec2\n"
+        "    var font_size: int\n"
+        "    var color: color\n"
+        "    var visible: bool\n"
+        "extern system ScreenLabelSystem:\n"
+        "    filter:\n"
+        "        std.render.text.ScreenLabel\n";
+
+    const std::string flat_transform =
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n";
+    const std::string volume_transform =
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n";
+
+    for (const auto& transform : {flat_transform, volume_transform}) {
+        ProgramNode program;
+        auto decorated = full_pipeline(transform + screen_label_decls, program);
+
+        const auto code = CppEnttCodegen::generate(decorated);
+        const auto tick = generated_function(code, "void screen_label_system_tick");
+        // No WorldTransform in the view and no flavor gating: the same
+        // emission serves flat and volume programs (dsl-model-animation D5).
+        CHECK(tick.find("registry.view<ScreenLabel>()") != std::string::npos);
+        CHECK(tick.find("cactus::runtime::entt_backend::submit_screen_label(ScreenLabel_comp.position, "
+                        "ScreenLabel_comp.font_size, ScreenLabel_comp.color, ScreenLabel_comp.text, "
+                        "ScreenLabel_comp.visible);") != std::string::npos);
+        CHECK(tick.find("(void)registry;") == std::string::npos);
+
+        // Render phase: labels draw after the world, never during update.
+        const auto render = generated_function(code, "void generated_render_project");
+        CHECK(render.find("screen_label_system_tick(registry);") != std::string::npos);
+        const auto update = generated_function(code, "void generated_update_project");
+        CHECK(update.find("screen_label_system_tick") == std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: std.render.models introspection funcs bind to model-prefixed runtime bridges",
+          "[codegen-entt][extern-func][stdlib][dsl-model-animation]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.render.models as models\n"
+        "asset Robot: model = \"art/robot.glb\"\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "trait ClipState:\n"
+        "    var clips: int\n"
+        "    var label: string\n"
+        "system Probe:\n"
+        "    filter:\n"
+        "        ClipState\n"
+        "    on tick:\n"
+        "        clips = models.animation_count(Robot)\n"
+        "        label = models.animation_name(Robot, clips - 1)\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::model_animation_count(Robot)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::model_animation_name(Robot, ") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {

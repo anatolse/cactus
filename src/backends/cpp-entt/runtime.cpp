@@ -1,9 +1,12 @@
 #include "backends/cpp-entt/runtime.hpp"
 
 #include <raylib.h>
+#include <rlgl.h>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstring>
 #include <memory_resource>
 #include <numbers>
 #include <raymath.h>
@@ -67,6 +70,11 @@ struct ModelSubmission {
     Vector3 scale{};
     int model_runtime_id{-1};
     bool cast_shadow{true};
+    // Animated submissions carry the entity's ModelAnimator pose; the flush
+    // re-poses the shared model per submission (dsl-model-animation D1).
+    int clip{0};
+    float time{0.0F};
+    bool animated{false};
 };
 
 struct PointLightSubmission {
@@ -128,6 +136,13 @@ struct MaterialResourceEntry {
 struct ModelResourceEntry {
     Model model{};
     std::string path;
+    // Clip data loads lazily on first animated draw or introspection call and
+    // is freed in clear_model_store (dsl-model-animation D4).
+    ModelAnimation* animations{nullptr};
+    int animation_count{0};
+    bool animations_load_attempted{false};
+    // Skeleton within the bone limit: materials bound to the skinned shader.
+    bool skinned{false};
     bool loaded{false};
     bool failed{false};
 };
@@ -198,8 +213,25 @@ std::unordered_set<std::uint32_t>& diagnosed_missing_model_handles() noexcept {
     return handles;
 }
 
+// (model runtime id, clip index) pairs that already produced an invalid-clip
+// diagnostic (at most one per pair, dsl-model-animation D3).
+std::unordered_set<std::uint64_t>& diagnosed_invalid_clips() noexcept {
+    static std::unordered_set<std::uint64_t> keys;
+    return keys;
+}
+
 constexpr int kMaxMeshLights  = 4;
 constexpr int kPointLightType = 1;
+
+// Maximum bones the skinned shader supports; must match MAX_BONES in the
+// skinned vertex shader (128 mat4 = 512 vec4 uniform components, within the
+// GL 3.3 guaranteed 1024). Models exceeding this render unskinned (D2).
+constexpr int kMaxSkinningBones = 128;
+
+// raylib 6.0 bakes glTF clips at GLTF_FRAMERATE = 60 keyframes per second
+// (rmodels.c), so animation frame = time in seconds * this rate. Pinned here;
+// re-verify against GLTF_FRAMERATE on any raylib upgrade.
+constexpr float kGltfKeyframesPerSecond = 60.0F;
 
 #if defined(__EMSCRIPTEN__) || defined(PLATFORM_WEB)
 constexpr const char* kLightingVertexShader = R"(#version 100
@@ -279,6 +311,57 @@ void main()
     vec4 finalColor = texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0));
     finalColor += texelColor*(ambient/10.0)*colDiffuse;
     gl_FragColor = pow(finalColor, vec4(1.0/2.2));
+}
+)";
+
+// Skinned variant of the lit vertex shader (dsl-model-animation D2): bone
+// attributes skin position and normal; the fragment shader is shared.
+// MAX_BONES must match kMaxSkinningBones.
+constexpr const char* kSkinnedLightingVertexShader = R"(#version 100
+
+attribute vec3 vertexPosition;
+attribute vec2 vertexTexCoord;
+attribute vec3 vertexNormal;
+attribute vec4 vertexColor;
+attribute vec4 vertexBoneIndices;
+attribute vec4 vertexBoneWeights;
+
+#define MAX_BONES 128
+
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
+uniform mat4 boneMatrices[MAX_BONES];
+
+varying vec3 fragPosition;
+varying vec2 fragTexCoord;
+varying vec4 fragColor;
+varying vec3 fragNormal;
+
+void main()
+{
+    int boneIndex0 = int(vertexBoneIndices.x);
+    int boneIndex1 = int(vertexBoneIndices.y);
+    int boneIndex2 = int(vertexBoneIndices.z);
+    int boneIndex3 = int(vertexBoneIndices.w);
+
+    vec4 skinnedPosition =
+        vertexBoneWeights.x*(boneMatrices[boneIndex0]*vec4(vertexPosition, 1.0)) +
+        vertexBoneWeights.y*(boneMatrices[boneIndex1]*vec4(vertexPosition, 1.0)) +
+        vertexBoneWeights.z*(boneMatrices[boneIndex2]*vec4(vertexPosition, 1.0)) +
+        vertexBoneWeights.w*(boneMatrices[boneIndex3]*vec4(vertexPosition, 1.0));
+
+    vec3 skinnedNormal =
+        vertexBoneWeights.x*(boneMatrices[boneIndex0]*vec4(vertexNormal, 0.0)).xyz +
+        vertexBoneWeights.y*(boneMatrices[boneIndex1]*vec4(vertexNormal, 0.0)).xyz +
+        vertexBoneWeights.z*(boneMatrices[boneIndex2]*vec4(vertexNormal, 0.0)).xyz +
+        vertexBoneWeights.w*(boneMatrices[boneIndex3]*vec4(vertexNormal, 0.0)).xyz;
+
+    fragPosition = vec3(matModel*skinnedPosition);
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    fragNormal = normalize(vec3(matNormal*vec4(skinnedNormal, 0.0)));
+    gl_Position = mvp*skinnedPosition;
 }
 )";
 #else
@@ -361,6 +444,57 @@ void main()
     finalColor = pow(finalColor, vec4(1.0/2.2));
 }
 )";
+
+// Skinned variant of the lit vertex shader (dsl-model-animation D2): bone
+// attributes skin position and normal; the fragment shader is shared.
+// MAX_BONES must match kMaxSkinningBones.
+constexpr const char* kSkinnedLightingVertexShader = R"(#version 330
+
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec3 vertexNormal;
+in vec4 vertexColor;
+in vec4 vertexBoneIndices;
+in vec4 vertexBoneWeights;
+
+#define MAX_BONES 128
+
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
+uniform mat4 boneMatrices[MAX_BONES];
+
+out vec3 fragPosition;
+out vec2 fragTexCoord;
+out vec4 fragColor;
+out vec3 fragNormal;
+
+void main()
+{
+    int boneIndex0 = int(vertexBoneIndices.x);
+    int boneIndex1 = int(vertexBoneIndices.y);
+    int boneIndex2 = int(vertexBoneIndices.z);
+    int boneIndex3 = int(vertexBoneIndices.w);
+
+    vec4 skinnedPosition =
+        vertexBoneWeights.x*(boneMatrices[boneIndex0]*vec4(vertexPosition, 1.0)) +
+        vertexBoneWeights.y*(boneMatrices[boneIndex1]*vec4(vertexPosition, 1.0)) +
+        vertexBoneWeights.z*(boneMatrices[boneIndex2]*vec4(vertexPosition, 1.0)) +
+        vertexBoneWeights.w*(boneMatrices[boneIndex3]*vec4(vertexPosition, 1.0));
+
+    vec3 skinnedNormal =
+        vertexBoneWeights.x*(boneMatrices[boneIndex0]*vec4(vertexNormal, 0.0)).xyz +
+        vertexBoneWeights.y*(boneMatrices[boneIndex1]*vec4(vertexNormal, 0.0)).xyz +
+        vertexBoneWeights.z*(boneMatrices[boneIndex2]*vec4(vertexNormal, 0.0)).xyz +
+        vertexBoneWeights.w*(boneMatrices[boneIndex3]*vec4(vertexNormal, 0.0)).xyz;
+
+    fragPosition = vec3(matModel*skinnedPosition);
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    fragNormal = normalize(vec3(matNormal*vec4(skinnedNormal, 0.0)));
+    gl_Position = mvp*skinnedPosition;
+}
+)";
 #endif
 
 struct LightingShaderState {
@@ -380,6 +514,14 @@ LightingShaderState& lighting_shader_state() noexcept {
     return state;
 }
 
+// Skinned shader variant state (dsl-model-animation D2): the same lighting
+// uniforms resolved against the skinned program, plus bone locations stored in
+// shader.locs so raylib's DrawMesh binds the bone attribute VBOs.
+LightingShaderState& skinned_lighting_shader_state() noexcept {
+    static LightingShaderState state{};
+    return state;
+}
+
 std::string light_uniform_name(const int index, const std::string_view field) {
     std::string result{"lights["};
     result += std::to_string(index);
@@ -388,9 +530,8 @@ std::string light_uniform_name(const int index, const std::string_view field) {
     return result;
 }
 
-void reset_lighting_shader_state() noexcept {
-    auto& state = lighting_shader_state();
-    state       = {};
+void reset_lighting_shader_state(LightingShaderState& state) noexcept {
+    state = {};
     state.enabled_locs.fill(-1);
     state.type_locs.fill(-1);
     state.position_locs.fill(-1);
@@ -398,20 +539,16 @@ void reset_lighting_shader_state() noexcept {
     state.color_locs.fill(-1);
 }
 
-Shader* ensure_lighting_shader() {
-    auto& state = lighting_shader_state();
-    if (state.loaded) {
-        return &state.shader;
-    }
+bool load_lighting_shader(LightingShaderState& state, const char* vertex_src, const char* fragment_src) {
     if (!IsWindowReady()) {
-        return nullptr;
+        return false;
     }
 
-    reset_lighting_shader_state();
-    state.shader = LoadShaderFromMemory(kLightingVertexShader, kLightingFragmentShader);
+    reset_lighting_shader_state(state);
+    state.shader = LoadShaderFromMemory(vertex_src, fragment_src);
     if (!IsShaderValid(state.shader)) {
-        reset_lighting_shader_state();
-        return nullptr;
+        reset_lighting_shader_state(state);
+        return false;
     }
 
     state.loaded                                = true;
@@ -434,32 +571,52 @@ Shader* ensure_lighting_shader() {
         state.color_locs[index]    = location("color");
     }
 
+    return true;
+}
+
+Shader* ensure_lighting_shader() {
+    auto& state = lighting_shader_state();
+    if (state.loaded) {
+        return &state.shader;
+    }
+    if (!load_lighting_shader(state, kLightingVertexShader, kLightingFragmentShader)) {
+        return nullptr;
+    }
+    return &state.shader;
+}
+
+Shader* ensure_skinned_lighting_shader() {
+    auto& state = skinned_lighting_shader_state();
+    if (state.loaded) {
+        return &state.shader;
+    }
+    if (!load_lighting_shader(state, kSkinnedLightingVertexShader, kLightingFragmentShader)) {
+        return nullptr;
+    }
+    // Bone locations: the uniform-matrix upload reads BONETRANSFORMS, and
+    // DrawMesh only binds the bone VBOs when the attrib locations are set.
+    auto& shader                                    = state.shader;
+    shader.locs[SHADER_LOC_MATRIX_BONETRANSFORMS]   = GetShaderLocation(shader, "boneMatrices");
+    shader.locs[SHADER_LOC_VERTEX_BONEIDS]          = GetShaderLocationAttrib(shader, "vertexBoneIndices");
+    shader.locs[SHADER_LOC_VERTEX_BONEWEIGHTS]      = GetShaderLocationAttrib(shader, "vertexBoneWeights");
     return &state.shader;
 }
 
 void clear_lighting_shader() noexcept {
-    auto& state = lighting_shader_state();
-    if (state.loaded && IsWindowReady()) {
-        UnloadShader(state.shader);
+    for (auto* state : {&lighting_shader_state(), &skinned_lighting_shader_state()}) {
+        if (state->loaded && IsWindowReady()) {
+            UnloadShader(state->shader);
+        }
+        reset_lighting_shader_state(*state);
     }
-    reset_lighting_shader_state();
 }
 
-void apply_point_lights(const Camera3D& camera) {
-    Shader* shader = ensure_lighting_shader();
-    if (shader == nullptr) {
-        return;
-    }
-
-    auto& shader_state = lighting_shader_state();
+void apply_point_lights_to(const LightingShaderState& shader_state, const Camera3D& camera, const int active_lights) {
+    const Shader& shader = shader_state.shader;
     const std::array<float, 4> ambient{0.22F, 0.22F, 0.28F, 1.0F};
     const std::array<float, 3> view_pos{camera.position.x, camera.position.y, camera.position.z};
-    SetShaderValue(*shader, shader_state.ambient_loc, ambient.data(), SHADER_UNIFORM_VEC4);
-    SetShaderValue(*shader, shader_state.view_pos_loc, view_pos.data(), SHADER_UNIFORM_VEC3);
-
-    const int active_lights = std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
-    render_debug_state_storage().active_point_lights  = active_lights;
-    render_debug_state_storage().used_lit_mesh_shader = active_lights > 0;
+    SetShaderValue(shader, shader_state.ambient_loc, ambient.data(), SHADER_UNIFORM_VEC4);
+    SetShaderValue(shader, shader_state.view_pos_loc, view_pos.data(), SHADER_UNIFORM_VEC3);
 
     for (int i = 0; i < kMaxMeshLights; ++i) {
         const int enabled = i < active_lights ? 1 : 0;
@@ -481,11 +638,28 @@ void apply_point_lights(const Camera3D& camera) {
         }
 
         const auto index = static_cast<std::size_t>(i);
-        SetShaderValue(*shader, shader_state.enabled_locs[index], &enabled, SHADER_UNIFORM_INT);
-        SetShaderValue(*shader, shader_state.type_locs[index], &type, SHADER_UNIFORM_INT);
-        SetShaderValue(*shader, shader_state.position_locs[index], position.data(), SHADER_UNIFORM_VEC3);
-        SetShaderValue(*shader, shader_state.target_locs[index], target.data(), SHADER_UNIFORM_VEC3);
-        SetShaderValue(*shader, shader_state.color_locs[index], color.data(), SHADER_UNIFORM_VEC4);
+        SetShaderValue(shader, shader_state.enabled_locs[index], &enabled, SHADER_UNIFORM_INT);
+        SetShaderValue(shader, shader_state.type_locs[index], &type, SHADER_UNIFORM_INT);
+        SetShaderValue(shader, shader_state.position_locs[index], position.data(), SHADER_UNIFORM_VEC3);
+        SetShaderValue(shader, shader_state.target_locs[index], target.data(), SHADER_UNIFORM_VEC3);
+        SetShaderValue(shader, shader_state.color_locs[index], color.data(), SHADER_UNIFORM_VEC4);
+    }
+}
+
+void apply_point_lights(const Camera3D& camera) {
+    const int active_lights = std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
+    render_debug_state_storage().active_point_lights  = active_lights;
+    render_debug_state_storage().used_lit_mesh_shader = active_lights > 0;
+
+    // Both variants share the fragment lighting model, so both must see the
+    // same light uniforms. The skinned variant is ensured here (not only at
+    // model-bind time) so a skinned model loading mid-flush is lit the same
+    // frame it first appears.
+    if (ensure_lighting_shader() != nullptr) {
+        apply_point_lights_to(lighting_shader_state(), camera, active_lights);
+    }
+    if (ensure_skinned_lighting_shader() != nullptr) {
+        apply_point_lights_to(skinned_lighting_shader_state(), camera, active_lights);
     }
 }
 
@@ -545,12 +719,16 @@ void clear_material_store() noexcept {
 void clear_model_store() noexcept {
     for (auto& [runtime_id, entry] : models()) {
         (void)runtime_id;
+        if (entry.animations != nullptr) {
+            UnloadModelAnimations(entry.animations, entry.animation_count);
+        }
         if (entry.loaded && IsWindowReady()) {
             UnloadModel(entry.model);
         }
     }
     models().clear();
     diagnosed_missing_model_handles().clear();
+    diagnosed_invalid_clips().clear();
 }
 
 Texture2D* ensure_texture_resource(const int runtime_id) {
@@ -608,7 +786,7 @@ Material* ensure_material_resource(const int runtime_id) {
 }
 
 // Record a diagnostic for a model load failure. Callers guarantee this runs at
-// most once per asset (the entry's `failed` flag flips exactly once).
+// most once per asset (the entry's `failed` or `loaded` flag flips exactly once).
 void record_model_load_failure(const std::string& message) {
     render_debug_state_storage().model_diagnostics.push_back(message);
     note_missing_asset();
@@ -646,16 +824,97 @@ Model* ensure_model_resource(const int runtime_id) {
         record_model_load_failure("model load failed: " + entry.path);
         return nullptr;
     }
-    // Bind the lit shader to every embedded material; raylib already mapped
-    // each material's baseColorFactor into the albedo map color, which the
-    // lit shader multiplies through (D6).
-    if (Shader* shader = ensure_lighting_shader(); shader != nullptr) {
+    // Bind every embedded material to the lit shader — the skinned variant
+    // when the model has a skeleton within the bone limit, the static variant
+    // otherwise (dsl-model-animation D2). raylib already mapped each
+    // material's baseColorFactor into the albedo map color, which the lit
+    // shader multiplies through (D6).
+    const int bone_count = entry.model.skeleton.boneCount;
+    if (bone_count > kMaxSkinningBones) {
+        record_model_load_failure("model exceeds " + std::to_string(kMaxSkinningBones) +
+                                  "-bone skinning limit, rendering unskinned: " + entry.path);
+    }
+    entry.skinned  = bone_count > 0 && bone_count <= kMaxSkinningBones;
+    Shader* shader = entry.skinned ? ensure_skinned_lighting_shader() : ensure_lighting_shader();
+    if (entry.skinned && shader == nullptr) {
+        entry.skinned = false;
+        shader        = ensure_lighting_shader();
+    }
+    if (shader != nullptr) {
         for (int i = 0; i < entry.model.materialCount; ++i) {
             entry.model.materials[i].shader = *shader;
         }
     }
     entry.loaded = true;
     return &entry.model;
+}
+
+// Lazily load clip data beside the model (dsl-model-animation D4). The load is
+// attempted once; a missing file or clip-less model leaves the count at zero.
+void ensure_model_animations(ModelResourceEntry& entry) {
+    if (entry.animations_load_attempted) {
+        return;
+    }
+    entry.animations_load_attempted = true;
+    if (entry.path.empty() || !FileExists(entry.path.c_str())) {
+        return;
+    }
+    entry.animations = LoadModelAnimations(entry.path.c_str(), &entry.animation_count);
+    if (entry.animations == nullptr) {
+        entry.animation_count = 0;
+    }
+}
+
+// Resolve an animated submission's clip to animation data. Out-of-range or
+// clip-less state degrades to bind pose (nullptr) with at most one diagnostic
+// per (asset, clip) pair (dsl-model-animation D3).
+const ModelAnimation* resolve_animation_clip(ModelResourceEntry& entry, const int runtime_id, const int clip) {
+    ensure_model_animations(entry);
+    if (clip >= 0 && clip < entry.animation_count) {
+        return &entry.animations[clip];
+    }
+    const std::uint64_t key = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(runtime_id)) << 32U) |
+                              static_cast<std::uint32_t>(clip);
+    if (diagnosed_invalid_clips().insert(key).second) {
+        render_debug_state_storage().model_diagnostics.push_back(
+            "invalid animation clip " + std::to_string(clip) + " (model has " +
+            std::to_string(entry.animation_count) + "): " + entry.path);
+    }
+    return nullptr;
+}
+
+// Re-pose the shared scratch model for one submission and upload its bone
+// matrices to the skinned shader, mirroring DrawModelEx's upload (rmodels.c) —
+// DrawMesh alone does not upload them. The pose buffer is shared across every
+// entity using this model, so the upload must stay immediately before the
+// submission's draws; do not reorder across submissions (D1). A null clip
+// renders the bind pose.
+void upload_skinned_pose(Model& model, const ModelAnimation* clip_anim, const float time) {
+    if (model.boneMatrices == nullptr) {
+        return;
+    }
+    if (clip_anim != nullptr && clip_anim->keyframeCount > 0) {
+        // Wrap defensively: authored time is wrapped by the animation system,
+        // but time is writable and negative frames would index out of bounds
+        // inside UpdateModelAnimation.
+        const auto frame_count = static_cast<float>(clip_anim->keyframeCount);
+        float frame            = std::fmod(time * kGltfKeyframesPerSecond, frame_count);
+        if (frame < 0.0F) {
+            frame += frame_count;
+        }
+        UpdateModelAnimation(model, *clip_anim, frame);
+    } else {
+        // Bind pose: identity bone matrices (an earlier submission may have
+        // left another entity's pose in the scratch buffer).
+        for (int b = 0; b < model.skeleton.boneCount; ++b) {
+            model.boneMatrices[b] = MatrixIdentity();
+        }
+    }
+    if (Shader* skinned = ensure_skinned_lighting_shader(); skinned != nullptr) {
+        rlEnableShader(skinned->id);
+        rlSetUniformMatrices(skinned->locs[SHADER_LOC_MATRIX_BONETRANSFORMS], model.boneMatrices,
+                             model.skeleton.boneCount);
+    }
 }
 
 Matrix mesh_transform_matrix(const MeshSubmission& submission) noexcept {
@@ -714,8 +973,18 @@ void flush_model_queue() noexcept {
         BeginMode3D(camera);
     }
     for (const auto& submission : model_queue()) {
-        Model* model = ensure_model_resource(submission.model_runtime_id);
-        if (model == nullptr || !window_ready) {
+        Model* model  = ensure_model_resource(submission.model_runtime_id);
+        const auto it = models().find(submission.model_runtime_id);
+        ModelResourceEntry* entry = it != models().end() ? &it->second : nullptr;
+
+        // Clip validation runs headless too, so invalid-clip diagnostics stay
+        // test-observable (D3).
+        const ModelAnimation* clip_anim = nullptr;
+        if (submission.animated && entry != nullptr && !entry->failed) {
+            clip_anim = resolve_animation_clip(*entry, submission.model_runtime_id, submission.clip);
+        }
+
+        if (model == nullptr || entry == nullptr || !window_ready) {
             continue;
         }
         const Matrix xform = mesh_transform_matrix(MeshSubmission{
@@ -723,6 +992,9 @@ void flush_model_queue() noexcept {
             .rotation = submission.rotation,
             .scale    = submission.scale,
         });
+        if (entry->skinned) {
+            upload_skinned_pose(*model, clip_anim, submission.time);
+        }
         // Draw every submesh with the embedded material bound to it in the file.
         for (int i = 0; i < model->meshCount; ++i) {
             const int material_index = model->meshMaterial[i];
@@ -945,6 +1217,47 @@ void flush_sprite_queue() noexcept {
     }
     EndMode2D();
 }
+
+void submit_model_impl(const Vector3 position,
+                       const Quat rotation,
+                       const Vector3 scale,
+                       const AssetHandle model,
+                       const bool visible,
+                       const bool cast_shadow,
+                       const bool animated,
+                       const int clip,
+                       const float time) noexcept {
+    if (!visible) {
+        return;
+    }
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
+    if (!resolved.valid()) {
+        note_missing_asset();
+        if (diagnosed_missing_model_handles().insert(model).second) {
+            render_debug_state_storage().model_diagnostics.push_back("missing model asset handle " +
+                                                                     std::to_string(model));
+        }
+        return;
+    }
+    auto& entry = models()[resolved.runtime_id];
+    if (entry.path.empty()) {
+        entry.path = std::string{resolved.asset_id};
+    }
+    model_queue().push_back(ModelSubmission{
+        .position         = position,
+        .rotation         = rotation,
+        .scale            = scale,
+        .model_runtime_id = resolved.runtime_id,
+        .cast_shadow      = cast_shadow,
+        .clip             = clip,
+        .time             = time,
+        .animated         = animated,
+    });
+    ++render_debug_state_storage().submitted_models;
+    if (animated) {
+        render_debug_state_storage().animated_model_submissions.push_back({.clip = clip, .time = time});
+    }
+}
 }  // namespace
 
 RuntimeBinding bind_runtime(GeneratedProjectInfo project) noexcept {
@@ -991,6 +1304,7 @@ void begin_render_frame() noexcept {
     render_debug_state_storage().active_point_lights    = 0;
     render_debug_state_storage().used_lit_mesh_shader   = false;
     render_debug_state_storage().drawn_sprite_layers.clear();
+    render_debug_state_storage().animated_model_submissions.clear();
 }
 
 void end_render_frame() noexcept {
@@ -1103,30 +1417,51 @@ void submit_model(const Vector3 position,
                   const AssetHandle model,
                   const bool visible,
                   const bool cast_shadow) noexcept {
-    if (!visible) {
-        return;
-    }
+    submit_model_impl(position, rotation, scale, model, visible, cast_shadow, false, 0, 0.0F);
+}
+
+void submit_model(const Vector3 position,
+                  const Quat rotation,
+                  const Vector3 scale,
+                  const AssetHandle model,
+                  const bool visible,
+                  const bool cast_shadow,
+                  const int clip,
+                  const float time) noexcept {
+    submit_model_impl(position, rotation, scale, model, visible, cast_shadow, true, clip, time);
+}
+
+int model_animation_count(const AssetHandle model) noexcept {
     const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
     if (!resolved.valid()) {
-        note_missing_asset();
-        if (diagnosed_missing_model_handles().insert(model).second) {
-            render_debug_state_storage().model_diagnostics.push_back("missing model asset handle " +
-                                                                     std::to_string(model));
-        }
-        return;
+        return 0;
     }
     auto& entry = models()[resolved.runtime_id];
     if (entry.path.empty()) {
         entry.path = std::string{resolved.asset_id};
     }
-    model_queue().push_back(ModelSubmission{
-        .position         = position,
-        .rotation         = rotation,
-        .scale            = scale,
-        .model_runtime_id = resolved.runtime_id,
-        .cast_shadow      = cast_shadow,
-    });
-    ++render_debug_state_storage().submitted_models;
+    // Introspection triggers the lazy model load so it works before first draw (D4).
+    (void)ensure_model_resource(resolved.runtime_id);
+    ensure_model_animations(entry);
+    return entry.animation_count;
+}
+
+std::string model_animation_name(const AssetHandle model, const int clip) noexcept {
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
+    if (!resolved.valid()) {
+        return "";
+    }
+    auto& entry = models()[resolved.runtime_id];
+    if (entry.path.empty()) {
+        entry.path = std::string{resolved.asset_id};
+    }
+    (void)ensure_model_resource(resolved.runtime_id);
+    ensure_model_animations(entry);
+    if (clip < 0 || clip >= entry.animation_count) {
+        return "";
+    }
+    const auto& anim = entry.animations[clip];
+    return std::string{anim.name, strnlen(anim.name, sizeof(anim.name))};
 }
 
 void submit_billboard(const Vector3 /*position*/,

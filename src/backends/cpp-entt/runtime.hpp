@@ -25,6 +25,11 @@ struct RuntimeBinding {
 };
 
 struct RenderDebugState {
+    struct AnimatedModelSubmission {
+        int clip{0};
+        float time{0.0F};
+    };
+
     int submitted_sprites{0};
     int advanced_animated_sprites{0};
     int submitted_meshes{0};
@@ -39,7 +44,11 @@ struct RenderDebugState {
     bool used_default_3d_camera{false};
     bool used_lit_mesh_shader{false};
     std::vector<int> drawn_sprite_layers;
-    // Missing/failed model diagnostics, recorded at most once per model asset.
+    // (clip, time) of each animated model submission this frame, in submission
+    // order — the per-entity poses observable without a GPU.
+    std::vector<AnimatedModelSubmission> animated_model_submissions;
+    // Missing/failed model and invalid-animation-clip diagnostics, recorded at
+    // most once per model asset (or per (asset, clip) pair).
     std::vector<std::string> model_diagnostics;
 };
 
@@ -80,6 +89,25 @@ void submit_model(Vector3 position,
                   AssetHandle model,
                   bool visible,
                   bool cast_shadow) noexcept;
+// Animated variant: carries the entity's ModelAnimator (clip, time) so the
+// flush re-poses the shared model per submission (dsl-model-animation).
+void submit_model(Vector3 position,
+                  Quat rotation,
+                  Vector3 scale,
+                  AssetHandle model,
+                  bool visible,
+                  bool cast_shadow,
+                  int clip,
+                  float time) noexcept;
+
+// ── Animation introspection extern func bridges (std.render.models) ───────────
+
+/// Number of animation clips in the model; 0 for an unresolvable handle.
+/// Triggers the model's lazy load, so it works before the first draw.
+[[nodiscard]] int model_animation_count(AssetHandle model) noexcept;
+
+/// Clip name as stored in the model file; "" for a bad handle or index.
+[[nodiscard]] std::string model_animation_name(AssetHandle model, int clip) noexcept;
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;

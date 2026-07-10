@@ -41,6 +41,11 @@ FetchContent_Declare(
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version" FORCE)
 FetchContent_MakeAvailable(Catch2 EnTT raylib)
 
+# GPU skinning for skeletal animation (dsl-model-animation): loaders skip the
+# CPU-side animVertices buffers, so UpdateModelAnimation reduces to bone-matrix
+# math and DrawMesh binds bone VBOs. Static model/mesh paths are unaffected.
+target_compile_definitions(raylib PRIVATE SUPPORT_GPU_SKINNING=1)
+
 # ── Compiler Warnings (after FetchContent so they don't apply to deps) ──────────
 if(MSVC)
     add_compile_options(/W4 /WX /permissive-)

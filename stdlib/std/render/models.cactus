@@ -50,3 +50,9 @@ pub extern func animation_count(m: model_id) int
 
 # Name of a clip as stored in the model file ("" on bad handle or index).
 pub extern func animation_name(m: model_id, clip: int) string
+
+# Extents (max - min per axis) of the model's bind-pose axis-aligned bounding
+# box. Triggers a lazy model load, so it works before the model's first draw.
+# Returns vec3(0.0, 0.0, 0.0) for an unresolvable handle, a failed load, or a
+# call before the rendering window exists.
+pub extern func bounds_size(m: model_id) vec3

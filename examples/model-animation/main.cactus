@@ -17,10 +17,15 @@ const:
     WINDOW_TITLE = "Model Animation Example"
     TARGET_FPS = 60
     ROTATION_SPEED = 1.75
-    ROBOT_COUNT = 3
+    CHARACTER_COUNT = 3
+    TARGET_HEIGHT = 1.8
+    SELECTED_SCALE = 1.3
+    SCALE_SPEED = 2.0
 
-# Shared with the model-renderer example — one CC0 robot GLB, 14 named clips.
+# Shared with the model-renderer example — one CC0 robot GLB, 14 named clips,
+# plus a CC0 knight GLB with its own clip table and a different native height.
 asset Robot: model = "../model-renderer/art/robot.glb"
+asset Knight: model = "../model-renderer/art/Crispoly-Characters-Mini-Red-Knight.glb"
 
 input CycleSelected: button
     key = Key.Tab
@@ -45,12 +50,16 @@ input RotateVerticalArrows: axis
     negative = Key.Down
     positive = Key.Up
 
-# Lock-step selection state: every robot sees the same TAB press and advances
-# its own `selected` copy, so "am I selected" is just `index == selected` —
-# no cross-entity reads needed.
-trait RobotState:
+# Lock-step selection state: every character sees the same TAB press and
+# advances its own `selected` copy, so "am I selected" is just
+# `index == selected` — no cross-entity reads needed.
+# base_scale: normalization factor computed at spawn (target height / model height)
+# scale_mult: animated selection-emphasis multiplier eased toward SELECTED_SCALE
+trait CharacterState:
     var index: int = 0
     var selected: int = 0
+    var base_scale: float = 1.0
+    var scale_mult: float = 1.0
 
 trait ControlInput:
     var horizontal: float = 0.0
@@ -58,62 +67,27 @@ trait ControlInput:
     var cycle_pressed: bool = false
     var clip_pressed: bool = false
 
-pub entity RobotLeft:
-    WorldTransform:
-        position = vec3(-2.5, 0.0, 0.0)
-        rotation = quat.identity()
-        scale = vec3(1.0, 1.0, 1.0)
+# Single-instance bootstrap marker: the SpawnCharacters load handler filters
+# on this, so its body runs exactly once (load handlers run once per matching
+# entity). The fields hold the per-model normalization factors computed during
+# load; their defaults are the zero-height (unloadable model) fallback.
+trait SpawnerMarker:
+    var robot_scale: float = 1.0
+    var knight_scale: float = 1.0
+
+template CharacterTemplate:
+    WorldTransform
     ModelRenderer:
-        model = Robot
         visible = true
-        cast_shadow = true
     ModelAnimator:
-        clip = 0
         playing = true
         speed = 1.0
         time = 0.0
-    RobotState:
-        index = 0
-        selected = 0
+    CharacterState
     ControlInput
 
-pub entity RobotCenter:
-    WorldTransform:
-        position = vec3(0.0, 0.0, 0.0)
-        rotation = quat.identity()
-        scale = vec3(1.0, 1.0, 1.0)
-    ModelRenderer:
-        model = Robot
-        visible = true
-        cast_shadow = true
-    ModelAnimator:
-        clip = 1
-        playing = true
-        speed = 1.0
-        time = 0.0
-    RobotState:
-        index = 1
-        selected = 0
-    ControlInput
-
-pub entity RobotRight:
-    WorldTransform:
-        position = vec3(2.5, 0.0, 0.0)
-        rotation = quat.identity()
-        scale = vec3(1.0, 1.0, 1.0)
-    ModelRenderer:
-        model = Robot
-        visible = true
-        cast_shadow = true
-    ModelAnimator:
-        clip = 2
-        playing = true
-        speed = 1.0
-        time = 0.0
-    RobotState:
-        index = 2
-        selected = 0
-    ControlInput
+pub entity Bootstrap:
+    SpawnerMarker
 
 pub entity Hud:
     ScreenLabel:
@@ -162,6 +136,57 @@ pub entity MainCamera:
         depth = 0
         clear_color = #223047FF
 
+# Spawns the cast once at startup: robot / knight / robot, left to right, each
+# normalized to TARGET_HEIGHT from its model's bind-pose bounds. A zero height
+# (unloadable model) falls back to unscaled.
+system SpawnCharacters:
+    filter:
+        SpawnerMarker
+
+    on load:
+        let robot_size = models.bounds_size(Robot)
+        if robot_size.y > 0.0:
+            robot_scale = TARGET_HEIGHT / robot_size.y
+        let knight_size = models.bounds_size(Knight)
+        if knight_size.y > 0.0:
+            knight_scale = TARGET_HEIGHT / knight_size.y
+        spawn CharacterTemplate:
+            WorldTransform:
+                position = vec3(-2.5, 0.0, 0.0)
+                rotation = quat.identity()
+                scale = vec3(robot_scale, robot_scale, robot_scale)
+            ModelRenderer:
+                model = Robot
+            ModelAnimator:
+                clip = 0
+            CharacterState:
+                index = 0
+                base_scale = robot_scale
+        spawn CharacterTemplate:
+            WorldTransform:
+                position = vec3(0.0, 0.0, 0.0)
+                rotation = quat.identity()
+                scale = vec3(knight_scale, knight_scale, knight_scale)
+            ModelRenderer:
+                model = Knight
+            ModelAnimator:
+                clip = 0
+            CharacterState:
+                index = 1
+                base_scale = knight_scale
+        spawn CharacterTemplate:
+            WorldTransform:
+                position = vec3(2.5, 0.0, 0.0)
+                rotation = quat.identity()
+                scale = vec3(robot_scale, robot_scale, robot_scale)
+            ModelRenderer:
+                model = Robot
+            ModelAnimator:
+                clip = 2
+            CharacterState:
+                index = 2
+                base_scale = robot_scale
+
 system ReadControls:
     filter:
         ControlInput
@@ -174,48 +199,71 @@ system ReadControls:
 
 system CycleSelection:
     filter:
-        RobotState
+        CharacterState
         ControlInput
 
     on tick:
         if cycle_pressed:
-            selected = (selected + 1) % ROBOT_COUNT
+            selected = (selected + 1) % CHARACTER_COUNT
+
+# Selection emphasis: ease each character's scale multiplier toward
+# SELECTED_SCALE while selected and back toward 1.0 otherwise, then write the
+# combined normalization * emphasis scale to the transform.
+system AnimateSelection:
+    filter:
+        WorldTransform
+        CharacterState
+    after:
+        CycleSelection
+
+    on tick:
+        if index == selected:
+            scale_mult = scale_mult + SCALE_SPEED * tick.dt
+            if scale_mult > SELECTED_SCALE:
+                scale_mult = SELECTED_SCALE
+        else:
+            scale_mult = scale_mult - SCALE_SPEED * tick.dt
+            if scale_mult < 1.0:
+                scale_mult = 1.0
+        scale = vec3(base_scale * scale_mult, base_scale * scale_mult, base_scale * scale_mult)
 
 system RotateSelected:
     filter:
         WorldTransform
-        RobotState
+        CharacterState
         ControlInput
     after:
         CycleSelection
 
     on tick:
         if index == selected:
-           # let yaw_axis = quat.up(rotation)
-            let pitch_axis = quat.right(rotation)
-            #let yaw_delta = quat.from_axis_angle(yaw_axis, horizontal * ROTATION_SPEED * tick.dt)
-            let pitch_delta = quat.from_axis_angle(pitch_axis, vertical * ROTATION_SPEED * tick.dt)
-            rotation = pitch_delta
+            let yaw_axis = quat.up(rotation)
+            # let pitch_axis = quat.right(rotation)
+            let yaw_delta = quat.from_axis_angle(yaw_axis, horizontal * ROTATION_SPEED * tick.dt)
+            # let pitch_delta = quat.from_axis_angle(pitch_axis, vertical * ROTATION_SPEED * tick.dt)
+            rotation = quat.multiply(yaw_delta, rotation)
             # rotation = quat.multiply(pitch_delta, quat.multiply(yaw_delta, rotation))
 
 system CycleClip:
     filter:
-        RobotState
+        CharacterState
         ControlInput
+        ModelRenderer
         ModelAnimator
     after:
         CycleSelection
 
     on tick:
         if clip_pressed and index == selected:
-            let count = models.animation_count(Robot)
+            let count = models.animation_count(model)
             if count > 0:
                 clip = (clip + 1) % count
                 time = 0.0
 
 system UpdateHud:
     filter:
-        RobotState
+        CharacterState
+        ModelRenderer
         ModelAnimator
     after:
         CycleClip
@@ -225,4 +273,4 @@ system UpdateHud:
             let hud = query.first[ScreenLabel]()
             project ScreenLabel to hud:
                 position = vec2(16.0, 16.0)
-                text = format("Robot {} - {}", index + 1, models.animation_name(Robot, clip))
+                text = format("Character {} - {}", index + 1, models.animation_name(model, clip))

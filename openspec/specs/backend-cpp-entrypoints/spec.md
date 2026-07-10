@@ -16,11 +16,19 @@ C++ backends SHALL own backend-specific `main()` templates for the standard Rayl
 - **THEN** it SHALL NOT create `main.cpp` or equivalent entrypoint source content with `file(WRITE)`, `configure_file` from inline text, or another build-script source-generation workaround
 
 ### Requirement: Generated entrypoints invoke generated lifecycle hooks
-Backend-generated entrypoints SHALL bridge final executable startup and frame execution to the generated hook functions emitted by the selected backend.
+Backend-generated entrypoints SHALL bridge final executable startup and frame execution to the generated hook functions emitted by the selected backend, including the startup load phase.
 
 #### Scenario: EnTT generated main invokes EnTT lifecycle hooks
 - **WHEN** a standard `cpp-entt` generated executable starts
-- **THEN** its backend-generated `main()` creates an `entt::registry` and `entt::dispatcher`, calls `generated_setup_dispatcher(dispatcher)`, calls `generated_init_project(registry)`, and runs frames through `generated_update_project(registry, dispatcher, dt)` and `generated_render_project(registry, dispatcher)`
+- **THEN** its backend-generated `main()` creates an `entt::registry` and `entt::dispatcher`, calls `generated_setup_dispatcher(dispatcher)`, calls `generated_init_project(registry)`, calls `generated_load_project(registry)`, and runs frames through `generated_update_project(registry, dispatcher, dt)` and `generated_render_project(registry, dispatcher)`
+
+#### Scenario: Startup load phase runs after window initialization
+- **WHEN** a `cpp-entt` generated executable starts
+- **THEN** `generated_load_project(registry)` is called after `InitWindow` and after `generated_init_project`, so `on load()` handler bodies can trigger lazy asset loads
+
+#### Scenario: No-main hosts control the load phase explicitly
+- **WHEN** a host builds generated output with `CACTUS_GENERATED_NO_MAIN`
+- **THEN** `generated_load_project(registry)` is available as an exported hook alongside `generated_init_project`, and load handlers fire only when the host calls it
 
 ### Requirement: Backend runtime libraries remain reusable without forcing main
 Reusable backend/runtime library targets SHALL remain usable by tests and host projects without defining `main()`. The executable entrypoint SHALL live in generated project output for the standard executable mode, while reusable runtime behavior remains in linked backend/runtime libraries.

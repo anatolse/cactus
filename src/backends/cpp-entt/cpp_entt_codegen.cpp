@@ -499,6 +499,32 @@ bool has_collision_event_decl(const ProgramNode* ast) {
     });
 }
 
+bool has_load_event_decl(const ProgramNode* ast) {
+    if (ast == nullptr) {
+        return false;
+    }
+    return std::ranges::any_of(ast->declarations, [](const auto& decl) {
+        const auto* event = std::get_if<EventNode>(&decl);
+        return event != nullptr && event->name == "load";
+    });
+}
+
+bool program_has_load_handlers(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return false;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* sys = std::get_if<SystemNode>(&decl)) {
+            for (const auto& handler : sys->handlers) {
+                if (handler.event_name == "load") {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool has_flat_collider_support(const DecoratedProgram& program) {
     const auto* collider = find_trait(program, "Collider");
     return collider != nullptr && collider->is_stdlib && find_field(collider, "layer") != nullptr &&
@@ -1020,6 +1046,7 @@ std::string emit_backend_main() {
     out << "    entt::dispatcher dispatcher;\n";
     out << "    cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);\n";
     out << "    cactus::runtime::entt_backend::generated_init_project(registry);\n";
+    out << "    cactus::runtime::entt_backend::generated_load_project(registry);\n";
     out << "    while (!WindowShouldClose()) {\n";
     out << "        const float dt = GetFrameTime();\n";
     out << "        cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);\n";
@@ -1115,6 +1142,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    float dt;\n";
     out << "};\n";
     out << "\n";
+
+    // Startup load-phase marker (dsl-scene-loading): load handlers take a
+    // loadEvent parameter; a linked `event load` declaration supplies its own.
+    if (program_has_load_handlers(program) && !has_load_event_decl(program.ast)) {
+        out << "struct loadEvent {};\n";
+        out << "\n";
+    }
 
     if (program.ast != nullptr) {
         bool has_axis_input   = false;
@@ -1559,6 +1593,23 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            if (auto* wt = reg.try_get<WorldTransform>(entity)) { wt->position = pos2d; }\n";
         out << "            return entity;\n";
         out << "        });\n";
+    }
+    out << "}\n\n";
+
+    // Startup load phase (dsl-scene-loading): fire every system's load handler
+    // once after root-module entities exist, in tick-dispatch system order.
+    out << "void generated_load_project(entt::registry& registry) {\n";
+    out << "    (void)registry;\n";
+    if (program.ast != nullptr) {
+        for (auto& decl : program.ast->declarations) {
+            if (auto* sys = std::get_if<SystemNode>(&decl)) {
+                for (auto& handler : sys->handlers) {
+                    if (handler.event_name == "load") {
+                        out << "    " << system_function_name(sys->name, "load") << "(registry, loadEvent{});\n";
+                    }
+                }
+            }
+        }
     }
     out << "}\n\n";
 

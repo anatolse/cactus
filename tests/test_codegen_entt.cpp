@@ -632,6 +632,94 @@ TEST_CASE("Codegen EnTT: std.render.models introspection funcs bind to model-pre
     CHECK(code.find("cactus::runtime::entt_backend::model_animation_name(Robot, ") != std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: models.bounds_size binds to the model-prefixed runtime bridge",
+          "[codegen-entt][extern-func][stdlib][dynamic-model-spawning]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.render.models as models\n"
+        "asset Robot: model = \"art/robot.glb\"\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "trait SizeState:\n"
+        "    var height: float\n"
+        "system Probe:\n"
+        "    filter:\n"
+        "        SizeState\n"
+        "    on tick:\n"
+        "        height = models.bounds_size(Robot).y\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::model_bounds_size(Robot)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: on load handlers fire through generated_load_project at startup",
+          "[codegen-entt][dsl-scene-loading][dynamic-model-spawning]") {
+    ProgramNode program;
+    // `pub event load` stands in for the std.core lifecycle declaration the
+    // multi-module pipeline links in; the single-module analyzer needs it to
+    // accept `on load:`. It also exercises the loadEvent dedupe: the event
+    // declaration supplies the struct, so the empty marker must not be emitted.
+    auto decorated = full_pipeline(
+        "pub event load\n"
+        "trait Marker\n"
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "template Enemy:\n"
+        "    Position\n"
+        "entity Bootstrap:\n"
+        "    Marker\n"
+        "system SpawnEnemies:\n"
+        "    filter:\n"
+        "        Marker\n"
+        "    on load:\n"
+        "        spawn Enemy:\n"
+        "            Position:\n"
+        "                x = 1.0\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Exactly one loadEvent definition backs the load-handler signature.
+    CHECK(count_occurrences(code, "struct loadEvent") == 1);
+
+    // The handler is dispatched from the exported startup load hook.
+    const auto load = generated_function(code, "void generated_load_project");
+    CHECK(load.find("spawn_enemies_load(registry, loadEvent{});") != std::string::npos);
+
+    // main() startup order: init project, then load phase, then the frame loop.
+    const auto init_pos = code.find("cactus::runtime::entt_backend::generated_init_project(registry);");
+    const auto load_pos = code.find("cactus::runtime::entt_backend::generated_load_project(registry);");
+    const auto loop_pos = code.find("while (!WindowShouldClose())");
+    REQUIRE(init_pos != std::string::npos);
+    REQUIRE(load_pos != std::string::npos);
+    REQUIRE(loop_pos != std::string::npos);
+    CHECK(init_pos < load_pos);
+    CHECK(load_pos < loop_pos);
+}
+
+TEST_CASE("Codegen EnTT: programs without load handlers emit no loadEvent marker",
+          "[codegen-entt][dsl-scene-loading][dynamic-model-spawning]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Pos:\n"
+        "    var x: float = 0.0\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on tick:\n"
+        "        x = x + tick.dt\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("struct loadEvent") == std::string::npos);
+    // The hook is still exported so main() and no-main hosts can call it.
+    const auto load = generated_function(code, "void generated_load_project");
+    CHECK(load.find("(void)registry;") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {
     ProgramNode program;
     auto decorated = full_pipeline(

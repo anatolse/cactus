@@ -113,6 +113,11 @@ void submit_model(Vector3 position,
 /// Clip duration in seconds (keyframes / glTF sampling rate); 0 for a bad
 /// handle or index. The generated ModelAnimationSystem wraps time by this.
 [[nodiscard]] float model_animation_duration(AssetHandle model, int clip) noexcept;
+
+/// Bind-pose AABB extents (max − min per axis) of the model. Triggers the
+/// model's lazy load, so it works before the first draw. Returns zero extents
+/// for an unresolvable handle, a failed load, or before the window exists.
+[[nodiscard]] Vector3 model_bounds_size(AssetHandle model) noexcept;
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
@@ -226,6 +231,7 @@ void destroy_entity_recursive(
 
 void generated_setup_dispatcher(entt::dispatcher& dispatcher);
 void generated_init_project(entt::registry& registry);
+void generated_load_project(entt::registry& registry);
 void generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt);
 void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher);
 [[nodiscard]] ProjectConfig generated_project_config() noexcept;

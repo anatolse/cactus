@@ -1513,6 +1513,26 @@ float model_animation_duration(const AssetHandle model, const int clip) noexcept
     return static_cast<float>(entry.animations[clip].keyframeCount) / kGltfKeyframesPerSecond;
 }
 
+Vector3 model_bounds_size(const AssetHandle model) noexcept {
+    constexpr Vector3 kZeroExtents{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
+    if (!resolved.valid()) {
+        return kZeroExtents;
+    }
+    auto& entry = models()[resolved.runtime_id];
+    if (entry.path.empty()) {
+        entry.path = std::string{resolved.asset_id};
+    }
+    // Introspection triggers the lazy model load so it works before first draw
+    // (D4). Model loads need the window; until then report zero extents.
+    Model* loaded = ensure_model_resource(resolved.runtime_id);
+    if (loaded == nullptr) {
+        return kZeroExtents;
+    }
+    const BoundingBox box = GetModelBoundingBox(*loaded);
+    return Vector3{.x = box.max.x - box.min.x, .y = box.max.y - box.min.y, .z = box.max.z - box.min.z};
+}
+
 void submit_billboard(const Vector3 /*position*/,
                       const Vector2 /*size*/,
                       const Color /*color*/,

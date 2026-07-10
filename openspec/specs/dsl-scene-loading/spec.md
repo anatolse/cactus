@@ -32,7 +32,7 @@ The language SHALL support a `load` statement inside system event handlers. `loa
 - **THEN** the compiler SHALL report an error: "unknown module 'some.unknown'"
 
 ### Requirement: `on load()` lifecycle handler on systems
-Systems MAY declare an `on load():` handler. This handler fires once after every `load` transition completes — after all non-persistent entities are removed, all target module entities are instantiated, and `on spawn()` handlers have fired.
+Systems MAY declare an `on load():` handler. This handler fires once after every `load` transition completes — after all non-persistent entities are removed, all target module entities are instantiated, and `on spawn()` handlers have fired. The handler SHALL also fire once at program start, after the root module's `entity` declarations are instantiated — program startup is the initial load phase. Like all system handlers, an `on load()` handler body executes once per entity matching the system's filter.
 
 #### Scenario: On load fires after all spawn handlers complete
 - **WHEN** a `load` transition completes
@@ -41,6 +41,18 @@ Systems MAY declare an `on load():` handler. This handler fires once after every
 #### Scenario: On load fires even when loaded module has no entities
 - **WHEN** a module with no `entity` declarations is loaded
 - **THEN** `on load()` still fires (there are just no entities created)
+
+#### Scenario: On load fires at program start
+- **WHEN** the program starts and the root module's `entity` declarations have been instantiated
+- **THEN** every system's `on load()` handler fires once, before the first frame's `on input()`/`on tick()` handlers
+
+#### Scenario: On load handler can spawn entities visible to the first frame
+- **WHEN** a system's `on load()` handler executes `spawn SomeTemplate:` at program start
+- **THEN** the spawned entities exist before the first frame's `on tick()` handlers run
+
+#### Scenario: On load handler body runs per matching entity
+- **WHEN** a system with `filter: Marker` declares `on load()` and exactly one entity has `Marker`
+- **THEN** the handler body executes exactly once (a run-once bootstrap is expressed by filtering on a single-instance marker trait)
 
 ### Requirement: Modules as scenes — execution model
 A module's `entity` declarations SHALL define its static entity layout. The root (`main.cactus`) module's `entity` declarations SHALL always be instantiated at program start and SHALL never be unloaded. All other modules' entities SHALL exist only when that module is the active loaded module.

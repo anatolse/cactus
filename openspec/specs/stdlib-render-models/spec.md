@@ -125,3 +125,22 @@ When a `ModelAnimator.clip` is negative, `>=` the model's clip count, or the mod
 #### Scenario: Animation-less model with animator
 - **WHEN** an entity has `ModelAnimator` but its model contains zero animation clips
 - **THEN** the entity renders at bind pose with a single recorded diagnostic
+
+### Requirement: Model bounds introspection function
+The `std.render.models` module SHALL provide `pub extern func bounds_size(m: model_id) vec3` returning the extents (max − min, per axis) of the model's bind-pose axis-aligned bounding box. For an unresolvable model handle, a failed model load, or a call before the rendering window exists, `bounds_size` SHALL return `vec3(0.0, 0.0, 0.0)`. The function SHALL work before the model's first draw (introspection triggers the same lazy model load as rendering).
+
+#### Scenario: Bounds extents for a loaded model
+- **WHEN** `models.bounds_size(Robot)` is called for a GLB whose bind-pose AABB spans 1.2 × 1.9 × 0.8 units
+- **THEN** it returns `vec3(1.2, 1.9, 0.8)`
+
+#### Scenario: Bounds before first render triggers lazy load
+- **WHEN** `bounds_size` is called in an `on load()` or `on tick()` handler before the model has ever been drawn, with the rendering window initialized
+- **THEN** the model loads lazily and the correct extents are returned
+
+#### Scenario: Unresolvable handle returns zero extents
+- **WHEN** `bounds_size` is called with a model handle that is unregistered or whose file failed to load
+- **THEN** it returns `vec3(0.0, 0.0, 0.0)` and does not crash
+
+#### Scenario: Skinned model reports bind-pose extents
+- **WHEN** `bounds_size` is called for a skinned model with animation clips
+- **THEN** the returned extents describe the bind pose, unaffected by any `ModelAnimator` state

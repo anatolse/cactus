@@ -61,7 +61,8 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
 // std.render.models extern funcs bind to the model_-prefixed runtime bridges
 // (the bare names would collide with other asset kinds' introspection).
 std::string stdlib_runtime_func_name(const std::string& module_name, const std::string& func_name) {
-    if (module_name == "std.render.models" && (func_name == "animation_count" || func_name == "animation_name")) {
+    if (module_name == "std.render.models" &&
+        (func_name == "animation_count" || func_name == "animation_name" || func_name == "bounds_size")) {
         return "model_" + func_name;
     }
     return func_name;
@@ -107,7 +108,7 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
                func_name == "sample_int" || func_name == "sample_normal" || func_name == "chance";
     }
     if (module_name == "std.render.models") {
-        return func_name == "animation_count" || func_name == "animation_name";
+        return func_name == "animation_count" || func_name == "animation_name" || func_name == "bounds_size";
     }
     return false;
 }

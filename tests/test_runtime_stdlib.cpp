@@ -378,6 +378,39 @@ TEST_CASE("Runtime stdlib: EnTT animation introspection reads real GLB clips bef
     cactus::runtime::entt_backend::reset_render_debug_state();
 }
 
+TEST_CASE("Runtime stdlib: EnTT model bounds introspection stays total without a loadable model",
+          "[runtime][assets][entt][dynamic-model-spawning]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+
+    // Unregistered handle: zero extents, no crash.
+    const auto missing = cactus::runtime::entt_backend::model_bounds_size(999U);
+    CHECK(missing.x == 0.0F);
+    CHECK(missing.y == 0.0F);
+    CHECK(missing.z == 0.0F);
+
+    // Fake record (test seam) pointing at a missing file: same degradation.
+    registry.register_model(84U, "does/not/exist.glb", 84);
+    const auto failed = cactus::runtime::entt_backend::model_bounds_size(84U);
+    CHECK(failed.x == 0.0F);
+    CHECK(failed.y == 0.0F);
+    CHECK(failed.z == 0.0F);
+
+    // Real GLB but no rendering window (headless test run): the lazy load
+    // cannot complete, so bounds_size reports zero extents instead of crashing.
+    const auto robot_path = (repo_root() / "examples/model-renderer/art/robot.glb").string();
+    REQUIRE(fs::exists(robot_path));
+    registry.register_model(85U, robot_path, 85);
+    const auto headless = cactus::runtime::entt_backend::model_bounds_size(85U);
+    CHECK(headless.x == 0.0F);
+    CHECK(headless.y == 0.0F);
+    CHECK(headless.z == 0.0F);
+
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+}
+
 TEST_CASE("Runtime stdlib: EnTT invalid animation clip degrades to bind pose with one diagnostic per (asset, clip)",
           "[runtime][assets][entt][dsl-model-animation]") {
     auto& registry = shared_asset_registry();

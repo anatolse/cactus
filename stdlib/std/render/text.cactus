@@ -26,3 +26,22 @@ extern system TextRenderer2D:
 extern system TextRenderer3D:
     filter:
         TextLabel
+
+# ── Window-Space Screen Labels ────────────────────────────────────────────────
+# HUD text drawn in window pixel coordinates after all viewport/world rendering.
+# Requires no WorldTransform, so it works identically in flat and volume
+# programs — unlike TextLabel, which follows the entity's transform flavor.
+
+# position:  screen pixels, top-left origin
+# font_size: screen pixels
+pub trait ScreenLabel:
+    var text:      string = ""
+    var position:  vec2
+    var font_size: int    = 32
+    var color:     color  = #FFFFFFFF
+    var visible:   bool   = true
+
+# Draws visible labels at their window position, overlaying 2D and 3D content.
+extern system ScreenLabelSystem:
+    filter:
+        ScreenLabel

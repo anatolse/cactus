@@ -21,3 +21,32 @@ extern system ModelRendererSystem:
     filter:
         std.transform.volume.WorldTransform
         ModelRenderer
+
+# ── Skeletal Animation ────────────────────────────────────────────────────────
+# Optional companion to ModelRenderer. Entities without ModelAnimator render at
+# the model's bind pose. Entities sharing one model asset animate independently.
+
+# Plays a skeletal animation clip on the entity's model.
+# clip:    index of the animation clip to play (see animation_count/animation_name)
+# playing: set false to freeze the pose at the current time
+# speed:   playback rate multiplier (2.0 = double speed)
+# time:    seconds into the clip; advanced by the backend, writable to seek
+pub trait ModelAnimator:
+    var clip: int = 0
+    var playing: bool = true
+    var speed: float = 1.0
+    var time: float = 0.0
+
+# Advances `time` by dt * speed each update tick while `playing`, wrapping by
+# the active clip's duration so playback loops.
+extern system ModelAnimationSystem:
+    filter:
+        ModelRenderer
+        ModelAnimator
+
+# Number of animation clips in the model file (0 if the handle is unresolvable).
+# Triggers a lazy model load, so it works before the model's first draw.
+pub extern func animation_count(m: model_id) int
+
+# Name of a clip as stored in the model file ("" on bad handle or index).
+pub extern func animation_name(m: model_id, clip: int) string

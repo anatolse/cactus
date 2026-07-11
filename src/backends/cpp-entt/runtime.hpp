@@ -15,6 +15,16 @@ int cactus_input_button_key(std::uint8_t button) noexcept;
 int cactus_input_button_mouse(std::uint8_t button) noexcept;
 float cactus_input_axis_value(std::uint8_t action) noexcept;
 
+// ── Frame-local consumed input (editor input override) ────────────────────────
+// Consumption is keyed by physical raylib key / mouse button code, not by
+// declared action, so consuming an editor control also hides same-key gameplay
+// bindings. Reset at the top of every generated update frame.
+void reset_consumed_input() noexcept;
+void mark_input_key_consumed(int key) noexcept;
+void mark_input_mouse_consumed(int mouse_button) noexcept;
+[[nodiscard]] bool is_input_key_consumed(int key) noexcept;
+[[nodiscard]] bool is_input_mouse_consumed(int mouse_button) noexcept;
+
 // ── Active camera state (set once per frame before any camera-dependent code) ──
 void set_active_camera_2d(Camera2D cam) noexcept;
 [[nodiscard]] Camera2D get_active_camera_2d() noexcept;
@@ -207,31 +217,43 @@ void destroy_entity_recursive(
     entt::entity entity,
     const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children);
 
+// Consume a declared button for the rest of the frame. Inline (like the query
+// adapters below) because it resolves through the generated
+// cactus_input_button_key/_mouse tables, which only exist in generated code.
+inline void consume_input_button(std::uint8_t button) noexcept {
+    const int mouse_button = cactus_input_button_mouse(button);
+    if (mouse_button >= 0) {
+        mark_input_mouse_consumed(mouse_button);
+        return;
+    }
+    mark_input_key_consumed(cactus_input_button_key(button));
+}
+
 [[nodiscard]] inline bool pressed(std::uint8_t button) noexcept {
     const int mouse_button = cactus_input_button_mouse(button);
     if (mouse_button >= 0) {
-        return IsMouseButtonPressed(mouse_button);
+        return !is_input_mouse_consumed(mouse_button) && IsMouseButtonPressed(mouse_button);
     }
     const int key = cactus_input_button_key(button);
-    return key != 0 && IsKeyPressed(key);
+    return key != 0 && !is_input_key_consumed(key) && IsKeyPressed(key);
 }
 
 [[nodiscard]] inline bool down(std::uint8_t button) noexcept {
     const int mouse_button = cactus_input_button_mouse(button);
     if (mouse_button >= 0) {
-        return IsMouseButtonDown(mouse_button);
+        return !is_input_mouse_consumed(mouse_button) && IsMouseButtonDown(mouse_button);
     }
     const int key = cactus_input_button_key(button);
-    return key != 0 && IsKeyDown(key);
+    return key != 0 && !is_input_key_consumed(key) && IsKeyDown(key);
 }
 
 [[nodiscard]] inline bool released(std::uint8_t button) noexcept {
     const int mouse_button = cactus_input_button_mouse(button);
     if (mouse_button >= 0) {
-        return IsMouseButtonReleased(mouse_button);
+        return !is_input_mouse_consumed(mouse_button) && IsMouseButtonReleased(mouse_button);
     }
     const int key = cactus_input_button_key(button);
-    return key != 0 && IsKeyReleased(key);
+    return key != 0 && !is_input_key_consumed(key) && IsKeyReleased(key);
 }
 
 [[nodiscard]] inline float axis(std::uint8_t action) noexcept {

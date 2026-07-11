@@ -45,7 +45,7 @@ add_test(NAME ProgramLinkerTests COMMAND test_program_linker)
 
 # Multi-module integration tests
 add_executable(test_multi_module_integration test_multi_module_integration.cpp)
-target_link_libraries(test_multi_module_integration PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_link_libraries(test_multi_module_integration PRIVATE cactus_frontend cactus_backend_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME MultiModuleIntegrationTests COMMAND test_multi_module_integration)
 
 # Dynamic ECS semantic tests (dynamic-ecs-language change)

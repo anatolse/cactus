@@ -8,6 +8,8 @@
 #include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
+#include "backends/cpp-entt/cpp_entt_codegen.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -291,6 +293,129 @@ TEST_CASE("integration: game_templates + editor_module cross-compile with std.ed
     CHECK(merged->traits.count("Renderable") == 1);
     CHECK(merged->traits.count("EditorLocked") == 1);
     CHECK(merged->traits.count("EditorState") == 1);
+
+    fs::remove_all(build_dir, ec);
+}
+
+// ── Editor input ordering (add-editor-camera-navigation, task 1.6) ─────────
+
+/// Lex, parse and semantically analyze source text, keeping the parsed AST
+/// alive in program_out for merged-AST code generation.
+static std::optional<DecoratedProgram> compile_source(const std::string& source,
+                                                      const std::string& filename,
+                                                      ProgramNode& program_out,
+                                                      ErrorReporter& errors,
+                                                      const ModuleImports& imports = {}) {
+    Lexer lexer(source, filename, errors);
+    auto tokens = lexer.tokenize();
+    if (errors.has_errors()) {
+        return std::nullopt;
+    }
+    Parser parser(std::move(tokens), errors);
+    program_out = parser.parse_program();
+    if (errors.has_errors()) {
+        return std::nullopt;
+    }
+    SemanticAnalyzer analyzer(errors);
+    auto decorated = analyzer.analyze(program_out, imports);
+    if (errors.has_errors()) {
+        return std::nullopt;
+    }
+    return decorated;
+}
+
+TEST_CASE("integration: stdlib on input handlers run before root-module handlers",
+          "[integration][editor][input]") {
+    auto build_dir = integration_build_dir() / "input_order";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    // Step 1: Compile a stdlib-like module with an `on input` system.
+    const std::string lib_source = "module editorlib\n"
+                                   "\n"
+                                   "pub event input\n"
+                                   "pub trait EditorNavState:\n"
+                                   "    var moves: float\n"
+                                   "system EditorNav:\n"
+                                   "    filter:\n"
+                                   "        EditorNavState\n"
+                                   "    on input:\n"
+                                   "        moves = moves + 1.0\n";
+    ErrorReporter lib_errors;
+    ProgramNode lib_ast;
+    auto lib_prog = compile_source(lib_source, "editorlib.cactus", lib_ast, lib_errors);
+    REQUIRE_FALSE(lib_errors.has_errors());
+    REQUIRE(lib_prog.has_value());
+
+    ModuleArtifact lib_artifact(lib_errors);
+    REQUIRE(lib_artifact.save(*lib_prog, "editorlib", build_dir));
+
+    // Step 2: Compile a root module with its own `on input` gameplay system.
+    ImportedSymbols lib_syms;
+    lib_syms.module_name = "editorlib";
+    for (auto& [name, trait] : lib_prog->traits) {
+        if (trait.is_pub) {
+            lib_syms.traits[name] = trait;
+        }
+    }
+    lib_syms.events.insert("input");
+    ModuleImports root_imports;
+    root_imports.add("editorlib", std::move(lib_syms));
+
+    const std::string root_source = "use editorlib\n"
+                                    "\n"
+                                    "trait PlayerState:\n"
+                                    "    var moves: float\n"
+                                    "system GameplayInput:\n"
+                                    "    filter:\n"
+                                    "        PlayerState\n"
+                                    "    on input:\n"
+                                    "        moves = moves + 1.0\n";
+    ErrorReporter root_errors;
+    ProgramNode root_ast;
+    auto root_prog = compile_source(root_source, "root.cactus", root_ast, root_errors, root_imports);
+    REQUIRE_FALSE(root_errors.has_errors());
+    REQUIRE(root_prog.has_value());
+
+    ModuleArtifact root_artifact(root_errors);
+    REQUIRE(root_artifact.save(*root_prog, "root", build_dir));
+
+    // Step 3: Link artifacts and rebuild the merged codegen AST the way
+    // src/main.cpp does — imported module declarations precede root-module
+    // declarations (topological merge order, dependencies first).
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link({build_dir / "editorlib.cmod", build_dir / "root.cmod"});
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(merged.has_value());
+
+    ProgramNode merged_ast;
+    merged_ast.declarations.insert(merged_ast.declarations.end(),
+                                   std::make_move_iterator(lib_ast.declarations.begin()),
+                                   std::make_move_iterator(lib_ast.declarations.end()));
+    merged_ast.declarations.insert(merged_ast.declarations.end(),
+                                   std::make_move_iterator(root_ast.declarations.begin()),
+                                   std::make_move_iterator(root_ast.declarations.end()));
+    merged->ast = &merged_ast;
+
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    // Step 4: The generated update resets consumed input first, then invokes
+    // the stdlib module's input handler before the root gameplay handler.
+    const auto update_start = code.find("void generated_update_project");
+    REQUIRE(update_start != std::string::npos);
+    const auto update_end = code.find("\n}\n", update_start);
+    REQUIRE(update_end != std::string::npos);
+    const auto update = code.substr(update_start, update_end - update_start);
+
+    const auto reset_pos    = update.find("cactus::runtime::entt_backend::reset_consumed_input();");
+    const auto editor_pos   = update.find("editor_nav_input(registry, dispatcher, input);");
+    const auto gameplay_pos = update.find("gameplay_input_input(registry, dispatcher, input);");
+    REQUIRE(reset_pos != std::string::npos);
+    REQUIRE(editor_pos != std::string::npos);
+    REQUIRE(gameplay_pos != std::string::npos);
+    CHECK(reset_pos < editor_pos);
+    CHECK(editor_pos < gameplay_pos);
 
     fs::remove_all(build_dir, ec);
 }

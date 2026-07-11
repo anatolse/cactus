@@ -316,6 +316,17 @@ std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
         if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
             if (ident->name == "Key") {
+                // raylib has no side-agnostic modifier constants, only
+                // KEY_LEFT_*/KEY_RIGHT_*; the DSL modifiers map to the left keys.
+                if (member->member == "Shift") {
+                    return "KEY_LEFT_SHIFT";
+                }
+                if (member->member == "Ctrl") {
+                    return "KEY_LEFT_CONTROL";
+                }
+                if (member->member == "Alt") {
+                    return "KEY_LEFT_ALT";
+                }
                 return "KEY_" + upper_copy(snake_case(member->member));
             }
         }
@@ -1265,16 +1276,22 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                     if (input->input_kind != InputKind::Axis) {
                         continue;
                     }
+                    // Consumed keys contribute 0.0 so editor-owned controls stay
+                    // invisible to same-key gameplay axes (editor input override).
+                    const auto axis_side = [](const std::string& key) {
+                        return "((!is_input_key_consumed(" + key + ") && IsKeyDown(" + key +
+                               ")) ? 1.0F : 0.0F)";
+                    };
                     std::string negative = "0";
                     std::string positive = "0";
                     for (const auto& prop : input->props) {
                         if (prop.key == "negative") {
                             if (auto key = raylib_key_constant(*prop.value)) {
-                                negative = "(IsKeyDown(" + *key + ") ? 1.0F : 0.0F)";
+                                negative = axis_side(*key);
                             }
                         } else if (prop.key == "positive") {
                             if (auto key = raylib_key_constant(*prop.value)) {
-                                positive = "(IsKeyDown(" + *key + ") ? 1.0F : 0.0F)";
+                                positive = axis_side(*key);
                             }
                         }
                     }
@@ -1660,6 +1677,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "void generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt) {\n";
 
     out << "    (void)dt;\n\n";
+
+    // Editor input override: consumption only lasts one frame, so clear it
+    // before any input handler runs (stdlib editor handlers consume first,
+    // gameplay handlers later in the same frame observe the consumed state).
+    out << "    cactus::runtime::entt_backend::reset_consumed_input();\n\n";
 
     // Call system input handlers
     if (program.ast != nullptr) {

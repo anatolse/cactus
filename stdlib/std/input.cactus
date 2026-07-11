@@ -55,6 +55,9 @@ pub enum Key:
     Shift
     Ctrl
     Alt
+    # Punctuation keys (Equal shares the + keycap; used for keyboard zoom)
+    Minus
+    Equal
     # Function keys
     F1
     F2

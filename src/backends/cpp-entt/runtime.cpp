@@ -1716,6 +1716,47 @@ void destroy_entity_recursive(
     destroying_entities.erase(entity);
 }
 
+// ── Frame-local consumed input (editor input override) ────────────────────────
+
+namespace {
+
+std::unordered_set<int>& consumed_key_codes() noexcept {
+    static std::unordered_set<int> codes;
+    return codes;
+}
+
+std::unordered_set<int>& consumed_mouse_codes() noexcept {
+    static std::unordered_set<int> codes;
+    return codes;
+}
+
+}  // namespace
+
+void reset_consumed_input() noexcept {
+    consumed_key_codes().clear();
+    consumed_mouse_codes().clear();
+}
+
+void mark_input_key_consumed(const int key) noexcept {
+    if (key != 0) {
+        consumed_key_codes().insert(key);
+    }
+}
+
+void mark_input_mouse_consumed(const int mouse_button) noexcept {
+    if (mouse_button >= 0) {
+        consumed_mouse_codes().insert(mouse_button);
+    }
+}
+
+bool is_input_key_consumed(const int key) noexcept {
+    return consumed_key_codes().contains(key);
+}
+
+bool is_input_mouse_consumed(const int mouse_button) noexcept {
+    return consumed_mouse_codes().contains(mouse_button);
+}
+
 // ── Active camera state ───────────────────────────────────────────────────────
 
 void set_active_camera_2d(Camera2D cam) noexcept {

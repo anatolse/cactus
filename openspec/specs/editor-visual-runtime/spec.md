@@ -100,3 +100,72 @@ After all other render-phase extern systems run, the codegen-emitted `generated_
 #### Scenario: Delta scales with zoom
 - **WHEN** the active camera zoom is 64.0 and the mouse moved 64 pixels horizontally
 - **THEN** `editor_mouse_delta_2d()` returns approximately `{1.0, 0.0}`
+
+### Requirement: GizmoRenderer3D draws the edit-mode ground grid and selection gizmos
+The emitted `GizmoRenderer3D` render-phase function SHALL early-return when no `EditorState` entity has `active=true`. When editing is active it SHALL open a `BeginMode3D(get_active_camera_3d())` block and draw, in order:
+
+1. **Ground grid (always, independent of selection)**: `DrawGrid(20, 1.0F)` — a horizontal grid on the y=0 plane centered at the world origin. The grid SHALL be drawn even when no entity carries `EditorGizmo3D`.
+2. **For each entity with both `EditorGizmo3D` and `WorldTransform` (vec3)**:
+   - **Always**: a wire box (`DrawCubeWiresV`) around the entity. The box uses the entity's model bind-pose bounds scaled by `WorldTransform.scale` when the entity has `ModelRenderer` and its model resolves; otherwise a 1×1×1 world-unit cube centered at `WorldTransform.position`. The wire color SHALL be the `EditorGizmo3D.color` field.
+   - **mode=1 (Translate)**: a red line along +X, a green line along +Y, and a blue line along +Z from the entity position, each of length `EditorGizmo3D.size` world units.
+   - **mode=2 (Rotate)**: a cyan circle (`DrawCircle3D`) of radius `EditorGizmo3D.size` centered at the entity position, lying in the horizontal plane.
+   - **mode=3 (Scale)**: the same three axis lines as Translate with a small cube (`DrawCubeV`) at the tip of each.
+
+The block SHALL close with `EndMode3D()`.
+
+#### Scenario: Grid visible in edit mode with empty selection
+- **WHEN** `EditorState.active` is true and no entity has `EditorGizmo3D`
+- **THEN** the render phase draws the y=0 grid and nothing else in the 3D gizmo pass
+
+#### Scenario: No grid or gizmos outside edit mode
+- **WHEN** `EditorState.active` is false
+- **THEN** `GizmoRenderer3D` draws nothing (early return, no `BeginMode3D` block opened)
+
+#### Scenario: Selected model gets a wire box sized from its bounds
+- **WHEN** an entity has `EditorGizmo3D`, `WorldTransform`, and `ModelRenderer` with a loaded model, and `EditorState.active` is true
+- **THEN** the render phase draws a wire box matching the model's bind-pose bounds scaled by the entity's transform scale
+
+#### Scenario: Translate mode draws three axis lines
+- **WHEN** an entity has `EditorGizmo3D` with mode=1 and `EditorState.active` is true
+- **THEN** the render phase draws red (+X), green (+Y), and blue (+Z) axis lines at the entity's position
+
+### Requirement: editor_plane_project_3d intersects the cursor ray with a plane
+`editor_plane_project_3d(screen, plane_origin, plane_normal)` SHALL build a picking ray from the active 3D camera through `screen` (raylib `GetScreenToWorldRay` or equivalent) and return the ray/plane intersection point. When the ray is parallel to the plane (|denominator| below epsilon) or the intersection lies behind the ray origin (`t < 0`), it SHALL return `plane_origin`.
+
+#### Scenario: Center-screen click with a downward-looking camera hits the ground
+- **WHEN** the active 3D camera is at `(0, 10, 0)` looking at the origin and `editor_plane_project_3d` is called with the screen center, plane origin `(0,0,0)`, and normal `(0,1,0)`
+- **THEN** the returned point is approximately `(0, 0, 0)`
+
+#### Scenario: Ray parallel to plane falls back to plane origin
+- **WHEN** the cursor ray direction is perpendicular to the plane normal
+- **THEN** `editor_plane_project_3d` returns `plane_origin`
+
+#### Scenario: Intersection behind the camera falls back to plane origin
+- **WHEN** the ray/plane intersection parameter `t` is negative
+- **THEN** `editor_plane_project_3d` returns `plane_origin`
+
+### Requirement: editor_raycast_3d picks entities via a codegen-registered impl
+The runtime SHALL expose `register_editor_raycast_impl` (mirroring `register_editor_hit_test_impl`); `editor_raycast_3d(screen_pos, mask)` SHALL delegate to the registered impl with the picking ray built from the active 3D camera, returning `entt::null` when no impl is registered. When the program declares a vec3 `WorldTransform` and `ModelRenderer`, codegen SHALL register an impl that tests the ray against each candidate entity's axis-aligned bounding box — the model's bind-pose bounds scaled by `WorldTransform.scale` and translated by `WorldTransform.position` — excluding entities with `EditorLocked`, and returns the hit with the smallest ray distance.
+
+#### Scenario: Click hits the nearest model
+- **WHEN** two entities with `ModelRenderer` overlap along the cursor ray
+- **THEN** `editor_raycast_3d` returns the entity whose bounding-box intersection is nearest to the camera
+
+#### Scenario: Locked entities are not pickable
+- **WHEN** the cursor ray intersects only an entity with `EditorLocked`
+- **THEN** `editor_raycast_3d` returns `entt::null`
+
+#### Scenario: No impl registered
+- **WHEN** the program has no vec3 `WorldTransform` or no `ModelRenderer` trait
+- **THEN** `editor_raycast_3d` returns `entt::null`
+
+### Requirement: editor_mouse_delta_3d returns ground-plane mouse movement
+`editor_mouse_delta_3d()` SHALL project the current cursor position and the previous cursor position (current minus `GetMouseDelta()`) onto the y=0 plane via the same ray/plane intersection as `editor_plane_project_3d`, and return the difference as a world-space vector. When either projection falls back (parallel ray or negative `t`), it SHALL return the zero vector.
+
+#### Scenario: Horizontal mouse movement maps to world-space delta
+- **WHEN** the active 3D camera looks down at the ground plane and the mouse moves horizontally across the screen
+- **THEN** `editor_mouse_delta_3d()` returns a non-zero vector lying in the y=0 plane
+
+#### Scenario: Degenerate projection yields zero delta
+- **WHEN** the cursor ray is parallel to the ground plane
+- **THEN** `editor_mouse_delta_3d()` returns `(0, 0, 0)`

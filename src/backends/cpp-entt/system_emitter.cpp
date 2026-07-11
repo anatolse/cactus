@@ -1215,9 +1215,11 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                 return rewrite_expr(arg, trait_names, program, pointer_aliases);
                             });
                         !lowered_name.empty()) {
-                        // editor_spawn_template and editor_hit_test_2d need registry as first arg
+                        // editor_spawn_template, editor_hit_test_2d, and editor_raycast_3d
+                        // need registry as first arg
                         const bool needs_registry = (ident->name == "editor_spawn_template" ||
-                                                     ident->name == "editor_hit_test_2d");
+                                                     ident->name == "editor_hit_test_2d" ||
+                                                     ident->name == "editor_raycast_3d");
                         std::string result = lowered_name + "(";
                         if (needs_registry) {
                             result += "registry";
@@ -1909,7 +1911,8 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_editor_extern_system(sys)) {
-        if (sys.name == "GizmoRenderer2D") {
+        if (sys.name == "GizmoRenderer2D" && !world_transform_is_volume(program)) {
+            const bool has_box_collider = program.traits.contains("BoxCollider");
             out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
             out << "    bool __editor_active = false;\n";
             out << "    auto __estate_view = registry.view<EditorState>();\n";
@@ -1920,12 +1923,15 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "    BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
             out << "    auto view = registry.view<EditorGizmo2D, WorldTransform>();\n";
             out << "    view.each([&](entt::entity entity, const EditorGizmo2D& gizmo, const WorldTransform& xform) {\n";
+            out << "        (void)entity;\n";
             out << "        Rectangle rect{.x = xform.position.x - 0.5F, .y = xform.position.y - 0.5F,\n";
             out << "                       .width = 1.0F, .height = 1.0F};\n";
-            out << "        if (const auto* box = registry.try_get<BoxCollider>(entity)) {\n";
-            out << "            rect = {.x = xform.position.x, .y = xform.position.y,\n";
-            out << "                    .width = box->size.x, .height = box->size.y};\n";
-            out << "        }\n";
+            if (has_box_collider) {
+                out << "        if (const auto* box = registry.try_get<BoxCollider>(entity)) {\n";
+                out << "            rect = {.x = xform.position.x, .y = xform.position.y,\n";
+                out << "                    .width = box->size.x, .height = box->size.y};\n";
+                out << "        }\n";
+            }
             out << "        DrawRectangleLinesEx(rect, 0.05F, gizmo.color);\n";
             out << "        const float arrow_len   = gizmo.size;\n";
             out << "        const float arrow_thick = arrow_len * 0.05F;\n";
@@ -2012,7 +2018,75 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "}\n\n";
             return out.str();
         }
-        // EditorPropertyPanel and GizmoRenderer3D — stub for now
+        if (sys.name == "GizmoRenderer3D" && world_transform_is_volume(program)) {
+            const bool has_model_renderer = program.traits.contains("ModelRenderer");
+            out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+            out << "    bool __editor_active = false;\n";
+            out << "    auto __estate_view = registry.view<EditorState>();\n";
+            out << "    for (auto __e : __estate_view) {\n";
+            out << "        if (__estate_view.get<EditorState>(__e).active) { __editor_active = true; break; }\n";
+            out << "    }\n";
+            out << "    if (!__editor_active) { return; }\n";
+            out << "    BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());\n";
+            out << "    DrawGrid(20, 1.0F);\n";
+            out << "    auto view = registry.view<EditorGizmo3D, WorldTransform>();\n";
+            out << "    view.each([&](entt::entity entity, const EditorGizmo3D& gizmo, const WorldTransform& xform) "
+                   "{\n";
+            out << "        (void)entity;\n";
+            out << "        Vector3 box_center = xform.position;\n";
+            out << "        Vector3 box_size{.x = 1.0F, .y = 1.0F, .z = 1.0F};\n";
+            if (has_model_renderer) {
+                out << "        if (const auto* renderer = registry.try_get<ModelRenderer>(entity)) {\n";
+                out << "            const BoundingBox bounds = "
+                       "cactus::runtime::entt_backend::model_bounds_box(renderer->model);\n";
+                out << "            const Vector3 extents{.x = bounds.max.x - bounds.min.x,\n";
+                out << "                                  .y = bounds.max.y - bounds.min.y,\n";
+                out << "                                  .z = bounds.max.z - bounds.min.z};\n";
+                out << "            if (extents.x > 0.0F || extents.y > 0.0F || extents.z > 0.0F) {\n";
+                out << "                box_size = Vector3{.x = extents.x * xform.scale.x,\n";
+                out << "                                   .y = extents.y * xform.scale.y,\n";
+                out << "                                   .z = extents.z * xform.scale.z};\n";
+                out << "                box_center = Vector3{\n";
+                out << "                    .x = xform.position.x + ((bounds.min.x + bounds.max.x) * 0.5F * "
+                       "xform.scale.x),\n";
+                out << "                    .y = xform.position.y + ((bounds.min.y + bounds.max.y) * 0.5F * "
+                       "xform.scale.y),\n";
+                out << "                    .z = xform.position.z + ((bounds.min.z + bounds.max.z) * 0.5F * "
+                       "xform.scale.z)};\n";
+                out << "            }\n";
+                out << "        }\n";
+            }
+            out << "        DrawCubeWiresV(box_center, box_size, gizmo.color);\n";
+            out << "        const Vector3 origin = xform.position;\n";
+            out << "        const float axis_len = gizmo.size;\n";
+            out << "        if (gizmo.mode == 1 || gizmo.mode == 3) {\n";
+            out << "            DrawLine3D(origin, Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z}, "
+                   "RED);\n";
+            out << "            DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z}, "
+                   "GREEN);\n";
+            out << "            DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len}, "
+                   "BLUE);\n";
+            out << "        }\n";
+            out << "        if (gizmo.mode == 2) {\n";
+            out << "            DrawCircle3D(origin, axis_len, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 90.0F, "
+                   "SKYBLUE);\n";
+            out << "        }\n";
+            out << "        if (gizmo.mode == 3) {\n";
+            out << "            const float tip = axis_len * 0.15F;\n";
+            out << "            DrawCubeV(Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z},\n";
+            out << "                      Vector3{.x = tip, .y = tip, .z = tip}, RED);\n";
+            out << "            DrawCubeV(Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z},\n";
+            out << "                      Vector3{.x = tip, .y = tip, .z = tip}, GREEN);\n";
+            out << "            DrawCubeV(Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len},\n";
+            out << "                      Vector3{.x = tip, .y = tip, .z = tip}, BLUE);\n";
+            out << "        }\n";
+            out << "    });\n";
+            out << "    EndMode3D();\n";
+            out << "}\n\n";
+            return out.str();
+        }
+        // EditorPropertyPanel and the dimension-mismatched gizmo renderer
+        // (GizmoRenderer3D in flat programs, GizmoRenderer2D in volume) — stub
         out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
         out << "    (void)registry;\n";
         out << "}\n\n";

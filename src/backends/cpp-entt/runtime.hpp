@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace cactus::runtime::entt_backend {
@@ -118,6 +119,10 @@ void submit_model(Vector3 position,
 /// model's lazy load, so it works before the first draw. Returns zero extents
 /// for an unresolvable handle, a failed load, or before the window exists.
 [[nodiscard]] Vector3 model_bounds_size(AssetHandle model) noexcept;
+// Bind-pose axis-aligned bounding box of a model asset (min/max corners in
+// model space). Triggers the lazy model load like model_bounds_size; returns a
+// zero-extent box at the origin for an unresolvable handle or failed load.
+[[nodiscard]] BoundingBox model_bounds_box(AssetHandle model) noexcept;
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
@@ -161,17 +166,28 @@ void submit_text_3d(std::uint32_t entity_id,
 using EditorHitTestImpl = std::function<entt::entity(entt::registry&, Vector2, int)>;
 using EditorSpawnImpl =
     std::function<entt::entity(entt::registry&, const std::string&, Vector2, Vector3)>;
+using EditorRaycastImpl = std::function<entt::entity(entt::registry&, Ray, int)>;
 void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept;
 void register_editor_spawn_impl(EditorSpawnImpl fn) noexcept;
+void register_editor_raycast_impl(EditorRaycastImpl fn) noexcept;
 
-/// 3D raycast: return the first entity hit by a ray from screen_pos, or entt::null.
-[[nodiscard]] entt::entity editor_raycast_3d(Vector2 screen_pos, int mask) noexcept;
+/// 3D raycast: return the nearest entity hit by the picking ray through
+/// screen_pos, or entt::null (always null when no impl is registered).
+[[nodiscard]] entt::entity editor_raycast_3d(entt::registry& registry,
+                                             Vector2 screen_pos,
+                                             int mask) noexcept;
 
 /// Convert a screen position to a 2D world position.
 [[nodiscard]] Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept;
 
 /// Return the current frame's mouse delta in 2D world space.
 [[nodiscard]] Vector2 editor_mouse_delta_2d() noexcept;
+
+/// Pure ray/plane intersection behind editor_plane_project_3d: nullopt when the
+/// ray is parallel to the plane or the intersection lies behind the ray origin.
+[[nodiscard]] std::optional<Vector3> editor_ray_plane_intersect(Ray ray,
+                                                                Vector3 plane_origin,
+                                                                Vector3 plane_normal) noexcept;
 
 /// Project a screen position onto a 3D plane.
 [[nodiscard]] Vector3 editor_plane_project_3d(Vector2 screen, Vector3 plane_origin, Vector3 plane_normal) noexcept;

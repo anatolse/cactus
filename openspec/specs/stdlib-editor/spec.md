@@ -7,7 +7,7 @@ The `std.editor` module provides the standard in-game editor infrastructure for 
 ## Requirements
 
 ### Requirement: std.editor module exposes EditorState trait and singleton entity
-The `std.editor` module SHALL declare a `pub trait EditorState` with fields `active: bool` (default `true`), `mode: GizmoMode` (default `GizmoMode.Select`), `selected: entity_id` (default `0`), `active_template: string` (default `""`), `focused_trait: string` (default `""`), and `focused_field: string` (default `""`). The module SHALL declare a `pub entity Editor` with `EditorState` initialized to its defaults.
+The `std.editor` module SHALL declare a `pub trait EditorState` with fields `active: bool` (default `true`), `mode: GizmoMode` (default `GizmoMode.Select`), `selected: entity_id` (default `0`), `active_template: string` (default `""`), `focused_trait: string` (default `""`), `focused_field: string` (default `""`), and `use_3d: bool` (default `false`). The module SHALL declare a `pub entity Editor` with `EditorState` initialized to its defaults. The `use_3d` field selects which interaction dimension is active: 2D selection/placement systems run only when it is `false`, 3D selection/placement systems only when it is `true`.
 
 #### Scenario: Editor entity exists in registry after module load
 - **WHEN** a module imports `use std.editor` and the scene loads
@@ -15,10 +15,11 @@ The `std.editor` module SHALL declare a `pub trait EditorState` with fields `act
 - **AND** the `EditorState.active` field is `true`
 - **AND** the `EditorState.mode` field is `GizmoMode.Select`
 - **AND** the `EditorState.selected` field is `0`
+- **AND** the `EditorState.use_3d` field is `false`
 
 #### Scenario: EditorState fields are writable by systems
 - **WHEN** a system filters on `EditorState as state`
-- **THEN** the system can read and write `state.active`, `state.mode`, `state.selected`, `state.active_template`, `state.focused_trait`, and `state.focused_field`
+- **THEN** the system can read and write `state.active`, `state.mode`, `state.selected`, `state.active_template`, `state.focused_trait`, `state.focused_field`, and `state.use_3d`
 
 ### Requirement: std.editor module exposes GizmoMode enum
 The `std.editor` module SHALL declare a `pub enum GizmoMode` with variants `Select`, `Translate`, `Rotate`, `Scale`, and `Place`.
@@ -149,8 +150,10 @@ The `std.editor` module SHALL declare:
 - `system EditorPlace2D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the screen-to-world position, then adds `EditorSelected` to the spawned entity
 - `system EditorGizmo2D` with filter requiring `std.transform.flat.WorldTransform` and `EditorSelected`, that on tick projects `EditorGizmo2D` with the current mode, color `#00FF00FF`, and size `1.0`
 
+`EditorSelection2D` and `EditorPlace2D` SHALL act only when `EditorState.use_3d` is `false`; when it is `true` their input handlers SHALL perform no selection and no spawning.
+
 #### Scenario: Click selects a 2D entity
-- **WHEN** editor is active and user clicks on a flat-world entity with `BoxCollider`
+- **WHEN** editor is active, `use_3d` is `false`, and user clicks on a flat-world entity with `BoxCollider`
 - **THEN** the entity receives `EditorSelected` component
 
 #### Scenario: Drag translates a 2D entity
@@ -159,10 +162,15 @@ The `std.editor` module SHALL declare:
 - **THEN** the entity's `WorldTransform.position` changes by the mouse delta each frame
 
 #### Scenario: Click in Place mode spawns a template entity
-- **WHEN** `EditorState.mode` is `GizmoMode.Place` and `EditorState.active_template` is `"Tree"`
+- **WHEN** `EditorState.mode` is `GizmoMode.Place`, `EditorState.use_3d` is `false`, and `EditorState.active_template` is `"Tree"`
 - **AND** user clicks in the world
 - **THEN** a new entity is created from the `Tree` template at the clicked position
 - **AND** the new entity receives `EditorSelected` component
+
+#### Scenario: 2D placement is inert when use_3d is true
+- **WHEN** `EditorState.mode` is `GizmoMode.Place` and `EditorState.use_3d` is `true`
+- **AND** user clicks in the world
+- **THEN** `EditorPlace2D` spawns no entity
 
 #### Scenario: Gizmo is projected on selected 2D entities each frame
 - **WHEN** an entity has `EditorSelected` and `std.transform.flat.WorldTransform`
@@ -172,12 +180,25 @@ The `std.editor` module SHALL declare:
 The `std.editor` module SHALL declare:
 - `system EditorSelection3D` with filter requiring `std.transform.volume.WorldTransform`, excluding `EditorLocked`, that on input click calls `editor_raycast_3d` and adds `EditorSelected` to the hit entity
 - `system EditorTranslate3D` with filter requiring `std.transform.volume.WorldTransform as xform` and `EditorSelected`, that on tick while mouse is held adds `editor_mouse_delta_3d()` to `xform.position`
-- `system EditorPlace3D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the plane-projected position, then adds `EditorSelected` to the spawned entity
+- `system EditorPlace3D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the position returned by `editor_plane_project_3d` against the ground plane (origin `(0,0,0)`, normal `(0,1,0)`), then adds `EditorSelected` to the spawned entity
 - `system EditorGizmo3D` with filter requiring `std.transform.volume.WorldTransform` and `EditorSelected`, that on tick projects `EditorGizmo3D` with the current mode, color `#00FF00FF`, and size `1.0`
 
+`EditorSelection3D` and `EditorPlace3D` SHALL act only when `EditorState.use_3d` is `true`; when it is `false` their input handlers SHALL perform no selection and no spawning.
+
 #### Scenario: Click selects a 3D entity
-- **WHEN** editor is active and user clicks on a volume-world entity
+- **WHEN** editor is active, `use_3d` is `true`, and user clicks on a volume-world entity
 - **THEN** the entity receives `EditorSelected` component
+
+#### Scenario: Click in Place mode spawns a template at the ground-plane hit point
+- **WHEN** `EditorState.mode` is `GizmoMode.Place`, `EditorState.use_3d` is `true`, and `EditorState.active_template` names a registered template
+- **AND** user clicks in the world
+- **THEN** a new entity is created from the template at the point where the cursor ray intersects the y=0 plane
+- **AND** the new entity receives `EditorSelected` component
+
+#### Scenario: 3D placement is inert when use_3d is false
+- **WHEN** `EditorState.mode` is `GizmoMode.Place` and `EditorState.use_3d` is `false`
+- **AND** user clicks in the world
+- **THEN** `EditorPlace3D` spawns no entity
 
 #### Scenario: Drag translates a 3D entity
 - **WHEN** an entity has `EditorSelected` and `std.transform.volume.WorldTransform`

@@ -92,3 +92,14 @@ The CMake build configuration SHALL register the split-screen forest bombs examp
 #### Scenario: Integration tests receive example metadata
 - **WHEN** `test_example_cpp_compilation` is compiled
 - **THEN** its compile definitions include the split-screen forest bombs source path, generated C++ path, and registered example target name
+
+### Requirement: Editor 3D example target is registered
+The CMake build configuration SHALL register the editor 3D example through the reusable Cactus example target helper with stable generated output and target metadata.
+
+#### Scenario: CMake registers editor 3D target
+- **WHEN** CMake configures generated example targets
+- **THEN** it registers `example_editor_3d_generated` for `examples/editor-3d/main.cactus` using the `cpp-entt` backend
+
+#### Scenario: Generated output path is stable
+- **WHEN** tests need to reference the editor 3D generated output
+- **THEN** CMake exposes a stable generated C++ path for the example under `${CACTUS_GENERATED_EXAMPLES_DIR}`

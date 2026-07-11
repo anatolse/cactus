@@ -1582,16 +1582,59 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            return entt::entity{entt::null};\n";
         out << "        });\n";
     }
-    if (uses_editor && program.traits.contains("LocalTransform") &&
-        program.traits.contains("WorldTransform")) {
+    if (uses_editor && program.traits.contains("WorldTransform")) {
+        // The applied position argument is decided here from the resolved
+        // WorldTransform.position field type: vec3 (std.transform.volume)
+        // programs place with pos3d, vec2 (std.transform.flat) with pos2d.
+        const bool volume_transform = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3);
+        const bool has_local        = program.traits.contains("LocalTransform");
+        const char* pos_arg2d       = volume_transform ? "Vector2 /*pos2d*/" : "Vector2 pos2d";
+        const char* pos_arg3d       = volume_transform ? "Vector3 pos3d" : "Vector3 /*pos3d*/";
+        const char* pos_value       = volume_transform ? "pos3d" : "pos2d";
         out << "    cactus::runtime::entt_backend::register_editor_spawn_impl(\n";
-        out << "        [](entt::registry& reg, const std::string& name, Vector2 pos2d, Vector3 /*pos3d*/) -> entt::entity {\n";
+        out << "        [](entt::registry& reg, const std::string& name, " << pos_arg2d << ", " << pos_arg3d
+            << ") -> entt::entity {\n";
         out << "            auto it = cactus_template_registry.find(name);\n";
         out << "            if (it == cactus_template_registry.end()) { return entt::entity{entt::null}; }\n";
         out << "            auto entity = it->second(reg);\n";
-        out << "            if (auto* lt = reg.try_get<LocalTransform>(entity)) { lt->position = pos2d; }\n";
-        out << "            if (auto* wt = reg.try_get<WorldTransform>(entity)) { wt->position = pos2d; }\n";
+        if (has_local) {
+            out << "            if (auto* lt = reg.try_get<LocalTransform>(entity)) { lt->position = " << pos_value
+                << "; }\n";
+        }
+        out << "            if (auto* wt = reg.try_get<WorldTransform>(entity)) { wt->position = " << pos_value
+            << "; }\n";
         out << "            return entity;\n";
+        out << "        });\n";
+    }
+    if (uses_editor && program.traits.contains("ModelRenderer") &&
+        trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3)) {
+        out << "    cactus::runtime::entt_backend::register_editor_raycast_impl(\n";
+        out << "        [](entt::registry& reg, Ray ray, int /*mask*/) -> entt::entity {\n";
+        out << "            entt::entity nearest = entt::null;\n";
+        out << "            float nearest_distance = 0.0F;\n";
+        out << "            auto view = reg.view<WorldTransform, ModelRenderer>(entt::exclude<EditorLocked>);\n";
+        out << "            for (auto entity : view) {\n";
+        out << "                const auto& xform    = reg.get<WorldTransform>(entity);\n";
+        out << "                const auto& renderer = reg.get<ModelRenderer>(entity);\n";
+        out << "                BoundingBox box = cactus::runtime::entt_backend::model_bounds_box(renderer.model);\n";
+        out << "                if (box.max.x - box.min.x <= 0.0F && box.max.y - box.min.y <= 0.0F &&\n";
+        out << "                    box.max.z - box.min.z <= 0.0F) {\n";
+        out << "                    box = BoundingBox{.min = {.x = -0.5F, .y = -0.5F, .z = -0.5F},\n";
+        out << "                                      .max = {.x = 0.5F, .y = 0.5F, .z = 0.5F}};\n";
+        out << "                }\n";
+        out << "                box.min = Vector3{.x = xform.position.x + (box.min.x * xform.scale.x),\n";
+        out << "                                  .y = xform.position.y + (box.min.y * xform.scale.y),\n";
+        out << "                                  .z = xform.position.z + (box.min.z * xform.scale.z)};\n";
+        out << "                box.max = Vector3{.x = xform.position.x + (box.max.x * xform.scale.x),\n";
+        out << "                                  .y = xform.position.y + (box.max.y * xform.scale.y),\n";
+        out << "                                  .z = xform.position.z + (box.max.z * xform.scale.z)};\n";
+        out << "                const RayCollision hit = GetRayCollisionBox(ray, box);\n";
+        out << "                if (hit.hit && (nearest == entt::null || hit.distance < nearest_distance)) {\n";
+        out << "                    nearest          = entity;\n";
+        out << "                    nearest_distance = hit.distance;\n";
+        out << "                }\n";
+        out << "            }\n";
+        out << "            return nearest;\n";
         out << "        });\n";
     }
     out << "}\n\n";

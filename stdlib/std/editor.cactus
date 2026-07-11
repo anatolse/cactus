@@ -40,6 +40,7 @@ pub trait EditorState:
     var active_template: string = ""
     var focused_trait: string = ""
     var focused_field: string = ""
+    var use_3d: bool = false
 
 pub entity Editor:
     EditorState
@@ -149,7 +150,7 @@ system EditorSelection2D:
         EditorState
 
     on input:
-        if active:
+        if active and not use_3d:
             if input.pressed(EditorSelectClick):
                 let previous = selected
                 let hit = editor_hit_test_2d(input.mouse_position(), 1)
@@ -177,7 +178,7 @@ system EditorPlace2D:
         EditorState
 
     on input:
-        if active:
+        if active and not use_3d:
             if mode == 4:
                 if input.pressed(EditorSelectClick):
                     let pos = editor_screen_to_world_2d(input.mouse_position())
@@ -201,7 +202,7 @@ system EditorSelection3D:
         EditorState
 
     on input:
-        if active:
+        if active and use_3d:
             if input.pressed(EditorSelectClick):
                 let previous = selected
                 let hit = editor_raycast_3d(input.mouse_position(), 1)
@@ -229,7 +230,7 @@ system EditorPlace3D:
         EditorState
 
     on input:
-        if active:
+        if active and use_3d:
             if mode == 4:
                 if input.pressed(EditorSelectClick):
                     let pos = editor_plane_project_3d(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))

@@ -1959,6 +1959,134 @@ TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
     //  which are tested in the actual editor-test.cactus example via test_example_cpp_compilation)
 }
 
+TEST_CASE("Codegen EnTT: GizmoRenderer3D emits grid, wire boxes, and mode handles in the render phase",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.editor\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "pub trait EditorGizmo3D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait ModelRenderer:\n"
+        "    let model: model_id\n"
+        "    var visible: bool = true\n"
+        "pub extern system GizmoRenderer3D:\n"
+        "    filter:\n"
+        "        EditorGizmo3D\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+
+    const auto tick = generated_function(code, "void gizmo_renderer3_d_tick");
+    // Early-return when no EditorState is active
+    CHECK(tick.find("__editor_active") != std::string::npos);
+    CHECK(tick.find("if (!__editor_active) { return; }") != std::string::npos);
+    // Ground grid and selection wire box inside a 3D camera block
+    CHECK(tick.find("BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d())") != std::string::npos);
+    CHECK(tick.find("DrawGrid(20, 1.0F)") != std::string::npos);
+    CHECK(tick.find("DrawCubeWiresV") != std::string::npos);
+    CHECK(tick.find("model_bounds_box") != std::string::npos);
+    // Mode handles: translate/scale axis lines, rotate circle, scale tip cubes
+    CHECK(tick.find("DrawLine3D") != std::string::npos);
+    CHECK(tick.find("DrawCircle3D") != std::string::npos);
+    CHECK(tick.find("DrawCubeV") != std::string::npos);
+    CHECK(tick.find("EndMode3D()") != std::string::npos);
+
+    // Dispatched from the render phase only
+    const auto render_project = generated_function(code, "void generated_render_project");
+    CHECK(render_project.find("gizmo_renderer3_d_tick(registry)") != std::string::npos);
+    const auto update_project = generated_function(code, "void generated_update_project");
+    CHECK(update_project.find("gizmo_renderer3_d_tick") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: volume-transform editor program registers pos3d spawn impl and raycast impl",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.editor\n"
+        "trait LocalTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait ModelRenderer:\n"
+        "    let model: model_id\n"
+        "    var visible: bool = true\n"
+        "trait EditorLocked\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+
+    // Spawn impl writes the 3D position into both transform components
+    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
+    CHECK(code.find("lt->position = pos3d") != std::string::npos);
+    CHECK(code.find("wt->position = pos3d") != std::string::npos);
+    CHECK(code.find("wt->position = pos2d") == std::string::npos);
+
+    // Raycast impl tests scaled/translated model bounds and skips locked entities
+    CHECK(code.find("register_editor_raycast_impl") != std::string::npos);
+    CHECK(code.find("model_bounds_box") != std::string::npos);
+    CHECK(code.find("GetRayCollisionBox") != std::string::npos);
+    CHECK(code.find("reg.view<WorldTransform, ModelRenderer>(entt::exclude<EditorLocked>)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: flat-transform editor program keeps pos2d spawn impl and no raycast impl",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.editor\n"
+        "trait LocalTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait EditorLocked\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
+    CHECK(code.find("lt->position = pos2d") != std::string::npos);
+    CHECK(code.find("wt->position = pos2d") != std::string::npos);
+    CHECK(code.find("pos3d;") == std::string::npos);
+    CHECK(code.find("register_editor_raycast_impl") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: volume editor program without ModelRenderer registers no raycast impl",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.editor\n"
+        "trait WorldTransform:\n"
+        "    var position: vec3\n"
+        "    var rotation: quat\n"
+        "    var scale: vec3\n"
+        "trait EditorLocked\n",
+        program);
+
+    auto code = CppEnttCodegen::generate(decorated);
+
+    // Spawn impl still registers (WorldTransform only — no LocalTransform patch)
+    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
+    CHECK(code.find("wt->position = pos3d") != std::string::npos);
+    CHECK(code.find("lt->position") == std::string::npos);
+    CHECK(code.find("register_editor_raycast_impl") == std::string::npos);
+}
+
 static constexpr const char* kViewportTrait =
     "trait Viewport:\n"
     "    var x: float\n"

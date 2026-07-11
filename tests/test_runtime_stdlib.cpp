@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <numbers>
@@ -666,6 +667,68 @@ TEST_CASE("Runtime stdlib: chance boundaries", "[runtime][stdlib][random]") {
     const auto rng = stdlib::random::seeded(0);
     CHECK(stdlib::random::chance(rng, 0.0F) == false);
     CHECK(stdlib::random::chance(rng, 1.0F) == true);
+}
+
+TEST_CASE("Runtime stdlib: editor ray/plane intersection hits, rejects parallel and behind-origin rays",
+          "[runtime][editor][entt]") {
+    constexpr Vector3 kGroundOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    constexpr Vector3 kGroundNormal{.x = 0.0F, .y = 1.0F, .z = 0.0F};
+
+    SECTION("Downward center ray from an overhead camera hits the plane origin") {
+        const Ray ray{.position = {.x = 0.0F, .y = 10.0F, .z = 0.0F}, .direction = {.x = 0.0F, .y = -1.0F, .z = 0.0F}};
+        const auto hit = entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal);
+        REQUIRE(hit.has_value());
+        CHECK(hit->x == Catch::Approx(0.0F).margin(1e-5));
+        CHECK(hit->y == Catch::Approx(0.0F).margin(1e-5));
+        CHECK(hit->z == Catch::Approx(0.0F).margin(1e-5));
+    }
+
+    SECTION("Angled ray lands at the projected ground point") {
+        const float inv_sqrt2 = 1.0F / std::numbers::sqrt2_v<float>;
+        const Ray ray{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
+                      .direction = {.x = inv_sqrt2, .y = -inv_sqrt2, .z = 0.0F}};
+        const auto hit = entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal);
+        REQUIRE(hit.has_value());
+        CHECK(hit->x == Catch::Approx(10.0F));
+        CHECK(hit->y == Catch::Approx(0.0F).margin(1e-5));
+        CHECK(hit->z == Catch::Approx(0.0F).margin(1e-5));
+    }
+
+    SECTION("Ray parallel to the plane misses") {
+        const Ray ray{.position = {.x = 0.0F, .y = 10.0F, .z = 0.0F}, .direction = {.x = 1.0F, .y = 0.0F, .z = 0.0F}};
+        CHECK_FALSE(entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal).has_value());
+    }
+
+    SECTION("Intersection behind the ray origin misses") {
+        const Ray ray{.position = {.x = 0.0F, .y = 10.0F, .z = 0.0F}, .direction = {.x = 0.0F, .y = 1.0F, .z = 0.0F}};
+        CHECK_FALSE(entt_backend::editor_ray_plane_intersect(ray, kGroundOrigin, kGroundNormal).has_value());
+    }
+
+    SECTION("Two projected cursor rays yield a ground-plane delta") {
+        // The core of editor_mouse_delta_3d: project current and previous cursor
+        // rays onto y=0 and difference them — the delta stays in the plane.
+        const Ray current{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
+                          .direction = {.x = 0.1F, .y = -1.0F, .z = 0.05F}};
+        const Ray previous{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
+                           .direction = {.x = 0.0F, .y = -1.0F, .z = 0.0F}};
+        const auto current_hit  = entt_backend::editor_ray_plane_intersect(current, kGroundOrigin, kGroundNormal);
+        const auto previous_hit = entt_backend::editor_ray_plane_intersect(previous, kGroundOrigin, kGroundNormal);
+        REQUIRE(current_hit.has_value());
+        REQUIRE(previous_hit.has_value());
+        const Vector3 delta{.x = current_hit->x - previous_hit->x,
+                            .y = current_hit->y - previous_hit->y,
+                            .z = current_hit->z - previous_hit->z};
+        CHECK(delta.y == Catch::Approx(0.0F).margin(1e-5));
+        CHECK(std::abs(delta.x) + std::abs(delta.z) > 0.0F);
+    }
+}
+
+TEST_CASE("Runtime stdlib: editor_raycast_3d without a registered impl returns null",
+          "[runtime][editor][entt]") {
+    entt::registry registry;
+    entt_backend::register_editor_raycast_impl({});
+    CHECK(entt_backend::editor_raycast_3d(registry, Vector2{.x = 100.0F, .y = 100.0F}, 1) ==
+          entt::entity{entt::null});
 }
 
 TEST_CASE("Runtime stdlib: sequence reproducibility", "[runtime][stdlib][random]") {

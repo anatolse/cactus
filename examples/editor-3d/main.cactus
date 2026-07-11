@@ -1,0 +1,123 @@
+module editor_3d
+
+use std.editor
+use std.input
+use std.math.quat as quat
+use std.transform.volume
+use std.render.meshes
+use std.render.models as models
+use std.camera.volume
+use std.camera.viewport
+
+const:
+    WINDOW_WIDTH = 960
+    WINDOW_HEIGHT = 540
+    WINDOW_TITLE = "Editor 3D Example"
+    TARGET_FPS = 60
+    TARGET_HEIGHT = 1.8
+
+# Shared with the model-renderer example — no new binary assets.
+asset Robot: model = "../model-renderer/art/robot.glb"
+asset Knight: model = "../model-renderer/art/Crispoly-Characters-Mini-Red-Knight.glb"
+
+# ── Character Templates (palette-spawnable via EditorPlace3D) ─────────────────
+# Each carries the CharacterScale normalization marker: palette spawns happen
+# mid-session, so scale normalization runs on tick instead of at load.
+
+trait CharacterScale:
+    var normalized: bool = false
+
+pub template RobotCharacter:
+    WorldTransform
+    ModelRenderer:
+        model = Robot
+        visible = true
+    ModelAnimator:
+        clip = 0
+        playing = true
+    CharacterScale
+
+pub template KnightCharacter:
+    WorldTransform
+    ModelRenderer:
+        model = Knight
+        visible = true
+    ModelAnimator:
+        clip = 0
+        playing = true
+    CharacterScale
+
+# ── Lights ────────────────────────────────────────────────────────────────────
+
+pub entity KeyLight:
+    WorldTransform:
+        position = vec3(-3.0, 4.0, 4.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #FFF4E0
+        intensity = 1.5
+        range = 20.0
+        enabled = true
+
+pub entity FillLight:
+    WorldTransform:
+        position = vec3(4.0, 2.5, 3.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    PointLight:
+        color = #C0D8FF
+        intensity = 1.0
+        range = 18.0
+        enabled = true
+
+# ── Camera (fixed angled editor view over the y=0 grid) ───────────────────────
+
+pub entity MainCamera:
+    WorldTransform:
+        position = vec3(0.0, 7.0, 10.0)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -0.55)
+        scale = vec3(1.0, 1.0, 1.0)
+    Camera:
+        fov_y = 60.0
+        near = 0.1
+        far = 500.0
+    Viewport:
+        x = 0.0
+        y = 0.0
+        width = 1.0
+        height = 1.0
+        depth = 0
+        clear_color = #223047FF
+
+# ── Editor 3D Mode ────────────────────────────────────────────────────────────
+# std.editor auto-creates the Editor entity with EditorState defaults (2D
+# interaction). This one-shot load handler flips the editor to the 3D path so
+# clicks raycast against models and Place-mode clicks land on the y=0 plane.
+
+system Enable3DEditor:
+    filter:
+        EditorState
+
+    on load:
+        use_3d = true
+
+# ── Spawn-Time Scale Normalization ────────────────────────────────────────────
+# Scene-authored and palette-spawned characters go through the same path: any
+# un-normalized character is scaled so its bind-pose height equals
+# TARGET_HEIGHT. Zero-height bounds (model not loadable yet) are skipped and
+# retried next tick; the flag is only set once the scale is written.
+
+system NormalizeSpawnedScale:
+    filter:
+        WorldTransform
+        ModelRenderer
+        CharacterScale
+
+    on tick:
+        if not normalized:
+            let size = models.bounds_size(model)
+            if size.y > 0.0:
+                let factor = TARGET_HEIGHT / size.y
+                scale = vec3(factor, factor, factor)
+                normalized = true

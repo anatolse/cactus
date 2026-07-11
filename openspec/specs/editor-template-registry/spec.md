@@ -19,12 +19,27 @@ After emitting all `create_X` factory functions, the codegen SHALL emit a static
 - **THEN** `cactus_template_registry["PlayerSpawn"]` points to `create_player_spawn`
 
 ### Requirement: editor_spawn_template resolves template name via the registry
-`editor_spawn_template(registry, template_name, position_2d, position_3d)` SHALL look up `template_name` in `cactus_template_registry`. If found, it SHALL call the factory function to create a new entity, then patch the entity's `LocalTransform.position` to `position_2d` (if the entity has `LocalTransform`) and trigger a `WorldTransform` sync by also setting `WorldTransform.position` to `position_2d`. If the name is not found, it SHALL return `entt::null`.
+`editor_spawn_template(registry, template_name, position_2d, position_3d)` SHALL look up `template_name` in `cactus_template_registry`. If found, it SHALL call the factory function to create a new entity and patch the entity's transform position; if the name is not found, it SHALL return `entt::null`.
 
-#### Scenario: Spawn known template
-- **WHEN** `editor_spawn_template(registry, "Box", {5.0, 3.0}, {})` is called and "Box" is registered
+Which position argument is applied SHALL be decided at codegen time from the resolved `WorldTransform.position` field type:
+- When `position` is `vec2` (`std.transform.flat`), the generated spawn impl SHALL set `LocalTransform.position` (if present) and `WorldTransform.position` (if present) to `position_2d`.
+- When `position` is `vec3` (`std.transform.volume`), the generated spawn impl SHALL set `LocalTransform.position` (if present) and `WorldTransform.position` (if present) to `position_3d`.
+
+The generated spawn impl SHALL be registered whenever the program declares a `WorldTransform` trait; `LocalTransform` patching applies only when that trait also exists in the program.
+
+#### Scenario: Spawn known template in a flat-transform program
+- **WHEN** `editor_spawn_template(registry, "Box", {5.0, 3.0}, {})` is called and "Box" is registered in a program using `std.transform.flat`
 - **THEN** a new entity is created with `LocalTransform.position = {5.0, 3.0}` and `WorldTransform.position = {5.0, 3.0}`
 - **THEN** the returned entity handle is valid
+
+#### Scenario: Spawn known template in a volume-transform program
+- **WHEN** `editor_spawn_template(registry, "Robot", {}, {2.0, 0.0, -3.0})` is called and "Robot" is registered in a program using `std.transform.volume`
+- **THEN** a new entity is created with `WorldTransform.position = {2.0, 0.0, -3.0}`
+- **THEN** the returned entity handle is valid
+
+#### Scenario: Volume-transform template without LocalTransform still spawns
+- **WHEN** a registered template has `WorldTransform` (vec3) but no `LocalTransform`
+- **THEN** `editor_spawn_template` creates the entity and sets only `WorldTransform.position` to `position_3d`
 
 #### Scenario: Spawn unknown template returns null
 - **WHEN** `editor_spawn_template(registry, "Unknown", {0,0}, {})` is called

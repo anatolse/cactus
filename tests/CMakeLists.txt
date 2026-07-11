@@ -113,6 +113,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_EDITOR_TEST_GENERATED_CPP="${EDITOR_TEST_GENERATED_CPP}"
     CACTUS_EXAMPLE_EDITOR_TEST_TARGET="example_editor_test_generated"
 
+    CACTUS_EXAMPLE_EDITOR_3D_SOURCE="examples/editor-3d/main.cactus"
+    CACTUS_EXAMPLE_EDITOR_3D_GENERATED_CPP="${EDITOR_3D_GENERATED_CPP}"
+    CACTUS_EXAMPLE_EDITOR_3D_TARGET="example_editor_3d_generated"
+
     CACTUS_EXAMPLE_SPLIT_SCREEN_SOURCE="examples/split-screen/split_screen.cactus"
     CACTUS_EXAMPLE_SPLIT_SCREEN_GENERATED_CPP="${SPLIT_SCREEN_GENERATED_CPP}"
     CACTUS_EXAMPLE_SPLIT_SCREEN_TARGET="example_split_screen_generated"

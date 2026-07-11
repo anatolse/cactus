@@ -47,6 +47,11 @@ EditorSpawnImpl& spawn_impl_storage() noexcept {
     return impl;
 }
 
+EditorRaycastImpl& raycast_impl_storage() noexcept {
+    static EditorRaycastImpl impl;
+    return impl;
+}
+
 struct SpriteSubmission {
     Vector2 position{};
     Vector2 size{};
@@ -1533,6 +1538,26 @@ Vector3 model_bounds_size(const AssetHandle model) noexcept {
     return Vector3{.x = box.max.x - box.min.x, .y = box.max.y - box.min.y, .z = box.max.z - box.min.z};
 }
 
+BoundingBox model_bounds_box(const AssetHandle model) noexcept {
+    constexpr BoundingBox kZeroBox{.min = {.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                   .max = {.x = 0.0F, .y = 0.0F, .z = 0.0F}};
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
+    if (!resolved.valid()) {
+        return kZeroBox;
+    }
+    auto& entry = models()[resolved.runtime_id];
+    if (entry.path.empty()) {
+        entry.path = std::string{resolved.asset_id};
+    }
+    // Introspection triggers the lazy model load so it works before first draw
+    // (D4). Model loads need the window; until then report a zero-extent box.
+    Model* loaded = ensure_model_resource(resolved.runtime_id);
+    if (loaded == nullptr) {
+        return kZeroBox;
+    }
+    return GetModelBoundingBox(*loaded);
+}
+
 void submit_billboard(const Vector3 /*position*/,
                       const Vector2 /*size*/,
                       const Color /*color*/,
@@ -1717,6 +1742,10 @@ void register_editor_spawn_impl(EditorSpawnImpl fn) noexcept {
     spawn_impl_storage() = std::move(fn);
 }
 
+void register_editor_raycast_impl(EditorRaycastImpl fn) noexcept {
+    raycast_impl_storage() = std::move(fn);
+}
+
 entt::entity editor_spawn_template(entt::registry& registry,
                                    const std::string& template_name,
                                    Vector2 position_2d,
@@ -1735,7 +1764,11 @@ entt::entity editor_hit_test_2d(entt::registry& registry, Vector2 screen_pos, in
     return entt::entity{entt::null};
 }
 
-entt::entity editor_raycast_3d(Vector2 /*screen_pos*/, int /*mask*/) noexcept {
+entt::entity editor_raycast_3d(entt::registry& registry, Vector2 screen_pos, int mask) noexcept {
+    if (raycast_impl_storage()) {
+        const Ray ray = GetScreenToWorldRay(screen_pos, get_active_camera_3d());
+        return raycast_impl_storage()(registry, ray, mask);
+    }
     return entt::entity{entt::null};
 }
 
@@ -1753,13 +1786,42 @@ Vector2 editor_mouse_delta_2d() noexcept {
     return Vector2{.x = delta.x / cam.zoom, .y = delta.y / cam.zoom};
 }
 
-Vector3 editor_plane_project_3d(Vector2 screen, Vector3 /*plane_origin*/, Vector3 /*plane_normal*/) noexcept {
-    (void)screen;
-    return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+std::optional<Vector3> editor_ray_plane_intersect(const Ray ray,
+                                                  const Vector3 plane_origin,
+                                                  const Vector3 plane_normal) noexcept {
+    constexpr float kParallelEpsilon = 1e-6F;
+    const float denominator          = Vector3DotProduct(ray.direction, plane_normal);
+    if (std::abs(denominator) < kParallelEpsilon) {
+        return std::nullopt;
+    }
+    const float t =
+        Vector3DotProduct(Vector3Subtract(plane_origin, ray.position), plane_normal) / denominator;
+    if (t < 0.0F) {
+        return std::nullopt;
+    }
+    return Vector3Add(ray.position, Vector3Scale(ray.direction, t));
+}
+
+Vector3 editor_plane_project_3d(Vector2 screen, Vector3 plane_origin, Vector3 plane_normal) noexcept {
+    const Ray ray = GetScreenToWorldRay(screen, get_active_camera_3d());
+    return editor_ray_plane_intersect(ray, plane_origin, plane_normal).value_or(plane_origin);
 }
 
 Vector3 editor_mouse_delta_3d() noexcept {
-    return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    constexpr Vector3 kGroundOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    constexpr Vector3 kGroundNormal{.x = 0.0F, .y = 1.0F, .z = 0.0F};
+    const Camera3D cam    = get_active_camera_3d();
+    const Vector2 cursor  = GetMousePosition();
+    const Vector2 delta   = GetMouseDelta();
+    const Vector2 previous{.x = cursor.x - delta.x, .y = cursor.y - delta.y};
+    const auto current_hit =
+        editor_ray_plane_intersect(GetScreenToWorldRay(cursor, cam), kGroundOrigin, kGroundNormal);
+    const auto previous_hit =
+        editor_ray_plane_intersect(GetScreenToWorldRay(previous, cam), kGroundOrigin, kGroundNormal);
+    if (!current_hit || !previous_hit) {
+        return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    }
+    return Vector3Subtract(*current_hit, *previous_hit);
 }
 
 }  // namespace cactus::runtime::entt_backend

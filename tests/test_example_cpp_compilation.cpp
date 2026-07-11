@@ -180,6 +180,13 @@ std::vector<ExampleCase> curated_examples() {
             .compile_target = CACTUS_EXAMPLE_EDITOR_TEST_TARGET,
         },
         ExampleCase{
+            .name           = "editor-3d",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_EDITOR_3D_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_EDITOR_3D_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_EDITOR_3D_TARGET,
+        },
+        ExampleCase{
             .name           = "split-screen",
             .source_file    = repo_root() / CACTUS_EXAMPLE_SPLIT_SCREEN_SOURCE,
             .backend        = "cpp-entt",

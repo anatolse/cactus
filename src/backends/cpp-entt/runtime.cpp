@@ -1361,10 +1361,12 @@ void end_render_frame() noexcept {
 void flush_viewport_3d() noexcept {
     flush_mesh_queue();
     flush_model_queue();
+    flush_text_3d_queue();
     flush_sprite_queue();
     flush_text_2d_queue();
     mesh_queue().clear();
     model_queue().clear();
+    text_3d_queue().clear();
     sprite_queue().clear();
     point_light_queue().clear();
     text_2d_queue().clear();

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <sstream>
@@ -1758,13 +1759,23 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "}  // namespace\n\n";
     }
 
-    auto emit_render_phase_calls = [&](std::string_view indent) {
+    // Screen labels are window-global (drawn once after all viewports), so the
+    // per-viewport pass must not re-submit them; every other render extern runs
+    // per viewport inside its scissor + camera.
+    enum class RenderPhaseSelection : std::uint8_t { All, PerViewport, WindowGlobal };
+    auto emit_render_phase_calls = [&](std::string_view indent, RenderPhaseSelection selection) {
         if (program.ast == nullptr) { return; }
         for (const auto& decl : program.ast->declarations) {
             if (const auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-                if (is_render_phase_extern(*sys, program)) {
-                    out << indent << system_function_name(sys->name, "tick") << "(registry);\n";
+                if (!is_render_phase_extern(*sys, program)) {
+                    continue;
                 }
+                const bool window_global = sys->name == "ScreenLabelSystem";
+                if ((selection == RenderPhaseSelection::PerViewport && window_global) ||
+                    (selection == RenderPhaseSelection::WindowGlobal && !window_global)) {
+                    continue;
+                }
+                out << indent << system_function_name(sys->name, "tick") << "(registry);\n";
             }
         }
     };
@@ -1813,17 +1824,17 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "                    __translate_camera_3d(__vp_ent, __cam, registry));\n";
             out << "            }\n";
         }
-        emit_render_phase_calls("            ");
-        if (emit_3d_helper) {
-            // Draw this viewport's 3D meshes now (inside its scissor + camera) so
-            // each split-screen region renders the world from its own camera.
-            out << "            cactus::runtime::entt_backend::flush_viewport_3d();\n";
-        }
+        emit_render_phase_calls("            ", RenderPhaseSelection::PerViewport);
+        // Draw this viewport's queued world content now (inside its scissor +
+        // camera) so each split-screen region renders from its own camera.
+        out << "            cactus::runtime::entt_backend::flush_viewport_3d();\n";
         out << "            EndScissorMode();\n";
         out << "        }\n";
         out << "    }\n";
+        // Window-global HUD labels submit once, after every viewport pass.
+        emit_render_phase_calls("    ", RenderPhaseSelection::WindowGlobal);
     } else {
-        emit_render_phase_calls("    ");
+        emit_render_phase_calls("    ", RenderPhaseSelection::All);
     }
 
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";

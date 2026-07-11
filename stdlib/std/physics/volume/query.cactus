@@ -16,5 +16,6 @@ pub extern func overlap_box(center: vec3, size: vec3) list[entity_id]
 # All entities whose 3D shape overlaps the given sphere.
 pub extern func overlap_sphere(center: vec3, radius: float) list[entity_id]
 
-# All entities along the 3D ray within max_dist that satisfy the query filter.
-pub extern func raycast(origin: vec3, dir: vec3, max_dist: float) list[entity_id]
+# Nearest entity along the 3D ray within max_dist that satisfies the query
+# filter, or a stale entity_id if nothing is hit.
+pub extern func raycast(origin: vec3, dir: vec3, max_dist: float) entity_id

@@ -235,6 +235,7 @@ private:
 
     // Phase 3: query expression helpers
     std::optional<std::string> get_query_func_name(const ExprNode& callee) const;
+    std::optional<std::pair<std::string, std::string>> get_query_module_and_func(const ExprNode& callee) const;
     void validate_query_named_args(const QueryCallExpr& qcall,
                                    const std::string& func_name,
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,

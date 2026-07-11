@@ -2142,36 +2142,62 @@ static bool is_known_query_module(const std::string& name) {
     return name == "std.query" || name == "std.physics.flat.query" || name == "std.physics.volume.query";
 }
 
+// Whether a known query module actually provides the named function; the
+// codegen only lowers these pairings (everything else becomes broken C++).
+static bool query_module_provides(const std::string& module_name, const std::string& func_name) {
+    if (module_name == "std.query") {
+        return func_name == "exists" || func_name == "count" || func_name == "first" || func_name == "all" ||
+               func_name == "parent";
+    }
+    if (module_name == "std.physics.flat.query") {
+        return func_name == "nearest" || func_name == "overlap_box" || func_name == "overlap_circle" ||
+               func_name == "raycast";
+    }
+    if (module_name == "std.physics.volume.query") {
+        return func_name == "nearest" || func_name == "overlap_box" || func_name == "overlap_sphere" ||
+               func_name == "raycast";
+    }
+    return false;
+}
+
 std::optional<std::string> SemanticAnalyzer::get_query_func_name(const ExprNode& callee) const {
+    if (auto resolved = get_query_module_and_func(callee)) {
+        return resolved->second;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::pair<std::string, std::string>> SemanticAnalyzer::get_query_module_and_func(
+    const ExprNode& callee) const {
     if (result_.ast == nullptr) {
         return std::nullopt;
     }
     const auto* member = std::get_if<MemberExpr>(&callee.expr);
-    if (!member) {
+    if (member == nullptr) {
         return std::nullopt;
     }
     const auto& func_name = member->member;
     auto qualifier        = extract_dotted_path(*member->object);
-    if (!qualifier) {
+    if (!qualifier.has_value()) {
         return std::nullopt;
     }
     if (is_known_query_module(*qualifier)) {
-        return func_name;
+        return std::make_pair(*qualifier, func_name);
     }
     for (const auto& decl : result_.ast->declarations) {
         const auto* use_node = std::get_if<UseNode>(&decl);
-        if (!use_node || !is_known_query_module(use_node->module_name)) {
+        if (use_node == nullptr || !is_known_query_module(use_node->module_name)) {
             continue;
         }
         if (use_node->alias.has_value() && *use_node->alias == *qualifier) {
-            return func_name;
+            return std::make_pair(use_node->module_name, func_name);
         }
         if (!use_node->alias.has_value()) {
             auto last_dot       = use_node->module_name.rfind('.');
             std::string last_comp = (last_dot != std::string::npos) ? use_node->module_name.substr(last_dot + 1)
                                                                      : use_node->module_name;
             if (last_comp == *qualifier) {
-                return func_name;
+                return std::make_pair(use_node->module_name, func_name);
             }
         }
     }
@@ -2525,13 +2551,19 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                 errors_.error(pred.location, "undeclared trait '" + pred.trait_name + "' in query filter");
             }
         }
-        auto func_name_opt = get_query_func_name(*qcall->callee);
-        const std::string func_name = func_name_opt.value_or([&]() -> std::string {
+        auto resolved = get_query_module_and_func(*qcall->callee);
+        const std::string func_name = resolved.has_value() ? resolved->second : [&]() -> std::string {
             if (const auto* m = std::get_if<MemberExpr>(&qcall->callee->expr)) {
                 return m->member;
             }
             return "";
-        }());
+        }();
+        // Only pairings the codegen can lower are valid — e.g. `overlap_sphere`
+        // exists in the volume namespace but not the flat one.
+        if (resolved.has_value() && !query_module_provides(resolved->first, resolved->second)) {
+            errors_.error(qcall->location,
+                          "'" + resolved->second + "' is not a query function of module '" + resolved->first + "'");
+        }
         validate_query_named_args(*qcall, func_name, filter_bindings, local_bindings, handler_event);
         if (func_name == "exists") {
             return make_bool_type();
@@ -2539,11 +2571,11 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         if (func_name == "count") {
             return make_int_type();
         }
-        if (func_name == "first" || func_name == "nearest" || func_name == "parent") {
+        if (func_name == "first" || func_name == "nearest" || func_name == "parent" || func_name == "raycast") {
             return make_entity_id_type();
         }
         if (func_name == "all" || func_name == "overlap_box" || func_name == "overlap_circle" ||
-            func_name == "overlap_sphere" || func_name == "raycast") {
+            func_name == "overlap_sphere") {
             return make_list_type(make_entity_id_type());
         }
         return make_unknown_type();

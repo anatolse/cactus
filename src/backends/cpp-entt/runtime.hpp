@@ -66,9 +66,10 @@ void reset_render_debug_state() noexcept;
 [[nodiscard]] const RenderDebugState& render_debug_state() noexcept;
 void begin_render_frame() noexcept;
 void end_render_frame() noexcept;
-// Draws and clears the queued 3D meshes, sprites, and 2D text immediately,
-// using the currently active cameras. Called once per viewport so each
-// split-screen region renders within its scissor rect.
+// Draws and clears the queued 3D meshes/models/text, sprites, and 2D text
+// immediately, using the currently active cameras. Called once per viewport so
+// each split-screen region renders within its scissor rect. Screen labels are
+// deliberately excluded — they are window-global and flush in end_render_frame.
 void flush_viewport_3d() noexcept;
 
 void submit_sprite(Vector2 position, Vector2 size, Color color, AssetHandle texture, bool visible, int layer) noexcept;

@@ -148,6 +148,7 @@ trait Bomb:
 # Sent to the throwing player when its bomb fells a tree.
 event TreeHit:
     count: int
+    thrower: entity_id
 
 # ── Templates ─────────────────────────────────────────────────────────────────
 
@@ -560,13 +561,17 @@ system BombSystem:
                 destroy hit_root
                 emit TreeHit to owner:
                     count = 1
+                    thrower = owner
 
             destroy
 
-# Task 3.7 — apply tree-hit deltas to the throwing player's score.
+# Task 3.7 — apply tree-hit deltas to the throwing player's score. Event
+# delivery broadcasts to every entity the handler's filter matches, so the
+# payload carries the thrower and the handler credits only that entity.
 system ScoreSystem:
     filter:
         Score
 
     on TreeHit as hit:
-        trees_hit = trees_hit + hit.count
+        if self == hit.thrower:
+            trees_hit = trees_hit + hit.count

@@ -1,9 +1,13 @@
 #include "backends/cpp-entt/system_emitter.hpp"
 
+#include "frontend/symbol_identity.hpp"
+
+#include "backends/cpp-entt/type_utils.hpp"
+
 #include <algorithm>
 #include <cctype>
-#include <cstdint>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -12,22 +16,23 @@ namespace cactus {
 
 namespace {
 
-std::string imported_module_name(const ProgramNode* ast, const std::string& qualifier) {
-    if (ast == nullptr) {
-        return qualifier;
-    }
-    for (const auto& decl : ast->declarations) {
-        if (const auto* use = std::get_if<UseNode>(&decl)) {
-            if ((use->alias.has_value() && *use->alias == qualifier) || use->module_name == qualifier) {
-                return use->module_name;
-            }
-        }
-    }
-    return qualifier;
+bool symbol_is(const SymbolId& symbol, SymbolKind kind, std::string_view module_name, std::string_view local_name) {
+    return symbol.kind == kind && symbol.module.name == module_name && symbol.local_name == local_name;
 }
 
-std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qualifier) {
-    const std::string module_name = imported_module_name(ast, qualifier);
+bool symbol_is(const std::optional<SymbolId>& symbol,
+               SymbolKind kind,
+               std::string_view module_name,
+               std::string_view local_name) {
+    return symbol.has_value() && symbol_is(*symbol, kind, module_name, local_name);
+}
+
+
+std::string stdlib_runtime_prefix(const SymbolId& func_id) {
+    if (func_id.kind != SymbolKind::Func) {
+        return {};
+    }
+    const std::string& module_name = func_id.module.name;
     if (module_name == "std.math") {
         return "cactus::runtime::stdlib::math";
     }
@@ -49,6 +54,18 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     if (module_name == "std.editor") {
         return "cactus::runtime::entt_backend";
     }
+    if (module_name == "std.camera.flat") {
+        return "cactus::runtime::entt_backend";
+    }
+    if (module_name == "std.camera.volume") {
+        return "cactus::runtime::entt_backend";
+    }
+    if (module_name == "std.transform.flat") {
+        return "cactus::runtime::entt_backend";
+    }
+    if (module_name == "std.transform.volume") {
+        return "cactus::runtime::entt_backend";
+    }
     if (module_name == "std.random") {
         return "cactus::runtime::stdlib::random";
     }
@@ -58,68 +75,53 @@ std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qua
     return {};
 }
 
-// std.render.models extern funcs bind to the model_-prefixed runtime bridges
-// (the bare names would collide with other asset kinds' introspection).
+// Table mapping (module_name, dsl_func_name) → runtime_func_name for cases
+// where the names differ. Functions absent from the table keep their DSL name.
+using FuncRenameMap                                                    = std::unordered_map<std::string, std::string>;
+const std::unordered_map<std::string, FuncRenameMap> kRuntimeFuncNames = {
+    {"std.render.models",
+     {{"animation_count", "model_animation_count"},
+      {"animation_name", "model_animation_name"},
+      {"bounds_size", "model_bounds_size"}}},
+    {"std.editor",
+     {{"spawn_template", "editor_spawn_template"},
+      {"hit_test_2d", "editor_hit_test_2d"},
+      {"raycast_3d", "editor_raycast_3d"},
+      {"camera_enter", "editor_camera_enter"},
+      {"camera_exit", "editor_camera_exit"},
+      {"apply_camera_2d", "editor_apply_camera_2d"},
+      {"apply_camera_3d", "editor_apply_camera_3d"}}},
+    {"std.input",
+     {{"mouse_delta", "editor_mouse_delta_screen"},
+      {"wheel_delta", "editor_wheel_delta"},
+      {"consume", "editor_consume"}}},
+    {"std.camera.flat",
+     {{"screen_to_world", "editor_screen_to_world_2d"}, {"screen_delta_to_world", "screen_delta_to_world_2d"}}},
+    {"std.camera.volume",
+     {{"screen_to_plane", "editor_plane_project_3d"}, {"screen_delta_on_plane", "screen_delta_on_plane_3d"}}},
+    {"std.transform.flat", {{"world_position", "editor_entity_position_2d"}}},
+    {"std.transform.volume", {{"world_position", "editor_entity_position_3d"}}},
+};
+
 std::string stdlib_runtime_func_name(const std::string& module_name, const std::string& func_name) {
-    if (module_name == "std.render.models" &&
-        (func_name == "animation_count" || func_name == "animation_name" || func_name == "bounds_size")) {
-        return "model_" + func_name;
+    const auto module_it = kRuntimeFuncNames.find(module_name);
+    if (module_it != kRuntimeFuncNames.end()) {
+        const auto func_it = module_it->second.find(func_name);
+        if (func_it != module_it->second.end()) {
+            return func_it->second;
+        }
     }
     return func_name;
-}
-
-bool module_exports_stdlib_func(const std::string& module_name, const std::string& func_name) {
-    if (module_name == "std.math") {
-        return func_name == "lerp" || func_name == "clamp" || func_name == "abs" || func_name == "min" ||
-               func_name == "max" || func_name == "sqrt" || func_name == "sin" || func_name == "cos" ||
-               func_name == "atan2" || func_name == "floor" || func_name == "ceil" || func_name == "round" ||
-               func_name == "pow";
-    }
-    if (module_name == "std.math.vec2") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "lerp" ||
-               func_name == "distance" || func_name == "angle";
-    }
-    if (module_name == "std.math.vec3") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "cross" ||
-               func_name == "lerp" || func_name == "distance" || func_name == "reflect";
-    }
-    if (module_name == "std.math.quat") {
-        return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
-               func_name == "forward" || func_name == "right" || func_name == "up" || func_name == "rotate" ||
-               func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
-    }
-    if (module_name == "std.input") {
-        return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
-               func_name == "axis2" || func_name == "mouse_position";
-    }
-    if (module_name == "std.physics.flat") {
-        return func_name == "query_cast_nearest" || func_name == "query_overlap_deepest" ||
-               func_name == "query_overlap_all";
-    }
-    if (module_name == "std.editor") {
-        return func_name == "editor_spawn_template" || func_name == "editor_hit_test_2d" ||
-               func_name == "editor_raycast_3d" || func_name == "editor_screen_to_world_2d" ||
-               func_name == "editor_mouse_delta_2d" || func_name == "editor_plane_project_3d" ||
-               func_name == "editor_mouse_delta_3d" || func_name == "editor_camera_enter" ||
-               func_name == "editor_camera_exit" || func_name == "editor_apply_camera_2d" ||
-               func_name == "editor_apply_camera_3d" || func_name == "editor_wheel_delta" ||
-               func_name == "editor_mouse_delta_screen" || func_name == "editor_entity_position_2d" ||
-               func_name == "editor_entity_position_3d" || func_name == "editor_consume";
-    }
-    if (module_name == "std.random") {
-        return func_name == "seeded" || func_name == "uniform" || func_name == "uniform_int" ||
-               func_name == "normal" || func_name == "advance" || func_name == "sample" ||
-               func_name == "sample_int" || func_name == "sample_normal" || func_name == "chance";
-    }
-    if (module_name == "std.render.models") {
-        return func_name == "animation_count" || func_name == "animation_name" || func_name == "bounds_size";
-    }
-    return false;
 }
 
 bool is_stdlib_physics_flat_query(const std::string& func_name) {
     return func_name == "query_cast_nearest" || func_name == "query_overlap_deepest" ||
            func_name == "query_overlap_all";
+}
+
+bool is_stdlib_physics_flat_query(const SymbolId& func_id) {
+    return symbol_is(func_id, SymbolKind::Func, "std.physics.flat", func_id.local_name) &&
+           is_stdlib_physics_flat_query(func_id.local_name);
 }
 
 std::string stdlib_physics_flat_query_call(const std::string& func_name,
@@ -134,58 +136,43 @@ std::string stdlib_physics_flat_query_call(const std::string& func_name,
     return result;
 }
 
-std::string lower_unqualified_stdlib_func(const DecoratedProgram& program,
-                                          const std::string& func_name,
-                                          const auto& emit_arg) {
-    (void)emit_arg;
-    if (program.ast == nullptr) {
+// Returns "prefix::runtime_name" for a resolved stdlib function identity, or empty if not applicable.
+std::string stdlib_runtime_call_name(const SymbolId& func_id) {
+    if (func_id.kind != SymbolKind::Func) {
         return {};
     }
-    if (func_name == "format") {
-        for (const auto& decl : program.ast->declarations) {
-            const auto* use = std::get_if<UseNode>(&decl);
-            if (use != nullptr && !use->alias.has_value() && use->module_name == "std.text") {
-                return "std::format";
-            }
-        }
+    if (is_stdlib_physics_flat_query(func_id)) {
+        return {};
     }
-    for (const auto& decl : program.ast->declarations) {
-        const auto* use = std::get_if<UseNode>(&decl);
-        if (use == nullptr || use->alias.has_value()) {
-            continue;
-        }
-        if (!module_exports_stdlib_func(use->module_name, func_name)) {
-            continue;
-        }
-        const std::string prefix = stdlib_runtime_prefix(program.ast, use->module_name);
-        if (prefix.empty()) {
-            continue;
-        }
-        if (use->module_name == "std.physics.flat" && is_stdlib_physics_flat_query(func_name)) {
-            continue;
-        }
-        const std::string runtime_name = stdlib_runtime_func_name(use->module_name, func_name);
-        std::string result;
-        result.reserve(prefix.size() + runtime_name.size() + 2U);
-        result.append(prefix).append("::").append(runtime_name);
-        return result;
+    const std::string prefix = stdlib_runtime_prefix(func_id);
+    if (prefix.empty()) {
+        return {};
     }
-    return {};
+    const std::string runtime_name = stdlib_runtime_func_name(func_id.module.name, func_id.local_name);
+    std::string result;
+    result.reserve(prefix.size() + runtime_name.size() + 2U);
+    result.append(prefix).append("::").append(runtime_name);
+    return result;
 }
 
-std::string lower_stdlib_member_call(const MemberExpr& member,
-                                     const std::vector<std::unique_ptr<ExprNode>>& args,
-                                     const DecoratedProgram& program,
-                                     const std::unordered_set<std::string>& pointer_aliases,
-                                     const auto& emit_arg,
-                                     const std::vector<std::string>& trait_names) {
-    (void)pointer_aliases;
-    (void)trait_names;
-    const auto* object = std::get_if<IdentExpr>(&member.object->expr);
-    if (object == nullptr) {
-        return {};
+bool stdlib_call_needs_registry(const SymbolId& func_id) {
+    if (func_id.kind != SymbolKind::Func) {
+        return false;
     }
-    if (member.member == "format" && imported_module_name(program.ast, object->name) == "std.text") {
+    if (func_id.module.name == "std.editor") {
+        return func_id.local_name == "spawn_template" || func_id.local_name == "hit_test_2d" ||
+               func_id.local_name == "raycast_3d" || func_id.local_name == "camera_enter" ||
+               func_id.local_name == "camera_exit" || func_id.local_name == "apply_camera_2d" ||
+               func_id.local_name == "apply_camera_3d";
+    }
+    return (func_id.module.name == "std.transform.flat" || func_id.module.name == "std.transform.volume") &&
+           func_id.local_name == "world_position";
+}
+
+std::string lower_resolved_stdlib_call(const SymbolId& func_id,
+                                       const std::vector<std::unique_ptr<ExprNode>>& args,
+                                       const auto& emit_arg) {
+    if (symbol_is(func_id, SymbolKind::Func, "std.text", "format")) {
         std::string result = "std::format(";
         for (size_t i = 0; i < args.size(); ++i) {
             if (i > 0) {
@@ -195,21 +182,20 @@ std::string lower_stdlib_member_call(const MemberExpr& member,
         }
         return result + ")";
     }
-    const std::string prefix = stdlib_runtime_prefix(program.ast, object->name);
-    if (prefix.empty()) {
+    if (is_stdlib_physics_flat_query(func_id)) {
+        return stdlib_physics_flat_query_call(func_id.local_name, args, emit_arg);
+    }
+    const std::string runtime_name = stdlib_runtime_call_name(func_id);
+    if (runtime_name.empty()) {
         return {};
     }
-    if (imported_module_name(program.ast, object->name) == "std.physics.flat" &&
-        is_stdlib_physics_flat_query(member.member)) {
-        return stdlib_physics_flat_query_call(member.member, args, emit_arg);
+    const bool needs_registry = stdlib_call_needs_registry(func_id);
+    std::string result        = runtime_name + "(";
+    if (needs_registry) {
+        result += "registry";
     }
-    const std::string runtime_name =
-        stdlib_runtime_func_name(imported_module_name(program.ast, object->name), member.member);
-    std::string result;
-    result.reserve(prefix.size() + runtime_name.size() + 3U);
-    result.append(prefix).append("::").append(runtime_name).push_back('(');
     for (size_t i = 0; i < args.size(); ++i) {
-        if (i > 0) {
+        if (i > 0 || needs_registry) {
             result += ", ";
         }
         result += emit_arg(*args[i]);
@@ -238,20 +224,29 @@ std::string upper_copy(std::string value) {
     return value;
 }
 
-std::string system_function_name(const std::string& system_name, const std::string& suffix) {
-    return snake_case(system_name) + "_" + suffix;
+std::string archetype_create_function_name(const SymbolId& template_id, const DecoratedProgram& program) {
+    const bool is_local = program.pub_templates.contains(template_id.local_name) ||
+                          program.non_pub_templates.contains(template_id.local_name);
+    const std::string& module = is_local ? program.module_name : template_id.module.name;
+    return "create_" + canonical_to_cpp_name(module, snake_case(template_id.local_name));
 }
 
-std::string archetype_create_function_name(const std::string& archetype_name) {
-    return "create_" + snake_case(archetype_name);
-}
-
-std::string event_cpp_type(const std::string& event_name) {
+std::string event_cpp_type(const std::string& event_name, const DecoratedProgram& program) {
     if (event_name == "tick") {
         return "TickEvent";
     }
     if (event_name == "input") {
         return "InputEvent";
+    }
+    if (program.ast != nullptr) {
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* ev = std::get_if<EventNode>(&decl)) {
+                if (ev->name == event_name) {
+                    const std::string& mod = ev->module_name.empty() ? program.module_name : ev->module_name;
+                    return canonical_to_cpp_name(mod, event_name) + "Event";
+                }
+            }
+        }
     }
     return event_name + "Event";
 }
@@ -279,35 +274,62 @@ std::string filter_simple_name(const FilterEntry& entry) {
     return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
 }
 
+bool filter_has_simple_name(const FilterClause& filter, const std::string& simple) {
+    for (const auto& entry : filter.entries) {
+        if (filter_simple_name(entry) == simple) {
+            return true;
+        }
+    }
+    return std::ranges::find(filter.trait_names, simple) != filter.trait_names.end();
+}
+
+bool world_transform_is_volume(const DecoratedProgram& program) {
+    const auto* wt = EnttCodegenUtils::find_trait(program, "WorldTransform");
+    if (wt == nullptr) {
+        return false;
+    }
+    return std::ranges::any_of(wt->fields, [](const auto& f) {
+        return f.name == "rotation" && f.type.kind == TypeKind::Quat;
+    });
+}
+
 struct FilterBinding {
-    std::string trait_name;
-    std::string binding_name;
+    std::string trait_name;     // simple name (for semantic lookups)
+    std::string cpp_type_name;  // canonical C++ type name (for code emission)
+    std::string binding_name;   // variable name suffix (e.g. "WorldTransform_comp" or alias)
 };
 
-std::vector<FilterBinding> filter_bindings(const FilterClause& filter) {
+std::vector<FilterBinding> filter_bindings(const FilterClause& filter, const DecoratedProgram& program) {
     std::vector<FilterBinding> result;
     std::unordered_set<std::string> seen_traits;
     for (const auto& entry : filter.entries) {
-        const auto trait_name = filter_simple_name(entry);
+        const auto trait_name    = filter_simple_name(entry);
+        const auto cpp_type_name = EnttCodegenUtils::trait_cpp_name(
+            entry.resolved_trait_id, entry.qualified_name, program);
         if (seen_traits.insert(trait_name).second) {
-            result.push_back(FilterBinding{.trait_name = trait_name, .binding_name = trait_name + "_comp"});
+            result.push_back(FilterBinding{
+                .trait_name = trait_name, .cpp_type_name = cpp_type_name, .binding_name = cpp_type_name + "_comp"});
         }
         if (entry.alias.has_value()) {
-            result.push_back(FilterBinding{.trait_name = trait_name, .binding_name = *entry.alias});
+            result.push_back(
+                FilterBinding{.trait_name = trait_name, .cpp_type_name = cpp_type_name, .binding_name = *entry.alias});
         }
     }
     for (const auto& trait_name : filter.trait_names) {
+        const auto cpp_type_name = EnttCodegenUtils::trait_cpp_name(trait_name, program);
         if (seen_traits.insert(trait_name).second) {
-            result.push_back(FilterBinding{.trait_name = trait_name, .binding_name = trait_name + "_comp"});
+            result.push_back(FilterBinding{
+                .trait_name = trait_name, .cpp_type_name = cpp_type_name, .binding_name = cpp_type_name + "_comp"});
         }
     }
     return result;
 }
 
-std::vector<std::string> filter_trait_names(const FilterClause& filter) {
+// Returns simple trait names (for semantic lookups in program.traits).
+std::vector<std::string> filter_trait_names(const FilterClause& filter, const DecoratedProgram& program) {
     std::vector<std::string> result;
     std::unordered_set<std::string> seen;
-    for (const auto& binding : filter_bindings(filter)) {
+    for (const auto& binding : filter_bindings(filter, program)) {
         if (seen.insert(binding.trait_name).second) {
             result.push_back(binding.trait_name);
         }
@@ -315,208 +337,128 @@ std::vector<std::string> filter_trait_names(const FilterClause& filter) {
     return result;
 }
 
-template <typename FilterLike>
-bool filter_has_trait(const FilterLike& filter, const std::string& qualified, const std::string& simple) {
-    for (const auto& entry : filter.entries) {
-        if (entry.qualified_name == qualified || filter_simple_name(entry) == simple) {
-            return true;
+// Returns canonical C++ type names for view<> template arguments.
+std::vector<std::string> filter_cpp_type_names(const FilterClause& filter, const DecoratedProgram& program) {
+    std::vector<std::string> result;
+    std::unordered_set<std::string> seen;
+    for (const auto& binding : filter_bindings(filter, program)) {
+        if (seen.insert(binding.cpp_type_name).second) {
+            result.push_back(binding.cpp_type_name);
         }
     }
-    return std::any_of(
-        filter.trait_names.begin(), filter.trait_names.end(), [&](const auto& name) { return name == simple; });
+    return result;
 }
 
-template <typename FilterLike>
-bool filter_has_exact_trait(const FilterLike& filter, const std::string& qualified) {
-    return std::any_of(filter.entries.begin(), filter.entries.end(), [&](const auto& entry) {
-        return entry.qualified_name == qualified;
-    });
-}
-
-template <typename FilterLike>
-bool filter_has_simple_trait(const FilterLike& filter, const std::string& simple) {
-    return std::any_of(filter.entries.begin(),
-                       filter.entries.end(),
-                       [&](const auto& entry) { return filter_simple_name(entry) == simple; }) ||
-           std::any_of(
-               filter.trait_names.begin(), filter.trait_names.end(), [&](const auto& name) { return name == simple; });
-}
-
-enum class TransformFlavor : std::uint8_t {
-    Unknown,
-    Flat,
-    Volume,
-};
-
-const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::string& name) {
-    auto it = program.traits.find(name);
-    if (it == program.traits.end()) {
-        return nullptr;
-    }
-    return &it->second;
-}
-
-const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& field_name) {
-    if (trait == nullptr) {
-        return nullptr;
-    }
-    auto it = std::ranges::find_if(trait->fields, [&](const auto& field) { return field.name == field_name; });
-    if (it == trait->fields.end()) {
-        return nullptr;
-    }
-    return &*it;
-}
-
-TransformFlavor transform_flavor_for_trait(const ResolvedTrait* trait) {
-    const auto* position = find_field(trait, "position");
-    const auto* rotation = find_field(trait, "rotation");
-    const auto* scale    = find_field(trait, "scale");
-    if (position == nullptr || rotation == nullptr || scale == nullptr) {
-        return TransformFlavor::Unknown;
-    }
-
-    if (position->type.kind == TypeKind::Vec2 && rotation->type.kind == TypeKind::Float &&
-        scale->type.kind == TypeKind::Vec2) {
-        return TransformFlavor::Flat;
-    }
-    if (position->type.kind == TypeKind::Vec3 && rotation->type.kind == TypeKind::Quat &&
-        scale->type.kind == TypeKind::Vec3) {
-        return TransformFlavor::Volume;
-    }
-    return TransformFlavor::Unknown;
-}
-
-TransformFlavor infer_transform_propagation_flavor(const ExternSystemNode& sys, const DecoratedProgram& program) {
-    const bool has_flat_qualified   = filter_has_exact_trait(sys.filter, "std.transform.flat.LocalTransform") ||
-                                      filter_has_exact_trait(sys.filter, "std.transform.flat.WorldTransform");
-    const bool has_volume_qualified = filter_has_exact_trait(sys.filter, "std.transform.volume.LocalTransform") ||
-                                      filter_has_exact_trait(sys.filter, "std.transform.volume.WorldTransform");
-
-    if (has_flat_qualified != has_volume_qualified) {
-        return has_flat_qualified ? TransformFlavor::Flat : TransformFlavor::Volume;
-    }
-
-    if (!filter_has_simple_trait(sys.filter, "LocalTransform") ||
-        !filter_has_simple_trait(sys.filter, "WorldTransform")) {
-        return TransformFlavor::Unknown;
-    }
-
-    const auto local_flavor = transform_flavor_for_trait(find_trait(program, "LocalTransform"));
-    const auto world_flavor = transform_flavor_for_trait(find_trait(program, "WorldTransform"));
-
-    if (local_flavor != TransformFlavor::Unknown) {
-        return local_flavor;
-    }
-    return world_flavor;
-}
-
-bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
-    if (sys.is_stdlib) {
-        return true;
-    }
-    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
-        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "ModelRendererSystem" ||
-        sys.name == "ModelAnimationSystem" || sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" ||
-        sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" ||
-        sys.name == "ScreenLabelSystem" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
-        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
-        return true;
-    }
-    return std::ranges::any_of(sys.filter.entries,
-                               [](const auto& entry) { return entry.qualified_name.rfind("std.", 0) == 0; });
-}
 
 bool is_flat_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "TransformPropagation" &&
-           infer_transform_propagation_flavor(sys, program) == TransformFlavor::Flat;
+    // When std.editor is used it transitively imports both transform modules,
+    // so both flat and volume TransformPropagation can appear in the merged AST.
+    // Only emit the variant that matches the program's actual WorldTransform dimensionality.
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.flat", "TransformPropagation")) {
+        return !world_transform_is_volume(program);
+    }
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.volume", "TransformPropagation")) {
+        return false;
+    }
+    return sys.name == "TransformPropagation" && !world_transform_is_volume(program);
 }
 
 bool is_volume_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "TransformPropagation" &&
-           infer_transform_propagation_flavor(sys, program) == TransformFlavor::Volume;
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.volume", "TransformPropagation")) {
+        return world_transform_is_volume(program);
+    }
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.flat", "TransformPropagation")) {
+        return false;
+    }
+    return sys.name == "TransformPropagation" && world_transform_is_volume(program);
 }
 
 bool is_shape_renderer(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "ShapeRenderer" &&
-           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "std.render.shapes.Shape", "Shape");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.shapes", "ShapeRenderer")) { return true; }
+    return sys.name == "ShapeRenderer" &&
+           filter_has_simple_name(sys.filter, "WorldTransform") &&
+           filter_has_simple_name(sys.filter, "Shape");
 }
 
 bool is_sprite_renderer(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "SpriteRenderer" &&
-           filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "std.render.sprites.Renderer", "Renderer");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.sprites", "SpriteRenderer")) { return true; }
+    return sys.name == "SpriteRenderer" &&
+           filter_has_simple_name(sys.filter, "WorldTransform") &&
+           filter_has_simple_name(sys.filter, "Renderer");
 }
 
 bool is_animated_sprite_system(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "AnimatedSpriteSystem" &&
-           filter_has_trait(sys.filter, "std.render.sprites.AnimatedSprite", "AnimatedSprite");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.sprites", "AnimatedSpriteSystem")) { return true; }
+    return sys.name == "AnimatedSpriteSystem" &&
+           filter_has_simple_name(sys.filter, "AnimatedSprite");
 }
 
 bool is_mesh_renderer(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "MeshRenderer" &&
-           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "std.render.meshes.Renderer", "Renderer");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "MeshRenderer")) { return true; }
+    return sys.name == "MeshRenderer" &&
+           filter_has_simple_name(sys.filter, "WorldTransform") &&
+           filter_has_simple_name(sys.filter, "Renderer");
 }
 
 bool is_model_renderer_system(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "ModelRendererSystem" &&
-           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "std.render.models.ModelRenderer", "ModelRenderer");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.models", "ModelRendererSystem")) { return true; }
+    return sys.name == "ModelRendererSystem" &&
+           filter_has_simple_name(sys.filter, "WorldTransform") &&
+           filter_has_simple_name(sys.filter, "ModelRenderer");
 }
 
 bool is_model_animation_system(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "ModelAnimationSystem" &&
-           filter_has_trait(sys.filter, "std.render.models.ModelRenderer", "ModelRenderer") &&
-           filter_has_trait(sys.filter, "std.render.models.ModelAnimator", "ModelAnimator");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.models", "ModelAnimationSystem")) { return true; }
+    return sys.name == "ModelAnimationSystem" &&
+           filter_has_simple_name(sys.filter, "ModelRenderer") &&
+           filter_has_simple_name(sys.filter, "ModelAnimator");
 }
 
 bool is_billboard_renderer(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "BillboardRenderer" &&
-           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "std.render.meshes.BillboardRenderer", "BillboardRenderer");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "BillboardRenderer")) { return true; }
+    return sys.name == "BillboardRenderer" &&
+           filter_has_simple_name(sys.filter, "WorldTransform");
 }
 
 bool is_point_light_system(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "PointLightSystem" &&
-           filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-           filter_has_trait(sys.filter, "std.render.meshes.PointLight", "PointLight");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "PointLightSystem")) { return true; }
+    return sys.name == "PointLightSystem" &&
+           filter_has_simple_name(sys.filter, "WorldTransform");
 }
 
 bool is_directional_light_system(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "DirectionalLightSystem" &&
-           filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
-}
-
-bool world_transform_is_volume(const DecoratedProgram& program) {
-    auto it = program.traits.find("WorldTransform");
-    if (it == program.traits.end()) {
-        return false;
-    }
-    return std::any_of(it->second.fields.begin(), it->second.fields.end(), [](const auto& f) {
-        return f.name == "rotation" && f.type.kind == TypeKind::Quat;
-    });
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "DirectionalLightSystem")) { return true; }
+    return sys.name == "DirectionalLightSystem" &&
+           filter_has_simple_name(sys.filter, "WorldTransform");
 }
 
 bool is_any_text_renderer_2d(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "TextRenderer2D" &&
-           filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.text", "TextRenderer2D")) { return true; }
+    return sys.name == "TextRenderer2D" &&
+           filter_has_simple_name(sys.filter, "WorldTransform");
 }
 
 bool is_any_text_renderer_3d(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "TextRenderer3D" &&
-           filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.text", "TextRenderer3D")) { return true; }
+    return sys.name == "TextRenderer3D" &&
+           filter_has_simple_name(sys.filter, "WorldTransform");
 }
 
 bool is_screen_label_system(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) && sys.name == "ScreenLabelSystem" &&
-           filter_has_trait(sys.filter, "std.render.text.ScreenLabel", "ScreenLabel");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.text", "ScreenLabelSystem")) { return true; }
+    return sys.name == "ScreenLabelSystem" &&
+           filter_has_simple_name(sys.filter, "ScreenLabel");
 }
 
 bool is_editor_extern_system(const ExternSystemNode& sys) {
-    return uses_stdlib_extern_contract(sys) &&
-           (sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel" || sys.name == "GizmoRenderer2D" ||
-            sys.name == "GizmoRenderer3D");
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "EditorTemplatePalette") ||
+        symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "EditorPropertyPanel") ||
+        symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "GizmoRenderer2D") ||
+        symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "GizmoRenderer3D")) {
+        return true;
+    }
+    return sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel" ||
+           sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D";
 }
 
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const SystemNode& sys) {
@@ -586,50 +528,54 @@ std::string foreach_temp_name(const ForeachStmt& stmt) {
 void emit_storage_filter_skip(std::ostringstream& out,
                               const FilterClause& filter,
                               const FilterClause& exclude,
+                              const DecoratedProgram& program,
                               int indent) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
-    for (const auto& trait_name : filter_trait_names(filter)) {
-        out << ind << "if (!registry.all_of<" << trait_name << ">(entity)) {\n";
+    for (const auto& cpp_name : filter_cpp_type_names(filter, program)) {
+        out << ind << "if (!registry.all_of<" << cpp_name << ">(entity)) {\n";
         out << ind << "    continue;\n";
         out << ind << "}\n";
     }
-    for (const auto& trait_name : filter_trait_names(exclude)) {
-        out << ind << "if (registry.all_of<" << trait_name << ">(entity)) {\n";
+    for (const auto& cpp_name : filter_cpp_type_names(exclude, program)) {
+        out << ind << "if (registry.all_of<" << cpp_name << ">(entity)) {\n";
         out << ind << "    continue;\n";
         out << ind << "}\n";
     }
 }
 
-void emit_filter_alias_bindings(std::ostringstream& out, const FilterClause& filter, int indent) {
+void emit_filter_alias_bindings(std::ostringstream& out,
+                                const FilterClause& filter,
+                                const DecoratedProgram& program,
+                                int indent) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
-    for (const auto& binding : filter_bindings(filter)) {
-        if (binding.binding_name == binding.trait_name + "_comp") {
+    for (const auto& binding : filter_bindings(filter, program)) {
+        if (binding.binding_name == binding.cpp_type_name + "_comp") {
             continue;
         }
-        out << ind << "[[maybe_unused]] auto& " << binding.binding_name << " = " << binding.trait_name << "_comp;\n";
+        out << ind << "[[maybe_unused]] auto& " << binding.binding_name << " = " << binding.cpp_type_name << "_comp;\n";
     }
 }
 
 void emit_view_declaration(std::ostringstream& out,
-                           const std::vector<std::string>& filter_traits,
-                           const std::vector<std::string>& exclude_traits,
+                           const std::vector<std::string>& cpp_type_names,
+                           const std::vector<std::string>& exclude_cpp_type_names,
                            int indent) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     out << ind << "auto view = registry.view<";
-    for (size_t i = 0; i < filter_traits.size(); ++i) {
+    for (size_t i = 0; i < cpp_type_names.size(); ++i) {
         if (i > 0) {
             out << ", ";
         }
-        out << filter_traits[i];
+        out << cpp_type_names[i];
     }
     out << ">(";
-    if (!exclude_traits.empty()) {
+    if (!exclude_cpp_type_names.empty()) {
         out << "entt::exclude<";
-        for (size_t i = 0; i < exclude_traits.size(); ++i) {
+        for (size_t i = 0; i < exclude_cpp_type_names.size(); ++i) {
             if (i > 0) {
                 out << ", ";
             }
-            out << exclude_traits[i];
+            out << exclude_cpp_type_names[i];
         }
         out << ">";
     }
@@ -637,17 +583,21 @@ void emit_view_declaration(std::ostringstream& out,
 }
 
 void emit_view_each_header(std::ostringstream& out,
-                           const std::vector<std::string>& filter_traits,
+                           const std::vector<FilterBinding>& bindings,
                            int indent,
                            const DecoratedProgram& program) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     out << ind << "view.each([&](entt::entity entity";
-    for (const auto& trait_name : filter_traits) {
+    std::unordered_set<std::string> seen_cpp;
+    for (const auto& binding : bindings) {
+        if (!seen_cpp.insert(binding.cpp_type_name).second) {
+            continue;
+        }
         // EnTT does not pass empty (marker) components to view.each lambdas.
-        auto it = program.traits.find(trait_name);
-        const bool is_empty = it == program.traits.end() || it->second.fields.empty();
+        const auto* trait   = EnttCodegenUtils::find_trait(program, binding.trait_name);
+        const bool is_empty = trait == nullptr || trait->fields.empty();
         if (!is_empty) {
-            out << ", [[maybe_unused]] " << trait_name << "& " << trait_name << "_comp";
+            out << ", [[maybe_unused]] " << binding.cpp_type_name << "& " << binding.cpp_type_name << "_comp";
         }
     }
     out << ") {\n";
@@ -661,9 +611,9 @@ static std::string find_comp_for_field(const std::string& field_name,
                                        const std::vector<std::string>& trait_names,
                                        const DecoratedProgram& program) {
     for (const auto& tn : trait_names) {
-        auto it = program.traits.find(tn);
-        if (it != program.traits.end()) {
-            for (const auto& f : it->second.fields) {
+        const auto* trait = EnttCodegenUtils::find_trait(program, tn);
+        if (trait != nullptr) {
+            for (const auto& f : trait->fields) {
                 if (f.name == field_name) {
                     return tn;
                 }
@@ -679,9 +629,9 @@ static std::unordered_set<std::string> collect_trait_fields(const std::vector<st
                                                             const DecoratedProgram& program) {
     std::unordered_set<std::string> fields;
     for (const auto& tn : trait_names) {
-        auto it = program.traits.find(tn);
-        if (it != program.traits.end()) {
-            for (const auto& f : it->second.fields) {
+        const auto* trait = EnttCodegenUtils::find_trait(program, tn);
+        if (trait != nullptr) {
+            for (const auto& f : trait->fields) {
                 fields.insert(f.name);
             }
         }
@@ -694,14 +644,20 @@ static std::unordered_set<std::string> collect_trait_fields(const std::vector<st
 static std::string rewrite_expr(const ExprNode& expr,
                                 const std::vector<std::string>& trait_names,
                                 const DecoratedProgram& program,
-                                const std::unordered_set<std::string>& pointer_aliases = {});
+                                const std::unordered_set<std::string>& pointer_aliases   = {},
+                                const std::unordered_map<std::string, std::string>& cpp_overrides = {});
 
 static std::string rewrite_stmt(const StmtNode& stmt,
                                 int indent,
                                 const std::vector<std::string>& trait_names,
                                 const DecoratedProgram& program,
-                                const std::unordered_set<std::string>& pointer_aliases = {},
-                                bool dispatcher_available                               = false);
+                                const std::unordered_set<std::string>& pointer_aliases   = {},
+                                bool dispatcher_available                                = false,
+                                const std::unordered_map<std::string, std::string>& cpp_overrides = {});
+
+static std::string trait_cpp_from_entry(const ArchetypeTraitEntry& entry, const DecoratedProgram& program) {
+    return EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.trait_name, program);
+}
 
 static std::string emit_spawn_overrides(const std::string& entity_name,
                                         const std::vector<ArchetypeTraitEntry>& overrides,
@@ -716,16 +672,15 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
             continue;
         }
 
+        const std::string cpp_name = trait_cpp_from_entry(override_entry, program);
         out << ind << "{\n";
-        out << ind << "    auto __existing = registry.try_get<" << override_entry.trait_name << ">(" << entity_name
-            << ");\n";
-        out << ind << "    auto __value = __existing ? *__existing : " << override_entry.trait_name << "{};\n";
+        out << ind << "    auto __existing = registry.try_get<" << cpp_name << ">(" << entity_name << ");\n";
+        out << ind << "    auto __value = __existing ? *__existing : " << cpp_name << "{};\n";
         for (const auto& assignment : override_entry.assignments) {
             out << ind << "    __value." << assignment.name << " = "
                 << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases) << ";\n";
         }
-        out << ind << "    registry.emplace_or_replace<" << override_entry.trait_name << ">(" << entity_name
-            << ", __value);\n";
+        out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", __value);\n";
         out << ind << "}\n";
     }
     return out.str();
@@ -733,11 +688,11 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
 
 // ── Hierarchical spawn expansion (dsl-hierarchical-entity-templates D9) ─────
 
-// Per-node creation helper names emitted by the codegen for hierarchical
-// archetypes (create_<t>__node, create_<t>__node__<role path>).
-static std::string archetype_node_create_function_name(const std::string& archetype_name,
+// Per-node creation helper names — must match the names generated by cpp_entt_codegen.cpp.
+static std::string archetype_node_create_function_name(const std::string& module_name,
+                                                       const std::string& archetype_name,
                                                        const std::vector<std::string>& role_path) {
-    std::string name = "create_" + snake_case(archetype_name) + "__node";
+    std::string name = "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name)) + "__node";
     for (const auto& role : role_path) {
         name += "__" + snake_case(role);
     }
@@ -745,13 +700,14 @@ static std::string archetype_node_create_function_name(const std::string& archet
 }
 
 static const std::vector<ChildArchetypeNode>* find_template_children(const DecoratedProgram& program,
-                                                                     const std::string& template_name) {
+                                                                     const SymbolId& template_id) {
     if (program.ast == nullptr) {
         return nullptr;
     }
     for (const auto& decl : program.ast->declarations) {
         const auto* tmpl = std::get_if<TemplateNode>(&decl);
-        if (tmpl != nullptr && tmpl->name == template_name && !tmpl->children.empty()) {
+        if (tmpl != nullptr && tmpl->resolved_template_id.has_value() &&
+            *tmpl->resolved_template_id == template_id && !tmpl->children.empty()) {
             return &tmpl->children;
         }
     }
@@ -762,7 +718,8 @@ static const std::vector<ChildArchetypeNode>* find_template_children(const Decor
 // via its per-node helper in parent-first preorder, emplace Parent on non-root
 // nodes, and apply that node's overrides in handler scope.
 static void emit_spawn_child_expansion(std::ostringstream& out,
-                                       const std::string& template_name,
+                                       const std::string& template_module,
+                                       const std::string& template_local_name,
                                        const std::vector<ChildArchetypeNode>& children,
                                        const std::vector<ChildOverrideNode>& overrides,
                                        const std::string& parent_var,
@@ -776,9 +733,13 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
     for (const auto& child : children) {
         const std::string var = var_prefix + "_" + std::to_string(index);
         role_path.push_back(child.role);
-        out << "    auto " << var << " = " << archetype_node_create_function_name(template_name, role_path)
-            << "(registry);\n";
-        out << "    registry.emplace_or_replace<Parent>(" << var << ", Parent{.parent = " << parent_var << "});\n";
+        out << "    auto " << var << " = "
+            << archetype_node_create_function_name(template_module, template_local_name, role_path) << "(registry);\n";
+        {
+            const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
+            out << "    registry.emplace_or_replace<" << parent_cpp << ">(" << var << ", " << parent_cpp
+                << "{.parent = " << parent_var << "});\n";
+        }
 
         const ChildOverrideNode* override_node = nullptr;
         for (const auto& candidate : overrides) {
@@ -792,7 +753,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
         }
 
         emit_spawn_child_expansion(out,
-                                   template_name,
+                                   template_module,
+                                   template_local_name,
                                    child.children,
                                    override_node != nullptr ? override_node->children : NO_OVERRIDES,
                                    var,
@@ -806,7 +768,7 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
     }
 }
 
-static std::string emit_hierarchical_spawn_expansion(const std::string& template_name,
+static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id,
                                                      const std::vector<ArchetypeTraitEntry>& root_overrides,
                                                      const std::vector<ChildOverrideNode>& child_overrides,
                                                      const std::vector<ChildArchetypeNode>& children,
@@ -815,12 +777,17 @@ static std::string emit_hierarchical_spawn_expansion(const std::string& template
                                                      const std::unordered_set<std::string>& pointer_aliases) {
     std::ostringstream out;
     std::vector<std::string> role_path;
+    const bool is_local_tmpl = program.pub_templates.contains(template_id.local_name) ||
+                               program.non_pub_templates.contains(template_id.local_name);
+    const std::string tmpl_module = is_local_tmpl ? program.module_name : template_id.module.name;
+    const std::string& tmpl_local = template_id.local_name;
     out << "([&]() {\n";
-    out << "    auto __spawned = " << archetype_node_create_function_name(template_name, role_path)
+    out << "    auto __spawned = " << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path)
         << "(registry);\n";
     out << emit_spawn_overrides("__spawned", root_overrides, 1, trait_names, program, pointer_aliases);
     emit_spawn_child_expansion(out,
-                               template_name,
+                               tmpl_module,
+                               tmpl_local,
                                children,
                                child_overrides,
                                "__spawned",
@@ -838,16 +805,23 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
                                          const std::unordered_set<std::string>& pointer_aliases) {
+    const SymbolId tmpl_id = spawn.resolved_template_id.has_value()
+        ? *spawn.resolved_template_id
+        : make_symbol_id(SymbolKind::Template, program.module_name, spawn.template_name);
     if (!spawn.child_overrides.empty()) {
-        if (const auto* children = find_template_children(program, spawn.template_name)) {
-            return emit_hierarchical_spawn_expansion(
-                spawn.template_name, spawn.overrides, spawn.child_overrides, *children, trait_names, program,
-                pointer_aliases);
+        if (const auto* children = find_template_children(program, tmpl_id)) {
+            return emit_hierarchical_spawn_expansion(tmpl_id,
+                                                     spawn.overrides,
+                                                     spawn.child_overrides,
+                                                     *children,
+                                                     trait_names,
+                                                     program,
+                                                     pointer_aliases);
         }
     }
     std::ostringstream out;
     out << "([&]() {\n";
-    out << "    auto __spawned = " << archetype_create_function_name(spawn.template_name) << "(registry);\n";
+    out << "    auto __spawned = " << archetype_create_function_name(tmpl_id, program) << "(registry);\n";
     out << emit_spawn_overrides("__spawned", spawn.overrides, 1, trait_names, program, pointer_aliases);
     out << "    return __spawned;\n";
     out << "})()";
@@ -856,92 +830,35 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
 
 // ── Query call lowering ─────────────────────────────────────────────────────
 
-static std::optional<std::string> extract_dotted_qualifier(const ExprNode& expr) {
-    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
-        return ident->name;
-    }
-    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
-        if (auto prefix = extract_dotted_qualifier(*member->object)) {
-            return *prefix + "." + member->member;
-        }
-    }
-    return std::nullopt;
-}
-
-static bool is_known_query_module_name(const std::string& name) {
-    return name == "std.query" || name == "std.physics.flat.query" || name == "std.physics.volume.query";
-}
-
-// Returns the full module name if `use` declares a known query module whose qualifier or alias
-// matches `qualifier`; otherwise returns empty.
-static std::string match_query_use_node(const UseNode& use, const std::string& qualifier) {
-    if (!is_known_query_module_name(use.module_name)) {
-        return {};
-    }
-    if (use.alias.has_value() && *use.alias == qualifier) {
-        return use.module_name;
-    }
-    if (!use.alias.has_value()) {
-        const auto last_dot      = use.module_name.rfind('.');
-        const std::string last_comp = (last_dot != std::string::npos)
-                                          ? use.module_name.substr(last_dot + 1)
-                                          : use.module_name;
-        if (last_comp == qualifier) {
-            return use.module_name;
-        }
-    }
-    return {};
-}
-
-static std::string resolve_query_module(const QueryCallExpr& qcall, const ProgramNode* ast) {
-    const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr);
-    if (member == nullptr) {
-        return {};
-    }
-    const auto qualifier = extract_dotted_qualifier(*member->object);
-    if (!qualifier.has_value()) {
-        return {};
-    }
-    if (is_known_query_module_name(*qualifier)) {
-        return *qualifier;
-    }
-    if (ast == nullptr) {
-        return {};
-    }
-    for (const auto& decl : ast->declarations) {
-        const auto* use = std::get_if<UseNode>(&decl);
-        if (use == nullptr) {
-            continue;
-        }
-        if (auto matched = match_query_use_node(*use, *qualifier); !matched.empty()) {
-            return matched;
-        }
-    }
-    return {};
-}
-
-static std::string get_query_func_name_from_call(const QueryCallExpr& qcall) {
-    const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr);
-    return member != nullptr ? member->member : std::string{};
-}
-
 // Build "<T1, T2>(entt::exclude<N1, N2>)" from filter predicates.
-// prepend_include is added first and deduplicated against positive filters.
+// prepend_include must already be the canonical C++ name; predicate names are
+// resolved to canonical C++ names when program is provided.
 static std::string build_view_suffix(const std::vector<QueryFilterPredicate>& filters,
-                                     const std::string& prepend_include = {}) {
+                                     const std::string& prepend_include = {},
+                                     const DecoratedProgram* program    = nullptr) {
+    auto to_cpp = [&](const QueryFilterPredicate& f) -> std::string {
+        if (program != nullptr) {
+            return EnttCodegenUtils::trait_cpp_name(f.resolved_trait_id, f.trait_name, *program);
+        }
+        if (f.resolved_trait_id.has_value()) {
+            return EnttCodegenUtils::trait_cpp_name(*f.resolved_trait_id);
+        }
+        return f.trait_name;
+    };
     std::string include_list = prepend_include;
     std::string exclude_list;
     for (const auto& f : filters) {
+        const std::string cpp_name = to_cpp(f);
         if (f.negated) {
             if (!exclude_list.empty()) {
                 exclude_list += ", ";
             }
-            exclude_list += f.trait_name;
-        } else if (f.trait_name != prepend_include) {
+            exclude_list += cpp_name;
+        } else if (cpp_name != prepend_include) {
             if (!include_list.empty()) {
                 include_list += ", ";
             }
-            include_list += f.trait_name;
+            include_list += cpp_name;
         }
     }
     std::string result = "<" + include_list + ">(";
@@ -965,8 +882,9 @@ static std::string find_named_arg_value(const std::vector<FieldAssignment>& name
 
 static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
                                         const std::string& func_name,
-                                        const auto& emit_arg) {
-    const std::string view = "registry.view" + build_view_suffix(qcall.filters);
+                                        const auto& emit_arg,
+                                        const DecoratedProgram& program) {
+    const std::string view = "registry.view" + build_view_suffix(qcall.filters, {}, &program);
     if (func_name == "exists") {
         return "[&]{ auto __v = " + view + "; return __v.begin() != __v.end(); }()";
     }
@@ -979,12 +897,12 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
                "static_cast<entt::entity>(*__it) : entt::entity{entt::null}; }()";
     }
     if (func_name == "all") {
-        return "[&]{ std::vector<entt::entity> __r; for (auto __e : " + view +
-               ") __r.push_back(__e); return __r; }()";
+        return "[&]{ std::vector<entt::entity> __r; for (auto __e : " + view + ") __r.push_back(__e); return __r; }()";
     }
     if (func_name == "parent") {
-        const std::string of_expr = find_named_arg_value(qcall.named_args, "of", emit_arg);
-        return "[&]{ if (auto* __p = registry.try_get<Parent>(" + of_expr +
+        const std::string of_expr   = find_named_arg_value(qcall.named_args, "of", emit_arg);
+        const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
+        return "[&]{ if (auto* __p = registry.try_get<" + parent_cpp + ">(" + of_expr +
                "); __p != nullptr) return __p->parent; return entt::entity{entt::null}; }()";
     }
     return "/* unsupported std.query func: " + func_name + " */";
@@ -992,14 +910,21 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
 
 static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
                                             const std::string& func_name,
-                                            const auto& emit_arg) {
-    const std::string view = "registry.view" + build_view_suffix(qcall.filters, "WorldTransform");
+                                            const auto& emit_arg,
+                                            const DecoratedProgram& program) {
+    const std::string wt   = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+    const std::string view = "registry.view" + build_view_suffix(qcall.filters, wt, &program);
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "[&]{ const auto __from = (" + from + "); "
+        return "[&]{ const auto __from = (" + from +
+               "); "
                "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __dx = __wt.position.x - __from.x, "
                "__dy = __wt.position.y - __from.y; "
                "float __d = __dx * __dx + __dy * __dy; "
@@ -1008,10 +933,15 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size + "); "
+        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size +
+               "); "
                "std::vector<entt::entity> __r; "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __hx = __sz.x * 0.5F, __hy = __sz.y * 0.5F; "
                "if (std::abs(__wt.position.x - __ct.x) <= __hx && "
                "std::abs(__wt.position.y - __ct.y) <= __hy) "
@@ -1020,10 +950,15 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
     if (func_name == "overlap_circle") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius + "); "
+        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius +
+               "); "
                "std::vector<entt::entity> __r; "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __dx = __wt.position.x - __ct.x, "
                "__dy = __wt.position.y - __ct.y; "
                "if ((__dx * __dx + __dy * __dy) <= __rad * __rad) "
@@ -1033,10 +968,16 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" + max_dist + "); "
+        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" +
+               max_dist +
+               "); "
                "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __dx = __wt.position.x - __org.x, "
                "__dy = __wt.position.y - __org.y; "
                "float __proj = __dx * __dir.x + __dy * __dir.y; "
@@ -1050,14 +991,21 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
 
 static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
                                               const std::string& func_name,
-                                              const auto& emit_arg) {
-    const std::string view = "registry.view" + build_view_suffix(qcall.filters, "WorldTransform");
+                                              const auto& emit_arg,
+                                              const DecoratedProgram& program) {
+    const std::string wt   = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const std::string view = "registry.view" + build_view_suffix(qcall.filters, wt, &program);
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "[&]{ const auto __from = (" + from + "); "
+        return "[&]{ const auto __from = (" + from +
+               "); "
                "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __dx = __wt.position.x - __from.x, "
                "__dy = __wt.position.y - __from.y, "
                "__dz = __wt.position.z - __from.z; "
@@ -1067,10 +1015,15 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size + "); "
+        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size +
+               "); "
                "std::vector<entt::entity> __r; "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __hx = __sz.x * 0.5F, __hy = __sz.y * 0.5F, __hz = __sz.z * 0.5F; "
                "if (std::abs(__wt.position.x - __ct.x) <= __hx && "
                "std::abs(__wt.position.y - __ct.y) <= __hy && "
@@ -1080,10 +1033,15 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
     if (func_name == "overlap_sphere") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius + "); "
+        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius +
+               "); "
                "std::vector<entt::entity> __r; "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __dx = __wt.position.x - __ct.x, "
                "__dy = __wt.position.y - __ct.y, "
                "__dz = __wt.position.z - __ct.z; "
@@ -1094,10 +1052,16 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" + max_dist + "); "
+        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" +
+               max_dist +
+               "); "
                "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " + view + ") { "
-               "const auto& __wt = registry.get<WorldTransform>(__e); "
+               "for (auto __e : " +
+               view +
+               ") { "
+               "const auto& __wt = registry.get<" +
+               wt +
+               ">(__e); "
                "float __dx = __wt.position.x - __org.x, "
                "__dy = __wt.position.y - __org.y, "
                "__dz = __wt.position.z - __org.z; "
@@ -1112,34 +1076,88 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
     return "/* unsupported std.physics.volume.query func: " + func_name + " */";
 }
 
+// Reconstructs "a.b.c" from nested MemberExpr/IdentExpr chains.
+static std::string expr_to_dotted_path(const ExprNode& expr) {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->name;
+    }
+    if (const auto* mem = std::get_if<MemberExpr>(&expr.expr)) {
+        const auto obj = expr_to_dotted_path(*mem->object);
+        if (obj.empty()) {
+            return "";
+        }
+        return obj + "." + mem->member;
+    }
+    return "";
+}
+
 static std::string lower_query_call_expr(const QueryCallExpr& qcall,
                                          const DecoratedProgram& program,
                                          const auto& emit_arg) {
-    const std::string module    = resolve_query_module(qcall, program.ast);
-    const std::string func_name = get_query_func_name_from_call(qcall);
-    if (module == "std.query") {
-        return lower_ecs_query_call(qcall, func_name, emit_arg);
+    auto lower_by_module = [&](const std::string& module, const std::string& func_name) -> std::string {
+        if (module == "std.query") {
+            return lower_ecs_query_call(qcall, func_name, emit_arg, program);
+        }
+        if (module == "std.physics.flat.query") {
+            return lower_flat_spatial_query(qcall, func_name, emit_arg, program);
+        }
+        if (module == "std.physics.volume.query") {
+            return lower_volume_spatial_query(qcall, func_name, emit_arg, program);
+        }
+        return {};
+    };
+
+    if (!qcall.resolved_callee_id.has_value()) {
+        // Fallback: infer module from UseNode declarations when semantic resolution was unavailable.
+        if (qcall.callee != nullptr && program.ast != nullptr) {
+            if (const auto* member = std::get_if<MemberExpr>(&qcall.callee->expr)) {
+                const std::string& func_name = member->member;
+                for (const auto& decl : program.ast->declarations) {
+                    const auto* use_node = std::get_if<UseNode>(&decl);
+                    if (use_node == nullptr) {
+                        continue;
+                    }
+                    bool matches = false;
+                    if (use_node->alias.has_value()) {
+                        if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
+                            matches = (ident->name == *use_node->alias);
+                        }
+                    } else {
+                        matches = (expr_to_dotted_path(*member->object) == use_node->module_name);
+                    }
+                    if (matches) {
+                        const auto result = lower_by_module(use_node->module_name, func_name);
+                        if (!result.empty()) {
+                            return result;
+                        }
+                    }
+                }
+            }
+        }
+        return "/* unresolved query call */";
     }
-    if (module == "std.physics.flat.query") {
-        return lower_flat_spatial_query(qcall, func_name, emit_arg);
+    const std::string& module    = qcall.resolved_callee_id->module.name;
+    const std::string& func_name = qcall.resolved_callee_id->local_name;
+    const auto result = lower_by_module(module, func_name);
+    if (!result.empty()) {
+        return result;
     }
-    if (module == "std.physics.volume.query") {
-        return lower_volume_spatial_query(qcall, func_name, emit_arg);
-    }
-    return "/* unresolved query module */";
+    return "/* unrecognized query module: " + module + " */";
 }
 
 static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          int indent,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
-                                         const std::unordered_set<std::string>& pointer_aliases = {},
-                                         bool dispatcher_available = false);
+                                         const std::unordered_set<std::string>& pointer_aliases   = {},
+                                         bool dispatcher_available                                = false,
+                                         const std::unordered_map<std::string, std::string>& cpp_overrides = {});
 
 static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-function-cognitive-complexity)
                                 const std::vector<std::string>& trait_names,
                                 const DecoratedProgram& program,
-                                const std::unordered_set<std::string>& pointer_aliases) {
+                                const std::unordered_set<std::string>& pointer_aliases,
+                                const std::unordered_map<std::string, std::string>& cpp_overrides) {
     auto known_fields = collect_trait_fields(trait_names, program);
 
     return std::visit(
@@ -1172,11 +1190,15 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 if (is_input_action_name(program, e.name)) {
                     return input_action_constant_name(e.name);
                 }
-                // If it's a known trait field, qualify it
+                // If it's a known trait field, qualify it with the canonical variable name
                 if (known_fields.contains(e.name)) {
                     auto comp = find_comp_for_field(e.name, trait_names, program);
                     if (!comp.empty()) {
-                        return comp + "_comp." + e.name;
+                        const auto ovr = cpp_overrides.find(comp);
+                        const auto& cpp = ovr != cpp_overrides.end()
+                                              ? ovr->second
+                                              : EnttCodegenUtils::trait_cpp_name(comp, program);
+                        return cpp + "_comp." + e.name;
                     }
                 }
                 return e.name;
@@ -1187,75 +1209,97 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 } else if (op == "or") {
                     op = "||";
                 }
-                return "(" + rewrite_expr(*e.left, trait_names, program, pointer_aliases) + " " + op + " " +
-                       rewrite_expr(*e.right, trait_names, program, pointer_aliases) + ")";
+                return "(" + rewrite_expr(*e.left, trait_names, program, pointer_aliases, cpp_overrides) + " " + op + " " +
+                       rewrite_expr(*e.right, trait_names, program, pointer_aliases, cpp_overrides) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
                 if (op == "not") {
                     op = "!";
                 }
-                return op + rewrite_expr(*e.operand, trait_names, program, pointer_aliases);
+                return op + rewrite_expr(*e.operand, trait_names, program, pointer_aliases, cpp_overrides);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
-                    return "registry.valid(" + rewrite_expr(*e.args[0], trait_names, program, pointer_aliases) + ")";
+                    return "registry.valid(" + rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
                 }
+                // Module-scope stdlib call: use resolved callee identity (preferred path).
+                if (e.resolved_callee_id.has_value()) {
+                    const auto lowered = lower_resolved_stdlib_call(
+                        *e.resolved_callee_id, e.args, [&](const ExprNode& arg) {
+                            return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides);
+                        });
+                    if (!lowered.empty()) {
+                        return lowered;
+                    }
+                }
+                // Bare ident call — check program.funcs module identity, then scan unaliased UseNodes.
                 if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                    auto emit_stdlib = [&](const std::string& module_name) -> std::string {
+                        if (module_name.empty()) {
+                            return {};
+                        }
+                        const auto func_id =
+                            make_symbol_id(SymbolKind::Func, ModuleId{.name = module_name}, ident->name);
+                        return lower_resolved_stdlib_call(func_id, e.args, [&](const ExprNode& arg) {
+                            return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides);
+                        });
+                    };
+                    const auto func_it = program.funcs.find(ident->name);
+                    if (func_it != program.funcs.end()) {
+                        const auto lowered = emit_stdlib(func_it->second.module_name);
+                        if (!lowered.empty()) {
+                            return lowered;
+                        }
+                    }
                     if (program.ast != nullptr) {
                         for (const auto& decl : program.ast->declarations) {
-                            const auto* use = std::get_if<UseNode>(&decl);
-                            if (use != nullptr && !use->alias.has_value() && use->module_name == "std.physics.flat" &&
-                                is_stdlib_physics_flat_query(ident->name)) {
-                                return stdlib_physics_flat_query_call(ident->name, e.args, [&](const ExprNode& arg) {
-                                    return rewrite_expr(arg, trait_names, program, pointer_aliases);
-                                });
+                            if (const auto* use_node = std::get_if<UseNode>(&decl);
+                                use_node != nullptr && !use_node->alias.has_value()) {
+                                const auto lowered = emit_stdlib(use_node->module_name);
+                                if (!lowered.empty()) {
+                                    return lowered;
+                                }
                             }
                         }
                     }
-                    if (const auto lowered_name = lower_unqualified_stdlib_func(
-                            program,
-                            ident->name,
-                            [&](const ExprNode& arg) {
-                                return rewrite_expr(arg, trait_names, program, pointer_aliases);
-                            });
-                        !lowered_name.empty()) {
-                        // editor_spawn_template, editor_hit_test_2d, and editor_raycast_3d
-                        // need registry as first arg
-                        const bool needs_registry = (ident->name == "editor_spawn_template" ||
-                                                     ident->name == "editor_hit_test_2d" ||
-                                                     ident->name == "editor_raycast_3d" ||
-                                                     ident->name == "editor_camera_enter" ||
-                                                     ident->name == "editor_camera_exit" ||
-                                                     ident->name == "editor_apply_camera_2d" ||
-                                                     ident->name == "editor_apply_camera_3d" ||
-                                                     ident->name == "editor_entity_position_2d" ||
-                                                     ident->name == "editor_entity_position_3d");
-                        std::string result = lowered_name + "(";
-                        if (needs_registry) {
-                            result += "registry";
-                        }
+                    // Bare DSL input-state builtins: fallback when no module resolved.
+                    if (ident->name == "axis" || ident->name == "pressed" || ident->name == "down" ||
+                        ident->name == "released") {
+                        std::string result = "InputEvent::" + ident->name + "(";
                         for (size_t i = 0; i < e.args.size(); ++i) {
-                            if (i > 0 || needs_registry) {
+                            if (i > 0) {
                                 result += ", ";
                             }
-                            result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases);
+                            result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
                         }
                         return result + ")";
                     }
                 }
-                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
-                    if (const auto lowered = lower_stdlib_member_call(
-                            *member,
-                            e.args,
-                            program,
-                            pointer_aliases,
-                            [&](const ExprNode& arg) {
-                                return rewrite_expr(arg, trait_names, program, pointer_aliases);
-                            },
-                            trait_names);
-                        !lowered.empty()) {
-                        return lowered;
+                // Disambiguate module-alias.func() when the alias shadows a known field name
+                // (e.g. `text.format(...)` where `text` is both a UseNode alias and a trait field).
+                if (const auto* member_callee = std::get_if<MemberExpr>(&e.callee->expr)) {
+                    if (const auto* alias_ident = std::get_if<IdentExpr>(&member_callee->object->expr)) {
+                        if (program.ast != nullptr) {
+                            for (const auto& decl : program.ast->declarations) {
+                                if (const auto* use_node = std::get_if<UseNode>(&decl)) {
+                                    if (use_node->alias.has_value() && *use_node->alias == alias_ident->name) {
+                                        const auto func_id = make_symbol_id(SymbolKind::Func,
+                                            ModuleId{.name = use_node->module_name},
+                                            member_callee->member);
+                                        const auto lowered = lower_resolved_stdlib_call(func_id, e.args,
+                                            [&](const ExprNode& arg) {
+                                                return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides);
+                                            });
+                                        if (!lowered.empty()) {
+                                            return lowered;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+                }
+                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
                     if (const auto* object = std::get_if<IdentExpr>(&member->object->expr)) {
                         if (object->name == "input" && member->member == "mouse_position" && e.args.empty()) {
                             return "cactus::runtime::entt_backend::mouse_position()";
@@ -1267,33 +1311,85 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                 if (i > 0) {
                                     result += ", ";
                                 }
-                                result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases);
+                                result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
                             }
                             return result + ")";
                         }
+                        if (object->name == "input" && member->member == "mouse_delta" && e.args.empty()) {
+                            return "cactus::runtime::entt_backend::editor_mouse_delta_screen()";
+                        }
+                        if (object->name == "input" && member->member == "wheel_delta" && e.args.empty()) {
+                            return "cactus::runtime::entt_backend::editor_wheel_delta()";
+                        }
+                        if (object->name == "input" && member->member == "consume" && e.args.size() == 1) {
+                            return "cactus::runtime::entt_backend::editor_consume(" +
+                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                        }
+                        // camera2d/camera3d/transform2d/transform3d are aliases declared in
+                        // std.editor and are invisible from the root program's AST, so
+                        // imported_module_name cannot resolve them and they need hardcoded dispatch.
+                        if (object->name == "camera2d") {
+                            if (member->member == "screen_to_world" && e.args.size() == 1) {
+                                return "cactus::runtime::entt_backend::editor_screen_to_world_2d(" +
+                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                            }
+                            if (member->member == "screen_delta_to_world" && e.args.size() == 1) {
+                                return "cactus::runtime::entt_backend::screen_delta_to_world_2d(" +
+                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                            }
+                        }
+                        if (object->name == "camera3d") {
+                            if (member->member == "screen_to_plane" && e.args.size() == 3) {
+                                std::string result = "cactus::runtime::entt_backend::editor_plane_project_3d(";
+                                for (size_t i = 0; i < e.args.size(); ++i) {
+                                    if (i > 0) {
+                                        result += ", ";
+                                    }
+                                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
+                                }
+                                return result + ")";
+                            }
+                            if (member->member == "screen_delta_on_plane" && e.args.size() == 4) {
+                                std::string result = "cactus::runtime::entt_backend::screen_delta_on_plane_3d(";
+                                for (size_t i = 0; i < e.args.size(); ++i) {
+                                    if (i > 0) {
+                                        result += ", ";
+                                    }
+                                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
+                                }
+                                return result + ")";
+                            }
+                        }
+                        if (object->name == "transform2d" && member->member == "world_position" && e.args.size() == 1) {
+                            return "cactus::runtime::entt_backend::editor_entity_position_2d(registry, " +
+                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                        }
+                        if (object->name == "transform3d" && member->member == "world_position" && e.args.size() == 1) {
+                            return "cactus::runtime::entt_backend::editor_entity_position_3d(registry, " +
+                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                        }
                     }
                 }
-                std::string result = rewrite_expr(*e.callee, trait_names, program, pointer_aliases) + "(";
+                std::string result = rewrite_expr(*e.callee, trait_names, program, pointer_aliases, cpp_overrides) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases);
+                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                // Three-level access module.EnumName.Variant: emit CanonicalEnum::Variant.
                 if (const auto* enum_member = std::get_if<MemberExpr>(&e.object->expr)) {
-                    if (const auto* module_ident = std::get_if<IdentExpr>(&enum_member->object->expr)) {
-                        if (imported_module_name(program.ast, module_ident->name) == "std.physics.flat" &&
-                            program.enums.contains(enum_member->member)) {
-                            return enum_member->member + "::" + e.member;
-                        }
+                    if (std::get_if<IdentExpr>(&enum_member->object->expr) != nullptr &&
+                        EnttCodegenUtils::find_enum(program, enum_member->member) != nullptr) {
+                        return EnttCodegenUtils::enum_cpp_name(enum_member->member, program) + "::" + e.member;
                     }
                 }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
-                    // Enum names — use :: notation
-                    if (program.enums.contains(ident->name)) {
-                        return ident->name + "::" + e.member;
+                    // Enum names — use :: notation with canonical C++ name
+                    if (EnttCodegenUtils::find_enum(program, ident->name) != nullptr) {
+                        return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + e.member;
                     }
                 }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
@@ -1301,7 +1397,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         return ident->name + "->" + e.member;
                     }
                 }
-                return rewrite_expr(*e.object, trait_names, program, pointer_aliases) + "." + e.member;
+                return rewrite_expr(*e.object, trait_names, program, pointer_aliases, cpp_overrides) + "." + e.member;
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 return emit_spawn_expression(e, trait_names, program, pointer_aliases);
             } else if constexpr (std::is_same_v<E, ListExpr>) {
@@ -1310,13 +1406,13 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*e.elements[i], trait_names, program, pointer_aliases);
+                    result += rewrite_expr(*e.elements[i], trait_names, program, pointer_aliases, cpp_overrides);
                 }
                 result += "}";
                 return result;
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 return lower_query_call_expr(e, program, [&](const ExprNode& arg) {
-                    return rewrite_expr(arg, trait_names, program, pointer_aliases);
+                    return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides);
                 });
             } else {
                 return "/* unsupported expr */";
@@ -1332,33 +1428,38 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
                                          const std::unordered_set<std::string>& pointer_aliases,
-                                         bool dispatcher_available) {
+                                         bool dispatcher_available,
+                                         const std::unordered_map<std::string, std::string>& cpp_overrides) {
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
     std::ostringstream out;
 
     out << ind << "{\n";
     out << ind
-        << "    auto __match_entity = " << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases)
+        << "    auto __match_entity = " << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases, cpp_overrides)
         << ";\n";
     out << ind << "    if (registry.valid(__match_entity)) {\n";
 
     bool first = true;
     for (const auto& arm : match_stmt.arms) {
-        const auto TRAIT_IT  = program.traits.find(arm.trait_name);
-        const bool IS_MARKER = TRAIT_IT == program.traits.end() || TRAIT_IT->second.fields.empty();
+        const std::string cpp_arm = EnttCodegenUtils::trait_cpp_name(arm.trait_name, program);
+        const auto simple_name    = arm.trait_name.rfind('.') != std::string::npos
+                                        ? arm.trait_name.substr(arm.trait_name.rfind('.') + 1)
+                                        : arm.trait_name;
+        const auto* TRAIT_INFO    = EnttCodegenUtils::find_trait(program, simple_name);
+        const bool IS_MARKER      = TRAIT_INFO == nullptr || TRAIT_INFO->fields.empty();
         std::unordered_set<std::string> arm_aliases = pointer_aliases;
 
         out << ind << "        " << (first ? "if" : "else if") << " (";
         if (IS_MARKER) {
-            out << "registry.all_of<" << arm.trait_name << ">(__match_entity)) {\n";
+            out << "registry.all_of<" << cpp_arm << ">(__match_entity)) {\n";
         } else {
-            const std::string ALIAS = arm.alias.value_or("__match_" + arm.trait_name);
+            const std::string ALIAS = arm.alias.value_or("__match_" + cpp_arm);
             arm_aliases.insert(ALIAS);
-            out << "auto* " << ALIAS << " = registry.try_get<" << arm.trait_name << ">(__match_entity)) {\n";
+            out << "auto* " << ALIAS << " = registry.try_get<" << cpp_arm << ">(__match_entity)) {\n";
         }
 
         for (const auto& stmt : arm.body) {
-            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, arm_aliases, dispatcher_available);
+            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, arm_aliases, dispatcher_available, cpp_overrides);
         }
         out << ind << "        }";
         first = false;
@@ -1370,7 +1471,7 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     if (match_stmt.wildcard.has_value()) {
         out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
         for (const auto& stmt : match_stmt.wildcard->body) {
-            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, pointer_aliases, dispatcher_available);
+            out << rewrite_stmt(*stmt, indent + 3, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
         }
         out << ind << "        }\n";
     }
@@ -1381,13 +1482,13 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static std::string rewrite_stmt(
-    const StmtNode& stmt,
-    int indent,
-    const std::vector<std::string>& trait_names,
-    const DecoratedProgram& program,
-    const std::unordered_set<std::string>& pointer_aliases,
-    bool dispatcher_available) {
+static std::string rewrite_stmt(const StmtNode& stmt,
+                                int indent,
+                                const std::vector<std::string>& trait_names,
+                                const DecoratedProgram& program,
+                                const std::unordered_set<std::string>& pointer_aliases,
+                                bool dispatcher_available,
+                                const std::unordered_map<std::string, std::string>& cpp_overrides) {
     auto known_fields = collect_trait_fields(trait_names, program);
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
@@ -1397,13 +1498,17 @@ static std::string rewrite_stmt(
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, LetStmt>) {
                 return ind + "[[maybe_unused]] auto " + s.name + " = " +
-                       rewrite_expr(*s.value, trait_names, program, pointer_aliases) + ";\n";
+                       rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
                 if (known_fields.contains(s.name)) {
                     auto comp = find_comp_for_field(s.name, trait_names, program);
                     if (!comp.empty()) {
-                        lhs = comp + "_comp." + s.name;
+                        const auto ovr = cpp_overrides.find(comp);
+                        const auto& cpp = ovr != cpp_overrides.end()
+                                              ? ovr->second
+                                              : EnttCodegenUtils::trait_cpp_name(comp, program);
+                        lhs = cpp + "_comp." + s.name;
                     } else {
                         lhs = s.name;
                     }
@@ -1416,17 +1521,17 @@ static std::string rewrite_stmt(
                         ident != nullptr && ident->name == "vec2" && call->args.size() == 2) {
                         const std::string prefix = ind + lhs + " " + s.op + " vec2(";
                         const std::string continuation(prefix.size(), ' ');
-                        return prefix + rewrite_expr(*call->args[0], trait_names, program, pointer_aliases) + ",\n" +
-                               continuation + rewrite_expr(*call->args[1], trait_names, program, pointer_aliases) +
+                        return prefix + rewrite_expr(*call->args[0], trait_names, program, pointer_aliases, cpp_overrides) + ",\n" +
+                               continuation + rewrite_expr(*call->args[1], trait_names, program, pointer_aliases, cpp_overrides) +
                                ");\n";
                     }
                 }
-                return ind + lhs + " " + s.op + " " + rewrite_expr(*s.value, trait_names, program, pointer_aliases) +
+                return ind + lhs + " " + s.op + " " + rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides) +
                        ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string emit_call;
                 if (dispatcher_available) {
-                    emit_call = "dispatcher.trigger(" + event_cpp_type(s.event_name) + "{";
+                    emit_call = "dispatcher.trigger(" + event_cpp_type(s.event_name, program) + "{";
                 } else {
                     emit_call = s.event_name + "_buffer.push_back({";
                 }
@@ -1435,20 +1540,23 @@ static std::string rewrite_stmt(
                         emit_call += ", ";
                     }
                     emit_call += "." + s.payload[i].name + " = " +
-                                 rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases);
+                                 rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides);
                 }
                 emit_call += "});";
                 if (s.target.has_value()) {
-                    const std::string TARGET = rewrite_expr(**s.target, trait_names, program, pointer_aliases);
+                    const std::string TARGET = rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides);
                     return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + "\n" + ind +
                            "}\n";
                 }
                 return ind + emit_call + "\n";
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                const SymbolId tmpl_id = s.resolved_template_id.has_value()
+                    ? *s.resolved_template_id
+                    : make_symbol_id(SymbolKind::Template, program.module_name, s.template_name);
                 if (!s.child_overrides.empty()) {
-                    if (const auto* children = find_template_children(program, s.template_name)) {
+                    if (const auto* children = find_template_children(program, tmpl_id)) {
                         return ind +
-                               emit_hierarchical_spawn_expansion(s.template_name,
+                               emit_hierarchical_spawn_expansion(tmpl_id,
                                                                  s.overrides,
                                                                  s.child_overrides,
                                                                  *children,
@@ -1460,25 +1568,27 @@ static std::string rewrite_stmt(
                 }
                 std::ostringstream result;
                 result << ind << "{\n";
-                result << ind << "    auto __spawned = " << archetype_create_function_name(s.template_name)
+                result << ind << "    auto __spawned = " << archetype_create_function_name(tmpl_id, program)
                        << "(registry);\n";
                 result << emit_spawn_overrides(
                     "__spawned", s.overrides, indent + 1, trait_names, program, pointer_aliases);
                 result << ind << "}\n";
                 return result.str();
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                std::string target = s.target_expr.has_value()
-                                         ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
-                                         : "entity";
-                const bool GUARDED = s.target_expr.has_value();
+                std::string target    = s.target_expr.has_value()
+                                            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides)
+                                            : "entity";
+                const bool GUARDED    = s.target_expr.has_value();
+                const std::string cpp = EnttCodegenUtils::trait_cpp_name(
+                    s.resolved_trait_id, s.trait_name, program);
                 if (s.args.empty()) {
                     if (GUARDED) {
-                        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" +
-                               s.trait_name + "(" + target + ");\n" + ind + "    registry.emplace_or_replace<" +
-                               s.trait_name + ">(" + target + ");\n" + ind + "}\n";
+                        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp +
+                               "(" + target + ");\n" + ind + "    registry.emplace_or_replace<" + cpp + ">(" + target +
+                               ");\n" + ind + "}\n";
                     }
-                    return ind + "cancel_projected_" + s.trait_name + "(" + target + ");\n" + ind +
-                           "registry.emplace_or_replace<" + s.trait_name + ">(" + target + ");\n";
+                    return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind +
+                           "registry.emplace_or_replace<" + cpp + ">(" + target + ");\n";
                 }
 
                 std::ostringstream result;
@@ -1486,72 +1596,80 @@ static std::string rewrite_stmt(
                     result << ind << "if (registry.valid(" << target << ")) {\n";
                 }
                 result << ind << (GUARDED ? "    " : "") << "{\n";
-                result << ind << (GUARDED ? "        " : "    ") << "cancel_projected_" << s.trait_name << "(" << target
+                result << ind << (GUARDED ? "        " : "    ") << "cancel_projected_" << cpp << "(" << target
                        << ");\n";
-                result << ind << (GUARDED ? "        " : "    ") << "auto __existing = registry.try_get<"
-                       << s.trait_name << ">(" << target << ");\n";
-                result << ind << (GUARDED ? "        " : "    ")
-                       << "auto __value = __existing ? *__existing : " << s.trait_name << "{};\n";
+                result << ind << (GUARDED ? "        " : "    ") << "auto __existing = registry.try_get<" << cpp << ">("
+                       << target << ");\n";
+                result << ind << (GUARDED ? "        " : "    ") << "auto __value = __existing ? *__existing : " << cpp
+                       << "{};\n";
                 for (const auto& arg : s.args) {
                     result << ind << (GUARDED ? "        " : "    ") << "__value." << arg.name << " = "
-                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
+                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides) << ";\n";
                 }
-                result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << s.trait_name
-                       << ">(" << target << ", __value);\n";
+                result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">("
+                       << target << ", __value);\n";
                 result << ind << (GUARDED ? "    " : "") << "}\n";
                 if (GUARDED) {
                     result << ind << "}\n";
                 }
                 return result.str();
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                std::string target = s.target_expr.has_value()
-                                         ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
-                                         : "entity";
+                std::string target    = s.target_expr.has_value()
+                                            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides)
+                                            : "entity";
+                const std::string cpp = EnttCodegenUtils::trait_cpp_name(
+                    s.resolved_trait_id, s.trait_name, program);
                 if (s.target_expr.has_value()) {
-                    return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" +
-                           s.trait_name + "(" + target + ");\n" + ind + "    if (registry.all_of<" + s.trait_name +
-                           ">(" + target + ")) {\n" + ind + "        registry.remove<" + s.trait_name + ">(" + target +
-                           ");\n" + ind + "    }\n" + ind + "}\n";
+                    return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" +
+                           target + ");\n" + ind + "    if (registry.all_of<" + cpp + ">(" + target + ")) {\n" + ind +
+                           "        registry.remove<" + cpp + ">(" + target + ");\n" + ind + "    }\n" + ind + "}\n";
                 }
-                return ind + "cancel_projected_" + s.trait_name + "(" + target + ");\n" + ind + "if (registry.all_of<" +
-                       s.trait_name + ">(" + target + ")) {\n" + ind + "    registry.remove<" + s.trait_name + ">(" +
-                       target + ");\n" + ind + "}\n";
+                return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "if (registry.all_of<" + cpp +
+                       ">(" + target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" + target + ");\n" + ind +
+                       "}\n";
             } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                 const std::string target = s.target_expr.has_value()
-                                               ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases)
+                                               ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides)
                                                : "entity";
-                const auto trait_it      = program.traits.find(s.trait_name);
-                const bool is_marker     = trait_it == program.traits.end() || trait_it->second.fields.empty();
+                const std::string cpp    = EnttCodegenUtils::trait_cpp_name(
+                    s.resolved_trait_id, s.trait_name, program);
+                const auto simple        = s.trait_name.rfind('.') != std::string::npos
+                                               ? s.trait_name.substr(s.trait_name.rfind('.') + 1)
+                                               : s.trait_name;
+                const auto* resolved_pt  = s.resolved_trait_id.has_value()
+                                               ? EnttCodegenUtils::find_trait(program, s.resolved_trait_id->local_name)
+                                               : EnttCodegenUtils::find_trait(program, simple);
+                const bool is_marker     = resolved_pt == nullptr || resolved_pt->fields.empty();
                 std::ostringstream result;
                 result << ind << "if (registry.valid(" << target << ")) {\n";
                 if (is_marker) {
-                    result << ind << "    project_" << s.trait_name << "(registry, " << target << ");\n";
+                    result << ind << "    project_" << cpp << "(registry, " << target << ");\n";
                 } else {
-                    result << ind << "    [[maybe_unused]] auto& __projected = project_" << s.trait_name
-                           << "(registry, " << target << ");\n";
+                    result << ind << "    [[maybe_unused]] auto& __projected = project_" << cpp << "(registry, "
+                           << target << ");\n";
                     for (const auto& arg : s.args) {
                         result << ind << "    __projected." << arg.name << " = "
-                               << rewrite_expr(*arg.value, trait_names, program, pointer_aliases) << ";\n";
+                               << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides) << ";\n";
                     }
                 }
                 result << ind << "}\n";
                 return result.str();
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 if (s.target_expr.has_value()) {
-                    std::string target = rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases);
+                    std::string target = rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides);
                     return ind + "if (registry.valid(" + target + ")) {\n" + ind +
                            "    cactus_destroy_entity_recursive(registry, " + target + ");\n" + ind + "}\n";
                 }
                 return ind + "cactus_destroy_entity_recursive(registry, entity);\n";
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
-                    return ind + "return " + rewrite_expr(**s.value, trait_names, program, pointer_aliases) + ";\n";
+                    return ind + "return " + rewrite_expr(**s.value, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
                 }
                 return ind + "return;\n";
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases) + ";\n";
+                return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                const auto condition = rewrite_expr(*s.condition, trait_names, program, pointer_aliases);
+                const auto condition = rewrite_expr(*s.condition, trait_names, program, pointer_aliases, cpp_overrides);
                 std::string result   = ind + "if ";
                 if (!condition.empty() && condition.front() == '(' && condition.back() == ')') {
                     result += condition;
@@ -1560,26 +1678,29 @@ static std::string rewrite_stmt(
                 }
                 result += " {\n";
                 for (auto& inner : s.then_body) {
-                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available);
+                    result +=
+                        rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
                 }
                 result += ind + "}";
                 if (!s.else_body.empty()) {
                     result += " else {\n";
                     for (auto& inner : s.else_body) {
-                        result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available);
+                        result += rewrite_stmt(
+                            *inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
                     }
                     result += ind + "}";
                 }
                 return result + "\n";
             } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
-                return emit_trait_match_stmt(s, indent, trait_names, program, pointer_aliases, dispatcher_available);
+                return emit_trait_match_stmt(s, indent, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
             } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                 const auto temp    = foreach_temp_name(s);
                 std::string result = ind + "auto " + temp + " = " +
-                                     rewrite_expr(*s.iterable, trait_names, program, pointer_aliases) + ";\n";
+                                     rewrite_expr(*s.iterable, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
                 result += ind + "for (const auto& " + s.var_name + " : " + temp + ") {\n";
                 for (const auto& inner : s.body) {
-                    result += rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available);
+                    result +=
+                        rewrite_stmt(*inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
                 }
                 result += ind + "}\n";
                 return result;
@@ -1592,8 +1713,17 @@ static std::string rewrite_stmt(
 
 std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
-    const auto filter_traits  = filter_trait_names(sys.filter);
-    const auto exclude_traits = filter_trait_names(sys.exclude);
+    const auto filter_bindings_list = filter_bindings(sys.filter, program);
+    const auto filter_traits        = filter_trait_names(sys.filter, program);
+    const auto filter_cpp_types     = filter_cpp_type_names(sys.filter, program);
+    const auto exclude_cpp_types    = filter_cpp_type_names(sys.exclude, program);
+
+    // Build simple_name → canonical_cpp_name map so rewrite_expr/rewrite_stmt can
+    // resolve ambiguous traits (e.g. WorldTransform in both flat and volume modules).
+    std::unordered_map<std::string, std::string> filter_cpp_overrides;
+    for (const auto& b : filter_bindings_list) {
+        filter_cpp_overrides.emplace(b.trait_name, b.cpp_type_name);
+    }
 
     for (const auto& handler : sys.handlers) {
         // Frame events (tick, input, fixed_tick, late_tick) are called directly from
@@ -1601,11 +1731,12 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
         // load, unload) are connected via dispatcher sinks and cannot take extra args.
         const bool is_frame_event = handler.event_name == "tick" || handler.event_name == "input" ||
                                     handler.event_name == "fixed_tick" || handler.event_name == "late_tick";
-        out << "void " << system_function_name(sys.name, handler.event_name) << "(entt::registry& registry";
+        out << "void " << system_function_name(program.module_name, sys.name, handler.event_name)
+            << "(entt::registry& registry";
         if (is_frame_event) {
             out << ", entt::dispatcher& dispatcher";
         }
-        out << ", const " << event_cpp_type(handler.event_name) << "& " << handler.alias.value_or(handler.event_name);
+        out << ", const " << event_cpp_type(handler.event_name, program) << "& " << handler.alias.value_or(handler.event_name);
         out << ") {\n";
         if (is_frame_event) {
             out << "    (void)dispatcher;\n";
@@ -1614,19 +1745,19 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
 
         emit_sort_call(out, sys);
         if (!filter_traits.empty()) {
-            emit_view_declaration(out, filter_traits, exclude_traits, 1);
-            emit_view_each_header(out, filter_traits, 1, program);
+            emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 1);
+            emit_view_each_header(out, filter_bindings_list, 1, program);
             out << "        (void)entity;\n";
-            emit_filter_alias_bindings(out, sys.filter, 2);
+            emit_filter_alias_bindings(out, sys.filter, program, 2);
         } else {
             out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
             out << "        (void)entity;\n";
-            emit_storage_filter_skip(out, sys.filter, sys.exclude, 2);
+            emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
         }
 
         // Emit body with proper component field access
         for (const auto& stmt : handler.body) {
-            out << rewrite_stmt(*stmt, 2, filter_traits, program, {}, is_frame_event);
+            out << rewrite_stmt(*stmt, 2, filter_traits, program, {}, is_frame_event, filter_cpp_overrides);
         }
 
         out << (filter_traits.empty() ? "    }\n" : "    });\n");
@@ -1641,27 +1772,31 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     std::ostringstream out;
 
     if (is_flat_transform_propagation(sys, program)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        const std::string lt     = EnttCodegenUtils::trait_cpp_name("LocalTransform", program);
+        const std::string wt     = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
         out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
-        out << "        return registry.all_of<LocalTransform, WorldTransform>(entity);\n";
+        out << "        return registry.all_of<" << lt << ", " << wt << ">(entity);\n";
         out << "    };\n";
         out << "    const auto GET_PARENT = [&](entt::entity entity) {\n";
-        out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr) {\n";
+        out << "        if (auto* parent = registry.try_get<" << parent << ">(entity); parent != nullptr) {\n";
         out << "            return parent->parent;\n";
         out << "        }\n";
         out << "        return entt::entity{entt::null};\n";
         out << "    };\n";
         out << "    const auto COPY_LOCAL = [&](entt::entity entity) {\n";
-        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
-        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
+        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
+        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
         out << "        world.position = local.position;\n";
         out << "        world.rotation = local.rotation;\n";
         out << "        world.scale = local.scale;\n";
         out << "    };\n";
         out << "    const auto ACCUMULATE_FROM_PARENT = [&](entt::entity parent_entity, entt::entity entity) {\n";
-        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
-        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
-        out << "        const auto& parent_world = registry.get<WorldTransform>(parent_entity);\n";
+        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
+        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
+        out << "        const auto& parent_world = registry.get<" << wt << ">(parent_entity);\n";
         out << "        world.position = Vector2{\n";
         out << "            .x = parent_world.position.x + local.position.x,\n";
         out << "            .y = parent_world.position.y + local.position.y,\n";
@@ -1680,27 +1815,31 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_volume_transform_propagation(sys, program)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        const std::string lt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.LocalTransform", program);
+        const std::string wt     = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
         out << "    const auto HAS_LOCAL_WORLD = [&](entt::entity entity) {\n";
-        out << "        return registry.all_of<LocalTransform, WorldTransform>(entity);\n";
+        out << "        return registry.all_of<" << lt << ", " << wt << ">(entity);\n";
         out << "    };\n";
         out << "    const auto GET_PARENT = [&](entt::entity entity) {\n";
-        out << "        if (auto* parent = registry.try_get<Parent>(entity); parent != nullptr) {\n";
+        out << "        if (auto* parent = registry.try_get<" << parent << ">(entity); parent != nullptr) {\n";
         out << "            return parent->parent;\n";
         out << "        }\n";
         out << "        return entt::entity{entt::null};\n";
         out << "    };\n";
         out << "    const auto COPY_LOCAL = [&](entt::entity entity) {\n";
-        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
-        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
+        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
+        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
         out << "        world.position = local.position;\n";
         out << "        world.rotation = local.rotation;\n";
         out << "        world.scale = local.scale;\n";
         out << "    };\n";
         out << "    const auto ACCUMULATE_FROM_PARENT = [&](entt::entity parent_entity, entt::entity entity) {\n";
-        out << "        auto& local = registry.get<LocalTransform>(entity);\n";
-        out << "        auto& world = registry.get<WorldTransform>(entity);\n";
-        out << "        const auto& parent_world = registry.get<WorldTransform>(parent_entity);\n";
+        out << "        auto& local = registry.get<" << lt << ">(entity);\n";
+        out << "        auto& world = registry.get<" << wt << ">(entity);\n";
+        out << "        const auto& parent_world = registry.get<" << wt << ">(parent_entity);\n";
         out << "        world.position = Vector3{\n";
         out << "            .x = parent_world.position.x + local.position.x,\n";
         out << "            .y = parent_world.position.y + local.position.y,\n";
@@ -1722,20 +1861,24 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_shape_renderer(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<WorldTransform, Shape>();\n";
+        const std::string wt         = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string shape      = EnttCodegenUtils::trait_cpp_name("Shape", program);
+        const std::string shape_type = EnttCodegenUtils::enum_cpp_name("ShapeType", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << wt << ", " << shape << ">();\n";
         out << "    BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Shape& "
-               "Shape_comp) {\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << shape << "& "
+            << shape << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        if (!Shape_comp.visible) {\n";
+        out << "        if (!" << shape << "_comp.visible) {\n";
         out << "            return;\n";
         out << "        }\n";
-        out << "        switch (Shape_comp.type) {\n";
-        out << "            case ShapeType::Rectangle:\n";
-        out << "                DrawRectangleV(WorldTransform_comp.position,\n";
-        out << "                               Shape_comp.size,\n";
-        out << "                               Shape_comp.color);\n";
+        out << "        switch (" << shape << "_comp.type) {\n";
+        out << "            case " << shape_type << "::Rectangle:\n";
+        out << "                DrawRectangleV(" << wt << "_comp.position,\n";
+        out << "                               " << shape << "_comp.size,\n";
+        out << "                               " << shape << "_comp.color);\n";
         out << "                break;\n";
         out << "        }\n";
         out << "    });\n";
@@ -1745,49 +1888,58 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_sprite_renderer(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& "
-               "Renderer_comp) {\n";
+        const std::string wt       = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string renderer = EnttCodegenUtils::trait_cpp_name("Renderer", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << wt << ", " << renderer << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << renderer
+            << "& " << renderer << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_sprite(WorldTransform_comp.position, Renderer_comp.size, "
-               "Renderer_comp.color, Renderer_comp.texture, Renderer_comp.visible, Renderer_comp.layer);\n";
+        out << "        cactus::runtime::entt_backend::submit_sprite(" << wt << "_comp.position, " << renderer
+            << "_comp.size, " << renderer << "_comp.color, " << renderer << "_comp.texture, " << renderer
+            << "_comp.visible, " << renderer << "_comp.layer);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_animated_sprite_system(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<AnimatedSprite>();\n";
-        out << "    view.each([&](entt::entity entity, AnimatedSprite& AnimatedSprite_comp) {\n";
+        const std::string anim = EnttCodegenUtils::trait_cpp_name("AnimatedSprite", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << anim << ">();\n";
+        out << "    view.each([&](entt::entity entity, " << anim << "& " << anim << "_comp) {\n";
         out << "        (void)entity;\n";
         out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
-        out << "        cactus::runtime::entt_backend::advance_animated_sprite(AnimatedSprite_comp.texture, "
-               "AnimatedSprite_comp.frame, AnimatedSprite_comp.frame_count, AnimatedSprite_comp.fps, "
-               "AnimatedSprite_comp.playing, kFixedDt);\n";
+        out << "        cactus::runtime::entt_backend::advance_animated_sprite(" << anim << "_comp.texture, " << anim
+            << "_comp.frame, " << anim << "_comp.frame_count, " << anim << "_comp.fps, " << anim
+            << "_comp.playing, kFixedDt);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_model_animation_system(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<ModelRenderer, ModelAnimator>();\n";
-        out << "    view.each([&](entt::entity entity, const ModelRenderer& ModelRenderer_comp, ModelAnimator& "
-               "ModelAnimator_comp) {\n";
+        const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
+        const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << mr << ", " << manim << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << mr << "& " << mr << "_comp, " << manim << "& "
+            << manim << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        if (!ModelAnimator_comp.playing) {\n";
+        out << "        if (!" << manim << "_comp.playing) {\n";
         out << "            return;\n";
         out << "        }\n";
         out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
-        out << "        ModelAnimator_comp.time += kFixedDt * ModelAnimator_comp.speed;\n";
-        out << "        const float duration = cactus::runtime::entt_backend::model_animation_duration("
-               "ModelRenderer_comp.model, ModelAnimator_comp.clip);\n";
+        out << "        " << manim << "_comp.time += kFixedDt * " << manim << "_comp.speed;\n";
+        out << "        const float duration = cactus::runtime::entt_backend::model_animation_duration(" << mr
+            << "_comp.model, " << manim << "_comp.clip);\n";
         out << "        if (duration > 0.0F) {\n";
-        out << "            ModelAnimator_comp.time = std::fmod(ModelAnimator_comp.time, duration);\n";
-        out << "            if (ModelAnimator_comp.time < 0.0F) {\n";
-        out << "                ModelAnimator_comp.time += duration;\n";
+        out << "            " << manim << "_comp.time = std::fmod(" << manim << "_comp.time, duration);\n";
+        out << "            if (" << manim << "_comp.time < 0.0F) {\n";
+        out << "                " << manim << "_comp.time += duration;\n";
         out << "            }\n";
         out << "        }\n";
         out << "    });\n";
@@ -1796,90 +1948,107 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_mesh_renderer(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<WorldTransform, Renderer>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const Renderer& "
-               "Renderer_comp) {\n";
+        const std::string wt       = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const std::string renderer = EnttCodegenUtils::trait_cpp_name("Renderer", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << wt << ", " << renderer << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << renderer
+            << "& " << renderer << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_mesh(WorldTransform_comp.position, "
-               "WorldTransform_comp.rotation, WorldTransform_comp.scale, Renderer_comp.mesh, Renderer_comp.material, "
-               "Renderer_comp.visible, Renderer_comp.cast_shadow);\n";
+        out << "        cactus::runtime::entt_backend::submit_mesh(" << wt << "_comp.position, " << wt
+            << "_comp.rotation, " << wt << "_comp.scale, " << renderer << "_comp.mesh, " << renderer
+            << "_comp.material, " << renderer << "_comp.visible, " << renderer << "_comp.cast_shadow);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_model_renderer_system(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<WorldTransform, ModelRenderer>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const ModelRenderer& "
-               "ModelRenderer_comp) {\n";
+        const std::string wt    = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
+        const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << wt << ", " << mr << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << mr << "& "
+            << mr << "_comp) {\n";
         out << "        (void)entity;\n";
-        if (program.traits.contains("ModelAnimator")) {
-            out << "        if (const auto* animator = registry.try_get<ModelAnimator>(entity)) {\n";
-            out << "            cactus::runtime::entt_backend::submit_model(WorldTransform_comp.position, "
-                   "WorldTransform_comp.rotation, WorldTransform_comp.scale, ModelRenderer_comp.model, "
-                   "ModelRenderer_comp.visible, ModelRenderer_comp.cast_shadow, animator->clip, animator->time);\n";
+        if (EnttCodegenUtils::find_trait(program, "ModelAnimator") != nullptr) {
+            out << "        if (const auto* animator = registry.try_get<" << manim << ">(entity)) {\n";
+            out << "            cactus::runtime::entt_backend::submit_model(" << wt << "_comp.position, " << wt
+                << "_comp.rotation, " << wt << "_comp.scale, " << mr << "_comp.model, " << mr << "_comp.visible, " << mr
+                << "_comp.cast_shadow, animator->clip, animator->time);\n";
             out << "            return;\n";
             out << "        }\n";
         }
-        out << "        cactus::runtime::entt_backend::submit_model(WorldTransform_comp.position, "
-               "WorldTransform_comp.rotation, WorldTransform_comp.scale, ModelRenderer_comp.model, "
-               "ModelRenderer_comp.visible, ModelRenderer_comp.cast_shadow);\n";
+        out << "        cactus::runtime::entt_backend::submit_model(" << wt << "_comp.position, " << wt
+            << "_comp.rotation, " << wt << "_comp.scale, " << mr << "_comp.model, " << mr << "_comp.visible, " << mr
+            << "_comp.cast_shadow);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_billboard_renderer(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<WorldTransform, BillboardRenderer>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const "
-               "BillboardRenderer& BillboardRenderer_comp) {\n";
+        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const std::string br = EnttCodegenUtils::trait_cpp_name("BillboardRenderer", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << wt << ", " << br << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << br << "& "
+            << br << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_billboard(WorldTransform_comp.position, "
-               "BillboardRenderer_comp.size, BillboardRenderer_comp.color, BillboardRenderer_comp.texture, "
-               "BillboardRenderer_comp.visible);\n";
+        out << "        cactus::runtime::entt_backend::submit_billboard(" << wt << "_comp.position, " << br
+            << "_comp.size, " << br << "_comp.color, " << br << "_comp.texture, " << br << "_comp.visible);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_point_light_system(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<WorldTransform, PointLight>();\n";
-        out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const PointLight& "
-               "PointLight_comp) {\n";
+        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const std::string pl = EnttCodegenUtils::trait_cpp_name("PointLight", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << wt << ", " << pl << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << pl << "& "
+            << pl << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::register_point_light(WorldTransform_comp.position, "
-               "PointLight_comp.color, PointLight_comp.intensity, PointLight_comp.range, PointLight_comp.enabled);\n";
+        out << "        cactus::runtime::entt_backend::register_point_light(" << wt << "_comp.position, " << pl
+            << "_comp.color, " << pl << "_comp.intensity, " << pl << "_comp.range, " << pl << "_comp.enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_directional_light_system(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<DirectionalLight>();\n";
-        out << "    view.each([&](entt::entity entity, const DirectionalLight& DirectionalLight_comp) {\n";
+        const std::string dl = EnttCodegenUtils::trait_cpp_name("DirectionalLight", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << dl << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << dl << "& " << dl << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::register_directional_light(DirectionalLight_comp.direction, "
-               "DirectionalLight_comp.color, DirectionalLight_comp.intensity, DirectionalLight_comp.enabled);\n";
+        out << "        cactus::runtime::entt_backend::register_directional_light(" << dl << "_comp.direction, " << dl
+            << "_comp.color, " << dl << "_comp.intensity, " << dl << "_comp.enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
     }
 
     if (is_any_text_renderer_2d(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        const std::string wt = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string tl = EnttCodegenUtils::trait_cpp_name("TextLabel", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
         if (!world_transform_is_volume(program)) {
-            out << "    auto view = registry.view<WorldTransform, TextLabel>();\n";
-            out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const TextLabel& "
-                   "TextLabel_comp) {\n";
+            out << "    auto view = registry.view<" << wt << ", " << tl << ">();\n";
+            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << tl << "& "
+                << tl << "_comp) {\n";
             out << "        (void)entity;\n";
-            out << "        cactus::runtime::entt_backend::submit_text_2d(WorldTransform_comp.position, "
-                   "WorldTransform_comp.rotation, TextLabel_comp.font_size, TextLabel_comp.color, TextLabel_comp.text, "
-                   "TextLabel_comp.visible);\n";
+            out << "        cactus::runtime::entt_backend::submit_text_2d(" << wt << "_comp.position, " << wt
+                << "_comp.rotation, " << tl << "_comp.font_size, " << tl << "_comp.color, " << tl << "_comp.text, "
+                << tl << "_comp.visible);\n";
             out << "    });\n";
         } else {
             out << "    (void)registry;\n";
@@ -1889,14 +2058,17 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_any_text_renderer_3d(sys)) {
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const std::string tl = EnttCodegenUtils::trait_cpp_name("TextLabel", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
         if (world_transform_is_volume(program)) {
-            out << "    auto view = registry.view<WorldTransform, TextLabel>();\n";
-            out << "    view.each([&](entt::entity entity, const WorldTransform& WorldTransform_comp, const TextLabel& "
-                   "TextLabel_comp) {\n";
-            out << "        cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), "
-                   "WorldTransform_comp.position, WorldTransform_comp.rotation, WorldTransform_comp.scale, "
-                   "TextLabel_comp.font_size, TextLabel_comp.color, TextLabel_comp.text, TextLabel_comp.visible);\n";
+            out << "    auto view = registry.view<" << wt << ", " << tl << ">();\n";
+            out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << tl << "& "
+                << tl << "_comp) {\n";
+            out << "        cactus::runtime::entt_backend::submit_text_3d(static_cast<uint32_t>(entity), " << wt
+                << "_comp.position, " << wt << "_comp.rotation, " << wt << "_comp.scale, " << tl << "_comp.font_size, "
+                << tl << "_comp.color, " << tl << "_comp.text, " << tl << "_comp.visible);\n";
             out << "    });\n";
         } else {
             out << "    (void)registry;\n";
@@ -1908,13 +2080,14 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     if (is_screen_label_system(sys)) {
         // Window-space HUD text: no WorldTransform and no flavor gating — the
         // same emission serves flat and volume programs (dsl-model-animation D5).
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<ScreenLabel>();\n";
-        out << "    view.each([&](entt::entity entity, const ScreenLabel& ScreenLabel_comp) {\n";
+        const std::string sl = EnttCodegenUtils::trait_cpp_name("ScreenLabel", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    auto view = registry.view<" << sl << ">();\n";
+        out << "    view.each([&](entt::entity entity, const " << sl << "& " << sl << "_comp) {\n";
         out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_screen_label(ScreenLabel_comp.position, "
-               "ScreenLabel_comp.font_size, ScreenLabel_comp.color, ScreenLabel_comp.text, "
-               "ScreenLabel_comp.visible);\n";
+        out << "        cactus::runtime::entt_backend::submit_screen_label(" << sl << "_comp.position, " << sl
+            << "_comp.font_size, " << sl << "_comp.color, " << sl << "_comp.text, " << sl << "_comp.visible);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -1923,21 +2096,26 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     if (is_editor_extern_system(sys)) {
         if (sys.name == "GizmoRenderer2D" && !world_transform_is_volume(program)) {
             const bool has_box_collider = program.traits.contains("BoxCollider");
-            out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+            const std::string es        = EnttCodegenUtils::trait_cpp_name("EditorState", program);
+            const std::string eg2d      = EnttCodegenUtils::trait_cpp_name("EditorGizmo2D", program);
+            const std::string wt        = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+            const std::string bc        = EnttCodegenUtils::trait_cpp_name("BoxCollider", program);
+            out << "void " << system_function_name(program.module_name, sys.name, "tick")
+                << "(entt::registry& registry) {\n";
             out << "    bool __editor_active = false;\n";
-            out << "    auto __estate_view = registry.view<EditorState>();\n";
+            out << "    auto __estate_view = registry.view<" << es << ">();\n";
             out << "    for (auto __e : __estate_view) {\n";
-            out << "        if (__estate_view.get<EditorState>(__e).active) { __editor_active = true; break; }\n";
+            out << "        if (__estate_view.get<" << es << ">(__e).active) { __editor_active = true; break; }\n";
             out << "    }\n";
             out << "    if (!__editor_active) { return; }\n";
             out << "    BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
-            out << "    auto view = registry.view<EditorGizmo2D, WorldTransform>();\n";
-            out << "    view.each([&](entt::entity entity, const EditorGizmo2D& gizmo, const WorldTransform& xform) {\n";
+            out << "    auto view = registry.view<" << eg2d << ", " << wt << ">();\n";
+            out << "    view.each([&](entt::entity entity, const " << eg2d << "& gizmo, const " << wt << "& xform) {\n";
             out << "        (void)entity;\n";
             out << "        Rectangle rect{.x = xform.position.x - 0.5F, .y = xform.position.y - 0.5F,\n";
             out << "                       .width = 1.0F, .height = 1.0F};\n";
             if (has_box_collider) {
-                out << "        if (const auto* box = registry.try_get<BoxCollider>(entity)) {\n";
+                out << "        if (const auto* box = registry.try_get<" << bc << ">(entity)) {\n";
                 out << "            rect = {.x = xform.position.x, .y = xform.position.y,\n";
                 out << "                    .width = box->size.x, .height = box->size.y};\n";
                 out << "        }\n";
@@ -1949,13 +2127,17 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "        if (gizmo.mode == 1) {\n";
             out << "            DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
             out << "            DrawTriangle(\n";
-            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y - (arrow_len * 0.1F)},\n";
-            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y + (arrow_len * 0.1F)},\n";
+            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y - (arrow_len * "
+                   "0.1F)},\n";
+            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y + (arrow_len * "
+                   "0.1F)},\n";
             out << "                {.x = center.x + arrow_len, .y = center.y}, RED);\n";
             out << "            DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
             out << "            DrawTriangle(\n";
-            out << "                {.x = center.x - (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * 0.2F)},\n";
-            out << "                {.x = center.x + (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * 0.2F)},\n";
+            out << "                {.x = center.x - (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * "
+                   "0.2F)},\n";
+            out << "                {.x = center.x + (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * "
+                   "0.2F)},\n";
             out << "                {.x = center.x, .y = center.y + arrow_len}, GREEN);\n";
             out << "        } else if (gizmo.mode == 2) {\n";
             out << "            DrawRing(center, gizmo.size * 0.8F, gizmo.size, 0.0F, 360.0F, 32, SKYBLUE);\n";
@@ -1976,10 +2158,12 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             return out.str();
         }
         if (sys.name == "EditorTemplatePalette") {
-            out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
-            out << "    auto __estate_view = registry.view<EditorState>();\n";
+            const std::string es = EnttCodegenUtils::trait_cpp_name("EditorState", program);
+            out << "void " << system_function_name(program.module_name, sys.name, "tick")
+                << "(entt::registry& registry) {\n";
+            out << "    auto __estate_view = registry.view<" << es << ">();\n";
             out << "    for (auto __ed_ent : __estate_view) {\n";
-            out << "        auto& __es = __estate_view.get<EditorState>(__ed_ent);\n";
+            out << "        auto& __es = __estate_view.get<" << es << ">(__ed_ent);\n";
             out << "        if (!__es.active) { continue; }\n";
             out << "        static std::unordered_map<std::string, Color> __tint_cache;\n";
             out << "        int __idx = 0;\n";
@@ -2030,23 +2214,27 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         }
         if (sys.name == "GizmoRenderer3D" && world_transform_is_volume(program)) {
             const bool has_model_renderer = program.traits.contains("ModelRenderer");
-            out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+            const std::string es          = EnttCodegenUtils::trait_cpp_name("EditorState", program);
+            const std::string eg3d        = EnttCodegenUtils::trait_cpp_name("EditorGizmo3D", program);
+            const std::string wt          = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+            const std::string mr          = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
+            out << "void " << system_function_name(program.module_name, sys.name, "tick")
+                << "(entt::registry& registry) {\n";
             out << "    bool __editor_active = false;\n";
-            out << "    auto __estate_view = registry.view<EditorState>();\n";
+            out << "    auto __estate_view = registry.view<" << es << ">();\n";
             out << "    for (auto __e : __estate_view) {\n";
-            out << "        if (__estate_view.get<EditorState>(__e).active) { __editor_active = true; break; }\n";
+            out << "        if (__estate_view.get<" << es << ">(__e).active) { __editor_active = true; break; }\n";
             out << "    }\n";
             out << "    if (!__editor_active) { return; }\n";
             out << "    BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());\n";
             out << "    DrawGrid(20, 1.0F);\n";
-            out << "    auto view = registry.view<EditorGizmo3D, WorldTransform>();\n";
-            out << "    view.each([&](entt::entity entity, const EditorGizmo3D& gizmo, const WorldTransform& xform) "
-                   "{\n";
+            out << "    auto view = registry.view<" << eg3d << ", " << wt << ">();\n";
+            out << "    view.each([&](entt::entity entity, const " << eg3d << "& gizmo, const " << wt << "& xform) {\n";
             out << "        (void)entity;\n";
             out << "        Vector3 box_center = xform.position;\n";
             out << "        Vector3 box_size{.x = 1.0F, .y = 1.0F, .z = 1.0F};\n";
             if (has_model_renderer) {
-                out << "        if (const auto* renderer = registry.try_get<ModelRenderer>(entity)) {\n";
+                out << "        if (const auto* renderer = registry.try_get<" << mr << ">(entity)) {\n";
                 out << "            const BoundingBox bounds = "
                        "cactus::runtime::entt_backend::model_bounds_box(renderer->model);\n";
                 out << "            const Vector3 extents{.x = bounds.max.x - bounds.min.x,\n";
@@ -2097,16 +2285,29 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         }
         // EditorPropertyPanel and the dimension-mismatched gizmo renderer
         // (GizmoRenderer3D in flat programs, GizmoRenderer2D in volume) — stub
-        out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
         out << "    (void)registry;\n";
         out << "}\n\n";
         return out.str();
     }
 
-    const auto filter_traits  = filter_trait_names(sys.filter);
-    const auto exclude_traits = filter_trait_names(sys.exclude);
+    // When std.editor is imported it pulls in both std.transform.flat and
+    // std.transform.volume, adding both TransformPropagation ExternSystemNodes
+    // to the merged AST. The dimension-matching variant is handled above (early
+    // return). The non-matching variant falls here and must be dropped so that
+    // the generic emit path does not produce a duplicate function definition.
+    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.flat", "TransformPropagation") ||
+        symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.volume", "TransformPropagation")) {
+        return "";
+    }
 
-    out << "void " << system_function_name(sys.name, "tick") << "(entt::registry& registry) {\n";
+    const auto filter_bindings_list = filter_bindings(sys.filter, program);
+    const auto filter_traits        = filter_trait_names(sys.filter, program);
+    const auto filter_cpp_types     = filter_cpp_type_names(sys.filter, program);
+    const auto exclude_cpp_types    = filter_cpp_type_names(sys.exclude, program);
+
+    out << "void " << system_function_name(program.module_name, sys.name, "tick") << "(entt::registry& registry) {\n";
 
     if (!sys.order_by.empty()) {
         out << "    // order by:\n";
@@ -2116,26 +2317,36 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (!filter_traits.empty()) {
-        emit_view_declaration(out, filter_traits, exclude_traits, 1);
-        emit_view_each_header(out, filter_traits, 1, program);
+        emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 1);
+        emit_view_each_header(out, filter_bindings_list, 1, program);
         out << "        (void)entity;\n";
-        emit_filter_alias_bindings(out, sys.filter, 2);
+        emit_filter_alias_bindings(out, sys.filter, program, 2);
     } else {
         out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
         out << "        (void)entity;\n";
-        emit_storage_filter_skip(out, sys.filter, sys.exclude, 2);
+        emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
     }
-    out << "        " << system_function_name(sys.name, "update") << "(registry, entity";
-    for (const auto& trait_name : filter_traits) {
-        out << ", " << trait_name << "_comp";
+    out << "        " << system_function_name(program.module_name, sys.name, "update") << "(registry, entity";
+    for (const auto& binding : filter_bindings_list) {
+        // Pass the canonical comp variable; skip duplicates and marker (empty) traits.
+        auto it             = program.traits.find(binding.trait_name);
+        const bool is_empty = it == program.traits.end() || it->second.fields.empty();
+        if (!is_empty && binding.binding_name == binding.cpp_type_name + "_comp") {
+            out << ", " << binding.cpp_type_name << "_comp";
+        }
     }
     out << ");\n";
     out << (filter_traits.empty() ? "    }\n" : "    });\n");
     out << "}\n\n";
 
-    out << "void " << system_function_name(sys.name, "update") << "(entt::registry& registry, entt::entity entity";
-    for (const auto& trait_name : filter_traits) {
-        out << ", " << trait_name << "& " << trait_name << "_comp";
+    out << "void " << system_function_name(program.module_name, sys.name, "update")
+        << "(entt::registry& registry, entt::entity entity";
+    for (const auto& binding : filter_bindings_list) {
+        auto it             = program.traits.find(binding.trait_name);
+        const bool is_empty = it == program.traits.end() || it->second.fields.empty();
+        if (!is_empty && binding.binding_name == binding.cpp_type_name + "_comp") {
+            out << ", " << binding.cpp_type_name << "& " << binding.cpp_type_name << "_comp";
+        }
     }
     out << ");\n\n";
 
@@ -2143,7 +2354,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
 }
 
 bool EnttSystemEmitter::requires_entt_hierarchy_helpers(const DecoratedProgram& program) {
-    return program.traits.contains("Parent");
+    return EnttCodegenUtils::find_trait(program, "Parent") != nullptr;
 }
 
 std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgram& program) {
@@ -2151,13 +2362,14 @@ std::string EnttSystemEmitter::emit_entt_hierarchy_helpers(const DecoratedProgra
         return "";
     }
 
+    const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
     std::ostringstream out;
     out << "[[maybe_unused]] static void cactus_destroy_entity_recursive(entt::registry& registry, entt::entity "
            "entity) {\n";
     out << "    cactus::runtime::entt_backend::destroy_entity_recursive(\n";
     out << "        registry, entity, [&](entt::entity parent, const auto& visitor) {\n";
-    out << "            auto parent_view = registry.view<Parent>();\n";
-    out << "            parent_view.each([&](entt::entity child, const Parent& rel) {\n";
+    out << "            auto parent_view = registry.view<" << parent_cpp << ">();\n";
+    out << "            parent_view.each([&](entt::entity child, const " << parent_cpp << "& rel) {\n";
     out << "                if (rel.parent == parent) {\n";
     out << "                    visitor(child);\n";
     out << "                }\n";

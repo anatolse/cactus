@@ -1,10 +1,10 @@
 module waving_label_2d
 
-use std.math
-use std.transform.flat
-use std.render.shapes
-use std.render.text
-use std.text
+use std.math as math
+use std.text as text
+use std.transform.flat as tf
+use std.render.shapes as shapes
+use std.render.text as rtext
 
 const:
     WINDOW_WIDTH  = 800
@@ -23,16 +23,16 @@ trait Clock:
     var elapsed: float = 0.0
 
 pub entity WavingSquare:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(CENTER_X, CENTER_Y)
         rotation = 0.0
         scale    = vec2(1.0, 1.0)
-    Shape:
-        type    = ShapeType.Rectangle
+    shapes.Shape:
+        type    = shapes.ShapeType.Rectangle
         size    = vec2(80.0, 80.0)
         color   = #6495EDFF
         visible = true
-    TextLabel:
+    rtext.TextLabel:
         text      = "00:00"
         font_size = 32
         color     = #FFFFFFFF
@@ -42,15 +42,15 @@ pub entity WavingSquare:
 
 system WaveSystem:
     filter:
-        WorldTransform
-        TextLabel
+        tf.WorldTransform
+        rtext.TextLabel
         Clock
 
     on tick:
         elapsed = elapsed + tick.dt
-        position = vec2(CENTER_X + sin(elapsed * WAVE_SPEED) * AMPLITUDE, CENTER_Y)
-        rotation = sin(elapsed * ROT_SPEED) * ROT_AMP
-        let secs = floor(elapsed)
+        position = vec2(CENTER_X + math.sin(elapsed * WAVE_SPEED) * AMPLITUDE, CENTER_Y)
+        rotation = math.sin(elapsed * ROT_SPEED) * ROT_AMP
+        let secs = math.floor(elapsed)
         let mm   = secs / 60
         let ss   = secs % 60
-        text = format("{:02}:{:02}", mm, ss)
+        text = text.format("{:02}:{:02}", mm, ss)

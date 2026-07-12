@@ -1,32 +1,32 @@
 module editor_test
 
-use std.transform.flat
-use std.physics.flat
-use std.camera.flat
-use std.camera.viewport
-use std.render.shapes
-use std.editor
+use std.transform.flat as tf
+use std.physics.flat as phys
+use std.camera.flat as cam2d
+use std.camera.viewport as vp
+use std.render.shapes as shapes
+use std.editor as editor
 
 # ── Template Catalog (editor-spawnable via EditorPlace2D) ─────────────────────
 
 pub template Box:
-    LocalTransform:
+    tf.LocalTransform:
         position = vec2(0.0, 0.0)
-    WorldTransform
-    BoxCollider:
+    tf.WorldTransform
+    phys.BoxCollider:
         size = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(1.0, 1.0)
         color = #FF4444FF
         visible = true
 
 pub template PlayerSpawn:
-    LocalTransform:
+    tf.LocalTransform:
         position = vec2(0.0, 0.0)
-    WorldTransform
-    Shape:
-        type = ShapeType.Rectangle
+    tf.WorldTransform
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(1.0, 1.0)
         color = #4488FFFF
         visible = true
@@ -43,34 +43,34 @@ pub template PlayerSpawn:
 #   F                    Frame the selected entity at its world position
 
 pub entity EditorCamera:
-    Camera:
+    cam2d.Camera:
         zoom = 64.0
         offset = vec2(0.0, 0.0)
-    Viewport
+    vp.Viewport
 
 # ── Initial Scene Entities ────────────────────────────────────────────────────
 
 pub entity Player:
-    LocalTransform:
+    tf.LocalTransform:
         position = vec2(0.0, 0.0)
-    WorldTransform
-    BoxCollider:
+    tf.WorldTransform
+    phys.BoxCollider:
         size = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(1.0, 1.0)
         color = #4488FFFF
         visible = true
-    EditorLocked
+    editor.EditorLocked
 
 pub entity SpawnBox:
-    LocalTransform:
+    tf.LocalTransform:
         position = vec2(3.0, 0.0)
-    WorldTransform
-    BoxCollider:
+    tf.WorldTransform
+    phys.BoxCollider:
         size = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(1.0, 1.0)
         color = #44FF44FF
         visible = true

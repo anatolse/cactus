@@ -13,6 +13,27 @@ namespace cactus {
 
 namespace fs = std::filesystem;
 
+namespace {
+
+void propagate_diagnostics(ErrorReporter& destination,
+                           const ErrorReporter& source,
+                           const std::string& fallback_message) {
+    if (source.diagnostics().empty()) {
+        destination.error({}, fallback_message);
+        return;
+    }
+
+    for (const auto& diagnostic : source.diagnostics()) {
+        if (diagnostic.level == DiagnosticLevel::Error) {
+            destination.error(diagnostic.location, diagnostic.message);
+        } else {
+            destination.warning(diagnostic.location, diagnostic.message);
+        }
+    }
+}
+
+}  // namespace
+
 ModuleResolver::ModuleResolver(ErrorReporter& errors)
     : errors_(errors) {}
 
@@ -59,8 +80,10 @@ std::string ModuleResolver::infer_module_name(const fs::path& search_root, const
         str = str.substr(0, str.size() - EXT.size());
     }
 
-    // Replace / with .
+    // Replace / with . and normalize hyphens to underscores so that
+    // `editor-test.cactus` infers `editor_test` matching `module editor_test`.
     std::ranges::replace(str, '/', '.');
+    std::ranges::replace(str, '-', '_');
     return str;
 }
 
@@ -69,18 +92,29 @@ std::string ModuleResolver::infer_module_name(const fs::path& search_root, const
 bool ModuleResolver::validate_module_name(const ProgramNode& program,
                                           const std::string& inferred_name,
                                           const fs::path& file_path) {
+    const ModuleNode* declared_module = nullptr;
     for (const auto& decl : program.declarations) {
         if (const auto* mod = std::get_if<ModuleNode>(&decl)) {
-            if (mod->name != inferred_name) {
-                errors_.error(mod->location,
-                              "module name '" + mod->name + "' does not match filename '" + inferred_name + "' (from " +
-                                  file_path.filename().string() + ")");
+            if (declared_module != nullptr) {
+                errors_.error(mod->location, "a source file may declare only one module");
                 return false;
             }
-            return true;
+            declared_module = mod;
         }
     }
-    // No module declaration — infer from filename (this is valid)
+
+    if (declared_module == nullptr) {
+        errors_.error({file_path.string(), 1, 1}, "explicit module declaration is required");
+        return false;
+    }
+
+    if (declared_module->name != inferred_name) {
+        errors_.error(declared_module->location,
+                      "module name '" + declared_module->name + "' does not match filename '" + inferred_name +
+                          "' (from " + file_path.filename().string() + ")");
+        return false;
+    }
+
     return true;
 }
 
@@ -137,8 +171,7 @@ bool ModuleResolver::resolve_module(const std::string& module_name,
     Lexer lexer(source, file_path.string(), parse_errors);
     auto tokens = lexer.tokenize();
     if (parse_errors.has_errors()) {
-        // Propagate errors
-        errors_.error({}, "errors while lexing " + file_path.string());
+        propagate_diagnostics(errors_, parse_errors, "errors while lexing " + file_path.string());
         visiting_stack.pop_back();
         return false;
     }
@@ -146,7 +179,7 @@ bool ModuleResolver::resolve_module(const std::string& module_name,
     Parser parser(std::move(tokens), parse_errors);
     auto program = parser.parse_program();
     if (parse_errors.has_errors()) {
-        errors_.error({}, "errors while parsing " + file_path.string());
+        propagate_diagnostics(errors_, parse_errors, "errors while parsing " + file_path.string());
         visiting_stack.pop_back();
         return false;
     }
@@ -293,14 +326,19 @@ std::vector<ModuleInfo> ModuleResolver::resolve(const fs::path& root_file, const
     Lexer lexer(source, canonical_root.string(), parse_errors);
     auto tokens = lexer.tokenize();
     if (parse_errors.has_errors()) {
-        errors_.error({}, "errors while lexing " + canonical_root.string());
+        propagate_diagnostics(errors_, parse_errors, "errors while lexing " + canonical_root.string());
         return {};
     }
 
     Parser parser(std::move(tokens), parse_errors);
     auto program = parser.parse_program();
     if (parse_errors.has_errors()) {
-        errors_.error({}, "errors while parsing " + canonical_root.string());
+        propagate_diagnostics(errors_, parse_errors, "errors while parsing " + canonical_root.string());
+        return {};
+    }
+
+    const auto inferred_root_name = infer_module_name(root_dir, canonical_root);
+    if (!validate_module_name(program, inferred_root_name, canonical_root)) {
         return {};
     }
 

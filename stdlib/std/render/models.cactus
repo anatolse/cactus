@@ -1,6 +1,6 @@
 module std.render.models
 
-use std.transform.volume
+use std.transform.volume as tv
 
 # ── 3D Model Rendering Traits ─────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
@@ -19,7 +19,7 @@ pub trait ModelRenderer:
 
 extern system ModelRendererSystem:
     filter:
-        std.transform.volume.WorldTransform
+        tv.WorldTransform
         ModelRenderer
 
 # ── Skeletal Animation ────────────────────────────────────────────────────────

@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 5;
+    static constexpr uint8_t CURRENT_VERSION = 6;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -56,10 +56,18 @@ private:
     static void write_str(std::ostream& out, const std::string& s);
     void write_type_info(std::ostream& out, const TypeInfo& t);
 
-    void write_traits(std::ostream& out, const std::unordered_map<std::string, ResolvedTrait>& traits);
-    void write_structs(std::ostream& out, const std::unordered_map<std::string, ResolvedStruct>& structs);
-    static void write_enums(std::ostream& out, const std::unordered_map<std::string, ResolvedEnum>& enums);
-    void write_funcs(std::ostream& out, const std::unordered_map<std::string, ResolvedFunc>& funcs);
+    void write_traits(std::ostream& out,
+                      const std::unordered_map<std::string, ResolvedTrait>& traits,
+                      const std::string& module_name);
+    void write_structs(std::ostream& out,
+                       const std::unordered_map<std::string, ResolvedStruct>& structs,
+                       const std::string& module_name);
+    static void write_enums(std::ostream& out,
+                            const std::unordered_map<std::string, ResolvedEnum>& enums,
+                            const std::string& module_name);
+    void write_funcs(std::ostream& out,
+                     const std::unordered_map<std::string, ResolvedFunc>& funcs,
+                     const std::string& module_name);
     static void write_string_set(std::ostream& out, const std::unordered_set<std::string>& values);
     static void write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph);
     static void write_string_pool(std::ostream& out, const StringPool& pool);

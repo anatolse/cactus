@@ -1,18 +1,18 @@
 module square
 
-use std.input
-use std.transform.flat
-use std.render.shapes
+use std.input as inp
+use std.transform.flat as tf
+use std.render.shapes as shapes
 
 # ── Input Declarations ────────────────────────────────────────────────────────
 
 input MoveX: axis
-    negative = Key.A
-    positive = Key.D
+    negative = inp.Key.A
+    positive = inp.Key.D
 
 input MoveY: axis
-    negative = Key.W
-    positive = Key.S
+    negative = inp.Key.W
+    positive = inp.Key.S
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -28,15 +28,15 @@ trait MoveInput:
 # ── Unit ──────────────────────────────────────────────────────────────────────
 
 pub entity Square:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(375.0, 275.0)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
     MoveInput:
         dx = 0.0
         dy = 0.0
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(50.0, 50.0)
         color = #6495EDFF
         visible = true
@@ -55,7 +55,7 @@ system ReadInputSystem:
 # MoveSystem: applies stored input deltas to position each tick
 system MoveSystem:
     filter:
-        WorldTransform
+        tf.WorldTransform
         MoveInput
 
     on tick:

@@ -72,7 +72,7 @@ The module resolver SHALL detect circular dependencies and report them as errors
 - **THEN** the resolver reports an error "circular dependency: A → B → C → A"
 
 ### Requirement: Module name validation
-The module resolver SHALL validate that a file's `module` declaration (if present) matches the filename (without `.cactus` extension). A mismatch SHALL produce an error.
+The module resolver SHALL require every source file to contain exactly one `module` declaration. The declared module name MUST match the module name inferred from the file path and search root. A mismatch or missing module declaration SHALL produce an error.
 
 #### Scenario: Matching module name
 - **WHEN** file `player.cactus` contains `module player`
@@ -82,9 +82,13 @@ The module resolver SHALL validate that a file's `module` declaration (if presen
 - **WHEN** file `player.cactus` contains `module enemy`
 - **THEN** the resolver reports an error "module name 'enemy' does not match filename 'player'"
 
-#### Scenario: Missing module declaration
+#### Scenario: Missing module declaration rejected
 - **WHEN** file `player.cactus` has no `module` declaration
-- **THEN** the resolver infers the module name as `"player"` from the filename
+- **THEN** the resolver reports an error that an explicit module declaration is required
+
+#### Scenario: Duplicate module declaration rejected
+- **WHEN** file `player.cactus` contains both `module player` and `module player.extra`
+- **THEN** the resolver reports an error that a file may declare only one module
 
 ### Requirement: Each module compiled once
 The module resolver SHALL ensure each module file is parsed and analyzed at most once, regardless of how many modules depend on it. Results SHALL be cached by canonical file path.

@@ -136,7 +136,23 @@ ProgramNode Parser::parse_program() {
     ProgramNode program;
     program.location = peek().location;
     skip_newlines();
+
+    bool saw_module = false;
+    if (check(TokenType::EOF_TOKEN)) {
+        errors_.error(program.location, "source file must start with a module declaration");
+        return program;
+    }
+    if (!check(TokenType::MODULE)) {
+        errors_.error(peek().location, "source file must start with a module declaration");
+    }
+
     while (!check(TokenType::EOF_TOKEN)) {
+        if (check(TokenType::MODULE)) {
+            if (saw_module) {
+                errors_.error(peek().location, "only one module declaration is allowed");
+            }
+            saw_module = true;
+        }
         program.declarations.push_back(parse_declaration());
         skip_newlines();
     }
@@ -716,7 +732,7 @@ std::vector<FieldAssignment> Parser::parse_field_assignment_block() {
 
 ArchetypeTraitEntry Parser::parse_archetype_trait_entry() {
     auto loc        = peek().location;
-    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+    auto trait_name = parse_dotted_name();
 
     ArchetypeTraitEntry entry;
     entry.trait_name = trait_name;
@@ -836,8 +852,8 @@ ChildArchetypeNode Parser::parse_child_declaration() {
 
     // A `from`-template child body overrides the template, so its nested
     // `children:` entries address existing roles; a plain child declares them.
-    auto body = parse_archetype_body_entries(node.template_ref.has_value() ? ChildBlockMode::Overrides
-                                                                           : ChildBlockMode::Declarations);
+    auto body            = parse_archetype_body_entries(node.template_ref.has_value() ? ChildBlockMode::Overrides
+                                                                                      : ChildBlockMode::Declarations);
     node.body_entries    = std::move(body.entries);
     node.template_uses   = std::move(body.template_uses);
     node.traits          = std::move(body.traits);
@@ -1056,7 +1072,7 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
-            node.after_systems.push_back(consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
+            node.after_systems.push_back(parse_dotted_name());
             expect_newline();
             any = true;
             if (errors_.error_count() > error_count_before) {
@@ -1449,7 +1465,7 @@ std::vector<std::unique_ptr<StmtNode>> Parser::parse_block() {
 AddTraitStmt Parser::parse_add_trait_stmt() {
     auto loc = peek().location;
     consume(TokenType::ADD, "expected 'add'");
-    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+    auto trait_name = parse_dotted_name();
 
     AddTraitStmt stmt;
     stmt.trait_name = trait_name;
@@ -1472,7 +1488,7 @@ AddTraitStmt Parser::parse_add_trait_stmt() {
 ProjectTraitStmt Parser::parse_project_trait_stmt() {
     auto loc = peek().location;
     consume(TokenType::PROJECT, "expected 'project'");
-    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+    auto trait_name = parse_dotted_name();
 
     ProjectTraitStmt stmt;
     stmt.trait_name = trait_name;
@@ -1512,7 +1528,7 @@ ForeachStmt Parser::parse_foreach_stmt() {
 RemoveTraitStmt Parser::parse_remove_trait_stmt() {
     auto loc = peek().location;
     consume(TokenType::REMOVE, "expected 'remove'");
-    auto trait_name = consume(TokenType::IDENTIFIER, "expected trait name").value;
+    auto trait_name = parse_dotted_name();
 
     RemoveTraitStmt stmt;
     stmt.trait_name = trait_name;
@@ -1563,7 +1579,7 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
 
         TraitMatchArm arm;
         arm.location   = arm_loc;
-        arm.trait_name = consume(TokenType::IDENTIFIER, "expected trait name or '_' in match arm").value;
+        arm.trait_name = parse_dotted_name();
         if (match(TokenType::AS)) {
             arm.alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
         }
@@ -1675,7 +1691,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
     // Task 4.5-4.6: spawn statement — spawn TemplateName(field = expr, ...)
     if (check(TokenType::SPAWN)) {
         advance();
-        auto template_name = consume(TokenType::IDENTIFIER, "expected template name").value;
+        auto template_name = parse_dotted_name();
         SpawnStmt spawn_stmt;
         spawn_stmt.template_name = template_name;
         spawn_stmt.location      = loc;
@@ -1884,7 +1900,7 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
             return advance().value;
         }
         const auto& tok     = peek();
-        const auto  tok_type = tok.type;
+        const auto tok_type = tok.type;
         bool is_usable =
             !tok.value.empty() && tok_type != TokenType::NEWLINE && tok_type != TokenType::DEDENT &&
             tok_type != TokenType::EOF_TOKEN && tok_type != TokenType::COLON && tok_type != TokenType::INDENT &&
@@ -1894,8 +1910,7 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
         if (is_usable) {
             return advance().value;
         }
-        errors_.error(tok.location,
-                      std::string("expected argument name, got ") + token_type_to_string(tok.type));
+        errors_.error(tok.location, std::string("expected argument name, got ") + token_type_to_string(tok.type));
         return "<error>";
     };
 
@@ -1940,7 +1955,7 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                     if (match(TokenType::NOT)) {
                         pred.negated = true;
                     }
-                    pred.trait_name = consume(TokenType::IDENTIFIER, "expected trait name in query filter").value;
+                    pred.trait_name = parse_dotted_name();
                     filters.push_back(std::move(pred));
                     if (!check(TokenType::RBRACKET)) {
                         consume(TokenType::COMMA, "expected ',' or ']' in query filter");
@@ -1950,11 +1965,12 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                 consume(TokenType::LPAREN, "expected '(' after query filter");
                 std::vector<FieldAssignment> named_args;
                 while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
-                    auto arg_loc   = peek().location;
-                    auto arg_name  = parse_named_arg_name();
+                    auto arg_loc  = peek().location;
+                    auto arg_name = parse_named_arg_name();
                     consume(TokenType::ASSIGN, "expected '='");
                     auto arg_value = parse_expression();
-                    named_args.push_back(FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
+                    named_args.push_back(
+                        FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
                     if (!check(TokenType::RPAREN)) {
                         consume(TokenType::COMMA, "expected ',' or ')'");
                     }
@@ -1969,20 +1985,21 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                 qcall.filters    = std::move(filters);
                 qcall.named_args = std::move(named_args);
                 qcall.location   = loc;
-                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
+                expr             = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
             }
             // Check for named-arg query call: .member(name = expr, ...) — no filter bracket
             else if (check(TokenType::LPAREN) && current_ + 1 < tokens_.size() &&
-                     tokens_[current_ + 1].type == TokenType::IDENTIFIER &&
-                     current_ + 2 < tokens_.size() && tokens_[current_ + 2].type == TokenType::ASSIGN) {
+                     tokens_[current_ + 1].type == TokenType::IDENTIFIER && current_ + 2 < tokens_.size() &&
+                     tokens_[current_ + 2].type == TokenType::ASSIGN) {
                 advance();  // consume '('
                 std::vector<FieldAssignment> named_args;
                 while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
-                    auto arg_loc   = peek().location;
-                    auto arg_name  = parse_named_arg_name();
+                    auto arg_loc  = peek().location;
+                    auto arg_name = parse_named_arg_name();
                     consume(TokenType::ASSIGN, "expected '='");
                     auto arg_value = parse_expression();
-                    named_args.push_back(FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
+                    named_args.push_back(
+                        FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
                     if (!check(TokenType::RPAREN)) {
                         consume(TokenType::COMMA, "expected ',' or ')'");
                     }
@@ -1996,7 +2013,7 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                 qcall.callee     = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
                 qcall.named_args = std::move(named_args);
                 qcall.location   = loc;
-                expr = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
+                expr             = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
             }
             // Check for method call: .member(args)
             else if (check(TokenType::LPAREN)) {
@@ -2054,10 +2071,10 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {  // NOLINT(readability-
 
     if (check(TokenType::SPAWN)) {
         advance();
-        auto template_name = consume(TokenType::IDENTIFIER, "expected template name").value;
+        auto template_name = parse_dotted_name();
         consume(TokenType::COLON, "expected ':'");
         SpawnExpr spawn;
-        spawn.template_name = template_name;
+        spawn.template_name   = template_name;
         auto overrides        = parse_archetype_override_block();
         spawn.overrides       = std::move(overrides.traits);
         spawn.child_overrides = std::move(overrides.child_overrides);
@@ -2337,7 +2354,7 @@ ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
-            node.after_systems.push_back(consume(TokenType::IDENTIFIER, "expected system name in after: block").value);
+            node.after_systems.push_back(parse_dotted_name());
             expect_newline();
             any = true;
             if (errors_.error_count() > error_count_before) {
@@ -2414,9 +2431,9 @@ AssetDeclNode Parser::parse_asset_decl(bool is_pub) {
             advance();
             kind = AssetKind::Material;
         } else {
-            errors_.error(peek().location,
-                          "expected asset type (mesh, model, texture, sound, music, font, material), got '" + type_val +
-                              "'");
+            errors_.error(
+                peek().location,
+                "expected asset type (mesh, model, texture, sound, music, font, material), got '" + type_val + "'");
             advance();
         }
     } else {

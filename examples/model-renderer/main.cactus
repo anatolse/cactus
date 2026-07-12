@@ -1,11 +1,11 @@
-module model_renderer
+module main
 
 use std.math.quat as quat
-use std.transform.volume
-use std.render.meshes
-use std.render.models
-use std.camera.volume
-use std.camera.viewport
+use std.transform.volume as tv
+use std.render.meshes as meshes
+use std.render.models as models
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
 
 const:
     WINDOW_WIDTH = 960
@@ -19,12 +19,12 @@ asset Robot: model = "art/robot.glb"
 # Godot "Squash the Creeps" player: 3 primitives with flat-color embedded
 # materials (red body, white eyes, black pupils).
 pub entity PlayerModel:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-2.5, 0.0, 0.0)
         # Stand the model upright: its GLB rest orientation is tipped back.
         rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), 1.5708)
         scale = vec3(1.0, 1.0, 1.0)
-    ModelRenderer:
+    models.ModelRenderer:
         model = Player
         visible = true
         cast_shadow = true
@@ -32,47 +32,47 @@ pub entity PlayerModel:
 # Raylib robot: 19 skinned primitives across 3 embedded materials, rendered
 # at bind pose (no ModelAnimator; see the model-animation example for playback).
 pub entity RobotModel:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(2.5, 0.0, 0.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    ModelRenderer:
+    models.ModelRenderer:
         model = Robot
         visible = true
         cast_shadow = true
 
 pub entity KeyLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-3.0, 4.0, 4.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #FFF4E0
         intensity = 1.5
         range = 20.0
         enabled = true
 
 pub entity FillLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(4.0, 2.5, 3.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #C0D8FF
         intensity = 1.0
         range = 18.0
         enabled = true
 
 pub entity MainCamera:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, 2.5, 8.0)
         rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -0.15)
         scale = vec3(1.0, 1.0, 1.0)
-    Camera:
+    cam3d.Camera:
         fov_y = 60.0
         near = 0.1
         far = 500.0
-    Viewport:
+    vp.Viewport:
         x = 0.0
         y = 0.0
         width = 1.0

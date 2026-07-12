@@ -1,6 +1,7 @@
 #include "frontend/program_linker.hpp"
 
 #include "frontend/module_artifact.hpp"
+#include "frontend/symbol_identity.hpp"
 
 namespace cactus {
 
@@ -16,16 +17,29 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         return true;
     }
 
+    // Canonical key for conflict detection: prefer stored canonical_id; derive from
+    // module + simple name when absent (e.g. for programs without explicit module declarations).
+    auto canonical_key = [&src_module_name](const auto& decl) -> std::string {
+        return decl.canonical_id.empty() ? make_canonical_id(src_module_name, decl.name) : decl.canonical_id;
+    };
+
+    // Map insertion key: prefer canonical_id so same-local-named declarations from
+    // different modules (e.g. flat.WorldTransform vs volume.WorldTransform) coexist;
+    // fall back to the source map key (simple name) when canonical_id is absent.
+    auto insert_key = [](const auto& decl, const std::string& src_key) -> std::string {
+        return decl.canonical_id.empty() ? src_key : decl.canonical_id;
+    };
+
     bool ok = true;
 
-    // ── Merge traits ─────────────────────────────────────────────────────────
+    // ── Merge traits (task 4.4: conflict by canonical identity, not simple name) ──
     for (const auto& [name, trait] : src.traits) {
-        // ── 5.3: Duplicate pub symbol detection ──────────────────────────────
         if (trait.is_pub) {
-            auto it = symbol_origins_.find(name);
+            const std::string key = canonical_key(trait);
+            auto it               = symbol_origins_.find(key);
             if (it != symbol_origins_.end()) {
-                std::string msg = "duplicate symbol '";
-                msg += name;
+                std::string msg = "duplicate canonical symbol '";
+                msg += key;
                 msg += "' defined in module '";
                 msg += it->second;
                 msg += "' and module '";
@@ -35,17 +49,18 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
                 ok = false;
                 continue;
             }
-            symbol_origins_[name] = src_module_name;
+            symbol_origins_[key] = src_module_name;
         }
-        target.traits[name] = trait;
+        target.traits[insert_key(trait, name)] = trait;
     }
 
     // ── Merge structs ────────────────────────────────────────────────────────
     for (const auto& [name, strct] : src.structs) {
-        auto it = symbol_origins_.find(name);
+        const std::string key = canonical_key(strct);
+        auto it               = symbol_origins_.find(key);
         if (it != symbol_origins_.end()) {
-            std::string msg = "duplicate symbol '";
-            msg += name;
+            std::string msg = "duplicate canonical symbol '";
+            msg += key;
             msg += "' defined in module '";
             msg += it->second;
             msg += "' and module '";
@@ -55,16 +70,17 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
             ok = false;
             continue;
         }
-        symbol_origins_[name] = src_module_name;
-        target.structs[name]  = strct;
+        symbol_origins_[key] = src_module_name;
+        target.structs[insert_key(strct, name)] = strct;
     }
 
     // ── Merge enums ──────────────────────────────────────────────────────────
     for (const auto& [name, enm] : src.enums) {
-        auto it = symbol_origins_.find(name);
+        const std::string key = canonical_key(enm);
+        auto it               = symbol_origins_.find(key);
         if (it != symbol_origins_.end()) {
-            std::string msg = "duplicate symbol '";
-            msg += name;
+            std::string msg = "duplicate canonical symbol '";
+            msg += key;
             msg += "' defined in module '";
             msg += it->second;
             msg += "' and module '";
@@ -74,8 +90,8 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
             ok = false;
             continue;
         }
-        symbol_origins_[name] = src_module_name;
-        target.enums[name]    = enm;
+        symbol_origins_[key] = src_module_name;
+        target.enums[insert_key(enm, name)] = enm;
     }
 
     // ── 5.4 + 5.2: Merge dependency graph (append) ──────────────────────────

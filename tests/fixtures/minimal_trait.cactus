@@ -1,2 +1,4 @@
+module minimal_trait
+
 trait Health:
     var health: int = 100

@@ -1,11 +1,12 @@
 ## Requirements
 ### Requirement: Top-level declaration parsing
-The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. Supported declarations: `module`, `use`, `const`, `struct`, `enum`, `trait`, `entity`, `system`, `event`, `func`, `extern func`, `template`, `asset`, `input`.
+The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. The first top-level declaration MUST be exactly one `module` declaration. Supported declarations after the module declaration are: `use`, `const`, `struct`, `enum`, `trait`, `entity`, `system`, `event`, `func`, `extern func`, `template`, `asset`, and `input`.
 
 Note: `view`, `interface`, and legacy `unit` are not supported top-level declarations in this language version.
 
 ```ebnf
-declaration = module_decl | use_decl | const_block | struct_decl
+program     = module_decl { declaration } EOF ;
+declaration = use_decl | const_block | struct_decl
             | enum_decl | trait_decl | entity_decl | template_decl | system_decl
             | event_decl | func_decl | extern_func_decl | asset_decl | input_decl ;
 ```
@@ -14,24 +15,32 @@ declaration = module_decl | use_decl | const_block | struct_decl
 - **WHEN** the source contains a `module` declaration followed by a `trait` declaration
 - **THEN** the parser produces a ProgramNode containing a ModuleNode and a TraitNode
 
+#### Scenario: Missing module declaration rejected
+- **WHEN** the source begins with `trait Position` and has no preceding `module` declaration
+- **THEN** the parser reports that a source file must start with a module declaration
+
+#### Scenario: Duplicate module declaration rejected
+- **WHEN** the source contains two `module` declarations
+- **THEN** the parser reports that only one module declaration is allowed
+
 #### Scenario: Asset declaration in program
-- **WHEN** the source contains `asset PlayerMesh: mesh = "player.glb"` at the top level
+- **WHEN** the source contains `module game.assets` followed by `asset PlayerMesh: mesh = "player.glb"` at the top level
 - **THEN** the parser produces a ProgramNode containing an `AssetDecl` node
 
 #### Scenario: Input declaration in program
-- **WHEN** the source contains an `input Jump: button` declaration at the top level
+- **WHEN** the source contains `module game.input` followed by an `input Jump: button` declaration at the top level
 - **THEN** the parser produces a ProgramNode containing an `InputDecl` node
 
 #### Scenario: Extern func declaration in program
-- **WHEN** `pub extern func lerp(a, b, t: float) float` appears at the top level
+- **WHEN** `module game.math` is followed by `pub extern func lerp(a, b, t: float) float` at the top level
 - **THEN** the parser produces a ProgramNode containing a `FuncNode` with `is_extern = true`
 
 #### Scenario: Entity declaration in program
-- **WHEN** the source contains `entity Player:` at the top level
+- **WHEN** the source contains `module game.scene` followed by `entity Player:` at the top level
 - **THEN** the parser produces a ProgramNode containing an entity declaration node
 
 #### Scenario: Unknown top-level keyword
-- **WHEN** the source contains an unrecognized keyword at the top level
+- **WHEN** the source contains an unrecognized keyword at the top level after the module declaration
 - **THEN** the parser reports an error with the source location and expected declaration types
 
 ### Requirement: Marker trait grammar (body is optional)

@@ -1,6 +1,6 @@
 module std.render.shapes
 
-use std.transform.flat
+use std.transform.flat as tf
 
 # ── Simple Primitive Shape Rendering Traits ──────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
@@ -16,5 +16,5 @@ pub trait Shape:
 
 extern system ShapeRenderer:
     filter:
-        WorldTransform
+        tf.WorldTransform
         Shape

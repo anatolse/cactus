@@ -1,5 +1,7 @@
 #include "backends/cpp-entt/component_emitter.hpp"
 
+#include "frontend/symbol_identity.hpp"
+
 #include <sstream>
 
 namespace cactus {
@@ -57,13 +59,14 @@ std::string stdlib_trait_default(const ResolvedTrait& trait, const ResolvedField
 }  // namespace
 
 std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait) {
+    const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
     std::ostringstream out;
     if (trait.fields.empty()) {
-        out << "struct " << trait.name << " {};\n";
+        out << "struct " << cpp_name << " {};\n";
         return out.str();
     }
 
-    out << "struct " << trait.name << " {\n";
+    out << "struct " << cpp_name << " {\n";
     for (const auto& field : trait.fields) {
         out << "    " << entt_type_to_cpp(field.type) << " " << field.name;
         const auto default_value = stdlib_trait_default(trait, field);
@@ -74,8 +77,9 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait) {
 }
 
 std::string EnttComponentEmitter::emit_pod_struct(const ResolvedStruct& s) {
+    const std::string cpp_name = canonical_to_cpp_name(s.module_name, s.name);
     std::ostringstream out;
-    out << "struct " << s.name << " {\n";
+    out << "struct " << cpp_name << " {\n";
     for (const auto& field : s.fields) {
         out << "    " << entt_type_to_cpp(field.type) << " " << field.name << ";\n";
     }

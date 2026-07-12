@@ -12,7 +12,7 @@ namespace cactus {
 class EnttEventEmitter {
 public:
     static std::string emit_event(const EventNode& event, const DecoratedProgram& program);
-    static std::string emit_sink_connection(const EventNode& event);
+    static std::string emit_sink_connection(const EventNode& event, const DecoratedProgram& program);
 };
 
 }  // namespace cactus

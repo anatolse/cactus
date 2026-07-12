@@ -23,3 +23,12 @@ pub trait FollowCamera:
 
 # FollowCameraSystem is not yet implemented — it requires entity-by-id field
 # access which is not yet available in the language.
+
+# ── Screen/World Projection Helpers ──────────────────────────────────────────
+# Converts screen-space coordinates through the active 2D camera.
+# screen_to_world: inverse camera transform → world position
+# screen_delta_to_world: scale a screen-space delta by the camera zoom
+
+pub extern func screen_to_world(screen: vec2) vec2
+
+pub extern func screen_delta_to_world(delta: vec2) vec2

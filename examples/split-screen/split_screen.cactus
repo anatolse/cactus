@@ -1,20 +1,20 @@
 module split_screen
 
-use std.input
-use std.transform.flat
-use std.camera.flat
-use std.camera.viewport
-use std.render.shapes
+use std.input as inp
+use std.transform.flat as tf
+use std.camera.flat as cam2d
+use std.camera.viewport as vp
+use std.render.shapes as shapes
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 
 input MoveX: axis
-    negative = Key.A
-    positive = Key.D
+    negative = inp.Key.A
+    positive = inp.Key.D
 
 input MoveY: axis
-    negative = Key.W
-    positive = Key.S
+    negative = inp.Key.W
+    positive = inp.Key.S
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -31,10 +31,10 @@ trait PlayerInput:
 
 # Left viewport: full left half of the screen, normal zoom.
 pub entity LeftCamera:
-    Camera:
+    cam2d.Camera:
         zoom = 1.0
         offset = vec2(0.0, 0.0)
-    Viewport:
+    vp.Viewport:
         x = 0.0
         y = 0.0
         width = 0.5
@@ -44,10 +44,10 @@ pub entity LeftCamera:
 
 # Right viewport: full right half of the screen, 2× zoom (shows the same world, closer in).
 pub entity RightCamera:
-    Camera:
+    cam2d.Camera:
         zoom = 2.0
         offset = vec2(0.0, 0.0)
-    Viewport:
+    vp.Viewport:
         x = 0.5
         y = 0.0
         width = 0.5
@@ -58,12 +58,12 @@ pub entity RightCamera:
 # ── Scene Entities ────────────────────────────────────────────────────────────
 
 pub entity Player:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(0.0, 0.0)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #4488FFFF
         visible = true
@@ -72,34 +72,34 @@ pub entity Player:
         dy = 0.0
 
 pub entity RedMarker:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(200.0, 0.0)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #FF4444FF
         visible = true
 
 pub entity GreenMarker:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(-200.0, 0.0)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #44FF44FF
         visible = true
 
 pub entity YellowMarker:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(0.0, -150.0)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #FFDD00FF
         visible = true
@@ -116,7 +116,7 @@ system ReadInputSystem:
 
 system MoveSystem:
     filter:
-        WorldTransform
+        tf.WorldTransform
         PlayerInput
 
     on tick:

@@ -38,6 +38,11 @@ add_executable(test_semantic_modules test_semantic_modules.cpp)
 target_link_libraries(test_semantic_modules PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticModulesTests COMMAND test_semantic_modules)
 
+# Symbol identity tests
+add_executable(test_symbol_identity test_symbol_identity.cpp)
+target_link_libraries(test_symbol_identity PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME SymbolIdentityTests COMMAND test_symbol_identity)
+
 # Program linker tests
 add_executable(test_program_linker test_program_linker.cpp)
 target_link_libraries(test_program_linker PRIVATE cactus_frontend Catch2::Catch2WithMain)

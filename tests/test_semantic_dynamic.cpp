@@ -27,7 +27,7 @@ static const std::string STDLIB_EVENTS =
 
 static bool analyze_errors(const std::string& source) {
     // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
-    const std::string FULL_SOURCE = STDLIB_EVENTS + source;
+    const std::string FULL_SOURCE = "module test\n" + STDLIB_EVENTS + source;
     ErrorReporter errors;
     Lexer lexer(FULL_SOURCE, "test.cactus", errors);
     auto tokens = lexer.tokenize();
@@ -46,7 +46,7 @@ static bool analyze_errors(const std::string& source) {
 
 static std::string first_error(const std::string& source) {
     // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
-    const std::string FULL_SOURCE = STDLIB_EVENTS + source;
+    const std::string FULL_SOURCE = "module test\n" + STDLIB_EVENTS + source;
     ErrorReporter errors;
     Lexer lexer(FULL_SOURCE, "test.cactus", errors);
     auto tokens = lexer.tokenize();
@@ -64,7 +64,7 @@ static std::string first_error(const std::string& source) {
 }
 
 static ProgramNode analyze_ast(const std::string& source) {
-    const std::string FULL_SOURCE = STDLIB_EVENTS + source;
+    const std::string FULL_SOURCE = "module test\n" + STDLIB_EVENTS + source;
     ErrorReporter errors;
     Lexer lexer(FULL_SOURCE, "test.cactus", errors);
     auto tokens = lexer.tokenize();
@@ -934,26 +934,25 @@ TEST_CASE("Semantic: EditorSelectionChanged and EditorModeChanged events are val
     CHECK(mode_event->fields[1].name == "current_mode");
 }
 
-TEST_CASE("Semantic: editor_spawn_template extern func with string param passes validation",
+TEST_CASE("Semantic: spawn_template extern func with string param passes validation",
           "[semantic][stdlib][editor][extern-func]") {
     // string param in extern func should NOT produce const-binding errors
     CHECK_FALSE(
-        analyze_errors("pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: "
+        analyze_errors("pub extern func spawn_template(template_name: string, position_2d: vec2, position_3d: "
                        "vec3) entity_id\n"));
 }
 
-TEST_CASE("Semantic: all seven editor extern funcs with string/int/vec params pass validation",
+TEST_CASE("Semantic: all seven clean-named editor extern funcs with string/int/vec/bool/quat params pass validation",
           "[semantic][stdlib][editor][extern-func]") {
     CHECK_FALSE(
-        analyze_errors("pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: "
+        analyze_errors("pub extern func spawn_template(template_name: string, position_2d: vec2, position_3d: "
                        "vec3) entity_id\n"
-                       "pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
-                       "pub extern func editor_raycast_3d(screen_pos: vec2, mask: int) entity_id\n"
-                       "pub extern func editor_screen_to_world_2d(screen: vec2) vec2\n"
-                       "pub extern func editor_mouse_delta_2d() vec2\n"
-                       "pub extern func editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) "
-                       "vec3\n"
-                       "pub extern func editor_mouse_delta_3d() vec3\n"));
+                       "pub extern func hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
+                       "pub extern func raycast_3d(screen_pos: vec2, mask: int) entity_id\n"
+                       "pub extern func camera_enter(use_3d: bool) entity_id\n"
+                       "pub extern func camera_exit()\n"
+                       "pub extern func apply_camera_2d(view_center: vec2, zoom: float)\n"
+                       "pub extern func apply_camera_3d(position: vec3, rotation: quat)\n"));
 }
 
 TEST_CASE("Semantic: extern system EditorTemplatePalette filter on EditorState is valid",

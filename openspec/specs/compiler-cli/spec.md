@@ -23,15 +23,19 @@ The CLI SHALL accept the following arguments: input file path (positional, requi
 - **THEN** the CLI prints an error "unknown backend 'rust'" and exits with non-zero status
 
 ### Requirement: Full pipeline execution
-The CLI SHALL execute the complete compiler pipeline: module resolution → per-module (lex → parse → analyze) → link → code generation. For single-file inputs with no `use` declarations, the pipeline SHALL skip module resolution and linking. If any stage produces errors, the CLI SHALL print all errors and exit without proceeding to the next stage.
+The CLI SHALL execute the complete compiler pipeline: module validation/resolution → per-module (lex → parse → analyze) → link when dependencies are present → code generation. Every input file MUST contain an explicit module declaration. For a module with no `use` declarations, the CLI MAY skip dependency traversal and linking, but semantic analysis and code generation still operate with the file's explicit module identity. If any stage produces errors, the CLI SHALL print all errors and exit without proceeding to the next stage.
 
 #### Scenario: Multi-module compilation
-- **WHEN** `main.cactus` contains `use player` and `use level`
+- **WHEN** `main.cactus` contains `module main`, `use player`, and `use level`
 - **THEN** the CLI resolves dependencies, compiles `player.cactus` and `level.cactus` first, then `main.cactus`, links all modules, and generates a single combined output
 
-#### Scenario: Single-file compilation unchanged
-- **WHEN** `standalone.cactus` has no `use` declarations
-- **THEN** the CLI compiles it directly without module resolution (backward compatible)
+#### Scenario: Single-module compilation uses explicit module identity
+- **WHEN** `standalone.cactus` declares `module standalone` and has no `use` declarations
+- **THEN** the CLI compiles it directly with canonical module identity `standalone`
+
+#### Scenario: Missing module declaration stops pipeline
+- **WHEN** `standalone.cactus` has no `module` declaration
+- **THEN** the CLI prints the module-declaration error and exits before code generation
 
 #### Scenario: Module resolution error stops pipeline
 - **WHEN** `main.cactus` does `use nonexistent` and the file cannot be found

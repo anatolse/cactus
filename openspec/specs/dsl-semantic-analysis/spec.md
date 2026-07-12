@@ -147,26 +147,49 @@ The semantic analyzer SHALL build a dependency graph of systems based on their t
 - **THEN** the dependency graph marks them as independent (parallelizable)
 
 ### Requirement: Accept imported symbols from dependency modules
-The semantic analyzer SHALL accept an `ImportedSymbols` parameter containing pub-exported types from dependency modules, keyed by module path or alias.
+The semantic analyzer SHALL accept imported public symbols from dependency modules keyed by module path or alias. Imported symbols SHALL be resolved only through an explicit module qualifier or alias, except for symbols provided by the implicit `std.core` prelude. Unique unqualified imported-symbol lookup SHALL NOT be performed for ordinary modules.
 
 #### Scenario: Qualified trait resolution via module path
 - **WHEN** module `enemies` does `use player` and references `player.Position`
-- **THEN** the semantic analyzer resolves `Position` from the `player` module's pub symbols
+- **THEN** the semantic analyzer resolves the trait reference to the canonical `player.Position` symbol identity
 
 #### Scenario: Qualified trait resolution via alias
 - **WHEN** module `enemies` does `use player as p` and references `p.Position`
-- **THEN** the semantic analyzer resolves `Position` from the `player` module's pub symbols via the alias
+- **THEN** the semantic analyzer resolves the trait reference to the canonical `player.Position` symbol identity via the alias
 
-#### Scenario: Unqualified access for unique symbol
-- **WHEN** `Position` is exported by only one imported module and no local declaration exists
-- **THEN** the semantic analyzer resolves the unqualified `Position` reference to the imported trait
+#### Scenario: Unqualified ordinary imported symbol rejected
+- **WHEN** `Position` is exported by exactly one imported non-`std.core` module and no local declaration named `Position` exists
+- **THEN** the semantic analyzer reports that `Position` must be referenced through its module path or import alias
+
+#### Scenario: std.core prelude symbol resolves unqualified
+- **WHEN** a module references lifecycle event `tick` without an explicit `use std.core`
+- **THEN** the semantic analyzer resolves the reference to the canonical `std.core.tick` event symbol identity
 
 ### Requirement: Ambiguous unqualified reference produces error
-The semantic analyzer SHALL report an error when an unqualified symbol name matches pub symbols from multiple imported modules.
+The semantic analyzer SHALL report an error when an unqualified module-scope reference cannot resolve locally or through the `std.core` prelude. If matching imported symbols exist, the diagnostic SHALL name the matching modules and instruct the author to use qualified access.
 
 #### Scenario: Ambiguous trait name
 - **WHEN** module `A` and module `B` both export `pub trait Config:`, and module `C` references unqualified `Config`
 - **THEN** the analyzer reports "ambiguous reference 'Config': defined in module A and module B; use qualified access to disambiguate"
+
+#### Scenario: Unique imported trait still requires qualification
+- **WHEN** module `A` exports `pub trait Config:` and module `C` imports only `A` but references unqualified `Config`
+- **THEN** the analyzer reports that `Config` is imported from module `A` and must be referenced as `A.Config` or through an alias
+
+### Requirement: Semantic analyzer produces resolved module-scope references
+The semantic analyzer SHALL produce a resolved representation in which every module-scope reference used by later phases carries a typed symbol identity. This includes type references, trait applications, filters, excludes, query filters, trait-match arms, event handlers, emit statements, system `after:` references, template uses, spawn sites, module-scope function calls, assets, inputs, and constants.
+
+#### Scenario: Filter entry stores resolved trait identity
+- **WHEN** a system filter references `phys.Body as body` through `use std.physics.flat as phys`
+- **THEN** the semantic representation stores the trait symbol identity `std.physics.flat.Body` on that filter entry
+
+#### Scenario: Add statement stores resolved trait identity
+- **WHEN** a handler contains `add phys.Body to target`
+- **THEN** the semantic representation stores the trait symbol identity `std.physics.flat.Body` on the add statement
+
+#### Scenario: after clause stores resolved system identity
+- **WHEN** a system has `after:` containing `render.SpriteRenderer`
+- **THEN** the semantic representation stores the referenced system's canonical symbol identity rather than the authored string
 
 ### Requirement: Filter clause aliases for trait fields
 The semantic analyzer SHALL support `as` aliases in system `filter:` clauses. Both the alias and the trait name are valid access paths. Unqualified field access (without any prefix) is not permitted.

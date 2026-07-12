@@ -1,27 +1,27 @@
 module platformer
 
-use std.input
+use std.input as inp
 use std.math as math
-use std.transform.flat
+use std.transform.flat as tf
 use std.physics.flat as phys
-use std.render.shapes
+use std.render.shapes as shapes
 
 # ── Input Action Declarations ─────────────────────────────────────────────────
 
 input MoveX: axis
-    negative = Key.A
-    positive = Key.D
-    gamepad  = GamepadAxis.LeftX
+    negative = inp.Key.A
+    positive = inp.Key.D
+    gamepad  = inp.GamepadAxis.LeftX
 
 input MoveY: axis
-    negative = Key.S
-    positive = Key.W
+    negative = inp.Key.S
+    positive = inp.Key.W
     invert   = true
-    gamepad  = GamepadAxis.LeftY
+    gamepad  = inp.GamepadAxis.LeftY
 
 input Jump: button
-    key     = Key.Space
-    gamepad = GamepadButton.South
+    key     = inp.Key.Space
+    gamepad = inp.GamepadButton.South
 
 const:
     WINDOW_TITLE = "Cactus Platformer"
@@ -122,49 +122,49 @@ trait Collectible:
 # ── Templates ────────────────────────────────────────────────────────────────────
 
 template FloatingPlatformBase:
-    WorldTransform:
+    tf.WorldTransform:
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         color = PLATFORM_COLOR
         visible = true
-    Collider:
+    phys.Collider:
         layer = SOLID_LAYER
         mask = PLAYER_LAYER
-    BoxCollider
+    phys.BoxCollider
 
 template WalkerEnemyBase:
-    WorldTransform:
+    tf.WorldTransform:
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
         color = ENEMY_COLOR
         visible = true
-    Collider:
+    phys.Collider:
         layer = ENEMY_LAYER
         mask = ENEMY_MASK
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
     PatrolMotion:
         patrol_speed = PATROL_SPEED
         direction = 1.0
 
 template BlueGemBase:
-    WorldTransform:
+    tf.WorldTransform:
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(GEM_SIZE, GEM_SIZE)
         color = GEM_COLOR_BLUE
         visible = true
-    Collider:
+    phys.Collider:
         layer = COLLECTIBLE_LAYER
         mask = COLLECTIBLE_MASK
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
         point_value = BLUE_GEM_POINTS
@@ -172,18 +172,18 @@ template BlueGemBase:
         collected = false
 
 template GoldGemBase:
-    WorldTransform:
+    tf.WorldTransform:
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(GEM_SIZE, GEM_SIZE)
         color = GEM_COLOR_GOLD
         visible = true
-    Collider:
+    phys.Collider:
         layer = COLLECTIBLE_LAYER
         mask = COLLECTIBLE_MASK
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(GEM_SIZE, GEM_SIZE)
     Collectible:
         point_value = GOLD_GEM_POINTS
@@ -193,19 +193,19 @@ template GoldGemBase:
 # ── Entities ──────────────────────────────────────────────────────────────────────
 
 pub entity Player:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(100.0, 300.0)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(PLAYER_WIDTH, PLAYER_HEIGHT)
         color = #44AAFFFF
         visible = true
-    Collider:
+    phys.Collider:
         layer = PLAYER_LAYER
         mask = PLAYER_MASK
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(PLAYER_WIDTH, PLAYER_HEIGHT)
     PlayerMotion:
         velocity = vec2(0.0, 0.0)
@@ -226,69 +226,69 @@ pub entity Player:
     Persistent
 
 pub entity GroundPlatform:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(0.0, GROUND_Y)
         rotation = 0.0
         scale = vec2(1.0, 1.0)
-    Shape:
-        type = ShapeType.Rectangle
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
         color = GROUND_COLOR
         visible = true
-    Collider:
+    phys.Collider:
         layer = SOLID_LAYER
         mask = PLAYER_LAYER
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
 
 pub entity FloatingPlatform1 from FloatingPlatformBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(PLATFORM1_X, PLATFORM1_Y)
-    Shape:
+    shapes.Shape:
         size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(PLATFORM1_WIDTH, PLATFORM_HEIGHT)
 
 pub entity FloatingPlatform2 from FloatingPlatformBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(PLATFORM2_X, PLATFORM2_Y)
-    Shape:
+    shapes.Shape:
         size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(PLATFORM2_WIDTH, PLATFORM_HEIGHT)
 
 pub entity FloatingPlatform3 from FloatingPlatformBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(PLATFORM3_X, PLATFORM3_Y)
-    Shape:
+    shapes.Shape:
         size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
-    BoxCollider:
+    phys.BoxCollider:
         size = vec2(PLATFORM3_WIDTH, PLATFORM_HEIGHT)
 
 pub entity WalkerEnemy1 from WalkerEnemyBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(400.0, 568.0)
     PatrolMotion:
         patrol_min_x = 350.0
         patrol_max_x = 550.0
 
 pub entity WalkerEnemy2 from WalkerEnemyBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(800.0, 568.0)
     PatrolMotion:
         patrol_min_x = 700.0
         patrol_max_x = 1000.0
 
 pub entity BlueGem1 from BlueGemBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(250.0, 560.0)
 
 pub entity BlueGem2 from BlueGemBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(350.0, 410.0)
 
 pub entity GoldGem1 from GoldGemBase:
-    WorldTransform:
+    tf.WorldTransform:
         position = vec2(1000.0, 240.0)
 
 # ── Systems ──────────────────────────────────────────────────────────────────────
@@ -303,9 +303,9 @@ system ReadPlayerInput:
 
 system MovementSystem:
     filter:
-        WorldTransform
+        tf.WorldTransform
         PlayerMotion
-        BoxCollider
+        phys.BoxCollider
 
     on tick:
         if move_axis > 0.0:
@@ -375,7 +375,7 @@ system InvincibilitySystem:
 
 system PatrolSystem:
     filter:
-        WorldTransform
+        tf.WorldTransform
         PatrolMotion
 
     on tick:
@@ -392,7 +392,7 @@ system PatrolSystem:
 system CollectionSystem:
     filter:
         Collectible
-        Shape
+        shapes.Shape
 
     on tick:
         if not collected:

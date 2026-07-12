@@ -1,13 +1,13 @@
-module editor_3d
+module main
 
-use std.editor
-use std.input
+use std.editor as editor
+use std.input as inp
 use std.math.quat as quat
-use std.transform.volume
-use std.render.meshes
+use std.transform.volume as tv
+use std.render.meshes as meshes
 use std.render.models as models
-use std.camera.volume
-use std.camera.viewport
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
 
 const:
     WINDOW_WIDTH = 960
@@ -28,21 +28,21 @@ trait CharacterScale:
     var normalized: bool = false
 
 pub template RobotCharacter:
-    WorldTransform
-    ModelRenderer:
+    tv.WorldTransform
+    models.ModelRenderer:
         model = Robot
         visible = true
-    ModelAnimator:
+    models.ModelAnimator:
         clip = 0
         playing = true
     CharacterScale
 
 pub template KnightCharacter:
-    WorldTransform
-    ModelRenderer:
+    tv.WorldTransform
+    models.ModelRenderer:
         model = Knight
         visible = true
-    ModelAnimator:
+    models.ModelAnimator:
         clip = 0
         playing = true
     CharacterScale
@@ -50,22 +50,22 @@ pub template KnightCharacter:
 # ── Lights ────────────────────────────────────────────────────────────────────
 
 pub entity KeyLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-3.0, 4.0, 4.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #FFF4E0
         intensity = 1.5
         range = 20.0
         enabled = true
 
 pub entity FillLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(4.0, 2.5, 3.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #C0D8FF
         intensity = 1.0
         range = 18.0
@@ -85,15 +85,15 @@ pub entity FillLight:
 #   F                         Frame the selected entity
 
 pub entity MainCamera:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, 7.0, 10.0)
         rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -0.55)
         scale = vec3(1.0, 1.0, 1.0)
-    Camera:
+    cam3d.Camera:
         fov_y = 60.0
         near = 0.1
         far = 500.0
-    Viewport:
+    vp.Viewport:
         x = 0.0
         y = 0.0
         width = 1.0
@@ -110,7 +110,7 @@ pub entity MainCamera:
 
 system Enable3DEditor:
     filter:
-        EditorState
+        editor.EditorState
 
     on load:
         use_3d = true
@@ -123,8 +123,8 @@ system Enable3DEditor:
 
 system NormalizeSpawnedScale:
     filter:
-        WorldTransform
-        ModelRenderer
+        tv.WorldTransform
+        models.ModelRenderer
         CharacterScale
 
     on tick:

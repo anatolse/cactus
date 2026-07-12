@@ -1,3 +1,5 @@
+module malformed_trait
+
 trait BrokenTrait:
     var health int
     let mana: int = 10

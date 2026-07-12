@@ -1,2 +1,4 @@
+module main
+
 use player
 use level

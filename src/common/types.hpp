@@ -1,6 +1,9 @@
 #pragma once
 
+#include "frontend/symbol_identity.hpp"
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,7 +40,10 @@ enum class TypeKind {
 
 struct TypeInfo {
     TypeKind kind = TypeKind::Unknown;
-    std::string name;                   // for Struct/Enum: the user-defined name
+    // Human-readable/debug spelling retained for diagnostics and legacy consumers.
+    // For user-defined Struct/Enum/Trait-like values, symbol_id is the semantic identity.
+    std::string name;
+    std::optional<SymbolId> symbol_id;
     std::shared_ptr<TypeInfo> element;  // for List: the element type
     std::vector<TypeInfo> params;       // for Func: parameter types
     std::shared_ptr<TypeInfo> ret;      // for Func: return type

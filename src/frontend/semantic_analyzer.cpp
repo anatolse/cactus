@@ -1,5 +1,7 @@
 #include "frontend/semantic_analyzer.hpp"
 
+#include "frontend/symbol_identity.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -14,13 +16,122 @@ bool module_name_is_stdlib(const std::string& module_name) {
     return module_name == "std" || module_name.starts_with("std.");
 }
 
-bool program_is_stdlib_module(const ProgramNode& program) {
-    for (const auto& decl : program.declarations) {
-        if (const auto* module = std::get_if<ModuleNode>(&decl)) {
-            return module_name_is_stdlib(module->name);
+template <typename ResolvedDecl>
+void assign_canonical_identity(ResolvedDecl& decl, const SymbolId& symbol) {
+    decl.module_name  = symbol.module.name;
+    decl.canonical_id = make_canonical_id(symbol);
+    decl.symbol_id    = symbol;
+}
+
+template <typename Decl>
+void ensure_symbol_identity(Decl& decl,
+                            SymbolKind kind,
+                            const std::string& fallback_module,
+                            const std::string& fallback_name) {
+    const std::string module_name = decl.module_name.empty() ? fallback_module : decl.module_name;
+    const std::string local_name  = decl.name.empty() ? fallback_name : decl.name;
+    if (module_name.empty() || local_name.empty()) {
+        return;
+    }
+
+    const SymbolId symbol = decl.symbol_id.value_or(make_symbol_id(kind, module_name, local_name));
+    decl.name             = symbol.local_name;
+    assign_canonical_identity(decl, symbol);
+}
+
+bool provider_is_std_core(const ModuleImports& imports, const std::string& qualifier) {
+    const auto module_it = imports.modules.find(qualifier);
+    return module_it != imports.modules.end() && module_it->second.module_name == "std.core";
+}
+
+std::optional<std::string> find_std_core_provider(const ModuleImports& imports,
+                                                  const std::vector<std::string>& qualifiers) {
+    for (const auto& qualifier : qualifiers) {
+        if (provider_is_std_core(imports, qualifier)) {
+            return qualifier;
         }
     }
-    return false;
+    return std::nullopt;
+}
+
+std::string provider_module_name(const ModuleImports& imports, const std::string& qualifier) {
+    const auto module_it = imports.modules.find(qualifier);
+    return module_it != imports.modules.end() ? module_it->second.module_name : qualifier;
+}
+
+std::vector<std::string> unique_provider_modules(const ModuleImports& imports,
+                                                 const std::vector<std::string>& qualifiers) {
+    std::vector<std::string> modules;
+    for (const auto& qualifier : qualifiers) {
+        const auto module_name = provider_module_name(imports, qualifier);
+        if (std::ranges::find(modules, module_name) == modules.end()) {
+            modules.push_back(module_name);
+        }
+    }
+    return modules;
+}
+
+std::string imported_reference_diagnostic(const ModuleImports& imports,
+                                          const char* kind,
+                                          const std::string& name,
+                                          const std::vector<std::string>& qualifiers) {
+    if (qualifiers.empty()) {
+        return std::string("unknown ") + kind + " '" + name + "'";
+    }
+
+    const auto modules = unique_provider_modules(imports, qualifiers);
+    if (modules.size() == 1 && qualifiers.size() == 1) {
+        const auto& qualifier  = qualifiers.front();
+        const auto module_name = provider_module_name(imports, qualifier);
+        std::ostringstream msg;
+        msg << kind << " '" << name << "' is imported from module '" << module_name << "' as canonical symbol '"
+            << make_canonical_id(module_name, name) << "' and must be referenced as '" << qualifier << "." << name
+            << "'";
+        return msg.str();
+    }
+
+    std::ostringstream msg;
+    msg << "ambiguous reference '" << name << "': defined as";
+    for (std::size_t i = 0; i < modules.size(); ++i) {
+        msg << (i == 0 ? " '" : (i + 1 == modules.size() ? " and '" : ", '")) << make_canonical_id(modules[i], name)
+            << "'";
+    }
+    msg << "; use qualified access to disambiguate";
+    return msg.str();
+}
+
+std::vector<std::string> type_provider_qualifiers(const ModuleImports& imports, const std::string& name) {
+    std::vector<std::string> qualifiers;
+    if (const auto it = imports.struct_providers.find(name); it != imports.struct_providers.end()) {
+        qualifiers.insert(qualifiers.end(), it->second.begin(), it->second.end());
+    }
+    if (const auto it = imports.enum_providers.find(name); it != imports.enum_providers.end()) {
+        qualifiers.insert(qualifiers.end(), it->second.begin(), it->second.end());
+    }
+    return qualifiers;
+}
+
+std::optional<std::string> explicit_module_name(const ProgramNode& program, ErrorReporter& errors) {
+    const ModuleNode* found = nullptr;
+    for (const auto& decl : program.declarations) {
+        if (const auto* module = std::get_if<ModuleNode>(&decl)) {
+            if (found != nullptr) {
+                errors.error(module->location, "semantic analysis requires exactly one explicit module declaration");
+                continue;
+            }
+            found = module;
+        }
+    }
+
+    if (found == nullptr) {
+        errors.error(program.location, "semantic analysis requires an explicit module declaration");
+        return std::nullopt;
+    }
+    if (found->name.empty() || found->name == "<error>") {
+        errors.error(found->location, "semantic analysis requires a non-empty explicit module declaration");
+        return std::nullopt;
+    }
+    return found->name;
 }
 
 const std::unordered_set<std::string>& builtin_types() {
@@ -141,6 +252,27 @@ TypeInfo find_field_type_in(const FieldContainer& fields, const std::string& mem
         }
     }
     return make_unknown_type();
+}
+
+TypeInfo make_resolved_user_type(TypeKind kind, const SymbolId& symbol, std::string display_name = {}) {
+    TypeInfo ti;
+    ti.kind      = kind;
+    ti.name      = display_name.empty() ? make_canonical_id(symbol) : std::move(display_name);
+    ti.symbol_id = symbol;
+    return ti;
+}
+
+template <typename ResolvedDecl>
+SymbolId resolved_decl_symbol(const ResolvedDecl& decl,
+                              SymbolKind kind,
+                              const std::string& fallback_module,
+                              const std::string& fallback_name) {
+    if (decl.symbol_id.has_value()) {
+        return *decl.symbol_id;
+    }
+    const std::string module_name = decl.module_name.empty() ? fallback_module : decl.module_name;
+    const std::string local_name  = decl.name.empty() ? fallback_name : decl.name;
+    return make_symbol_id(kind, module_name, local_name);
 }
 
 bool expr_contains_self(const ExprNode& expr);
@@ -300,8 +432,9 @@ FieldAssignment clone_field_assignment(const FieldAssignment& assignment) {
 
 ArchetypeTraitEntry clone_archetype_trait_entry(const ArchetypeTraitEntry& entry) {
     ArchetypeTraitEntry copy;
-    copy.trait_name = entry.trait_name;
-    copy.location   = entry.location;
+    copy.trait_name        = entry.trait_name;
+    copy.resolved_trait_id = entry.resolved_trait_id;
+    copy.location          = entry.location;
     copy.assignments.reserve(entry.assignments.size());
     for (const auto& assignment : entry.assignments) {
         copy.assignments.push_back(clone_field_assignment(assignment));
@@ -338,12 +471,12 @@ std::vector<ChildOverrideNode> clone_child_override_nodes(const std::vector<Chil
 
 ChildArchetypeNode clone_child_archetype_node(const ChildArchetypeNode& node) {
     ChildArchetypeNode copy;
-    copy.role         = node.role;
-    copy.template_ref = node.template_ref;
-    copy.location     = node.location;
-    copy.body_entries  = node.body_entries;
-    copy.template_uses = node.template_uses;
-    copy.traits        = clone_archetype_trait_entries(node.traits);
+    copy.role            = node.role;
+    copy.template_ref    = node.template_ref;
+    copy.location        = node.location;
+    copy.body_entries    = node.body_entries;
+    copy.template_uses   = node.template_uses;
+    copy.traits          = clone_archetype_trait_entries(node.traits);
     copy.children        = clone_child_archetype_nodes(node.children);
     copy.child_overrides = clone_child_override_nodes(node.child_overrides);
     return copy;
@@ -362,18 +495,24 @@ std::vector<ChildArchetypeNode> clone_child_archetype_nodes(const std::vector<Ch
 
 // Merge one trait entry into a flattened trait list: new traits append, existing
 // traits merge field-by-field with later assignments overriding earlier ones.
+bool same_trait_entry_identity(const ArchetypeTraitEntry& lhs, const ArchetypeTraitEntry& rhs) {
+    if (lhs.resolved_trait_id.has_value() && rhs.resolved_trait_id.has_value()) {
+        return *lhs.resolved_trait_id == *rhs.resolved_trait_id;
+    }
+    return lhs.trait_name == rhs.trait_name;
+}
+
 void merge_trait_entry_into(std::vector<ArchetypeTraitEntry>& merged, const ArchetypeTraitEntry& entry) {
     auto existing = std::ranges::find_if(
-        merged, [&entry](const auto& candidate) { return candidate.trait_name == entry.trait_name; });
+        merged, [&entry](const auto& candidate) { return same_trait_entry_identity(candidate, entry); });
     if (existing == merged.end()) {
         merged.push_back(clone_archetype_trait_entry(entry));
         return;
     }
 
     for (const auto& assignment : entry.assignments) {
-        auto field = std::ranges::find_if(existing->assignments, [&assignment](const auto& candidate) {
-            return candidate.name == assignment.name;
-        });
+        auto field = std::ranges::find_if(
+            existing->assignments, [&assignment](const auto& candidate) { return candidate.name == assignment.name; });
         if (field == existing->assignments.end()) {
             existing->assignments.push_back(clone_field_assignment(assignment));
         } else {
@@ -518,6 +657,50 @@ void ModuleImports::add(const std::string& qualifier,
                         ImportedSymbols pub_syms,
                         std::unordered_set<std::string> non_pub,
                         std::unordered_set<std::string> non_pub_templates) {
+    for (auto& [name, trait] : pub_syms.traits) {
+        ensure_symbol_identity(trait, SymbolKind::Trait, pub_syms.module_name, name);
+    }
+    for (auto& [name, strct] : pub_syms.structs) {
+        ensure_symbol_identity(strct, SymbolKind::Struct, pub_syms.module_name, name);
+    }
+    for (auto& [name, enm] : pub_syms.enums) {
+        ensure_symbol_identity(enm, SymbolKind::Enum, pub_syms.module_name, name);
+    }
+    for (auto& [name, func] : pub_syms.funcs) {
+        ensure_symbol_identity(func, SymbolKind::Func, pub_syms.module_name, name);
+    }
+    for (auto& [name, tmpl] : pub_syms.templates) {
+        const auto symbol = tmpl.symbol_id.value_or(make_symbol_id(SymbolKind::Template, pub_syms.module_name, name));
+        tmpl.name         = symbol.local_name;
+        tmpl.module_name  = symbol.module.name;
+        tmpl.canonical_id = make_canonical_id(symbol);
+        tmpl.symbol_id    = symbol;
+    }
+    for (const auto& name : pub_syms.events) {
+        if (!pub_syms.event_symbols.contains(name)) {
+            const auto symbol            = make_symbol_id(SymbolKind::Event, pub_syms.module_name, name);
+            pub_syms.event_symbols[name] = ImportedEvent{.name         = symbol.local_name,
+                                                         .module_name  = symbol.module.name,
+                                                         .canonical_id = make_canonical_id(symbol),
+                                                         .symbol_id    = symbol};
+        }
+    }
+    for (auto& [name, event] : pub_syms.event_symbols) {
+        const auto symbol  = event.symbol_id.value_or(make_symbol_id(SymbolKind::Event, pub_syms.module_name, name));
+        event.name         = symbol.local_name;
+        event.module_name  = symbol.module.name;
+        event.canonical_id = make_canonical_id(symbol);
+        event.symbol_id    = symbol;
+        pub_syms.events.insert(symbol.local_name);
+    }
+    for (auto& [name, sys] : pub_syms.systems) {
+        const auto symbol = sys.symbol_id.value_or(make_symbol_id(SymbolKind::System, pub_syms.module_name, name));
+        sys.name          = symbol.local_name;
+        sys.module_name   = symbol.module.name;
+        sys.canonical_id  = make_canonical_id(symbol);
+        sys.symbol_id     = symbol;
+    }
+
     const auto existing = modules.find(qualifier);
     if (existing != modules.end() && existing->second.module_name == pub_syms.module_name) {
         // Idempotent import of the same module source under the same qualifier.
@@ -547,12 +730,16 @@ void ModuleImports::add(const std::string& qualifier,
     for (auto& [name, _] : pub_syms.funcs) {
         func_providers[name].push_back(qualifier);
     }
-    for (const auto& name : pub_syms.templates) {
+    for (const auto& [name, _] : pub_syms.templates) {
         template_providers[name].push_back(qualifier);
     }
-    // Index imported event names (e.g. from std.core)
-    for (const auto& ev_name : pub_syms.events) {
-        (void)ev_name;  // no uniqueness conflict for events — just populate event_names_ in analyzer
+    // Index imported event names
+    for (const auto& [ev_name, _] : pub_syms.event_symbols) {
+        event_providers[ev_name].push_back(qualifier);
+    }
+    // Index imported extern system names (for after: resolution)
+    for (const auto& [sys_name, _] : pub_syms.systems) {
+        system_providers[sys_name].push_back(qualifier);
     }
     // Store non-pub trait names for error diagnostics
     if (!non_pub.empty()) {
@@ -571,15 +758,50 @@ SemanticAnalyzer::SemanticAnalyzer(ErrorReporter& errors)
     : errors_(errors) {}
 
 DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImports& imports) {
-    imports_                  = imports;
-    current_module_is_stdlib_ = program_is_stdlib_module(program);
-    result_.ast               = &program;
+    imports_ = imports;
+
+    result_     = DecoratedProgram{};
+    result_.ast = &program;
+
+    current_module_is_stdlib_ = false;
+    current_module_name_.clear();
+    current_module_id_ = ModuleId{};
+    struct_names_.clear();
+    enum_names_.clear();
+    trait_names_.clear();
+    event_names_.clear();
+    func_names_.clear();
+    system_names_.clear();
+    const_names_.clear();
+    module_scope_symbols_.clear();
+    asset_decl_types_.clear();
+    input_decl_types_.clear();
+    call_graph_.clear();
+    template_names_.clear();
+    entity_names_.clear();
+    use_names_.clear();
+    archetype_traits_.clear();
+    archetype_children_.clear();
+    template_required_fields_.clear();
+    event_structs_.clear();
+
+    auto module_name = explicit_module_name(program, errors_);
+    if (!module_name.has_value()) {
+        return std::move(result_);
+    }
+
+    current_module_id_        = ModuleId{.name = *module_name};
+    current_module_name_      = current_module_id_.name;
+    current_module_is_stdlib_ = module_name_is_stdlib(current_module_id_.name);
+    result_.module_name       = current_module_id_.name;
+    result_.source_modules.push_back(ResolvedSourceModule{.module_name = current_module_id_.name, .ast = &program});
 
     // Phase 1: Collect all type declarations
     collect_types(program);
 
     // Phase 2: Resolve types in fields
     resolve_all_types(program);
+    resolve_trait_references(program);
 
     // Phase 3: Semantic checks
     check_const_strings(program);
@@ -612,50 +834,138 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
 
 // ── Phase 1: Collect Types ──────────────────────────────────────────────────
 
+bool SemanticAnalyzer::declare_module_scope_symbol(SymbolKind kind,
+                                                   const std::string& name,
+                                                   const SourceLocation& loc) {
+    const auto symbol         = make_symbol_id(kind, current_module_id_, name);
+    auto [existing, inserted] = module_scope_symbols_.emplace(name, symbol);
+    if (inserted) {
+        return true;
+    }
+
+    errors_.error(loc,
+                  "duplicate module-scope declaration '" + name + "' in module '" + current_module_name_ +
+                      "': " + symbol_kind_name(kind) + " conflicts with existing " +
+                      symbol_kind_name(existing->second.kind) + " declaration");
+    return false;
+}
+
 void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    // Seed event_names_ from imported modules (e.g. std.core lifecycle events).
-    // Also seed event_structs_ with empty stubs so that handler_event is non-null
-    // for marker/cross-module events (e.g. `input`), enabling world-access calls
-    // like exists() inside on-input handlers.
+    // Seed event_names_ and event_structs_ from all imported modules.
+    // std.core prelude events are always accessible unqualified; events from
+    // other modules are also allowed unqualified because the `on event:` handler
+    // syntax does not yet support qualified module prefixes.
+    // event_structs_ stubs are required so handler_event is non-null for
+    // marker/cross-module events, enabling world-access calls like exists() inside handlers.
     for (const auto& [qualifier, syms] : imports_.modules) {
         for (const auto& ev_name : syms.events) {
             event_names_.insert(ev_name);
             if (!event_structs_.contains(ev_name)) {
-                event_structs_[ev_name] = ResolvedStruct{.name = ev_name};
+                const auto event_id = syms.event_symbols.contains(ev_name) && syms.event_symbols.at(ev_name).symbol_id
+                                          ? *syms.event_symbols.at(ev_name).symbol_id
+                                          : make_symbol_id(SymbolKind::Event, syms.module_name, ev_name);
+                ResolvedStruct event_stub;
+                event_stub.name = event_id.local_name;
+                assign_canonical_identity(event_stub, event_id);
+                event_structs_[ev_name] = std::move(event_stub);
             }
         }
     }
 
+    // First pass: populate the complete module-scope namespace and all local
+    // declaration-name sets before resolving any reference sites. This ensures
+    // forward references in event fields and later semantic phases see the same
+    // typed local symbol table.
     for (auto& decl : program.declarations) {
         std::visit(
             [this](auto& node) {  // NOLINT(readability-function-cognitive-complexity)
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, StructNode>) {
-                    if (struct_names_.contains(node.name)) {
-                        errors_.error(node.location, "duplicate struct '" + node.name + "'");
-                    }
+                    declare_module_scope_symbol(SymbolKind::Struct, node.name, node.location);
                     struct_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, EnumNode>) {
-                    if (enum_names_.contains(node.name)) {
-                        errors_.error(node.location, "duplicate enum '" + node.name + "'");
-                    }
+                    declare_module_scope_symbol(SymbolKind::Enum, node.name, node.location);
                     enum_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, TraitNode>) {
+                    node.is_stdlib = current_module_is_stdlib_;
+                    declare_module_scope_symbol(SymbolKind::Trait, node.name, node.location);
+                    trait_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, EventNode>) {
+                    declare_module_scope_symbol(SymbolKind::Event, node.name, node.location);
+                    event_names_.insert(node.name);
+                    if (node.is_pub) {
+                        result_.pub_events.insert(node.name);
+                    }
+                } else if constexpr (std::is_same_v<T, FuncNode>) {
+                    node.is_stdlib = current_module_is_stdlib_;
+                    declare_module_scope_symbol(SymbolKind::Func, node.name, node.location);
+                    func_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
+                    node.is_stdlib = current_module_is_stdlib_;
+                    declare_module_scope_symbol(SymbolKind::System, node.name, node.location);
+                    system_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, ConstBlockNode>) {
+                    for (auto& a : node.assignments) {
+                        declare_module_scope_symbol(SymbolKind::Const, a.name, a.location);
+                        const_names_.insert(a.name);
+                        result_.string_pool.intern(a.name);
+                    }
+                } else if constexpr (std::is_same_v<T, TemplateNode>) {
+                    // Track template names separately from units (5.2)
+                    declare_module_scope_symbol(SymbolKind::Template, node.name, node.location);
+                    template_names_.insert(node.name);
+                    archetype_traits_[node.name] = &node.traits;
+                    if (node.is_pub) {
+                        result_.pub_templates.insert(node.name);
+                    } else {
+                        result_.non_pub_templates.insert(node.name);
+                    }
+                } else if constexpr (std::is_same_v<T, EntityNode>) {
+                    // Track entity names to distinguish from templates (5.4)
+                    declare_module_scope_symbol(SymbolKind::Entity, node.name, node.location);
+                    entity_names_.insert(node.name);
+                    archetype_traits_[node.name] = &node.traits;
+                } else if constexpr (std::is_same_v<T, UseNode>) {
+                    // Track declared module names for `load` reachability (5.6)
+                    use_names_.insert(node.module_name);
+                    if (node.alias.has_value()) {
+                        use_names_.insert(*node.alias);
+                    }
+                } else if constexpr (std::is_same_v<T, AssetDeclNode>) {
+                    // Register asset name → opaque ID TypeKind (task 6.1)
+                    declare_module_scope_symbol(SymbolKind::Asset, node.name, node.location);
+                    TypeKind tk                  = asset_kind_to_type_kind(node.asset_kind);
+                    asset_decl_types_[node.name] = tk;
+                } else if constexpr (std::is_same_v<T, InputDeclNode>) {
+                    // Register input name → InputButton or InputAxis (task 6.4)
+                    declare_module_scope_symbol(SymbolKind::Input, node.name, node.location);
+                    TypeKind tk = (node.input_kind == InputKind::Button) ? TypeKind::InputButton : TypeKind::InputAxis;
+                    input_decl_types_[node.name] = tk;
+                }
+            },
+            decl);
+    }
+
+    // Second pass: build resolved declarations that were historically produced
+    // during collection but may contain reference sites (event field types).
+    for (auto& decl : program.declarations) {
+        std::visit(
+            [this](auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, EnumNode>) {
+                    const auto enum_id = make_symbol_id(SymbolKind::Enum, current_module_id_, node.name);
                     ResolvedEnum re;
-                    re.name = node.name;
+                    re.name = enum_id.local_name;
+                    assign_canonical_identity(re, enum_id);
                     for (auto& v : node.variants) {
                         re.variants.push_back(v.name);
                     }
                     result_.enums[node.name] = std::move(re);
-                } else if constexpr (std::is_same_v<T, TraitNode>) {
-                    node.is_stdlib = current_module_is_stdlib_;
-                    if (trait_names_.contains(node.name)) {
-                        errors_.error(node.location, "duplicate trait '" + node.name + "'");
-                    }
-                    trait_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, EventNode>) {
-                    event_names_.insert(node.name);
+                    const auto event_id = make_symbol_id(SymbolKind::Event, current_module_id_, node.name);
                     ResolvedStruct rs;
-                    rs.name = node.name;
+                    rs.name = event_id.local_name;
+                    assign_canonical_identity(rs, event_id);
                     for (auto& f : node.fields) {
                         ResolvedField rf;
                         rf.name        = f.name;
@@ -669,52 +979,6 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                         rs.fields.push_back(std::move(rf));
                     }
                     event_structs_[node.name] = std::move(rs);
-                    if (node.is_pub) {
-                        result_.pub_events.insert(node.name);
-                    }
-                } else if constexpr (std::is_same_v<T, FuncNode>) {
-                    node.is_stdlib = current_module_is_stdlib_;
-                    func_names_.insert(node.name);
-                } else if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
-                    node.is_stdlib = current_module_is_stdlib_;
-                    if (system_names_.contains(node.name)) {
-                        errors_.error(node.location, "duplicate system '" + node.name + "'");
-                    }
-                    system_names_.insert(node.name);
-                } else if constexpr (std::is_same_v<T, ConstBlockNode>) {
-                    for (auto& a : node.assignments) {
-                        result_.string_pool.intern(a.name);
-                    }
-                } else if constexpr (std::is_same_v<T, TemplateNode>) {
-                    // Track template names separately from units (5.2)
-                    if (template_names_.contains(node.name)) {
-                        errors_.error(node.location, "duplicate template '" + node.name + "'");
-                    }
-                    template_names_.insert(node.name);
-                    archetype_traits_[node.name] = &node.traits;
-                    if (node.is_pub) {
-                        result_.pub_templates.insert(node.name);
-                    } else {
-                        result_.non_pub_templates.insert(node.name);
-                    }
-                } else if constexpr (std::is_same_v<T, EntityNode>) {
-                    // Track entity names to distinguish from templates (5.4)
-                    entity_names_.insert(node.name);
-                    archetype_traits_[node.name] = &node.traits;
-                } else if constexpr (std::is_same_v<T, UseNode>) {
-                    // Track declared module names for `load` reachability (5.6)
-                    use_names_.insert(node.module_name);
-                    if (node.alias.has_value()) {
-                        use_names_.insert(*node.alias);
-                    }
-                } else if constexpr (std::is_same_v<T, AssetDeclNode>) {
-                    // Register asset name → opaque ID TypeKind (task 6.1)
-                    TypeKind tk                  = asset_kind_to_type_kind(node.asset_kind);
-                    asset_decl_types_[node.name] = tk;
-                } else if constexpr (std::is_same_v<T, InputDeclNode>) {
-                    // Register input name → InputButton or InputAxis (task 6.4)
-                    TypeKind tk = (node.input_kind == InputKind::Button) ? TypeKind::InputButton : TypeKind::InputAxis;
-                    input_decl_types_[node.name] = tk;
                 }
             },
             decl);
@@ -729,8 +993,10 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
             [this](auto& node) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, StructNode>) {
+                    const auto struct_id = make_symbol_id(SymbolKind::Struct, current_module_id_, node.name);
                     ResolvedStruct rs;
-                    rs.name = node.name;
+                    rs.name = struct_id.local_name;
+                    assign_canonical_identity(rs, struct_id);
                     for (auto& f : node.fields) {
                         ResolvedField rf;
                         rf.name = f.name;
@@ -739,8 +1005,10 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                     }
                     result_.structs[node.name] = std::move(rs);
                 } else if constexpr (std::is_same_v<T, TraitNode>) {
+                    const auto trait_id = make_symbol_id(SymbolKind::Trait, current_module_id_, node.name);
                     ResolvedTrait rt;
-                    rt.name      = node.name;
+                    rt.name = trait_id.local_name;
+                    assign_canonical_identity(rt, trait_id);
                     rt.is_pub    = node.is_pub;
                     rt.is_stdlib = node.is_stdlib;
                     for (auto& f : node.fields) {
@@ -757,9 +1025,10 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                     }
                     result_.traits[node.name] = std::move(rt);
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
-                    // Task 4.4: Resolve func parameter types and return type
+                    const auto func_id = make_symbol_id(SymbolKind::Func, current_module_id_, node.name);
                     ResolvedFunc rf;
-                    rf.name      = node.name;
+                    rf.name = func_id.local_name;
+                    assign_canonical_identity(rf, func_id);
                     rf.is_pub    = node.is_pub;
                     rf.is_extern = node.is_extern;
                     rf.is_stdlib = node.is_stdlib;
@@ -779,9 +1048,297 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
     }
 }
 
+void SemanticAnalyzer::resolve_trait_references(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
+    auto resolve_trait_entry = [this](ArchetypeTraitEntry& entry) {
+        entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.trait_name);
+    };
+
+    std::function<std::optional<std::string>(const ExprNode&)> module_scope_expr_path =
+        [&](const ExprNode& expr) -> std::optional<std::string> {
+        if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+            return ident->name;
+        }
+        if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+            auto prefix = module_scope_expr_path(*member->object);
+            if (prefix.has_value()) {
+                return *prefix + "." + member->member;
+            }
+        }
+        return std::nullopt;
+    };
+
+    std::function<void(std::vector<ChildOverrideNode>&)> resolve_child_overrides;
+    std::function<void(std::vector<ChildArchetypeNode>&)> resolve_child_archetypes;
+    std::function<void(ExprNode&)> resolve_expr;
+    std::function<void(std::vector<std::unique_ptr<StmtNode>>&)> resolve_stmts;
+
+    resolve_child_overrides = [&](std::vector<ChildOverrideNode>& overrides) {
+        for (auto& override_node : overrides) {
+            for (auto& trait : override_node.traits) {
+                resolve_trait_entry(trait);
+            }
+            resolve_child_overrides(override_node.children);
+        }
+    };
+
+    resolve_child_archetypes = [&](std::vector<ChildArchetypeNode>& children) {
+        for (auto& child : children) {
+            if (child.template_ref.has_value()) {
+                child.resolved_template_ref_id = try_resolve_template_ref_to_symbol(*child.template_ref);
+            }
+            for (auto& use : child.template_uses) {
+                use.resolved_template_id = try_resolve_template_ref_to_symbol(use.template_name);
+            }
+            for (auto& trait : child.traits) {
+                resolve_trait_entry(trait);
+            }
+            resolve_child_archetypes(child.children);
+            resolve_child_overrides(child.child_overrides);
+        }
+    };
+
+    auto resolve_filter_clause = [this](FilterClause& clause) {
+        clause.resolved_trait_ids.clear();
+        if (!clause.entries.empty()) {
+            clause.resolved_trait_ids.reserve(clause.entries.size());
+            for (auto& entry : clause.entries) {
+                entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.qualified_name);
+                if (entry.resolved_trait_id.has_value()) {
+                    clause.resolved_trait_ids.push_back(*entry.resolved_trait_id);
+                }
+            }
+            return;
+        }
+
+        clause.resolved_trait_ids.reserve(clause.trait_names.size());
+        for (const auto& trait_name : clause.trait_names) {
+            auto resolved = try_resolve_trait_ref_to_symbol(trait_name);
+            if (resolved.has_value()) {
+                clause.resolved_trait_ids.push_back(*resolved);
+            }
+        }
+    };
+
+    resolve_expr = [&](ExprNode& expr) {
+        std::visit(
+            [&](auto& e) {  // NOLINT(readability-function-cognitive-complexity)
+                using E = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<E, UnaryExpr>) {
+                    resolve_expr(*e.operand);
+                } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                    resolve_expr(*e.left);
+                    resolve_expr(*e.right);
+                } else if constexpr (std::is_same_v<E, CallExpr>) {
+                    if (auto callee_path = module_scope_expr_path(*e.callee)) {
+                        e.resolved_callee_id = try_resolve_func_ref_to_symbol(*callee_path);
+                    }
+                    resolve_expr(*e.callee);
+                    for (auto& arg : e.args) {
+                        resolve_expr(*arg);
+                    }
+                } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                    resolve_expr(*e.object);
+                } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                    resolve_expr(*e.body);
+                } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                    resolve_expr(*e.source);
+                    for (auto& op : e.operations) {
+                        for (auto& arg : op.args) {
+                            resolve_expr(*arg);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                    resolve_expr(*e.subject);
+                    for (auto& arm : e.arms) {
+                        resolve_expr(*arm.pattern);
+                        resolve_expr(*arm.body);
+                    }
+                } else if constexpr (std::is_same_v<E, IfExpr>) {
+                    resolve_expr(*e.condition);
+                    resolve_expr(*e.then_expr);
+                    resolve_expr(*e.else_expr);
+                } else if constexpr (std::is_same_v<E, ListExpr>) {
+                    for (auto& element : e.elements) {
+                        resolve_expr(*element);
+                    }
+                } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                    e.resolved_template_id = try_resolve_template_ref_to_symbol(e.template_name);
+                    for (auto& override_entry : e.overrides) {
+                        resolve_trait_entry(override_entry);
+                        for (auto& assignment : override_entry.assignments) {
+                            resolve_expr(*assignment.value);
+                        }
+                    }
+                    resolve_child_overrides(e.child_overrides);
+                } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                    if (auto callee_path = module_scope_expr_path(*e.callee)) {
+                        e.resolved_callee_id = try_resolve_func_ref_to_symbol(*callee_path);
+                    }
+                    resolve_expr(*e.callee);
+                    for (auto& pred : e.filters) {
+                        pred.resolved_trait_id = try_resolve_trait_ref_to_symbol(pred.trait_name);
+                    }
+                    for (auto& arg : e.named_args) {
+                        resolve_expr(*arg.value);
+                    }
+                }
+            },
+            expr.expr);
+    };
+
+    resolve_stmts = [&](std::vector<std::unique_ptr<StmtNode>>& stmts) {
+        for (auto& stmt : stmts) {
+            std::visit(
+                [&](auto& s) {  // NOLINT(readability-function-cognitive-complexity)
+                    using S = std::decay_t<decltype(s)>;
+                    if constexpr (std::is_same_v<S, LetStmt>) {
+                        resolve_expr(*s.value);
+                    } else if constexpr (std::is_same_v<S, VarAssign>) {
+                        resolve_expr(*s.value);
+                    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+                        s.resolved_event_id = try_resolve_event_ref_to_symbol(s.event_name);
+                        if (s.target.has_value()) {
+                            resolve_expr(**s.target);
+                        }
+                        for (auto& field : s.payload) {
+                            resolve_expr(*field.value);
+                        }
+                    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                        if (s.value.has_value()) {
+                            resolve_expr(**s.value);
+                        }
+                    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                        resolve_expr(*s.expr);
+                    } else if constexpr (std::is_same_v<S, IfStmt>) {
+                        resolve_expr(*s.condition);
+                        resolve_stmts(s.then_body);
+                        resolve_stmts(s.else_body);
+                    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                        resolve_expr(*s.iterable);
+                        resolve_stmts(s.body);
+                    } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                        resolve_expr(*s.subject);
+                        for (auto& arm : s.arms) {
+                            arm.resolved_trait_id = try_resolve_trait_ref_to_symbol(arm.trait_name);
+                            resolve_stmts(arm.body);
+                        }
+                        if (s.wildcard.has_value()) {
+                            resolve_stmts(s.wildcard->body);
+                        }
+                    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                        s.resolved_template_id = try_resolve_template_ref_to_symbol(s.template_name);
+                        for (auto& override_entry : s.overrides) {
+                            resolve_trait_entry(override_entry);
+                            for (auto& assignment : override_entry.assignments) {
+                                resolve_expr(*assignment.value);
+                            }
+                        }
+                        resolve_child_overrides(s.child_overrides);
+                    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+                        if (s.target_expr.has_value()) {
+                            resolve_expr(**s.target_expr);
+                        }
+                    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+                        for (auto& arg : s.args) {
+                            resolve_expr(*arg.value);
+                        }
+                        if (s.target_expr.has_value()) {
+                            resolve_expr(**s.target_expr);
+                        }
+                    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+                        if (s.target_expr.has_value()) {
+                            resolve_expr(**s.target_expr);
+                        }
+                    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+                        for (auto& arg : s.args) {
+                            resolve_expr(*arg.value);
+                        }
+                        if (s.target_expr.has_value()) {
+                            resolve_expr(**s.target_expr);
+                        }
+                    }
+                },
+                stmt->stmt);
+        }
+    };
+
+    for (auto& decl : program.declarations) {
+        std::visit(
+            [&](auto& node) {  // NOLINT(readability-function-cognitive-complexity)
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, ConstBlockNode>) {
+                    for (auto& assignment : node.assignments) {
+                        resolve_expr(*assignment.value);
+                    }
+                } else if constexpr (std::is_same_v<T, TraitNode>) {
+                    for (auto& field : node.fields) {
+                        if (field.default_value.has_value()) {
+                            resolve_expr(**field.default_value);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, EntityNode>) {
+                    node.resolved_entity_id = make_symbol_id(SymbolKind::Entity, current_module_id_, node.name);
+                    if (node.template_ref.has_value()) {
+                        node.resolved_template_ref_id = try_resolve_template_ref_to_symbol(*node.template_ref);
+                    }
+                    for (auto& trait : node.traits) {
+                        resolve_trait_entry(trait);
+                        for (auto& assignment : trait.assignments) {
+                            resolve_expr(*assignment.value);
+                        }
+                    }
+                    for (auto& use : node.template_uses) {
+                        use.resolved_template_id = try_resolve_template_ref_to_symbol(use.template_name);
+                    }
+                    resolve_child_archetypes(node.children);
+                    resolve_child_overrides(node.child_overrides);
+                } else if constexpr (std::is_same_v<T, TemplateNode>) {
+                    node.resolved_template_id = make_symbol_id(SymbolKind::Template, current_module_id_, node.name);
+                    for (auto& trait : node.traits) {
+                        resolve_trait_entry(trait);
+                        for (auto& assignment : trait.assignments) {
+                            resolve_expr(*assignment.value);
+                        }
+                    }
+                    for (auto& use : node.template_uses) {
+                        use.resolved_template_id = try_resolve_template_ref_to_symbol(use.template_name);
+                    }
+                    resolve_child_archetypes(node.children);
+                } else if constexpr (std::is_same_v<T, SystemNode>) {
+                    node.resolved_system_id = make_symbol_id(SymbolKind::System, current_module_id_, node.name);
+                    resolve_filter_clause(node.filter);
+                    resolve_filter_clause(node.exclude);
+                    for (auto& handler : node.handlers) {
+                        handler.resolved_event_id = try_resolve_event_ref_to_symbol(handler.event_name);
+                        resolve_stmts(handler.body);
+                    }
+                } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
+                    node.resolved_system_id = make_symbol_id(SymbolKind::System, current_module_id_, node.name);
+                    resolve_filter_clause(node.filter);
+                    resolve_filter_clause(node.exclude);
+                } else if constexpr (std::is_same_v<T, FuncNode>) {
+                    node.resolved_func_id = make_symbol_id(SymbolKind::Func, current_module_id_, node.name);
+                    resolve_stmts(node.body);
+                } else if constexpr (std::is_same_v<T, AssetDeclNode>) {
+                    node.resolved_asset_id = make_symbol_id(SymbolKind::Asset, current_module_id_, node.name);
+                } else if constexpr (std::is_same_v<T, InputDeclNode>) {
+                    node.resolved_input_id = make_symbol_id(SymbolKind::Input, current_module_id_, node.name);
+                    for (auto& prop : node.props) {
+                        resolve_expr(*prop.value);
+                    }
+                }
+            },
+            decl);
+    }
+}
+
 TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
     // ── Qualified name: "module.Symbol" or "alias.Symbol" ──────────────────
-    auto dot = ref.name.find('.');
+    auto dot = ref.name.rfind('.');
     if (dot != std::string::npos) {
         auto qualifier = ref.name.substr(0, dot);
         auto sym_name  = ref.name.substr(dot + 1);
@@ -809,19 +1366,15 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
 
     // ── Local user-defined types ────────────────────────────────────────────
     if (struct_names_.contains(ref.name)) {
-        TypeInfo ti;
-        ti.kind = TypeKind::Struct;
-        ti.name = ref.name;
-        return ti;
+        return make_resolved_user_type(
+            TypeKind::Struct, make_symbol_id(SymbolKind::Struct, current_module_id_, ref.name), ref.name);
     }
     if (enum_names_.contains(ref.name)) {
-        TypeInfo ti;
-        ti.kind = TypeKind::Enum;
-        ti.name = ref.name;
-        return ti;
+        return make_resolved_user_type(
+            TypeKind::Enum, make_symbol_id(SymbolKind::Enum, current_module_id_, ref.name), ref.name);
     }
 
-    // ── Unqualified import lookup (4.3) ─────────────────────────────────────
+    // ── Prelude/ordinary import diagnostics ─────────────────────────────────
     if (!imports_.empty()) {
         return resolve_imported_type(ref.name, ref.location);
     }
@@ -835,6 +1388,18 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
 TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
                                                   const std::string& sym_name,
                                                   const SourceLocation& loc) {
+    // Qualified references may explicitly name the current module.
+    if (qualifier == current_module_name_) {
+        if (struct_names_.contains(sym_name)) {
+            return make_resolved_user_type(TypeKind::Struct,
+                                           make_symbol_id(SymbolKind::Struct, current_module_id_, sym_name));
+        }
+        if (enum_names_.contains(sym_name)) {
+            return make_resolved_user_type(TypeKind::Enum,
+                                           make_symbol_id(SymbolKind::Enum, current_module_id_, sym_name));
+        }
+    }
+
     auto it = imports_.modules.find(qualifier);
     if (it == imports_.modules.end()) {
         errors_.error(loc, "unknown module qualifier '" + qualifier + "'");
@@ -844,18 +1409,14 @@ TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
     const auto& syms = it->second;
 
     // Check imported structs
-    if (syms.structs.contains(sym_name)) {
-        TypeInfo ti;
-        ti.kind = TypeKind::Struct;
-        ti.name = qualifier + "." + sym_name;
-        return ti;
+    if (auto struct_it = syms.structs.find(sym_name); struct_it != syms.structs.end()) {
+        const auto symbol = resolved_decl_symbol(struct_it->second, SymbolKind::Struct, syms.module_name, sym_name);
+        return make_resolved_user_type(TypeKind::Struct, symbol);
     }
     // Check imported enums
-    if (syms.enums.contains(sym_name)) {
-        TypeInfo ti;
-        ti.kind = TypeKind::Enum;
-        ti.name = qualifier + "." + sym_name;
-        return ti;
+    if (auto enum_it = syms.enums.find(sym_name); enum_it != syms.enums.end()) {
+        const auto symbol = resolved_decl_symbol(enum_it->second, SymbolKind::Enum, syms.module_name, sym_name);
+        return make_resolved_user_type(TypeKind::Enum, symbol);
     }
 
     // ── Task 4.6: Non-pub helpful error ─────────────────────────────────────
@@ -871,54 +1432,34 @@ TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
     return make_unknown_type();
 }
 
-// ── Task 4.3: Unqualified import lookup ────────────────────────────────────
+// ── Unqualified type lookup: local first, then std.core prelude only. Ordinary
+// imports are namespace bindings and must be referenced with module/alias.
 
 TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name, const SourceLocation& loc) {
-    auto struct_it = imports_.struct_providers.find(name);
-    auto enum_it   = imports_.enum_providers.find(name);
-
-    size_t struct_count = (struct_it != imports_.struct_providers.end()) ? struct_it->second.size() : 0;
-    size_t enum_count   = (enum_it != imports_.enum_providers.end()) ? enum_it->second.size() : 0;
-    size_t total        = struct_count + enum_count;
-
-    if (total == 0) {
+    const auto providers = type_provider_qualifiers(imports_, name);
+    if (providers.empty()) {
         errors_.error(loc, "unknown type '" + name + "'");
         return make_unknown_type();
     }
 
-    if (total > 1) {
-        // Build a helpful ambiguity message (task 4.3 requirement)
-        std::ostringstream msg;
-        msg << "ambiguous reference '" << name << "': defined in";
-        bool first  = true;
-        auto append = [&](const std::vector<std::string>& quals) {
-            for (const auto& q : quals) {
-                msg << (first ? " module '" : " and module '") << q << "'";
-                first = false;
+    if (auto prelude = find_std_core_provider(imports_, providers)) {
+        const auto module_it = imports_.modules.find(*prelude);
+        if (module_it != imports_.modules.end()) {
+            if (auto struct_it = module_it->second.structs.find(name); struct_it != module_it->second.structs.end()) {
+                const auto symbol =
+                    resolved_decl_symbol(struct_it->second, SymbolKind::Struct, module_it->second.module_name, name);
+                return make_resolved_user_type(TypeKind::Struct, symbol);
             }
-        };
-        if (struct_it != imports_.struct_providers.end()) {
-            append(struct_it->second);
+            if (auto enum_it = module_it->second.enums.find(name); enum_it != module_it->second.enums.end()) {
+                const auto symbol =
+                    resolved_decl_symbol(enum_it->second, SymbolKind::Enum, module_it->second.module_name, name);
+                return make_resolved_user_type(TypeKind::Enum, symbol);
+            }
         }
-        if (enum_it != imports_.enum_providers.end()) {
-            append(enum_it->second);
-        }
-        msg << "; use qualified access to disambiguate";
-        errors_.error(loc, msg.str());
-        return make_unknown_type();
     }
 
-    // Unique — resolve
-    if (struct_count == 1) {
-        TypeInfo ti;
-        ti.kind = TypeKind::Struct;
-        ti.name = name;
-        return ti;
-    }
-    TypeInfo ti;
-    ti.kind = TypeKind::Enum;
-    ti.name = name;
-    return ti;
+    errors_.error(loc, imported_reference_diagnostic(imports_, "type", name, providers));
+    return make_unknown_type();
 }
 
 bool SemanticAnalyzer::is_known_type(const std::string& name) const {
@@ -1071,7 +1612,23 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
                                   "`exists()` requires world access; only allowed inside system event handlers");
                 }
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                    call_graph_[func_name].insert(ident->name);
+                    // Use canonical IDs so same simple names across modules don't
+                    // create false recursion edges (task 3.6).
+                    const auto callee_canonical = func_names_.contains(ident->name)
+                                                      ? make_canonical_id(current_module_name_, ident->name)
+                                                      : ident->name;
+                    call_graph_[make_canonical_id(current_module_name_, func_name)].insert(callee_canonical);
+                    // Ordinary imports are namespace bindings. Unqualified imported
+                    // function calls are rejected unless they come from std.core.
+                    if (!func_names_.contains(ident->name) && !imports_.empty()) {
+                        auto pit = imports_.func_providers.find(ident->name);
+                        if (pit != imports_.func_providers.end() && !pit->second.empty() &&
+                            !find_std_core_provider(imports_, pit->second).has_value()) {
+                            errors_.error(
+                                e.location,
+                                imported_reference_diagnostic(imports_, "function", ident->name, pit->second));
+                        }
+                    }
                 }
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
                 check_func_purity_expr(*e.left, func_name);
@@ -1100,10 +1657,10 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
 // ── Phase 3c: No Recursion ──────────────────────────────────────────────────
 
 void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    for (auto& [func, callees] : call_graph_) {
+    for (auto& [func_canonical, callees] : call_graph_) {
         std::unordered_set<std::string> visited;
-        std::vector<std::string> stack = {func};
-        visited.insert(func);
+        std::vector<std::string> stack = {func_canonical};
+        visited.insert(func_canonical);
 
         while (!stack.empty()) {
             auto current = stack.back();
@@ -1115,19 +1672,22 @@ void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {  // NOLINT(rea
             }
 
             for (const auto& callee : it->second) {
-                if (callee == func) {
+                if (callee == func_canonical) {
+                    // Strip module prefix for readable diagnostic.
+                    auto dot        = func_canonical.rfind('.');
+                    auto local_name = dot != std::string::npos ? func_canonical.substr(dot + 1) : func_canonical;
                     for (auto& decl : program.declarations) {
                         if (auto* fn = std::get_if<FuncNode>(&decl)) {
-                            if (fn->name == func) {
+                            if (fn->name == local_name) {
                                 errors_.error(fn->location,
-                                              "func '" + func + "' is recursive (recursion is not allowed)");
+                                              "func '" + local_name + "' is recursive (recursion is not allowed)");
                                 break;
                             }
                         }
                     }
                     break;
                 }
-                if (visited.contains(callee)) {
+                if (!visited.contains(callee)) {
                     visited.insert(callee);
                     stack.push_back(callee);
                 }
@@ -1201,8 +1761,8 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
                                 // Allow qualified stdlib constructor calls (e.g. rand.seeded, rand.uniform).
                                 if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
                                     allowed_ctor = member->member == "seeded" || member->member == "uniform" ||
-                                                   member->member == "uniform_int" ||
-                                                   member->member == "normal" || member->member == "identity";
+                                                   member->member == "uniform_int" || member->member == "normal" ||
+                                                   member->member == "identity";
                                 }
                                 if (allowed_ctor) {
                                     for (const auto& arg : e.args) {
@@ -1243,11 +1803,8 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
         auto trait_name        = qname.substr(last_dot + 1);
         auto simple_trait_name = (last_dot != std::string::npos) ? qname.substr(last_dot + 1) : trait_name;
 
-        // Allow qualified references to resolve to a local trait when the simple
-        // name exists in the current module. This keeps codegen-oriented tests
-        // and stdlib-like qualified spellings working even when the backing
-        // module is not imported in the snippet under analysis.
-        if (trait_names_.contains(simple_trait_name)) {
+        // Qualified local references must use the current module namespace.
+        if (trait_names_.contains(simple_trait_name) && qualifier == current_module_name_) {
             out_simple_name = simple_trait_name;
             return true;
         }
@@ -1282,23 +1839,17 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
         out_simple_name = qname;
         return true;
     }
-    // Check imports (task 4.3 uniqueness)
+    // Only the std.core prelude is available through unqualified imported lookup.
+    // Ordinary imports are namespace bindings and must be qualified.
     if (!imports_.empty()) {
         auto it = imports_.trait_providers.find(qname);
         if (it != imports_.trait_providers.end()) {
-            if (it->second.size() > 1) {
-                std::ostringstream msg;
-                msg << "ambiguous trait '" << qname << "' in filter: found in module '" << it->second[0]
-                    << "' and module '" << it->second[1] << "'";
-                if (it->second.size() > 2) {
-                    msg << " (and others)";
-                }
-                msg << "; use qualified access to disambiguate";
-                errors_.error(entry.location, msg.str());
-                return false;
+            if (find_std_core_provider(imports_, it->second).has_value()) {
+                out_simple_name = qname;
+                return true;
             }
-            out_simple_name = qname;
-            return true;
+            errors_.error(entry.location, imported_reference_diagnostic(imports_, "trait", qname, it->second));
+            return false;
         }
     }
 
@@ -1320,9 +1871,10 @@ void SemanticAnalyzer::validateOrderByClause(
 
     std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
     for (const auto& entry : system.filter.entries) {
+        // Use full qualified name for canonical lookup (task 3.5).
+        const auto* trait = find_resolved_trait(entry.resolved_trait_id, entry.qualified_name);
         auto dot          = entry.qualified_name.rfind('.');
         auto simple       = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
-        const auto* trait = find_resolved_trait(simple);
         if (trait != nullptr) {
             filter_bindings[simple] = trait;
             if (entry.alias.has_value()) {
@@ -1423,15 +1975,9 @@ void SemanticAnalyzer::validate_system_filters(
                     if (trait_names_.contains(trait_name)) {
                         continue;
                     }
-                    // Not local — check imports
-                    bool found = false;
-                    if (!imports_.empty()) {
-                        auto it = imports_.trait_providers.find(trait_name);
-                        if (it != imports_.trait_providers.end() && !it->second.empty()) {
-                            found = true;
-                        }
-                    }
-                    if (!found) {
+                    const auto prev_errors = errors_.error_count();
+                    const auto canonical   = resolve_trait_ref_to_canonical(trait_name, sys->filter.location);
+                    if (canonical.empty() && errors_.error_count() == prev_errors) {
                         errors_.error(sys->filter.location,
                                       "system '" + sys->name + "' filters on unknown trait '" + trait_name + "'");
                     }
@@ -1467,14 +2013,9 @@ void SemanticAnalyzer::validate_system_filters(
                     if (trait_names_.contains(trait_name)) {
                         continue;
                     }
-                    bool found = false;
-                    if (!imports_.empty()) {
-                        auto it = imports_.trait_providers.find(trait_name);
-                        if (it != imports_.trait_providers.end() && !it->second.empty()) {
-                            found = true;
-                        }
-                    }
-                    if (!found) {
+                    const auto prev_errors = errors_.error_count();
+                    const auto canonical   = resolve_trait_ref_to_canonical(trait_name, sys->filter.location);
+                    if (canonical.empty() && errors_.error_count() == prev_errors) {
                         errors_.error(
                             sys->filter.location,
                             "extern system '" + sys->name + "' filters on unknown trait '" + trait_name + "'");
@@ -1510,10 +2051,12 @@ void SemanticAnalyzer::validate_event_usage(
             for (auto& handler : sys->handlers) {
                 std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
                 for (const auto& entry : sys->filter.entries) {
-                    auto dot = entry.qualified_name.rfind('.');
+                    // Use the full qualified name so find_resolved_trait returns the
+                    // correct trait even when multiple modules share a local name (task 3.5).
+                    const auto* trait = find_resolved_trait(entry.resolved_trait_id, entry.qualified_name);
+                    auto dot          = entry.qualified_name.rfind('.');
                     auto simple =
                         (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
-                    const auto* trait = find_resolved_trait(simple);
                     if (trait != nullptr) {
                         filter_bindings[simple] = trait;
                         if (entry.alias.has_value()) {
@@ -1543,11 +2086,16 @@ void SemanticAnalyzer::validate_event_usage(
                 const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
                 std::unordered_map<std::string, TypeInfo> local_bindings;
                 if (handler_event != nullptr) {
+                    const auto symbol = resolved_decl_symbol(
+                        *handler_event, SymbolKind::Event, current_module_name_, handler_event->name);
                     local_bindings[handler.event_name] =
-                        TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                        make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                 }
                 if (handler.alias.has_value() && handler_event != nullptr) {
-                    local_bindings[*handler.alias] = TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                    const auto symbol = resolved_decl_symbol(
+                        *handler_event, SymbolKind::Event, current_module_name_, handler_event->name);
+                    local_bindings[*handler.alias] =
+                        make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                 }
 
                 validate_event_stmts(handler.body, filter_bindings, local_bindings, handler_event, sys->name);
@@ -1598,9 +2146,13 @@ void SemanticAnalyzer::validate_event_stmts(
     };
 
     auto validate_add = [this, &filter_bindings, &locals, handler_event](const AddTraitStmt& add) {
-        const auto* trait = find_resolved_trait(add.trait_name);
+        const auto* trait = find_resolved_trait(add.resolved_trait_id, add.trait_name);
         if (trait == nullptr) {
-            errors_.error(add.location, "undeclared trait '" + add.trait_name + "'");
+            const auto prev_errors = errors_.error_count();
+            (void)resolve_trait_ref_to_canonical(add.trait_name, add.location);
+            if (errors_.error_count() == prev_errors) {
+                errors_.error(add.location, "undeclared trait '" + add.trait_name + "'");
+            }
             return;
         }
 
@@ -1644,9 +2196,13 @@ void SemanticAnalyzer::validate_event_stmts(
     };
 
     auto validate_project = [this, &filter_bindings, &locals, handler_event](const ProjectTraitStmt& project) {
-        const auto* trait = find_resolved_trait(project.trait_name);
+        const auto* trait = find_resolved_trait(project.resolved_trait_id, project.trait_name);
         if (trait == nullptr) {
-            errors_.error(project.location, "undeclared trait '" + project.trait_name + "'");
+            const auto prev_errors = errors_.error_count();
+            (void)resolve_trait_ref_to_canonical(project.trait_name, project.location);
+            if (errors_.error_count() == prev_errors) {
+                errors_.error(project.location, "undeclared trait '" + project.trait_name + "'");
+            }
             return;
         }
 
@@ -1704,8 +2260,12 @@ void SemanticAnalyzer::validate_event_stmts(
     };
 
     auto validate_remove = [this, &filter_bindings, &locals, handler_event](const RemoveTraitStmt& remove) {
-        if (!is_trait_declared(remove.trait_name)) {
-            errors_.error(remove.location, "undeclared trait '" + remove.trait_name + "'");
+        if (find_resolved_trait(remove.resolved_trait_id, remove.trait_name) == nullptr) {
+            const auto prev_errors = errors_.error_count();
+            (void)resolve_trait_ref_to_canonical(remove.trait_name, remove.location);
+            if (errors_.error_count() == prev_errors) {
+                errors_.error(remove.location, "undeclared trait '" + remove.trait_name + "'");
+            }
         }
         if (remove.target_expr.has_value()) {
             auto t = infer_expr_type(**remove.target_expr, filter_bindings, locals, handler_event);
@@ -1823,9 +2383,13 @@ void SemanticAnalyzer::validate_trait_match_stmt(
     }
 
     for (const auto& arm : stmt.arms) {
-        const auto* trait = find_resolved_trait(arm.trait_name);
+        const auto* trait = find_resolved_trait(arm.resolved_trait_id, arm.trait_name);
         if (trait == nullptr) {
-            errors_.error(arm.location, "undeclared trait '" + arm.trait_name + "'");
+            const auto prev_errors = errors_.error_count();
+            (void)resolve_trait_ref_to_canonical(arm.trait_name, arm.location);
+            if (errors_.error_count() == prev_errors) {
+                errors_.error(arm.location, "undeclared trait '" + arm.trait_name + "'");
+            }
             continue;
         }
 
@@ -1842,7 +2406,8 @@ void SemanticAnalyzer::validate_trait_match_stmt(
                 errors_.error(arm.location,
                               "match arm alias '" + *arm.alias + "' conflicts with filter alias '" + *arm.alias + "'");
             } else {
-                arm_locals[*arm.alias] = TypeInfo{.kind = TypeKind::Struct, .name = trait->name};
+                const auto symbol = resolved_decl_symbol(*trait, SymbolKind::Trait, current_module_name_, trait->name);
+                arm_locals[*arm.alias] = make_resolved_user_type(TypeKind::Struct, symbol, trait->name);
             }
         }
 
@@ -1858,16 +2423,25 @@ void SemanticAnalyzer::validate_trait_match_stmt(
 
 void SemanticAnalyzer::build_dependency_graph(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    auto add_dep_from_filter = [](const auto& sys, SystemDependency& dep) {
+    // Resolve a filter entry to its canonical trait ID for the dependency graph (task 3.7).
+    auto filter_entry_canonical = [this](const FilterEntry& entry) -> std::string {
+        auto canonical = resolve_trait_ref_to_canonical(entry.qualified_name, entry.location);
+        if (!canonical.empty()) {
+            return canonical;
+        }
+        // Fallback: use simple name (resolution errors already reported elsewhere).
+        auto dot = entry.qualified_name.rfind('.');
+        return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
+    };
+
+    auto add_dep_from_filter = [&](const auto& sys, SystemDependency& dep) {
         if (!sys.filter.entries.empty()) {
-            for (auto& entry : sys.filter.entries) {
-                auto dot    = entry.qualified_name.find('.');
-                auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
-                dep.reads.insert(simple);
+            for (const auto& entry : sys.filter.entries) {
+                dep.reads.insert(filter_entry_canonical(entry));
             }
         } else {
-            for (auto& t : sys.filter.trait_names) {
-                dep.reads.insert(t);
+            for (const auto& t : sys.filter.trait_names) {
+                dep.reads.insert(make_canonical_id(current_module_name_, t));
             }
         }
     };
@@ -1875,10 +2449,10 @@ void SemanticAnalyzer::build_dependency_graph(
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             SystemDependency dep;
-            dep.system_name = sys->name;
+            dep.system_name = sys->name;  // simple name (task 5.4 will migrate to canonical)
+            dep.system_id   = sys->resolved_system_id;
             add_dep_from_filter(*sys, dep);
 
-            // Analyze handler bodies
             for (auto& handler : sys->handlers) {
                 collect_system_deps(handler.body, dep);
             }
@@ -1888,6 +2462,7 @@ void SemanticAnalyzer::build_dependency_graph(
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
             SystemDependency dep;
             dep.system_name = sys->name;
+            dep.system_id   = sys->resolved_system_id;
             add_dep_from_filter(*sys, dep);
             result_.dependency_graph.push_back(std::move(dep));
         }
@@ -1932,17 +2507,27 @@ bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
     if (trait_names_.contains(name)) {
         return true;
     }
+    // Handle qualified names: "qualifier.TraitName"
+    auto dot = name.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = name.substr(0, dot);
+        auto local_name = name.substr(dot + 1);
+        if (trait_names_.contains(local_name) && qualifier == current_module_name_) {
+            return true;  // qualifies a local trait
+        }
+        auto it = imports_.modules.find(qualifier);
+        return it != imports_.modules.end() && it->second.traits.contains(local_name);
+    }
     if (!imports_.empty()) {
         auto it = imports_.trait_providers.find(name);
-        if (it != imports_.trait_providers.end() && !it->second.empty()) {
+        if (it != imports_.trait_providers.end() && find_std_core_provider(imports_, it->second).has_value()) {
             return true;
         }
     }
     return false;
 }
 
-bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbols& symbols,
-                                                             const std::string& name) {
+bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbols& symbols, const std::string& name) {
     return symbols.traits.contains(name) || symbols.structs.contains(name) || symbols.enums.contains(name) ||
            symbols.funcs.contains(name) || symbols.events.contains(name);
 }
@@ -1950,8 +2535,8 @@ bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbo
 bool SemanticAnalyzer::local_non_template_symbol_exists(const std::string& name) const {
     return trait_names_.contains(name) || entity_names_.contains(name) || struct_names_.contains(name) ||
            enum_names_.contains(name) || event_names_.contains(name) || func_names_.contains(name) ||
-           system_names_.contains(name) || asset_decl_types_.contains(name) || input_decl_types_.contains(name) ||
-           use_names_.contains(name);
+           system_names_.contains(name) || const_names_.contains(name) || asset_decl_types_.contains(name) ||
+           input_decl_types_.contains(name) || use_names_.contains(name);
 }
 
 bool SemanticAnalyzer::imported_non_template_symbol_exists(const std::string& name) const {
@@ -2016,18 +2601,12 @@ bool SemanticAnalyzer::resolve_archetype_template_use(const ArchetypeTemplateUse
     if (!imports_.empty()) {
         auto provider_it = imports_.template_providers.find(use.template_name);
         if (provider_it != imports_.template_providers.end()) {
-            if (provider_it->second.size() > 1) {
-                std::ostringstream msg;
-                msg << "ambiguous template '" << use.template_name << "' in archetype-body use: found in module '"
-                    << provider_it->second[0] << "' and module '" << provider_it->second[1] << "'";
-                if (provider_it->second.size() > 2) {
-                    msg << " (and others)";
-                }
-                msg << "; use qualified access to disambiguate";
-                errors_.error(use.location, msg.str());
-                return false;
+            if (find_std_core_provider(imports_, provider_it->second).has_value()) {
+                return true;
             }
-            return true;
+            errors_.error(use.location,
+                          imported_reference_diagnostic(imports_, "template", use.template_name, provider_it->second));
+            return false;
         }
 
         for (const auto& [qualifier, names] : imports_.non_pub_template_names) {
@@ -2054,11 +2633,50 @@ const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::string& na
     if (it != result_.traits.end()) {
         return &it->second;
     }
+    // Handle canonical IDs and qualified references (dotted names).
+    auto dot = name.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = name.substr(0, dot);
+        auto local_name = name.substr(dot + 1);
+
+        // Local canonical ID: strip the current module prefix.
+        if (qualifier == current_module_name_) {
+            auto lit = result_.traits.find(local_name);
+            if (lit != result_.traits.end()) {
+                return &lit->second;
+            }
+        }
+
+        // Qualifier matches an alias/module in imports.
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it != imports_.modules.end()) {
+            auto tit = mod_it->second.traits.find(local_name);
+            if (tit != mod_it->second.traits.end()) {
+                return &tit->second;
+            }
+        }
+
+        // Full canonical ID scan: find the trait whose canonical_id matches.
+        for (const auto& [q, syms] : imports_.modules) {
+            for (const auto& [local, trait] : syms.traits) {
+                if (trait.canonical_id == name) {
+                    return &trait;
+                }
+            }
+        }
+        for (const auto& [local, trait] : result_.traits) {
+            if (trait.canonical_id == name) {
+                return &trait;
+            }
+        }
+        return nullptr;
+    }
     if (!imports_.empty()) {
         auto pit = imports_.trait_providers.find(name);
         if (pit != imports_.trait_providers.end()) {
-            for (const auto& qualifier : pit->second) {
-                auto mit = imports_.modules.find(qualifier);
+            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
+                const auto& qualifier = *prelude;
+                auto mit              = imports_.modules.find(qualifier);
                 if (mit != imports_.modules.end()) {
                     auto tit = mit->second.traits.find(name);
                     if (tit != mit->second.traits.end()) {
@@ -2067,8 +2685,55 @@ const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::string& na
                 }
             }
         }
+        return nullptr;
     }
+
     return nullptr;
+}
+
+const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Trait) {
+        return nullptr;
+    }
+
+    if (symbol.module.name == current_module_name_) {
+        if (auto it = result_.traits.find(symbol.local_name); it != result_.traits.end()) {
+            return &it->second;
+        }
+    }
+
+    const auto canonical = make_canonical_id(symbol);
+    for (const auto& [_, syms] : imports_.modules) {
+        if (syms.module_name != symbol.module.name) {
+            continue;
+        }
+        if (auto it = syms.traits.find(symbol.local_name); it != syms.traits.end()) {
+            return &it->second;
+        }
+        for (const auto& [__, trait] : syms.traits) {
+            if ((trait.symbol_id.has_value() && *trait.symbol_id == symbol) || trait.canonical_id == canonical) {
+                return &trait;
+            }
+        }
+    }
+
+    for (const auto& [_, trait] : result_.traits) {
+        if ((trait.symbol_id.has_value() && *trait.symbol_id == symbol) || trait.canonical_id == canonical) {
+            return &trait;
+        }
+    }
+
+    return nullptr;
+}
+
+const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::optional<SymbolId>& symbol,
+                                                           const std::string& fallback_name) const {
+    if (symbol.has_value()) {
+        if (const auto* trait = find_resolved_trait(*symbol); trait != nullptr) {
+            return trait;
+        }
+    }
+    return find_resolved_trait(fallback_name);
 }
 
 const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& name) const {
@@ -2079,43 +2744,418 @@ const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& n
     return nullptr;
 }
 
-// ── std.text.format recognition ────────────────────────────────────────────────
+// ── Task 3.1: Canonical trait ID resolution ────────────────────────────────────
 
-bool SemanticAnalyzer::is_std_text_format_callee(const ExprNode& callee) const {
-    if (result_.ast == nullptr) {
-        return false;
-    }
-    // Unaliased: format(...) from use std.text (no alias)
-    if (const auto* ident = std::get_if<IdentExpr>(&callee.expr)) {
-        if (ident->name != "format") {
-            return false;
+std::string SemanticAnalyzer::resolve_trait_ref_to_canonical(const std::string& ref, const SourceLocation& loc) {
+    auto dot = ref.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = ref.substr(0, dot);
+        auto local_name = ref.substr(dot + 1);
+
+        // Qualified local reference (e.g., current_module.TraitName).
+        if (trait_names_.contains(local_name) && qualifier == current_module_name_) {
+            return make_canonical_id(current_module_name_, local_name);
         }
-        for (const auto& decl : result_.ast->declarations) {
-            if (const auto* use = std::get_if<UseNode>(&decl)) {
-                if (use->module_name == "std.text" && !use->alias.has_value()) {
-                    return true;
+
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it == imports_.modules.end()) {
+            errors_.error(loc, "unknown module qualifier '" + qualifier + "' in trait reference");
+            return "";
+        }
+        if (!mod_it->second.traits.contains(local_name)) {
+            auto np_it = imports_.non_pub_trait_names.find(qualifier);
+            if (np_it != imports_.non_pub_trait_names.end() && np_it->second.contains(local_name)) {
+                errors_.error(loc, "trait '" + local_name + "' is not public in module '" + qualifier + "'");
+            } else {
+                errors_.error(loc, "unknown trait '" + local_name + "' in module '" + qualifier + "'");
+            }
+            return "";
+        }
+        return mod_it->second.traits.at(local_name).canonical_id;
+    }
+
+    // Unqualified: local trait first.
+    if (trait_names_.contains(ref)) {
+        return make_canonical_id(current_module_name_, ref);
+    }
+
+    // Unqualified: check the std.core prelude only. Ordinary imports must be
+    // referenced through their module path or alias.
+    if (!imports_.empty()) {
+        auto pit = imports_.trait_providers.find(ref);
+        if (pit != imports_.trait_providers.end() && !pit->second.empty()) {
+            const auto prelude = find_std_core_provider(imports_, pit->second);
+            if (!prelude.has_value()) {
+                errors_.error(loc, imported_reference_diagnostic(imports_, "trait", ref, pit->second));
+                return "";
+            }
+            const auto& qualifier = *prelude;
+            auto mit              = imports_.modules.find(qualifier);
+            if (mit != imports_.modules.end()) {
+                auto tit = mit->second.traits.find(ref);
+                if (tit != mit->second.traits.end()) {
+                    return tit->second.canonical_id;
                 }
             }
         }
-        return false;
     }
-    // Aliased: qualifier.format(...) — qualifier resolves to std.text
+
+    return "";  // not found; caller reports error as needed
+}
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_trait_ref_to_symbol(const std::string& ref) const {
+    const auto* trait = find_resolved_trait(ref);
+    if (trait == nullptr) {
+        return std::nullopt;
+    }
+    return resolved_decl_symbol(*trait, SymbolKind::Trait, current_module_name_, trait->name);
+}
+
+// ── Task 3.3: Canonical event ID resolution ─────────────────────────────────────
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_event_ref_to_symbol(const std::string& ref) const {
+    auto dot = ref.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = ref.substr(0, dot);
+        auto local_name = ref.substr(dot + 1);
+
+        // Qualified local reference — only matches a locally declared event.
+        if (qualifier == current_module_name_) {
+            auto local_it = module_scope_symbols_.find(local_name);
+            if (local_it != module_scope_symbols_.end() && local_it->second.kind == SymbolKind::Event) {
+                return local_it->second;
+            }
+            return std::nullopt;
+        }
+
+        // Qualified import reference.
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it != imports_.modules.end()) {
+            if (auto ev_it = mod_it->second.event_symbols.find(local_name);
+                ev_it != mod_it->second.event_symbols.end() && ev_it->second.symbol_id.has_value()) {
+                return ev_it->second.symbol_id;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // Unqualified: locally declared event takes priority over prelude.
+    // event_names_ includes std.core prelude events, so consult module_scope_symbols_
+    // (which only holds locally declared symbols) to correctly distinguish the two.
+    {
+        auto local_it = module_scope_symbols_.find(ref);
+        if (local_it != module_scope_symbols_.end() && local_it->second.kind == SymbolKind::Event) {
+            return local_it->second;
+        }
+    }
+
+    // Unqualified: check std.core prelude only.
+    if (!imports_.empty()) {
+        auto pit = imports_.event_providers.find(ref);
+        if (pit != imports_.event_providers.end() && !pit->second.empty()) {
+            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
+                const auto& qualifier = *prelude;
+                auto mit              = imports_.modules.find(qualifier);
+                if (mit != imports_.modules.end()) {
+                    auto eit = mit->second.event_symbols.find(ref);
+                    if (eit != mit->second.event_symbols.end() && eit->second.symbol_id.has_value()) {
+                        return eit->second.symbol_id;
+                    }
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ── Task 3.4: Canonical system ID resolution ────────────────────────────────────
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_system_ref_to_symbol(const std::string& ref) const {
+    return try_resolve_system_ref_impl(ref, true);
+}
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_system_ref_impl(const std::string& ref, bool allow_local) const {
+    auto dot = ref.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = ref.substr(0, dot);
+        auto local_name = ref.substr(dot + 1);
+
+        if (allow_local && system_names_.contains(local_name) && qualifier == current_module_name_) {
+            return make_symbol_id(SymbolKind::System, current_module_id_, local_name);
+        }
+
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it != imports_.modules.end()) {
+            if (auto sys_it = mod_it->second.systems.find(local_name);
+                sys_it != mod_it->second.systems.end() && sys_it->second.symbol_id.has_value()) {
+                return sys_it->second.symbol_id;
+            }
+        }
+        return std::nullopt;
+    }
+
+    if (allow_local && system_names_.contains(ref)) {
+        return make_symbol_id(SymbolKind::System, current_module_id_, ref);
+    }
+
+    if (!imports_.empty()) {
+        auto pit = imports_.system_providers.find(ref);
+        if (pit != imports_.system_providers.end() && !pit->second.empty()) {
+            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
+                const auto& qualifier = *prelude;
+                auto mit              = imports_.modules.find(qualifier);
+                if (mit != imports_.modules.end()) {
+                    auto sit = mit->second.systems.find(ref);
+                    if (sit != mit->second.systems.end() && sit->second.symbol_id.has_value()) {
+                        return sit->second.symbol_id;
+                    }
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::resolve_system_after_ref_to_symbol(
+    const std::string& ref,
+    const SourceLocation& /*loc*/,
+    const std::unordered_set<std::string>& local_system_names) const {
+    auto dot = ref.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = ref.substr(0, dot);
+        auto local_name = ref.substr(dot + 1);
+
+        if (local_system_names.contains(local_name) && qualifier == current_module_name_) {
+            return make_symbol_id(SymbolKind::System, current_module_id_, local_name);
+        }
+
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it != imports_.modules.end()) {
+            if (auto sys_it = mod_it->second.systems.find(local_name);
+                sys_it != mod_it->second.systems.end() && sys_it->second.symbol_id.has_value()) {
+                return sys_it->second.symbol_id;
+            }
+        }
+        return std::nullopt;
+    }
+
+    if (local_system_names.contains(ref)) {
+        return make_symbol_id(SymbolKind::System, current_module_id_, ref);
+    }
+
+    if (!imports_.empty()) {
+        auto pit = imports_.system_providers.find(ref);
+        if (pit != imports_.system_providers.end() && !pit->second.empty()) {
+            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
+                const auto& qualifier = *prelude;
+                auto mit              = imports_.modules.find(qualifier);
+                if (mit != imports_.modules.end()) {
+                    auto sit = mit->second.systems.find(ref);
+                    if (sit != mit->second.systems.end() && sit->second.symbol_id.has_value()) {
+                        return sit->second.symbol_id;
+                    }
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ── Task 3.5: Canonical template/entity ID resolution ───────────────────────────
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_template_ref_to_symbol(const std::string& ref) const {
+    auto dot = ref.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = ref.substr(0, dot);
+        auto local_name = ref.substr(dot + 1);
+
+        if (template_names_.contains(local_name) && qualifier == current_module_name_) {
+            return make_symbol_id(SymbolKind::Template, current_module_id_, local_name);
+        }
+        if (entity_names_.contains(local_name) && qualifier == current_module_name_) {
+            return make_symbol_id(SymbolKind::Entity, current_module_id_, local_name);
+        }
+
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it != imports_.modules.end()) {
+            auto tmpl_it = mod_it->second.templates.find(local_name);
+            if (tmpl_it != mod_it->second.templates.end() && tmpl_it->second.symbol_id.has_value()) {
+                return tmpl_it->second.symbol_id;
+            }
+        }
+        return std::nullopt;
+    }
+
+    if (template_names_.contains(ref)) {
+        return make_symbol_id(SymbolKind::Template, current_module_id_, ref);
+    }
+    if (entity_names_.contains(ref)) {
+        return make_symbol_id(SymbolKind::Entity, current_module_id_, ref);
+    }
+
+    if (!imports_.empty()) {
+        auto pit = imports_.template_providers.find(ref);
+        if (pit != imports_.template_providers.end() && !pit->second.empty()) {
+            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
+                const auto& qualifier = *prelude;
+                auto mit              = imports_.modules.find(qualifier);
+                if (mit != imports_.modules.end()) {
+                    auto tit = mit->second.templates.find(ref);
+                    if (tit != mit->second.templates.end() && tit->second.symbol_id.has_value()) {
+                        return tit->second.symbol_id;
+                    }
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ── Task 3.6: Canonical func ID resolution ──────────────────────────────────────
+
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_func_ref_to_symbol(const std::string& ref) const {
+    auto dot = ref.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = ref.substr(0, dot);
+        auto local_name = ref.substr(dot + 1);
+
+        if (func_names_.contains(local_name) && qualifier == current_module_name_) {
+            return make_symbol_id(SymbolKind::Func, current_module_id_, local_name);
+        }
+
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it != imports_.modules.end()) {
+            auto func_it = mod_it->second.funcs.find(local_name);
+            if (func_it != mod_it->second.funcs.end()) {
+                if (func_it->second.symbol_id.has_value()) {
+                    return func_it->second.symbol_id;
+                }
+                if (!func_it->second.module_name.empty()) {
+                    return make_symbol_id(SymbolKind::Func,
+                                         ModuleId{.name = func_it->second.module_name},
+                                         local_name);
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+    if (func_names_.contains(ref)) {
+        return make_symbol_id(SymbolKind::Func, current_module_id_, ref);
+    }
+
+    if (!imports_.empty()) {
+        auto pit = imports_.func_providers.find(ref);
+        if (pit != imports_.func_providers.end() && !pit->second.empty()) {
+            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
+                const auto& qualifier = *prelude;
+                auto mit              = imports_.modules.find(qualifier);
+                if (mit != imports_.modules.end()) {
+                    auto fit = mit->second.funcs.find(ref);
+                    if (fit != mit->second.funcs.end() && fit->second.symbol_id.has_value()) {
+                        return fit->second.symbol_id;
+                    }
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ── Task 3.4: Canonical system ID resolution for after: clauses ─────────────────
+
+std::string SemanticAnalyzer::resolve_system_after_ref(const std::string& ref,
+                                                       const SourceLocation& loc,
+                                                       const std::unordered_set<std::string>& local_system_names) {
+    auto dot = ref.rfind('.');
+    if (dot != std::string::npos) {
+        auto qualifier  = ref.substr(0, dot);
+        auto local_name = ref.substr(dot + 1);
+
+        // Qualified local system (e.g., current_module.SystemName).
+        if (local_system_names.contains(local_name) && qualifier == current_module_name_) {
+            return make_canonical_id(current_module_name_, local_name);
+        }
+
+        auto mod_it = imports_.modules.find(qualifier);
+        if (mod_it == imports_.modules.end()) {
+            errors_.error(loc, "unknown module qualifier '" + qualifier + "' in 'after:' clause");
+            return "";
+        }
+        if (!mod_it->second.systems.contains(local_name)) {
+            errors_.error(loc, "unknown system '" + local_name + "' in module '" + qualifier + "' in 'after:' clause");
+            return "";
+        }
+        return make_canonical_id(mod_it->second.module_name, local_name);
+    }
+
+    // Unqualified: local system first.
+    if (local_system_names.contains(ref)) {
+        return make_canonical_id(current_module_name_, ref);
+    }
+
+    // Unqualified: check the std.core prelude only. Ordinary imports must be
+    // referenced through their module path or alias.
+    if (!imports_.empty()) {
+        auto pit = imports_.system_providers.find(ref);
+        if (pit != imports_.system_providers.end() && !pit->second.empty()) {
+            const auto prelude = find_std_core_provider(imports_, pit->second);
+            if (!prelude.has_value()) {
+                errors_.error(loc, imported_reference_diagnostic(imports_, "system", ref, pit->second));
+                return "";
+            }
+            const auto& qualifier = *prelude;
+            auto mit              = imports_.modules.find(qualifier);
+            if (mit != imports_.modules.end() && mit->second.systems.contains(ref)) {
+                return make_canonical_id(mit->second.module_name, ref);
+            }
+        }
+    }
+
+    return "";  // not found
+}
+
+// ── std.text.format recognition ────────────────────────────────────────────────
+
+static std::optional<std::string> extract_dotted_path(const ExprNode& expr);
+
+bool SemanticAnalyzer::is_std_text_format_callee(const ExprNode& callee) const {
+    // Explicit namespace binding: qualifier.format(...), where qualifier is
+    // either the full imported module path (`std.text`) or an authored alias.
     if (const auto* member = std::get_if<MemberExpr>(&callee.expr)) {
         if (member->member != "format") {
             return false;
         }
-        if (const auto* obj = std::get_if<IdentExpr>(&member->object->expr)) {
+        auto qualifier = extract_dotted_path(*member->object);
+        if (!qualifier.has_value()) {
+            return false;
+        }
+        if (*qualifier == "std.text") {
+            return true;
+        }
+        auto import_it = imports_.modules.find(*qualifier);
+        if (import_it != imports_.modules.end() && import_it->second.module_name == "std.text") {
+            return true;
+        }
+        // Fall back to scanning UseNode declarations in the AST. This handles
+        // unit-test scenarios where the caller omits an explicit imports table
+        // but the source still has `use std.text as <qualifier>`.
+        if (result_.ast != nullptr) {
             for (const auto& decl : result_.ast->declarations) {
-                if (const auto* use = std::get_if<UseNode>(&decl)) {
-                    if (use->module_name != "std.text") {
-                        continue;
-                    }
-                    if (use->alias.has_value() && *use->alias == obj->name) {
-                        return true;
-                    }
-                    if (!use->alias.has_value() && obj->name == "text") {
-                        return true;
-                    }
+                const auto* use_node = std::get_if<UseNode>(&decl);
+                if (use_node == nullptr || use_node->module_name != "std.text") {
+                    continue;
+                }
+                if (use_node->alias.has_value() && *use_node->alias == *qualifier) {
+                    return true;
+                }
+                if (!use_node->alias.has_value() && *qualifier == "std.text") {
+                    return true;
                 }
             }
         }
@@ -2191,14 +3231,6 @@ std::optional<std::pair<std::string, std::string>> SemanticAnalyzer::get_query_m
         }
         if (use_node->alias.has_value() && *use_node->alias == *qualifier) {
             return std::make_pair(use_node->module_name, func_name);
-        }
-        if (!use_node->alias.has_value()) {
-            auto last_dot       = use_node->module_name.rfind('.');
-            std::string last_comp = (last_dot != std::string::npos) ? use_node->module_name.substr(last_dot + 1)
-                                                                     : use_node->module_name;
-            if (last_comp == *qualifier) {
-                return std::make_pair(use_node->module_name, func_name);
-            }
         }
     }
     return std::nullopt;
@@ -2417,11 +3449,13 @@ void SemanticAnalyzer::validate_text_format_calls(ProgramNode& program) {
                         const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
                         std::unordered_map<std::string, TypeInfo> local_bindings;
                         if (handler_event != nullptr) {
+                            const auto symbol = resolved_decl_symbol(
+                                *handler_event, SymbolKind::Event, current_module_name_, handler_event->name);
                             local_bindings[handler.event_name] =
-                                TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                                make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                             if (handler.alias.has_value()) {
                                 local_bindings[*handler.alias] =
-                                    TypeInfo{.kind = TypeKind::Struct, .name = handler_event->name};
+                                    make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                             }
                         }
 
@@ -2528,10 +3562,64 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         }
         if (auto local_it = local_bindings.find(owner->name);
             local_it != local_bindings.end() && local_it->second.kind == TypeKind::Struct) {
-            if (auto struct_it = result_.structs.find(local_it->second.name); struct_it != result_.structs.end()) {
+            const auto& local_type = local_it->second;
+            if (local_type.symbol_id.has_value()) {
+                const auto& symbol = *local_type.symbol_id;
+                if (symbol.kind == SymbolKind::Struct) {
+                    if (symbol.module.name == current_module_name_) {
+                        if (auto struct_it = result_.structs.find(symbol.local_name);
+                            struct_it != result_.structs.end()) {
+                            return find_field_type_in(struct_it->second.fields, member->member);
+                        }
+                    }
+                    for (const auto& [_, syms] : imports_.modules) {
+                        if (syms.module_name != symbol.module.name) {
+                            continue;
+                        }
+                        if (auto struct_it = syms.structs.find(symbol.local_name); struct_it != syms.structs.end()) {
+                            return find_field_type_in(struct_it->second.fields, member->member);
+                        }
+                    }
+                } else if (symbol.kind == SymbolKind::Event) {
+                    if (auto event_it = event_structs_.find(symbol.local_name); event_it != event_structs_.end()) {
+                        return find_field_type_in(event_it->second.fields, member->member);
+                    }
+                } else if (symbol.kind == SymbolKind::Trait) {
+                    if (const auto* trait = find_resolved_trait(make_canonical_id(symbol)); trait != nullptr) {
+                        return find_field_type_in(trait->fields, member->member);
+                    }
+                }
+            }
+
+            const auto& type_name = local_type.name;
+            const auto dot        = type_name.rfind('.');
+            if (dot != std::string::npos) {
+                // Qualified alias name ("alias.StructName") or canonical name from resolved TypeInfo.
+                const auto qualifier  = type_name.substr(0, dot);
+                const auto local_name = type_name.substr(dot + 1);
+                if (qualifier == current_module_name_) {
+                    if (auto struct_it = result_.structs.find(local_name); struct_it != result_.structs.end()) {
+                        return find_field_type_in(struct_it->second.fields, member->member);
+                    }
+                }
+                if (auto mod_it = imports_.modules.find(qualifier); mod_it != imports_.modules.end()) {
+                    if (auto s_it = mod_it->second.structs.find(local_name); s_it != mod_it->second.structs.end()) {
+                        return find_field_type_in(s_it->second.fields, member->member);
+                    }
+                }
+                for (const auto& [_, syms] : imports_.modules) {
+                    if (syms.module_name != qualifier) {
+                        continue;
+                    }
+                    if (auto s_it = syms.structs.find(local_name); s_it != syms.structs.end()) {
+                        return find_field_type_in(s_it->second.fields, member->member);
+                    }
+                }
+            }
+            if (auto struct_it = result_.structs.find(type_name); struct_it != result_.structs.end()) {
                 return find_field_type_in(struct_it->second.fields, member->member);
             }
-            if (auto event_it = event_structs_.find(local_it->second.name); event_it != event_structs_.end()) {
+            if (auto event_it = event_structs_.find(type_name); event_it != event_structs_.end()) {
                 return find_field_type_in(event_it->second.fields, member->member);
             }
         }
@@ -2551,7 +3639,7 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                 errors_.error(pred.location, "undeclared trait '" + pred.trait_name + "' in query filter");
             }
         }
-        auto resolved = get_query_module_and_func(*qcall->callee);
+        auto resolved               = get_query_module_and_func(*qcall->callee);
         const std::string func_name = resolved.has_value() ? resolved->second : [&]() -> std::string {
             if (const auto* m = std::get_if<MemberExpr>(&qcall->callee->expr)) {
                 return m->member;
@@ -2597,6 +3685,15 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                 errors_.error(expr.location, "`exists()` argument must be of type `entity_id`");
             }
             return make_bool_type();
+        }
+        if (auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
+            ident != nullptr && !func_names_.contains(ident->name) && !imports_.empty()) {
+            auto provider_it = imports_.func_providers.find(ident->name);
+            if (provider_it != imports_.func_providers.end() && !provider_it->second.empty() &&
+                !find_std_core_provider(imports_, provider_it->second).has_value()) {
+                errors_.error(expr.location,
+                              imported_reference_diagnostic(imports_, "function", ident->name, provider_it->second));
+            }
         }
         return make_unknown_type();
     }
@@ -2681,9 +3778,13 @@ void SemanticAnalyzer::validate_template_unit_declarations(
                         }
                     }
 
-                    // 5.1: Validate all traits in nested trait blocks are declared
+                    // 5.1 / 3.1: Validate all traits in nested trait blocks are declared.
+                    // Resolve via canonical helper to catch ambiguous imports and unknown qualifiers.
+                    // AST trait_name is preserved for backward-compatible codegen (task 5.x).
                     for (auto& entry : node.traits) {
-                        if (!is_trait_declared(entry.trait_name)) {
+                        const auto prev_errors = errors_.error_count();
+                        auto canonical         = resolve_trait_ref_to_canonical(entry.trait_name, entry.location);
+                        if (canonical.empty() && errors_.error_count() == prev_errors) {
                             errors_.error(
                                 entry.location,
                                 "undeclared trait '" + entry.trait_name + "' in " + KIND + " '" + node.name + "'");
@@ -2766,14 +3867,12 @@ void SemanticAnalyzer::validate_archetype_template_ref(const std::string& tmpl_r
         } else if (!module_it->second.templates.contains(template_name)) {
             auto non_pub_it = imports_.non_pub_template_names.find(qualifier);
             if (non_pub_it != imports_.non_pub_template_names.end() && non_pub_it->second.contains(template_name)) {
-                errors_.error(location,
-                              "template '" + template_name + "' is not public in module '" + qualifier + "'");
+                errors_.error(location, "template '" + template_name + "' is not public in module '" + qualifier + "'");
             } else if (imported_symbols_contain_non_template(module_it->second, template_name)) {
                 errors_.error(location,
                               "'" + template_name + "' is not a template; 'from' clause must reference a template");
             } else {
-                errors_.error(location,
-                              "undefined template '" + template_name + "' in module '" + qualifier + "'");
+                errors_.error(location, "undefined template '" + template_name + "' in module '" + qualifier + "'");
             }
         }
         return;
@@ -2788,7 +3887,12 @@ void SemanticAnalyzer::validate_archetype_template_ref(const std::string& tmpl_r
     }
     if (!imports_.empty()) {
         if (imports_.template_providers.contains(tmpl_ref)) {
-            return;  // valid imported template
+            const auto& providers = imports_.template_providers.at(tmpl_ref);
+            if (find_std_core_provider(imports_, providers).has_value()) {
+                return;
+            }
+            errors_.error(location, imported_reference_diagnostic(imports_, "template", tmpl_ref, providers));
+            return;
         }
         for (const auto& [qualifier, names] : imports_.non_pub_template_names) {
             if (names.contains(tmpl_ref)) {
@@ -2826,10 +3930,10 @@ void SemanticAnalyzer::validate_child_archetypes(  // NOLINT(readability-functio
         }
 
         if (child.template_ref.has_value()) {
-            validate_archetype_template_ref(*child.template_ref,
-                                            child.location,
-                                            "child '" + child.role + "' of " + archetype_kind + " '" +
-                                                archetype_name + "'");
+            validate_archetype_template_ref(
+                *child.template_ref,
+                child.location,
+                "child '" + child.role + "' of " + archetype_kind + " '" + archetype_name + "'");
         } else {
             for (const auto& entry : child.traits) {
                 if (entry.trait_name == "Parent") {
@@ -2905,8 +4009,8 @@ void SemanticAnalyzer::validate_child_override_tree(  // NOLINT(readability-func
         for (const auto& entry : override_node.traits) {
             if (!child_trait_names.contains(entry.trait_name)) {
                 errors_.error(entry.location,
-                              "trait '" + entry.trait_name + "' is not part of child '" + override_node.role +
-                                  "' in " + site_desc + "; cannot override it");
+                              "trait '" + entry.trait_name + "' is not part of child '" + override_node.role + "' in " +
+                                  site_desc + "; cannot override it");
                 continue;
             }
             const auto* trait = find_resolved_trait(entry.trait_name);
@@ -2969,9 +4073,9 @@ void SemanticAnalyzer::validate_child_required_fields(const std::vector<ChildArc
             }
             for (const auto& field : trait->fields) {
                 if (field.is_var && !field.has_default && !provided.contains(field.name)) {
-                    errors_.error(site_loc,
-                                  "required field '" + field.name + "' not set for child '" + child.role + "' in " +
-                                      site_desc);
+                    errors_.error(
+                        site_loc,
+                        "required field '" + field.name + "' not set for child '" + child.role + "' in " + site_desc);
                 }
             }
         }
@@ -3362,9 +4466,9 @@ void SemanticAnalyzer::validate_template_backed_entity_overrides(
 
         // Resolve the template's flattened archetype (already done by flatten_template_compositions).
         // archetype_traits_ uses unqualified names; strip module qualifier if present.
-        const auto tmpl_dot   = tmpl_ref.rfind('.');
-        const auto tmpl_key   = tmpl_dot != std::string::npos ? tmpl_ref.substr(tmpl_dot + 1) : tmpl_ref;
-        auto tmpl_traits_it   = archetype_traits_.find(tmpl_key);
+        const auto tmpl_dot = tmpl_ref.rfind('.');
+        const auto tmpl_key = tmpl_dot != std::string::npos ? tmpl_ref.substr(tmpl_dot + 1) : tmpl_ref;
+        auto tmpl_traits_it = archetype_traits_.find(tmpl_key);
         if (tmpl_traits_it == archetype_traits_.end() || tmpl_traits_it->second == nullptr) {
             continue;  // template not found — already reported in validate_template_unit_declarations
         }
@@ -3445,6 +4549,12 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
             [this, &context_name](auto& s) {  // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, SpawnStmt>) {
+                    // Handle dotted template references from imports (task 3.2).
+                    auto tmpl_dot = s.template_name.rfind('.');
+                    if (tmpl_dot != std::string::npos) {
+                        validate_archetype_template_ref(s.template_name, s.location, "spawn statement");
+                        return;  // field validation deferred — imported template body not available locally
+                    }
                     // 5.4: Reject spawn of an entity
                     if (entity_names_.contains(s.template_name)) {
                         errors_.error(s.location,
@@ -3527,6 +4637,11 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
 }
 
 void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location) {
+    // Handle dotted template references from imports (task 3.2).
+    if (spawn.template_name.rfind('.') != std::string::npos) {
+        validate_archetype_template_ref(spawn.template_name, location, "spawn expression");
+        return;  // field validation deferred — imported template body not available locally
+    }
     if (entity_names_.contains(spawn.template_name)) {
         errors_.error(location,
                       "'" + spawn.template_name +
@@ -3586,10 +4701,8 @@ void SemanticAnalyzer::validate_spawn_expr(const SpawnExpr& spawn, const SourceL
                                      *children_it->second,
                                      "template '" + spawn.template_name + "'",
                                      /*allow_self=*/true);
-        validate_child_required_fields(*children_it->second,
-                                       spawn.child_overrides,
-                                       "spawn of template '" + spawn.template_name + "'",
-                                       location);
+        validate_child_required_fields(
+            *children_it->second, spawn.child_overrides, "spawn of template '" + spawn.template_name + "'", location);
     }
 }
 
@@ -3694,13 +4807,17 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                     if constexpr (std::is_same_v<S, AddTraitStmt> || std::is_same_v<S, RemoveTraitStmt>) {
                         const std::string& tname = s.trait_name;
                         if (!is_trait_declared(tname)) {
-                            const std::string KW = std::is_same_v<S, AddTraitStmt> ? "add" : "remove";
-                            std::string msg      = "undeclared trait '";
-                            msg += tname;
-                            msg += "' in `";
-                            msg += KW;
-                            msg += "` statement";
-                            errors_.error(s.location, msg);
+                            const auto prev_errors = errors_.error_count();
+                            (void)resolve_trait_ref_to_canonical(tname, s.location);
+                            if (errors_.error_count() == prev_errors) {
+                                const std::string KW = std::is_same_v<S, AddTraitStmt> ? "add" : "remove";
+                                std::string msg      = "undeclared trait '";
+                                msg += tname;
+                                msg += "' in `";
+                                msg += KW;
+                                msg += "` statement";
+                                errors_.error(s.location, msg);
+                            }
                         }
                         if constexpr (std::is_same_v<S, AddTraitStmt>) {
                             if (s.target_expr.has_value()) {
@@ -3721,7 +4838,11 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                     if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                         const std::string& tname = s.trait_name;
                         if (!is_trait_declared(tname)) {
-                            errors_.error(s.location, "undeclared trait '" + tname + "' in `project` statement");
+                            const auto prev_errors = errors_.error_count();
+                            (void)resolve_trait_ref_to_canonical(tname, s.location);
+                            if (errors_.error_count() == prev_errors) {
+                                errors_.error(s.location, "undeclared trait '" + tname + "' in `project` statement");
+                            }
                         }
                         if (s.target_expr.has_value()) {
                             auto t = infer_expr_type(**s.target_expr, {}, self_context_locals, nullptr);
@@ -3785,9 +4906,9 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
                     }
                 } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
                     if (node.filter.entries.empty() && node.filter.trait_names.empty()) {
-                        errors_.error(
-                            node.location,
-                            "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
+                        errors_.error(node.location,
+                                      "`extern system` requires a `filter:` clause (no-filter extern systems are "
+                                      "not supported)");
                     }
                 }
             },
@@ -3845,13 +4966,21 @@ void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
     if (!node.exclude.entries.empty()) {
         for (auto& entry : node.exclude.entries) {
             if (!is_trait_declared(entry.qualified_name)) {
-                errors_.error(entry.location, "undeclared trait '" + entry.qualified_name + "' in exclude clause");
+                const auto prev_errors = errors_.error_count();
+                (void)resolve_trait_ref_to_canonical(entry.qualified_name, entry.location);
+                if (errors_.error_count() == prev_errors) {
+                    errors_.error(entry.location, "undeclared trait '" + entry.qualified_name + "' in exclude clause");
+                }
             }
         }
     } else {
         for (auto& trait_name : node.exclude.trait_names) {
             if (!is_trait_declared(trait_name)) {
-                errors_.error(node.exclude.location, "undeclared trait '" + trait_name + "' in exclude clause");
+                const auto prev_errors = errors_.error_count();
+                (void)resolve_trait_ref_to_canonical(trait_name, node.exclude.location);
+                if (errors_.error_count() == prev_errors) {
+                    errors_.error(node.exclude.location, "undeclared trait '" + trait_name + "' in exclude clause");
+                }
             }
         }
     }
@@ -3861,51 +4990,65 @@ void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
 
 void SemanticAnalyzer::validate_after_clauses(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    // Collect all system names
-    std::unordered_set<std::string> all_system_names;
+    // Collect local system names and build canonical ID map (task 3.4 / 3.7).
+    std::unordered_set<std::string> local_system_names;
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            all_system_names.insert(sys->name);
+            local_system_names.insert(sys->name);
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            all_system_names.insert(sys->name);
+            local_system_names.insert(sys->name);
         }
     }
 
-    // Validate each system's after_systems list
+    // Resolve each system's after_systems to canonical IDs and validate.
+    // after_resolved: local_simple_name → list of canonical system IDs it runs after.
+    std::unordered_map<std::string, std::vector<std::string>> after_resolved;
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            for (auto& after_name : sys->after_systems) {
-                if (!all_system_names.contains(after_name)) {
-                    errors_.error(sys->location, "unknown system '" + after_name + "' in after clause");
-                } else if (after_name == sys->name) {
-                    errors_.error(sys->location, "system '" + sys->name + "' cannot list itself in after:");
+        auto resolve_after = [&](const auto& sys) {
+            const auto self_canonical = make_canonical_id(current_module_name_, sys.name);
+            for (const auto& after_ref : sys.after_systems) {
+                auto canonical = resolve_system_after_ref(after_ref, sys.location, local_system_names);
+                if (canonical.empty()) {
+                    errors_.error(sys.location, "unknown system '" + after_ref + "' in after clause");
+                } else if (canonical == self_canonical) {
+                    errors_.error(sys.location, "system '" + sys.name + "' cannot list itself in after:");
+                } else {
+                    after_resolved[sys.name].push_back(canonical);
                 }
             }
+        };
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            resolve_after(*sys);
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            for (auto& after_name : sys->after_systems) {
-                if (!all_system_names.contains(after_name)) {
-                    errors_.error(sys->location, "unknown system '" + after_name + "' in after clause");
-                } else if (after_name == sys->name) {
-                    errors_.error(sys->location, "system '" + sys->name + "' cannot list itself in after:");
-                }
-            }
+            resolve_after(*sys);
         }
     }
 
-    // Build adjacency graph for cycle detection: sys → list of systems it must run after
+    // Build adjacency graph for cycle detection using canonical IDs.
     std::unordered_map<std::string, std::vector<std::string>> after_graph;
     for (auto& decl : program.declarations) {
+        auto add_to_graph = [&](const auto& sys) {
+            const auto canonical = make_canonical_id(current_module_name_, sys.name);
+            after_graph[canonical] =
+                after_resolved.count(sys.name) ? after_resolved.at(sys.name) : std::vector<std::string>{};
+        };
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            after_graph[sys->name] = sys->after_systems;
+            add_to_graph(*sys);
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            after_graph[sys->name] = sys->after_systems;
+            add_to_graph(*sys);
         }
     }
 
-    // DFS cycle detection
+    // Build a set of valid canonical IDs for cycle-skip guard.
+    std::unordered_set<std::string> all_canonical;
+    for (const auto& [canonical, _] : after_graph) {
+        all_canonical.insert(canonical);
+    }
+
+    // DFS cycle detection on canonical IDs.
     enum class Color : uint8_t { White, Gray, Black };
     std::unordered_map<std::string, Color> color;
     for (auto& [name, _] : after_graph) {
@@ -3919,26 +5062,28 @@ void SemanticAnalyzer::validate_after_clauses(
         path.push_back(node);
         auto it = after_graph.find(node);
         if (it != after_graph.end()) {
-            for (auto& neighbor : it->second) {
-                if (!all_system_names.contains(neighbor)) {
-                    continue;  // already reported
+            for (const auto& neighbor : it->second) {
+                if (!all_canonical.contains(neighbor)) {
+                    continue;  // imported system — no local node, skip cycle check
+                }
+                if (color.count(neighbor) == 0) {
+                    color[neighbor] = Color::White;
                 }
                 if (color[neighbor] == Color::Gray) {
-                    // Found a cycle — build path string
                     std::string cycle_path;
                     bool in_cycle = false;
-                    for (auto& p : path) {
+                    for (const auto& p : path) {
                         if (p == neighbor) {
                             in_cycle = true;
                         }
                         if (in_cycle) {
                             if (!cycle_path.empty()) {
-                                cycle_path += " → ";
+                                cycle_path += " -> ";
                             }
                             cycle_path += p;
                         }
                     }
-                    cycle_path += " → " + neighbor;
+                    cycle_path += " -> " + neighbor;
                     errors_.error({}, "cycle in system ordering: " + cycle_path);
                     color[node] = Color::Black;
                     path.pop_back();
@@ -3965,15 +5110,12 @@ void SemanticAnalyzer::validate_after_clauses(
         }
     }
 
-    // Populate after_systems in dependency graph
+    // Populate after_systems in dependency graph with canonical IDs (task 3.7).
     for (auto& dep : result_.dependency_graph) {
-        auto it = after_graph.find(dep.system_name);
-        if (it != after_graph.end()) {
-            for (auto& after_name : it->second) {
-                if (all_system_names.contains(after_name)) {
-                    dep.after_systems.push_back(after_name);
-                }
-            }
+        // dep.system_name is the simple name; find canonical after entries via after_resolved.
+        auto it = after_resolved.find(dep.system_name);
+        if (it != after_resolved.end()) {
+            dep.after_systems = it->second;
         }
     }
 }

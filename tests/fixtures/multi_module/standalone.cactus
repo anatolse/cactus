@@ -1,2 +1,4 @@
+module standalone
+
 trait Standalone:
     var x: int = 0

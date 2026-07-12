@@ -4,6 +4,7 @@
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
+#include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 
 namespace cactus {
 
@@ -47,56 +49,57 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
     out << "// ── Projected Trait Registry Tracking ────────────────────────────────\n\n";
     out << "namespace {\n\n";
     for (const auto& [name, trait] : program.traits) {
-        out << "std::vector<entt::entity> projected_" << name
+        const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
+        out << "std::vector<entt::entity> projected_" << cpp_name
             << "_entities;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n";
         if (trait.fields.empty()) {
-            out << "std::unordered_map<entt::entity, bool> projected_" << name
+            out << "std::unordered_map<entt::entity, bool> projected_" << cpp_name
                 << "_previous;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
         } else {
-            out << "std::unordered_map<entt::entity, std::optional<" << name << ">> projected_" << name
+            out << "std::unordered_map<entt::entity, std::optional<" << cpp_name << ">> projected_" << cpp_name
                 << "_previous;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
         }
-        out << "[[maybe_unused]] void remember_projected_" << name
+        out << "[[maybe_unused]] void remember_projected_" << cpp_name
             << "(entt::registry& registry, entt::entity entity) {\n";
-        out << "    if (projected_" << name << "_previous.contains(entity)) {\n";
+        out << "    if (projected_" << cpp_name << "_previous.contains(entity)) {\n";
         out << "        return;\n";
         out << "    }\n";
-        out << "    projected_" << name << "_entities.push_back(entity);\n";
+        out << "    projected_" << cpp_name << "_entities.push_back(entity);\n";
         if (trait.fields.empty()) {
-            out << "    projected_" << name << "_previous.emplace(entity, registry.all_of<" << name << ">(entity));\n";
+            out << "    projected_" << cpp_name << "_previous.emplace(entity, registry.all_of<" << cpp_name << ">(entity));\n";
         } else {
-            out << "    if (auto* previous = registry.try_get<" << name << ">(entity); previous != nullptr) {\n";
-            out << "        projected_" << name << "_previous.emplace(entity, *previous);\n";
+            out << "    if (auto* previous = registry.try_get<" << cpp_name << ">(entity); previous != nullptr) {\n";
+            out << "        projected_" << cpp_name << "_previous.emplace(entity, *previous);\n";
             out << "    } else {\n";
-            out << "        projected_" << name << "_previous.emplace(entity, std::nullopt);\n";
+            out << "        projected_" << cpp_name << "_previous.emplace(entity, std::nullopt);\n";
             out << "    }\n";
         }
         out << "}\n\n";
         if (trait.fields.empty()) {
-            out << "[[maybe_unused]] void project_" << name << "(entt::registry& registry, entt::entity entity) {\n";
-            out << "    remember_projected_" << name << "(registry, entity);\n";
-            out << "    registry.emplace_or_replace<" << name << ">(entity);\n";
+            out << "[[maybe_unused]] void project_" << cpp_name << "(entt::registry& registry, entt::entity entity) {\n";
+            out << "    remember_projected_" << cpp_name << "(registry, entity);\n";
+            out << "    registry.emplace_or_replace<" << cpp_name << ">(entity);\n";
             out << "}\n\n";
         } else {
-            out << "[[maybe_unused]] " << name << "& project_" << name
+            out << "[[maybe_unused]] " << cpp_name << "& project_" << cpp_name
                 << "(entt::registry& registry, entt::entity entity) {\n";
-            out << "    remember_projected_" << name << "(registry, entity);\n";
-            out << "    if (auto* current = registry.try_get<" << name << ">(entity); current != nullptr) {\n";
+            out << "    remember_projected_" << cpp_name << "(registry, entity);\n";
+            out << "    if (auto* current = registry.try_get<" << cpp_name << ">(entity); current != nullptr) {\n";
             out << "        return *current;\n";
             out << "    }\n";
-            out << "    return registry.emplace<" << name << ">(entity);\n";
+            out << "    return registry.emplace<" << cpp_name << ">(entity);\n";
             out << "}\n\n";
         }
-        out << "[[maybe_unused]] void cancel_projected_" << name << "(entt::entity entity) {\n";
-        out << "    projected_" << name << "_previous.erase(entity);\n";
+        out << "[[maybe_unused]] void cancel_projected_" << cpp_name << "(entt::entity entity) {\n";
+        out << "    projected_" << cpp_name << "_previous.erase(entity);\n";
         out << "}\n\n";
     }
     out << "void clear_projected_traits(entt::registry& registry) {\n";
     for (const auto& [name, trait] : program.traits) {
-        (void)trait;
-        out << "    for (const auto entity : projected_" << name << "_entities) {\n";
-        out << "        auto previous_it = projected_" << name << "_previous.find(entity);\n";
-        out << "        if (previous_it == projected_" << name << "_previous.end()) {\n";
+        const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
+        out << "    for (const auto entity : projected_" << cpp_name << "_entities) {\n";
+        out << "        auto previous_it = projected_" << cpp_name << "_previous.find(entity);\n";
+        out << "        if (previous_it == projected_" << cpp_name << "_previous.end()) {\n";
         out << "            continue;\n";
         out << "        }\n";
         out << "        if (!registry.valid(entity)) {\n";
@@ -104,20 +107,20 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
         out << "        }\n";
         if (trait.fields.empty()) {
             out << "        if (previous_it->second) {\n";
-            out << "            registry.emplace_or_replace<" << name << ">(entity);\n";
-            out << "        } else if (registry.all_of<" << name << ">(entity)) {\n";
-            out << "            registry.remove<" << name << ">(entity);\n";
+            out << "            registry.emplace_or_replace<" << cpp_name << ">(entity);\n";
+            out << "        } else if (registry.all_of<" << cpp_name << ">(entity)) {\n";
+            out << "            registry.remove<" << cpp_name << ">(entity);\n";
             out << "        }\n";
         } else {
             out << "        if (previous_it->second.has_value()) {\n";
-            out << "            registry.emplace_or_replace<" << name << ">(entity, *previous_it->second);\n";
-            out << "        } else if (registry.all_of<" << name << ">(entity)) {\n";
-            out << "            registry.remove<" << name << ">(entity);\n";
+            out << "            registry.emplace_or_replace<" << cpp_name << ">(entity, *previous_it->second);\n";
+            out << "        } else if (registry.all_of<" << cpp_name << ">(entity)) {\n";
+            out << "            registry.remove<" << cpp_name << ">(entity);\n";
             out << "        }\n";
         }
         out << "    }\n";
-        out << "    projected_" << name << "_entities.clear();\n";
-        out << "    projected_" << name << "_previous.clear();\n";
+        out << "    projected_" << cpp_name << "_entities.clear();\n";
+        out << "    projected_" << cpp_name << "_previous.clear();\n";
     }
     out << "}\n\n";
     out << "}  // namespace\n\n";
@@ -142,10 +145,6 @@ std::string snake_case(const std::string& value) {
         }
     }
     return result;
-}
-
-std::string system_function_name(const std::string& system_name, const std::string& suffix) {
-    return snake_case(system_name) + "_" + suffix;
 }
 
 std::string input_action_constant_name(const std::string& input_name) {
@@ -246,16 +245,21 @@ bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
     if (sys.is_stdlib) {
         return true;
     }
-    if (sys.name == "TransformPropagation" || sys.name == "ShapeRenderer" || sys.name == "SpriteRenderer" ||
-        sys.name == "AnimatedSpriteSystem" || sys.name == "MeshRenderer" || sys.name == "ModelRendererSystem" ||
-        sys.name == "ModelAnimationSystem" || sys.name == "BillboardRenderer" || sys.name == "PointLightSystem" ||
-        sys.name == "DirectionalLightSystem" || sys.name == "TextRenderer2D" || sys.name == "TextRenderer3D" ||
-        sys.name == "ScreenLabelSystem" || sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
-        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
+    // Filter entries with stdlib-qualified traits (user systems that integrate with stdlib).
+    if (std::ranges::any_of(sys.filter.entries,
+                            [](const auto& entry) { return entry.qualified_name.rfind("std.", 0) == 0; })) {
         return true;
     }
-    return std::ranges::any_of(sys.filter.entries,
-                               [](const auto& entry) { return entry.qualified_name.rfind("std.", 0) == 0; });
+    // Name-based fallback for test scenarios where resolved module identities are unavailable.
+    static const std::unordered_set<std::string> kKnownStdlibExternSystems = {
+        "ShapeRenderer",        "SpriteRenderer",      "AnimatedSpriteSystem",
+        "MeshRenderer",         "ModelRendererSystem",  "ModelAnimationSystem",
+        "BillboardRenderer",    "PointLightSystem",     "DirectionalLightSystem",
+        "TextRenderer2D",       "TextRenderer3D",       "ScreenLabelSystem",
+        "TransformPropagation", "EditorTemplatePalette","EditorPropertyPanel",
+        "GizmoRenderer2D",      "GizmoRenderer3D",
+    };
+    return kKnownStdlibExternSystems.contains(sys.name);
 }
 
 bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram& program) {
@@ -352,8 +356,8 @@ std::string pad_to_width(const std::string& value, std::size_t width) {
     return value + std::string(width - value.size(), ' ');
 }
 
-std::string archetype_create_function_name(const std::string& archetype_name) {
-    return "create_" + snake_case(archetype_name);
+std::string archetype_create_function_name(const std::string& module_name, const std::string& archetype_name) {
+    return "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name));
 }
 
 void emit_archetype_trait_initializers(std::ostringstream& out,
@@ -363,9 +367,19 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
                                        int indent) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     for (const auto& trait : traits) {
-        auto resolved_trait = program.traits.find(trait.trait_name);
+        const std::string cpp_name = EnttCodegenUtils::trait_cpp_name(
+            trait.resolved_trait_id, trait.trait_name, program);
+        // Prefer canonical key lookup; fall back to source-name lookup for
+        // single-module programs that don't go through the artifact linker.
+        const std::string lookup_key = trait.resolved_trait_id.has_value()
+                                           ? cactus::make_canonical_id(*trait.resolved_trait_id)
+                                           : trait.trait_name;
+        auto resolved_trait = program.traits.find(lookup_key);
+        if (resolved_trait == program.traits.end()) {
+            resolved_trait = program.traits.find(trait.trait_name);
+        }
         if (resolved_trait != program.traits.end() && resolved_trait->second.fields.empty()) {
-            out << ind << "registry.emplace<" << trait.trait_name << ">(" << entity_name << ");\n";
+            out << ind << "registry.emplace<" << cpp_name << ">(" << entity_name << ");\n";
             continue;
         }
 
@@ -374,12 +388,12 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
         for (const auto& assignment : trait.assignments) {
             widest = std::max(widest, std::string("component.").size() + assignment.name.size());
         }
-        out << ind << "    " << pad_to_width("auto component", widest) << " = " << trait.trait_name << "{};\n";
+        out << ind << "    " << pad_to_width("auto component", widest) << " = " << cpp_name << "{};\n";
         for (const auto& assignment : trait.assignments) {
             out << ind << "    " << pad_to_width("component." + assignment.name, widest) << " = "
-                << EnttCodegenUtils::emit_expr(*assignment.value, program.ast) << ";\n";
+                << EnttCodegenUtils::emit_expr(*assignment.value, program) << ";\n";
         }
-        out << ind << "    registry.emplace<" << trait.trait_name << ">(" << entity_name << ", component);\n";
+        out << ind << "    registry.emplace<" << cpp_name << ">(" << entity_name << ", component);\n";
         out << ind << "}\n";
     }
 }
@@ -388,7 +402,7 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
                                              const std::vector<ArchetypeTraitEntry>& traits,
                                              const DecoratedProgram& program) {
     std::ostringstream out;
-    out << "entt::entity " << archetype_create_function_name(archetype_name) << "(entt::registry& registry) {\n";
+    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name) << "(entt::registry& registry) {\n";
     out << "    auto entity = registry.create();\n";
     emit_archetype_trait_initializers(out, traits, program, "entity", 1);
     out << "    return entity;\n";
@@ -401,9 +415,10 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
 // Internal per-node creation helper name: create_<archetype>__node for the
 // root, create_<archetype>__node__<role path> for descendants. These are not
 // registered in the editor template palette.
-std::string archetype_node_create_function_name(const std::string& archetype_name,
+std::string archetype_node_create_function_name(const std::string& module_name,
+                                                const std::string& archetype_name,
                                                 const std::vector<std::string>& role_path) {
-    std::string name = "create_" + snake_case(archetype_name) + "__node";
+    std::string name = "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name)) + "__node";
     for (const auto& role : role_path) {
         name += "__" + snake_case(role);
     }
@@ -417,7 +432,7 @@ void emit_archetype_node_helpers(std::ostringstream& out,
                                  std::vector<std::string>& role_path) {
     for (const auto& child : children) {
         role_path.push_back(child.role);
-        out << "static entt::entity " << archetype_node_create_function_name(archetype_name, role_path)
+        out << "static entt::entity " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
             << "(entt::registry& registry) {\n";
         out << "    auto entity = registry.create();\n";
         emit_archetype_trait_initializers(out, child.traits, program, "entity", 1);
@@ -432,19 +447,23 @@ void emit_archetype_node_helpers(std::ostringstream& out,
 // is created via its per-node helper, receives a generated Parent relation to
 // its immediate parent, and then its own descendants follow (D3/D8).
 void emit_child_creation_sequence(std::ostringstream& out,
+                                  const std::string& module_name,
                                   const std::string& archetype_name,
                                   const std::vector<ChildArchetypeNode>& children,
                                   const std::string& parent_var,
                                   const std::string& var_prefix,
-                                  std::vector<std::string>& role_path) {
+                                  std::vector<std::string>& role_path,
+                                  const DecoratedProgram& program) {
     std::size_t index = 0;
     for (const auto& child : children) {
         const std::string var = var_prefix + "_" + std::to_string(index);
         role_path.push_back(child.role);
-        out << "    auto " << var << " = " << archetype_node_create_function_name(archetype_name, role_path)
+        out << "    auto " << var << " = " << archetype_node_create_function_name(module_name, archetype_name, role_path)
             << "(registry);\n";
-        out << "    registry.emplace_or_replace<Parent>(" << var << ", Parent{.parent = " << parent_var << "});\n";
-        emit_child_creation_sequence(out, archetype_name, child.children, var, var, role_path);
+        const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
+        out << "    registry.emplace_or_replace<" << parent_cpp << ">(" << var << ", " << parent_cpp
+            << "{.parent = " << parent_var << "});\n";
+        emit_child_creation_sequence(out, module_name, archetype_name, child.children, var, var, role_path, program);
         role_path.pop_back();
         ++index;
     }
@@ -464,7 +483,7 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     std::ostringstream out;
     std::vector<std::string> role_path;
 
-    out << "static entt::entity " << archetype_node_create_function_name(archetype_name, role_path)
+    out << "static entt::entity " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
         << "(entt::registry& registry) {\n";
     out << "    auto entity = registry.create();\n";
     emit_archetype_trait_initializers(out, traits, program, "entity", 1);
@@ -472,9 +491,9 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     out << "}\n\n";
     emit_archetype_node_helpers(out, archetype_name, children, program, role_path);
 
-    out << "entt::entity " << archetype_create_function_name(archetype_name) << "(entt::registry& registry) {\n";
-    out << "    auto entity = " << archetype_node_create_function_name(archetype_name, role_path) << "(registry);\n";
-    emit_child_creation_sequence(out, archetype_name, children, "entity", "__child", role_path);
+    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name) << "(entt::registry& registry) {\n";
+    out << "    auto entity = " << archetype_node_create_function_name(program.module_name, archetype_name, role_path) << "(registry);\n";
+    emit_child_creation_sequence(out, program.module_name, archetype_name, children, "entity", "__child", role_path, program);
     out << "    return entity;\n";
     out << "}\n\n";
     return out.str();
@@ -482,7 +501,15 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
 
 const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::string& name) {
     auto it = program.traits.find(name);
-    return it == program.traits.end() ? nullptr : &it->second;
+    if (it != program.traits.end()) {
+        return &it->second;
+    }
+    for (const auto& [_, t] : program.traits) {
+        if (t.name == name) {
+            return &t;
+        }
+    }
+    return nullptr;
 }
 
 const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& field_name) {
@@ -562,70 +589,119 @@ bool has_volume_collider_support(const DecoratedProgram& program) {
 }
 
 bool has_flat_physics_query_api(const DecoratedProgram& program) {
-    return program.enums.contains("QueryResultKind") && program.structs.contains("QueryContact2D") &&
-           program.structs.contains("QueryResult2D");
+    return EnttCodegenUtils::find_enum(program, "QueryResultKind") != nullptr &&
+           EnttCodegenUtils::find_struct(program, "QueryContact2D") != nullptr &&
+           EnttCodegenUtils::find_struct(program, "QueryResult2D") != nullptr;
 }
 
-std::string emit_flat_query_fallback_helpers() {
-    return R"(
-// ── Stdlib 2D Query Fallbacks ────────────────────────────────────────────────
-
-namespace {
-
-QueryContact2D cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {
-    return QueryContact2D{.other = entity, .normal = normal, .distance = distance, .overlap = overlap};
+std::string emit_flat_query_fallback_helpers(const DecoratedProgram& program) {
+    const std::string qc2d = EnttCodegenUtils::struct_cpp_name("QueryContact2D", program);
+    const std::string qr2d = EnttCodegenUtils::struct_cpp_name("QueryResult2D", program);
+    const std::string qrk  = EnttCodegenUtils::enum_cpp_name("QueryResultKind", program);
+    std::ostringstream out;
+    out << "\n// ── Stdlib 2D Query Fallbacks ────────────────────────────────────────────────\n\n";
+    out << "namespace {\n\n";
+    out << qc2d << " cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {\n";
+    out << "    return " << qc2d << "{.other = entity, .normal = normal, .distance = distance, .overlap = overlap};\n";
+    out << "}\n\n";
+    out << qr2d << " cactus_empty_query_result() noexcept {\n";
+    out << "    return " << qr2d << "{.kind = " << qrk << "::Empty,\n";
+    out << "                         .contact = cactus_flat_contact(entt::entity{entt::null},\n";
+    out << "                                                        Vector2{.x = 0.0F, .y = 0.0F},\n";
+    out << "                                                        0.0F,\n";
+    out << "                                                        Vector2{.x = 0.0F, .y = 0.0F})};\n";
+    out << "}\n\n";
+    out << "}  // namespace\n\n";
+    out << qr2d << " cactus_query_cast_nearest(entt::registry& registry,\n";
+    out << "                                        entt::entity subject_entity,\n";
+    out << "                                        Vector2 delta,\n";
+    out << "                                        int mask,\n";
+    out << "                                        entt::entity exclude) {\n";
+    out << "    (void)registry;\n";
+    out << "    (void)subject_entity;\n";
+    out << "    (void)delta;\n";
+    out << "    (void)mask;\n";
+    out << "    (void)exclude;\n";
+    out << "    return cactus_empty_query_result();\n";
+    out << "}\n\n";
+    out << qr2d << " cactus_query_overlap_deepest(entt::registry& registry,\n";
+    out << "                                           entt::entity subject_entity,\n";
+    out << "                                           int mask,\n";
+    out << "                                           entt::entity exclude) {\n";
+    out << "    (void)registry;\n";
+    out << "    (void)subject_entity;\n";
+    out << "    (void)mask;\n";
+    out << "    (void)exclude;\n";
+    out << "    return cactus_empty_query_result();\n";
+    out << "}\n\n";
+    out << "std::vector<" << qc2d << "> cactus_query_overlap_all(entt::registry& registry,\n";
+    out << "                                                     entt::entity subject_entity,\n";
+    out << "                                                     int mask,\n";
+    out << "                                                     entt::entity exclude) {\n";
+    out << "    (void)registry;\n";
+    out << "    (void)subject_entity;\n";
+    out << "    (void)mask;\n";
+    out << "    (void)exclude;\n";
+    out << "    return {};\n";
+    out << "}\n\n";
+    return out.str();
 }
 
-QueryResult2D cactus_empty_query_result() noexcept {
-    return QueryResult2D{.kind = QueryResultKind::Empty,
-                         .contact = cactus_flat_contact(entt::entity{entt::null},
-                                                        Vector2{.x = 0.0F, .y = 0.0F},
-                                                        0.0F,
-                                                        Vector2{.x = 0.0F, .y = 0.0F})};
+// Finds the canonical C++ struct type name for the CollisionEnter event (e.g.
+// std_physics_flat__CollisionEnterEvent). Prefers a tagged source module
+// (set by the CLI merge loop) over the root program's module name.
+std::string collision_event_type(const DecoratedProgram& program) {
+    if (program.ast != nullptr) {
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* ev = std::get_if<EventNode>(&decl)) {
+                if (ev->name != "CollisionEnter") { continue; }
+                const std::string& mod = ev->module_name.empty() ? program.module_name : ev->module_name;
+                return canonical_to_cpp_name(mod, ev->name) + "Event";
+            }
+        }
+    }
+    return canonical_to_cpp_name(program.module_name, "CollisionEnter") + "Event";
 }
 
-}  // namespace
-
-QueryResult2D cactus_query_cast_nearest(entt::registry& registry,
-                                        entt::entity subject_entity,
-                                        Vector2 delta,
-                                        int mask,
-                                        entt::entity exclude) {
-    (void)registry;
-    (void)subject_entity;
-    (void)delta;
-    (void)mask;
-    (void)exclude;
-    return cactus_empty_query_result();
+// Returns the C++ type name for the load lifecycle event. If the program
+// declares its own `event load`, returns the canonical form (e.g.
+// main__loadEvent); otherwise returns "loadEvent" to match the synthetic struct
+// emitted when no user-declared load event exists.
+std::string load_event_type(const DecoratedProgram& program) {
+    if (program.ast != nullptr) {
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* ev = std::get_if<EventNode>(&decl)) {
+                if (ev->name == "load") {
+                    const std::string& mod = ev->module_name.empty() ? program.module_name : ev->module_name;
+                    return canonical_to_cpp_name(mod, "load") + "Event";
+                }
+            }
+        }
+    }
+    return "loadEvent";
 }
 
-QueryResult2D cactus_query_overlap_deepest(entt::registry& registry,
-                                           entt::entity subject_entity,
-                                           int mask,
-                                           entt::entity exclude) {
-    (void)registry;
-    (void)subject_entity;
-    (void)mask;
-    (void)exclude;
-    return cactus_empty_query_result();
-}
-
-std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry,
-                                                     entt::entity subject_entity,
-                                                     int mask,
-                                                     entt::entity exclude) {
-    (void)registry;
-    (void)subject_entity;
-    (void)mask;
-    (void)exclude;
-    return {};
-}
-
-)";
-}
-
-std::string emit_flat_collision_helpers() {
-    return R"(
+std::string emit_flat_collision_helpers(const DecoratedProgram& program) {
+    auto replace_token = [](std::string& s, const std::string& from, const std::string& to) {
+        auto is_ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; };
+        std::string::size_type pos = 0;
+        while ((pos = s.find(from, pos)) != std::string::npos) {
+            const bool ok = (pos == 0 || !is_ident(s[pos - 1])) &&
+                            (pos + from.size() == s.size() || !is_ident(s[pos + from.size()]));
+            if (ok) { s.replace(pos, from.size(), to); pos += to.size(); }
+            else    { pos += from.size(); }
+        }
+    };
+    const auto wt   = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+    const auto col  = EnttCodegenUtils::trait_cpp_name("Collider", program);
+    const auto box  = EnttCodegenUtils::trait_cpp_name("BoxCollider", program);
+    const auto cir  = EnttCodegenUtils::trait_cpp_name("CircleCollider", program);
+    const auto cap  = EnttCodegenUtils::trait_cpp_name("CapsuleCollider", program);
+    const auto qc2d = EnttCodegenUtils::struct_cpp_name("QueryContact2D", program);
+    const auto qr2d = EnttCodegenUtils::struct_cpp_name("QueryResult2D", program);
+    const auto qrk  = EnttCodegenUtils::enum_cpp_name("QueryResultKind", program);
+    const auto cee  = collision_event_type(program);
+    std::string code = R"(
 // ── Stdlib 2D Collider Runtime ───────────────────────────────────────────────
 
 namespace {
@@ -919,10 +995,36 @@ void cactus_dispatch_stdlib_flat_collisions(entt::registry& registry, entt::disp
 }
 
 )";
+    replace_token(code, "CollisionEnterEvent", cee);
+    replace_token(code, "CapsuleCollider",     cap);
+    replace_token(code, "CircleCollider",      cir);
+    replace_token(code, "BoxCollider",         box);
+    replace_token(code, "WorldTransform",      wt);
+    replace_token(code, "QueryContact2D",      qc2d);
+    replace_token(code, "QueryResult2D",       qr2d);
+    replace_token(code, "QueryResultKind",     qrk);
+    replace_token(code, "Collider",            col);
+    return code;
 }
 
-std::string emit_volume_collision_helpers() {
-    return R"(
+std::string emit_volume_collision_helpers(const DecoratedProgram& program) {
+    auto replace_token = [](std::string& s, const std::string& from, const std::string& to) {
+        auto is_ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; };
+        std::string::size_type pos = 0;
+        while ((pos = s.find(from, pos)) != std::string::npos) {
+            const bool ok = (pos == 0 || !is_ident(s[pos - 1])) &&
+                            (pos + from.size() == s.size() || !is_ident(s[pos + from.size()]));
+            if (ok) { s.replace(pos, from.size(), to); pos += to.size(); }
+            else    { pos += from.size(); }
+        }
+    };
+    const auto wt  = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+    const auto col = EnttCodegenUtils::trait_cpp_name("Collider", program);
+    const auto box = EnttCodegenUtils::trait_cpp_name("BoxCollider", program);
+    const auto sph = EnttCodegenUtils::trait_cpp_name("SphereCollider", program);
+    const auto cap = EnttCodegenUtils::trait_cpp_name("CapsuleCollider", program);
+    const auto cee = collision_event_type(program);
+    std::string code = R"(
 // ── Stdlib 3D Collider Runtime ───────────────────────────────────────────────
 
 namespace {
@@ -1044,6 +1146,13 @@ void cactus_dispatch_stdlib_volume_collisions(entt::registry& registry, entt::di
 }
 
 )";
+    replace_token(code, "CollisionEnterEvent", cee);
+    replace_token(code, "CapsuleCollider",     cap);
+    replace_token(code, "SphereCollider",      sph);
+    replace_token(code, "BoxCollider",         box);
+    replace_token(code, "WorldTransform",      wt);
+    replace_token(code, "Collider",            col);
+    return code;
 }
 
 std::string emit_backend_main() {
@@ -1105,11 +1214,18 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#undef PI\n";
     out << "#endif\n";
     // raylib defines `typedef Camera3D Camera;` which conflicts with the Camera DSL
-    // component struct. Redirect the token so struct Camera becomes struct CactusCamera.
+    // component struct. Redirect the token so struct Camera resolves to its canonical C++ name.
     // Use Camera3D directly for any raylib 3D-camera uses.
     if (uses_flat || uses_volume) {
+        // When both camera modules are in the merged traits map (e.g. via std.editor
+        // which transitively imports both), disambiguate by WorldTransform dimensionality:
+        // 3D programs use volume camera, 2D programs use flat camera.
+        const bool vol_wt  = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3);
+        const std::string camera_cpp = (uses_volume && vol_wt)
+            ? EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program)
+            : EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
         out << "// Suppress raylib Camera typedef; DSL Camera struct takes this name\n";
-        out << "#define Camera CactusCamera\n";
+        out << "#define Camera " << camera_cpp << "\n";
     }
     out << "\n";
     if (uses_viewport) {
@@ -1370,27 +1486,33 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
-    // stdlib::random types are defined in cactus_runtime.hpp; expose them at file scope.
+    // stdlib::random types: emit canonical-name aliases to the runtime header types so that
+    // runtime function return values (e.g. seeded(), uniform()) are assignment-compatible with
+    // the component fields and ECS views that use the canonical names (std_random__Rng, etc.).
     const bool uses_random = program_uses_module(program, "std.random");
     if (uses_random) {
-        out << "using Rng        = cactus::runtime::stdlib::random::Rng;\n";
-        out << "using Uniform    = cactus::runtime::stdlib::random::Uniform;\n";
-        out << "using UniformInt = cactus::runtime::stdlib::random::UniformInt;\n";
-        out << "using Normal     = cactus::runtime::stdlib::random::Normal;\n";
+        out << "using std_random__Rng        = cactus::runtime::stdlib::random::Rng;\n";
+        out << "using std_random__Uniform    = cactus::runtime::stdlib::random::Uniform;\n";
+        out << "using std_random__UniformInt = cactus::runtime::stdlib::random::UniformInt;\n";
+        out << "using std_random__Normal     = cactus::runtime::stdlib::random::Normal;\n";
         out << "\n";
     }
 
-    // POD structs (stdlib::random struct types are suppressed — they come from the runtime header).
+    // POD structs (stdlib::random struct types are suppressed — aliases above cover them).
     static const std::unordered_set<std::string> kRandomRuntimeTypes{"Rng", "Uniform", "UniformInt", "Normal"};
     for (const auto& [name, s] : program.structs) {
-        if (uses_random && kRandomRuntimeTypes.contains(name)) {
+        if (uses_random && kRandomRuntimeTypes.contains(s.name)) {
             continue;
         }
         out << EnttComponentEmitter::emit_pod_struct(s) << "\n";
     }
 
     // Component structs (from traits)
+    // stdlib::random trait types are exposed via 'using' aliases above — suppress their generated structs.
     for (const auto& [name, t] : program.traits) {
+        if (uses_random && t.module_name == "std.random" && kRandomRuntimeTypes.contains(t.name)) {
+            continue;
+        }
         out << EnttComponentEmitter::emit_component(t) << "\n";
     }
 
@@ -1420,15 +1542,16 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     }
 
     if (has_flat_colliders) {
-        out << emit_flat_collision_helpers();
+        out << emit_flat_collision_helpers(program);
     } else if (has_flat_physics_query_api(program)) {
-        out << emit_flat_query_fallback_helpers();
+        out << emit_flat_query_fallback_helpers(program);
     }
     if (has_volume_colliders) {
-        out << emit_volume_collision_helpers();
+        out << emit_volume_collision_helpers(program);
     }
 
     out << EnttSystemEmitter::emit_entt_hierarchy_helpers(program);
+
 
     // Persist serialization stubs
     out << "// ── Persist Serialization ────────────────────────────────────────────\n\n";
@@ -1441,7 +1564,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
         }
         if (has_persist) {
-            out << "void save_" << name << "(const " << name << "& comp) {\n";
+            const std::string cpp_name = canonical_to_cpp_name(t.module_name, t.name);
+            out << "void save_" << cpp_name << "(const " << cpp_name << "& comp) {\n";
             out << "    (void)comp;\n";
             for (const auto& f : t.fields) {
                 if (f.is_persist) {
@@ -1449,7 +1573,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 }
             }
             out << "}\n\n";
-            out << "void load_" << name << "(" << name << "& comp) {\n";
+            out << "void load_" << cpp_name << "(" << cpp_name << "& comp) {\n";
             out << "    (void)comp;\n";
             for (const auto& f : t.fields) {
                 if (f.is_persist) {
@@ -1471,7 +1595,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
         }
         if (has_sync) {
-            out << "void replicate_" << name << "(const " << name << "& comp) {\n";
+            const std::string cpp_name = canonical_to_cpp_name(t.module_name, t.name);
+            out << "void replicate_" << cpp_name << "(const " << cpp_name << "& comp) {\n";
             out << "    (void)comp;\n";
             for (const auto& f : t.fields) {
                 if (f.is_sync) {
@@ -1505,7 +1630,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         for (const auto& decl : program.ast->declarations) {
             if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
                 if (tmpl->is_pub) {
-                    out << "    {\"" << tmpl->name << "\", " << archetype_create_function_name(tmpl->name) << "},\n";
+                    out << "    {\"" << tmpl->name << "\", " << archetype_create_function_name(program.module_name, tmpl->name) << "},\n";
                 }
             }
         }
@@ -1533,7 +1658,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    (void)dispatcher;\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* event = std::get_if<EventNode>(&decl)) {
-                out << "    " << EnttEventEmitter::emit_sink_connection(*event);
+                out << "    " << EnttEventEmitter::emit_sink_connection(*event, program);
             }
         }
     }
@@ -1581,7 +1706,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         for (auto& decl : program.ast->declarations) {
             if (auto* entity = std::get_if<EntityNode>(&decl)) {
-                out << "    create_" << snake_case(entity->name) << "(registry);\n";
+                out << "    " << archetype_create_function_name(program.module_name, entity->name) << "(registry);\n";
             }
         }
     }
@@ -1656,18 +1781,33 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        });\n";
     }
     // ── Camera rig lifecycle impls ────────────────────────────────────────────
+    // Use WorldTransform dimensionality — not uses_flat/uses_volume — to gate 2D vs 3D rig
+    // code. std.editor imports both camera modules transitively, making both uses_flat and
+    // uses_volume true even for purely 2D or purely 3D programs.
+    const bool rig_is_2d = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec2);
+    const bool rig_is_3d = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3);
+    // Canonical C++ names for types emitted inside rig lambdas.
+    const std::string vp_cpp_rig   = uses_editor ? EnttCodegenUtils::trait_cpp_name("Viewport", program) : "";
+    const std::string ec2d_cpp_rig = uses_editor ? EnttCodegenUtils::trait_cpp_name("EditorCamera2D", program) : "";
+    const std::string ec3d_cpp_rig = uses_editor ? EnttCodegenUtils::trait_cpp_name("EditorCamera3D", program) : "";
+    // WorldTransform may exist in two modules (flat + volume) when std.editor is used.
+    // Always resolve by actual dimensionality so the correct variant is chosen even
+    // when both flat and volume appear in the merged program.
+    const std::string wt_cpp_rig = rig_is_3d
+        ? EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program)
+        : EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
     if (uses_editor && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_camera_enter_impl(\n";
         out << "        [](entt::registry& reg, bool use_3d) -> entt::entity {\n";
-        if (!uses_flat && !uses_volume) {
+        if (!uses_flat && !rig_is_3d) {
             out << "            (void)use_3d;\n";
             out << "            return entt::entity{entt::null};\n";
         } else {
-            if (uses_flat) {
+            if (uses_flat && !rig_is_3d) {
                 out << "            if (!use_3d) {\n";
                 out << "                auto __cam2d = cactus::runtime::entt_backend::get_active_camera_2d();\n";
                 out << "                if (__cam2d.zoom == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<Viewport, Camera>().each()) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<" << vp_cpp_rig << ", Camera>().each()) {\n";
                 out << "                        if (__vp.active) {\n";
                 out << "                            __cam2d.target = __cam.offset;\n";
                 out << "                            __cam2d.zoom = (__cam.zoom == 0.0F) ? 1.0F : __cam.zoom;\n";
@@ -1677,24 +1817,24 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                }\n";
                 out << "                if (__cam2d.zoom == 0.0F) { __cam2d.zoom = 1.0F; }\n";
                 out << "                std::vector<entt::entity> __saved;\n";
-                out << "                for (auto __ent : reg.view<Viewport>()) {\n";
-                out << "                    if (auto* __vp = reg.try_get<Viewport>(__ent); __vp != nullptr && __vp->active) {\n";
+                out << "                for (auto __ent : reg.view<" << vp_cpp_rig << ">()) {\n";
+                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig << ">(__ent); __vp != nullptr && __vp->active) {\n";
                 out << "                        __saved.push_back(__ent); __vp->active = false;\n";
                 out << "                    }\n";
                 out << "                }\n";
                 out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
-                out << "                reg.emplace<EditorCamera2D>(__rig, EditorCamera2D{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, .min_zoom = 0.05F, .max_zoom = 20.0F});\n";
+                out << "                reg.emplace<" << ec2d_cpp_rig << ">(__rig, " << ec2d_cpp_rig << "{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, .min_zoom = 0.05F, .max_zoom = 20.0F});\n";
                 out << "                reg.emplace<Camera>(__rig, Camera{.zoom = __cam2d.zoom, .offset = __cam2d.target});\n";
-                out << "                reg.emplace<Viewport>(__rig);\n";
+                out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
                 out << "                return __rig;\n";
                 out << "            }\n";
             }
-            if (uses_volume) {
+            if (rig_is_3d) {
                 out << "            if (use_3d) {\n";
                 out << "                auto __cam3d = cactus::runtime::entt_backend::get_active_camera_3d();\n";
                 out << "                if (__cam3d.fovy == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<Viewport, Camera, WorldTransform>().each()) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<" << vp_cpp_rig << ", Camera, " << wt_cpp_rig << ">().each()) {\n";
                 out << "                        if (__vp.active) {\n";
                 out << "                            __cam3d.fovy = __cam.fov_y;\n";
                 out << "                            __cam3d.position = __wt.position;\n";
@@ -1720,17 +1860,17 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                const float __yaw = std::atan2(-__dx, -__dz);\n";
                 out << "                const Quat __rot = cactus::runtime::stdlib::math::quat::from_euler(__pitch, __yaw, 0.0F);\n";
                 out << "                std::vector<entt::entity> __saved;\n";
-                out << "                for (auto __ent : reg.view<Viewport>()) {\n";
-                out << "                    if (auto* __vp = reg.try_get<Viewport>(__ent); __vp != nullptr && __vp->active) {\n";
+                out << "                for (auto __ent : reg.view<" << vp_cpp_rig << ">()) {\n";
+                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig << ">(__ent); __vp != nullptr && __vp->active) {\n";
                 out << "                        __saved.push_back(__ent); __vp->active = false;\n";
                 out << "                    }\n";
                 out << "                }\n";
                 out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
-                out << "                reg.emplace<EditorCamera3D>(__rig, EditorCamera3D{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = 0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, .min_distance = 0.1F, .max_distance = 1000.0F});\n";
+                out << "                reg.emplace<" << ec3d_cpp_rig << ">(__rig, " << ec3d_cpp_rig << "{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = 0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, .min_distance = 0.1F, .max_distance = 1000.0F});\n";
                 out << "                reg.emplace<Camera>(__rig, Camera{.fov_y = __cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
-                out << "                reg.emplace<Viewport>(__rig);\n";
-                out << "                reg.emplace<WorldTransform>(__rig, WorldTransform{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
+                out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
+                out << "                reg.emplace<" << wt_cpp_rig << ">(__rig, " << wt_cpp_rig << "{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
                 out << "                return __rig;\n";
                 out << "            }\n";
             }
@@ -1741,12 +1881,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        [](entt::registry& reg, entt::entity rig) {\n";
         out << "            if (reg.valid(rig)) { reg.destroy(rig); }\n";
         out << "            for (auto __saved_ent : cactus::runtime::entt_backend::editor_saved_viewports()) {\n";
-        out << "                if (auto* __vp = reg.try_get<Viewport>(__saved_ent)) { __vp->active = true; }\n";
+        out << "                if (auto* __vp = reg.try_get<" << vp_cpp_rig << ">(__saved_ent)) { __vp->active = true; }\n";
         out << "            }\n";
         out << "            cactus::runtime::entt_backend::set_editor_saved_viewports({});\n";
         out << "        });\n";
     }
-    if (uses_editor && uses_flat && uses_viewport) {
+    if (uses_editor && uses_flat && !rig_is_3d && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_apply_camera_2d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig, Vector2 view_center, float zoom) {\n";
         out << "            if (auto* __cam = reg.try_get<Camera>(rig)) {\n";
@@ -1754,31 +1894,32 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "                __cam->offset = view_center;\n";
         out << "            }\n";
         out << "        });\n";
-        if (program.traits.contains("WorldTransform")) {
-            out << "    cactus::runtime::entt_backend::register_editor_entity_position_2d_impl(\n";
-            out << "        [](entt::registry& reg, entt::entity __eid) -> Vector2 {\n";
-            out << "            if (reg.valid(__eid)) {\n";
-            out << "                if (const auto* __wt = reg.try_get<WorldTransform>(__eid)) {\n";
-            out << "                    return Vector2{.x = __wt->position.x, .y = __wt->position.y};\n";
-            out << "                }\n";
-            out << "            }\n";
-            out << "            return Vector2{.x = 0.0F, .y = 0.0F};\n";
-            out << "        });\n";
-        }
     }
-    if (uses_editor && uses_volume && uses_viewport &&
-        trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3)) {
+    if (uses_editor && rig_is_2d) {
+        out << "    cactus::runtime::entt_backend::register_editor_entity_position_2d_impl(\n";
+        out << "        [](entt::registry& reg, entt::entity __eid) -> Vector2 {\n";
+        out << "            if (reg.valid(__eid)) {\n";
+        out << "                if (const auto* __wt = reg.try_get<" << wt_cpp_rig << ">(__eid)) {\n";
+        out << "                    return Vector2{.x = __wt->position.x, .y = __wt->position.y};\n";
+        out << "                }\n";
+        out << "            }\n";
+        out << "            return Vector2{.x = 0.0F, .y = 0.0F};\n";
+        out << "        });\n";
+    }
+    if (uses_editor && rig_is_3d && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_apply_camera_3d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig, Vector3 position, Quat rotation) {\n";
-        out << "            if (auto* __wt = reg.try_get<WorldTransform>(rig)) {\n";
+        out << "            if (auto* __wt = reg.try_get<" << wt_cpp_rig << ">(rig)) {\n";
         out << "                __wt->position = position;\n";
         out << "                __wt->rotation = rotation;\n";
         out << "            }\n";
         out << "        });\n";
+    }
+    if (uses_editor && rig_is_3d) {
         out << "    cactus::runtime::entt_backend::register_editor_entity_position_3d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity __eid) -> Vector3 {\n";
         out << "            if (reg.valid(__eid)) {\n";
-        out << "                if (const auto* __wt = reg.try_get<WorldTransform>(__eid)) {\n";
+        out << "                if (const auto* __wt = reg.try_get<" << wt_cpp_rig << ">(__eid)) {\n";
         out << "                    return __wt->position;\n";
         out << "                }\n";
         out << "            }\n";
@@ -1796,7 +1937,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 for (auto& handler : sys->handlers) {
                     if (handler.event_name == "load") {
-                        out << "    " << system_function_name(sys->name, "load") << "(registry, loadEvent{});\n";
+                        out << "    " << system_function_name(program.module_name, sys->name,"load") << "(registry, " << load_event_type(program) << "{});\n";
                     }
                 }
             }
@@ -1835,7 +1976,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 if (auto* sys = std::get_if<SystemNode>(&decl)) {
                     for (auto& handler : sys->handlers) {
                         if (handler.event_name == "input") {
-                            out << "    " << system_function_name(sys->name, "input") << "(registry, dispatcher, input);\n";
+                            out << "    " << system_function_name(program.module_name, sys->name,"input") << "(registry, dispatcher, input);\n";
                         }
                     }
                 }
@@ -1850,7 +1991,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 for (auto& handler : sys->handlers) {
                     if (handler.event_name == "tick") {
-                        out << "    " << system_function_name(sys->name, "tick") << "(registry, dispatcher, TickEvent{dt});\n";
+                        out << "    " << system_function_name(program.module_name, sys->name,"tick") << "(registry, dispatcher, TickEvent{dt});\n";
                     }
                 }
             }
@@ -1858,7 +1999,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 if (!is_update_phase_extern(*sys, program)) {
                     continue;
                 }
-                out << "    " << system_function_name(sys->name, "tick") << "(registry);\n";
+                out << "    " << system_function_name(program.module_name, sys->name,"tick") << "(registry);\n";
             }
         }
     }
@@ -1874,7 +2015,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "}\n\n";
 
     // ── translate_camera helpers (emitted when viewport loop is active) ──────
-    const bool emit_2d_helper = uses_viewport && uses_flat;
+    const std::string vp_cpp = EnttCodegenUtils::trait_cpp_name("Viewport", program);
+    // Disambiguate WorldTransform by dimensionality; both flat and volume may appear in the
+    // merged AST when std.editor is in use, making a plain name lookup non-deterministic.
+    const std::string wt_cpp = rig_is_3d ? wt_cpp_rig : EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+    // Guard 2D helper on WorldTransform NOT being 3D: std.editor imports both camera modules
+    // transitively, so uses_flat is true even for 3D programs using std.editor.
+    const bool emit_2d_helper = uses_viewport && uses_flat && !rig_is_3d;
     const bool emit_3d_helper = uses_viewport && uses_volume &&
         trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3) &&
         trait_field_is(program, "WorldTransform", "rotation", TypeKind::Quat);
@@ -1897,8 +2044,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "    cam3d.fovy       = cam.fov_y;\n";
             out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
             out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
-            out << "    if (registry.all_of<WorldTransform>(entity)) {\n";
-            out << "        const auto& xform = registry.get<WorldTransform>(entity);\n";
+            out << "    if (registry.all_of<" << wt_cpp << ">(entity)) {\n";
+            out << "        const auto& xform = registry.get<" << wt_cpp << ">(entity);\n";
             out << "        cam3d.position = xform.position;\n";
             out << "        const auto& q  = xform.rotation;\n";
             out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
@@ -1927,7 +2074,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                     (selection == RenderPhaseSelection::WindowGlobal && !window_global)) {
                     continue;
                 }
-                out << indent << system_function_name(sys->name, "tick") << "(registry);\n";
+                out << indent << system_function_name(program.module_name, sys->name,"tick") << "(registry);\n";
             }
         }
     };
@@ -1945,13 +2092,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        const int __sh = GetScreenHeight();\n";
         out << "        static std::vector<std::pair<int,entt::entity>> __vps;\n";
         out << "        __vps.clear();\n";
-        out << "        for (const auto& [__vp_e, __vp] : registry.view<Viewport>().each()) {\n";
+        out << "        for (const auto& [__vp_e, __vp] : registry.view<" << vp_cpp << ">().each()) {\n";
         out << "            if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
         out << "        }\n";
         out << "        std::ranges::sort(__vps);\n";
         out << "        for (auto& [__depth, __vp_ent] : __vps) {\n";
         out << "            (void)__depth;\n";
-        out << "            const auto& __vp = registry.get<Viewport>(__vp_ent);\n";
+        out << "            const auto& __vp = registry.get<" << vp_cpp << ">(__vp_ent);\n";
         out << "            BeginScissorMode(\n";
         out << "                static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
         out << "                static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";

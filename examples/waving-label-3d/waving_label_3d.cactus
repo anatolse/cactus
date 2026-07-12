@@ -1,10 +1,10 @@
 module waving_label_3d
 
-use std.math
+use std.math as math
 use std.math.quat as quat
-use std.text
-use std.transform.volume
-use std.render.text
+use std.text as text
+use std.transform.volume as tv
+use std.render.text as rtext
 
 const:
     WINDOW_WIDTH  = 960
@@ -16,11 +16,11 @@ trait Clock:
     var elapsed: float = 0.0
 
 pub entity WavingLabel:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, 0.0, 0.0)
         rotation = quat.identity()
         scale    = vec3(3.0, 1.5, 1.0)
-    TextLabel:
+    rtext.TextLabel:
         text      = "00:00"
         font_size = 1
         color     = #FFFFFFFF
@@ -30,14 +30,14 @@ pub entity WavingLabel:
 
 system WaveSystem:
     filter:
-        WorldTransform
-        TextLabel
+        tv.WorldTransform
+        rtext.TextLabel
         Clock
 
     on tick:
         elapsed  = elapsed + tick.dt
-        let ry   = quat.from_axis_angle(vec3(0.0, 1.0, 0.0), sin(elapsed * 1.2) * 1.2)
-        let rx   = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), sin(elapsed * 0.7) * 0.5)
+        let ry   = quat.from_axis_angle(vec3(0.0, 1.0, 0.0), math.sin(elapsed * 1.2) * 1.2)
+        let rx   = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), math.sin(elapsed * 0.7) * 0.5)
         rotation = quat.multiply(ry, rx)
-        let secs = floor(elapsed)
-        text = format("{:02}:{:02}", secs / 60, secs % 60)
+        let secs = math.floor(elapsed)
+        text = text.format("{:02}:{:02}", secs / 60, secs % 60)

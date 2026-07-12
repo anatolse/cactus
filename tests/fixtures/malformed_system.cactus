@@ -1,3 +1,5 @@
+module malformed_system
+
 system BrokenSystem:
     filter:
         Position

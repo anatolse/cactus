@@ -705,8 +705,8 @@ TEST_CASE("Runtime stdlib: editor ray/plane intersection hits, rejects parallel 
     }
 
     SECTION("Two projected cursor rays yield a ground-plane delta") {
-        // The core of editor_mouse_delta_3d: project current and previous cursor
-        // rays onto y=0 and difference them — the delta stays in the plane.
+        // Project current and previous cursor rays onto y=0 and difference them
+        // — the underlying logic behind screen_delta_on_plane_3d's 3D delta.
         const Ray current{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
                           .direction = {.x = 0.1F, .y = -1.0F, .z = 0.05F}};
         const Ray previous{.position  = {.x = 0.0F, .y = 10.0F, .z = 0.0F},
@@ -728,6 +728,24 @@ TEST_CASE("Runtime stdlib: editor_raycast_3d without a registered impl returns n
     entt::registry registry;
     entt_backend::register_editor_raycast_impl({});
     CHECK(entt_backend::editor_raycast_3d(registry, Vector2{.x = 100.0F, .y = 100.0F}, 1) ==
+          entt::entity{entt::null});
+}
+
+TEST_CASE("Runtime stdlib: editor_hit_test_2d without a registered impl returns null",
+          "[runtime][editor][entt]") {
+    entt::registry registry;
+    entt_backend::register_editor_hit_test_impl({});
+    CHECK(entt_backend::editor_hit_test_2d(registry, Vector2{.x = 50.0F, .y = 50.0F}, 1) ==
+          entt::entity{entt::null});
+}
+
+TEST_CASE("Runtime stdlib: editor_spawn_template without a registered impl returns null",
+          "[runtime][editor][entt]") {
+    entt::registry registry;
+    entt_backend::register_editor_spawn_impl({});
+    CHECK(entt_backend::editor_spawn_template(registry, "Enemy",
+                                              Vector2{.x = 0.0F, .y = 0.0F},
+                                              Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}) ==
           entt::entity{entt::null});
 }
 

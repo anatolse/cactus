@@ -55,7 +55,7 @@ public:
     static std::string infer_module_name(const std::filesystem::path& search_root,
                                          const std::filesystem::path& file_path);
 
-    /// Validate that a module declaration (if present) matches the inferred name.
+    /// Validate that exactly one module declaration is present and matches the inferred name.
     bool validate_module_name(const ProgramNode& program,
                               const std::string& inferred_name,
                               const std::filesystem::path& file_path);

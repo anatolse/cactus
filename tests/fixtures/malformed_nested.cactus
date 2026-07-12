@@ -1,3 +1,5 @@
+module malformed_nested
+
 system Nested:
     on tick:
         if value > 0:

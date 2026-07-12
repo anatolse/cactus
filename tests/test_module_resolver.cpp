@@ -45,7 +45,7 @@ static ProgramNode parse_file(const fs::path& file_path) {
 // ── Dependency Extraction ───────────────────────────────────────────────────
 
 TEST_CASE("ModuleResolver: extract deps from use declarations", "[resolver]") {
-    auto prog = parse("use player\nuse level\n");
+    auto prog = parse("module test\nuse player\nuse level\n");
     auto deps = ModuleResolver::extract_dependencies(prog);
     REQUIRE(deps.size() == 2);
     CHECK(deps[0] == "player");
@@ -53,13 +53,13 @@ TEST_CASE("ModuleResolver: extract deps from use declarations", "[resolver]") {
 }
 
 TEST_CASE("ModuleResolver: no use declarations → empty deps", "[resolver]") {
-    auto prog = parse("trait Standalone:\n    var x: int = 0\n");
+    auto prog = parse("module standalone\ntrait Standalone:\n    var x: int = 0\n");
     auto deps = ModuleResolver::extract_dependencies(prog);
     CHECK(deps.empty());
 }
 
 TEST_CASE("ModuleResolver: use with alias — alias ignored for deps", "[resolver]") {
-    auto prog = parse("use player as p\n");
+    auto prog = parse("module test\nuse player as p\n");
     auto deps = ModuleResolver::extract_dependencies(prog);
     REQUIRE(deps.size() == 1);
     CHECK(deps[0] == "player");
@@ -112,12 +112,27 @@ TEST_CASE("ModuleResolver: mismatched module name rejected", "[resolver]") {
     CHECK(errors.has_errors());
 }
 
-TEST_CASE("ModuleResolver: missing module declaration accepted", "[resolver]") {
+TEST_CASE("ModuleResolver: missing module declaration rejected", "[resolver]") {
     ErrorReporter errors;
     ModuleResolver resolver(errors);
-    auto prog = parse("trait Foo:\n    var x: int = 0\n");
-    CHECK(resolver.validate_module_name(prog, "foo", "foo.cactus"));
-    CHECK_FALSE(errors.has_errors());
+
+    ProgramNode prog;
+    prog.location = {"foo.cactus", 1, 1};
+
+    CHECK_FALSE(resolver.validate_module_name(prog, "foo", "foo.cactus"));
+    CHECK(errors.has_errors());
+}
+
+TEST_CASE("ModuleResolver: duplicate module declaration rejected", "[resolver]") {
+    ErrorReporter errors;
+    ModuleResolver resolver(errors);
+
+    ProgramNode prog;
+    prog.declarations.push_back(ModuleNode{.name = "foo", .location = {"foo.cactus", 1, 1}});
+    prog.declarations.push_back(ModuleNode{.name = "foo.extra", .location = {"foo.cactus", 2, 1}});
+
+    CHECK_FALSE(resolver.validate_module_name(prog, "foo", "foo.cactus"));
+    CHECK(errors.has_errors());
 }
 
 // ── File Location ───────────────────────────────────────────────────────────
@@ -174,6 +189,22 @@ TEST_CASE("ModuleResolver: standalone file (no deps)", "[resolver]") {
     REQUIRE_FALSE(errors.has_errors());
     REQUIRE(result.size() == 1);
     CHECK(result[0].qualified_name == "standalone");
+}
+
+TEST_CASE("ModuleResolver: resolve rejects a missing module declaration", "[resolver]") {
+    ErrorReporter errors;
+    ModuleResolver resolver(errors);
+    auto result = resolver.resolve(FIXTURES / "missing_module.cactus");
+    CHECK(errors.has_errors());
+    CHECK(result.empty());
+}
+
+TEST_CASE("ModuleResolver: resolve rejects a mismatched module declaration", "[resolver]") {
+    ErrorReporter errors;
+    ModuleResolver resolver(errors);
+    auto result = resolver.resolve(FIXTURES / "mismatched.cactus");
+    CHECK(errors.has_errors());
+    CHECK(result.empty());
 }
 
 TEST_CASE("ModuleResolver: multi-module resolution with transitive deps", "[resolver]") {

@@ -1,6 +1,6 @@
 module stdlib_extern_coverage
 
-use std.input
+use std.input as inp
 use std.math.vec2 as v2
 use std.physics.flat as phys
 
@@ -8,8 +8,8 @@ const:
     CONTACT_MASK = 1
 
 input MoveX: axis
-    negative = Key.A
-    positive = Key.D
+    negative = inp.Key.A
+    positive = inp.Key.D
 
 trait Motion:
     var x: float = 0.0
@@ -19,7 +19,7 @@ trait DamageFlash:
     var intensity: float = 0.0
 
 trait ContactSnapshot:
-    var hits: list[QueryContact2D] = []
+    var hits: list[phys.QueryContact2D] = []
 
 pub entity ExternSurface:
     Motion:

@@ -101,26 +101,25 @@ TEST_CASE("program_linker: dependency graphs are concatenated", "[linker][5.2]")
     CHECK(merged.dependency_graph[1].system_name == "RenderSystem");
 }
 
-// ── Task 5.3: Duplicate pub symbol detection ──────────────────────────────────
+// ── Task 4.4: Same simple pub name from different modules is accepted ──────────
 
-TEST_CASE("program_linker: duplicate pub trait name detected", "[linker][5.3]") {
+TEST_CASE("program_linker: same simple pub trait name from different modules is accepted", "[linker][4.4]") {
+    // Both modules have pub trait "Position" — different canonical IDs, so no conflict.
     auto prog_a = make_program("Position", true);
-    auto prog_b = make_program("Position", true);  // same pub name!
+    auto prog_b = make_program("Position", true);
 
     ErrorReporter errors;
     ProgramLinker linker(errors);
 
     DecoratedProgram merged;
-    linker.merge_into(merged, prog_a, "modA");
-    bool ok = linker.merge_into(merged, prog_b, "modB");
+    REQUIRE(linker.merge_into(merged, prog_a, "modA"));
+    REQUIRE(linker.merge_into(merged, prog_b, "modB"));
 
-    CHECK_FALSE(ok);
-    CHECK(errors.has_errors());
-    const auto& msg = errors.diagnostics()[0].message;
-    CHECK(msg.find("duplicate symbol") != std::string::npos);
-    CHECK(msg.find("Position") != std::string::npos);
-    CHECK(msg.find("modA") != std::string::npos);
-    CHECK(msg.find("modB") != std::string::npos);
+    CHECK_FALSE(errors.has_errors());
+    // Both canonical keys ("modA.Position", "modB.Position") conflict-detect cleanly;
+    // because canonical_id is empty in make_program(), simple name is used as the map key
+    // and last-write-wins (both are from different modules with no canonical_id set).
+    CHECK(merged.traits.count("Position") == 1);
 }
 
 TEST_CASE("program_linker: merging same module twice is idempotent", "[linker][std-core]") {
@@ -137,20 +136,19 @@ TEST_CASE("program_linker: merging same module twice is idempotent", "[linker][s
     CHECK(merged.traits.count("Persistent") == 1);
 }
 
-TEST_CASE("program_linker: duplicate enum name detected", "[linker][5.3]") {
+TEST_CASE("program_linker: same simple enum name from different modules is accepted", "[linker][4.4]") {
     auto prog_a = make_program("TraitA", true, "Direction");
-    auto prog_b = make_program("TraitB", true, "Direction");  // same enum name
+    auto prog_b = make_program("TraitB", true, "Direction");  // same enum simple name, different module
 
     ErrorReporter errors;
     ProgramLinker linker(errors);
 
     DecoratedProgram merged;
-    linker.merge_into(merged, prog_a, "modA");
-    bool ok = linker.merge_into(merged, prog_b, "modB");
+    REQUIRE(linker.merge_into(merged, prog_a, "modA"));
+    REQUIRE(linker.merge_into(merged, prog_b, "modB"));
 
-    CHECK_FALSE(ok);
-    CHECK(errors.has_errors());
-    CHECK(errors.diagnostics()[0].message.find("Direction") != std::string::npos);
+    CHECK_FALSE(errors.has_errors());
+    CHECK(merged.enums.count("Direction") == 1);
 }
 
 TEST_CASE("program_linker: non-pub trait with same name does not conflict", "[linker][5.3]") {
@@ -220,12 +218,12 @@ TEST_CASE("program_linker: link from artifact files round-trip", "[linker][5.1]"
     fs::remove_all(build_dir, ec);
 }
 
-TEST_CASE("program_linker: link detects duplicate across artifacts", "[linker][5.1]") {
-    auto build_dir = linker_build_dir() / "dup";
+TEST_CASE("program_linker: link accepts same simple pub name from different module artifacts", "[linker][4.4]") {
+    auto build_dir = linker_build_dir() / "same_name";
     std::error_code ec;
     fs::remove_all(build_dir, ec);
 
-    // Both modules define pub trait "Config"
+    // Both modules define pub trait "Config" — different canonical IDs, so coexistence is fine.
     auto prog_a = make_program("Config", true);
     auto prog_b = make_program("Config", true);
 
@@ -233,13 +231,103 @@ TEST_CASE("program_linker: link detects duplicate across artifacts", "[linker][5
     ModuleArtifact artifact(save_errors);
     artifact.save(prog_a, "modA", build_dir);
     artifact.save(prog_b, "modB", build_dir);
+    REQUIRE_FALSE(save_errors.has_errors());
 
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
     auto merged = linker.link({build_dir / "modA.cmod", build_dir / "modB.cmod"});
 
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(merged.has_value());
+
+    fs::remove_all(build_dir, ec);
+}
+
+// ── Task 6.2: std.transform.flat + std.transform.volume coexistence ──────────
+
+TEST_CASE("program_linker: std.transform.flat and std.transform.volume link without duplicate symbol error",
+          "[linker][6.2]") {
+    auto build_dir = linker_build_dir() / "transform_coexist";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    // Reproduce the motivating case: flat and volume both export LocalTransform
+    // and WorldTransform (same local names, distinct canonical IDs).
+    auto make_transform_prog = [](const std::string& mod) {
+        DecoratedProgram prog;
+        prog.module_name = mod;
+        for (const char* local : {"LocalTransform", "WorldTransform"}) {
+            ResolvedTrait t;
+            t.name         = local;
+            t.is_pub       = true;
+            t.module_name  = mod;
+            t.canonical_id = mod + "." + local;
+            prog.traits[local] = t;
+        }
+        return prog;
+    };
+
+    auto flat_prog = make_transform_prog("std.transform.flat");
+    auto vol_prog  = make_transform_prog("std.transform.volume");
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(flat_prog, "std.transform.flat", build_dir));
+    REQUIRE(artifact.save(vol_prog, "std.transform.volume", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link({build_dir / "std.transform.flat.cmod",
+                               build_dir / "std.transform.volume.cmod"});
+
+    CHECK_FALSE(link_errors.has_errors());
+    REQUIRE(merged.has_value());
+
+    fs::remove_all(build_dir, ec);
+}
+
+// ── Task 4.6: Canonical identity round-trip and conflict detection ────────────
+
+TEST_CASE("program_linker: duplicate canonical identity from distinct artifacts is rejected", "[linker][4.6]") {
+    auto build_dir = linker_build_dir() / "canonical_conflict";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    // Two programs whose traits share the same pre-set canonical_id (simulating
+    // two artifacts both claiming to define the same canonical symbol).
+    DecoratedProgram prog_a;
+    ResolvedTrait ta;
+    ta.name         = "Position";
+    ta.is_pub       = true;
+    ta.module_name  = "shared";
+    ta.canonical_id = "shared.Position";
+    prog_a.traits["Position"] = ta;
+
+    DecoratedProgram prog_b;
+    ResolvedTrait tb;
+    tb.name         = "Position";
+    tb.is_pub       = true;
+    tb.module_name  = "shared";
+    tb.canonical_id = "shared.Position";  // same canonical_id as prog_a
+    prog_b.traits["Position"] = tb;
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    // Save as distinct artifact files so they appear to be different modules.
+    artifact.save(prog_a, "copy_one", build_dir);
+    artifact.save(prog_b, "copy_two", build_dir);
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link({build_dir / "copy_one.cmod", build_dir / "copy_two.cmod"});
+
     CHECK_FALSE(merged.has_value());
     CHECK(link_errors.has_errors());
+    const auto& msg = link_errors.diagnostics()[0].message;
+    CHECK(msg.find("duplicate canonical symbol") != std::string::npos);
+    CHECK(msg.find("shared.Position") != std::string::npos);
 
     fs::remove_all(build_dir, ec);
 }

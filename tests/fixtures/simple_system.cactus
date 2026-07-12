@@ -1,3 +1,5 @@
+module simple_system
+
 trait Position:
     var x: float = 0.0
     var y: float = 0.0

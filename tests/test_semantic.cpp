@@ -23,9 +23,19 @@ static const std::string STDLIB_EVENTS =
     "pub event load\n"
     "pub event unload\n";
 
+static bool starts_with_module_decl(const std::string& src) {
+    const auto first = src.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos || src.compare(first, 6, "module") != 0) {
+        return false;
+    }
+    const auto after = first + 6;
+    return after < src.size() && std::isspace(static_cast<unsigned char>(src[after])) != 0;
+}
+
 static DecoratedProgram analyze(const std::string& source) {
+    const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    Lexer lexer(src, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     REQUIRE_FALSE(errors.has_errors());
     Parser parser(std::move(tokens), errors);
@@ -38,8 +48,9 @@ static DecoratedProgram analyze(const std::string& source) {
 }
 
 static bool analyze_has_errors(const std::string& source) {
+    const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    Lexer lexer(src, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     if (errors.has_errors()) {
         return true;
@@ -55,8 +66,9 @@ static bool analyze_has_errors(const std::string& source) {
 }
 
 static std::string analyze_first_error(const std::string& source) {
+    const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    Lexer lexer(src, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     if (errors.has_errors()) {
         return errors.diagnostics().front().message;
@@ -257,7 +269,7 @@ TEST_CASE("Semantic: dependency graph built", "[semantic]") {
                           "        x = x + t.dt\n");
     REQUIRE(result.dependency_graph.size() == 1);
     CHECK(result.dependency_graph[0].system_name == "Move");
-    CHECK(result.dependency_graph[0].reads.count("Pos"));
+    CHECK(result.dependency_graph[0].reads.count("test.Pos"));
     CHECK(result.dependency_graph[0].writes.count("x"));
 }
 
@@ -495,12 +507,12 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
     for (auto& dep : result.dependency_graph) {
         if (dep.system_name == "B") {
             REQUIRE(dep.after_systems.size() == 1);
-            CHECK(dep.after_systems[0] == "A");
+            CHECK(dep.after_systems[0] == "test.A");
             found_b = true;
         }
         if (dep.system_name == "C") {
             REQUIRE(dep.after_systems.size() == 1);
-            CHECK(dep.after_systems[0] == "B");
+            CHECK(dep.after_systems[0] == "test.B");
             found_c = true;
         }
     }
@@ -852,7 +864,7 @@ TEST_CASE("Semantic: project participates in dependency writes", "[semantic][pro
                           "        project DamageFlash\n");
 
     REQUIRE(result.dependency_graph.size() == 1);
-    CHECK(result.dependency_graph[0].reads.count("Health") == 1);
+    CHECK(result.dependency_graph[0].reads.count("test.Health") == 1);
     CHECK(result.dependency_graph[0].writes.count("DamageFlash") == 1);
 }
 

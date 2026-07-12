@@ -1,5 +1,7 @@
 #include "backends/cpp-entt/type_utils.hpp"
 
+#include "frontend/symbol_identity.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -10,190 +12,75 @@ namespace cactus {
 
 namespace {
 
-std::string imported_module_name(const ProgramNode* ast, const std::string& qualifier) {
-    if (ast == nullptr) {
-        return qualifier;
+template <typename ResolvedDecl>
+std::string resolved_decl_cpp_name(const ResolvedDecl& decl) {
+    // Prefer module_name: allows tests to override canonical identity after analysis.
+    if (!decl.module_name.empty()) {
+        return canonical_to_cpp_name(decl.module_name, decl.name);
     }
-    for (const auto& decl : ast->declarations) {
-        if (const auto* use = std::get_if<UseNode>(&decl)) {
-            if ((use->alias.has_value() && *use->alias == qualifier) || use->module_name == qualifier) {
-                return use->module_name;
+    if (decl.symbol_id.has_value()) {
+        return canonical_to_cpp_name(*decl.symbol_id);
+    }
+    return decl.name;
+}
+
+template <typename Map>
+const typename Map::mapped_type* find_decl_by_symbol(const Map& map, const SymbolId& symbol) {
+    const auto canonical = make_canonical_id(symbol);
+    if (auto it = map.find(canonical); it != map.end()) {
+        return &it->second;
+    }
+    if (auto it = map.find(symbol.local_name); it != map.end()) {
+        const auto& decl = it->second;
+        if ((decl.symbol_id.has_value() && *decl.symbol_id == symbol) || decl.canonical_id == canonical ||
+            (!decl.symbol_id.has_value() && decl.module_name == symbol.module.name && decl.name == symbol.local_name)) {
+            return &decl;
+        }
+    }
+    for (const auto& [_, decl] : map) {
+        if ((decl.symbol_id.has_value() && *decl.symbol_id == symbol) || decl.canonical_id == canonical ||
+            (!decl.symbol_id.has_value() && decl.module_name == symbol.module.name && decl.name == symbol.local_name)) {
+            return &decl;
+        }
+    }
+    return nullptr;
+}
+
+template <typename Map>
+std::string symbol_cpp_name_from_map(const SymbolId& symbol, const Map& map) {
+    if (const auto* decl = find_decl_by_symbol(map, symbol); decl != nullptr) {
+        return resolved_decl_cpp_name(*decl);
+    }
+    return canonical_to_cpp_name(symbol);
+}
+
+template <typename Map>
+std::string resolved_or_fallback_cpp_name(const std::optional<SymbolId>& symbol,
+                                          const std::string& fallback_source_name,
+                                          const Map& map) {
+    if (symbol.has_value()) {
+        return symbol_cpp_name_from_map(*symbol, map);
+    }
+    auto direct = map.find(fallback_source_name);
+    if (direct != map.end()) {
+        return resolved_decl_cpp_name(direct->second);
+    }
+    const auto dot = fallback_source_name.rfind('.');
+    if (dot != std::string::npos) {
+        for (const auto& [_, decl] : map) {
+            if (decl.canonical_id == fallback_source_name) {
+                return resolved_decl_cpp_name(decl);
             }
         }
+        return fallback_source_name.substr(dot + 1U);
     }
-    return qualifier;
-}
-
-std::string stdlib_runtime_prefix(const ProgramNode* ast, const std::string& qualifier) {
-    const std::string module_name = imported_module_name(ast, qualifier);
-    if (module_name == "std.math") {
-        return "cactus::runtime::stdlib::math";
-    }
-    if (module_name == "std.math.vec2") {
-        return "cactus::runtime::stdlib::math::vec2";
-    }
-    if (module_name == "std.math.vec3") {
-        return "cactus::runtime::stdlib::math::vec3";
-    }
-    if (module_name == "std.math.quat") {
-        return "cactus::runtime::stdlib::math::quat";
-    }
-    if (module_name == "std.input") {
-        return "cactus::runtime::entt_backend";
-    }
-    if (module_name == "std.random") {
-        return "cactus::runtime::stdlib::random";
-    }
-    if (module_name == "std.render.models") {
-        return "cactus::runtime::entt_backend";
-    }
-    return {};
-}
-
-// std.render.models extern funcs bind to the model_-prefixed runtime bridges
-// (the bare names would collide with other asset kinds' introspection).
-std::string stdlib_runtime_func_name(const std::string& module_name, const std::string& func_name) {
-    if (module_name == "std.render.models" &&
-        (func_name == "animation_count" || func_name == "animation_name" || func_name == "bounds_size")) {
-        return "model_" + func_name;
-    }
-    return func_name;
-}
-
-bool module_exports_stdlib_func(const std::string& module_name, const std::string& func_name) {
-    if (module_name == "std.math") {
-        return func_name == "lerp" || func_name == "clamp" || func_name == "abs" || func_name == "min" ||
-               func_name == "max" || func_name == "sqrt" || func_name == "sin" || func_name == "cos" ||
-               func_name == "atan2" || func_name == "floor" || func_name == "ceil" || func_name == "round" ||
-               func_name == "pow";
-    }
-    if (module_name == "std.math.vec2") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "lerp" ||
-               func_name == "distance" || func_name == "angle";
-    }
-    if (module_name == "std.math.vec3") {
-        return func_name == "length" || func_name == "normalize" || func_name == "dot" || func_name == "cross" ||
-               func_name == "lerp" || func_name == "distance" || func_name == "reflect";
-    }
-    if (module_name == "std.math.quat") {
-        return func_name == "identity" || func_name == "from_euler" || func_name == "from_axis_angle" ||
-               func_name == "forward" || func_name == "right" || func_name == "up" || func_name == "rotate" ||
-               func_name == "slerp" || func_name == "multiply" || func_name == "inverse";
-    }
-    if (module_name == "std.input") {
-        return func_name == "pressed" || func_name == "down" || func_name == "released" || func_name == "axis" ||
-               func_name == "axis2" || func_name == "mouse_position";
-    }
-    if (module_name == "std.random") {
-        return func_name == "seeded" || func_name == "uniform" || func_name == "uniform_int" ||
-               func_name == "normal" || func_name == "advance" || func_name == "sample" ||
-               func_name == "sample_int" || func_name == "sample_normal" || func_name == "chance";
-    }
-    if (module_name == "std.render.models") {
-        return func_name == "animation_count" || func_name == "animation_name" || func_name == "bounds_size";
-    }
-    if (module_name == "std.editor") {
-        return func_name == "editor_spawn_template" || func_name == "editor_hit_test_2d" ||
-               func_name == "editor_raycast_3d" || func_name == "editor_screen_to_world_2d" ||
-               func_name == "editor_mouse_delta_2d" || func_name == "editor_plane_project_3d" ||
-               func_name == "editor_mouse_delta_3d" || func_name == "editor_camera_enter" ||
-               func_name == "editor_camera_exit" || func_name == "editor_apply_camera_2d" ||
-               func_name == "editor_apply_camera_3d" || func_name == "editor_wheel_delta" ||
-               func_name == "editor_mouse_delta_screen" || func_name == "editor_entity_position_2d" ||
-               func_name == "editor_entity_position_3d" || func_name == "editor_consume";
-    }
-    return false;
-}
-
-std::string lower_unqualified_stdlib_func(const ProgramNode* ast,
-                                          const std::string& func_name,
-                                          const auto& emit_args,
-                                          const std::vector<std::unique_ptr<ExprNode>>& args) {
-    if (ast == nullptr) {
-        return {};
-    }
-    if (func_name == "format") {
-        for (const auto& decl : ast->declarations) {
-            const auto* use = std::get_if<UseNode>(&decl);
-            if (use != nullptr && !use->alias.has_value() && use->module_name == "std.text") {
-                std::string result = "std::format(";
-                for (size_t i = 0; i < args.size(); ++i) {
-                    if (i > 0) {
-                        result += ", ";
-                    }
-                    result += emit_args(*args[i]);
-                }
-                return result + ")";
-            }
+    // No dot — scan by local name for canonical-keyed maps (multi-module mode).
+    for (const auto& [_, decl] : map) {
+        if (decl.name == fallback_source_name) {
+            return resolved_decl_cpp_name(decl);
         }
     }
-    for (const auto& decl : ast->declarations) {
-        const auto* use = std::get_if<UseNode>(&decl);
-        if (use == nullptr || use->alias.has_value()) {
-            continue;
-        }
-        if (!module_exports_stdlib_func(use->module_name, func_name)) {
-            continue;
-        }
-        const std::string prefix = stdlib_runtime_prefix(ast, use->module_name);
-        if (prefix.empty()) {
-            continue;
-        }
-        const std::string runtime_name = stdlib_runtime_func_name(use->module_name, func_name);
-        std::string result;
-        result.reserve(prefix.size() + runtime_name.size() + 3U);
-        result.append(prefix).append("::").append(runtime_name).push_back('(');
-        for (size_t i = 0; i < args.size(); ++i) {
-            if (i > 0) {
-                result += ", ";
-            }
-            result += emit_args(*args[i]);
-        }
-        result += ")";
-        return result;
-    }
-    return {};
-}
-
-std::string lower_stdlib_member_call(const MemberExpr& member,
-                                     const std::vector<std::unique_ptr<ExprNode>>& args,
-                                     const ProgramNode* ast,
-                                     const auto& emit_arg) {
-    const auto* object_ident = std::get_if<IdentExpr>(&member.object->expr);
-    if (object_ident == nullptr) {
-        return {};
-    }
-    if (member.member == "format" && imported_module_name(ast, object_ident->name) == "std.text") {
-        std::string result = "std::format(";
-        for (size_t i = 0; i < args.size(); ++i) {
-            if (i > 0) {
-                result += ", ";
-            }
-            result += emit_arg(*args[i]);
-        }
-        return result + ")";
-    }
-    if (object_ident->name == "input" && member.member == "mouse_position" && args.empty()) {
-        return "cactus::runtime::entt_backend::mouse_position()";
-    }
-    const std::string prefix = stdlib_runtime_prefix(ast, object_ident->name);
-    if (prefix.empty()) {
-        return {};
-    }
-
-    const std::string runtime_name =
-        stdlib_runtime_func_name(imported_module_name(ast, object_ident->name), member.member);
-    std::string result;
-    result.reserve(prefix.size() + runtime_name.size() + 3U);
-    result.append(prefix).append("::").append(runtime_name).push_back('(');
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (i > 0) {
-            result += ", ";
-        }
-        result += emit_arg(*args[i]);
-    }
-    result += ")";
-    return result;
+    return fallback_source_name;
 }
 
 std::string upper_copy(std::string value) {
@@ -236,6 +123,31 @@ bool is_input_action_name(const ProgramNode* ast, const std::string& name) {
 
 }  // namespace
 
+std::string system_function_name(const std::string& module_name,
+                                 const std::string& system_name,
+                                 const std::string& suffix) {
+    return snake_case(canonical_to_cpp_name(module_name, system_name)) + "_" + suffix;
+}
+
+std::string system_function_name(const SymbolId& system_id, const std::string& suffix) {
+    return snake_case(canonical_to_cpp_name(system_id)) + "_" + suffix;
+}
+
+std::string event_cpp_type_name(const SymbolId& event_id) {
+    if (event_id.module.name == "std.core") {
+        if (event_id.local_name == "tick") {
+            return "TickEvent";
+        }
+        if (event_id.local_name == "input") {
+            return "InputEvent";
+        }
+        if (event_id.local_name == "load") {
+            return "loadEvent";
+        }
+    }
+    return canonical_to_cpp_name(event_id) + "Event";
+}
+
 std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
     switch (type.kind) {
         case TypeKind::Int:
@@ -265,8 +177,10 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
         case TypeKind::InputAxis:
             return "std::uint8_t";
         case TypeKind::Struct:
-        case TypeKind::Enum:
-        {
+        case TypeKind::Enum: {
+            if (type.symbol_id.has_value()) {
+                return canonical_to_cpp_name(*type.symbol_id);
+            }
             // Strip module-alias qualifier (e.g. "rand.Rng" → "Rng").
             const auto dot = type.name.rfind('.');
             return dot != std::string::npos ? type.name.substr(dot + 1U) : type.name;
@@ -284,12 +198,13 @@ std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
 }
 
 std::string EnttCodegenUtils::emit_enum(const ResolvedEnum& e) {
+    const std::string cpp_name = resolved_decl_cpp_name(e);
     std::ostringstream out;
     if (e.variants.size() == 1) {
-        out << "enum class " << e.name << " : std::uint8_t { " << e.variants.front() << " };\n";
+        out << "enum class " << cpp_name << " : std::uint8_t { " << e.variants.front() << " };\n";
         return out.str();
     }
-    out << "enum class " << e.name << " : std::uint8_t {\n";
+    out << "enum class " << cpp_name << " : std::uint8_t {\n";
     for (size_t i = 0; i < e.variants.size(); ++i) {
         out << "    " << e.variants[i];
         if (i + 1 < e.variants.size()) {
@@ -348,20 +263,6 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 }
                 return op + emit_expr(*e.operand, ast);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
-                if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                    if (const auto lowered = lower_unqualified_stdlib_func(
-                            ast, ident->name, [&](const ExprNode& arg) { return emit_expr(arg, ast); }, e.args);
-                        !lowered.empty()) {
-                        return lowered;
-                    }
-                }
-                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
-                    if (const auto lowered = lower_stdlib_member_call(
-                            *member, e.args, ast, [&](const ExprNode& arg) { return emit_expr(arg, ast); });
-                        !lowered.empty()) {
-                        return lowered;
-                    }
-                }
                 std::string result = emit_expr(*e.callee, ast) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
@@ -384,6 +285,175 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
             }
         },
         expr.expr);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
+std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedProgram& program) {
+    return std::visit(
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+        [&](auto& e) -> std::string {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, CallExpr>) {
+                auto stdlib_prefix_for_module = [](const std::string& mod) -> std::string {
+                    if (mod == "std.math") { return "cactus::runtime::stdlib::math"; }
+                    if (mod == "std.math.vec2") { return "cactus::runtime::stdlib::math::vec2"; }
+                    if (mod == "std.math.vec3") { return "cactus::runtime::stdlib::math::vec3"; }
+                    if (mod == "std.math.quat") { return "cactus::runtime::stdlib::math::quat"; }
+                    if (mod == "std.random") { return "cactus::runtime::stdlib::random"; }
+                    return {};
+                };
+                if (e.resolved_callee_id.has_value() && e.resolved_callee_id->kind == SymbolKind::Func) {
+                    const auto prefix = stdlib_prefix_for_module(e.resolved_callee_id->module.name);
+                    if (!prefix.empty()) {
+                        std::string result = prefix + "::" + e.resolved_callee_id->local_name + "(";
+                        for (size_t i = 0; i < e.args.size(); ++i) {
+                            if (i > 0) {
+                                result += ", ";
+                            }
+                            result += EnttCodegenUtils::emit_expr(*e.args[i], program);
+                        }
+                        return result + ")";
+                    }
+                }
+                // Fallback: scan UseNode aliases when resolved_callee_id is not set
+                if (program.ast != nullptr) {
+                    if (const auto* member_callee = std::get_if<MemberExpr>(&e.callee->expr)) {
+                        if (const auto* alias_ident = std::get_if<IdentExpr>(&member_callee->object->expr)) {
+                            for (const auto& decl : program.ast->declarations) {
+                                if (const auto* use_node = std::get_if<UseNode>(&decl)) {
+                                    const bool alias_matches = use_node->alias.has_value()
+                                                                   ? (*use_node->alias == alias_ident->name)
+                                                                   : (use_node->module_name == alias_ident->name);
+                                    if (alias_matches) {
+                                        const auto prefix = stdlib_prefix_for_module(use_node->module_name);
+                                        if (!prefix.empty()) {
+                                            std::string result = prefix + "::" + member_callee->member + "(";
+                                            for (size_t i = 0; i < e.args.size(); ++i) {
+                                                if (i > 0) {
+                                                    result += ", ";
+                                                }
+                                                result += EnttCodegenUtils::emit_expr(*e.args[i], program);
+                                            }
+                                            return result + ")";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                std::string result = EnttCodegenUtils::emit_expr(*e.callee, program) + "(";
+                for (size_t i = 0; i < e.args.size(); ++i) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += EnttCodegenUtils::emit_expr(*e.args[i], program);
+                }
+                return result + ")";
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                // Three-level: alias.EnumType.Variant → canonical_EnumType::Variant
+                if (const auto* inner_member = std::get_if<MemberExpr>(&e.object->expr)) {
+                    if (EnttCodegenUtils::find_enum(program, inner_member->member) != nullptr) {
+                        return EnttCodegenUtils::enum_cpp_name(inner_member->member, program) + "::" + e.member;
+                    }
+                }
+                // Two-level: EnumType.Variant → canonical_EnumType::Variant
+                if (const auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
+                    if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
+                        return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + e.member;
+                    }
+                }
+                return EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member;
+            } else {
+                return emit_expr(expr, program.ast);
+            }
+        },
+        expr.expr);
+}
+
+std::string EnttCodegenUtils::symbol_cpp_name(const SymbolId& symbol) {
+    return canonical_to_cpp_name(symbol);
+}
+
+std::string EnttCodegenUtils::trait_cpp_name(const SymbolId& symbol) {
+    return canonical_to_cpp_name(symbol);
+}
+
+std::string EnttCodegenUtils::struct_cpp_name(const SymbolId& symbol) {
+    return canonical_to_cpp_name(symbol);
+}
+
+std::string EnttCodegenUtils::enum_cpp_name(const SymbolId& symbol) {
+    return canonical_to_cpp_name(symbol);
+}
+
+std::string EnttCodegenUtils::trait_cpp_name(const std::optional<SymbolId>& symbol,
+                                             const std::string& fallback_source_name,
+                                             const DecoratedProgram& program) {
+    return resolved_or_fallback_cpp_name(symbol, fallback_source_name, program.traits);
+}
+
+std::string EnttCodegenUtils::struct_cpp_name(const std::optional<SymbolId>& symbol,
+                                              const std::string& fallback_source_name,
+                                              const DecoratedProgram& program) {
+    return resolved_or_fallback_cpp_name(symbol, fallback_source_name, program.structs);
+}
+
+std::string EnttCodegenUtils::enum_cpp_name(const std::optional<SymbolId>& symbol,
+                                            const std::string& fallback_source_name,
+                                            const DecoratedProgram& program) {
+    return resolved_or_fallback_cpp_name(symbol, fallback_source_name, program.enums);
+}
+
+std::string EnttCodegenUtils::trait_cpp_name(const std::string& source_name, const DecoratedProgram& program) {
+    return resolved_or_fallback_cpp_name(std::nullopt, source_name, program.traits);
+}
+
+std::string EnttCodegenUtils::struct_cpp_name(const std::string& source_name, const DecoratedProgram& program) {
+    return resolved_or_fallback_cpp_name(std::nullopt, source_name, program.structs);
+}
+
+std::string EnttCodegenUtils::enum_cpp_name(const std::string& source_name, const DecoratedProgram& program) {
+    return resolved_or_fallback_cpp_name(std::nullopt, source_name, program.enums);
+}
+
+const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& program, const std::string& simple_name) {
+    auto it = program.traits.find(simple_name);
+    if (it != program.traits.end()) {
+        return &it->second;
+    }
+    for (const auto& [_, t] : program.traits) {
+        if (t.name == simple_name) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+const ResolvedEnum* EnttCodegenUtils::find_enum(const DecoratedProgram& program, const std::string& simple_name) {
+    auto it = program.enums.find(simple_name);
+    if (it != program.enums.end()) {
+        return &it->second;
+    }
+    for (const auto& [_, e] : program.enums) {
+        if (e.name == simple_name) {
+            return &e;
+        }
+    }
+    return nullptr;
+}
+
+const ResolvedStruct* EnttCodegenUtils::find_struct(const DecoratedProgram& program, const std::string& simple_name) {
+    auto it = program.structs.find(simple_name);
+    if (it != program.structs.end()) {
+        return &it->second;
+    }
+    for (const auto& [_, s] : program.structs) {
+        if (s.name == simple_name) {
+            return &s;
+        }
+    }
+    return nullptr;
 }
 
 }  // namespace cactus

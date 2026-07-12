@@ -61,12 +61,14 @@ struct FieldAssignment {
 
 struct ArchetypeTraitEntry {
     std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
     std::vector<FieldAssignment> assignments;
     SourceLocation location;
 };
 
 struct ArchetypeTemplateUseEntry {
     std::string template_name;
+    std::optional<SymbolId> resolved_template_id;  // set by semantic analysis; source spelling is preserved
     SourceLocation location;
 };
 
@@ -85,8 +87,8 @@ struct ArchetypeBodyEntry {
 // roles of the referenced template; overrides merge field-by-field.
 struct ChildOverrideNode {
     std::string role;
-    std::vector<ArchetypeTraitEntry> traits;   // trait field overrides for this child
-    std::vector<ChildOverrideNode> children;   // nested overrides for this child's children
+    std::vector<ArchetypeTraitEntry> traits;  // trait field overrides for this child
+    std::vector<ChildOverrideNode> children;  // nested overrides for this child's children
     SourceLocation location;
 };
 
@@ -95,7 +97,8 @@ struct ChildOverrideNode {
 // declarations or author-visible entity_id constants.
 struct ChildArchetypeNode {
     std::string role;
-    std::optional<std::string> template_ref;  // set when "entity Role from TemplateName:"
+    std::optional<std::string> template_ref;           // set when "entity Role from TemplateName:"
+    std::optional<SymbolId> resolved_template_ref_id;  // set by semantic analysis; source spelling is preserved
     std::vector<ArchetypeBodyEntry> body_entries;
     std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
@@ -106,6 +109,7 @@ struct ChildArchetypeNode {
 
 struct SpawnExpr {
     std::string template_name;
+    std::optional<SymbolId> resolved_template_id;  // set by semantic analysis; source spelling is preserved
     std::vector<ArchetypeTraitEntry> overrides;
     std::vector<ChildOverrideNode> child_overrides;
     SourceLocation location;
@@ -113,12 +117,14 @@ struct SpawnExpr {
 
 struct QueryFilterPredicate {
     std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
     bool negated = false;
     SourceLocation location;
 };
 
 struct QueryCallExpr {
     std::unique_ptr<ExprNode> callee;
+    std::optional<SymbolId> resolved_callee_id;  // set by semantic analysis for module-scope query calls
     std::vector<QueryFilterPredicate> filters;
     std::vector<FieldAssignment> named_args;
     SourceLocation location;
@@ -157,6 +163,7 @@ struct UnaryExpr {
 
 struct CallExpr {
     std::unique_ptr<ExprNode> callee;
+    std::optional<SymbolId> resolved_callee_id;  // set by semantic analysis for module-scope func calls
     std::vector<std::unique_ptr<ExprNode>> args;
     SourceLocation location;
 };
@@ -248,6 +255,7 @@ struct LetStmt {
 
 struct EmitStmt {
     std::string event_name;
+    std::optional<SymbolId> resolved_event_id;  // set by semantic analysis; source spelling is preserved
     std::optional<std::unique_ptr<ExprNode>> target;
     std::vector<FieldAssignment> payload;
     SourceLocation location;
@@ -279,6 +287,7 @@ struct ForeachStmt {
 
 struct TraitMatchArm {
     std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
     std::optional<std::string> alias;
     std::vector<std::unique_ptr<StmtNode>> body;
     SourceLocation location;
@@ -299,6 +308,7 @@ struct TraitMatchStmt {
 // spawn TemplateName: Trait: field = expr
 struct SpawnStmt {
     std::string template_name;
+    std::optional<SymbolId> resolved_template_id;  // set by semantic analysis; source spelling is preserved
     std::vector<ArchetypeTraitEntry> overrides;
     std::vector<ChildOverrideNode> child_overrides;
     SourceLocation location;
@@ -319,6 +329,7 @@ struct LoadStmt {
 // add TraitName[: ...] [to expr] — attach or patch trait on entity
 struct AddTraitStmt {
     std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
     std::vector<FieldAssignment> args;
     std::optional<std::unique_ptr<ExprNode>> target_expr;
     SourceLocation location;
@@ -327,6 +338,7 @@ struct AddTraitStmt {
 // remove TraitName [from expr] — detach trait from entity
 struct RemoveTraitStmt {
     std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
     std::optional<std::unique_ptr<ExprNode>> target_expr;
     SourceLocation location;
 };
@@ -334,6 +346,7 @@ struct RemoveTraitStmt {
 // project TraitName[: ...] [to expr] — frame-local projected trait overlay
 struct ProjectTraitStmt {
     std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
     std::vector<FieldAssignment> args;
     std::optional<std::unique_ptr<ExprNode>> target_expr;
     SourceLocation location;
@@ -367,7 +380,8 @@ struct StmtNode {
 
 struct EventHandlerNode {
     std::string event_name;
-    std::optional<std::string> alias;  // optional 'as alias' clause
+    std::optional<SymbolId> resolved_event_id;  // set by semantic analysis; source spelling is preserved
+    std::optional<std::string> alias;           // optional 'as alias' clause
     std::vector<std::unique_ptr<StmtNode>> body;
     SourceLocation location;
 };
@@ -387,6 +401,7 @@ struct UseNode {
 
 struct ConstAssignment {
     std::string name;
+    std::optional<SymbolId> resolved_const_id;  // set by semantic analysis; source spelling is preserved
     std::unique_ptr<ExprNode> value;
     SourceLocation location;
 };
@@ -425,7 +440,9 @@ struct TraitNode {
 struct EntityNode {
     std::string name;
     bool is_pub = false;
-    std::optional<std::string> template_ref;  // set when "entity Name from TemplateName:"
+    std::optional<std::string> template_ref;           // set when "entity Name from TemplateName:"
+    std::optional<SymbolId> resolved_entity_id;        // set by semantic analysis; source spelling is preserved
+    std::optional<SymbolId> resolved_template_ref_id;  // set by semantic analysis; source spelling is preserved
     std::vector<ArchetypeBodyEntry> body_entries;
     std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
@@ -439,6 +456,7 @@ struct EntityNode {
 struct TemplateNode {
     std::string name;
     bool is_pub = false;
+    std::optional<SymbolId> resolved_template_id;  // set by semantic analysis; source spelling is preserved
     std::vector<ArchetypeBodyEntry> body_entries;
     std::vector<ArchetypeTemplateUseEntry> template_uses;
     std::vector<ArchetypeTraitEntry> traits;
@@ -447,14 +465,19 @@ struct TemplateNode {
 };
 
 struct FilterEntry {
-    std::string qualified_name;        // "phys.Body" or "Body" — full dotted path as parsed
+    // Source spelling as authored: "Body" or "phys.Body" (alias-qualified).
+    // Semantic analysis preserves this spelling while storing the resolved trait
+    // identity for later phases.
+    std::string qualified_name;
+    std::optional<SymbolId> resolved_trait_id;
     std::optional<std::string> alias;  // "b" from "as b"
     SourceLocation location;
 };
 
 struct FilterClause {
-    std::vector<FilterEntry> entries;      // full parsed info (qualified names + aliases)
-    std::vector<std::string> trait_names;  // simple trait names (last component) — backward compat
+    std::vector<FilterEntry> entries;          // full parsed info (qualified names + aliases)
+    std::vector<std::string> trait_names;      // simple trait names (last component) — backward compat
+    std::vector<SymbolId> resolved_trait_ids;  // resolved entries or legacy trait_names, in source order
     SourceLocation location;
 };
 
@@ -468,8 +491,10 @@ struct SortKey {
 struct SystemNode {
     std::string name;
     bool is_stdlib = false;
-    FilterClause filter;   // empty entries = no filter (match all)
-    FilterClause exclude;  // empty entries = no exclude
+    std::optional<SymbolId> resolved_system_id;       // set by semantic analysis; source spelling is preserved
+    std::vector<SymbolId> resolved_after_system_ids;  // set by semantic analysis; parallel to after_systems
+    FilterClause filter;                              // empty entries = no filter (match all)
+    FilterClause exclude;                             // empty entries = no exclude
     std::vector<SortKey> order_by;
     std::vector<std::string> after_systems;  // explicit ordering: this system runs after these
     std::optional<std::string> target;       // "cpu" or "gpu"
@@ -480,6 +505,8 @@ struct SystemNode {
 struct ExternSystemNode {
     std::string name;
     bool is_stdlib = false;
+    std::optional<SymbolId> resolved_system_id;       // set by semantic analysis; source spelling is preserved
+    std::vector<SymbolId> resolved_after_system_ids;  // set by semantic analysis; parallel to after_systems
     FilterClause filter;
     FilterClause exclude;
     std::vector<SortKey> order_by;
@@ -505,6 +532,7 @@ struct ViewNode {
 struct EventNode {
     std::string name;
     bool is_pub = false;
+    std::string module_name;  // set by codegen merge to track source module
     std::vector<FieldNode> fields;
     SourceLocation location;
 };
@@ -514,6 +542,7 @@ struct FuncNode {
     bool is_pub    = false;
     bool is_extern = false;
     bool is_stdlib = false;
+    std::optional<SymbolId> resolved_func_id;  // set by semantic analysis; source spelling is preserved
     std::vector<FuncParam> params;
     std::optional<TypeRef> return_type;
     std::vector<std::unique_ptr<StmtNode>> body;
@@ -537,7 +566,8 @@ struct AssetDeclNode {
     std::string name;
     bool is_pub          = false;
     AssetKind asset_kind = AssetKind::Mesh;
-    std::string path;  // resource path string literal
+    std::string path;                           // resource path string literal
+    std::optional<SymbolId> resolved_asset_id;  // set by semantic analysis; source spelling is preserved
     SourceLocation location;
 };
 
@@ -559,6 +589,7 @@ struct InputDeclNode {
     bool is_pub          = false;
     InputKind input_kind = InputKind::Button;
     std::vector<InputPropNode> props;
+    std::optional<SymbolId> resolved_input_id;  // set by semantic analysis; source spelling is preserved
     SourceLocation location;
 };
 

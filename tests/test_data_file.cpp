@@ -20,7 +20,7 @@ using namespace cactus;
 
 static std::pair<ProgramNode, DecoratedProgram> compile(const std::string& source) {
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    Lexer lexer("module test\n" + source, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     REQUIRE_FALSE(errors.has_errors());
     Parser parser(std::move(tokens), errors);

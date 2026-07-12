@@ -474,6 +474,125 @@ TEST_CASE("ModuleArtifact: version-1 artifact rejected with error", "[artifact][
     fs::remove_all(build_dir, ec);
 }
 
+// ── Task 4.6: Canonical identity round-trip ───────────────────────────────────
+
+TEST_CASE("ModuleArtifact: canonical identity round-trips through save/load", "[artifact][4.6]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    DecoratedProgram prog;
+
+    // Trait with pre-set canonical identity (as set by semantic analysis).
+    ResolvedTrait wt;
+    wt.name         = "WorldTransform";
+    wt.is_pub       = true;
+    wt.module_name  = "std.transform.flat";
+    wt.canonical_id = "std.transform.flat.WorldTransform";
+    prog.traits["WorldTransform"] = wt;
+
+    // Func with pre-set canonical identity.
+    ResolvedFunc wp;
+    wp.name         = "world_position";
+    wp.is_pub       = true;
+    wp.is_extern    = true;
+    wp.module_name  = "std.transform.flat";
+    wp.canonical_id = "std.transform.flat.world_position";
+    prog.funcs["world_position"] = wp;
+
+    REQUIRE(artifact.save(prog, "std.transform.flat", build_dir));
+    REQUIRE_FALSE(errors.has_errors());
+
+    std::string loaded_name;
+    auto loaded = artifact.load(build_dir / "std.transform.flat.cmod", loaded_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    CHECK(loaded_name == "std.transform.flat");
+
+    REQUIRE(loaded->traits.count("WorldTransform") == 1);
+    const auto& lt = loaded->traits.at("WorldTransform");
+    CHECK(lt.canonical_id == "std.transform.flat.WorldTransform");
+    CHECK(lt.module_name == "std.transform.flat");
+
+    REQUIRE(loaded->funcs.count("world_position") == 1);
+    const auto& lf = loaded->funcs.at("world_position");
+    CHECK(lf.canonical_id == "std.transform.flat.world_position");
+    CHECK(lf.module_name == "std.transform.flat");
+
+    // extract_pub_symbols also preserves canonical identity
+    auto syms = artifact.extract_pub_symbols(build_dir / "std.transform.flat.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(syms.has_value());
+    CHECK(syms->traits.at("WorldTransform").canonical_id == "std.transform.flat.WorldTransform");
+    CHECK(syms->funcs.at("world_position").canonical_id == "std.transform.flat.world_position");
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: canonical identity preserved as-is (not derived) when not set", "[artifact][4.6]") {
+    // Traits/structs/enums with empty canonical_id are serialised with an empty canonical_id.
+    // The linker is responsible for deriving canonical identity from src_module_name at merge time.
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    auto prog = make_test_program();  // traits have empty canonical_id
+
+    REQUIRE(artifact.save(prog, "physics", build_dir));
+    REQUIRE_FALSE(errors.has_errors());
+
+    std::string loaded_name;
+    auto loaded = artifact.load(build_dir / "physics.cmod", loaded_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+
+    REQUIRE(loaded->traits.count("Position") == 1);
+    CHECK(loaded->traits.at("Position").canonical_id.empty());  // not derived by serializer
+    CHECK(loaded->traits.at("Position").module_name == "physics");
+
+    REQUIRE(loaded->enums.count("Direction") == 1);
+    CHECK(loaded->enums.at("Direction").canonical_id.empty());  // not derived by serializer
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: dep_graph after_systems round-trips through save/load", "[artifact][4.6]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    DecoratedProgram prog;
+
+    SystemDependency dep;
+    dep.system_name  = "Follow2D";
+    dep.reads.insert("std.transform.flat.WorldTransform");
+    dep.after_systems = {"std.transform.flat.TransformPropagation"};
+    prog.dependency_graph.push_back(dep);
+
+    REQUIRE(artifact.save(prog, "game", build_dir));
+    REQUIRE_FALSE(errors.has_errors());
+
+    std::string loaded_name;
+    auto loaded = artifact.load(build_dir / "game.cmod", loaded_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+
+    REQUIRE(loaded->dependency_graph.size() == 1);
+    const auto& d = loaded->dependency_graph[0];
+    CHECK(d.system_name == "Follow2D");
+    CHECK(d.reads.count("std.transform.flat.WorldTransform") == 1);
+    REQUIRE(d.after_systems.size() == 1);
+    CHECK(d.after_systems[0] == "std.transform.flat.TransformPropagation");
+
+    fs::remove_all(build_dir, ec);
+}
+
 // ── Invalid magic ─────────────────────────────────────────────────────────────
 
 TEST_CASE("ModuleArtifact: invalid magic rejected", "[artifact]") {

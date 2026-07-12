@@ -1,6 +1,6 @@
 module std.render.meshes
 
-use std.transform.volume
+use std.transform.volume as tv
 
 # ── 3D Mesh Rendering Traits ──────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
@@ -52,12 +52,12 @@ pub trait DirectionalLight:
 
 extern system MeshRenderer:
     filter:
-        std.transform.volume.WorldTransform
+        tv.WorldTransform
         Renderer
 
 extern system PointLightSystem:
     filter:
-        std.transform.volume.WorldTransform
+        tv.WorldTransform
         PointLight
 
 extern system DirectionalLightSystem:

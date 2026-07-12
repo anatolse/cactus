@@ -2,15 +2,38 @@
 Define the required behavior of the EnTT-based C++ backend, including registry-oriented code generation, event integration, and correctness expectations for generated output.
 ## Requirements
 ### Requirement: EnTT component struct generation
-The backend SHALL generate EnTT-compatible component structs for each trait. Empty traits SHALL generate empty tag structs.
+The backend SHALL generate EnTT-compatible component structs for each resolved trait. Empty traits SHALL generate empty tag structs. The generated C++ type name SHALL be derived from the trait's resolved symbol identity and SHALL be deterministic and collision-free for distinct trait symbols.
 
 #### Scenario: Trait becomes component
-- **WHEN** the decorated AST contains `trait Position:` with `var x: float` and `var y: float`
-- **THEN** the backend generates `struct Position { float x; float y; };` usable as an EnTT component
+- **WHEN** the resolved semantic program contains trait symbol `game.components.Position` with fields `var x: float` and `var y: float`
+- **THEN** the backend generates a collision-free C++ component struct derived from `game.components.Position`, such as `game_components__Position`, with fields `float x; float y;`
 
 #### Scenario: Empty trait becomes tag
-- **WHEN** the decorated AST contains `trait Alive:` with no fields
-- **THEN** the backend generates `struct Alive {};` as an EnTT tag component
+- **WHEN** the resolved semantic program contains marker trait symbol `game.state.Alive`
+- **THEN** the backend generates an empty tag component struct using the C++ name derived from `game.state.Alive`
+
+#### Scenario: Same local trait name from different modules produces different C++ types
+- **WHEN** traits `std.transform.flat.WorldTransform` and `std.transform.volume.WorldTransform` are both present
+- **THEN** the backend generates two distinct C++ component type names
+
+### Requirement: Code generation consumes resolved symbol identities
+The cpp-entt backend SHALL consume resolved typed symbol identities for all module-scope declarations and references. It MUST NOT perform semantic name resolution by scanning `UseNode` declarations, resolving aliases, interpreting unique unqualified imports, or falling back from source-spelled strings to declaration maps.
+
+#### Scenario: Alias-qualified trait lowered without alias lookup
+- **WHEN** semantic analysis resolved source `phys.Body` to trait symbol `std.physics.flat.Body`
+- **THEN** cpp-entt codegen emits the component name derived from `std.physics.flat.Body` without inspecting the `phys` alias
+
+#### Scenario: Stdlib function binding keyed by resolved identity
+- **WHEN** semantic analysis resolved a call to function symbol `std.input.mouse_delta`
+- **THEN** cpp-entt lowers the call using the stdlib/runtime binding for `std.input.mouse_delta` rather than searching imported modules for a source spelling
+
+#### Scenario: Query lowering keyed by resolved identity
+- **WHEN** semantic analysis resolved a query call to `std.physics.volume.query.raycast`
+- **THEN** cpp-entt selects the volume raycast lowering from that resolved function identity
+
+#### Scenario: User declaration with stdlib-like local name does not bind stdlib behavior
+- **WHEN** module `game.custom` declares `trait WorldTransform` and uses it in a system
+- **THEN** cpp-entt treats it as `game.custom.WorldTransform` and does not apply stdlib transform behavior unless the resolved symbol identity is the stdlib symbol
 
 ### Requirement: Registry-based system generation
 The backend SHALL generate system functions that iterate over the EnTT registry and apply declared filter clauses. For ordinary generated systems with non-empty filters, the backend SHALL use `entt::registry::view<Components...>()`-style iteration so filtering is performed by EnTT rather than by scanning every entity with early-exit guards. When `exclude:` clauses are present, the backend SHALL use native EnTT exclusion where possible. For each event handler the backend SHALL emit a second parameter `const EventType& <name>` where `<name>` is the handler alias if present, otherwise the event name. The backend SHALL NOT emit individual field parameters (e.g., `float dt`) — handler body code accesses fields via the event variable (e.g., `tick.dt`).

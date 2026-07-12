@@ -14,14 +14,14 @@ module forest_bombs
 # Task 1.2 — required stdlib surfaces. std.core provides the Parent trait that
 # hierarchical `children:` templates wire on generated child entities.
 use std.core
-use std.input
+use std.input as inp
 use std.math as math
 use std.math.quat as quat
 use std.random as rand
-use std.transform.volume
-use std.render.meshes
-use std.camera.volume
-use std.camera.viewport
+use std.transform.volume as tv
+use std.render.meshes as meshes
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
 use std.physics.volume.query as query
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -66,35 +66,35 @@ asset CrownMaterial:    material = "materials/crown_green.mat"
 
 # Player 1: WASD to move, Space to throw.
 input P1MoveX: axis
-    negative = Key.A
-    positive = Key.D
+    negative = inp.Key.A
+    positive = inp.Key.D
 
 input P1MoveZ: axis
-    negative = Key.S
-    positive = Key.W
+    negative = inp.Key.S
+    positive = inp.Key.W
 
 input P1Throw: button
-    key = Key.Space
+    key = inp.Key.Space
 
 input P1FlyAxis: axis
-    negative = Key.R
-    positive = Key.F
+    negative = inp.Key.R
+    positive = inp.Key.F
 
 # Player 2: arrow keys to move, Enter to throw.
 input P2MoveX: axis
-    negative = Key.Left
-    positive = Key.Right
+    negative = inp.Key.Left
+    positive = inp.Key.Right
 
 input P2MoveZ: axis
-    negative = Key.Down
-    positive = Key.Up
+    negative = inp.Key.Down
+    positive = inp.Key.Up
 
 input P2Throw: button
-    key = Key.Enter
+    key = inp.Key.Enter
 
 input P2FlyAxis: axis
-    negative = Key.PageUp
-    positive = Key.PageDown
+    negative = inp.Key.PageUp
+    positive = inp.Key.PageDown
 
 # ── Gameplay traits ───────────────────────────────────────────────────────────
 
@@ -154,11 +154,11 @@ event TreeHit:
 
 # Spawned when a player throws. Orange box on an authored projectile arc.
 template BombTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, 0.0, 0.0)
         rotation = quat.identity()
         scale    = vec3(0.6, 0.6, 0.6)
-    Renderer:
+    meshes.Renderer:
         mesh        = SphereMesh
         material    = BombMaterial
         visible     = true
@@ -175,10 +175,10 @@ template BombTemplate:
 # grows from its own TreeGrowth data. Parentage does not move the crown —
 # crown positions stay authored per tree.
 template TreeTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         rotation = quat.identity()
         scale    = vec3(0.4, 1.2, 0.4)
-    Renderer:
+    meshes.Renderer:
         mesh        = BoxMesh
         material    = TrunkMaterial
         visible     = true
@@ -195,10 +195,10 @@ template TreeTemplate:
 
     children:
         entity Crown:
-            WorldTransform:
+            tv.WorldTransform:
                 rotation = quat.identity()
                 scale    = vec3(1.4, 1.4, 1.4)
-            Renderer:
+            meshes.Renderer:
                 mesh        = BoxMesh
                 material    = CrownMaterial
                 visible     = true
@@ -219,11 +219,11 @@ template TreeTemplate:
 # with the player, but it does not render a mesh or throw bombs.
 
 pub entity Player1:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-3.0, PLAYER_BODY_Y, 8.0)
         rotation = quat.identity()
         scale    = vec3(0.5, 0.5, 0.5)
-    Renderer:
+    meshes.Renderer:
         mesh        = CapsuleMesh
         material    = PlayerMaterial
         visible     = true
@@ -240,15 +240,15 @@ pub entity Player1:
     Player1Tag
 
 pub entity Player1Camera:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-3.0, PLAYER_BODY_Y + EYE_HEIGHT, 8.0)
         rotation = quat.identity()
         scale    = vec3(1.0, 1.0, 1.0)
-    Camera:
+    cam3d.Camera:
         fov_y = 60.0
         near  = 0.1
         far   = 500.0
-    Viewport:
+    vp.Viewport:
         x           = 0.0
         y           = 0.0
         width       = 0.5
@@ -262,11 +262,11 @@ pub entity Player1Camera:
     Player1Tag
 
 pub entity Player2:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(3.0, PLAYER_BODY_Y, 8.0)
         rotation = quat.identity()
         scale    = vec3(0.5, 0.5, 0.5)
-    Renderer:
+    meshes.Renderer:
         mesh        = CapsuleMesh
         material    = PlayerMaterial
         visible     = true
@@ -283,15 +283,15 @@ pub entity Player2:
     Player2Tag
 
 pub entity Player2Camera:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(3.0, PLAYER_BODY_Y + EYE_HEIGHT, 8.0)
         rotation = quat.identity()
         scale    = vec3(1.0, 1.0, 1.0)
-    Camera:
+    cam3d.Camera:
         fov_y = 60.0
         near  = 0.1
         far   = 500.0
-    Viewport:
+    vp.Viewport:
         x           = 0.5
         y           = 0.0
         width       = 0.5
@@ -306,38 +306,38 @@ pub entity Player2Camera:
 
 # Task 2.4 — ground plane and a sun light for a readable 3D scene.
 pub entity Ground:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, -0.5, 0.0)
         rotation = quat.identity()
         scale    = vec3(60.0, 1.0, 60.0)
-    Renderer:
+    meshes.Renderer:
         mesh        = BoxMesh
         material    = GroundMaterial
         visible     = true
         cast_shadow = false
 
 pub entity SunLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, 20.0, 0.0)
         rotation = quat.identity()
         scale    = vec3(1.0, 1.0, 1.0)
-    DirectionalLight:
+    meshes.DirectionalLight:
         direction = vec3(-0.3, -1.0, -0.2)
         color     = #FFF3D6FF
         intensity = 1.1
         enabled   = true
-    PointLight:
+    meshes.PointLight:
         color     = #FFF3D6FF
         intensity = 2.8
         range     = 45.0
         enabled   = true
 
 pub entity FillLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-8.0, 6.0, 10.0)
         rotation = quat.identity()
         scale    = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color     = #BBD7FFFF
         intensity = 1.4
         range     = 35.0
@@ -353,7 +353,7 @@ pub entity FillLight:
 # crown by role.
 
 pub entity Tree1 from TreeTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-7.0, 0.0, 2.0)
     TreeGrowth:
         target_scale = 1.0
@@ -362,7 +362,7 @@ pub entity Tree1 from TreeTemplate:
         rng = rand.seeded(1)
     children:
         Crown:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(-7.0, 1.6, 2.0)
             TreeGrowth:
                 target_scale = 1.0
@@ -371,7 +371,7 @@ pub entity Tree1 from TreeTemplate:
                 rng = rand.seeded(101)
 
 pub entity Tree2 from TreeTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-3.0, 0.0, -1.0)
     TreeGrowth:
         target_scale = 1.3
@@ -380,7 +380,7 @@ pub entity Tree2 from TreeTemplate:
         rng = rand.seeded(2)
     children:
         Crown:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(-3.0, 1.6, -1.0)
             TreeGrowth:
                 target_scale = 1.3
@@ -389,7 +389,7 @@ pub entity Tree2 from TreeTemplate:
                 rng = rand.seeded(102)
 
 pub entity Tree3 from TreeTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(2.0, 0.0, 1.0)
     TreeGrowth:
         target_scale = 0.8
@@ -398,7 +398,7 @@ pub entity Tree3 from TreeTemplate:
         rng = rand.seeded(3)
     children:
         Crown:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(2.0, 1.6, 1.0)
             TreeGrowth:
                 target_scale = 0.8
@@ -407,7 +407,7 @@ pub entity Tree3 from TreeTemplate:
                 rng = rand.seeded(103)
 
 pub entity Tree4 from TreeTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(6.0, 0.0, -3.0)
     TreeGrowth:
         target_scale = 1.5
@@ -416,7 +416,7 @@ pub entity Tree4 from TreeTemplate:
         rng = rand.seeded(4)
     children:
         Crown:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(6.0, 1.6, -3.0)
             TreeGrowth:
                 target_scale = 1.5
@@ -425,7 +425,7 @@ pub entity Tree4 from TreeTemplate:
                 rng = rand.seeded(104)
 
 pub entity Tree5 from TreeTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-5.0, 0.0, -5.0)
     TreeGrowth:
         target_scale = 1.1
@@ -434,7 +434,7 @@ pub entity Tree5 from TreeTemplate:
         rng = rand.seeded(5)
     children:
         Crown:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(-5.0, 1.6, -5.0)
             TreeGrowth:
                 target_scale = 1.1
@@ -443,7 +443,7 @@ pub entity Tree5 from TreeTemplate:
                 rng = rand.seeded(105)
 
 pub entity Tree6 from TreeTemplate:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(3.0, 0.0, -7.0)
     TreeGrowth:
         target_scale = 0.9
@@ -452,7 +452,7 @@ pub entity Tree6 from TreeTemplate:
         rng = rand.seeded(6)
     children:
         Crown:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(3.0, 1.6, -7.0)
             TreeGrowth:
                 target_scale = 0.9
@@ -489,7 +489,7 @@ system ReadPlayer2Input:
 # free because each player entity owns its own viewport camera.
 system PlayerMoveSystem:
     filter:
-        WorldTransform
+        tv.WorldTransform
         PlayerInput
 
     on tick:
@@ -503,7 +503,7 @@ system PlayerMoveSystem:
 # different pace, producing natural-looking variation without hand-authored noise.
 system TreeGrowthSystem:
     filter:
-        WorldTransform
+        tv.WorldTransform
         TreeGrowth
         TreeRng
 
@@ -518,7 +518,7 @@ system TreeGrowthSystem:
 # with authored launch velocity, tagged with its owning player.
 system ThrowSystem:
     filter:
-        WorldTransform
+        tv.WorldTransform
         PlayerInput
         BombInventory
 
@@ -529,7 +529,7 @@ system ThrowSystem:
         if throw_pressed and bombs_left > 0 and throw_cooldown <= 0.0:
             let fwd = quat.forward(rotation)
             spawn BombTemplate:
-                WorldTransform:
+                tv.WorldTransform:
                     position = vec3(position.x, position.y + EYE_HEIGHT, position.z)
                     rotation = quat.identity()
                     scale    = vec3(0.6, 0.6, 0.6)
@@ -546,7 +546,7 @@ system ThrowSystem:
 # fells the whole tree. Score one point per felled tree for the thrower.
 system BombSystem:
     filter:
-        WorldTransform
+        tv.WorldTransform
         Bomb
 
     on tick:

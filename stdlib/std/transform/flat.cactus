@@ -24,3 +24,6 @@ extern system TransformPropagation:
     filter:
         LocalTransform
         WorldTransform
+
+# Returns WorldTransform.position for a live entity, or vec2(0,0) if stale.
+pub extern func world_position(of: entity_id) vec2

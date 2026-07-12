@@ -5,6 +5,7 @@
 #include "frontend/parser.hpp"
 #include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
+#include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 
@@ -73,6 +74,25 @@ static bool has_use_declarations(const cactus::ProgramNode& prog) {
     return false;
 }
 
+/// Validate the root file's explicit module declaration on CLI paths that may
+/// otherwise skip ModuleResolver (for example, single-module builds with no use
+/// declarations).
+static bool validate_root_module_declaration(const std::string& input_file,
+                                             const cactus::ProgramNode& root_prog,
+                                             cactus::ErrorReporter& errors) {
+    std::error_code ec;
+    const auto canonical_input = fs::canonical(input_file, ec);
+    if (ec) {
+        errors.error({}, "cannot resolve input file '" + input_file + "': " + ec.message());
+        return false;
+    }
+
+    const auto inferred_name =
+        cactus::ModuleResolver::infer_module_name(canonical_input.parent_path(), canonical_input);
+    cactus::ModuleResolver validator(errors);
+    return validator.validate_module_name(root_prog, inferred_name, canonical_input);
+}
+
 /// Build ImportedSymbols (pub only) from a compiled DecoratedProgram.
 static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_name,
                                                    const cactus::DecoratedProgram& prog) {
@@ -80,23 +100,76 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
     syms.module_name = module_name;
     for (const auto& [name, trait] : prog.traits) {
         if (trait.is_pub) {
-            syms.traits[name] = trait;
+            auto exported = trait;
+            if (!exported.symbol_id.has_value()) {
+                exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Trait, module_name, name);
+            }
+            exported.module_name  = exported.symbol_id->module.name;
+            exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
+            exported.name         = exported.symbol_id->local_name;
+            syms.traits[name]     = std::move(exported);
         }
     }
     for (const auto& [name, strct] : prog.structs) {
-        syms.structs[name] = strct;
+        auto exported = strct;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Struct, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.structs[name]    = std::move(exported);
     }
     for (const auto& [name, enm] : prog.enums) {
-        syms.enums[name] = enm;
+        auto exported = enm;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Enum, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.enums[name]      = std::move(exported);
     }
     for (const auto& [name, func] : prog.funcs) {
         if (func.is_pub) {
-            syms.funcs[name] = func;
+            auto exported = func;
+            if (!exported.symbol_id.has_value()) {
+                exported.symbol_id = cactus::make_symbol_id(cactus::SymbolKind::Func, module_name, name);
+            }
+            exported.module_name  = exported.symbol_id->module.name;
+            exported.canonical_id = cactus::make_canonical_id(*exported.symbol_id);
+            exported.name         = exported.symbol_id->local_name;
+            syms.funcs[name]      = std::move(exported);
         }
     }
-    syms.templates = prog.pub_templates;
+    for (const auto& name : prog.pub_templates) {
+        const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::Template, module_name, name);
+        cactus::ImportedTemplate tmpl;
+        tmpl.name            = symbol.local_name;
+        tmpl.module_name     = symbol.module.name;
+        tmpl.canonical_id    = cactus::make_canonical_id(symbol);
+        tmpl.symbol_id       = symbol;
+        syms.templates[name] = tmpl;
+    }
+    for (const auto& dep : prog.dependency_graph) {
+        const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::System, module_name, dep.system_name);
+        cactus::ImportedSystem sys;
+        sys.name                      = symbol.local_name;
+        sys.module_name               = symbol.module.name;
+        sys.canonical_id              = cactus::make_canonical_id(symbol);
+        sys.symbol_id                 = symbol;
+        sys.after_systems             = dep.after_systems;
+        syms.systems[dep.system_name] = sys;
+    }
     // Export pub event names so downstream modules can validate handlers
     syms.events = prog.pub_events;
+    for (const auto& name : prog.pub_events) {
+        const auto symbol        = cactus::make_symbol_id(cactus::SymbolKind::Event, module_name, name);
+        syms.event_symbols[name] = cactus::ImportedEvent{.name         = symbol.local_name,
+                                                         .module_name  = symbol.module.name,
+                                                         .canonical_id = cactus::make_canonical_id(symbol),
+                                                         .symbol_id    = symbol};
+    }
     return syms;
 }
 
@@ -193,6 +266,10 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
     cactus::ErrorReporter errors;
     auto root_prog = lex_and_parse(input_file, errors);
     if (!root_prog || errors.has_errors()) {
+        print_errors(errors);
+        return 1;
+    }
+    if (!validate_root_module_declaration(input_file, *root_prog, errors) || errors.has_errors()) {
         print_errors(errors);
         return 1;
     }
@@ -312,6 +389,12 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
 
             // Preserve full declaration ASTs for final codegen so imported
             // units/systems/extern systems from stdlib modules are also emitted.
+            // Tag events with their source module so emit_event can use the canonical module prefix.
+            for (auto& decl : mod_prog->declarations) {
+                if (auto* ev = std::get_if<cactus::EventNode>(&decl)) {
+                    ev->module_name = mod.qualified_name;
+                }
+            }
             merged_codegen_prog->declarations.insert(merged_codegen_prog->declarations.end(),
                                                      std::make_move_iterator(mod_prog->declarations.begin()),
                                                      std::make_move_iterator(mod_prog->declarations.end()));
@@ -333,9 +416,17 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
         // still emitted after multi-module linking. Artifacts intentionally do
         // not serialize AST structure.
         decorated.ast = merged_codegen_prog.get();
+        // The linker produces an empty module_name; restore it from the root
+        // module declaration so codegen can emit correctly-namespaced identifiers.
+        for (const auto& decl : root_prog->declarations) {
+            if (const auto* mod = std::get_if<cactus::ModuleNode>(&decl)) {
+                decorated.module_name = mod->name;
+                break;
+            }
+        }
 
     } else {
-        // ── 6.3: Single-file backward-compatible pipeline ─────────────────────
+        // ── Single-module explicit-module pipeline ─────────────────────────────
         cactus::SemanticAnalyzer analyzer(errors);
         decorated = analyzer.analyze(*root_prog);
         if (errors.has_errors()) {

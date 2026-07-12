@@ -225,6 +225,9 @@ void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rot
 /// Return the current frame's mouse delta in 2D world space.
 [[nodiscard]] Vector2 editor_mouse_delta_2d() noexcept;
 
+/// Convert a screen-space delta to a 2D world-space delta (std.camera.flat.screen_delta_to_world).
+[[nodiscard]] Vector2 screen_delta_to_world_2d(Vector2 delta) noexcept;
+
 /// Pure ray/plane intersection behind editor_plane_project_3d: nullopt when the
 /// ray is parallel to the plane or the intersection lies behind the ray origin.
 [[nodiscard]] std::optional<Vector3> editor_ray_plane_intersect(Ray ray,
@@ -236,6 +239,13 @@ void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rot
 
 /// Return the current frame's mouse delta in 3D world space.
 [[nodiscard]] Vector3 editor_mouse_delta_3d() noexcept;
+
+/// World-space delta for a screen-space cursor movement on a 3D plane
+/// (std.camera.volume.screen_delta_on_plane).
+[[nodiscard]] Vector3 screen_delta_on_plane_3d(Vector2 screen,
+                                               Vector2 delta,
+                                               Vector3 plane_origin,
+                                               Vector3 plane_normal) noexcept;
 
 void propagate_hierarchy(entt::registry& registry,
                          const std::function<bool(entt::entity)>& has_local_world,

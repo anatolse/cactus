@@ -1,3 +1,5 @@
+module malformed_struct
+
 struct BrokenA:
     name int
     price: float

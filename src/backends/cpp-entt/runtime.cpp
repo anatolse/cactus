@@ -993,7 +993,6 @@ void flush_model_queue() noexcept {
         BeginMode3D(camera);
     }
     for (const auto& submission : model_queue()) {
-        Model* model  = ensure_model_resource(submission.model_runtime_id);
         const auto it = models().find(submission.model_runtime_id);
         ModelResourceEntry* entry = it != models().end() ? &it->second : nullptr;
 
@@ -1004,7 +1003,13 @@ void flush_model_queue() noexcept {
             clip_anim = resolve_animation_clip(*entry, submission.model_runtime_id, submission.clip);
         }
 
-        if (model == nullptr || entry == nullptr || !window_ready) {
+        // Trigger lazy load only when the entry exists and hasn't failed; avoids
+        // a redundant second map lookup on already-loaded models each frame.
+        Model* model = (entry != nullptr && !entry->failed)
+                           ? ensure_model_resource(submission.model_runtime_id)
+                           : nullptr;
+
+        if (model == nullptr || !window_ready) {
             continue;
         }
         const Matrix xform = mesh_transform_matrix(MeshSubmission{
@@ -1793,6 +1798,11 @@ Vector2 editor_mouse_delta_2d() noexcept {
     return Vector2{.x = delta.x / cam.zoom, .y = delta.y / cam.zoom};
 }
 
+Vector2 screen_delta_to_world_2d(Vector2 delta) noexcept {
+    return editor_screen_to_world_2d(delta) -
+           editor_screen_to_world_2d(Vector2{.x = 0.0F, .y = 0.0F});
+}
+
 std::optional<Vector3> editor_ray_plane_intersect(const Ray ray,
                                                   const Vector3 plane_origin,
                                                   const Vector3 plane_normal) noexcept {
@@ -1825,6 +1835,22 @@ Vector3 editor_mouse_delta_3d() noexcept {
         editor_ray_plane_intersect(GetScreenToWorldRay(cursor, cam), kGroundOrigin, kGroundNormal);
     const auto previous_hit =
         editor_ray_plane_intersect(GetScreenToWorldRay(previous, cam), kGroundOrigin, kGroundNormal);
+    if (!current_hit || !previous_hit) {
+        return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    }
+    return Vector3Subtract(*current_hit, *previous_hit);
+}
+
+Vector3 screen_delta_on_plane_3d(const Vector2 screen,
+                                 const Vector2 delta,
+                                 const Vector3 plane_origin,
+                                 const Vector3 plane_normal) noexcept {
+    const Camera3D cam = get_active_camera_3d();
+    const Vector2 previous{.x = screen.x - delta.x, .y = screen.y - delta.y};
+    const auto current_hit =
+        editor_ray_plane_intersect(GetScreenToWorldRay(screen, cam), plane_origin, plane_normal);
+    const auto previous_hit =
+        editor_ray_plane_intersect(GetScreenToWorldRay(previous, cam), plane_origin, plane_normal);
     if (!current_hit || !previous_hit) {
         return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     }

@@ -10,12 +10,12 @@ pub trait EditorState:
     var selected: entity_id
 
 pub entity SceneRoot:
-    Renderable:
+    game_templates.Renderable:
         color = #FFFFFFFF
         size = vec2(1.0, 1.0)
     EditorLocked
 
 pub entity EditableBox:
-    Renderable:
+    game_templates.Renderable:
         color = #FF4444FF
         size = vec2(1.0, 1.0)

@@ -1,0 +1,2 @@
+trait MissingModule:
+    var x: int = 0

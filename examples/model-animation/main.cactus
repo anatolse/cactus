@@ -1,15 +1,15 @@
-module model_animation
+module main
 
-use std.input
+use std.input as inp
 use std.math.quat as quat
 use std.query as query
-use std.transform.volume
-use std.render.meshes
+use std.text as text
+use std.transform.volume as tv
+use std.render.meshes as meshes
 use std.render.models as models
-use std.render.text
-use std.text
-use std.camera.volume
-use std.camera.viewport
+use std.render.text as rtext
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
 
 const:
     WINDOW_WIDTH = 960
@@ -28,27 +28,27 @@ asset Robot: model = "../model-renderer/art/robot.glb"
 asset Knight: model = "../model-renderer/art/Crispoly-Characters-Mini-Red-Knight.glb"
 
 input CycleSelected: button
-    key = Key.Tab
+    key = inp.Key.Tab
 
 input NextClip: button
-    key = Key.Space
+    key = inp.Key.Space
 
 # Arrows and WASD both rotate; each direction is two axis declarations, summed.
 input RotateHorizontalKeys: axis
-    negative = Key.A
-    positive = Key.D
+    negative = inp.Key.A
+    positive = inp.Key.D
 
 input RotateHorizontalArrows: axis
-    negative = Key.Left
-    positive = Key.Right
+    negative = inp.Key.Left
+    positive = inp.Key.Right
 
 input RotateVerticalKeys: axis
-    negative = Key.S
-    positive = Key.W
+    negative = inp.Key.S
+    positive = inp.Key.W
 
 input RotateVerticalArrows: axis
-    negative = Key.Down
-    positive = Key.Up
+    negative = inp.Key.Down
+    positive = inp.Key.Up
 
 # Lock-step selection state: every character sees the same TAB press and
 # advances its own `selected` copy, so "am I selected" is just
@@ -76,10 +76,10 @@ trait SpawnerMarker:
     var knight_scale: float = 1.0
 
 template CharacterTemplate:
-    WorldTransform
-    ModelRenderer:
+    tv.WorldTransform
+    models.ModelRenderer:
         visible = true
-    ModelAnimator:
+    models.ModelAnimator:
         playing = true
         speed = 1.0
         time = 0.0
@@ -90,7 +90,7 @@ pub entity Bootstrap:
     SpawnerMarker
 
 pub entity Hud:
-    ScreenLabel:
+    rtext.ScreenLabel:
         text = ""
         position = vec2(16.0, 16.0)
         font_size = 24
@@ -98,37 +98,37 @@ pub entity Hud:
         visible = true
 
 pub entity KeyLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-3.0, 4.0, 4.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #FFF4E0
         intensity = 1.5
         range = 20.0
         enabled = true
 
 pub entity FillLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(4.0, 2.5, 3.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #C0D8FF
         intensity = 1.0
         range = 18.0
         enabled = true
 
 pub entity MainCamera:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, 2.5, 8.0)
         rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -0.15)
         scale = vec3(1.0, 1.0, 1.0)
-    Camera:
+    cam3d.Camera:
         fov_y = 60.0
         near = 0.1
         far = 500.0
-    Viewport:
+    vp.Viewport:
         x = 0.0
         y = 0.0
         width = 1.0
@@ -151,37 +151,37 @@ system SpawnCharacters:
         if knight_size.y > 0.0:
             knight_scale = TARGET_HEIGHT / knight_size.y
         spawn CharacterTemplate:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(-2.5, 0.0, 0.0)
                 rotation = quat.identity()
                 scale = vec3(robot_scale, robot_scale, robot_scale)
-            ModelRenderer:
+            models.ModelRenderer:
                 model = Robot
-            ModelAnimator:
+            models.ModelAnimator:
                 clip = 0
             CharacterState:
                 index = 0
                 base_scale = robot_scale
         spawn CharacterTemplate:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(0.0, 0.0, 0.0)
                 rotation = quat.identity()
                 scale = vec3(knight_scale, knight_scale, knight_scale)
-            ModelRenderer:
+            models.ModelRenderer:
                 model = Knight
-            ModelAnimator:
+            models.ModelAnimator:
                 clip = 0
             CharacterState:
                 index = 1
                 base_scale = knight_scale
         spawn CharacterTemplate:
-            WorldTransform:
+            tv.WorldTransform:
                 position = vec3(2.5, 0.0, 0.0)
                 rotation = quat.identity()
                 scale = vec3(robot_scale, robot_scale, robot_scale)
-            ModelRenderer:
+            models.ModelRenderer:
                 model = Robot
-            ModelAnimator:
+            models.ModelAnimator:
                 clip = 2
             CharacterState:
                 index = 2
@@ -211,7 +211,7 @@ system CycleSelection:
 # combined normalization * emphasis scale to the transform.
 system AnimateSelection:
     filter:
-        WorldTransform
+        tv.WorldTransform
         CharacterState
     after:
         CycleSelection
@@ -229,7 +229,7 @@ system AnimateSelection:
 
 system RotateSelected:
     filter:
-        WorldTransform
+        tv.WorldTransform
         CharacterState
         ControlInput
     after:
@@ -248,8 +248,8 @@ system CycleClip:
     filter:
         CharacterState
         ControlInput
-        ModelRenderer
-        ModelAnimator
+        models.ModelRenderer
+        models.ModelAnimator
     after:
         CycleSelection
 
@@ -263,14 +263,14 @@ system CycleClip:
 system UpdateHud:
     filter:
         CharacterState
-        ModelRenderer
-        ModelAnimator
+        models.ModelRenderer
+        models.ModelAnimator
     after:
         CycleClip
 
     on tick:
         if index == selected:
-            let hud = query.first[ScreenLabel]()
-            project ScreenLabel to hud:
+            let hud = query.first[rtext.ScreenLabel]()
+            project rtext.ScreenLabel to hud:
                 position = vec2(16.0, 16.0)
-                text = format("Character {} - {}", index + 1, models.animation_name(model, clip))
+                text = text.format("Character {} - {}", index + 1, models.animation_name(model, clip))

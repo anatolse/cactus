@@ -1,9 +1,9 @@
-module mesh_renderer
+module main
 
-use std.input
+use std.input as inp
 use std.math.quat as quat
-use std.transform.volume
-use std.render.meshes
+use std.transform.volume as tv
+use std.render.meshes as meshes
 
 const:
     WINDOW_WIDTH = 960
@@ -16,62 +16,62 @@ asset BlueCubeMesh: mesh = "models/blue_cube.mesh"
 asset BlueCubeMaterial: material = "materials/blue_cube.mat"
 
 input RotateHorizontal: axis
-    negative = Key.A
-    positive = Key.D
+    negative = inp.Key.A
+    positive = inp.Key.D
 
 input RotateVertical: axis
-    negative = Key.S
-    positive = Key.W
+    negative = inp.Key.S
+    positive = inp.Key.W
 
 trait RotationInput:
     var horizontal: float = 0.0
     var vertical: float = 0.0
 
 pub entity BlueCube:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(0.0, 0.0, 0.0)
         rotation = quat.identity()
         scale = vec3(1.5, 1.5, 1.5)
     RotationInput:
         horizontal = 0.0
         vertical = 0.0
-    Renderer:
+    meshes.Renderer:
         mesh = BlueCubeMesh
         material = BlueCubeMaterial
         visible = true
         cast_shadow = true
 
 pub entity BlueCube2:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(3.0, 1.0, 0.0)
         rotation = quat.identity()
         scale = vec3(3.5, 3.5, 3.5)
     RotationInput:
         horizontal = 0.0
         vertical = 0.0
-    Renderer:
+    meshes.Renderer:
         mesh = BlueCubeMesh
         material = BlueCubeMaterial
         visible = true
         cast_shadow = true
 
 pub entity LeftPointLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(-2.0, 1.5, 2.5)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #b3ffd5
         intensity = 1.4
         range = 8.0
         enabled = true
 
 pub entity RightPointLight:
-    WorldTransform:
+    tv.WorldTransform:
         position = vec3(2.0, 1.25, 2.0)
         rotation = quat.identity()
         scale = vec3(1.0, 1.0, 1.0)
-    PointLight:
+    meshes.PointLight:
         color = #ffb3e8
         intensity = 1.2
         range = 8.0
@@ -87,7 +87,7 @@ system ReadRotationInput:
 
 system ApplyScreenSpaceRotation:
     filter:
-        WorldTransform
+        tv.WorldTransform
         RotationInput
 
     on tick:

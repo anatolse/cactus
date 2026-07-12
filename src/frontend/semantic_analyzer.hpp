@@ -4,7 +4,9 @@
 #include "common/string_pool.hpp"
 #include "common/types.hpp"
 #include "frontend/ast.hpp"
+#include "frontend/symbol_identity.hpp"
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -22,7 +24,14 @@ struct ResolvedField {
     bool is_persist  = false;
     bool is_sync     = false;
     bool is_pub      = false;
-    bool has_default = false;  // true if field has a default value in trait definition
+    bool has_default = false;
+};
+
+// Canonical identity mixin — present on all module-scope resolved declarations.
+struct CanonicalIdentity {
+    std::string module_name;   // declaring module path
+    std::string canonical_id;  // "<module_name>.<local_name>"
+    std::optional<SymbolId> symbol_id;
 };
 
 struct ResolvedParam {
@@ -30,7 +39,7 @@ struct ResolvedParam {
     TypeInfo type;
 };
 
-struct ResolvedFunc {
+struct ResolvedFunc : CanonicalIdentity {
     std::string name;
     bool is_pub    = false;
     bool is_extern = false;
@@ -39,32 +48,47 @@ struct ResolvedFunc {
     std::optional<TypeInfo> return_type;
 };
 
-struct ResolvedTrait {
+struct ResolvedTrait : CanonicalIdentity {
     std::string name;
     std::vector<ResolvedField> fields;
     bool is_pub    = false;
     bool is_stdlib = false;
 };
 
-struct ResolvedStruct {
+struct ResolvedStruct : CanonicalIdentity {
     std::string name;
     std::vector<ResolvedField> fields;
 };
 
-struct ResolvedEnum {
+struct ResolvedEnum : CanonicalIdentity {
     std::string name;
     std::vector<std::string> variants;
 };
 
+/// Codegen-facing source module view. The AST remains the parsed syntax tree,
+/// but semantic analysis mutates its module-scope reference sites with resolved
+/// SymbolIds. Linkers preserve these per-module views instead of fabricating a
+/// combined raw AST.
+struct ResolvedSourceModule {
+    std::string module_name;
+    ProgramNode* ast = nullptr;  // non-owning; owned by the CLI/test pipeline
+};
+
 struct SystemDependency {
     std::string system_name;
+    std::optional<SymbolId> system_id;  // resolved system identity
     std::unordered_set<std::string> reads;
     std::unordered_set<std::string> writes;
     std::unordered_set<std::string> emits;
-    std::vector<std::string> after_systems;  // explicit ordering: this system runs after these
+    std::vector<std::string> after_systems;           // explicit ordering: this system runs after these (source)
+    std::vector<SymbolId> resolved_after_system_ids;  // resolved after: system identities
 };
 
 struct DecoratedProgram {
+    std::string module_name;  // this program's explicit declaring module name
+    // Map key: simple local declaration name. Each declaration still carries a non-empty
+    // module_name and canonical_id; later linker/codegen migration tasks will move more
+    // consumers to canonical keys while preserving local lookup during semantic analysis.
     std::unordered_map<std::string, ResolvedTrait> traits;
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
@@ -73,31 +97,68 @@ struct DecoratedProgram {
     std::unordered_set<std::string> non_pub_templates;
     std::unordered_set<std::string> pub_events;  // pub event names (for ImportedSymbols export)
     std::vector<SystemDependency> dependency_graph;
+    std::vector<ResolvedSourceModule> source_modules;
     StringPool string_pool;
     ProgramNode* ast = nullptr;  // non-owning pointer to original AST
 };
 
 // ── Imported Symbols (pub exports from a single module) ────────────────────
 
+/// Canonical identity for an imported system — carries name, canonical_id, and
+/// scheduling dependencies needed for `after:` resolution across modules.
+struct ImportedSystem {
+    std::string name;
+    std::string module_name;
+    std::string canonical_id;
+    std::optional<SymbolId> symbol_id;
+    std::vector<std::string> after_systems;  // canonical system IDs this runs after
+};
+
+/// Canonical identity for an imported template.
+struct ImportedTemplate {
+    std::string name;
+    std::string module_name;
+    std::string canonical_id;
+    std::optional<SymbolId> symbol_id;
+};
+
+/// Canonical identity for an imported event.
+struct ImportedEvent {
+    std::string name;
+    std::string module_name;
+    std::string canonical_id;
+    std::optional<SymbolId> symbol_id;
+};
+
+/// Canonical identity for an imported function (extern funcs).
+struct ImportedFunc {
+    std::string name;
+    std::string module_name;
+    std::string canonical_id;
+    std::optional<SymbolId> symbol_id;
+};
+
 /// Public symbols extracted from a compiled module artifact.
 /// Only `pub`-marked declarations are included.
 struct ImportedSymbols {
     std::string module_name;  // qualified name of the source module
 
-    std::unordered_map<std::string, ResolvedTrait> traits;    // pub traits
-    std::unordered_map<std::string, ResolvedStruct> structs;  // pub structs
-    std::unordered_map<std::string, ResolvedEnum> enums;      // pub enums
-    std::unordered_map<std::string, ResolvedFunc> funcs;      // pub extern funcs
-    std::unordered_set<std::string> templates;                // pub templates
-    std::unordered_set<std::string> events;                   // pub event names
+    std::unordered_map<std::string, ResolvedTrait> traits;               // pub traits
+    std::unordered_map<std::string, ResolvedStruct> structs;             // pub structs
+    std::unordered_map<std::string, ResolvedEnum> enums;                 // pub enums
+    std::unordered_map<std::string, ResolvedFunc> funcs;                 // pub extern funcs
+    std::unordered_map<std::string, ImportedTemplate> templates;         // pub templates with canonical identity
+    std::unordered_set<std::string> events;                              // legacy pub event names
+    std::unordered_map<std::string, ImportedEvent> event_symbols;        // pub events with canonical identity
+    std::unordered_map<std::string, ImportedSystem> systems;             // systems with canonical identity
+    std::unordered_map<std::string, ImportedFunc> func_symbols;          // pub funcs with canonical identity
+    std::unordered_map<std::string, ImportedTemplate> template_symbols;  // pub templates with canonical identity
 };
 
 // ── Module Imports (aggregate for one compilation unit) ────────────────────
 
 /// Aggregate of imported modules' pub symbols for a single compilation unit.
 /// Keyed by qualifier: the declared module name or a `use ... as` alias.
-///
-/// Pass ModuleImports{} (the default) for single-file backward-compatible mode.
 struct ModuleImports {
     /// qualifier → pub symbols for that module
     std::unordered_map<std::string, ImportedSymbols> modules;
@@ -112,6 +173,8 @@ struct ModuleImports {
     std::unordered_map<std::string, std::vector<std::string>> enum_providers;
     std::unordered_map<std::string, std::vector<std::string>> func_providers;
     std::unordered_map<std::string, std::vector<std::string>> template_providers;
+    std::unordered_map<std::string, std::vector<std::string>> event_providers;
+    std::unordered_map<std::string, std::vector<std::string>> system_providers;
 
     [[nodiscard]] bool empty() const {
         return modules.empty();
@@ -132,16 +195,18 @@ public:
     explicit SemanticAnalyzer(ErrorReporter& errors);
 
     /// Analyze a program with optional multi-module imported symbols.
-    /// Omit imports (or pass ModuleImports{}) for single-file backward-compatible mode.
+    /// Omit imports (or pass ModuleImports{}) for a module with no dependencies.
     DecoratedProgram analyze(ProgramNode& program, const ModuleImports& imports = ModuleImports{});
 
 private:
     // Phase 1: Collect type declarations
     void collect_types(ProgramNode& program);
+    bool declare_module_scope_symbol(SymbolKind kind, const std::string& name, const SourceLocation& loc);
 
     // Phase 2: Resolve types in fields
     void resolve_all_types(ProgramNode& program);
     TypeInfo resolve_type_ref(const TypeRef& ref);
+    void resolve_trait_references(ProgramNode& program);
 
     // Import-aware type resolution helpers
     TypeInfo resolve_qualified_type(const std::string& qualifier,
@@ -213,6 +278,9 @@ private:
     static bool imported_symbols_contain_non_template(const ImportedSymbols& symbols, const std::string& name);
     std::unordered_set<std::string> get_archetype_fields(const std::vector<ArchetypeTraitEntry>& traits) const;
     const ResolvedTrait* find_resolved_trait(const std::string& name) const;
+    const ResolvedTrait* find_resolved_trait(const SymbolId& symbol) const;
+    const ResolvedTrait* find_resolved_trait(const std::optional<SymbolId>& symbol,
+                                             const std::string& fallback_name) const;
     const ResolvedStruct* find_resolved_event(const std::string& name) const;
     TypeInfo infer_expr_type(const ExprNode& expr,
                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -242,22 +310,19 @@ private:
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                    const ResolvedStruct* handler_event) const;
     void validate_text_format_calls(ProgramNode& program);
-    void validate_text_format_in_stmts(
-        const std::vector<std::unique_ptr<StmtNode>>& stmts,
-        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
-        const std::unordered_map<std::string, TypeInfo>& local_bindings,
-        const ResolvedStruct* handler_event);
-    void validate_text_format_in_expr(
-        const ExprNode& expr,
-        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
-        const std::unordered_map<std::string, TypeInfo>& local_bindings,
-        const ResolvedStruct* handler_event);
-    void validate_one_text_format_call(
-        const CallExpr& call,
-        const SourceLocation& loc,
-        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
-        const std::unordered_map<std::string, TypeInfo>& local_bindings,
-        const ResolvedStruct* handler_event);
+    void validate_text_format_in_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                       const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                       const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                       const ResolvedStruct* handler_event);
+    void validate_text_format_in_expr(const ExprNode& expr,
+                                      const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                      const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                      const ResolvedStruct* handler_event);
+    void validate_one_text_format_call(const CallExpr& call,
+                                       const SourceLocation& loc,
+                                       const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                       const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                       const ResolvedStruct* handler_event);
 
     // Phase 5: after: validation
     void validate_after_clauses(ProgramNode& program);
@@ -269,10 +334,40 @@ private:
     /// Sets out_simple_name to the unqualified trait name on success.
     bool resolve_filter_entry(const FilterEntry& entry, std::string& out_simple_name);
 
+    /// Resolve a trait reference (dotted or simple) to its canonical ID.
+    /// Reports an error and returns "" on failure.
+    std::string resolve_trait_ref_to_canonical(const std::string& ref, const SourceLocation& loc);
+    std::optional<SymbolId> try_resolve_trait_ref_to_symbol(const std::string& ref) const;
+
+    /// Resolve an event reference (dotted or simple) to its canonical SymbolId.
+    /// Returns nullopt if the event is not found.
+    std::optional<SymbolId> try_resolve_event_ref_to_symbol(const std::string& ref) const;
+
+    /// Resolve a system name to its canonical SymbolId.
+    std::optional<SymbolId> try_resolve_system_ref_to_symbol(const std::string& ref) const;
+    std::optional<SymbolId> try_resolve_system_ref_impl(const std::string& ref, bool allow_local) const;
+
+    /// Resolve a system name in an after: clause to its canonical SymbolId.
+    std::optional<SymbolId> resolve_system_after_ref_to_symbol(
+        const std::string& ref,
+        const SourceLocation& loc,
+        const std::unordered_set<std::string>& local_system_names) const;
+    std::string resolve_system_after_ref(const std::string& ref,
+                                         const SourceLocation& loc,
+                                         const std::unordered_set<std::string>& local_system_names);
+
+    /// Resolve a template/entity reference to its canonical SymbolId.
+    std::optional<SymbolId> try_resolve_template_ref_to_symbol(const std::string& ref) const;
+
+    /// Resolve a func reference to its canonical SymbolId.
+    std::optional<SymbolId> try_resolve_func_ref_to_symbol(const std::string& ref) const;
+
     ErrorReporter& errors_;
     DecoratedProgram result_;
     ModuleImports imports_;
     bool current_module_is_stdlib_ = false;
+    std::string current_module_name_;
+    ModuleId current_module_id_;
 
     // Known type names (populated during Phase 1)
     std::unordered_set<std::string> struct_names_;
@@ -281,6 +376,8 @@ private:
     std::unordered_set<std::string> event_names_;
     std::unordered_set<std::string> func_names_;
     std::unordered_set<std::string> system_names_;
+    std::unordered_set<std::string> const_names_;
+    std::unordered_map<std::string, SymbolId> module_scope_symbols_;
 
     // Asset and input declaration tracking (dsl-spec-new-features)
     // Maps identifier name → resolved TypeKind (e.g., "PlayerMesh" → MeshId)

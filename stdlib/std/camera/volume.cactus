@@ -46,3 +46,12 @@ pub trait ThirdPersonCamera:
 # followed/target entity's WorldTransform), which is not yet available in the
 # language. Until then, attach Camera + Viewport (std.camera.viewport) to an
 # entity whose own WorldTransform drives the 3D view.
+
+# ── Screen/World Projection Helpers ──────────────────────────────────────────
+# Projects screen-space coordinates through the active 3D camera onto a plane.
+# screen_to_plane: ray/plane intersection; returns plane_origin when degenerate
+# screen_delta_on_plane: world-space delta for a screen-space cursor movement
+
+pub extern func screen_to_plane(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3
+
+pub extern func screen_delta_on_plane(screen: vec2, delta: vec2, plane_origin: vec3, plane_normal: vec3) vec3

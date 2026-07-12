@@ -1,6 +1,6 @@
 module shooter_slice
 
-use std.input
+use std.input as inp
 use std.query as query
 
 const:
@@ -11,15 +11,15 @@ const:
     ENEMY_HEALTH = 3
 
 input MoveX: axis
-    negative = Key.A
-    positive = Key.D
+    negative = inp.Key.A
+    positive = inp.Key.D
 
 input MoveY: axis
-    negative = Key.S
-    positive = Key.W
+    negative = inp.Key.S
+    positive = inp.Key.W
 
 input Fire: button
-    mouse = MouseButton.Left
+    mouse = inp.MouseButton.Left
 
 trait Position:
     var pos: vec2

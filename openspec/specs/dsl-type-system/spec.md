@@ -35,19 +35,19 @@ The semantic analyzer SHALL reject `entity_id` comparisons against integer liter
 - **THEN** the type system resolves it to TypeInfo with kind=InputButton
 
 ### Requirement: Composite type support
-The type system SHALL support user-defined `struct` (value objects, fields only), `enum` (named integer constants), and `list[T]` (parameterized ordered collection).
+The type system SHALL support user-defined `struct` (value objects, fields only), `enum` (named integer constants), and `list[T]` (parameterized ordered collection). Every user-defined type reference SHALL carry the resolved type symbol identity for the referenced struct, enum, or trait rather than an alias-qualified or simple source spelling.
 
 #### Scenario: Struct type declaration
-- **WHEN** the source declares `struct Item:` with fields `name: string` and `price: int`
-- **THEN** the type system registers a Struct type named "Item" with two fields
+- **WHEN** source declares `module game.items` and `struct Item:` with fields `name: string` and `price: int`
+- **THEN** the type system registers a Struct type with symbol identity `game.items.Item` and two fields
 
 #### Scenario: List parameterized type
-- **WHEN** a field is declared as `var items: list[Item]`
-- **THEN** the type system resolves it to TypeInfo with kind=List and element type pointing to the Item struct
+- **WHEN** a field is declared as `var items: list[items.Item]` through an import alias that resolves to module `game.items`
+- **THEN** the type system resolves it to TypeInfo with kind=List and an element type carrying the symbol identity `game.items.Item`
 
 #### Scenario: Enum type
-- **WHEN** the source declares `enum State:` with variants `Idle`, `Walking`, `Running`
-- **THEN** the type system registers an Enum type named "State" with three integer-valued variants
+- **WHEN** source declares `module game.ai` and `enum State:` with variants `Idle`, `Walking`, `Running`
+- **THEN** the type system registers an Enum type with symbol identity `game.ai.State` and three integer-valued variants
 
 ### Requirement: Field modifier flags
 The type system SHALL track field modifiers as boolean flags on TypeInfo: `is_let`, `is_persist`, `is_sync`, and `is_pub`.

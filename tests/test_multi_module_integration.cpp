@@ -7,6 +7,7 @@
 #include "frontend/parser.hpp"
 #include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
+#include "frontend/symbol_identity.hpp"
 
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 
@@ -136,10 +137,10 @@ TEST_CASE("integration: resolve → compile → link player + level", "[integrat
 
     REQUIRE_FALSE(link_errors.has_errors());
     REQUIRE(merged.has_value());
-    CHECK(merged->traits.count("Position") == 1);
-    CHECK(merged->traits.count("LevelData") == 1);
-    CHECK(merged->traits.at("Position").is_pub);
-    CHECK(merged->traits.at("LevelData").is_pub);
+    CHECK(merged->traits.count("player.Position") == 1);
+    CHECK(merged->traits.count("level.LevelData") == 1);
+    CHECK(merged->traits.at("player.Position").is_pub);
+    CHECK(merged->traits.at("level.LevelData").is_pub);
 
     fs::remove_all(build_dir, ec);
 }
@@ -230,8 +231,8 @@ TEST_CASE("integration: full pipeline using module resolver", "[integration][7.2
     REQUIRE(merged.has_value());
 
     // Both traits should be in the merged program
-    CHECK(merged->traits.count("Position") == 1);
-    CHECK(merged->traits.count("LevelData") == 1);
+    CHECK(merged->traits.count("player.Position") == 1);
+    CHECK(merged->traits.count("level.LevelData") == 1);
 
     fs::remove_all(build_dir, ec);
 }
@@ -264,7 +265,12 @@ TEST_CASE("integration: game_templates + editor_module cross-compile with std.ed
             gt_syms.traits[name] = trait;
         }
     }
-    gt_syms.templates = gt_prog->pub_templates;
+    for (const auto& name : gt_prog->pub_templates) {
+        ImportedTemplate tmpl;
+        tmpl.name               = name;
+        tmpl.canonical_id       = make_canonical_id("game_templates", name);
+        gt_syms.templates[name] = tmpl;
+    }
     ModuleImports editor_imports;
     editor_imports.add("game_templates", std::move(gt_syms));
 
@@ -290,9 +296,9 @@ TEST_CASE("integration: game_templates + editor_module cross-compile with std.ed
     REQUIRE_FALSE(link_errors.has_errors());
     REQUIRE(merged.has_value());
     // Merged program should have Renderable (from game_templates) and local traits (from editor_module)
-    CHECK(merged->traits.count("Renderable") == 1);
-    CHECK(merged->traits.count("EditorLocked") == 1);
-    CHECK(merged->traits.count("EditorState") == 1);
+    CHECK(merged->traits.count("game_templates.Renderable") == 1);
+    CHECK(merged->traits.count("editor_module.EditorLocked") == 1);
+    CHECK(merged->traits.count("editor_module.EditorState") == 1);
 
     fs::remove_all(build_dir, ec);
 }
@@ -324,23 +330,23 @@ static std::optional<DecoratedProgram> compile_source(const std::string& source,
     return decorated;
 }
 
-TEST_CASE("integration: stdlib on input handlers run before root-module handlers",
-          "[integration][editor][input]") {
+TEST_CASE("integration: stdlib on input handlers run before root-module handlers", "[integration][editor][input]") {
     auto build_dir = integration_build_dir() / "input_order";
     std::error_code ec;
     fs::remove_all(build_dir, ec);
 
     // Step 1: Compile a stdlib-like module with an `on input` system.
-    const std::string lib_source = "module editorlib\n"
-                                   "\n"
-                                   "pub event input\n"
-                                   "pub trait EditorNavState:\n"
-                                   "    var moves: float\n"
-                                   "system EditorNav:\n"
-                                   "    filter:\n"
-                                   "        EditorNavState\n"
-                                   "    on input:\n"
-                                   "        moves = moves + 1.0\n";
+    const std::string lib_source =
+        "module editorlib\n"
+        "\n"
+        "pub event input\n"
+        "pub trait EditorNavState:\n"
+        "    var moves: float\n"
+        "system EditorNav:\n"
+        "    filter:\n"
+        "        EditorNavState\n"
+        "    on input:\n"
+        "        moves = moves + 1.0\n";
     ErrorReporter lib_errors;
     ProgramNode lib_ast;
     auto lib_prog = compile_source(lib_source, "editorlib.cactus", lib_ast, lib_errors);
@@ -362,15 +368,17 @@ TEST_CASE("integration: stdlib on input handlers run before root-module handlers
     ModuleImports root_imports;
     root_imports.add("editorlib", std::move(lib_syms));
 
-    const std::string root_source = "use editorlib\n"
-                                    "\n"
-                                    "trait PlayerState:\n"
-                                    "    var moves: float\n"
-                                    "system GameplayInput:\n"
-                                    "    filter:\n"
-                                    "        PlayerState\n"
-                                    "    on input:\n"
-                                    "        moves = moves + 1.0\n";
+    const std::string root_source =
+        "module root\n"
+        "use editorlib\n"
+        "\n"
+        "trait PlayerState:\n"
+        "    var moves: float\n"
+        "system GameplayInput:\n"
+        "    filter:\n"
+        "        PlayerState\n"
+        "    on input:\n"
+        "        moves = moves + 1.0\n";
     ErrorReporter root_errors;
     ProgramNode root_ast;
     auto root_prog = compile_source(root_source, "root.cactus", root_ast, root_errors, root_imports);

@@ -1,55 +1,59 @@
 module std.editor
 
-use std.input
+use std.input as inp
 use std.math as math
 use std.math.quat as quat
 use std.query as query
+use std.camera.flat as camera2d
+use std.camera.volume as camera3d
+use std.transform.flat as transform2d
+use std.transform.volume as transform3d
 
 # ── Editor Input Actions ──────────────────────────────────────────────────────
 
 input EditorToggleActive: button
-    key = Key.F1
+    key = inp.Key.F1
 
 input EditorModeTranslate: button
-    key = Key.W
+    key = inp.Key.W
 
 input EditorModeRotate: button
-    key = Key.E
+    key = inp.Key.E
 
 input EditorModeScale: button
-    key = Key.R
+    key = inp.Key.R
 
 input EditorModePlace: button
-    key = Key.T
+    key = inp.Key.T
 
 input EditorSelectClick: button
-    mouse = MouseButton.Left
+    mouse = inp.MouseButton.Left
 
 # ── Camera Navigation Input Actions ───────────────────────────────────────────
 # Laptop-friendly defaults that never require a middle mouse button:
 #   Right drag         orbit (3D) / pan (2D)     [middle drag: Blender-like alt]
 #   Shift + drag       pan instead of orbit (3D)
-#   Wheel / trackpad   zoom (2D) / dolly (3D)    [read via editor_wheel_delta]
+#   Wheel / trackpad   zoom (2D) / dolly (3D)    [read via input.wheel_delta]
 #   - / =              keyboard zoom fallback (= shares the + keycap)
 #   F                  frame the selected entity
 
 input EditorNavDrag: button
-    mouse = MouseButton.Right
+    mouse = inp.MouseButton.Right
 
 input EditorNavDragAlt: button
-    mouse = MouseButton.Middle
+    mouse = inp.MouseButton.Middle
 
 input EditorNavPanModifier: button
-    key = Key.Shift
+    key = inp.Key.Shift
 
 input EditorNavZoomIn: button
-    key = Key.Equal
+    key = inp.Key.Equal
 
 input EditorNavZoomOut: button
-    key = Key.Minus
+    key = inp.Key.Minus
 
 input EditorFrameSelected: button
-    key = Key.F
+    key = inp.Key.F
 
 # ── Gizmo Mode ────────────────────────────────────────────────────────────────
 
@@ -96,9 +100,9 @@ pub trait EditorCategory:
     var visible: bool = true
 
 # ── Editor Camera Rig Traits ──────────────────────────────────────────────────
-# Carried by the editor-owned camera rig entity that editor_camera_enter spawns
+# Carried by the editor-owned camera rig entity that camera_enter spawns
 # when edit mode activates (the user's active viewports are disabled and the
-# rig takes over rendering; editor_camera_exit destroys it and restores them —
+# rig takes over rendering; camera_exit destroys it and restores them —
 # user camera entities are never mutated). Rig existence is the edit-mode gate:
 # exactly one rig with the trait matching EditorState.use_3d exists while edit
 # mode is active. Navigation state is initialized from the captured camera pose
@@ -159,52 +163,28 @@ pub event EditorModeChanged:
     current_mode: int
 
 # ── Extern Func Bridges ───────────────────────────────────────────────────────
+# Only editor-specific bridges remain here. Generic input, camera projection,
+# and entity-position helpers moved to std.input, std.camera.*, std.transform.*.
+# Backend runtime symbols may remain editor_-prefixed for C++ symbol hygiene;
+# codegen maps the clean DSL names to the prefixed runtime implementations.
 
-pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id
+pub extern func spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id
 
-pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id
+pub extern func hit_test_2d(screen_pos: vec2, mask: int) entity_id
 
-pub extern func editor_raycast_3d(screen_pos: vec2, mask: int) entity_id
+pub extern func raycast_3d(screen_pos: vec2, mask: int) entity_id
 
-pub extern func editor_screen_to_world_2d(screen: vec2) vec2
+# Edit-mode camera swap lifecycle. Enter captures the active camera pose,
+# deactivates user viewports, and spawns the dimension-matching rig. Exit
+# destroys the rig and restores the recorded viewports.
+pub extern func camera_enter(use_3d: bool) entity_id
 
-pub extern func editor_mouse_delta_2d() vec2
+pub extern func camera_exit()
 
-pub extern func editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3
+# Write the rig's backend camera components.
+pub extern func apply_camera_2d(view_center: vec2, zoom: float)
 
-pub extern func editor_mouse_delta_3d() vec3
-
-# Edit-mode camera swap lifecycle. Enter captures the active camera pose
-# (previous frame's render state; falls back to the first active viewport
-# camera, then the default camera), deactivates user viewports, and spawns the
-# dimension-matching rig at that pose. Exit destroys the rig and restores the
-# recorded viewports. Bookkeeping lives in the runtime, not in EditorState.
-pub extern func editor_camera_enter(use_3d: bool) entity_id
-
-pub extern func editor_camera_exit()
-
-# Write the rig's backend camera components (std.editor cannot name
-# std.camera.* / std.transform.* traits directly).
-pub extern func editor_apply_camera_2d(view_center: vec2, zoom: float)
-
-pub extern func editor_apply_camera_3d(position: vec3, rotation: quat)
-
-# Wheel/trackpad scroll steps this frame (no wheel surface exists in the DSL).
-pub extern func editor_wheel_delta() float
-
-# Raw mouse movement in screen pixels (editor_mouse_delta_2d/_3d are
-# world-projected; orbiting needs unprojected pixels).
-pub extern func editor_mouse_delta_screen() vec2
-
-# Cross-entity world-position reads for frame-selected.
-pub extern func editor_entity_position_2d(of: entity_id) vec2
-
-pub extern func editor_entity_position_3d(of: entity_id) vec3
-
-# Hide a declared button from gameplay input queries for the rest of the
-# frame. Keyed by the underlying key/mouse code, so gameplay actions bound to
-# the same physical control are suppressed too.
-pub extern func editor_consume(b: InputButton)
+pub extern func apply_camera_3d(position: vec3, rotation: quat)
 
 # ── Extern System Declarations ────────────────────────────────────────────────
 
@@ -244,16 +224,16 @@ system EditorModeToggle:
         let has_3d = query.exists[EditorCamera3D]()
         if active:
             if has_2d and use_3d:
-                editor_camera_exit()
+                camera_exit()
             if has_3d and not use_3d:
-                editor_camera_exit()
+                camera_exit()
             if use_3d and not has_3d:
-                editor_camera_enter(true)
+                camera_enter(true)
             if not use_3d and not has_2d:
-                editor_camera_enter(false)
+                camera_enter(false)
         else:
             if has_2d or has_3d:
-                editor_camera_exit()
+                camera_exit()
 
         if active:
             if input.pressed(EditorModeTranslate):
@@ -276,7 +256,7 @@ system EditorSelection2D:
         if active and not use_3d:
             if input.pressed(EditorSelectClick):
                 let previous = selected
-                let hit = editor_hit_test_2d(input.mouse_position(), 1)
+                let hit = hit_test_2d(input.mouse_position(), 1)
 
                 if exists(previous):
                     remove EditorSelected from previous
@@ -294,7 +274,7 @@ system EditorTranslate2D:
         EditorSelected
 
     on tick:
-        let delta = editor_mouse_delta_2d()
+        let delta = camera2d.screen_delta_to_world(input.mouse_delta())
 
 system EditorPlace2D:
     filter:
@@ -304,13 +284,13 @@ system EditorPlace2D:
         if active and not use_3d:
             if mode == 4:
                 if input.pressed(EditorSelectClick):
-                    let pos = editor_screen_to_world_2d(input.mouse_position())
-                    let id = editor_spawn_template(active_template, pos, vec3(0.0, 0.0, 0.0))
+                    let pos = camera2d.screen_to_world(input.mouse_position())
+                    let id = spawn_template(active_template, pos, vec3(0.0, 0.0, 0.0))
                     if exists(id):
                         add EditorSelected to id
                         selected = id
 
-system EditorGizmo2D:
+system EditorGizmoRenderer2D:
     filter:
         EditorSelected
 
@@ -328,7 +308,7 @@ system EditorSelection3D:
         if active and use_3d:
             if input.pressed(EditorSelectClick):
                 let previous = selected
-                let hit = editor_raycast_3d(input.mouse_position(), 1)
+                let hit = raycast_3d(input.mouse_position(), 1)
 
                 if exists(previous):
                     remove EditorSelected from previous
@@ -346,7 +326,7 @@ system EditorTranslate3D:
         EditorSelected
 
     on tick:
-        let delta = editor_mouse_delta_3d()
+        let delta = camera3d.screen_delta_on_plane(input.mouse_position(), input.mouse_delta(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
 
 system EditorPlace3D:
     filter:
@@ -356,13 +336,13 @@ system EditorPlace3D:
         if active and use_3d:
             if mode == 4:
                 if input.pressed(EditorSelectClick):
-                    let pos = editor_plane_project_3d(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
-                    let id = editor_spawn_template(active_template, vec2(0.0, 0.0), pos)
+                    let pos = camera3d.screen_to_plane(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+                    let id = spawn_template(active_template, vec2(0.0, 0.0), pos)
                     if exists(id):
                         add EditorSelected to id
                         selected = id
 
-system EditorGizmo3D:
+system EditorGizmoRenderer3D:
     filter:
         EditorSelected
 
@@ -383,11 +363,11 @@ system EditorCameraNav2D:
 
     on input:
         if input.down(EditorNavDrag) or input.down(EditorNavDragAlt):
-            let delta = editor_mouse_delta_screen()
+            let delta = input.mouse_delta()
             let per_pixel = pan_speed / zoom
             view_center = vec2(view_center.x - delta.x * per_pixel, view_center.y - delta.y * per_pixel)
 
-        let wheel = editor_wheel_delta()
+        let wheel = input.wheel_delta()
         if wheel != 0.0:
             zoom = math.clamp(zoom * (1.0 + wheel * zoom_speed), min_zoom, max_zoom)
         if input.pressed(EditorNavZoomIn):
@@ -398,9 +378,9 @@ system EditorCameraNav2D:
         if input.pressed(EditorFrameSelected):
             let sel = query.first[EditorSelected]()
             if exists(sel):
-                view_center = editor_entity_position_2d(sel)
+                view_center = transform2d.world_position(sel)
 
-        editor_apply_camera_2d(view_center, zoom)
+        apply_camera_2d(view_center, zoom)
 
 # ── Editor Camera Navigation (3D) ─────────────────────────────────────────────
 # Orbit: right or middle drag. Pan: Shift + drag (focus slides parallel to the
@@ -415,7 +395,7 @@ system EditorCameraNav3D:
 
     on input:
         if input.down(EditorNavDrag) or input.down(EditorNavDragAlt):
-            let delta = editor_mouse_delta_screen()
+            let delta = input.mouse_delta()
             if input.down(EditorNavPanModifier):
                 let view_rot = quat.from_euler(pitch, yaw, 0.0)
                 let right_dir = quat.right(view_rot)
@@ -429,7 +409,7 @@ system EditorCameraNav3D:
                 yaw = yaw - delta.x * orbit_speed
                 pitch = math.clamp(pitch - delta.y * orbit_speed, min_pitch, max_pitch)
 
-        let wheel = editor_wheel_delta()
+        let wheel = input.wheel_delta()
         if wheel != 0.0:
             distance = math.clamp(distance * (1.0 - wheel * zoom_speed), min_distance, max_distance)
         if input.pressed(EditorNavZoomIn):
@@ -440,12 +420,12 @@ system EditorCameraNav3D:
         if input.pressed(EditorFrameSelected):
             let sel = query.first[EditorSelected]()
             if exists(sel):
-                focus = editor_entity_position_3d(sel)
+                focus = transform3d.world_position(sel)
 
         let rot = quat.from_euler(pitch, yaw, 0.0)
         let fwd = quat.forward(rot)
         let pos = vec3(focus.x - fwd.x * distance, focus.y - fwd.y * distance, focus.z - fwd.z * distance)
-        editor_apply_camera_3d(pos, rot)
+        apply_camera_3d(pos, rot)
 
 # ── Editor Input Consumption ──────────────────────────────────────────────────
 # Hides editor-owned controls from gameplay input queries while edit mode is
@@ -465,18 +445,18 @@ system EditorInputConsume:
         # The toggle is editor-owned on both edges, including the press that
         # just deactivated edit mode in EditorModeToggle this frame.
         if input.pressed(EditorToggleActive):
-            editor_consume(EditorToggleActive)
+            input.consume(EditorToggleActive)
 
         if active:
-            editor_consume(EditorToggleActive)
-            editor_consume(EditorModeTranslate)
-            editor_consume(EditorModeRotate)
-            editor_consume(EditorModeScale)
-            editor_consume(EditorModePlace)
-            editor_consume(EditorSelectClick)
-            editor_consume(EditorNavDrag)
-            editor_consume(EditorNavDragAlt)
-            editor_consume(EditorNavPanModifier)
-            editor_consume(EditorNavZoomIn)
-            editor_consume(EditorNavZoomOut)
-            editor_consume(EditorFrameSelected)
+            input.consume(EditorToggleActive)
+            input.consume(EditorModeTranslate)
+            input.consume(EditorModeRotate)
+            input.consume(EditorModeScale)
+            input.consume(EditorModePlace)
+            input.consume(EditorSelectClick)
+            input.consume(EditorNavDrag)
+            input.consume(EditorNavDragAlt)
+            input.consume(EditorNavPanModifier)
+            input.consume(EditorNavZoomIn)
+            input.consume(EditorNavZoomOut)
+            input.consume(EditorFrameSelected)

@@ -1,3 +1,5 @@
+module circular_b
+
 use circular_a
 trait CircB:
     var b: int = 0

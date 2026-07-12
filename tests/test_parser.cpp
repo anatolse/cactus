@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -16,14 +17,30 @@
 using namespace cactus;
 namespace fs = std::filesystem;
 
+static bool starts_with_module_declaration(const std::string& source) {
+    const auto first = source.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos || source.compare(first, 6, "module") != 0) {
+        return false;
+    }
+    const auto after_keyword = first + 6;
+    return after_keyword < source.size() && std::isspace(static_cast<unsigned char>(source[after_keyword])) != 0;
+}
+
 static ProgramNode parse(const std::string& source) {
     ErrorReporter errors;
-    Lexer lexer(source, "test.cactus", errors);
+    const bool synthetic_module    = !starts_with_module_declaration(source);
+    const std::string parse_source = synthetic_module ? "module test\n" + source : source;
+    Lexer lexer(parse_source, "test.cactus", errors);
     auto tokens = lexer.tokenize();
     REQUIRE_FALSE(errors.has_errors());
     Parser parser(std::move(tokens), errors);
     auto program = parser.parse_program();
     REQUIRE_FALSE(errors.has_errors());
+    if (synthetic_module) {
+        REQUIRE_FALSE(program.declarations.empty());
+        REQUIRE(std::holds_alternative<ModuleNode>(program.declarations.front()));
+        program.declarations.erase(program.declarations.begin());
+    }
     return program;
 }
 
@@ -36,9 +53,13 @@ static std::string read_fixture(const std::string& name) {
     return ss.str();
 }
 
-static ErrorReporter parse_expect_errors(const std::string& source, const std::string& filename = "test.cactus") {
+static ErrorReporter parse_expect_errors(const std::string& source,
+                                         const std::string& filename = "test.cactus",
+                                         bool add_synthetic_module   = true) {
     ErrorReporter errors;
-    Lexer lexer(source, filename, errors);
+    const bool synthetic_module    = add_synthetic_module && !starts_with_module_declaration(source);
+    const std::string parse_source = synthetic_module ? "module test\n" + source : source;
+    Lexer lexer(parse_source, filename, errors);
     auto tokens = lexer.tokenize();
     Parser parser(std::move(tokens), errors);
     parser.parse_program();
@@ -60,6 +81,38 @@ TEST_CASE("Parser: module declaration", "[parser]") {
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<ModuleNode>(prog.declarations[0]);
     CHECK(decl.name == "player");
+}
+
+TEST_CASE("Parser: missing module declaration rejected", "[parser][modules]") {
+    auto errors = parse_expect_errors("trait Position\n", "missing_module.cactus", false);
+    REQUIRE(errors.has_errors());
+
+    bool found = false;
+    for (const auto& diagnostic : errors.diagnostics()) {
+        if (diagnostic.message.find("source file must start with a module declaration") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("Parser: duplicate module declaration rejected", "[parser][modules]") {
+    auto errors = parse_expect_errors(
+        "module player\n"
+        "module player.extra\n",
+        "duplicate_module.cactus",
+        false);
+    REQUIRE(errors.has_errors());
+
+    bool found = false;
+    for (const auto& diagnostic : errors.diagnostics()) {
+        if (diagnostic.message.find("only one module declaration is allowed") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
 }
 
 TEST_CASE("Parser: use declaration", "[parser]") {
@@ -1497,7 +1550,7 @@ TEST_CASE("Parser: error messages retain source locations during recovery", "[pa
 
     REQUIRE_FALSE(errors.diagnostics().empty());
     CHECK(errors.diagnostics().front().location.filename == "location_test.cactus");
-    CHECK(errors.diagnostics().front().location.line == 2);
+    CHECK(errors.diagnostics().front().location.line == 3);
 }
 
 TEST_CASE("Parser: synchronization limits spurious cascade errors", "[parser][recovery]") {
@@ -1637,13 +1690,13 @@ TEST_CASE("Parser: std.editor module parses enum, traits, events, extern funcs, 
         "pub event EditorModeChanged:\n"
         "    previous_mode: int\n"
         "    current_mode: int\n"
-        "pub extern func editor_spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id\n"
-        "pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
-        "pub extern func editor_raycast_3d(screen_pos: vec2, mask: int) entity_id\n"
-        "pub extern func editor_screen_to_world_2d(screen: vec2) vec2\n"
-        "pub extern func editor_mouse_delta_2d() vec2\n"
-        "pub extern func editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3\n"
-        "pub extern func editor_mouse_delta_3d() vec3\n"
+        "pub extern func spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id\n"
+        "pub extern func hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
+        "pub extern func raycast_3d(screen_pos: vec2, mask: int) entity_id\n"
+        "pub extern func camera_enter(use_3d: bool) entity_id\n"
+        "pub extern func camera_exit()\n"
+        "pub extern func apply_camera_2d(view_center: vec2, zoom: float)\n"
+        "pub extern func apply_camera_3d(position: vec3, rotation: quat)\n"
         "pub extern system EditorTemplatePalette:\n"
         "    filter:\n"
         "        EditorState\n"
@@ -1678,7 +1731,7 @@ TEST_CASE("Parser: query call — one positive filter", "[parser][query]") {
         "func test():\n"
         "    let x = query.exists[Boss]()\n");
     auto& func = std::get<FuncNode>(prog.declarations[0]);
-    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    auto* let  = std::get_if<LetStmt>(&func.body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
     REQUIRE(qcall != nullptr);
@@ -1696,7 +1749,7 @@ TEST_CASE("Parser: query call — negative trait filter", "[parser][query]") {
         "func test():\n"
         "    let x = query.count[EnemyAI, not Dead]()\n");
     auto& func = std::get<FuncNode>(prog.declarations[0]);
-    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    auto* let  = std::get_if<LetStmt>(&func.body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
     REQUIRE(qcall != nullptr);
@@ -1712,7 +1765,7 @@ TEST_CASE("Parser: query call — named spatial argument", "[parser][query]") {
         "func test():\n"
         "    let x = query.nearest[Transform, Enemy](from = player_pos)\n");
     auto& func = std::get<FuncNode>(prog.declarations[0]);
-    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    auto* let  = std::get_if<LetStmt>(&func.body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
     REQUIRE(qcall != nullptr);
@@ -1728,7 +1781,7 @@ TEST_CASE("Parser: query call — multiple named arguments", "[parser][query]") 
         "func test():\n"
         "    let x = query.overlap_box[Pickup](center = p, size = s)\n");
     auto& func = std::get<FuncNode>(prog.declarations[0]);
-    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    auto* let  = std::get_if<LetStmt>(&func.body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
     REQUIRE(qcall != nullptr);
@@ -1742,7 +1795,7 @@ TEST_CASE("Parser: query call — named arg without filter bracket", "[parser][q
         "func test():\n"
         "    let x = query.parent(of = child_id)\n");
     auto& func = std::get<FuncNode>(prog.declarations[0]);
-    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    auto* let  = std::get_if<LetStmt>(&func.body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
     REQUIRE(qcall != nullptr);
@@ -1759,7 +1812,7 @@ TEST_CASE("Parser: query call — module-qualified path", "[parser][query]") {
         "func test():\n"
         "    let x = std.query.first[Boss]()\n");
     auto& func = std::get<FuncNode>(prog.declarations[0]);
-    auto* let   = std::get_if<LetStmt>(&func.body[0]->stmt);
+    auto* let  = std::get_if<LetStmt>(&func.body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
     REQUIRE(qcall != nullptr);
@@ -1906,8 +1959,8 @@ TEST_CASE("Parser: spawn expression with child overrides", "[parser][hierarchy]"
         "                        Sword:\n"
         "                            Renderer:\n"
         "                                tint = 1.0\n");
-    auto& sys  = std::get<SystemNode>(prog.declarations[0]);
-    auto* let  = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* let = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* spawn = std::get_if<SpawnExpr>(&let->value->expr);
     REQUIRE(spawn != nullptr);
@@ -1951,5 +2004,151 @@ TEST_CASE("Parser: children declaration block requires entity keyword", "[parser
         "    children:\n"
         "        Trunk:\n"
         "            Renderer\n");
+}
+
+// ── module-qualified-symbol-identity: parser coverage (tasks 2.1-2.6) ────────
+
+TEST_CASE("Parser: qualified trait entry in entity body", "[parser][module-qualified]") {
+    auto prog = parse(
+        "entity Player:\n"
+        "    flat.WorldTransform:\n"
+        "        x = 0.0\n"
+        "    health.Health\n");
+    auto& entity = std::get<EntityNode>(prog.declarations[0]);
+    REQUIRE(entity.traits.size() == 2);
+    CHECK(entity.traits[0].trait_name == "flat.WorldTransform");
+    REQUIRE(entity.traits[0].assignments.size() == 1);
+    CHECK(entity.traits[0].assignments[0].name == "x");
+    CHECK(entity.traits[1].trait_name == "health.Health");
+}
+
+TEST_CASE("Parser: qualified trait entry in template body", "[parser][module-qualified]") {
+    auto prog = parse(
+        "template Enemy:\n"
+        "    physics.RigidBody:\n"
+        "        mass = 1.0\n"
+        "    ai.EnemyAI\n");
+    auto& tmpl = std::get<TemplateNode>(prog.declarations[0]);
+    REQUIRE(tmpl.traits.size() == 2);
+    CHECK(tmpl.traits[0].trait_name == "physics.RigidBody");
+    REQUIRE(tmpl.traits[0].assignments.size() == 1);
+    CHECK(tmpl.traits[0].assignments[0].name == "mass");
+    CHECK(tmpl.traits[1].trait_name == "ai.EnemyAI");
+}
+
+TEST_CASE("Parser: qualified add remove project statements", "[parser][module-qualified]") {
+    auto prog = parse(
+        "system TagSystem:\n"
+        "    on tick:\n"
+        "        add editor.EditorSelected to self\n"
+        "        project debug.Highlight to self\n"
+        "        remove editor.EditorSelected from self\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers[0].body.size() == 3);
+    auto* add     = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    auto* project = std::get_if<ProjectTraitStmt>(&sys.handlers[0].body[1]->stmt);
+    auto* remove  = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[2]->stmt);
+    REQUIRE(add != nullptr);
+    CHECK(add->trait_name == "editor.EditorSelected");
+    REQUIRE(project != nullptr);
+    CHECK(project->trait_name == "debug.Highlight");
+    REQUIRE(remove != nullptr);
+    CHECK(remove->trait_name == "editor.EditorSelected");
+}
+
+TEST_CASE("Parser: qualified spawn template name and override traits", "[parser][module-qualified]") {
+    auto prog = parse(
+        "system Spawner:\n"
+        "    on tick:\n"
+        "        spawn enemies.Walker:\n"
+        "            flat.WorldTransform:\n"
+        "                x = 1.0\n");
+    auto& sys   = std::get<SystemNode>(prog.declarations[0]);
+    auto* spawn = std::get_if<SpawnStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(spawn != nullptr);
+    CHECK(spawn->template_name == "enemies.Walker");
+    REQUIRE(spawn->overrides.size() == 1);
+    CHECK(spawn->overrides[0].trait_name == "flat.WorldTransform");
+}
+
+TEST_CASE("Parser: qualified spawn expression template and override traits", "[parser][module-qualified]") {
+    auto prog = parse(
+        "system Spawner:\n"
+        "    on tick:\n"
+        "        let e = spawn enemies.Walker:\n"
+        "            flat.WorldTransform:\n"
+        "                x = 0.0\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* let = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* spawn = std::get_if<SpawnExpr>(&let->value->expr);
+    REQUIRE(spawn != nullptr);
+    CHECK(spawn->template_name == "enemies.Walker");
+    REQUIRE(spawn->overrides.size() == 1);
+    CHECK(spawn->overrides[0].trait_name == "flat.WorldTransform");
+}
+
+TEST_CASE("Parser: qualified trait match arm", "[parser][module-qualified]") {
+    auto prog = parse(
+        "system MatchSys:\n"
+        "    filter:\n"
+        "        Marker\n"
+        "    on tick:\n"
+        "        match self:\n"
+        "            enemy.Boss as boss =>\n"
+        "                add enemy.Activated\n"
+        "            _ =>\n"
+        "                add enemy.Idle\n");
+    auto& sys   = std::get<SystemNode>(prog.declarations[0]);
+    auto* match = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(match != nullptr);
+    REQUIRE(match->arms.size() == 1);
+    CHECK(match->arms[0].trait_name == "enemy.Boss");
+    REQUIRE(match->arms[0].alias.has_value());
+    CHECK(*match->arms[0].alias == "boss");
+    REQUIRE(match->wildcard.has_value());
+}
+
+TEST_CASE("Parser: qualified query filter predicate", "[parser][module-qualified]") {
+    auto prog = parse(
+        "system QuerySys:\n"
+        "    on tick:\n"
+        "        let n = query.count[enemy.Boss, not enemy.Idle]()\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto* let = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(let != nullptr);
+    auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
+    REQUIRE(qcall != nullptr);
+    REQUIRE(qcall->filters.size() == 2);
+    CHECK(qcall->filters[0].trait_name == "enemy.Boss");
+    CHECK_FALSE(qcall->filters[0].negated);
+    CHECK(qcall->filters[1].trait_name == "enemy.Idle");
+    CHECK(qcall->filters[1].negated);
+}
+
+TEST_CASE("Parser: qualified system name in after clause", "[parser][module-qualified]") {
+    auto prog = parse(
+        "system Follow2D:\n"
+        "    after:\n"
+        "        flat.TransformPropagation\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.after_systems.size() == 1);
+    CHECK(sys.after_systems[0] == "flat.TransformPropagation");
+}
+
+TEST_CASE("Parser: qualified after clause with multiple systems", "[parser][module-qualified]") {
+    auto prog = parse(
+        "system Renderer:\n"
+        "    after:\n"
+        "        flat.TransformPropagation\n"
+        "        volume.TransformPropagation\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.after_systems.size() == 2);
+    CHECK(sys.after_systems[0] == "flat.TransformPropagation");
+    CHECK(sys.after_systems[1] == "volume.TransformPropagation");
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

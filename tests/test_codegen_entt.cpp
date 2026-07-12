@@ -32,11 +32,37 @@ static std::string generated_function(const std::string& code, const std::string
     return code.substr(start, end - start + 3);
 }
 
+// Returns true when source already starts with a module declaration.
+static bool starts_with_module_decl(const std::string& src) {
+    const auto first = src.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos || src.compare(first, 6, "module") != 0) {
+        return false;
+    }
+    const auto after = first + 6;
+    return after < src.size() && std::isspace(static_cast<unsigned char>(src[after])) != 0;
+}
+
+// Erase canonical identity from a resolved declaration map so the codegen uses
+// the (now-empty) module_name and produces unqualified C++ names. Tests that
+// want a specific module prefix assign trait.module_name themselves after calling
+// full_pipeline.  canonical_id is kept so find_decl_by_symbol can still locate
+// entries when looking up by resolved SymbolId from AST nodes.
+template <typename Map>
+static void clear_module_identity(Map& map) {
+    for (auto& [key, decl] : map) {
+        decl.module_name = "";
+        if (decl.symbol_id.has_value()) {
+            decl.symbol_id->module.name = "";
+        }
+    }
+}
+
 static DecoratedProgram full_pipeline_from_file(const std::string& source,
                                                 const std::string& filename,
                                                 ProgramNode& program_out) {
+    const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;
-    Lexer lexer(source, filename, errors);
+    Lexer lexer(src, filename, errors);
     auto tokens = lexer.tokenize();
     REQUIRE_FALSE(errors.has_errors());
     Parser parser(std::move(tokens), errors);
@@ -45,6 +71,13 @@ static DecoratedProgram full_pipeline_from_file(const std::string& source,
     SemanticAnalyzer analyzer(errors);
     auto result = analyzer.analyze(program_out);
     REQUIRE_FALSE(errors.has_errors());
+    // Clear module identity so codegen produces unqualified C++ names.
+    // Tests that need qualified names assign module_name explicitly after this call.
+    result.module_name = "";
+    clear_module_identity(result.traits);
+    clear_module_identity(result.structs);
+    clear_module_identity(result.enums);
+    clear_module_identity(result.funcs);
     return result;
 }
 
@@ -54,7 +87,8 @@ static DecoratedProgram full_pipeline(const std::string& source, ProgramNode& pr
 
 TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
     ResolvedTrait trait;
-    trait.name = "Position";
+    trait.name        = "Position";
+    trait.module_name = "test.codegen";
     trait.fields.push_back({.name       = "x",
                             .type       = {.kind = TypeKind::Float, .name = "float"},
                             .is_let     = false,
@@ -71,7 +105,7 @@ TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
                             .is_pub     = false});
 
     auto code = EnttComponentEmitter::emit_component(trait);
-    CHECK(code.find("struct Position") != std::string::npos);
+    CHECK(code.find("struct test_codegen__Position") != std::string::npos);
     CHECK(code.find("float x{}") != std::string::npos);
     CHECK(code.find("float y{}") != std::string::npos);
     // Should NOT have std::vector (that's SoA)
@@ -80,9 +114,10 @@ TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
 
 TEST_CASE("Codegen EnTT: stdlib collider components keep authored defaults", "[codegen-entt][stdlib][physics]") {
     ResolvedTrait collider;
-    collider.name      = "Collider";
-    collider.is_pub    = true;
-    collider.is_stdlib = true;
+    collider.name        = "Collider";
+    collider.module_name = "std.physics.flat";
+    collider.is_pub      = true;
+    collider.is_stdlib   = true;
     collider.fields.push_back({.name = "layer", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
     collider.fields.push_back({.name = "mask", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
 
@@ -91,9 +126,10 @@ TEST_CASE("Codegen EnTT: stdlib collider components keep authored defaults", "[c
     CHECK(collider_code.find("int mask{1};") != std::string::npos);
 
     ResolvedTrait box;
-    box.name      = "BoxCollider";
-    box.is_pub    = true;
-    box.is_stdlib = true;
+    box.name        = "BoxCollider";
+    box.module_name = "std.physics.flat";
+    box.is_pub      = true;
+    box.is_stdlib   = true;
     box.fields.push_back({.name = "size", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
 
     const auto box_code = EnttComponentEmitter::emit_component(box);
@@ -143,7 +179,8 @@ TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
             CHECK(code.find("struct DamageEvent") != std::string::npos);
             CHECK(code.find("int amount;") != std::string::npos);
 
-            auto sink = EnttEventEmitter::emit_sink_connection(*event);
+            DecoratedProgram prog;
+            auto sink = EnttEventEmitter::emit_sink_connection(*event, prog);
             CHECK(sink.find("dispatcher.sink<DamageEvent>") != std::string::npos);
         }
     }
@@ -485,8 +522,8 @@ TEST_CASE("Codegen EnTT: model renderer extern system binds to backend runtime w
         "    var cast_shadow: bool\n"
         "extern system ModelRendererSystem:\n"
         "    filter:\n"
-        "        std.transform.volume.WorldTransform\n"
-        "        std.render.models.ModelRenderer\n",
+        "        WorldTransform\n"
+        "        ModelRenderer\n",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
@@ -511,8 +548,8 @@ TEST_CASE("Codegen EnTT: model animation extern system advances time in the upda
         "    var time: float\n"
         "extern system ModelAnimationSystem:\n"
         "    filter:\n"
-        "        std.render.models.ModelRenderer\n"
-        "        std.render.models.ModelAnimator\n",
+        "        ModelRenderer\n"
+        "        ModelAnimator\n",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
@@ -549,8 +586,8 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
         "    var time: float\n"
         "extern system ModelRendererSystem:\n"
         "    filter:\n"
-        "        std.transform.volume.WorldTransform\n"
-        "        std.render.models.ModelRenderer\n",
+        "        WorldTransform\n"
+        "        ModelRenderer\n",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
@@ -573,7 +610,7 @@ TEST_CASE("Codegen EnTT: screen label extern system renders window-space text in
         "    var visible: bool\n"
         "extern system ScreenLabelSystem:\n"
         "    filter:\n"
-        "        std.render.text.ScreenLabel\n";
+        "        ScreenLabel\n";
 
     const std::string flat_transform =
         "trait WorldTransform:\n"
@@ -776,12 +813,13 @@ TEST_CASE("Codegen EnTT: imported pub asset keeps its declaring module's path ba
     // module's declarations with their original source locations, so an asset
     // imported from module A resolves against A's directory, not the importer's.
     ErrorReporter errors;
-    Lexer lexer_a("pub asset SharedModel: model = \"art/m.glb\"\n", "mods/shared/assets.cactus", errors);
+    Lexer lexer_a("module shared\npub asset SharedModel: model = \"art/m.glb\"\n", "mods/shared/assets.cactus", errors);
     Parser parser_a(lexer_a.tokenize(), errors);
     auto prog_a = parser_a.parse_program();
     REQUIRE_FALSE(errors.has_errors());
 
     Lexer lexer_b(
+        "module game\n"
         "trait Marker\n"
         "entity Bot:\n"
         "    Marker\n",
@@ -791,7 +829,9 @@ TEST_CASE("Codegen EnTT: imported pub asset keeps its declaring module's path ba
     auto merged = parser_b.parse_program();
     REQUIRE_FALSE(errors.has_errors());
     for (auto& decl : prog_a.declarations) {
-        merged.declarations.push_back(std::move(decl));
+        if (!std::holds_alternative<ModuleNode>(decl)) {
+            merged.declarations.push_back(std::move(decl));
+        }
     }
 
     SemanticAnalyzer analyzer(errors);
@@ -1127,7 +1167,8 @@ TEST_CASE("Codegen EnTT: spawn handler uses marker event parameter", "[codegen-e
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn)") != std::string::npos);  // spawn handlers don't get dispatcher (lifecycle event)
+            CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn)") !=
+                  std::string::npos);  // spawn handlers don't get dispatcher (lifecycle event)
         }
     }
 }
@@ -1354,9 +1395,9 @@ TEST_CASE("Codegen EnTT: flat transform propagation extern system is recognized"
         "    var scale: vec2\n"
         "extern system TransformPropagation:\n"
         "    filter:\n"
-        "        std.core.Parent\n"
-        "        std.transform.flat.LocalTransform\n"
-        "        std.transform.flat.WorldTransform\n",
+        "        Parent\n"
+        "        LocalTransform\n"
+        "        WorldTransform\n",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
@@ -1380,9 +1421,9 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
         "    var scale: vec2\n"
         "extern system TransformPropagation:\n"
         "    filter:\n"
-        "        std.core.Parent\n"
-        "        std.transform.flat.LocalTransform\n"
-        "        std.transform.flat.WorldTransform\n",
+        "        Parent\n"
+        "        LocalTransform\n"
+        "        WorldTransform\n",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
@@ -1406,9 +1447,9 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern system is recognize
         "    var scale: vec3\n"
         "extern system TransformPropagation:\n"
         "    filter:\n"
-        "        std.core.Parent\n"
-        "        std.transform.volume.LocalTransform\n"
-        "        std.transform.volume.WorldTransform\n",
+        "        Parent\n"
+        "        LocalTransform\n"
+        "        WorldTransform\n",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
@@ -1862,7 +1903,7 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
         "pub event EditorSelectionChanged:\n"
         "    previous: entity_id\n"
         "    current: entity_id\n"
-        "pub extern func editor_hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
+        "pub extern func hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
         "pub extern system EditorTemplatePalette:\n"
         "    filter:\n"
         "        EditorState\n",
@@ -2107,11 +2148,10 @@ static constexpr const char* kCameraFlatTrait =
 TEST_CASE("Codegen EnTT: std.camera.viewport emits viewport render loop and no camera-sync block",
           "[codegen-entt][camera][viewport]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string("use std.camera.viewport\n"
-                    "use std.camera.flat\n") +
-            kViewportTrait + kCameraFlatTrait,
-        program);
+    auto decorated = full_pipeline(std::string("use std.camera.viewport\n"
+                                               "use std.camera.flat\n") +
+                                       kViewportTrait + kCameraFlatTrait,
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
 
@@ -2136,12 +2176,9 @@ TEST_CASE("Codegen EnTT: std.camera.viewport emits viewport render loop and no c
     CHECK(code.find("#include <algorithm>") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: viewport loop sorts by depth (lower depth first)",
-          "[codegen-entt][camera][viewport]") {
+TEST_CASE("Codegen EnTT: viewport loop sorts by depth (lower depth first)", "[codegen-entt][camera][viewport]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string("use std.camera.viewport\n") + kViewportTrait,
-        program);
+    auto decorated = full_pipeline(std::string("use std.camera.viewport\n") + kViewportTrait, program);
 
     const auto code = CppEnttCodegen::generate(decorated);
 
@@ -2151,12 +2188,9 @@ TEST_CASE("Codegen EnTT: viewport loop sorts by depth (lower depth first)",
     CHECK(code.find("std::ranges::sort(__vps)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths",
-          "[codegen-entt][camera][viewport]") {
+TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths", "[codegen-entt][camera][viewport]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string("use std.camera.viewport\n") + kViewportTrait,
-        program);
+    auto decorated = full_pipeline(std::string("use std.camera.viewport\n") + kViewportTrait, program);
 
     const auto code = CppEnttCodegen::generate(decorated);
 
@@ -2167,11 +2201,10 @@ TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths",
 TEST_CASE("Codegen EnTT: viewport loop emits scissor for each viewport (split-screen)",
           "[codegen-entt][camera][viewport]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string("use std.camera.viewport\n"
-                    "use std.camera.flat\n") +
-            kViewportTrait + kCameraFlatTrait,
-        program);
+    auto decorated = full_pipeline(std::string("use std.camera.viewport\n"
+                                               "use std.camera.flat\n") +
+                                       kViewportTrait + kCameraFlatTrait,
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
 
@@ -2219,13 +2252,12 @@ static const char* const kQueryPreamble =
 
 TEST_CASE("Codegen EnTT: query.exists lowers to entt view begin/end check", "[codegen-entt][query]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        if query.exists[Boss]():\n"
-            "            let x = 1\n",
-        program);
+    auto decorated = full_pipeline(std::string(kQueryPreamble) +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        if query.exists[Boss]():\n"
+                                       "            let x = 1\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Boss>()") != std::string::npos);
@@ -2234,13 +2266,12 @@ TEST_CASE("Codegen EnTT: query.exists lowers to entt view begin/end check", "[co
 
 TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[codegen-entt][query]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        if query.exists[Enemy, not Dead]():\n"
-            "            let x = 1\n",
-        program);
+    auto decorated = full_pipeline(std::string(kQueryPreamble) +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        if query.exists[Enemy, not Dead]():\n"
+                                       "            let x = 1\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Enemy>(entt::exclude<Dead>)") != std::string::npos);
@@ -2248,12 +2279,11 @@ TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[
 
 TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][query]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        let n = query.count[Enemy, not Dead]()\n",
-        program);
+    auto decorated = full_pipeline(std::string(kQueryPreamble) +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        let n = query.count[Enemy, not Dead]()\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Enemy>(entt::exclude<Dead>)") != std::string::npos);
@@ -2262,12 +2292,11 @@ TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][q
 
 TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[codegen-entt][query]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        let t = query.first[Boss]()\n",
-        program);
+    auto decorated = full_pipeline(std::string(kQueryPreamble) +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        let t = query.first[Boss]()\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Boss>()") != std::string::npos);
@@ -2278,12 +2307,11 @@ TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[
 
 TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-entt][query]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        let all = query.all[Enemy]()\n",
-        program);
+    auto decorated = full_pipeline(std::string(kQueryPreamble) +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        let all = query.all[Enemy]()\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Enemy>()") != std::string::npos);
@@ -2345,12 +2373,11 @@ static const char* const kFlatQueryPreamble =
 TEST_CASE("Codegen EnTT: flat query.nearest lowers to WorldTransform distance search",
           "[codegen-entt][query][spatial]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kFlatQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        let p = query.nearest[Enemy](from = tick.dt)\n",
-        program);
+    auto decorated = full_pipeline(std::string(kFlatQueryPreamble) +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        let p = query.nearest[Enemy](from = tick.dt)\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
@@ -2360,8 +2387,7 @@ TEST_CASE("Codegen EnTT: flat query.nearest lowers to WorldTransform distance se
     CHECK(code.find("__best{entt::null}") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches",
-          "[codegen-entt][query][spatial]") {
+TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches", "[codegen-entt][query][spatial]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         std::string(kFlatQueryPreamble) +
@@ -2376,15 +2402,14 @@ TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches
     CHECK(code.find("std::abs") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search",
-          "[codegen-entt][query][spatial]") {
+TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search", "[codegen-entt][query][spatial]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kFlatQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        let hits = query.overlap_circle[Enemy](center = tick.dt, radius = tick.dt)\n",
-        program);
+    auto decorated =
+        full_pipeline(std::string(kFlatQueryPreamble) +
+                          "system S:\n"
+                          "    on tick:\n"
+                          "        let hits = query.overlap_circle[Enemy](center = tick.dt, radius = tick.dt)\n",
+                      program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
@@ -2392,8 +2417,7 @@ TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search
     CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search",
-          "[codegen-entt][query][spatial]") {
+TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search", "[codegen-entt][query][spatial]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         std::string(kFlatQueryPreamble) +
@@ -2418,15 +2442,13 @@ static const char* const kVolumeQueryPreamble =
     "    var hp: int\n"
     "trait Pickup\n";
 
-TEST_CASE("Codegen EnTT: volume query.nearest lowers to 3D distance search",
-          "[codegen-entt][query][spatial][3d]") {
+TEST_CASE("Codegen EnTT: volume query.nearest lowers to 3D distance search", "[codegen-entt][query][spatial][3d]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kVolumeQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        let e = query.nearest[Enemy](from = tick.dt)\n",
-        program);
+    auto decorated = full_pipeline(std::string(kVolumeQueryPreamble) +
+                                       "system S:\n"
+                                       "    on tick:\n"
+                                       "        let e = query.nearest[Enemy](from = tick.dt)\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
@@ -2437,12 +2459,12 @@ TEST_CASE("Codegen EnTT: volume query.nearest lowers to 3D distance search",
 TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search",
           "[codegen-entt][query][spatial][3d]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string(kVolumeQueryPreamble) +
-            "system S:\n"
-            "    on tick:\n"
-            "        let hits = query.overlap_sphere[Enemy](center = tick.dt, radius = tick.dt)\n",
-        program);
+    auto decorated =
+        full_pipeline(std::string(kVolumeQueryPreamble) +
+                          "system S:\n"
+                          "    on tick:\n"
+                          "        let hits = query.overlap_sphere[Enemy](center = tick.dt, radius = tick.dt)\n",
+                      program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
@@ -2487,8 +2509,7 @@ TEST_CASE("Codegen EnTT: hierarchical template emits per-node helpers and canoni
     CHECK(wrapper.find("return entity;") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: hierarchical creation assigns Parent to the immediate parent",
-          "[codegen-entt][hierarchy]") {
+TEST_CASE("Codegen EnTT: hierarchical creation assigns Parent to the immediate parent", "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX, program);
     const auto code = CppEnttCodegen::generate(decorated);
@@ -2505,18 +2526,18 @@ TEST_CASE("Codegen EnTT: hierarchical creation assigns Parent to the immediate p
 
 TEST_CASE("Codegen EnTT: hierarchical creation is parent-first preorder", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                       "template Pair:\n"
-                                       "    Tag\n"
-                                       "    children:\n"
-                                       "        entity First:\n"
-                                       "            Tag\n"
-                                       "            children:\n"
-                                       "                entity Deep:\n"
-                                       "                    Tag\n"
-                                       "        entity Second:\n"
-                                       "            Tag\n",
-                                   program);
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                        "template Pair:\n"
+                                        "    Tag\n"
+                                        "    children:\n"
+                                        "        entity First:\n"
+                                        "            Tag\n"
+                                        "            children:\n"
+                                        "                entity Deep:\n"
+                                        "                    Tag\n"
+                                        "        entity Second:\n"
+                                        "            Tag\n",
+                                    program);
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto wrapper = generated_function(code, "entt::entity create_pair(entt::registry& registry)");
@@ -2537,13 +2558,13 @@ TEST_CASE("Codegen EnTT: hierarchical creation is parent-first preorder", "[code
 TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls canonical wrapper and returns root",
           "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                       "system S:\n"
-                                       "    on tick:\n"
-                                       "        let root = spawn Rig:\n"
-                                       "            Tag:\n"
-                                       "                value = 3\n",
-                                   program);
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                        "system S:\n"
+                                        "    on tick:\n"
+                                        "        let root = spawn Rig:\n"
+                                        "            Tag:\n"
+                                        "                value = 3\n",
+                                    program);
     const auto code = CppEnttCodegen::generate(decorated);
 
     CHECK(code.find("auto __spawned = create_rig(registry);") != std::string::npos);
@@ -2552,21 +2573,21 @@ TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls cano
 
 TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                       "system S:\n"
-                                       "    on tick:\n"
-                                       "        let root = spawn Rig:\n"
-                                       "            Tag:\n"
-                                       "                value = 3\n"
-                                       "            children:\n"
-                                       "                Socket:\n"
-                                       "                    Tag:\n"
-                                       "                        value = 4\n"
-                                       "                    children:\n"
-                                       "                        Gem:\n"
-                                       "                            Growth:\n"
-                                       "                                target_scale = 2.0\n",
-                                   program);
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                        "system S:\n"
+                                        "    on tick:\n"
+                                        "        let root = spawn Rig:\n"
+                                        "            Tag:\n"
+                                        "                value = 3\n"
+                                        "            children:\n"
+                                        "                Socket:\n"
+                                        "                    Tag:\n"
+                                        "                        value = 4\n"
+                                        "                    children:\n"
+                                        "                        Gem:\n"
+                                        "                            Growth:\n"
+                                        "                                target_scale = 2.0\n",
+                                    program);
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Inline expansion uses the per-node helpers, not the canonical wrapper.
@@ -2585,15 +2606,15 @@ TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[
 
 TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in setup", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                       "entity Rig1 from Rig:\n"
-                                       "    Tag:\n"
-                                       "        value = 5\n"
-                                       "    children:\n"
-                                       "        Socket:\n"
-                                       "            Tag:\n"
-                                       "                value = 7\n",
-                                   program);
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                        "entity Rig1 from Rig:\n"
+                                        "    Tag:\n"
+                                        "        value = 5\n"
+                                        "    children:\n"
+                                        "        Socket:\n"
+                                        "            Tag:\n"
+                                        "                value = 7\n",
+                                    program);
     const auto code = CppEnttCodegen::generate(decorated);
 
     // generated_init_project creates the whole tree through the entity wrapper.
@@ -2609,13 +2630,13 @@ TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in se
 
 TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creation", "[codegen-entt][hierarchy]") {
     ProgramNode program;
-    auto decorated = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                       "system S:\n"
-                                       "    filter:\n"
-                                       "        Tag\n"
-                                       "    on tick:\n"
-                                       "        destroy self\n",
-                                   program);
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
+                                        "system S:\n"
+                                        "    filter:\n"
+                                        "        Tag\n"
+                                        "    on tick:\n"
+                                        "        destroy self\n",
+                                    program);
     const auto code = CppEnttCodegen::generate(decorated);
 
     // The existing Parent-based recursive destroy support keys off the Parent
@@ -2625,8 +2646,7 @@ TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creatio
 
 // ── 5.1: Key constant mapping and new extern declarations ───────────────────
 
-TEST_CASE("Codegen EnTT: Key.Shift/Minus/Equal/F map to correct raylib constants",
-          "[codegen-entt][input][editor]") {
+TEST_CASE("Codegen EnTT: Key.Shift/Minus/Equal/F map to correct raylib constants", "[codegen-entt][input][editor]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "pub event input\n"
@@ -2648,25 +2668,23 @@ TEST_CASE("Codegen EnTT: Key.Shift/Minus/Equal/F map to correct raylib constants
     CHECK(code.find("KEY_F") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: editor camera externs are recognized as stdlib functions in generated calls",
+TEST_CASE("Codegen EnTT: std.input mouse_delta and wheel_delta lower to correct runtime calls",
           "[codegen-entt][editor][stdlib]") {
     ProgramNode program;
-    // Call a selection of new externs from a system so they appear in the
-    // generated output. module_exports_stdlib_func recognition causes them to be
-    // emitted via cactus::runtime::entt_backend:: rather than left unqualified.
+    // input.wheel_delta() and input.mouse_delta() are qualified calls on the
+    // std.input module and must lower to the prefixed runtime symbols.
     auto decorated = full_pipeline(
         "use std.editor\n"
+        "use std.input\n"
         "pub event tick\n"
-        "pub extern func editor_wheel_delta() float\n"
-        "pub extern func editor_mouse_delta_screen() vec2\n"
         "trait Rig:\n"
         "    var active: bool\n"
         "system NavPoll:\n"
         "    filter:\n"
         "        Rig\n"
         "    on tick:\n"
-        "        let _w = editor_wheel_delta()\n"
-        "        let _d = editor_mouse_delta_screen()\n",
+        "        let _w = input.wheel_delta()\n"
+        "        let _d = input.mouse_delta()\n",
         program);
 
     const auto code   = CppEnttCodegen::generate(decorated);
@@ -2677,8 +2695,7 @@ TEST_CASE("Codegen EnTT: editor camera externs are recognized as stdlib function
 
 // ── 5.3: editor_consume generates correct runtime call ───────────────────────
 
-TEST_CASE("Codegen EnTT: editor_consume call generates runtime consume invocation",
-          "[codegen-entt][editor][stdlib]") {
+TEST_CASE("Codegen EnTT: input.consume call generates runtime consume invocation", "[codegen-entt][editor][stdlib]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "use std.editor\n"
@@ -2686,21 +2703,19 @@ TEST_CASE("Codegen EnTT: editor_consume call generates runtime consume invocatio
         "use std.input\n"
         "input NavDrag: button\n"
         "    mouse = MouseButton.Right\n"
-        "pub extern func editor_consume(b: InputButton)\n"
         "trait EditorSt:\n"
         "    var active: bool = true\n"
         "system EditorInputConsume:\n"
         "    filter:\n"
         "        EditorSt\n"
         "    on input:\n"
-        "        editor_consume(NavDrag)\n",
+        "        input.consume(NavDrag)\n",
         program);
 
     const auto code   = CppEnttCodegen::generate(decorated);
     const auto system = generated_function(code, "void editor_input_consume_input");
     // The call must pass K_NAV_DRAG (the generated enum constant) to editor_consume.
-    CHECK(system.find("cactus::runtime::entt_backend::editor_consume(K_NAV_DRAG)") !=
-          std::string::npos);
+    CHECK(system.find("cactus::runtime::entt_backend::editor_consume(K_NAV_DRAG)") != std::string::npos);
 }
 
 // ── 5.4: Camera rig lifecycle registration in generated_init_project ─────────
@@ -2720,12 +2735,11 @@ static constexpr const char* kWorldTransformVolumeTrait =
 TEST_CASE("Codegen EnTT: 2D editor+viewport program registers 2D camera rig lifecycle impls",
           "[codegen-entt][editor][camera-rig]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string("use std.editor\n"
-                    "use std.camera.viewport\n"
-                    "use std.camera.flat\n") +
-            kViewportTrait + kCameraFlatTrait,
-        program);
+    auto decorated = full_pipeline(std::string("use std.editor\n"
+                                               "use std.camera.viewport\n"
+                                               "use std.camera.flat\n") +
+                                       kViewportTrait + kCameraFlatTrait,
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto init = generated_function(code, "void generated_init_project");
@@ -2756,20 +2770,19 @@ TEST_CASE("Codegen EnTT: 2D editor+viewport program registers 2D camera rig life
 TEST_CASE("Codegen EnTT: 3D editor+viewport program registers 3D camera rig lifecycle impls",
           "[codegen-entt][editor][camera-rig]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        std::string("use std.editor\n"
-                    "use std.camera.viewport\n"
-                    "use std.camera.volume\n") +
-            kViewportTrait + kCameraVolumeTrait + kWorldTransformVolumeTrait,
-        program);
+    auto decorated = full_pipeline(std::string("use std.editor\n"
+                                               "use std.camera.viewport\n"
+                                               "use std.camera.volume\n") +
+                                       kViewportTrait + kCameraVolumeTrait + kWorldTransformVolumeTrait,
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
     const auto init = generated_function(code, "void generated_init_project");
 
     // Enter impl derives orbit state from camera pose
     CHECK(init.find("register_editor_camera_enter_impl") != std::string::npos);
-    CHECK(init.find("std::atan2(-__dx, -__dz)") != std::string::npos);   // yaw derivation
-    CHECK(init.find("std::asin") != std::string::npos);                   // pitch derivation
+    CHECK(init.find("std::atan2(-__dx, -__dz)") != std::string::npos);  // yaw derivation
+    CHECK(init.find("std::asin") != std::string::npos);                 // pitch derivation
     CHECK(init.find("EditorCamera3D{.focus") != std::string::npos);
     CHECK(init.find(".orbit_speed = 0.005F") != std::string::npos);
     CHECK(init.find(".min_pitch = -1.5F") != std::string::npos);
@@ -2792,6 +2805,209 @@ TEST_CASE("Codegen EnTT: 3D editor+viewport program registers 3D camera rig life
 
     // No 2D-specific impls without uses_flat
     CHECK(init.find("register_editor_apply_camera_2d_impl") == std::string::npos);
+}
+
+// ── 5.5: Camera and transform projection lowering ─────────────────────────
+
+TEST_CASE("Codegen EnTT: std.camera.flat projection helpers lower to correct runtime calls",
+          "[codegen-entt][editor][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.camera.flat as camera2d\n"
+        "pub event tick\n"
+        "trait Scene:\n"
+        "    var active: bool\n"
+        "system Project2D:\n"
+        "    filter:\n"
+        "        Scene\n"
+        "    on tick:\n"
+        "        let _wp = camera2d.screen_to_world(vec2(0.0, 0.0))\n"
+        "        let _wd = camera2d.screen_delta_to_world(vec2(1.0, 0.0))\n",
+        program);
+
+    const auto code   = CppEnttCodegen::generate(decorated);
+    const auto system = generated_function(code, "void project2_d_tick");
+    CHECK(system.find("cactus::runtime::entt_backend::editor_screen_to_world_2d(") != std::string::npos);
+    CHECK(system.find("cactus::runtime::entt_backend::screen_delta_to_world_2d(") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as first argument",
+          "[codegen-entt][editor][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.transform.flat as transform2d\n"
+        "pub event tick\n"
+        "trait Selection:\n"
+        "    var sel: entity_id\n"
+        "system GetPos:\n"
+        "    filter:\n"
+        "        Selection\n"
+        "    on tick:\n"
+        "        let _pos = transform2d.world_position(sel)\n",
+        program);
+
+    const auto code   = CppEnttCodegen::generate(decorated);
+    const auto system = generated_function(code, "void get_pos_tick");
+    CHECK(system.find("cactus::runtime::entt_backend::editor_entity_position_2d(registry,") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers with registry injected",
+          "[codegen-entt][editor][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick\n"
+        "pub extern func spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id\n"
+        "trait Placer:\n"
+        "    var result: entity_id\n"
+        "system PlaceTest:\n"
+        "    filter:\n"
+        "        Placer\n"
+        "    on tick:\n"
+        "        result = spawn_template(\"Enemy\", vec2(0.0, 0.0), vec3(0.0, 0.0, 0.0))\n",
+        program);
+
+    decorated.funcs["spawn_template"].is_stdlib   = true;
+    decorated.funcs["spawn_template"].module_name = "std.editor";
+
+    const auto code   = CppEnttCodegen::generate(decorated);
+    const auto system = generated_function(code, "void place_test_tick");
+    CHECK(system.find("cactus::runtime::entt_backend::editor_spawn_template(registry,") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: same simple component name from different modules produces distinct C++ symbols",
+          "[codegen-entt][canonical-identity]") {
+    ResolvedTrait flat_wt;
+    flat_wt.name        = "WorldTransform";
+    flat_wt.module_name = "std.transform.flat";
+    flat_wt.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+
+    ResolvedTrait vol_wt;
+    vol_wt.name        = "WorldTransform";
+    vol_wt.module_name = "std.transform.volume";
+    vol_wt.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec3, .name = "vec3"}, .is_var = true});
+
+    const auto flat_code = EnttComponentEmitter::emit_component(flat_wt);
+    const auto vol_code  = EnttComponentEmitter::emit_component(vol_wt);
+
+    CHECK(flat_code.find("struct std_transform_flat__WorldTransform") != std::string::npos);
+    CHECK(vol_code.find("struct std_transform_volume__WorldTransform") != std::string::npos);
+    CHECK(flat_code.find("struct WorldTransform ") == std::string::npos);
+    CHECK(vol_code.find("struct WorldTransform ") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: user-defined trait with explicit module_name produces canonical C++ type",
+          "[codegen-entt][canonical-identity]") {
+    ResolvedTrait trait;
+    trait.name        = "WorldTransform";
+    trait.module_name = "game.transforms";
+    trait.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+
+    const auto code = EnttComponentEmitter::emit_component(trait);
+    CHECK(code.find("struct game_transforms__WorldTransform") != std::string::npos);
+    CHECK(code.find("struct WorldTransform") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: system function name uses canonical module prefix when program.module_name is set",
+          "[codegen-entt][canonical-identity]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Velocity:\n"
+        "    var vx: float\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Velocity\n"
+        "    on tick:\n"
+        "        vx = vx + tick.dt\n",
+        program);
+    decorated.module_name = "my.game";
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("void my_game__move_tick(") != std::string::npos);
+    CHECK(code.find("void move_tick(") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: registry view uses canonical C++ type names for module-qualified traits",
+          "[codegen-entt][canonical-identity]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Position:\n"
+        "    var x: float\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        x = x + tick.dt\n",
+        program);
+    decorated.traits.at("Position").module_name = "my.game";
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            const auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.view<my_game__Position>()") != std::string::npos);
+            CHECK(code.find("my_game__Position& my_game__Position_comp") != std::string::npos);
+            CHECK(code.find("my_game__Position_comp.x") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: stdlib func lowering falls back to program.funcs when no local use import",
+          "[codegen-entt][canonical-identity][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick:\n"
+        "    dt: float\n"
+        "trait Value:\n"
+        "    var x: float\n"
+        "system Demo:\n"
+        "    filter:\n"
+        "        Value\n"
+        "    on tick:\n"
+        "        x = lerp(0.0, 10.0, 0.5)\n",
+        program);
+
+    ResolvedFunc lerp_func;
+    lerp_func.name          = "lerp";
+    lerp_func.module_name   = "std.math";
+    lerp_func.is_stdlib     = true;
+    lerp_func.is_extern     = true;
+    decorated.funcs["lerp"] = lerp_func;
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: stdlib extern system lowering uses canonical C++ names for module-qualified traits",
+          "[codegen-entt][canonical-identity]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait Renderer:\n"
+        "    let texture: texture_id\n"
+        "    var size: vec2\n"
+        "    var color: color\n"
+        "    var visible: bool\n"
+        "    var layer: int\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "        Renderer\n",
+        program);
+    decorated.traits.at("WorldTransform").module_name = "std.transform.flat";
+    decorated.traits.at("Renderer").module_name       = "std.render.sprites";
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void sprite_renderer_tick");
+    CHECK(tick.find("registry.view<std_transform_flat__WorldTransform, std_render_sprites__Renderer>()") !=
+          std::string::npos);
+    CHECK(tick.find("std_transform_flat__WorldTransform_comp.position") != std::string::npos);
+    CHECK(tick.find("std_render_sprites__Renderer_comp.layer") != std::string::npos);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

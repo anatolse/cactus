@@ -1340,36 +1340,30 @@ void begin_render_frame() noexcept {
     render_debug_state_storage().animated_model_submissions.clear();
 }
 
-void end_render_frame() noexcept {
+static void flush_viewport_queues() noexcept {
     flush_mesh_queue();
     flush_model_queue();
     flush_text_3d_queue();
     flush_sprite_queue();
     flush_text_2d_queue();
-    // Screen labels are window-global: drawn last, after all viewport/world
-    // rendering, so they overlay every view (never flushed per viewport).
-    flush_screen_label_queue();
     mesh_queue().clear();
     model_queue().clear();
+    text_3d_queue().clear();
     sprite_queue().clear();
     point_light_queue().clear();
     text_2d_queue().clear();
-    text_3d_queue().clear();
+}
+
+void end_render_frame() noexcept {
+    flush_viewport_queues();
+    // Screen labels are window-global: drawn last, after all viewport/world
+    // rendering, so they overlay every view (never flushed per viewport).
+    flush_screen_label_queue();
     screen_label_queue().clear();
 }
 
 void flush_viewport_3d() noexcept {
-    flush_mesh_queue();
-    flush_model_queue();
-    flush_text_3d_queue();
-    flush_sprite_queue();
-    flush_text_2d_queue();
-    mesh_queue().clear();
-    model_queue().clear();
-    text_3d_queue().clear();
-    sprite_queue().clear();
-    point_light_queue().clear();
-    text_2d_queue().clear();
+    flush_viewport_queues();
 }
 
 void submit_sprite(const Vector2 position,
@@ -1470,72 +1464,54 @@ void submit_model(const Vector3 position,
     submit_model_impl(position, rotation, scale, model, visible, cast_shadow, true, clip, time);
 }
 
-int model_animation_count(const AssetHandle model) noexcept {
+// Resolve a model handle, fill entry.path if needed, and trigger the lazy
+// load (D4: introspection works before first draw). Returns {nullptr, nullptr}
+// if the handle is invalid.
+struct ModelEntryAccess {
+    ModelResourceEntry* entry;
+    Model*              loaded;
+};
+
+static ModelEntryAccess prepare_model_entry(const AssetHandle model) noexcept {
     const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
     if (!resolved.valid()) {
-        return 0;
+        return {.entry = nullptr, .loaded = nullptr};
     }
     auto& entry = models()[resolved.runtime_id];
     if (entry.path.empty()) {
         entry.path = std::string{resolved.asset_id};
     }
-    // Introspection triggers the lazy model load so it works before first draw (D4).
-    (void)ensure_model_resource(resolved.runtime_id);
-    ensure_model_animations(entry);
-    return entry.animation_count;
+    return {.entry = &entry, .loaded = ensure_model_resource(resolved.runtime_id)};
+}
+
+int model_animation_count(const AssetHandle model) noexcept {
+    auto [entry, loaded] = prepare_model_entry(model);
+    if (entry == nullptr) { return 0; }
+    ensure_model_animations(*entry);
+    return entry->animation_count;
 }
 
 std::string model_animation_name(const AssetHandle model, const int clip) noexcept {
-    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
-    if (!resolved.valid()) {
-        return "";
-    }
-    auto& entry = models()[resolved.runtime_id];
-    if (entry.path.empty()) {
-        entry.path = std::string{resolved.asset_id};
-    }
-    (void)ensure_model_resource(resolved.runtime_id);
-    ensure_model_animations(entry);
-    if (clip < 0 || clip >= entry.animation_count) {
-        return "";
-    }
-    const auto& anim = entry.animations[clip];
+    auto [entry, loaded] = prepare_model_entry(model);
+    if (entry == nullptr) { return ""; }
+    ensure_model_animations(*entry);
+    if (clip < 0 || clip >= entry->animation_count) { return ""; }
+    const auto& anim = entry->animations[clip];
     return std::string{anim.name, strnlen(anim.name, sizeof(anim.name))};
 }
 
 float model_animation_duration(const AssetHandle model, const int clip) noexcept {
-    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
-    if (!resolved.valid()) {
-        return 0.0F;
-    }
-    auto& entry = models()[resolved.runtime_id];
-    if (entry.path.empty()) {
-        entry.path = std::string{resolved.asset_id};
-    }
-    (void)ensure_model_resource(resolved.runtime_id);
-    ensure_model_animations(entry);
-    if (clip < 0 || clip >= entry.animation_count) {
-        return 0.0F;
-    }
-    return static_cast<float>(entry.animations[clip].keyframeCount) / kGltfKeyframesPerSecond;
+    auto [entry, loaded] = prepare_model_entry(model);
+    if (entry == nullptr) { return 0.0F; }
+    ensure_model_animations(*entry);
+    if (clip < 0 || clip >= entry->animation_count) { return 0.0F; }
+    return static_cast<float>(entry->animations[clip].keyframeCount) / kGltfKeyframesPerSecond;
 }
 
 Vector3 model_bounds_size(const AssetHandle model) noexcept {
     constexpr Vector3 kZeroExtents{.x = 0.0F, .y = 0.0F, .z = 0.0F};
-    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
-    if (!resolved.valid()) {
-        return kZeroExtents;
-    }
-    auto& entry = models()[resolved.runtime_id];
-    if (entry.path.empty()) {
-        entry.path = std::string{resolved.asset_id};
-    }
-    // Introspection triggers the lazy model load so it works before first draw
-    // (D4). Model loads need the window; until then report zero extents.
-    Model* loaded = ensure_model_resource(resolved.runtime_id);
-    if (loaded == nullptr) {
-        return kZeroExtents;
-    }
+    auto [entry, loaded] = prepare_model_entry(model);
+    if (loaded == nullptr) { return kZeroExtents; }
     const BoundingBox box = GetModelBoundingBox(*loaded);
     return Vector3{.x = box.max.x - box.min.x, .y = box.max.y - box.min.y, .z = box.max.z - box.min.z};
 }
@@ -1543,20 +1519,8 @@ Vector3 model_bounds_size(const AssetHandle model) noexcept {
 BoundingBox model_bounds_box(const AssetHandle model) noexcept {
     constexpr BoundingBox kZeroBox{.min = {.x = 0.0F, .y = 0.0F, .z = 0.0F},
                                    .max = {.x = 0.0F, .y = 0.0F, .z = 0.0F}};
-    const auto resolved = shared_asset_registry().resolve(AssetKind::Model, model);
-    if (!resolved.valid()) {
-        return kZeroBox;
-    }
-    auto& entry = models()[resolved.runtime_id];
-    if (entry.path.empty()) {
-        entry.path = std::string{resolved.asset_id};
-    }
-    // Introspection triggers the lazy model load so it works before first draw
-    // (D4). Model loads need the window; until then report a zero-extent box.
-    Model* loaded = ensure_model_resource(resolved.runtime_id);
-    if (loaded == nullptr) {
-        return kZeroBox;
-    }
+    auto [entry, loaded] = prepare_model_entry(model);
+    if (loaded == nullptr) { return kZeroBox; }
     return GetModelBoundingBox(*loaded);
 }
 

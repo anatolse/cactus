@@ -341,11 +341,9 @@ ChildArchetypeNode clone_child_archetype_node(const ChildArchetypeNode& node) {
     copy.role         = node.role;
     copy.template_ref = node.template_ref;
     copy.location     = node.location;
-    copy.body_entries = node.body_entries;
-    for (const auto& use : node.template_uses) {
-        copy.template_uses.push_back(use);
-    }
-    copy.traits          = clone_archetype_trait_entries(node.traits);
+    copy.body_entries  = node.body_entries;
+    copy.template_uses = node.template_uses;
+    copy.traits        = clone_archetype_trait_entries(node.traits);
     copy.children        = clone_child_archetype_nodes(node.children);
     copy.child_overrides = clone_child_override_nodes(node.child_overrides);
     return copy;
@@ -509,6 +507,8 @@ bool is_format_supported_type(TypeKind kind) {
             return false;
     }
 }
+
+const std::vector<ChildOverrideNode> kNoChildOverrides;
 
 }  // namespace
 
@@ -2976,9 +2976,8 @@ void SemanticAnalyzer::validate_child_required_fields(const std::vector<ChildArc
             }
         }
 
-        static const std::vector<ChildOverrideNode> NO_OVERRIDES;
         validate_child_required_fields(child.children,
-                                       override_node != nullptr ? override_node->children : NO_OVERRIDES,
+                                       override_node != nullptr ? override_node->children : kNoChildOverrides,
                                        site_desc,
                                        site_loc);
     }
@@ -2992,9 +2991,8 @@ void SemanticAnalyzer::validate_hierarchical_entities(ProgramNode& program) {
         if (entity == nullptr || entity->children.empty()) {
             continue;
         }
-        static const std::vector<ChildOverrideNode> NO_OVERRIDES;
         validate_child_required_fields(
-            entity->children, NO_OVERRIDES, "entity '" + entity->name + "'", entity->location);
+            entity->children, kNoChildOverrides, "entity '" + entity->name + "'", entity->location);
     }
 }
 

@@ -92,6 +92,16 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
     if (module_name == "std.render.models") {
         return func_name == "animation_count" || func_name == "animation_name" || func_name == "bounds_size";
     }
+    if (module_name == "std.editor") {
+        return func_name == "editor_spawn_template" || func_name == "editor_hit_test_2d" ||
+               func_name == "editor_raycast_3d" || func_name == "editor_screen_to_world_2d" ||
+               func_name == "editor_mouse_delta_2d" || func_name == "editor_plane_project_3d" ||
+               func_name == "editor_mouse_delta_3d" || func_name == "editor_camera_enter" ||
+               func_name == "editor_camera_exit" || func_name == "editor_apply_camera_2d" ||
+               func_name == "editor_apply_camera_3d" || func_name == "editor_wheel_delta" ||
+               func_name == "editor_mouse_delta_screen" || func_name == "editor_entity_position_2d" ||
+               func_name == "editor_entity_position_3d" || func_name == "editor_consume";
+    }
     return false;
 }
 

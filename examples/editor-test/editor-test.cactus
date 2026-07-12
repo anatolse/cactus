@@ -32,6 +32,15 @@ pub template PlayerSpawn:
         visible = true
 
 # ── Camera ────────────────────────────────────────────────────────────────────
+# User-authored camera entity. When edit mode activates (F1), this viewport is
+# deactivated and an editor rig is spawned at the captured 2D pose (zoom and
+# world-center from the last rendered frame). On exit the rig is destroyed and
+# this viewport is restored — EditorCamera is never mutated.
+#
+# Navigation controls (while edit mode is active):
+#   Right/middle drag    Pan world with the cursor
+#   Scroll / - / =       Zoom in/out (clamped to [min_zoom, max_zoom])
+#   F                    Frame the selected entity at its world position
 
 pub entity EditorCamera:
     Camera:

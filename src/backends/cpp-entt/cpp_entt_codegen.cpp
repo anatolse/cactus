@@ -1655,6 +1655,136 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            return nearest;\n";
         out << "        });\n";
     }
+    // ── Camera rig lifecycle impls ────────────────────────────────────────────
+    if (uses_editor && uses_viewport) {
+        out << "    cactus::runtime::entt_backend::register_editor_camera_enter_impl(\n";
+        out << "        [](entt::registry& reg, bool use_3d) -> entt::entity {\n";
+        if (!uses_flat && !uses_volume) {
+            out << "            (void)use_3d;\n";
+            out << "            return entt::entity{entt::null};\n";
+        } else {
+            if (uses_flat) {
+                out << "            if (!use_3d) {\n";
+                out << "                auto __cam2d = cactus::runtime::entt_backend::get_active_camera_2d();\n";
+                out << "                if (__cam2d.zoom == 0.0F) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<Viewport, Camera>().each()) {\n";
+                out << "                        if (__vp.active) {\n";
+                out << "                            __cam2d.target = __cam.offset;\n";
+                out << "                            __cam2d.zoom = (__cam.zoom == 0.0F) ? 1.0F : __cam.zoom;\n";
+                out << "                            break;\n";
+                out << "                        }\n";
+                out << "                    }\n";
+                out << "                }\n";
+                out << "                if (__cam2d.zoom == 0.0F) { __cam2d.zoom = 1.0F; }\n";
+                out << "                std::vector<entt::entity> __saved;\n";
+                out << "                for (auto __ent : reg.view<Viewport>()) {\n";
+                out << "                    if (auto* __vp = reg.try_get<Viewport>(__ent); __vp != nullptr && __vp->active) {\n";
+                out << "                        __saved.push_back(__ent); __vp->active = false;\n";
+                out << "                    }\n";
+                out << "                }\n";
+                out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
+                out << "                auto __rig = reg.create();\n";
+                out << "                reg.emplace<EditorCamera2D>(__rig, EditorCamera2D{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, .min_zoom = 0.05F, .max_zoom = 20.0F});\n";
+                out << "                reg.emplace<Camera>(__rig, Camera{.zoom = __cam2d.zoom, .offset = __cam2d.target});\n";
+                out << "                reg.emplace<Viewport>(__rig);\n";
+                out << "                return __rig;\n";
+                out << "            }\n";
+            }
+            if (uses_volume) {
+                out << "            if (use_3d) {\n";
+                out << "                auto __cam3d = cactus::runtime::entt_backend::get_active_camera_3d();\n";
+                out << "                if (__cam3d.fovy == 0.0F) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<Viewport, Camera, WorldTransform>().each()) {\n";
+                out << "                        if (__vp.active) {\n";
+                out << "                            __cam3d.fovy = __cam.fov_y;\n";
+                out << "                            __cam3d.position = __wt.position;\n";
+                out << "                            const Vector3 __fwd = cactus::runtime::stdlib::math::quat::forward(__wt.rotation);\n";
+                out << "                            __cam3d.target = {.x = __wt.position.x + __fwd.x, .y = __wt.position.y + __fwd.y, .z = __wt.position.z + __fwd.z};\n";
+                out << "                            break;\n";
+                out << "                        }\n";
+                out << "                    }\n";
+                out << "                }\n";
+                out << "                if (__cam3d.fovy == 0.0F) {\n";
+                out << "                    __cam3d.fovy = 60.0F;\n";
+                out << "                    __cam3d.position = Vector3{.x = 0.0F, .y = 5.0F, .z = 10.0F};\n";
+                out << "                    __cam3d.target = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};\n";
+                out << "                }\n";
+                out << "                const Vector3 __pos = __cam3d.position;\n";
+                out << "                const Vector3 __tgt = __cam3d.target;\n";
+                out << "                const float __dx = __pos.x - __tgt.x;\n";
+                out << "                const float __dy = __pos.y - __tgt.y;\n";
+                out << "                const float __dz = __pos.z - __tgt.z;\n";
+                out << "                const float __dist = cactus::runtime::stdlib::math::vec3::length(Vector3{.x = __dx, .y = __dy, .z = __dz});\n";
+                out << "                const float __distance = (__dist < 0.1F) ? 0.1F : __dist;\n";
+                out << "                const float __pitch = std::asin(std::clamp(__dy / __distance, -1.0F, 1.0F));\n";
+                out << "                const float __yaw = std::atan2(-__dx, -__dz);\n";
+                out << "                const Quat __rot = cactus::runtime::stdlib::math::quat::from_euler(__pitch, __yaw, 0.0F);\n";
+                out << "                std::vector<entt::entity> __saved;\n";
+                out << "                for (auto __ent : reg.view<Viewport>()) {\n";
+                out << "                    if (auto* __vp = reg.try_get<Viewport>(__ent); __vp != nullptr && __vp->active) {\n";
+                out << "                        __saved.push_back(__ent); __vp->active = false;\n";
+                out << "                    }\n";
+                out << "                }\n";
+                out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
+                out << "                auto __rig = reg.create();\n";
+                out << "                reg.emplace<EditorCamera3D>(__rig, EditorCamera3D{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = 0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, .min_distance = 0.1F, .max_distance = 1000.0F});\n";
+                out << "                reg.emplace<Camera>(__rig, Camera{.fov_y = __cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
+                out << "                reg.emplace<Viewport>(__rig);\n";
+                out << "                reg.emplace<WorldTransform>(__rig, WorldTransform{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
+                out << "                return __rig;\n";
+                out << "            }\n";
+            }
+            out << "            return entt::entity{entt::null};\n";
+        }
+        out << "        });\n";
+        out << "    cactus::runtime::entt_backend::register_editor_camera_exit_impl(\n";
+        out << "        [](entt::registry& reg, entt::entity rig) {\n";
+        out << "            if (reg.valid(rig)) { reg.destroy(rig); }\n";
+        out << "            for (auto __saved_ent : cactus::runtime::entt_backend::editor_saved_viewports()) {\n";
+        out << "                if (auto* __vp = reg.try_get<Viewport>(__saved_ent)) { __vp->active = true; }\n";
+        out << "            }\n";
+        out << "            cactus::runtime::entt_backend::set_editor_saved_viewports({});\n";
+        out << "        });\n";
+    }
+    if (uses_editor && uses_flat && uses_viewport) {
+        out << "    cactus::runtime::entt_backend::register_editor_apply_camera_2d_impl(\n";
+        out << "        [](entt::registry& reg, entt::entity rig, Vector2 view_center, float zoom) {\n";
+        out << "            if (auto* __cam = reg.try_get<Camera>(rig)) {\n";
+        out << "                __cam->zoom = zoom;\n";
+        out << "                __cam->offset = view_center;\n";
+        out << "            }\n";
+        out << "        });\n";
+        if (program.traits.contains("WorldTransform")) {
+            out << "    cactus::runtime::entt_backend::register_editor_entity_position_2d_impl(\n";
+            out << "        [](entt::registry& reg, entt::entity __eid) -> Vector2 {\n";
+            out << "            if (reg.valid(__eid)) {\n";
+            out << "                if (const auto* __wt = reg.try_get<WorldTransform>(__eid)) {\n";
+            out << "                    return Vector2{.x = __wt->position.x, .y = __wt->position.y};\n";
+            out << "                }\n";
+            out << "            }\n";
+            out << "            return Vector2{.x = 0.0F, .y = 0.0F};\n";
+            out << "        });\n";
+        }
+    }
+    if (uses_editor && uses_volume && uses_viewport &&
+        trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3)) {
+        out << "    cactus::runtime::entt_backend::register_editor_apply_camera_3d_impl(\n";
+        out << "        [](entt::registry& reg, entt::entity rig, Vector3 position, Quat rotation) {\n";
+        out << "            if (auto* __wt = reg.try_get<WorldTransform>(rig)) {\n";
+        out << "                __wt->position = position;\n";
+        out << "                __wt->rotation = rotation;\n";
+        out << "            }\n";
+        out << "        });\n";
+        out << "    cactus::runtime::entt_backend::register_editor_entity_position_3d_impl(\n";
+        out << "        [](entt::registry& reg, entt::entity __eid) -> Vector3 {\n";
+        out << "            if (reg.valid(__eid)) {\n";
+        out << "                if (const auto* __wt = reg.try_get<WorldTransform>(__eid)) {\n";
+        out << "                    return __wt->position;\n";
+        out << "                }\n";
+        out << "            }\n";
+        out << "            return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};\n";
+        out << "        });\n";
+    }
     out << "}\n\n";
 
     // Startup load phase (dsl-scene-loading): fire every system's load handler

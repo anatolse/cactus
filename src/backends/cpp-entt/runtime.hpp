@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace cactus::runtime::entt_backend {
 
@@ -182,6 +183,36 @@ void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept;
 void register_editor_spawn_impl(EditorSpawnImpl fn) noexcept;
 void register_editor_raycast_impl(EditorRaycastImpl fn) noexcept;
 
+// ── Editor camera rig lifecycle ───────────────────────────────────────────────
+// Impl callbacks registered from generated_init_project; they reference
+// generated component types (Camera, Viewport, WorldTransform, EditorCamera2D/3D).
+using EditorCameraEnterImpl      = std::function<entt::entity(entt::registry&, bool)>;
+using EditorCameraExitImpl       = std::function<void(entt::registry&, entt::entity)>;
+using EditorApplyCamera2DImpl    = std::function<void(entt::registry&, entt::entity, Vector2, float)>;
+using EditorApplyCamera3DImpl    = std::function<void(entt::registry&, entt::entity, Vector3, Quat)>;
+using EditorEntityPosition2DImpl = std::function<Vector2(entt::registry&, entt::entity)>;
+using EditorEntityPosition3DImpl = std::function<Vector3(entt::registry&, entt::entity)>;
+
+void register_editor_camera_enter_impl(EditorCameraEnterImpl fn) noexcept;
+void register_editor_camera_exit_impl(EditorCameraExitImpl fn) noexcept;
+void register_editor_apply_camera_2d_impl(EditorApplyCamera2DImpl fn) noexcept;
+void register_editor_apply_camera_3d_impl(EditorApplyCamera3DImpl fn) noexcept;
+void register_editor_entity_position_2d_impl(EditorEntityPosition2DImpl fn) noexcept;
+void register_editor_entity_position_3d_impl(EditorEntityPosition3DImpl fn) noexcept;
+
+void set_editor_saved_viewports(std::vector<entt::entity> viewports) noexcept;
+[[nodiscard]] const std::vector<entt::entity>& editor_saved_viewports() noexcept;
+[[nodiscard]] entt::entity editor_rig_entity() noexcept;
+
+entt::entity editor_camera_enter(entt::registry& registry, bool use_3d) noexcept;
+void editor_camera_exit(entt::registry& registry) noexcept;
+void editor_apply_camera_2d(entt::registry& registry, Vector2 view_center, float zoom) noexcept;
+void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rotation) noexcept;
+[[nodiscard]] float editor_wheel_delta() noexcept;
+[[nodiscard]] Vector2 editor_mouse_delta_screen() noexcept;
+[[nodiscard]] Vector2 editor_entity_position_2d(entt::registry& registry, entt::entity entity_id) noexcept;
+[[nodiscard]] Vector3 editor_entity_position_3d(entt::registry& registry, entt::entity entity_id) noexcept;
+
 /// 3D raycast: return the nearest entity hit by the picking ray through
 /// screen_pos, or entt::null (always null when no impl is registered).
 [[nodiscard]] entt::entity editor_raycast_3d(entt::registry& registry,
@@ -227,6 +258,11 @@ inline void consume_input_button(std::uint8_t button) noexcept {
         return;
     }
     mark_input_key_consumed(cactus_input_button_key(button));
+}
+
+// editor_consume is inline for the same reason: resolves through generated tables.
+inline void editor_consume(std::uint8_t button) noexcept {
+    consume_input_button(button);
 }
 
 [[nodiscard]] inline bool pressed(std::uint8_t button) noexcept {

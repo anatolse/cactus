@@ -71,7 +71,18 @@ pub entity FillLight:
         range = 18.0
         enabled = true
 
-# ── Camera (fixed angled editor view over the y=0 grid) ───────────────────────
+# ── Camera ────────────────────────────────────────────────────────────────────
+# Authored camera entity. When edit mode activates (F1), this viewport is
+# deactivated and an editor rig is spawned at the captured pose. The rig's
+# EditorCamera3D orbit state (yaw, pitch, distance, focus) is derived from
+# MainCamera's position and target at the moment of entry. On exit the rig is
+# destroyed and this viewport is restored — MainCamera is never mutated.
+#
+# Navigation controls (while edit mode is active):
+#   Right/middle drag         Orbit around focus point
+#   Shift + right/middle drag Pan focus point parallel to view plane
+#   Scroll / - / =            Dolly (zoom distance in/out)
+#   F                         Frame the selected entity
 
 pub entity MainCamera:
     WorldTransform:
@@ -94,6 +105,8 @@ pub entity MainCamera:
 # std.editor auto-creates the Editor entity with EditorState defaults (2D
 # interaction). This one-shot load handler flips the editor to the 3D path so
 # clicks raycast against models and Place-mode clicks land on the y=0 plane.
+# EditorModeToggle (in std.editor) reads use_3d on the first input frame and
+# spawns an EditorCamera3D rig at MainCamera's captured pose.
 
 system Enable3DEditor:
     filter:

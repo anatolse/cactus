@@ -1867,4 +1867,113 @@ Vector3 editor_mouse_delta_3d() noexcept {
     return Vector3Subtract(*current_hit, *previous_hit);
 }
 
+// ── Camera rig lifecycle ──────────────────────────────────────────────────────
+
+namespace {
+
+EditorCameraEnterImpl& camera_enter_impl_storage() noexcept {
+    static EditorCameraEnterImpl impl;
+    return impl;
+}
+EditorCameraExitImpl& camera_exit_impl_storage() noexcept {
+    static EditorCameraExitImpl impl;
+    return impl;
+}
+EditorApplyCamera2DImpl& apply_camera_2d_impl_storage() noexcept {
+    static EditorApplyCamera2DImpl impl;
+    return impl;
+}
+EditorApplyCamera3DImpl& apply_camera_3d_impl_storage() noexcept {
+    static EditorApplyCamera3DImpl impl;
+    return impl;
+}
+EditorEntityPosition2DImpl& entity_position_2d_impl_storage() noexcept {
+    static EditorEntityPosition2DImpl impl;
+    return impl;
+}
+EditorEntityPosition3DImpl& entity_position_3d_impl_storage() noexcept {
+    static EditorEntityPosition3DImpl impl;
+    return impl;
+}
+entt::entity& camera_rig_entity_storage() noexcept {
+    static entt::entity ent{entt::null};
+    return ent;
+}
+std::vector<entt::entity>& saved_viewports_storage() noexcept {
+    static std::vector<entt::entity> viewports;
+    return viewports;
+}
+
+}  // namespace
+
+void register_editor_camera_enter_impl(EditorCameraEnterImpl fn) noexcept {
+    camera_enter_impl_storage() = std::move(fn);
+}
+void register_editor_camera_exit_impl(EditorCameraExitImpl fn) noexcept {
+    camera_exit_impl_storage() = std::move(fn);
+}
+void register_editor_apply_camera_2d_impl(EditorApplyCamera2DImpl fn) noexcept {
+    apply_camera_2d_impl_storage() = std::move(fn);
+}
+void register_editor_apply_camera_3d_impl(EditorApplyCamera3DImpl fn) noexcept {
+    apply_camera_3d_impl_storage() = std::move(fn);
+}
+void register_editor_entity_position_2d_impl(EditorEntityPosition2DImpl fn) noexcept {
+    entity_position_2d_impl_storage() = std::move(fn);
+}
+void register_editor_entity_position_3d_impl(EditorEntityPosition3DImpl fn) noexcept {
+    entity_position_3d_impl_storage() = std::move(fn);
+}
+
+void set_editor_saved_viewports(std::vector<entt::entity> viewports) noexcept {
+    saved_viewports_storage() = std::move(viewports);
+}
+const std::vector<entt::entity>& editor_saved_viewports() noexcept {
+    return saved_viewports_storage();
+}
+entt::entity editor_rig_entity() noexcept {
+    return camera_rig_entity_storage();
+}
+
+entt::entity editor_camera_enter(entt::registry& registry, bool use_3d) noexcept {
+    if (camera_enter_impl_storage()) {
+        camera_rig_entity_storage() = camera_enter_impl_storage()(registry, use_3d);
+    }
+    return camera_rig_entity_storage();
+}
+void editor_camera_exit(entt::registry& registry) noexcept {
+    if (camera_exit_impl_storage()) {
+        camera_exit_impl_storage()(registry, camera_rig_entity_storage());
+    }
+    camera_rig_entity_storage() = entt::entity{entt::null};
+}
+void editor_apply_camera_2d(entt::registry& registry, Vector2 view_center, float zoom) noexcept {
+    if (apply_camera_2d_impl_storage()) {
+        apply_camera_2d_impl_storage()(registry, camera_rig_entity_storage(), view_center, zoom);
+    }
+}
+void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rotation) noexcept {
+    if (apply_camera_3d_impl_storage()) {
+        apply_camera_3d_impl_storage()(registry, camera_rig_entity_storage(), position, rotation);
+    }
+}
+float editor_wheel_delta() noexcept {
+    return GetMouseWheelMove();
+}
+Vector2 editor_mouse_delta_screen() noexcept {
+    return GetMouseDelta();
+}
+Vector2 editor_entity_position_2d(entt::registry& registry, entt::entity entity_id) noexcept {
+    if (entity_position_2d_impl_storage()) {
+        return entity_position_2d_impl_storage()(registry, entity_id);
+    }
+    return Vector2{.x = 0.0F, .y = 0.0F};
+}
+Vector3 editor_entity_position_3d(entt::registry& registry, entt::entity entity_id) noexcept {
+    if (entity_position_3d_impl_storage()) {
+        return entity_position_3d_impl_storage()(registry, entity_id);
+    }
+    return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+}
+
 }  // namespace cactus::runtime::entt_backend

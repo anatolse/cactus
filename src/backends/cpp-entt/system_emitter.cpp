@@ -100,7 +100,11 @@ bool module_exports_stdlib_func(const std::string& module_name, const std::strin
         return func_name == "editor_spawn_template" || func_name == "editor_hit_test_2d" ||
                func_name == "editor_raycast_3d" || func_name == "editor_screen_to_world_2d" ||
                func_name == "editor_mouse_delta_2d" || func_name == "editor_plane_project_3d" ||
-               func_name == "editor_mouse_delta_3d";
+               func_name == "editor_mouse_delta_3d" || func_name == "editor_camera_enter" ||
+               func_name == "editor_camera_exit" || func_name == "editor_apply_camera_2d" ||
+               func_name == "editor_apply_camera_3d" || func_name == "editor_wheel_delta" ||
+               func_name == "editor_mouse_delta_screen" || func_name == "editor_entity_position_2d" ||
+               func_name == "editor_entity_position_3d" || func_name == "editor_consume";
     }
     if (module_name == "std.random") {
         return func_name == "seeded" || func_name == "uniform" || func_name == "uniform_int" ||
@@ -1219,7 +1223,13 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         // need registry as first arg
                         const bool needs_registry = (ident->name == "editor_spawn_template" ||
                                                      ident->name == "editor_hit_test_2d" ||
-                                                     ident->name == "editor_raycast_3d");
+                                                     ident->name == "editor_raycast_3d" ||
+                                                     ident->name == "editor_camera_enter" ||
+                                                     ident->name == "editor_camera_exit" ||
+                                                     ident->name == "editor_apply_camera_2d" ||
+                                                     ident->name == "editor_apply_camera_3d" ||
+                                                     ident->name == "editor_entity_position_2d" ||
+                                                     ident->name == "editor_entity_position_3d");
                         std::string result = lowered_name + "(";
                         if (needs_registry) {
                             result += "registry";

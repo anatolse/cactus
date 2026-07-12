@@ -2623,4 +2623,175 @@ TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creatio
     CHECK(code.find("registry.view<Parent>()") != std::string::npos);
 }
 
+// ── 5.1: Key constant mapping and new extern declarations ───────────────────
+
+TEST_CASE("Codegen EnTT: Key.Shift/Minus/Equal/F map to correct raylib constants",
+          "[codegen-entt][input][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event input\n"
+        "use std.input\n"
+        "input PanMod: button\n"
+        "    key = Key.Shift\n"
+        "input ZoomIn: button\n"
+        "    key = Key.Equal\n"
+        "input ZoomOut: button\n"
+        "    key = Key.Minus\n"
+        "input FrameSel: button\n"
+        "    key = Key.F\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("KEY_LEFT_SHIFT") != std::string::npos);
+    CHECK(code.find("KEY_EQUAL") != std::string::npos);
+    CHECK(code.find("KEY_MINUS") != std::string::npos);
+    CHECK(code.find("KEY_F") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: editor camera externs are recognized as stdlib functions in generated calls",
+          "[codegen-entt][editor][stdlib]") {
+    ProgramNode program;
+    // Call a selection of new externs from a system so they appear in the
+    // generated output. module_exports_stdlib_func recognition causes them to be
+    // emitted via cactus::runtime::entt_backend:: rather than left unqualified.
+    auto decorated = full_pipeline(
+        "use std.editor\n"
+        "pub event tick\n"
+        "pub extern func editor_wheel_delta() float\n"
+        "pub extern func editor_mouse_delta_screen() vec2\n"
+        "trait Rig:\n"
+        "    var active: bool\n"
+        "system NavPoll:\n"
+        "    filter:\n"
+        "        Rig\n"
+        "    on tick:\n"
+        "        let _w = editor_wheel_delta()\n"
+        "        let _d = editor_mouse_delta_screen()\n",
+        program);
+
+    const auto code   = CppEnttCodegen::generate(decorated);
+    const auto system = generated_function(code, "void nav_poll_tick");
+    CHECK(system.find("cactus::runtime::entt_backend::editor_wheel_delta()") != std::string::npos);
+    CHECK(system.find("cactus::runtime::entt_backend::editor_mouse_delta_screen()") != std::string::npos);
+}
+
+// ── 5.3: editor_consume generates correct runtime call ───────────────────────
+
+TEST_CASE("Codegen EnTT: editor_consume call generates runtime consume invocation",
+          "[codegen-entt][editor][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.editor\n"
+        "pub event input\n"
+        "use std.input\n"
+        "input NavDrag: button\n"
+        "    mouse = MouseButton.Right\n"
+        "pub extern func editor_consume(b: InputButton)\n"
+        "trait EditorSt:\n"
+        "    var active: bool = true\n"
+        "system EditorInputConsume:\n"
+        "    filter:\n"
+        "        EditorSt\n"
+        "    on input:\n"
+        "        editor_consume(NavDrag)\n",
+        program);
+
+    const auto code   = CppEnttCodegen::generate(decorated);
+    const auto system = generated_function(code, "void editor_input_consume_input");
+    // The call must pass K_NAV_DRAG (the generated enum constant) to editor_consume.
+    CHECK(system.find("cactus::runtime::entt_backend::editor_consume(K_NAV_DRAG)") !=
+          std::string::npos);
+}
+
+// ── 5.4: Camera rig lifecycle registration in generated_init_project ─────────
+
+static constexpr const char* kCameraVolumeTrait =
+    "trait Camera:\n"
+    "    var fov_y: float\n"
+    "    var near: float\n"
+    "    var far: float\n";
+
+static constexpr const char* kWorldTransformVolumeTrait =
+    "trait WorldTransform:\n"
+    "    var position: vec3\n"
+    "    var rotation: quat\n"
+    "    var scale: vec3\n";
+
+TEST_CASE("Codegen EnTT: 2D editor+viewport program registers 2D camera rig lifecycle impls",
+          "[codegen-entt][editor][camera-rig]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string("use std.editor\n"
+                    "use std.camera.viewport\n"
+                    "use std.camera.flat\n") +
+            kViewportTrait + kCameraFlatTrait,
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto init = generated_function(code, "void generated_init_project");
+
+    // Enter and exit impls are always registered together
+    CHECK(init.find("register_editor_camera_enter_impl") != std::string::npos);
+    CHECK(init.find("register_editor_camera_exit_impl") != std::string::npos);
+
+    // Enter impl captures 2D pose and spawns rig with EditorCamera2D
+    CHECK(init.find("EditorCamera2D{.view_center") != std::string::npos);
+    CHECK(init.find(".min_zoom = 0.05F") != std::string::npos);
+    CHECK(init.find(".max_zoom = 20.0F") != std::string::npos);
+    CHECK(init.find("set_editor_saved_viewports") != std::string::npos);
+
+    // Exit impl destroys rig and restores viewports
+    CHECK(init.find("reg.destroy(rig)") != std::string::npos);
+    CHECK(init.find("__vp->active = true") != std::string::npos);
+
+    // 2D apply impl writes zoom and offset back to rig Camera
+    CHECK(init.find("register_editor_apply_camera_2d_impl") != std::string::npos);
+    CHECK(init.find("__cam->zoom = zoom") != std::string::npos);
+    CHECK(init.find("__cam->offset = view_center") != std::string::npos);
+
+    // No 3D impls without uses_volume
+    CHECK(init.find("register_editor_apply_camera_3d_impl") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: 3D editor+viewport program registers 3D camera rig lifecycle impls",
+          "[codegen-entt][editor][camera-rig]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string("use std.editor\n"
+                    "use std.camera.viewport\n"
+                    "use std.camera.volume\n") +
+            kViewportTrait + kCameraVolumeTrait + kWorldTransformVolumeTrait,
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto init = generated_function(code, "void generated_init_project");
+
+    // Enter impl derives orbit state from camera pose
+    CHECK(init.find("register_editor_camera_enter_impl") != std::string::npos);
+    CHECK(init.find("std::atan2(-__dx, -__dz)") != std::string::npos);   // yaw derivation
+    CHECK(init.find("std::asin") != std::string::npos);                   // pitch derivation
+    CHECK(init.find("EditorCamera3D{.focus") != std::string::npos);
+    CHECK(init.find(".orbit_speed = 0.005F") != std::string::npos);
+    CHECK(init.find(".min_pitch = -1.5F") != std::string::npos);
+    CHECK(init.find(".max_pitch = 1.5F") != std::string::npos);
+    CHECK(init.find(".min_distance = 0.1F") != std::string::npos);
+    CHECK(init.find(".max_distance = 1000.0F") != std::string::npos);
+
+    // Exit impl destroys rig
+    CHECK(init.find("register_editor_camera_exit_impl") != std::string::npos);
+    CHECK(init.find("reg.destroy(rig)") != std::string::npos);
+
+    // 3D apply impl writes position and rotation to rig WorldTransform (5.5 clamping driven by these writes)
+    CHECK(init.find("register_editor_apply_camera_3d_impl") != std::string::npos);
+    CHECK(init.find("__wt->position = position") != std::string::npos);
+    CHECK(init.find("__wt->rotation = rotation") != std::string::npos);
+
+    // Entity position impl returns WorldTransform.position
+    CHECK(init.find("register_editor_entity_position_3d_impl") != std::string::npos);
+    CHECK(init.find("return __wt->position") != std::string::npos);
+
+    // No 2D-specific impls without uses_flat
+    CHECK(init.find("register_editor_apply_camera_2d_impl") == std::string::npos);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

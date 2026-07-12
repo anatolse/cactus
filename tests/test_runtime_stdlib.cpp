@@ -731,6 +731,61 @@ TEST_CASE("Runtime stdlib: editor_raycast_3d without a registered impl returns n
           entt::entity{entt::null});
 }
 
+TEST_CASE("Runtime stdlib: consumed input state reset clears all consumed keys and buttons",
+          "[runtime][editor][entt]") {
+    entt_backend::reset_consumed_input();
+
+    CHECK_FALSE(entt_backend::is_input_key_consumed(87));   // KEY_W — starts clear
+    CHECK_FALSE(entt_backend::is_input_mouse_consumed(1));  // MOUSE_BUTTON_RIGHT — starts clear
+
+    entt_backend::mark_input_key_consumed(87);
+    entt_backend::mark_input_mouse_consumed(1);
+    CHECK(entt_backend::is_input_key_consumed(87));
+    CHECK(entt_backend::is_input_mouse_consumed(1));
+
+    entt_backend::reset_consumed_input();
+    CHECK_FALSE(entt_backend::is_input_key_consumed(87));
+    CHECK_FALSE(entt_backend::is_input_mouse_consumed(1));
+}
+
+TEST_CASE("Runtime stdlib: mark_input_key_consumed is code-specific and does not affect other codes",
+          "[runtime][editor][entt]") {
+    entt_backend::reset_consumed_input();
+    entt_backend::mark_input_key_consumed(65);  // KEY_A
+    CHECK(entt_backend::is_input_key_consumed(65));
+    CHECK_FALSE(entt_backend::is_input_key_consumed(66));   // KEY_B — not consumed
+    CHECK_FALSE(entt_backend::is_input_mouse_consumed(0));  // mouse codes are separate
+}
+
+TEST_CASE("Runtime stdlib: editor camera rig lifecycle functions are safe without registered impls",
+          "[runtime][editor][entt]") {
+    entt::registry registry;
+    entt_backend::register_editor_camera_enter_impl({});
+    entt_backend::register_editor_camera_exit_impl({});
+    entt_backend::register_editor_apply_camera_2d_impl({});
+    entt_backend::register_editor_apply_camera_3d_impl({});
+    entt_backend::register_editor_entity_position_2d_impl({});
+    entt_backend::register_editor_entity_position_3d_impl({});
+
+    // enter with no impl returns null and records null as rig
+    const auto rig = entt_backend::editor_camera_enter(registry, false);
+    CHECK(rig == entt::entity{entt::null});
+
+    // apply and query with no impls don't crash and return zero values
+    entt_backend::editor_apply_camera_2d(registry, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F);
+    entt_backend::editor_apply_camera_3d(registry, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                         Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F});
+    const auto pos2 = entt_backend::editor_entity_position_2d(registry, entt::entity{entt::null});
+    CHECK(pos2.x == Catch::Approx(0.0F));
+    CHECK(pos2.y == Catch::Approx(0.0F));
+    const auto pos3 = entt_backend::editor_entity_position_3d(registry, entt::entity{entt::null});
+    CHECK(pos3.x == Catch::Approx(0.0F));
+    CHECK(pos3.z == Catch::Approx(0.0F));
+
+    // exit with no impl doesn't crash
+    entt_backend::editor_camera_exit(registry);
+}
+
 TEST_CASE("Runtime stdlib: sequence reproducibility", "[runtime][stdlib][random]") {
     auto rng_a = stdlib::random::seeded(5);
     auto rng_b = stdlib::random::seeded(5);

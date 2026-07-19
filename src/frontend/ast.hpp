@@ -4,6 +4,7 @@
 #include "common/types.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -168,9 +169,18 @@ struct CallExpr {
     SourceLocation location;
 };
 
+// Resolved enum-member identity for member chains like `inp.Key.A` whose head
+// names an enum type. Set by semantic analysis; source spelling is preserved.
+struct ResolvedEnumMember {
+    SymbolId enum_id;    // e.g. Enum std.input / "Key"
+    std::string member;  // "A" — validated against the enum's declared members
+    std::int32_t index = -1;  // member ordinal within the enum declaration
+};
+
 struct MemberExpr {
     std::unique_ptr<ExprNode> object;
     std::string member;
+    std::optional<ResolvedEnumMember> resolved_enum_member;  // set by semantic analysis
     SourceLocation location;
 };
 

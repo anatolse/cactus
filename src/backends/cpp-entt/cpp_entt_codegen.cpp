@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace cactus {
@@ -316,37 +317,56 @@ bool is_update_phase_extern(const ExternSystemNode& sys, const DecoratedProgram&
     return !is_render_phase_extern(sys, program);
 }
 
-std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
+// Input bindings are emitted from the resolved enum member identity attached
+// by semantic analysis (unified-name-resolution change) — never from source
+// spelling or AST shape, which broke when examples moved to alias-qualified
+// constants (`inp.Key.A`).
+const ResolvedEnumMember* resolved_input_member(const ExprNode& expr) {
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
-        if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
-            if (ident->name == "Key") {
-                // raylib has no side-agnostic modifier constants, only
-                // KEY_LEFT_*/KEY_RIGHT_*; the DSL modifiers map to the left keys.
-                if (member->member == "Shift") {
-                    return "KEY_LEFT_SHIFT";
-                }
-                if (member->member == "Ctrl") {
-                    return "KEY_LEFT_CONTROL";
-                }
-                if (member->member == "Alt") {
-                    return "KEY_LEFT_ALT";
-                }
-                return "KEY_" + upper_copy(snake_case(member->member));
-            }
+        if (member->resolved_enum_member.has_value()) {
+            return &*member->resolved_enum_member;
         }
     }
-    return std::nullopt;
+    return nullptr;
+}
+
+bool is_std_input_enum(const ResolvedEnumMember& member, std::string_view enum_name) {
+    return member.enum_id.module.name == "std.input" && member.enum_id.local_name == enum_name;
+}
+
+std::optional<std::string> raylib_key_constant(const ExprNode& expr) {
+    const auto* member = resolved_input_member(expr);
+    if (member == nullptr || !is_std_input_enum(*member, "Key")) {
+        return std::nullopt;
+    }
+    // raylib has no side-agnostic modifier constants, only
+    // KEY_LEFT_*/KEY_RIGHT_*; the DSL modifiers map to the left keys.
+    if (member->member == "Shift") {
+        return "KEY_LEFT_SHIFT";
+    }
+    if (member->member == "Ctrl") {
+        return "KEY_LEFT_CONTROL";
+    }
+    if (member->member == "Alt") {
+        return "KEY_LEFT_ALT";
+    }
+    return "KEY_" + upper_copy(snake_case(member->member));
 }
 
 std::optional<std::string> raylib_mouse_constant(const ExprNode& expr) {
-    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
-        if (const auto* ident = std::get_if<IdentExpr>(&member->object->expr)) {
-            if (ident->name == "MouseButton") {
-                return "MOUSE_BUTTON_" + upper_copy(snake_case(member->member));
-            }
-        }
+    const auto* member = resolved_input_member(expr);
+    if (member == nullptr || !is_std_input_enum(*member, "MouseButton")) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return "MOUSE_BUTTON_" + upper_copy(snake_case(member->member));
+}
+
+// A binding property that reaches codegen without the matching resolved enum
+// member is an internal error: the frontend rejects such programs. Failing
+// loudly here replaces the old silent `0`/`-1` dead-input fallbacks.
+[[noreturn]] void fail_unresolved_input_binding(const std::string& input_name, const std::string& prop_key) {
+    throw std::runtime_error("internal error: input '" + input_name + "' property '" + prop_key +
+                             "' lacks a resolved std.input binding; semantic analysis must reject this program");
 }
 
 std::string pad_to_width(const std::string& value, std::size_t width) {
@@ -1316,8 +1336,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                         if (prop.key == "key") {
                             if (auto maybe_key = raylib_key_constant(*prop.value)) {
                                 key = *maybe_key;
-                            } else if (auto maybe_mouse = raylib_mouse_constant(*prop.value)) {
-                                key = *maybe_mouse;
+                            } else {
+                                fail_unresolved_input_binding(input->name, prop.key);
                             }
                         }
                     }
@@ -1343,6 +1363,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                         if (prop.key == "mouse") {
                             if (auto maybe_mouse = raylib_mouse_constant(*prop.value)) {
                                 mouse = *maybe_mouse;
+                            } else {
+                                fail_unresolved_input_binding(input->name, prop.key);
                             }
                         }
                     }
@@ -1404,10 +1426,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                         if (prop.key == "negative") {
                             if (auto key = raylib_key_constant(*prop.value)) {
                                 negative = axis_side(*key);
+                            } else {
+                                fail_unresolved_input_binding(input->name, prop.key);
                             }
                         } else if (prop.key == "positive") {
                             if (auto key = raylib_key_constant(*prop.value)) {
                                 positive = axis_side(*key);
+                            } else {
+                                fail_unresolved_input_binding(input->name, prop.key);
                             }
                         }
                     }

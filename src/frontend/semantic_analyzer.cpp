@@ -275,6 +275,29 @@ SymbolId resolved_decl_symbol(const ResolvedDecl& decl,
     return make_symbol_id(kind, module_name, local_name);
 }
 
+/// Collect the dotted identifier chain of a member expression, outermost
+/// member last (e.g. `inp.Key.A` → ["inp", "Key", "A"]). Returns nullopt when
+/// the chain head is not a plain identifier (runtime member access).
+std::optional<std::vector<std::string>> member_chain_segments(const MemberExpr& member) {
+    std::vector<std::string> segments;
+    segments.push_back(member.member);
+    const ExprNode* cursor = member.object.get();
+    while (cursor != nullptr) {
+        if (const auto* inner = std::get_if<MemberExpr>(&cursor->expr)) {
+            segments.push_back(inner->member);
+            cursor = inner->object.get();
+            continue;
+        }
+        if (const auto* ident = std::get_if<IdentExpr>(&cursor->expr)) {
+            segments.push_back(ident->name);
+            std::ranges::reverse(segments);
+            return segments;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 bool expr_contains_self(const ExprNode& expr);
 bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments);
 std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr);
@@ -360,7 +383,10 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                 }
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                MemberExpr copy{.object = clone_expr(*e.object), .member = e.member, .location = e.location};
+                MemberExpr copy{.object               = clone_expr(*e.object),
+                                .member               = e.member,
+                                .resolved_enum_member = e.resolved_enum_member,
+                                .location             = e.location};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, LambdaExpr>) {
                 LambdaExpr copy{.params = e.params, .body = clone_expr(*e.body), .location = e.location};
@@ -1139,6 +1165,9 @@ void SemanticAnalyzer::resolve_trait_references(
                     }
                 } else if constexpr (std::is_same_v<E, MemberExpr>) {
                     resolve_expr(*e.object);
+                    // Enum member chains (`Key.A`, `inp.Key.A`, `std.input.Key.A`)
+                    // resolve here; non-enum chains fall through untouched.
+                    resolve_enum_member_expr(e, expr.location);
                 } else if constexpr (std::is_same_v<E, LambdaExpr>) {
                     resolve_expr(*e.body);
                 } else if constexpr (std::is_same_v<E, PipelineExpr>) {
@@ -1330,6 +1359,7 @@ void SemanticAnalyzer::resolve_trait_references(
                     for (auto& prop : node.props) {
                         resolve_expr(*prop.value);
                     }
+                    validate_input_decl_props(node);
                 }
             },
             decl);
@@ -3065,6 +3095,279 @@ std::optional<SymbolId> SemanticAnalyzer::try_resolve_func_ref_to_symbol(const s
     }
 
     return std::nullopt;
+}
+
+// ── Unified name resolution (unified-name-resolution change, D1/D2/D4) ──────
+
+const ImportedSymbols* SemanticAnalyzer::find_imported_module(const std::string& qualifier_or_canonical) const {
+    auto it = imports_.modules.find(qualifier_or_canonical);
+    if (it != imports_.modules.end()) {
+        return &it->second;
+    }
+    // Canonical module paths are valid qualifiers even when the module was
+    // imported under an alias (spec: alias and canonical are interchangeable).
+    // Exact qualifier keys (aliases) win over the canonical scan; aliases are
+    // single identifiers, so only dot-free module names can ever collide.
+    for (const auto& [_, syms] : imports_.modules) {
+        if (syms.module_name == qualifier_or_canonical) {
+            return &syms;
+        }
+    }
+    return nullptr;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedSymbols& syms,
+                                                                 const std::string& name) {
+    // One namespace per module: at most one of these maps can hold the name.
+    if (auto trait_it = syms.traits.find(name); trait_it != syms.traits.end()) {
+        return resolved_decl_symbol(trait_it->second, SymbolKind::Trait, syms.module_name, name);
+    }
+    if (auto struct_it = syms.structs.find(name); struct_it != syms.structs.end()) {
+        return resolved_decl_symbol(struct_it->second, SymbolKind::Struct, syms.module_name, name);
+    }
+    if (auto enum_it = syms.enums.find(name); enum_it != syms.enums.end()) {
+        return resolved_decl_symbol(enum_it->second, SymbolKind::Enum, syms.module_name, name);
+    }
+    if (auto func_it = syms.funcs.find(name); func_it != syms.funcs.end()) {
+        return resolved_decl_symbol(func_it->second, SymbolKind::Func, syms.module_name, name);
+    }
+    if (auto tmpl_it = syms.templates.find(name); tmpl_it != syms.templates.end()) {
+        return tmpl_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Template, syms.module_name, name));
+    }
+    if (auto event_it = syms.event_symbols.find(name); event_it != syms.event_symbols.end()) {
+        return event_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Event, syms.module_name, name));
+    }
+    if (auto sys_it = syms.systems.find(name); sys_it != syms.systems.end()) {
+        return sys_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::System, syms.module_name, name));
+    }
+    if (auto fs_it = syms.func_symbols.find(name); fs_it != syms.func_symbols.end()) {
+        return fs_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Func, syms.module_name, name));
+    }
+    return std::nullopt;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::lookup_local_symbol(const std::string& name) const {
+    auto it = module_scope_symbols_.find(name);
+    if (it == module_scope_symbols_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+std::optional<ResolvedRef> SemanticAnalyzer::resolve_name(const std::vector<std::string>& segments) const {
+    if (segments.empty()) {
+        return std::nullopt;
+    }
+
+    // Module qualifiers first, longest dotted prefix wins (D2); at least one
+    // trailing segment must remain to name the symbol.
+    for (std::size_t take = segments.size() - 1; take >= 1; --take) {
+        std::string prefix = segments[0];
+        for (std::size_t i = 1; i < take; ++i) {
+            prefix += "." + segments[i];
+        }
+        const bool is_current      = prefix == current_module_name_;
+        const ImportedSymbols* mod = find_imported_module(prefix);
+        if (!is_current && mod == nullptr) {
+            continue;
+        }
+
+        const std::string& sym_name = segments[take];
+        std::vector<std::string> members(segments.begin() + static_cast<std::ptrdiff_t>(take) + 1, segments.end());
+        if (is_current) {
+            if (auto local = lookup_local_symbol(sym_name)) {
+                return ResolvedRef{.symbol = *local, .member_segments = std::move(members)};
+            }
+        }
+        if (mod != nullptr) {
+            if (auto imported = lookup_imported_symbol(*mod, sym_name)) {
+                return ResolvedRef{.symbol = *imported, .member_segments = std::move(members)};
+            }
+        }
+        // The longest matching module qualifier is authoritative: a matched
+        // module that lacks the symbol is a failure, not a cue to reinterpret
+        // the prefix as a shorter module plus more segments.
+        return std::nullopt;
+    }
+
+    // Bare name: local declarations, then the std.core prelude. Ordinary
+    // imports stay namespace bindings (Oberon policy) — no unqualified lookup.
+    std::vector<std::string> members(segments.begin() + 1, segments.end());
+    if (auto local = lookup_local_symbol(segments[0])) {
+        return ResolvedRef{.symbol = *local, .member_segments = std::move(members)};
+    }
+    if (const ImportedSymbols* prelude = find_imported_module("std.core")) {
+        if (auto sym = lookup_imported_symbol(*prelude, segments[0])) {
+            return ResolvedRef{.symbol = *sym, .member_segments = std::move(members)};
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<ResolvedRef> SemanticAnalyzer::resolve_name_required(const std::vector<std::string>& segments,
+                                                                   const SourceLocation& loc) {
+    auto resolved = resolve_name(segments);
+    if (resolved.has_value()) {
+        return resolved;
+    }
+
+    std::string spelled = segments.empty() ? "" : segments[0];
+    for (std::size_t i = 1; i < segments.size(); ++i) {
+        spelled += "." + segments[i];
+    }
+
+    // When the head names a symbol some import provides, suggest qualified
+    // spellings (alias and canonical) instead of a bare "unknown symbol".
+    std::vector<std::string> suggestions;
+    if (!segments.empty()) {
+        const auto add_suggestions = [&](const std::unordered_map<std::string, std::vector<std::string>>& providers) {
+            auto pit = providers.find(segments[0]);
+            if (pit == providers.end()) {
+                return;
+            }
+            for (const auto& qualifier : pit->second) {
+                suggestions.push_back("'" + qualifier + "." + spelled + "'");
+                const auto* mod = find_imported_module(qualifier);
+                if (mod != nullptr && mod->module_name != qualifier) {
+                    suggestions.push_back("'" + mod->module_name + "." + spelled + "'");
+                }
+            }
+        };
+        add_suggestions(imports_.enum_providers);
+        add_suggestions(imports_.trait_providers);
+        add_suggestions(imports_.struct_providers);
+        add_suggestions(imports_.func_providers);
+    }
+
+    std::string message = "unknown symbol '" + spelled + "'";
+    if (!suggestions.empty()) {
+        message += "; ordinary imports must be qualified: use " + suggestions[0];
+        if (suggestions.size() > 1) {
+            message += " or " + suggestions[1];
+        }
+    }
+    errors_.error(loc, message);
+    return std::nullopt;
+}
+
+const ResolvedEnum* SemanticAnalyzer::find_resolved_enum(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Enum) {
+        return nullptr;
+    }
+    if (symbol.module.name == current_module_name_) {
+        auto it = result_.enums.find(symbol.local_name);
+        if (it != result_.enums.end()) {
+            return &it->second;
+        }
+    }
+    for (const auto& [_, syms] : imports_.modules) {
+        if (syms.module_name != symbol.module.name) {
+            continue;
+        }
+        auto it = syms.enums.find(symbol.local_name);
+        if (it != syms.enums.end()) {
+            return &it->second;
+        }
+    }
+    return nullptr;
+}
+
+void SemanticAnalyzer::resolve_enum_member_expr(MemberExpr& member, const SourceLocation& loc) {
+    auto segments = member_chain_segments(member);
+    if (!segments.has_value() || segments->size() < 2) {
+        return;  // non-identifier head or too short — runtime member access
+    }
+
+    auto resolved = resolve_name(*segments);
+    if (!resolved.has_value() || resolved->symbol.kind != SymbolKind::Enum) {
+        return;  // not an enum reference — leave to type checking / callers
+    }
+    if (resolved->member_segments.empty()) {
+        return;  // the chain names the enum type itself, not a member
+    }
+    const auto canonical = make_canonical_id(resolved->symbol);
+    if (resolved->member_segments.size() > 1) {
+        errors_.error(loc,
+                      "enum member '" + resolved->member_segments[0] + "' of '" + canonical + "' has no members");
+        return;
+    }
+    const ResolvedEnum* enum_decl = find_resolved_enum(resolved->symbol);
+    if (enum_decl == nullptr) {
+        return;  // enum record unavailable (should not happen after phase 2)
+    }
+    const std::string& wanted = resolved->member_segments[0];
+    for (std::size_t i = 0; i < enum_decl->variants.size(); ++i) {
+        if (enum_decl->variants[i] == wanted) {
+            member.resolved_enum_member = ResolvedEnumMember{
+                .enum_id = resolved->symbol, .member = wanted, .index = static_cast<std::int32_t>(i)};
+            return;
+        }
+    }
+    errors_.error(loc, "'" + wanted + "' is not a member of enum '" + canonical + "'");
+}
+
+void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
+    for (const auto& prop : node.props) {
+        const bool is_key_prop   = prop.key == "key" || prop.key == "negative" || prop.key == "positive";
+        const bool is_mouse_prop = prop.key == "mouse";
+        const bool is_gamepad    = prop.key == "gamepad";
+
+        if (!is_key_prop && !is_mouse_prop && !is_gamepad) {
+            if (prop.key == "invert") {
+                const auto* lit = std::get_if<LiteralExpr>(&prop.value->expr);
+                if (lit == nullptr || lit->kind != LiteralExpr::Kind::Bool) {
+                    errors_.error(prop.location, "input property 'invert' requires a bool value");
+                }
+            }
+            continue;
+        }
+
+        std::string expected = "Key";
+        if (is_mouse_prop) {
+            expected = "MouseButton";
+        } else if (is_gamepad) {
+            expected = node.input_kind == InputKind::Button ? "GamepadButton" : "GamepadAxis";
+        }
+        const std::string expected_canonical = "std.input." + expected;
+
+        const auto* member = std::get_if<MemberExpr>(&prop.value->expr);
+        if (member == nullptr) {
+            errors_.error(prop.location,
+                          "input property '" + prop.key + "' must reference a " + expected_canonical + " member");
+            continue;
+        }
+
+        if (member->resolved_enum_member.has_value()) {
+            const auto& rem = *member->resolved_enum_member;
+            if (rem.enum_id.module.name != "std.input" || rem.enum_id.local_name != expected) {
+                errors_.error(prop.location,
+                              "input property '" + prop.key + "' requires a " + expected_canonical +
+                                  " member, got '" + make_canonical_id(rem.enum_id) + "." + rem.member + "'");
+            }
+            continue;
+        }
+
+        // No resolved member: produce a precise required-mode diagnostic,
+        // avoiding a duplicate when resolve_enum_member_expr already reported
+        // (known enum, unknown member).
+        auto segments = member_chain_segments(*member);
+        if (!segments.has_value() || segments->size() < 2) {
+            errors_.error(prop.location,
+                          "input property '" + prop.key + "' must reference a " + expected_canonical + " member");
+            continue;
+        }
+        auto resolved = resolve_name(*segments);
+        if (resolved.has_value()) {
+            if (resolved->symbol.kind == SymbolKind::Enum) {
+                continue;  // unknown-member error already reported by resolve_enum_member_expr
+            }
+            errors_.error(prop.location,
+                          "input property '" + prop.key + "' requires a " + expected_canonical +
+                              " member, got '" + make_canonical_id(resolved->symbol) + "'");
+            continue;
+        }
+        (void)resolve_name_required(*segments, prop.location);
+    }
 }
 
 // ── Task 3.4: Canonical system ID resolution for after: clauses ─────────────────

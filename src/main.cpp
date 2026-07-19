@@ -436,7 +436,13 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
     }
 
     // ── Code generation ───────────────────────────────────────────────────────
-    std::string generated = cactus::CppEnttCodegen::generate(decorated);
+    std::string generated;
+    try {
+        generated = cactus::CppEnttCodegen::generate(decorated);
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return 1;
+    }
 
     // ── Output ────────────────────────────────────────────────────────────────
     if (output_file.empty()) {

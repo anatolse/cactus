@@ -55,6 +55,8 @@ pub enum Key:
     Shift
     Ctrl
     Alt
+    PageUp
+    PageDown
     # Punctuation keys (Equal shares the + keycap; used for keyboard zoom)
     Minus
     Equal

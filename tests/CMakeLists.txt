@@ -18,6 +18,11 @@ add_executable(test_semantic test_semantic.cpp)
 target_link_libraries(test_semantic PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticTests COMMAND test_semantic)
 
+# Unified name resolution tests (unified-name-resolution change)
+add_executable(test_name_resolution test_name_resolution.cpp)
+target_link_libraries(test_name_resolution PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME NameResolutionTests COMMAND test_name_resolution)
+
 # EnTT codegen tests
 add_executable(test_codegen_entt test_codegen_entt.cpp)
 target_link_libraries(test_codegen_entt PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)

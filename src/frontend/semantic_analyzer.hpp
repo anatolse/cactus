@@ -188,6 +188,17 @@ struct ModuleImports {
              std::unordered_set<std::string> non_pub_templates = {});
 };
 
+// ── Unified name resolution (unified-name-resolution change) ────────────────
+
+/// Result of resolving a dotted reference through the unified resolver: the
+/// module-scope symbol it names plus any trailing member segments (e.g. the
+/// enum member `A` in `inp.Key.A`). The symbol's kind lives on SymbolId and is
+/// checked by callers after lookup succeeds.
+struct ResolvedRef {
+    SymbolId symbol;
+    std::vector<std::string> member_segments;
+};
+
 // ── Semantic Analyzer ───────────────────────────────────────────────────────
 
 class SemanticAnalyzer {
@@ -361,6 +372,28 @@ private:
 
     /// Resolve a func reference to its canonical SymbolId.
     std::optional<SymbolId> try_resolve_func_ref_to_symbol(const std::string& ref) const;
+
+    // ── Unified name resolution (design D1/D2/D4) ───────────────────────────
+    /// Resolve dotted segments with fixed precedence: module qualifiers (alias
+    /// or canonical module path, longest dotted prefix first), then module-local
+    /// declarations, then the std.core prelude. Optional-returning probe form.
+    std::optional<ResolvedRef> resolve_name(const std::vector<std::string>& segments) const;
+    /// Required form: like resolve_name but reports a diagnostic (with a
+    /// qualified-spelling suggestion where possible) when resolution fails.
+    std::optional<ResolvedRef> resolve_name_required(const std::vector<std::string>& segments,
+                                                     const SourceLocation& loc);
+    /// Find an imported module by alias or canonical module path.
+    const ImportedSymbols* find_imported_module(const std::string& qualifier_or_canonical) const;
+    /// Cross-kind symbol lookup within one imported module's pub exports.
+    static std::optional<SymbolId> lookup_imported_symbol(const ImportedSymbols& syms, const std::string& name);
+    /// Cross-kind lookup among this module's own declarations.
+    std::optional<SymbolId> lookup_local_symbol(const std::string& name) const;
+    /// Enum record lookup by resolved identity (local or imported).
+    const ResolvedEnum* find_resolved_enum(const SymbolId& symbol) const;
+    /// Resolve/validate an enum member chain on a MemberExpr (design D3).
+    void resolve_enum_member_expr(MemberExpr& member, const SourceLocation& loc);
+    /// Task 1.5: required-mode validation of input declaration properties.
+    void validate_input_decl_props(const InputDeclNode& node);
 
     ErrorReporter& errors_;
     DecoratedProgram result_;

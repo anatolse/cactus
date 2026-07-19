@@ -57,9 +57,41 @@ static void clear_module_identity(Map& map) {
     }
 }
 
+// Minimal std.input pub-symbol surface for tests whose sources declare input
+// bindings. Registered under alias "inp"; the canonical path "std.input" also
+// resolves through the unified resolver's canonical-qualifier support.
+static ModuleImports std_input_imports() {
+    ImportedSymbols syms;
+    syms.module_name = "std.input";
+    const auto add_enum = [&syms](const std::string& name, std::vector<std::string> variants) {
+        ResolvedEnum enm;
+        enm.name         = name;
+        enm.module_name  = "std.input";
+        enm.symbol_id    = make_symbol_id(SymbolKind::Enum, "std.input", name);
+        enm.canonical_id = make_canonical_id(*enm.symbol_id);
+        enm.variants     = std::move(variants);
+        syms.enums[name] = std::move(enm);
+    };
+    add_enum("Key", {"A",    "B",     "C",     "D",    "E",         "F",     "G",    "H",     "I",    "J",
+                     "K",    "L",     "M",     "N",    "O",         "P",     "Q",    "R",     "S",    "T",
+                     "U",    "V",     "W",     "X",    "Y",         "Z",     "Zero", "One",   "Two",  "Three",
+                     "Four", "Five",  "Six",   "Seven", "Eight",    "Nine",  "Left", "Right", "Up",   "Down",
+                     "Space", "Escape", "Enter", "Backspace", "Tab", "Shift", "Ctrl", "Alt",  "PageUp",
+                     "PageDown", "Minus", "Equal", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9",
+                     "F10", "F11", "F12"});
+    add_enum("MouseButton", {"Left", "Right", "Middle", "Side", "Extra"});
+    add_enum("GamepadButton", {"South", "North", "East", "West", "L1", "L2", "R1", "R2", "Start", "Select",
+                               "L3", "R3", "DPadUp", "DPadDown", "DPadLeft", "DPadRight"});
+    add_enum("GamepadAxis", {"LeftX", "LeftY", "RightX", "RightY", "L2Axis", "R2Axis"});
+    ModuleImports imports;
+    imports.add("inp", std::move(syms));
+    return imports;
+}
+
 static DecoratedProgram full_pipeline_from_file(const std::string& source,
                                                 const std::string& filename,
-                                                ProgramNode& program_out) {
+                                                ProgramNode& program_out,
+                                                const ModuleImports& imports = ModuleImports{}) {
     const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;
     Lexer lexer(src, filename, errors);
@@ -69,7 +101,7 @@ static DecoratedProgram full_pipeline_from_file(const std::string& source,
     program_out = parser.parse_program();
     REQUIRE_FALSE(errors.has_errors());
     SemanticAnalyzer analyzer(errors);
-    auto result = analyzer.analyze(program_out);
+    auto result = analyzer.analyze(program_out, imports);
     REQUIRE_FALSE(errors.has_errors());
     // Clear module identity so codegen produces unqualified C++ names.
     // Tests that need qualified names assign module_name explicitly after this call.
@@ -81,8 +113,10 @@ static DecoratedProgram full_pipeline_from_file(const std::string& source,
     return result;
 }
 
-static DecoratedProgram full_pipeline(const std::string& source, ProgramNode& program_out) {
-    return full_pipeline_from_file(source, "test.cactus", program_out);
+static DecoratedProgram full_pipeline(const std::string& source,
+                                      ProgramNode& program_out,
+                                      const ModuleImports& imports = ModuleImports{}) {
+    return full_pipeline_from_file(source, "test.cactus", program_out, imports);
 }
 
 TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
@@ -250,10 +284,10 @@ TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower
           "[codegen-entt][input][mouse]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "use std.input\n"
+        "use std.input as inp\n"
         "pub event input\n"
         "input Select: button\n"
-        "    mouse = MouseButton.Left\n"
+        "    mouse = inp.MouseButton.Left\n"
         "trait MouseState:\n"
         "    var pos: vec2\n"
         "system ReadMouse:\n"
@@ -262,7 +296,7 @@ TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower
         "    on input:\n"
         "        if input.pressed(Select):\n"
         "            pos = input.mouse_position()\n",
-        program);
+        program, std_input_imports());
 
     const auto code = CppEnttCodegen::generate(decorated);
 
@@ -270,6 +304,75 @@ TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower
     CHECK(code.find("return MOUSE_BUTTON_LEFT;") != std::string::npos);
     CHECK(code.find("cactus::runtime::entt_backend::pressed(action)") != std::string::npos);
     CHECK(code.find("cactus::runtime::entt_backend::mouse_position()") != std::string::npos);
+}
+
+// ── Golden input-binding tests (unified-name-resolution change, task 1.8) ──
+// Guard against the dead-input regression where unmatched binding spellings
+// silently emitted `0`/`-1` constants.
+
+TEST_CASE("Codegen EnTT: axis bindings emit raylib key constants, never dead zeros",
+          "[codegen-entt][input][golden]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.input as inp\n"
+        "pub event input\n"
+        "input MoveX: axis\n"
+        "    negative = inp.Key.A\n"
+        "    positive = inp.Key.D\n"
+        "input MoveY: axis\n"
+        "    negative = inp.Key.W\n"
+        "    positive = inp.Key.S\n",
+        program, std_input_imports());
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto axis = generated_function(code, "float cactus_input_axis_value");
+    CHECK(axis.find("KEY_A") != std::string::npos);
+    CHECK(axis.find("KEY_D") != std::string::npos);
+    CHECK(axis.find("KEY_W") != std::string::npos);
+    CHECK(axis.find("KEY_S") != std::string::npos);
+    // The dead-input fallback shape must never appear.
+    CHECK(axis.find("return 0 - 0;") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: button key and mouse bindings emit raylib constants",
+          "[codegen-entt][input][golden]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.input as inp\n"
+        "pub event input\n"
+        "input Jump: button\n"
+        "    key = inp.Key.Space\n"
+        "input Fire: button\n"
+        "    mouse = inp.MouseButton.Left\n",
+        program, std_input_imports());
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("return KEY_SPACE;") != std::string::npos);
+    CHECK(code.find("return MOUSE_BUTTON_LEFT;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: alias and canonical binding spellings generate identical code",
+          "[codegen-entt][input][golden][canonical]") {
+    ProgramNode alias_program;
+    auto alias_decorated = full_pipeline(
+        "use std.input as inp\n"
+        "pub event input\n"
+        "input Jump: button\n"
+        "    key = inp.Key.Space\n",
+        alias_program, std_input_imports());
+    const auto alias_code = CppEnttCodegen::generate(alias_decorated);
+
+    ProgramNode canonical_program;
+    auto canonical_decorated = full_pipeline(
+        "use std.input as inp\n"
+        "pub event input\n"
+        "input Jump: button\n"
+        "    key = std.input.Key.Space\n",
+        canonical_program, std_input_imports());
+    const auto canonical_code = CppEnttCodegen::generate(canonical_decorated);
+
+    CHECK(alias_code == canonical_code);
+    CHECK(alias_code.find("return KEY_SPACE;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: extern func generates runtime header include", "[codegen-entt][extern-func]") {
@@ -349,7 +452,7 @@ TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespa
         "    dt: float\n"
         "use std.input\n"
         "input Jump: button\n"
-        "    key = Key.Space\n"
+        "    key = std.input.Key.Space\n"
         "trait Controller:\n"
         "    var active: bool = false\n"
         "system Demo:\n"
@@ -357,7 +460,7 @@ TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespa
         "        Controller\n"
         "    on tick:\n"
         "        active = down(Jump)\n",
-        program);
+        program, std_input_imports());
 
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("cactus::runtime::entt_backend::down(K_JUMP)") != std::string::npos);
@@ -2650,16 +2753,16 @@ TEST_CASE("Codegen EnTT: Key.Shift/Minus/Equal/F map to correct raylib constants
     ProgramNode program;
     auto decorated = full_pipeline(
         "pub event input\n"
-        "use std.input\n"
+        "use std.input as inp\n"
         "input PanMod: button\n"
-        "    key = Key.Shift\n"
+        "    key = inp.Key.Shift\n"
         "input ZoomIn: button\n"
-        "    key = Key.Equal\n"
+        "    key = inp.Key.Equal\n"
         "input ZoomOut: button\n"
-        "    key = Key.Minus\n"
+        "    key = inp.Key.Minus\n"
         "input FrameSel: button\n"
-        "    key = Key.F\n",
-        program);
+        "    key = std.input.Key.F\n",
+        program, std_input_imports());
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("KEY_LEFT_SHIFT") != std::string::npos);
@@ -2700,9 +2803,9 @@ TEST_CASE("Codegen EnTT: input.consume call generates runtime consume invocation
     auto decorated = full_pipeline(
         "use std.editor\n"
         "pub event input\n"
-        "use std.input\n"
+        "use std.input as inp\n"
         "input NavDrag: button\n"
-        "    mouse = MouseButton.Right\n"
+        "    mouse = inp.MouseButton.Right\n"
         "trait EditorSt:\n"
         "    var active: bool = true\n"
         "system EditorInputConsume:\n"
@@ -2710,7 +2813,7 @@ TEST_CASE("Codegen EnTT: input.consume call generates runtime consume invocation
         "        EditorSt\n"
         "    on input:\n"
         "        input.consume(NavDrag)\n",
-        program);
+        program, std_input_imports());
 
     const auto code   = CppEnttCodegen::generate(decorated);
     const auto system = generated_function(code, "void editor_input_consume_input");

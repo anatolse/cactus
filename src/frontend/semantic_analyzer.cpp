@@ -298,6 +298,30 @@ std::optional<std::vector<std::string>> member_chain_segments(const MemberExpr& 
     return std::nullopt;
 }
 
+/// Split a dotted source reference ("phys.Body") into resolver segments.
+std::vector<std::string> dotted_segments(const std::string& ref) {
+    std::vector<std::string> segments;
+    std::size_t start = 0;
+    for (auto dot = ref.find('.'); dot != std::string::npos; dot = ref.find('.', start)) {
+        segments.push_back(ref.substr(start, dot - start));
+        start = dot + 1;
+    }
+    segments.push_back(ref.substr(start));
+    return segments;
+}
+
+/// Dotted identifier chain of a callee expression: a bare identifier or a
+/// member chain with an identifier head. Nullopt for computed callees.
+std::optional<std::vector<std::string>> callee_chain_segments(const ExprNode& callee) {
+    if (const auto* ident = std::get_if<IdentExpr>(&callee.expr)) {
+        return std::vector<std::string>{ident->name};
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&callee.expr)) {
+        return member_chain_segments(*member);
+    }
+    return std::nullopt;
+}
+
 bool expr_contains_self(const ExprNode& expr);
 bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments);
 std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr);
@@ -1080,20 +1104,6 @@ void SemanticAnalyzer::resolve_trait_references(
         entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.trait_name);
     };
 
-    std::function<std::optional<std::string>(const ExprNode&)> module_scope_expr_path =
-        [&](const ExprNode& expr) -> std::optional<std::string> {
-        if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
-            return ident->name;
-        }
-        if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
-            auto prefix = module_scope_expr_path(*member->object);
-            if (prefix.has_value()) {
-                return *prefix + "." + member->member;
-            }
-        }
-        return std::nullopt;
-    };
-
     std::function<void(std::vector<ChildOverrideNode>&)> resolve_child_overrides;
     std::function<void(std::vector<ChildArchetypeNode>&)> resolve_child_archetypes;
     std::function<void(ExprNode&)> resolve_expr;
@@ -1156,9 +1166,7 @@ void SemanticAnalyzer::resolve_trait_references(
                     resolve_expr(*e.left);
                     resolve_expr(*e.right);
                 } else if constexpr (std::is_same_v<E, CallExpr>) {
-                    if (auto callee_path = module_scope_expr_path(*e.callee)) {
-                        e.resolved_callee_id = try_resolve_func_ref_to_symbol(*callee_path);
-                    }
+                    e.resolved_callee_id = resolve_callee_symbol(*e.callee);
                     resolve_expr(*e.callee);
                     for (auto& arg : e.args) {
                         resolve_expr(*arg);
@@ -1201,9 +1209,7 @@ void SemanticAnalyzer::resolve_trait_references(
                     }
                     resolve_child_overrides(e.child_overrides);
                 } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                    if (auto callee_path = module_scope_expr_path(*e.callee)) {
-                        e.resolved_callee_id = try_resolve_func_ref_to_symbol(*callee_path);
-                    }
+                    e.resolved_callee_id = resolve_callee_symbol(*e.callee);
                     resolve_expr(*e.callee);
                     for (auto& pred : e.filters) {
                         pred.resolved_trait_id = try_resolve_trait_ref_to_symbol(pred.trait_name);
@@ -1418,35 +1424,23 @@ TypeInfo SemanticAnalyzer::resolve_type_ref(const TypeRef& ref) {
 TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
                                                   const std::string& sym_name,
                                                   const SourceLocation& loc) {
-    // Qualified references may explicitly name the current module.
-    if (qualifier == current_module_name_) {
-        if (struct_names_.contains(sym_name)) {
-            return make_resolved_user_type(TypeKind::Struct,
-                                           make_symbol_id(SymbolKind::Struct, current_module_id_, sym_name));
+    // Unified lookup (task 3.2): current-module, alias, and canonical-path
+    // qualifiers all resolve through resolve_name; only struct/enum symbols
+    // name types.
+    auto segments = dotted_segments(qualifier);
+    segments.push_back(sym_name);
+    if (auto resolved = resolve_name(segments); resolved.has_value() && resolved->member_segments.empty()) {
+        if (resolved->symbol.kind == SymbolKind::Struct) {
+            return make_resolved_user_type(TypeKind::Struct, resolved->symbol);
         }
-        if (enum_names_.contains(sym_name)) {
-            return make_resolved_user_type(TypeKind::Enum,
-                                           make_symbol_id(SymbolKind::Enum, current_module_id_, sym_name));
+        if (resolved->symbol.kind == SymbolKind::Enum) {
+            return make_resolved_user_type(TypeKind::Enum, resolved->symbol);
         }
     }
 
-    auto it = imports_.modules.find(qualifier);
-    if (it == imports_.modules.end()) {
+    if (qualifier != current_module_name_ && find_imported_module(qualifier) == nullptr) {
         errors_.error(loc, "unknown module qualifier '" + qualifier + "'");
         return make_unknown_type();
-    }
-
-    const auto& syms = it->second;
-
-    // Check imported structs
-    if (auto struct_it = syms.structs.find(sym_name); struct_it != syms.structs.end()) {
-        const auto symbol = resolved_decl_symbol(struct_it->second, SymbolKind::Struct, syms.module_name, sym_name);
-        return make_resolved_user_type(TypeKind::Struct, symbol);
-    }
-    // Check imported enums
-    if (auto enum_it = syms.enums.find(sym_name); enum_it != syms.enums.end()) {
-        const auto symbol = resolved_decl_symbol(enum_it->second, SymbolKind::Enum, syms.module_name, sym_name);
-        return make_resolved_user_type(TypeKind::Enum, symbol);
     }
 
     // ── Task 4.6: Non-pub helpful error ─────────────────────────────────────
@@ -1466,28 +1460,22 @@ TypeInfo SemanticAnalyzer::resolve_qualified_type(const std::string& qualifier,
 // imports are namespace bindings and must be referenced with module/alias.
 
 TypeInfo SemanticAnalyzer::resolve_imported_type(const std::string& name, const SourceLocation& loc) {
+    // Unified lookup (task 3.2): bare names resolve local-first, then the
+    // std.core prelude, matching resolve_name's precedence.
+    if (auto resolved = resolve_name({name}); resolved.has_value() && resolved->member_segments.empty()) {
+        if (resolved->symbol.kind == SymbolKind::Struct) {
+            return make_resolved_user_type(TypeKind::Struct, resolved->symbol);
+        }
+        if (resolved->symbol.kind == SymbolKind::Enum) {
+            return make_resolved_user_type(TypeKind::Enum, resolved->symbol);
+        }
+    }
+
     const auto providers = type_provider_qualifiers(imports_, name);
     if (providers.empty()) {
         errors_.error(loc, "unknown type '" + name + "'");
         return make_unknown_type();
     }
-
-    if (auto prelude = find_std_core_provider(imports_, providers)) {
-        const auto module_it = imports_.modules.find(*prelude);
-        if (module_it != imports_.modules.end()) {
-            if (auto struct_it = module_it->second.structs.find(name); struct_it != module_it->second.structs.end()) {
-                const auto symbol =
-                    resolved_decl_symbol(struct_it->second, SymbolKind::Struct, module_it->second.module_name, name);
-                return make_resolved_user_type(TypeKind::Struct, symbol);
-            }
-            if (auto enum_it = module_it->second.enums.find(name); enum_it != module_it->second.enums.end()) {
-                const auto symbol =
-                    resolved_decl_symbol(enum_it->second, SymbolKind::Enum, module_it->second.module_name, name);
-                return make_resolved_user_type(TypeKind::Enum, symbol);
-            }
-        }
-    }
-
     errors_.error(loc, imported_reference_diagnostic(imports_, "type", name, providers));
     return make_unknown_type();
 }
@@ -1824,60 +1812,41 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
 
 bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::string& out_simple_name) {
     const auto& qname = entry.qualified_name;
-    auto dot          = qname.find('.');
 
+    // Unified lookup: alias-, canonical-, and current-module-qualified plus
+    // bare local/prelude spellings all resolve the same way.
+    if (auto resolved = try_resolve_ref_of_kind(qname, {SymbolKind::Trait})) {
+        out_simple_name = resolved->local_name;
+        return true;
+    }
+
+    auto dot = qname.rfind('.');
     if (dot != std::string::npos) {
-        // ── Qualified: "module.Trait" or "alias.Trait" ──────────────────────
-        auto last_dot          = qname.rfind('.');
-        auto qualifier         = qname.substr(0, last_dot);
-        auto trait_name        = qname.substr(last_dot + 1);
-        auto simple_trait_name = (last_dot != std::string::npos) ? qname.substr(last_dot + 1) : trait_name;
+        auto qualifier  = qname.substr(0, dot);
+        auto trait_name = qname.substr(dot + 1);
 
-        // Qualified local references must use the current module namespace.
-        if (trait_names_.contains(simple_trait_name) && qualifier == current_module_name_) {
-            out_simple_name = simple_trait_name;
-            return true;
-        }
-
-        auto it = imports_.modules.find(qualifier);
-        if (it == imports_.modules.end()) {
+        if (qualifier != current_module_name_ && find_imported_module(qualifier) == nullptr) {
             errors_.error(entry.location, "unknown module qualifier '" + qualifier + "' in filter");
             return false;
         }
-        if (!it->second.traits.contains(trait_name)) {
-            // Trait not found in pub traits — check for non-pub helpful error
-            // ── Task 4.6: Non-pub helpful error ──────────────────────────────
-            auto np_it = imports_.non_pub_trait_names.find(qualifier);
-            if (np_it != imports_.non_pub_trait_names.end() && (np_it->second.contains(trait_name))) {
-                errors_.error(entry.location,
-                              "trait '" + trait_name + "' is not public in module '" + qualifier +
-                                  "'; did you mean to mark it as 'pub'?");
-            } else {
-                errors_.error(
-                    entry.location,
-                    "system filter references unknown trait '" + trait_name + "' in module '" + qualifier + "'");
-            }
-            return false;
+        // ── Task 4.6: Non-pub helpful error ──────────────────────────────────
+        auto np_it = imports_.non_pub_trait_names.find(qualifier);
+        if (np_it != imports_.non_pub_trait_names.end() && np_it->second.contains(trait_name)) {
+            errors_.error(entry.location,
+                          "trait '" + trait_name + "' is not public in module '" + qualifier +
+                              "'; did you mean to mark it as 'pub'?");
+        } else {
+            errors_.error(entry.location,
+                          "system filter references unknown trait '" + trait_name + "' in module '" + qualifier + "'");
         }
-        out_simple_name = trait_name;
-        return true;
+        return false;
     }
 
-    // ── Unqualified ──────────────────────────────────────────────────────────
-    // Check local traits first
-    if (trait_names_.contains(qname)) {
-        out_simple_name = qname;
-        return true;
-    }
-    // Only the std.core prelude is available through unqualified imported lookup.
-    // Ordinary imports are namespace bindings and must be qualified.
+    // Bare name provided only by ordinary (non-prelude) imports: point at the
+    // qualified spelling.
     if (!imports_.empty()) {
         auto it = imports_.trait_providers.find(qname);
         if (it != imports_.trait_providers.end()) {
-            if (find_std_core_provider(imports_, it->second).has_value()) {
-                out_simple_name = qname;
-                return true;
-            }
             errors_.error(entry.location, imported_reference_diagnostic(imports_, "trait", qname, it->second));
             return false;
         }
@@ -2534,27 +2503,7 @@ void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<Stm
 // ── Dynamic ECS: Helpers ────────────────────────────────────────────────────
 
 bool SemanticAnalyzer::is_trait_declared(const std::string& name) const {
-    if (trait_names_.contains(name)) {
-        return true;
-    }
-    // Handle qualified names: "qualifier.TraitName"
-    auto dot = name.rfind('.');
-    if (dot != std::string::npos) {
-        auto qualifier  = name.substr(0, dot);
-        auto local_name = name.substr(dot + 1);
-        if (trait_names_.contains(local_name) && qualifier == current_module_name_) {
-            return true;  // qualifies a local trait
-        }
-        auto it = imports_.modules.find(qualifier);
-        return it != imports_.modules.end() && it->second.traits.contains(local_name);
-    }
-    if (!imports_.empty()) {
-        auto it = imports_.trait_providers.find(name);
-        if (it != imports_.trait_providers.end() && find_std_core_provider(imports_, it->second).has_value()) {
-            return true;
-        }
-    }
-    return false;
+    return try_resolve_ref_of_kind(name, {SymbolKind::Trait}).has_value();
 }
 
 bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbols& symbols, const std::string& name) {
@@ -2777,56 +2726,37 @@ const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& n
 // ── Task 3.1: Canonical trait ID resolution ────────────────────────────────────
 
 std::string SemanticAnalyzer::resolve_trait_ref_to_canonical(const std::string& ref, const SourceLocation& loc) {
+    // Unified lookup; the string-splitting below only produces diagnostics.
+    if (auto resolved = try_resolve_ref_of_kind(ref, {SymbolKind::Trait})) {
+        return make_canonical_id(*resolved);
+    }
+
     auto dot = ref.rfind('.');
     if (dot != std::string::npos) {
         auto qualifier  = ref.substr(0, dot);
         auto local_name = ref.substr(dot + 1);
 
-        // Qualified local reference (e.g., current_module.TraitName).
-        if (trait_names_.contains(local_name) && qualifier == current_module_name_) {
-            return make_canonical_id(current_module_name_, local_name);
-        }
-
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it == imports_.modules.end()) {
+        if (qualifier != current_module_name_ && find_imported_module(qualifier) == nullptr) {
             errors_.error(loc, "unknown module qualifier '" + qualifier + "' in trait reference");
             return "";
         }
-        if (!mod_it->second.traits.contains(local_name)) {
-            auto np_it = imports_.non_pub_trait_names.find(qualifier);
-            if (np_it != imports_.non_pub_trait_names.end() && np_it->second.contains(local_name)) {
-                errors_.error(loc, "trait '" + local_name + "' is not public in module '" + qualifier + "'");
-            } else {
-                errors_.error(loc, "unknown trait '" + local_name + "' in module '" + qualifier + "'");
-            }
-            return "";
+        auto np_it = imports_.non_pub_trait_names.find(qualifier);
+        if (np_it != imports_.non_pub_trait_names.end() && np_it->second.contains(local_name)) {
+            errors_.error(loc, "trait '" + local_name + "' is not public in module '" + qualifier + "'");
+        } else {
+            errors_.error(loc, "unknown trait '" + local_name + "' in module '" + qualifier + "'");
         }
-        return mod_it->second.traits.at(local_name).canonical_id;
+        return "";
     }
 
-    // Unqualified: local trait first.
-    if (trait_names_.contains(ref)) {
-        return make_canonical_id(current_module_name_, ref);
-    }
-
-    // Unqualified: check the std.core prelude only. Ordinary imports must be
-    // referenced through their module path or alias.
+    // Bare name provided only by ordinary (non-prelude) imports: point at the
+    // qualified spelling.
     if (!imports_.empty()) {
         auto pit = imports_.trait_providers.find(ref);
-        if (pit != imports_.trait_providers.end() && !pit->second.empty()) {
-            const auto prelude = find_std_core_provider(imports_, pit->second);
-            if (!prelude.has_value()) {
-                errors_.error(loc, imported_reference_diagnostic(imports_, "trait", ref, pit->second));
-                return "";
-            }
-            const auto& qualifier = *prelude;
-            auto mit              = imports_.modules.find(qualifier);
-            if (mit != imports_.modules.end()) {
-                auto tit = mit->second.traits.find(ref);
-                if (tit != mit->second.traits.end()) {
-                    return tit->second.canonical_id;
-                }
-            }
+        if (pit != imports_.trait_providers.end() && !pit->second.empty() &&
+            !find_std_core_provider(imports_, pit->second).has_value()) {
+            errors_.error(loc, imported_reference_diagnostic(imports_, "trait", ref, pit->second));
+            return "";
         }
     }
 
@@ -2834,267 +2764,47 @@ std::string SemanticAnalyzer::resolve_trait_ref_to_canonical(const std::string& 
 }
 
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_trait_ref_to_symbol(const std::string& ref) const {
-    const auto* trait = find_resolved_trait(ref);
-    if (trait == nullptr) {
-        return std::nullopt;
-    }
-    return resolved_decl_symbol(*trait, SymbolKind::Trait, current_module_name_, trait->name);
+    return try_resolve_ref_of_kind(ref, {SymbolKind::Trait});
 }
 
 // ── Task 3.3: Canonical event ID resolution ─────────────────────────────────────
 
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_event_ref_to_symbol(const std::string& ref) const {
-    auto dot = ref.rfind('.');
-    if (dot != std::string::npos) {
-        auto qualifier  = ref.substr(0, dot);
-        auto local_name = ref.substr(dot + 1);
-
-        // Qualified local reference — only matches a locally declared event.
-        if (qualifier == current_module_name_) {
-            auto local_it = module_scope_symbols_.find(local_name);
-            if (local_it != module_scope_symbols_.end() && local_it->second.kind == SymbolKind::Event) {
-                return local_it->second;
-            }
-            return std::nullopt;
-        }
-
-        // Qualified import reference.
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it != imports_.modules.end()) {
-            if (auto ev_it = mod_it->second.event_symbols.find(local_name);
-                ev_it != mod_it->second.event_symbols.end() && ev_it->second.symbol_id.has_value()) {
-                return ev_it->second.symbol_id;
-            }
-        }
-        return std::nullopt;
-    }
-
-    // Unqualified: locally declared event takes priority over prelude.
-    // event_names_ includes std.core prelude events, so consult module_scope_symbols_
-    // (which only holds locally declared symbols) to correctly distinguish the two.
-    {
-        auto local_it = module_scope_symbols_.find(ref);
-        if (local_it != module_scope_symbols_.end() && local_it->second.kind == SymbolKind::Event) {
-            return local_it->second;
-        }
-    }
-
-    // Unqualified: check std.core prelude only.
-    if (!imports_.empty()) {
-        auto pit = imports_.event_providers.find(ref);
-        if (pit != imports_.event_providers.end() && !pit->second.empty()) {
-            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
-                const auto& qualifier = *prelude;
-                auto mit              = imports_.modules.find(qualifier);
-                if (mit != imports_.modules.end()) {
-                    auto eit = mit->second.event_symbols.find(ref);
-                    if (eit != mit->second.event_symbols.end() && eit->second.symbol_id.has_value()) {
-                        return eit->second.symbol_id;
-                    }
-                }
-            }
-        }
-    }
-
-    return std::nullopt;
+    // Unqualified: locally declared event takes priority over prelude; the
+    // shared wrapper preserves this because resolve_name consults
+    // module_scope_symbols_ (locally declared symbols only) before std.core.
+    return try_resolve_ref_of_kind(ref, {SymbolKind::Event});
 }
 
 // ── Task 3.4: Canonical system ID resolution ────────────────────────────────────
 
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_system_ref_to_symbol(const std::string& ref) const {
-    return try_resolve_system_ref_impl(ref, true);
-}
-
-std::optional<SymbolId> SemanticAnalyzer::try_resolve_system_ref_impl(const std::string& ref, bool allow_local) const {
-    auto dot = ref.rfind('.');
-    if (dot != std::string::npos) {
-        auto qualifier  = ref.substr(0, dot);
-        auto local_name = ref.substr(dot + 1);
-
-        if (allow_local && system_names_.contains(local_name) && qualifier == current_module_name_) {
-            return make_symbol_id(SymbolKind::System, current_module_id_, local_name);
-        }
-
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it != imports_.modules.end()) {
-            if (auto sys_it = mod_it->second.systems.find(local_name);
-                sys_it != mod_it->second.systems.end() && sys_it->second.symbol_id.has_value()) {
-                return sys_it->second.symbol_id;
-            }
-        }
-        return std::nullopt;
-    }
-
-    if (allow_local && system_names_.contains(ref)) {
-        return make_symbol_id(SymbolKind::System, current_module_id_, ref);
-    }
-
-    if (!imports_.empty()) {
-        auto pit = imports_.system_providers.find(ref);
-        if (pit != imports_.system_providers.end() && !pit->second.empty()) {
-            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
-                const auto& qualifier = *prelude;
-                auto mit              = imports_.modules.find(qualifier);
-                if (mit != imports_.modules.end()) {
-                    auto sit = mit->second.systems.find(ref);
-                    if (sit != mit->second.systems.end() && sit->second.symbol_id.has_value()) {
-                        return sit->second.symbol_id;
-                    }
-                }
-            }
-        }
-    }
-
-    return std::nullopt;
+    return try_resolve_ref_of_kind(ref, {SymbolKind::System});
 }
 
 std::optional<SymbolId> SemanticAnalyzer::resolve_system_after_ref_to_symbol(
     const std::string& ref,
     const SourceLocation& /*loc*/,
-    const std::unordered_set<std::string>& local_system_names) const {
-    auto dot = ref.rfind('.');
-    if (dot != std::string::npos) {
-        auto qualifier  = ref.substr(0, dot);
-        auto local_name = ref.substr(dot + 1);
-
-        if (local_system_names.contains(local_name) && qualifier == current_module_name_) {
-            return make_symbol_id(SymbolKind::System, current_module_id_, local_name);
-        }
-
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it != imports_.modules.end()) {
-            if (auto sys_it = mod_it->second.systems.find(local_name);
-                sys_it != mod_it->second.systems.end() && sys_it->second.symbol_id.has_value()) {
-                return sys_it->second.symbol_id;
-            }
-        }
-        return std::nullopt;
-    }
-
-    if (local_system_names.contains(ref)) {
-        return make_symbol_id(SymbolKind::System, current_module_id_, ref);
-    }
-
-    if (!imports_.empty()) {
-        auto pit = imports_.system_providers.find(ref);
-        if (pit != imports_.system_providers.end() && !pit->second.empty()) {
-            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
-                const auto& qualifier = *prelude;
-                auto mit              = imports_.modules.find(qualifier);
-                if (mit != imports_.modules.end()) {
-                    auto sit = mit->second.systems.find(ref);
-                    if (sit != mit->second.systems.end() && sit->second.symbol_id.has_value()) {
-                        return sit->second.symbol_id;
-                    }
-                }
-            }
-        }
-    }
-
-    return std::nullopt;
+    const std::unordered_set<std::string>& /*local_system_names*/) const {
+    // All locally declared systems are registered in module_scope_symbols_,
+    // which resolve_name consults, so the caller-collected name set is
+    // redundant with the unified lookup.
+    return try_resolve_ref_of_kind(ref, {SymbolKind::System});
 }
 
 // ── Task 3.5: Canonical template/entity ID resolution ───────────────────────────
 
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_template_ref_to_symbol(const std::string& ref) const {
-    auto dot = ref.rfind('.');
-    if (dot != std::string::npos) {
-        auto qualifier  = ref.substr(0, dot);
-        auto local_name = ref.substr(dot + 1);
-
-        if (template_names_.contains(local_name) && qualifier == current_module_name_) {
-            return make_symbol_id(SymbolKind::Template, current_module_id_, local_name);
-        }
-        if (entity_names_.contains(local_name) && qualifier == current_module_name_) {
-            return make_symbol_id(SymbolKind::Entity, current_module_id_, local_name);
-        }
-
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it != imports_.modules.end()) {
-            auto tmpl_it = mod_it->second.templates.find(local_name);
-            if (tmpl_it != mod_it->second.templates.end() && tmpl_it->second.symbol_id.has_value()) {
-                return tmpl_it->second.symbol_id;
-            }
-        }
-        return std::nullopt;
-    }
-
-    if (template_names_.contains(ref)) {
-        return make_symbol_id(SymbolKind::Template, current_module_id_, ref);
-    }
-    if (entity_names_.contains(ref)) {
-        return make_symbol_id(SymbolKind::Entity, current_module_id_, ref);
-    }
-
-    if (!imports_.empty()) {
-        auto pit = imports_.template_providers.find(ref);
-        if (pit != imports_.template_providers.end() && !pit->second.empty()) {
-            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
-                const auto& qualifier = *prelude;
-                auto mit              = imports_.modules.find(qualifier);
-                if (mit != imports_.modules.end()) {
-                    auto tit = mit->second.templates.find(ref);
-                    if (tit != mit->second.templates.end() && tit->second.symbol_id.has_value()) {
-                        return tit->second.symbol_id;
-                    }
-                }
-            }
-        }
-    }
-
-    return std::nullopt;
+    // Spawn/template references accept both template and entity declarations.
+    return try_resolve_ref_of_kind(ref, {SymbolKind::Template, SymbolKind::Entity});
 }
 
 // ── Task 3.6: Canonical func ID resolution ──────────────────────────────────────
 
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_func_ref_to_symbol(const std::string& ref) const {
-    auto dot = ref.rfind('.');
-    if (dot != std::string::npos) {
-        auto qualifier  = ref.substr(0, dot);
-        auto local_name = ref.substr(dot + 1);
-
-        if (func_names_.contains(local_name) && qualifier == current_module_name_) {
-            return make_symbol_id(SymbolKind::Func, current_module_id_, local_name);
-        }
-
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it != imports_.modules.end()) {
-            auto func_it = mod_it->second.funcs.find(local_name);
-            if (func_it != mod_it->second.funcs.end()) {
-                if (func_it->second.symbol_id.has_value()) {
-                    return func_it->second.symbol_id;
-                }
-                if (!func_it->second.module_name.empty()) {
-                    return make_symbol_id(SymbolKind::Func,
-                                         ModuleId{.name = func_it->second.module_name},
-                                         local_name);
-                }
-            }
-        }
-        return std::nullopt;
-    }
-
-    if (func_names_.contains(ref)) {
-        return make_symbol_id(SymbolKind::Func, current_module_id_, ref);
-    }
-
-    if (!imports_.empty()) {
-        auto pit = imports_.func_providers.find(ref);
-        if (pit != imports_.func_providers.end() && !pit->second.empty()) {
-            if (const auto prelude = find_std_core_provider(imports_, pit->second)) {
-                const auto& qualifier = *prelude;
-                auto mit              = imports_.modules.find(qualifier);
-                if (mit != imports_.modules.end()) {
-                    auto fit = mit->second.funcs.find(ref);
-                    if (fit != mit->second.funcs.end() && fit->second.symbol_id.has_value()) {
-                        return fit->second.symbol_id;
-                    }
-                }
-            }
-        }
-    }
-
-    return std::nullopt;
+    // Missing-SymbolId fallback (synthesizing from the func's declaring module)
+    // lives in lookup_imported_symbol via resolved_decl_symbol.
+    return try_resolve_ref_of_kind(ref, {SymbolKind::Func});
 }
 
 // ── Unified name resolution (unified-name-resolution change, D1/D2/D4) ──────
@@ -3250,6 +2960,31 @@ std::optional<ResolvedRef> SemanticAnalyzer::resolve_name_required(const std::ve
     return std::nullopt;
 }
 
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_ref_of_kind(const std::string& ref,
+                                                                  std::initializer_list<SymbolKind> kinds) const {
+    auto resolved = resolve_name(dotted_segments(ref));
+    if (!resolved.has_value() || !resolved->member_segments.empty()) {
+        return std::nullopt;
+    }
+    if (std::ranges::find(kinds, resolved->symbol.kind) == kinds.end()) {
+        return std::nullopt;
+    }
+    return resolved->symbol;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::resolve_callee_symbol(const ExprNode& callee) const {
+    auto segments = callee_chain_segments(callee);
+    if (!segments.has_value()) {
+        return std::nullopt;
+    }
+    auto resolved = resolve_name(*segments);
+    if (!resolved.has_value() || !resolved->member_segments.empty() ||
+        resolved->symbol.kind != SymbolKind::Func) {
+        return std::nullopt;
+    }
+    return resolved->symbol;
+}
+
 const ResolvedEnum* SemanticAnalyzer::find_resolved_enum(const SymbolId& symbol) const {
     if (symbol.kind != SymbolKind::Enum) {
         return nullptr;
@@ -3374,53 +3109,37 @@ void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
 
 std::string SemanticAnalyzer::resolve_system_after_ref(const std::string& ref,
                                                        const SourceLocation& loc,
-                                                       const std::unordered_set<std::string>& local_system_names) {
+                                                       const std::unordered_set<std::string>& /*local_system_names*/) {
+    // Unified lookup: alias- and canonical-qualified, current-module-qualified,
+    // bare local, and std.core prelude spellings all resolve identically.
+    if (auto resolved = try_resolve_ref_of_kind(ref, {SymbolKind::System})) {
+        return make_canonical_id(*resolved);
+    }
+
     auto dot = ref.rfind('.');
     if (dot != std::string::npos) {
         auto qualifier  = ref.substr(0, dot);
         auto local_name = ref.substr(dot + 1);
-
-        // Qualified local system (e.g., current_module.SystemName).
-        if (local_system_names.contains(local_name) && qualifier == current_module_name_) {
-            return make_canonical_id(current_module_name_, local_name);
-        }
-
-        auto mod_it = imports_.modules.find(qualifier);
-        if (mod_it == imports_.modules.end()) {
+        if (qualifier != current_module_name_ && find_imported_module(qualifier) == nullptr) {
             errors_.error(loc, "unknown module qualifier '" + qualifier + "' in 'after:' clause");
             return "";
         }
-        if (!mod_it->second.systems.contains(local_name)) {
-            errors_.error(loc, "unknown system '" + local_name + "' in module '" + qualifier + "' in 'after:' clause");
-            return "";
-        }
-        return make_canonical_id(mod_it->second.module_name, local_name);
+        errors_.error(loc, "unknown system '" + local_name + "' in module '" + qualifier + "' in 'after:' clause");
+        return "";
     }
 
-    // Unqualified: local system first.
-    if (local_system_names.contains(ref)) {
-        return make_canonical_id(current_module_name_, ref);
-    }
-
-    // Unqualified: check the std.core prelude only. Ordinary imports must be
-    // referenced through their module path or alias.
+    // Bare name provided only by ordinary (non-prelude) imports: point at the
+    // qualified spelling instead of a generic unknown-system error.
     if (!imports_.empty()) {
         auto pit = imports_.system_providers.find(ref);
-        if (pit != imports_.system_providers.end() && !pit->second.empty()) {
-            const auto prelude = find_std_core_provider(imports_, pit->second);
-            if (!prelude.has_value()) {
-                errors_.error(loc, imported_reference_diagnostic(imports_, "system", ref, pit->second));
-                return "";
-            }
-            const auto& qualifier = *prelude;
-            auto mit              = imports_.modules.find(qualifier);
-            if (mit != imports_.modules.end() && mit->second.systems.contains(ref)) {
-                return make_canonical_id(mit->second.module_name, ref);
-            }
+        if (pit != imports_.system_providers.end() && !pit->second.empty() &&
+            !find_std_core_provider(imports_, pit->second).has_value()) {
+            errors_.error(loc, imported_reference_diagnostic(imports_, "system", ref, pit->second));
+            return "";
         }
     }
 
-    return "";  // not found
+    return "";  // not found; caller reports error as needed
 }
 
 // ── std.text.format recognition ────────────────────────────────────────────────
@@ -3852,6 +3571,10 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
     }
 
     if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        // Resolved enum member access (`inp.Key.A`) types as its enum (D3/2.2).
+        if (member->resolved_enum_member.has_value()) {
+            return make_resolved_user_type(TypeKind::Enum, member->resolved_enum_member->enum_id);
+        }
         const auto* owner = std::get_if<IdentExpr>(&member->object->expr);
         if (owner == nullptr) {
             return make_unknown_type();
@@ -4160,18 +3883,24 @@ void SemanticAnalyzer::validate_template_unit_declarations(
 void SemanticAnalyzer::validate_archetype_template_ref(const std::string& tmpl_ref,
                                                        const SourceLocation& location,
                                                        const std::string& owner_desc) {
+    // Unified lookup accepts alias-, canonical-, and current-module-qualified
+    // spellings; the string-splitting below only produces diagnostics.
+    if (try_resolve_ref_of_kind(tmpl_ref, {SymbolKind::Template}).has_value()) {
+        return;
+    }
+
     const auto dot = tmpl_ref.rfind('.');
     if (dot != std::string::npos) {
         const auto qualifier     = tmpl_ref.substr(0, dot);
         const auto template_name = tmpl_ref.substr(dot + 1);
-        auto module_it           = imports_.modules.find(qualifier);
-        if (module_it == imports_.modules.end()) {
+        const auto* module       = find_imported_module(qualifier);
+        if (module == nullptr) {
             errors_.error(location, "unknown module qualifier '" + qualifier + "' in 'from' clause of " + owner_desc);
-        } else if (!module_it->second.templates.contains(template_name)) {
+        } else {
             auto non_pub_it = imports_.non_pub_template_names.find(qualifier);
             if (non_pub_it != imports_.non_pub_template_names.end() && non_pub_it->second.contains(template_name)) {
                 errors_.error(location, "template '" + template_name + "' is not public in module '" + qualifier + "'");
-            } else if (imported_symbols_contain_non_template(module_it->second, template_name)) {
+            } else if (imported_symbols_contain_non_template(*module, template_name)) {
                 errors_.error(location,
                               "'" + template_name + "' is not a template; 'from' clause must reference a template");
             } else {

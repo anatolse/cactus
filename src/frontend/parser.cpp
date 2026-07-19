@@ -653,13 +653,12 @@ TypeRef Parser::parse_type_ref() {
     auto name = consume(TokenType::IDENTIFIER, "expected type name").value;
     TypeRef ref;
     ref.location = loc;
-    // Support qualified type names: "qualifier.Symbol" (e.g. "rand.Rng").
-    if (match(TokenType::DOT)) {
-        auto sym = consume(TokenType::IDENTIFIER, "expected type name after '.'").value;
-        ref.name = name + "." + sym;
-    } else {
-        ref.name = name;
+    // Support qualified type names: alias ("rand.Rng") or canonical module
+    // path ("std.random.Rng") plus the symbol.
+    while (match(TokenType::DOT)) {
+        name += "." + consume(TokenType::IDENTIFIER, "expected type name after '.'").value;
     }
+    ref.name = name;
     if (match(TokenType::LBRACKET)) {
         ref.param = std::make_unique<TypeRef>(parse_type_ref());
         consume(TokenType::RBRACKET, "expected ']'");
@@ -2286,9 +2285,12 @@ FilterClause Parser::parse_exclude_clause() {
         }
         auto error_count_before = errors_.error_count();
         auto entry_loc          = peek().location;
-        auto name               = consume(TokenType::IDENTIFIER, "expected trait name").value;
-        clause.trait_names.push_back(name);
+        // Qualified names allowed, mirroring filter entries (alias or
+        // canonical module path plus trait name).
+        auto name = parse_dotted_name();
         clause.entries.push_back({.qualified_name = name, .alias = std::nullopt, .location = entry_loc});
+        auto dot_pos = name.rfind('.');
+        clause.trait_names.push_back(dot_pos != std::string::npos ? name.substr(dot_pos + 1) : name);
         expect_newline();
         if (errors_.error_count() > error_count_before) {
             synchronize();

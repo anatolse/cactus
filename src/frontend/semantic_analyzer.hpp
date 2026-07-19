@@ -356,7 +356,6 @@ private:
 
     /// Resolve a system name to its canonical SymbolId.
     std::optional<SymbolId> try_resolve_system_ref_to_symbol(const std::string& ref) const;
-    std::optional<SymbolId> try_resolve_system_ref_impl(const std::string& ref, bool allow_local) const;
 
     /// Resolve a system name in an after: clause to its canonical SymbolId.
     std::optional<SymbolId> resolve_system_after_ref_to_symbol(
@@ -374,6 +373,12 @@ private:
     std::optional<SymbolId> try_resolve_func_ref_to_symbol(const std::string& ref) const;
 
     // ── Unified name resolution (design D1/D2/D4) ───────────────────────────
+    /// Kind-filtered optional-mode wrapper over resolve_name: the shared
+    /// implementation of the per-kind try_resolve_*_to_symbol resolvers
+    /// (task 3.1). Trailing member segments mean the reference does not name
+    /// a module-scope declaration, so they yield nullopt.
+    std::optional<SymbolId> try_resolve_ref_of_kind(const std::string& ref,
+                                                    std::initializer_list<SymbolKind> kinds) const;
     /// Resolve dotted segments with fixed precedence: module qualifiers (alias
     /// or canonical module path, longest dotted prefix first), then module-local
     /// declarations, then the std.core prelude. Optional-returning probe form.
@@ -388,6 +393,10 @@ private:
     static std::optional<SymbolId> lookup_imported_symbol(const ImportedSymbols& syms, const std::string& name);
     /// Cross-kind lookup among this module's own declarations.
     std::optional<SymbolId> lookup_local_symbol(const std::string& name) const;
+    /// Resolve a call/query callee expression to a func symbol via
+    /// resolve_name on its chain segments (design D7). Optional-mode: non-func
+    /// results and computed callees yield nullopt.
+    std::optional<SymbolId> resolve_callee_symbol(const ExprNode& callee) const;
     /// Enum record lookup by resolved identity (local or imported).
     const ResolvedEnum* find_resolved_enum(const SymbolId& symbol) const;
     /// Resolve/validate an enum member chain on a MemberExpr (design D3).

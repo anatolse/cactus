@@ -284,17 +284,14 @@ bool filter_has_simple_name(const FilterClause& filter, const std::string& simpl
 }
 
 bool world_transform_is_volume(const DecoratedProgram& program) {
-    const auto* wt = EnttCodegenUtils::find_trait(program, "WorldTransform");
-    if (wt == nullptr) {
-        return false;
-    }
-    return std::ranges::any_of(wt->fields, [](const auto& f) {
-        return f.name == "rotation" && f.type.kind == TypeKind::Quat;
-    });
+    // Root-program resolved usage — deterministic even when std.editor links
+    // both WorldTransform variants into the merged trait map.
+    return EnttCodegenUtils::world_transform_usage(program).volume;
 }
 
 struct FilterBinding {
-    std::string trait_name;     // simple name (for semantic lookups)
+    std::string trait_name;     // simple name (for alias/dedupe bookkeeping)
+    std::string lookup_name;    // canonical id when resolved, else simple name (for find_trait)
     std::string cpp_type_name;  // canonical C++ type name (for code emission)
     std::string binding_name;   // variable name suffix (e.g. "WorldTransform_comp" or alias)
 };
@@ -304,34 +301,45 @@ std::vector<FilterBinding> filter_bindings(const FilterClause& filter, const Dec
     std::unordered_set<std::string> seen_traits;
     for (const auto& entry : filter.entries) {
         const auto trait_name    = filter_simple_name(entry);
+        const auto lookup_name   = entry.resolved_trait_id.has_value()
+                                       ? make_canonical_id(*entry.resolved_trait_id)
+                                       : trait_name;
         const auto cpp_type_name = EnttCodegenUtils::trait_cpp_name(
             entry.resolved_trait_id, entry.qualified_name, program);
         if (seen_traits.insert(trait_name).second) {
-            result.push_back(FilterBinding{
-                .trait_name = trait_name, .cpp_type_name = cpp_type_name, .binding_name = cpp_type_name + "_comp"});
+            result.push_back(FilterBinding{.trait_name    = trait_name,
+                                           .lookup_name   = lookup_name,
+                                           .cpp_type_name = cpp_type_name,
+                                           .binding_name  = cpp_type_name + "_comp"});
         }
         if (entry.alias.has_value()) {
-            result.push_back(
-                FilterBinding{.trait_name = trait_name, .cpp_type_name = cpp_type_name, .binding_name = *entry.alias});
+            result.push_back(FilterBinding{.trait_name    = trait_name,
+                                           .lookup_name   = lookup_name,
+                                           .cpp_type_name = cpp_type_name,
+                                           .binding_name  = *entry.alias});
         }
     }
     for (const auto& trait_name : filter.trait_names) {
         const auto cpp_type_name = EnttCodegenUtils::trait_cpp_name(trait_name, program);
         if (seen_traits.insert(trait_name).second) {
-            result.push_back(FilterBinding{
-                .trait_name = trait_name, .cpp_type_name = cpp_type_name, .binding_name = cpp_type_name + "_comp"});
+            result.push_back(FilterBinding{.trait_name    = trait_name,
+                                           .lookup_name   = trait_name,
+                                           .cpp_type_name = cpp_type_name,
+                                           .binding_name  = cpp_type_name + "_comp"});
         }
     }
     return result;
 }
 
-// Returns simple trait names (for semantic lookups in program.traits).
+// Returns trait lookup names (canonical id when resolved) for semantic lookups
+// in program.traits — simple names alone are ambiguous once both stdlib
+// transform variants are linked.
 std::vector<std::string> filter_trait_names(const FilterClause& filter, const DecoratedProgram& program) {
     std::vector<std::string> result;
     std::unordered_set<std::string> seen;
     for (const auto& binding : filter_bindings(filter, program)) {
-        if (seen.insert(binding.trait_name).second) {
-            result.push_back(binding.trait_name);
+        if (seen.insert(binding.lookup_name).second) {
+            result.push_back(binding.lookup_name);
         }
     }
     return result;
@@ -594,7 +602,7 @@ void emit_view_each_header(std::ostringstream& out,
             continue;
         }
         // EnTT does not pass empty (marker) components to view.each lambdas.
-        const auto* trait   = EnttCodegenUtils::find_trait(program, binding.trait_name);
+        const auto* trait   = EnttCodegenUtils::find_trait(program, binding.lookup_name);
         const bool is_empty = trait == nullptr || trait->fields.empty();
         if (!is_empty) {
             out << ", [[maybe_unused]] " << binding.cpp_type_name << "& " << binding.cpp_type_name << "_comp";
@@ -912,7 +920,7 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
                                             const std::string& func_name,
                                             const auto& emit_arg,
                                             const DecoratedProgram& program) {
-    const std::string wt   = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+    const std::string wt   = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
     const std::string view = "registry.view" + build_view_suffix(qcall.filters, wt, &program);
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
@@ -1441,11 +1449,12 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 
     bool first = true;
     for (const auto& arm : match_stmt.arms) {
-        const std::string cpp_arm = EnttCodegenUtils::trait_cpp_name(arm.trait_name, program);
+        const std::string cpp_arm = EnttCodegenUtils::trait_cpp_name(arm.resolved_trait_id, arm.trait_name, program);
         const auto simple_name    = arm.trait_name.rfind('.') != std::string::npos
                                         ? arm.trait_name.substr(arm.trait_name.rfind('.') + 1)
                                         : arm.trait_name;
-        const auto* TRAIT_INFO    = EnttCodegenUtils::find_trait(program, simple_name);
+        const auto* TRAIT_INFO    = EnttCodegenUtils::find_trait(
+            program, arm.resolved_trait_id.has_value() ? make_canonical_id(*arm.resolved_trait_id) : simple_name);
         const bool IS_MARKER      = TRAIT_INFO == nullptr || TRAIT_INFO->fields.empty();
         std::unordered_set<std::string> arm_aliases = pointer_aliases;
 
@@ -1637,7 +1646,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                                ? s.trait_name.substr(s.trait_name.rfind('.') + 1)
                                                : s.trait_name;
                 const auto* resolved_pt  = s.resolved_trait_id.has_value()
-                                               ? EnttCodegenUtils::find_trait(program, s.resolved_trait_id->local_name)
+                                               ? EnttCodegenUtils::find_trait(program, make_canonical_id(*s.resolved_trait_id))
                                                : EnttCodegenUtils::find_trait(program, simple);
                 const bool is_marker     = resolved_pt == nullptr || resolved_pt->fields.empty();
                 std::ostringstream result;
@@ -1718,11 +1727,13 @@ std::string EnttSystemEmitter::emit_system(const SystemNode& sys, const Decorate
     const auto filter_cpp_types     = filter_cpp_type_names(sys.filter, program);
     const auto exclude_cpp_types    = filter_cpp_type_names(sys.exclude, program);
 
-    // Build simple_name → canonical_cpp_name map so rewrite_expr/rewrite_stmt can
-    // resolve ambiguous traits (e.g. WorldTransform in both flat and volume modules).
+    // Build lookup_name/simple_name → canonical_cpp_name map so rewrite_expr and
+    // rewrite_stmt can resolve ambiguous traits (e.g. WorldTransform in both
+    // flat and volume modules) without another map scan.
     std::unordered_map<std::string, std::string> filter_cpp_overrides;
     for (const auto& b : filter_bindings_list) {
         filter_cpp_overrides.emplace(b.trait_name, b.cpp_type_name);
+        filter_cpp_overrides.emplace(b.lookup_name, b.cpp_type_name);
     }
 
     for (const auto& handler : sys.handlers) {
@@ -1772,8 +1783,8 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     std::ostringstream out;
 
     if (is_flat_transform_propagation(sys, program)) {
-        const std::string lt     = EnttCodegenUtils::trait_cpp_name("LocalTransform", program);
-        const std::string wt     = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string lt     = EnttCodegenUtils::trait_cpp_name("std.transform.flat.LocalTransform", program);
+        const std::string wt     = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
         const std::string parent = EnttCodegenUtils::trait_cpp_name("Parent", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
@@ -1861,7 +1872,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_shape_renderer(sys)) {
-        const std::string wt         = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string wt         = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
         const std::string shape      = EnttCodegenUtils::trait_cpp_name("Shape", program);
         const std::string shape_type = EnttCodegenUtils::enum_cpp_name("ShapeType", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
@@ -1888,7 +1899,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_sprite_renderer(sys)) {
-        const std::string wt       = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string wt       = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
         const std::string renderer = EnttCodegenUtils::trait_cpp_name("Renderer", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
@@ -2037,7 +2048,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_any_text_renderer_2d(sys)) {
-        const std::string wt = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
+        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
         const std::string tl = EnttCodegenUtils::trait_cpp_name("TextLabel", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
@@ -2095,11 +2106,11 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
 
     if (is_editor_extern_system(sys)) {
         if (sys.name == "GizmoRenderer2D" && !world_transform_is_volume(program)) {
-            const bool has_box_collider = program.traits.contains("BoxCollider");
+            const bool has_box_collider = EnttCodegenUtils::has_trait(program, "std.physics.flat.BoxCollider");
             const std::string es        = EnttCodegenUtils::trait_cpp_name("EditorState", program);
             const std::string eg2d      = EnttCodegenUtils::trait_cpp_name("EditorGizmo2D", program);
-            const std::string wt        = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
-            const std::string bc        = EnttCodegenUtils::trait_cpp_name("BoxCollider", program);
+            const std::string wt        = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
+            const std::string bc        = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
             out << "void " << system_function_name(program.module_name, sys.name, "tick")
                 << "(entt::registry& registry) {\n";
             out << "    bool __editor_active = false;\n";
@@ -2213,7 +2224,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             return out.str();
         }
         if (sys.name == "GizmoRenderer3D" && world_transform_is_volume(program)) {
-            const bool has_model_renderer = program.traits.contains("ModelRenderer");
+            const bool has_model_renderer = EnttCodegenUtils::has_trait(program, "ModelRenderer");
             const std::string es          = EnttCodegenUtils::trait_cpp_name("EditorState", program);
             const std::string eg3d        = EnttCodegenUtils::trait_cpp_name("EditorGizmo3D", program);
             const std::string wt          = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);

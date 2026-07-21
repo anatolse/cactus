@@ -809,3 +809,107 @@ The cpp-entt backend SHALL compile recognized `std.physics.flat.query` and `std.
 - **WHEN** authored code uses `query.raycast[Wall, not Trigger](origin = p, dir = d, max_dist = dist)`
 - **THEN** the generated code performs a raycast-style search limited by the listed trait filters
 
+### Requirement: Editor glue emission is gated on canonical trait identity
+The cpp-entt backend SHALL decide whether to emit editor runtime glue — the
+`register_editor_hit_test_impl`, `register_editor_spawn_impl`, and
+`register_editor_raycast_impl` registrations, the edit-mode HUD overlay, and the viewport
+camera translation helpers — using trait lookups that succeed for both canonically-keyed
+linked programs (trait map keyed by `std.module.Name`) and simple-name-keyed
+single-module programs. Simple-name presence probes that only match the map key SHALL NOT
+be used as emission gates.
+
+#### Scenario: Hit-test and spawn impls emitted for a linked 2D editor program
+- **WHEN** a multi-module program using `std.editor`, `std.transform.flat`, and
+  `std.physics.flat` is linked from artifacts (traits keyed by canonical id) and code is
+  generated
+- **THEN** the generated `generated_init_project` registers
+  `register_editor_hit_test_impl` and `register_editor_spawn_impl`
+
+#### Scenario: Raycast impl emitted for a linked 3D editor program
+- **WHEN** a multi-module program using `std.editor`, `std.transform.volume`, and
+  `std.render.models` is linked from artifacts and code is generated
+- **THEN** the generated `generated_init_project` registers
+  `register_editor_raycast_impl`
+
+#### Scenario: Edit-mode overlay emitted for a linked editor program
+- **WHEN** any linked program whose merged traits include `std.editor.EditorState` is
+  generated
+- **THEN** `generated_render_project` contains the edit-mode HUD overlay block gated on
+  `EditorState.active`
+
+#### Scenario: Emitted impl lambdas reference resolved component names
+- **WHEN** the hit-test, spawn, or raycast impl registration is emitted for a linked
+  program
+- **THEN** the lambda bodies reference the resolved C++ component type names (e.g.
+  `std_transform_flat__WorldTransform`) rather than bare simple names, and the generated
+  translation unit compiles
+
+### Requirement: Editor rig dimensionality derives from root-program transform usage
+The cpp-entt backend SHALL derive the editor camera rig dimensionality (2D, 3D, or both)
+from which `WorldTransform` variant(s) — `std.transform.flat.WorldTransform` or
+`std.transform.volume.WorldTransform` — the root module's declarations resolve to. Mere
+presence of a variant in the merged trait map SHALL NOT be used, because `std.editor`
+transitively imports both variants into every editor program. The selected dimensionality
+determines which `camera_enter` rig branch, which viewport camera helper
+(`set_active_camera_2d` / `set_active_camera_3d`), and which transform component the
+emitted glue uses.
+
+#### Scenario: 3D program generates the 3D rig path and active 3D camera
+- **WHEN** a program whose root module entities and templates reference only
+  `std.transform.volume.WorldTransform` is generated with `std.editor` and a viewport
+- **THEN** the generated `camera_enter` impl contains the 3D rig branch (spawning
+  `EditorCamera3D`), and the viewport render loop calls `set_active_camera_3d` for
+  viewport entities carrying the volume camera
+
+#### Scenario: 2D program generates the 2D rig path and active 2D camera
+- **WHEN** a program whose root module entities and templates reference only
+  `std.transform.flat.WorldTransform` is generated with `std.editor` and a viewport
+- **THEN** the generated `camera_enter` impl contains the 2D rig branch (spawning
+  `EditorCamera2D`), and the viewport render loop calls `set_active_camera_2d`
+
+#### Scenario: Dimensionality is deterministic
+- **WHEN** the same program is generated repeatedly
+- **THEN** the emitted rig branches and camera helper calls are identical across runs
+  (independent of trait map iteration order)
+
+### Requirement: Ambiguous simple-name trait lookups fail loudly in codegen
+When a codegen trait lookup by simple name matches two or more traits with different
+canonical ids in the merged program, the backend SHALL raise an internal codegen error
+identifying the ambiguous name instead of selecting an arbitrary match. Call sites that
+can legitimately encounter both stdlib variants SHALL look up by canonical id.
+
+#### Scenario: Ambiguous lookup raises an error
+- **WHEN** codegen performs a simple-name trait lookup for a name carried by two traits
+  with different canonical ids (e.g. `WorldTransform` with both flat and volume linked)
+- **THEN** code generation fails with an internal error naming the ambiguous trait,
+  rather than emitting code based on an arbitrary variant
+
+#### Scenario: Unique simple names still resolve
+- **WHEN** codegen performs a simple-name lookup for a trait whose name is unique in the
+  merged program (e.g. `ModelRenderer`)
+- **THEN** the lookup succeeds regardless of whether the map key is the simple name or
+  the canonical id
+
+### Requirement: Input bindings emitted from resolved enum member identities
+The cpp-entt backend SHALL emit keyboard and mouse binding constants for `input` declarations by consuming the resolved enum member identity attached to each binding property value: members of `std.input.Key` map to raylib `KEY_*` constants (with side-agnostic modifiers mapping to the left-side constants: `Shift` → `KEY_LEFT_SHIFT`, `Ctrl` → `KEY_LEFT_CONTROL`, `Alt` → `KEY_LEFT_ALT`), and members of `std.input.MouseButton` map to raylib `MOUSE_BUTTON_*` constants. The backend SHALL NOT recognize binding constants by source spelling or AST shape. Members of `std.input.GamepadButton` and `std.input.GamepadAxis` are accepted from the frontend but produce no bindings in this backend.
+
+#### Scenario: Alias-qualified key binding emits raylib constant
+- **WHEN** an axis input declares `negative = inp.Key.A` and `positive = inp.Key.D` with `use std.input as inp`
+- **THEN** the generated axis evaluation reads `KEY_A` and `KEY_D`, not placeholder constants
+
+#### Scenario: Spelling-independent emission
+- **WHEN** the same key binding is written `inp.Key.Space` in one program and `std.input.Key.Space` in another
+- **THEN** both programs generate identical binding code using `KEY_SPACE`
+
+#### Scenario: Modifier maps to left-side constant
+- **WHEN** a button input declares `key = inp.Key.Shift`
+- **THEN** the generated binding uses `KEY_LEFT_SHIFT`
+
+#### Scenario: Mouse binding emits mouse constant
+- **WHEN** a button input declares `mouse = inp.MouseButton.Left`
+- **THEN** the generated mouse binding lookup returns `MOUSE_BUTTON_LEFT`
+
+#### Scenario: Missing resolution fails generation loudly
+- **WHEN** an input binding property reaches code generation without a resolved enum member identity
+- **THEN** generation fails with an internal error identifying the input declaration, instead of emitting a dead binding such as `0` or `-1`
+

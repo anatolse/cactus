@@ -9,6 +9,7 @@
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
+#include "backends/cpp-entt/type_utils.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -3111,6 +3112,55 @@ TEST_CASE("Codegen EnTT: stdlib extern system lowering uses canonical C++ names 
           std::string::npos);
     CHECK(tick.find("std_transform_flat__WorldTransform_comp.position") != std::string::npos);
     CHECK(tick.find("std_render_sprites__Renderer_comp.layer") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: ambiguous simple-name trait lookup fails loudly under canonical keys",
+          "[codegen-entt][canonical-identity][editor]") {
+    DecoratedProgram program;
+
+    ResolvedTrait flat_wt;
+    flat_wt.name         = "WorldTransform";
+    flat_wt.module_name  = "std.transform.flat";
+    flat_wt.canonical_id = "std.transform.flat.WorldTransform";
+    flat_wt.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+
+    ResolvedTrait vol_wt;
+    vol_wt.name         = "WorldTransform";
+    vol_wt.module_name  = "std.transform.volume";
+    vol_wt.canonical_id = "std.transform.volume.WorldTransform";
+    vol_wt.fields.push_back({.name = "position", .type = {.kind = TypeKind::Vec3, .name = "vec3"}, .is_var = true});
+
+    ResolvedTrait renderer;
+    renderer.name         = "ModelRenderer";
+    renderer.module_name  = "std.render.models";
+    renderer.canonical_id = "std.render.models.ModelRenderer";
+    renderer.fields.push_back({.name = "visible", .type = {.kind = TypeKind::Bool, .name = "bool"}, .is_var = true});
+
+    program.traits["std.transform.flat.WorldTransform"]   = flat_wt;
+    program.traits["std.transform.volume.WorldTransform"] = vol_wt;
+    program.traits["std.render.models.ModelRenderer"]     = renderer;
+
+    // Simple name carried by two distinct canonical ids → loud internal error.
+    try {
+        (void)EnttCodegenUtils::find_trait(program, "WorldTransform");
+        FAIL("expected ambiguous trait lookup to throw");
+    } catch (const std::runtime_error& e) {
+        CHECK(std::string(e.what()).find("WorldTransform") != std::string::npos);
+    }
+
+    // Canonical ids resolve to their exact variant.
+    const auto* flat = EnttCodegenUtils::find_trait(program, "std.transform.flat.WorldTransform");
+    REQUIRE(flat != nullptr);
+    CHECK(flat->fields.at(0).type.kind == TypeKind::Vec2);
+    const auto* vol = EnttCodegenUtils::find_trait(program, "std.transform.volume.WorldTransform");
+    REQUIRE(vol != nullptr);
+    CHECK(vol->fields.at(0).type.kind == TypeKind::Vec3);
+
+    // Unique simple names still resolve under canonical map keys.
+    CHECK(EnttCodegenUtils::has_trait(program, "ModelRenderer"));
+    const auto* mr = EnttCodegenUtils::find_trait(program, "ModelRenderer");
+    REQUIRE(mr != nullptr);
+    CHECK(mr->canonical_id == "std.render.models.ModelRenderer");
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

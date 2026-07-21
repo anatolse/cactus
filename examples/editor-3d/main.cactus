@@ -34,7 +34,8 @@ pub template RobotCharacter:
         visible = true
     models.ModelAnimator:
         clip = 0
-        playing = true
+        speed = 1.0
+        time = 0.0
     CharacterScale
 
 pub template KnightCharacter:
@@ -45,6 +46,8 @@ pub template KnightCharacter:
     models.ModelAnimator:
         clip = 0
         playing = true
+        speed = 1.0
+        time = 0.0
     CharacterScale
 
 # ── Lights ────────────────────────────────────────────────────────────────────

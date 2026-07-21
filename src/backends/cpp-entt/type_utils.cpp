@@ -6,6 +6,8 @@
 #include <cctype>
 #include <cstdint>
 #include <sstream>
+#include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace cactus {
@@ -72,7 +74,24 @@ std::string resolved_or_fallback_cpp_name(const std::optional<SymbolId>& symbol,
                 return resolved_decl_cpp_name(decl);
             }
         }
-        return fallback_source_name.substr(dot + 1U);
+        // Canonical id with no canonical match (single-module programs without
+        // linker metadata): resolve by the simple suffix when it is unique.
+        auto simple                             = fallback_source_name.substr(dot + 1U);
+        const typename Map::mapped_type* unique = nullptr;
+        for (const auto& [_, decl] : map) {
+            if (decl.name != simple) {
+                continue;
+            }
+            if (unique != nullptr) {
+                unique = nullptr;
+                break;
+            }
+            unique = &decl;
+        }
+        if (unique != nullptr) {
+            return resolved_decl_cpp_name(*unique);
+        }
+        return simple;
     }
     // No dot — scan by local name for canonical-keyed maps (multi-module mode).
     for (const auto& [_, decl] : map) {
@@ -417,17 +436,45 @@ std::string EnttCodegenUtils::enum_cpp_name(const std::string& source_name, cons
     return resolved_or_fallback_cpp_name(std::nullopt, source_name, program.enums);
 }
 
-const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& program, const std::string& simple_name) {
-    auto it = program.traits.find(simple_name);
+const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& program, const std::string& name) {
+    auto it = program.traits.find(name);
     if (it != program.traits.end()) {
         return &it->second;
     }
+    // Canonical-id request: exact canonical match wins; otherwise fall through
+    // to the simple-name scan so metadata-less single-module programs resolve.
+    std::string simple = name;
+    if (const auto dot = name.rfind('.'); dot != std::string::npos) {
+        for (const auto& [_, t] : program.traits) {
+            if (t.canonical_id == name) {
+                return &t;
+            }
+        }
+        simple = name.substr(dot + 1U);
+    }
+    const ResolvedTrait* match = nullptr;
     for (const auto& [_, t] : program.traits) {
-        if (t.name == simple_name) {
-            return &t;
+        if (t.name != simple) {
+            continue;
+        }
+        if (match != nullptr && match->canonical_id != t.canonical_id) {
+            // Picking either variant would depend on map iteration order; the
+            // silent wrong pick is exactly what disabled the editor glue.
+            throw std::runtime_error("internal error: trait lookup '" + name +
+                                     "' is ambiguous in the merged program (candidates include '" +
+                                     (match->canonical_id.empty() ? match->name : match->canonical_id) + "' and '" +
+                                     (t.canonical_id.empty() ? t.name : t.canonical_id) +
+                                     "'); codegen must look it up by canonical id");
+        }
+        if (match == nullptr) {
+            match = &t;
         }
     }
-    return nullptr;
+    return match;
+}
+
+bool EnttCodegenUtils::has_trait(const DecoratedProgram& program, const std::string& name) {
+    return find_trait(program, name) != nullptr;
 }
 
 const ResolvedEnum* EnttCodegenUtils::find_enum(const DecoratedProgram& program, const std::string& simple_name) {
@@ -454,6 +501,135 @@ const ResolvedStruct* EnttCodegenUtils::find_struct(const DecoratedProgram& prog
         }
     }
     return nullptr;
+}
+
+// ── WorldTransform usage scan (D2) ──────────────────────────────────────────
+
+namespace {
+
+constexpr std::string_view kFlatTransformModule   = "std.transform.flat";
+constexpr std::string_view kVolumeTransformModule = "std.transform.volume";
+
+void note_world_transform_ref(const SymbolId& id, WorldTransformUsage& usage) {
+    if (id.local_name != "WorldTransform") {
+        return;
+    }
+    if (id.module.name == kFlatTransformModule) {
+        usage.flat = true;
+    } else if (id.module.name == kVolumeTransformModule) {
+        usage.volume = true;
+    }
+}
+
+void note_world_transform_ref(const std::optional<SymbolId>& id, WorldTransformUsage& usage) {
+    if (id.has_value()) {
+        note_world_transform_ref(*id, usage);
+    }
+}
+
+// The merged codegen AST contains every module's declarations; only the root
+// module's references decide dimensionality. Declarations without a resolved
+// id (single-module pipeline) are root by construction.
+bool is_root_decl(const std::optional<SymbolId>& id, const std::string& root_module) {
+    return !id.has_value() || root_module.empty() || id->module.name == root_module;
+}
+
+void scan_trait_entries(const std::vector<ArchetypeTraitEntry>& traits, WorldTransformUsage& usage) {
+    for (const auto& entry : traits) {
+        note_world_transform_ref(entry.resolved_trait_id, usage);
+    }
+}
+
+void scan_child_overrides(const std::vector<ChildOverrideNode>& overrides, WorldTransformUsage& usage) {
+    for (const auto& node : overrides) {
+        scan_trait_entries(node.traits, usage);
+        scan_child_overrides(node.children, usage);
+    }
+}
+
+void scan_children(const std::vector<ChildArchetypeNode>& children, WorldTransformUsage& usage) {
+    for (const auto& child : children) {
+        scan_trait_entries(child.traits, usage);
+        scan_children(child.children, usage);
+        scan_child_overrides(child.child_overrides, usage);
+    }
+}
+
+void scan_filter(const FilterClause& filter, WorldTransformUsage& usage) {
+    for (const auto& entry : filter.entries) {
+        note_world_transform_ref(entry.resolved_trait_id, usage);
+    }
+    for (const auto& id : filter.resolved_trait_ids) {
+        note_world_transform_ref(id, usage);
+    }
+}
+
+// NOLINTNEXTLINE(bugprone-branch-clone) -- system/extern-system arms differ by node type
+void scan_root_declaration(const Declaration& decl, const std::string& root_module, WorldTransformUsage& usage) {
+    if (const auto* entity = std::get_if<EntityNode>(&decl)) {
+        if (is_root_decl(entity->resolved_entity_id, root_module)) {
+            scan_trait_entries(entity->traits, usage);
+            scan_children(entity->children, usage);
+            scan_child_overrides(entity->child_overrides, usage);
+        }
+    } else if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+        if (is_root_decl(tmpl->resolved_template_id, root_module)) {
+            scan_trait_entries(tmpl->traits, usage);
+            scan_children(tmpl->children, usage);
+        }
+    } else if (const auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (is_root_decl(sys->resolved_system_id, root_module)) {
+            scan_filter(sys->filter, usage);
+            scan_filter(sys->exclude, usage);
+        }
+    } else if (const auto* ext = std::get_if<ExternSystemNode>(&decl)) {
+        if (is_root_decl(ext->resolved_system_id, root_module)) {
+            scan_filter(ext->filter, usage);
+            scan_filter(ext->exclude, usage);
+        }
+    }
+}
+
+// Fallback: when the merged program holds exactly one WorldTransform variant,
+// derive dimensionality from its position field type. With both variants
+// present and no root reference, neither rig is emitted.
+WorldTransformUsage usage_from_unique_variant(const DecoratedProgram& program) {
+    WorldTransformUsage usage;
+    const ResolvedTrait* only = nullptr;
+    for (const auto& [_, t] : program.traits) {
+        if (t.name != "WorldTransform") {
+            continue;
+        }
+        if (only != nullptr && only->canonical_id != t.canonical_id) {
+            return usage;
+        }
+        only = &t;
+    }
+    if (only == nullptr) {
+        return usage;
+    }
+    for (const auto& field : only->fields) {
+        if (field.name == "position") {
+            usage.flat   = field.type.kind == TypeKind::Vec2;
+            usage.volume = field.type.kind == TypeKind::Vec3;
+        }
+    }
+    return usage;
+}
+
+}  // namespace
+
+WorldTransformUsage EnttCodegenUtils::world_transform_usage(const DecoratedProgram& program) {
+    WorldTransformUsage usage;
+    if (program.ast != nullptr) {
+        for (const auto& decl : program.ast->declarations) {
+            scan_root_declaration(decl, program.module_name, usage);
+        }
+    }
+    if (usage.flat || usage.volume) {
+        return usage;
+    }
+    return usage_from_unique_variant(program);
 }
 
 }  // namespace cactus

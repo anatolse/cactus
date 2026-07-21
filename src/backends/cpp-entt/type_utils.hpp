@@ -7,6 +7,14 @@
 
 namespace cactus {
 
+// Which stdlib WorldTransform variant(s) the root module's declarations
+// (entities, templates, system filters) resolve to. Falls back to the merged
+// program's single variant when the root references neither explicitly.
+struct WorldTransformUsage {
+    bool flat   = false;
+    bool volume = false;
+};
+
 class EnttCodegenUtils {
 public:
     static std::string type_to_cpp(const TypeInfo& type);
@@ -38,10 +46,19 @@ public:
     static std::string enum_cpp_name(const std::string& source_name, const DecoratedProgram& program);
 
     // Lookup helpers that work with both simple-name-keyed (single-module) and
-    // canonical-id-keyed (multi-module) program maps.
-    static const ResolvedTrait*  find_trait(const DecoratedProgram& program, const std::string& simple_name);
+    // canonical-id-keyed (multi-module) program maps. `name` may be a canonical
+    // id ("std.transform.flat.WorldTransform") or a simple name; a simple name
+    // matching two traits with different canonical ids throws an internal
+    // codegen error — such call sites must pass a canonical id.
+    static const ResolvedTrait*  find_trait(const DecoratedProgram& program, const std::string& name);
+    static bool                  has_trait(const DecoratedProgram& program, const std::string& name);
     static const ResolvedEnum*   find_enum(const DecoratedProgram& program, const std::string& simple_name);
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const std::string& simple_name);
+
+    // Editor/rig dimensionality (D2): derived from the root module's resolved
+    // WorldTransform references, never from merged-map presence — std.editor
+    // transitively imports both flat and volume variants into every program.
+    static WorldTransformUsage world_transform_usage(const DecoratedProgram& program);
 };
 
 // Canonical C++ name for a generated system handler function.

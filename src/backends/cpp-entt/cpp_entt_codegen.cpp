@@ -519,17 +519,9 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     return out.str();
 }
 
+// Canonical-aware, loud on ambiguous simple names — see EnttCodegenUtils::find_trait.
 const ResolvedTrait* find_trait(const DecoratedProgram& program, const std::string& name) {
-    auto it = program.traits.find(name);
-    if (it != program.traits.end()) {
-        return &it->second;
-    }
-    for (const auto& [_, t] : program.traits) {
-        if (t.name == name) {
-            return &t;
-        }
-    }
-    return nullptr;
+    return EnttCodegenUtils::find_trait(program, name);
 }
 
 const ResolvedField* find_field(const ResolvedTrait* trait, const std::string& field_name) {
@@ -585,27 +577,30 @@ bool program_has_load_handlers(const DecoratedProgram& program) {
 }
 
 bool has_flat_collider_support(const DecoratedProgram& program) {
-    const auto* collider = find_trait(program, "Collider");
+    // Canonical ids: Collider/WorldTransform/BoxCollider/CapsuleCollider exist in
+    // both flat and volume stdlib modules, so simple-name lookups are ambiguous
+    // whenever both variants are linked (std.editor imports both transforms).
+    const auto* collider = find_trait(program, "std.physics.flat.Collider");
     return collider != nullptr && collider->is_stdlib && find_field(collider, "layer") != nullptr &&
            find_field(collider, "mask") != nullptr &&
-           trait_field_is(program, "WorldTransform", "position", TypeKind::Vec2) &&
-           trait_field_is(program, "WorldTransform", "rotation", TypeKind::Float) &&
-           trait_field_is(program, "WorldTransform", "scale", TypeKind::Vec2) &&
-           trait_field_is(program, "BoxCollider", "size", TypeKind::Vec2) &&
+           trait_field_is(program, "std.transform.flat.WorldTransform", "position", TypeKind::Vec2) &&
+           trait_field_is(program, "std.transform.flat.WorldTransform", "rotation", TypeKind::Float) &&
+           trait_field_is(program, "std.transform.flat.WorldTransform", "scale", TypeKind::Vec2) &&
+           trait_field_is(program, "std.physics.flat.BoxCollider", "size", TypeKind::Vec2) &&
            trait_field_is(program, "CircleCollider", "radius", TypeKind::Float) &&
-           trait_field_is(program, "CapsuleCollider", "height", TypeKind::Float);
+           trait_field_is(program, "std.physics.flat.CapsuleCollider", "height", TypeKind::Float);
 }
 
 bool has_volume_collider_support(const DecoratedProgram& program) {
-    const auto* collider = find_trait(program, "Collider");
+    const auto* collider = find_trait(program, "std.physics.volume.Collider");
     return collider != nullptr && collider->is_stdlib && find_field(collider, "layer") != nullptr &&
            find_field(collider, "mask") != nullptr &&
-           trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3) &&
-           trait_field_is(program, "WorldTransform", "rotation", TypeKind::Quat) &&
-           trait_field_is(program, "WorldTransform", "scale", TypeKind::Vec3) &&
-           trait_field_is(program, "BoxCollider", "size", TypeKind::Vec3) &&
+           trait_field_is(program, "std.transform.volume.WorldTransform", "position", TypeKind::Vec3) &&
+           trait_field_is(program, "std.transform.volume.WorldTransform", "rotation", TypeKind::Quat) &&
+           trait_field_is(program, "std.transform.volume.WorldTransform", "scale", TypeKind::Vec3) &&
+           trait_field_is(program, "std.physics.volume.BoxCollider", "size", TypeKind::Vec3) &&
            trait_field_is(program, "SphereCollider", "radius", TypeKind::Float) &&
-           trait_field_is(program, "CapsuleCollider", "height", TypeKind::Float);
+           trait_field_is(program, "std.physics.volume.CapsuleCollider", "height", TypeKind::Float);
 }
 
 bool has_flat_physics_query_api(const DecoratedProgram& program) {
@@ -712,11 +707,11 @@ std::string emit_flat_collision_helpers(const DecoratedProgram& program) {
             else    { pos += from.size(); }
         }
     };
-    const auto wt   = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
-    const auto col  = EnttCodegenUtils::trait_cpp_name("Collider", program);
-    const auto box  = EnttCodegenUtils::trait_cpp_name("BoxCollider", program);
+    const auto wt   = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
+    const auto col  = EnttCodegenUtils::trait_cpp_name("std.physics.flat.Collider", program);
+    const auto box  = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
     const auto cir  = EnttCodegenUtils::trait_cpp_name("CircleCollider", program);
-    const auto cap  = EnttCodegenUtils::trait_cpp_name("CapsuleCollider", program);
+    const auto cap  = EnttCodegenUtils::trait_cpp_name("std.physics.flat.CapsuleCollider", program);
     const auto qc2d = EnttCodegenUtils::struct_cpp_name("QueryContact2D", program);
     const auto qr2d = EnttCodegenUtils::struct_cpp_name("QueryResult2D", program);
     const auto qrk  = EnttCodegenUtils::enum_cpp_name("QueryResultKind", program);
@@ -1038,11 +1033,11 @@ std::string emit_volume_collision_helpers(const DecoratedProgram& program) {
             else    { pos += from.size(); }
         }
     };
-    const auto wt  = EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
-    const auto col = EnttCodegenUtils::trait_cpp_name("Collider", program);
-    const auto box = EnttCodegenUtils::trait_cpp_name("BoxCollider", program);
+    const auto wt  = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const auto col = EnttCodegenUtils::trait_cpp_name("std.physics.volume.Collider", program);
+    const auto box = EnttCodegenUtils::trait_cpp_name("std.physics.volume.BoxCollider", program);
     const auto sph = EnttCodegenUtils::trait_cpp_name("SphereCollider", program);
-    const auto cap = EnttCodegenUtils::trait_cpp_name("CapsuleCollider", program);
+    const auto cap = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CapsuleCollider", program);
     const auto cee = collision_event_type(program);
     std::string code = R"(
 // ── Stdlib 3D Collider Runtime ───────────────────────────────────────────────
@@ -1215,6 +1210,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     const bool uses_volume   = module_uses_camera_volume(program);
     const bool uses_text     = uses_text_format(program);
     const bool uses_editor   = module_uses_editor(program);
+    // Dimensionality from the root module's resolved WorldTransform references —
+    // deterministic even when std.editor links both flat and volume variants.
+    const WorldTransformUsage wt_usage = EnttCodegenUtils::world_transform_usage(program);
 
     // Header
     out << "// Generated by Cactus DSL Compiler (cpp-entt backend)\n\n";
@@ -1240,8 +1238,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         // When both camera modules are in the merged traits map (e.g. via std.editor
         // which transitively imports both), disambiguate by WorldTransform dimensionality:
         // 3D programs use volume camera, 2D programs use flat camera.
-        const bool vol_wt  = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3);
-        const std::string camera_cpp = (uses_volume && vol_wt)
+        const std::string camera_cpp = (uses_volume && wt_usage.volume)
             ? EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program)
             : EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
         out << "// Suppress raylib Camera typedef; DSL Camera struct takes this name\n";
@@ -1736,14 +1733,30 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
         }
     }
-    if (uses_editor && program.traits.contains("WorldTransform") &&
-        program.traits.contains("BoxCollider")) {
+    // ── Editor runtime glue ───────────────────────────────────────────────────
+    // Gates use canonical trait identity (D1) and root-program dimensionality
+    // (D2). Simple-name presence probes on the merged trait map are ambiguous
+    // once std.editor links both stdlib transform variants, and linked programs
+    // key the map by canonical id, so `contains(<simple>)` is always false.
+    // The 2D rig stores only EditorCamera2D + Camera + Viewport, so it exists
+    // for any flat-camera program that is not 3D (including transforms-free UI
+    // tools); the 3D rig carries a volume WorldTransform and requires it.
+    const bool rig_is_2d         = wt_usage.flat || (uses_flat && !wt_usage.volume);
+    const bool rig_is_3d         = wt_usage.volume;
+    const std::string wt2d_cpp   = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
+    const std::string wt3d_cpp   = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const std::string cam2d_cpp  = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
+    const std::string cam3d_cpp  = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
+    const std::string locked_cpp = uses_editor ? EnttCodegenUtils::trait_cpp_name("EditorLocked", program) : "";
+    if (uses_editor && wt_usage.flat && EnttCodegenUtils::has_trait(program, "std.physics.flat.BoxCollider")) {
+        const std::string box_cpp = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
         out << "    cactus::runtime::entt_backend::register_editor_hit_test_impl(\n";
         out << "        [](entt::registry& reg, Vector2 world_pos, int /*mask*/) -> entt::entity {\n";
-        out << "            auto view = reg.view<WorldTransform, BoxCollider>(entt::exclude<EditorLocked>);\n";
+        out << "            auto view = reg.view<" << wt2d_cpp << ", " << box_cpp << ">(entt::exclude<" << locked_cpp
+            << ">);\n";
         out << "            for (auto entity : view) {\n";
-        out << "                const auto& xform = reg.get<WorldTransform>(entity);\n";
-        out << "                const auto& box   = reg.get<BoxCollider>(entity);\n";
+        out << "                const auto& xform = reg.get<" << wt2d_cpp << ">(entity);\n";
+        out << "                const auto& box   = reg.get<" << box_cpp << ">(entity);\n";
         out << "                if (world_pos.x < xform.position.x || world_pos.x > xform.position.x + box.size.x) { continue; }\n";
         out << "                if (world_pos.y < xform.position.y || world_pos.y > xform.position.y + box.size.y) { continue; }\n";
         out << "                return entity;\n";
@@ -1751,15 +1764,18 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            return entt::entity{entt::null};\n";
         out << "        });\n";
     }
-    if (uses_editor && program.traits.contains("WorldTransform")) {
-        // The applied position argument is decided here from the resolved
-        // WorldTransform.position field type: vec3 (std.transform.volume)
-        // programs place with pos3d, vec2 (std.transform.flat) with pos2d.
-        const bool volume_transform = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3);
-        const bool has_local        = program.traits.contains("LocalTransform");
-        const char* pos_arg2d       = volume_transform ? "Vector2 /*pos2d*/" : "Vector2 pos2d";
-        const char* pos_arg3d       = volume_transform ? "Vector3 pos3d" : "Vector3 /*pos3d*/";
-        const char* pos_value       = volume_transform ? "pos3d" : "pos2d";
+    if (uses_editor && (wt_usage.flat || wt_usage.volume)) {
+        // The applied position argument follows the rig dimensionality: volume
+        // programs place with pos3d, flat with pos2d (volume wins when both).
+        const bool volume_transform    = wt_usage.volume;
+        const std::string wt_cpp_spawn = volume_transform ? wt3d_cpp : wt2d_cpp;
+        const std::string lt_canonical =
+            volume_transform ? "std.transform.volume.LocalTransform" : "std.transform.flat.LocalTransform";
+        const bool has_local     = EnttCodegenUtils::has_trait(program, lt_canonical);
+        const std::string lt_cpp = has_local ? EnttCodegenUtils::trait_cpp_name(lt_canonical, program) : "";
+        const char* pos_arg2d    = volume_transform ? "Vector2 /*pos2d*/" : "Vector2 pos2d";
+        const char* pos_arg3d    = volume_transform ? "Vector3 pos3d" : "Vector3 /*pos3d*/";
+        const char* pos_value    = volume_transform ? "pos3d" : "pos2d";
         out << "    cactus::runtime::entt_backend::register_editor_spawn_impl(\n";
         out << "        [](entt::registry& reg, const std::string& name, " << pos_arg2d << ", " << pos_arg3d
             << ") -> entt::entity {\n";
@@ -1767,24 +1783,25 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            if (it == cactus_template_registry.end()) { return entt::entity{entt::null}; }\n";
         out << "            auto entity = it->second(reg);\n";
         if (has_local) {
-            out << "            if (auto* lt = reg.try_get<LocalTransform>(entity)) { lt->position = " << pos_value
+            out << "            if (auto* lt = reg.try_get<" << lt_cpp << ">(entity)) { lt->position = " << pos_value
                 << "; }\n";
         }
-        out << "            if (auto* wt = reg.try_get<WorldTransform>(entity)) { wt->position = " << pos_value
+        out << "            if (auto* wt = reg.try_get<" << wt_cpp_spawn << ">(entity)) { wt->position = " << pos_value
             << "; }\n";
         out << "            return entity;\n";
         out << "        });\n";
     }
-    if (uses_editor && program.traits.contains("ModelRenderer") &&
-        trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3)) {
+    if (uses_editor && rig_is_3d && EnttCodegenUtils::has_trait(program, "ModelRenderer")) {
+        const std::string mr_cpp = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
         out << "    cactus::runtime::entt_backend::register_editor_raycast_impl(\n";
         out << "        [](entt::registry& reg, Ray ray, int /*mask*/) -> entt::entity {\n";
         out << "            entt::entity nearest = entt::null;\n";
         out << "            float nearest_distance = 0.0F;\n";
-        out << "            auto view = reg.view<WorldTransform, ModelRenderer>(entt::exclude<EditorLocked>);\n";
+        out << "            auto view = reg.view<" << wt3d_cpp << ", " << mr_cpp << ">(entt::exclude<" << locked_cpp
+            << ">);\n";
         out << "            for (auto entity : view) {\n";
-        out << "                const auto& xform    = reg.get<WorldTransform>(entity);\n";
-        out << "                const auto& renderer = reg.get<ModelRenderer>(entity);\n";
+        out << "                const auto& xform    = reg.get<" << wt3d_cpp << ">(entity);\n";
+        out << "                const auto& renderer = reg.get<" << mr_cpp << ">(entity);\n";
         out << "                BoundingBox box = cactus::runtime::entt_backend::model_bounds_box(renderer.model);\n";
         out << "                if (box.max.x - box.min.x <= 0.0F && box.max.y - box.min.y <= 0.0F &&\n";
         out << "                    box.max.z - box.min.z <= 0.0F) {\n";
@@ -1807,33 +1824,26 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        });\n";
     }
     // ── Camera rig lifecycle impls ────────────────────────────────────────────
-    // Use WorldTransform dimensionality — not uses_flat/uses_volume — to gate 2D vs 3D rig
-    // code. std.editor imports both camera modules transitively, making both uses_flat and
-    // uses_volume true even for purely 2D or purely 3D programs.
-    const bool rig_is_2d = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec2);
-    const bool rig_is_3d = trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3);
-    // Canonical C++ names for types emitted inside rig lambdas.
+    // Rig dimensionality comes from wt_usage (D2) — std.editor imports both
+    // camera and transform modules transitively, so map presence and
+    // uses_flat/uses_volume cannot distinguish 2D from 3D programs. When the
+    // root references both variants, both rig branches are emitted and the
+    // existing camera_enter(use_3d) dispatch selects at runtime.
     const std::string vp_cpp_rig   = uses_editor ? EnttCodegenUtils::trait_cpp_name("Viewport", program) : "";
     const std::string ec2d_cpp_rig = uses_editor ? EnttCodegenUtils::trait_cpp_name("EditorCamera2D", program) : "";
     const std::string ec3d_cpp_rig = uses_editor ? EnttCodegenUtils::trait_cpp_name("EditorCamera3D", program) : "";
-    // WorldTransform may exist in two modules (flat + volume) when std.editor is used.
-    // Always resolve by actual dimensionality so the correct variant is chosen even
-    // when both flat and volume appear in the merged program.
-    const std::string wt_cpp_rig = rig_is_3d
-        ? EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program)
-        : EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
     if (uses_editor && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_camera_enter_impl(\n";
         out << "        [](entt::registry& reg, bool use_3d) -> entt::entity {\n";
-        if (!uses_flat && !rig_is_3d) {
+        if (!rig_is_2d && !rig_is_3d) {
             out << "            (void)use_3d;\n";
             out << "            return entt::entity{entt::null};\n";
         } else {
-            if (uses_flat && !rig_is_3d) {
+            if (rig_is_2d) {
                 out << "            if (!use_3d) {\n";
                 out << "                auto __cam2d = cactus::runtime::entt_backend::get_active_camera_2d();\n";
                 out << "                if (__cam2d.zoom == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<" << vp_cpp_rig << ", Camera>().each()) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<" << vp_cpp_rig << ", " << cam2d_cpp << ">().each()) {\n";
                 out << "                        if (__vp.active) {\n";
                 out << "                            __cam2d.target = __cam.offset;\n";
                 out << "                            __cam2d.zoom = (__cam.zoom == 0.0F) ? 1.0F : __cam.zoom;\n";
@@ -1851,7 +1861,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
                 out << "                reg.emplace<" << ec2d_cpp_rig << ">(__rig, " << ec2d_cpp_rig << "{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, .min_zoom = 0.05F, .max_zoom = 20.0F});\n";
-                out << "                reg.emplace<Camera>(__rig, Camera{.zoom = __cam2d.zoom, .offset = __cam2d.target});\n";
+                out << "                reg.emplace<" << cam2d_cpp << ">(__rig, " << cam2d_cpp << "{.zoom = __cam2d.zoom, .offset = __cam2d.target});\n";
                 out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
                 out << "                return __rig;\n";
                 out << "            }\n";
@@ -1860,7 +1870,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "            if (use_3d) {\n";
                 out << "                auto __cam3d = cactus::runtime::entt_backend::get_active_camera_3d();\n";
                 out << "                if (__cam3d.fovy == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<" << vp_cpp_rig << ", Camera, " << wt_cpp_rig << ">().each()) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<" << vp_cpp_rig << ", " << cam3d_cpp << ", " << wt3d_cpp << ">().each()) {\n";
                 out << "                        if (__vp.active) {\n";
                 out << "                            __cam3d.fovy = __cam.fov_y;\n";
                 out << "                            __cam3d.position = __wt.position;\n";
@@ -1894,9 +1904,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
                 out << "                reg.emplace<" << ec3d_cpp_rig << ">(__rig, " << ec3d_cpp_rig << "{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = 0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, .min_distance = 0.1F, .max_distance = 1000.0F});\n";
-                out << "                reg.emplace<Camera>(__rig, Camera{.fov_y = __cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
+                out << "                reg.emplace<" << cam3d_cpp << ">(__rig, " << cam3d_cpp << "{.fov_y = __cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
                 out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
-                out << "                reg.emplace<" << wt_cpp_rig << ">(__rig, " << wt_cpp_rig << "{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
+                out << "                reg.emplace<" << wt3d_cpp << ">(__rig, " << wt3d_cpp << "{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
                 out << "                return __rig;\n";
                 out << "            }\n";
             }
@@ -1912,20 +1922,20 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            cactus::runtime::entt_backend::set_editor_saved_viewports({});\n";
         out << "        });\n";
     }
-    if (uses_editor && uses_flat && !rig_is_3d && uses_viewport) {
+    if (uses_editor && rig_is_2d && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_apply_camera_2d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig, Vector2 view_center, float zoom) {\n";
-        out << "            if (auto* __cam = reg.try_get<Camera>(rig)) {\n";
+        out << "            if (auto* __cam = reg.try_get<" << cam2d_cpp << ">(rig)) {\n";
         out << "                __cam->zoom = zoom;\n";
         out << "                __cam->offset = view_center;\n";
         out << "            }\n";
         out << "        });\n";
     }
-    if (uses_editor && rig_is_2d) {
+    if (uses_editor && wt_usage.flat) {
         out << "    cactus::runtime::entt_backend::register_editor_entity_position_2d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity __eid) -> Vector2 {\n";
         out << "            if (reg.valid(__eid)) {\n";
-        out << "                if (const auto* __wt = reg.try_get<" << wt_cpp_rig << ">(__eid)) {\n";
+        out << "                if (const auto* __wt = reg.try_get<" << wt2d_cpp << ">(__eid)) {\n";
         out << "                    return Vector2{.x = __wt->position.x, .y = __wt->position.y};\n";
         out << "                }\n";
         out << "            }\n";
@@ -1935,7 +1945,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     if (uses_editor && rig_is_3d && uses_viewport) {
         out << "    cactus::runtime::entt_backend::register_editor_apply_camera_3d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity rig, Vector3 position, Quat rotation) {\n";
-        out << "            if (auto* __wt = reg.try_get<" << wt_cpp_rig << ">(rig)) {\n";
+        out << "            if (auto* __wt = reg.try_get<" << wt3d_cpp << ">(rig)) {\n";
         out << "                __wt->position = position;\n";
         out << "                __wt->rotation = rotation;\n";
         out << "            }\n";
@@ -1945,7 +1955,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    cactus::runtime::entt_backend::register_editor_entity_position_3d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity __eid) -> Vector3 {\n";
         out << "            if (reg.valid(__eid)) {\n";
-        out << "                if (const auto* __wt = reg.try_get<" << wt_cpp_rig << ">(__eid)) {\n";
+        out << "                if (const auto* __wt = reg.try_get<" << wt3d_cpp << ">(__eid)) {\n";
         out << "                    return __wt->position;\n";
         out << "                }\n";
         out << "            }\n";
@@ -2042,19 +2052,15 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // ── translate_camera helpers (emitted when viewport loop is active) ──────
     const std::string vp_cpp = EnttCodegenUtils::trait_cpp_name("Viewport", program);
-    // Disambiguate WorldTransform by dimensionality; both flat and volume may appear in the
-    // merged AST when std.editor is in use, making a plain name lookup non-deterministic.
-    const std::string wt_cpp = rig_is_3d ? wt_cpp_rig : EnttCodegenUtils::trait_cpp_name("WorldTransform", program);
-    // Guard 2D helper on WorldTransform NOT being 3D: std.editor imports both camera modules
-    // transitively, so uses_flat is true even for 3D programs using std.editor.
-    const bool emit_2d_helper = uses_viewport && uses_flat && !rig_is_3d;
-    const bool emit_3d_helper = uses_viewport && uses_volume &&
-        trait_field_is(program, "WorldTransform", "position", TypeKind::Vec3) &&
-        trait_field_is(program, "WorldTransform", "rotation", TypeKind::Quat);
+    // 2D helper: flat camera in use and the program is not 3D-only (std.editor
+    // makes uses_flat true even for 3D programs, so wt_usage gates it). The 3D
+    // helper follows the root program's volume WorldTransform usage.
+    const bool emit_2d_helper = uses_viewport && uses_flat && (rig_is_2d || !rig_is_3d);
+    const bool emit_3d_helper = uses_viewport && uses_volume && rig_is_3d;
     if (emit_2d_helper || emit_3d_helper) {
         out << "namespace {\n";
         if (emit_2d_helper) {
-            out << "Camera2D __translate_camera_2d(const Camera& cam, int sw, int sh) noexcept {\n";
+            out << "Camera2D __translate_camera_2d(const " << cam2d_cpp << "& cam, int sw, int sh) noexcept {\n";
             out << "    Camera2D cam2d{};\n";
             out << "    cam2d.target   = cam.offset;\n";
             out << "    cam2d.zoom     = cam.zoom;\n";
@@ -2065,13 +2071,13 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "}\n";
         }
         if (emit_3d_helper) {
-            out << "Camera3D __translate_camera_3d(entt::entity entity, const Camera& cam, entt::registry& registry) {\n";
+            out << "Camera3D __translate_camera_3d(entt::entity entity, const " << cam3d_cpp << "& cam, entt::registry& registry) {\n";
             out << "    Camera3D cam3d{};\n";
             out << "    cam3d.fovy       = cam.fov_y;\n";
             out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
             out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
-            out << "    if (registry.all_of<" << wt_cpp << ">(entity)) {\n";
-            out << "        const auto& xform = registry.get<" << wt_cpp << ">(entity);\n";
+            out << "    if (registry.all_of<" << wt3d_cpp << ">(entity)) {\n";
+            out << "        const auto& xform = registry.get<" << wt3d_cpp << ">(entity);\n";
             out << "        cam3d.position = xform.position;\n";
             out << "        const auto& q  = xform.rotation;\n";
             out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
@@ -2131,20 +2137,22 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "                static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
         out << "                static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
         out << "            if (__vp.clear) { ClearBackground(__vp.clear_color); }\n";
+        // Camera helper selection keys on the viewport entity's resolved camera
+        // component type (flat vs volume Camera), not a shared bare Camera token.
         if (emit_2d_helper) {
-            out << "            if (registry.all_of<Camera>(__vp_ent)) {\n";
-            out << "                const auto& __cam = registry.get<Camera>(__vp_ent);\n";
+            out << "            if (registry.all_of<" << cam2d_cpp << ">(__vp_ent)) {\n";
+            out << "                const auto& __cam = registry.get<" << cam2d_cpp << ">(__vp_ent);\n";
             out << "                cactus::runtime::entt_backend::set_active_camera_2d(\n";
             out << "                    __translate_camera_2d(__cam, __sw, __sh));\n";
             out << "            }\n";
         }
         if (emit_3d_helper) {
             if (emit_2d_helper) {
-                out << "            else if (registry.all_of<Camera>(__vp_ent)) {\n";
+                out << "            else if (registry.all_of<" << cam3d_cpp << ">(__vp_ent)) {\n";
             } else {
-                out << "            if (registry.all_of<Camera>(__vp_ent)) {\n";
+                out << "            if (registry.all_of<" << cam3d_cpp << ">(__vp_ent)) {\n";
             }
-            out << "                const auto& __cam = registry.get<Camera>(__vp_ent);\n";
+            out << "                const auto& __cam = registry.get<" << cam3d_cpp << ">(__vp_ent);\n";
             out << "                cactus::runtime::entt_backend::set_active_camera_3d(\n";
             out << "                    __translate_camera_3d(__vp_ent, __cam, registry));\n";
             out << "            }\n";
@@ -2165,13 +2173,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
 
     // Edit-mode overlay drawn after end_render_frame (screen-space, no camera transform)
-    if (uses_editor && program.traits.contains("EditorState")) {
+    if (uses_editor && EnttCodegenUtils::has_trait(program, "EditorState")) {
+        const std::string es_cpp = EnttCodegenUtils::trait_cpp_name("EditorState", program);
         out << "    {\n";
         out << "        bool __editor_active = false;\n";
         out << "        int  __editor_mode   = 0;\n";
-        out << "        auto __ed_view = registry.view<EditorState>();\n";
+        out << "        auto __ed_view = registry.view<" << es_cpp << ">();\n";
         out << "        for (auto __ed_ent : __ed_view) {\n";
-        out << "            const auto& __es = __ed_view.get<EditorState>(__ed_ent);\n";
+        out << "            const auto& __es = __ed_view.get<" << es_cpp << ">(__ed_ent);\n";
         out << "            if (__es.active) { __editor_active = true; __editor_mode = __es.mode; break; }\n";
         out << "        }\n";
         out << "        if (__editor_active) {\n";

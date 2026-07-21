@@ -58,19 +58,31 @@ The semantic analyzer SHALL validate that `input_prop` keys match the expected s
 - **THEN** the semantic analyzer accepts `invert` with a `bool` value
 
 ### Requirement: Input property values reference std.input enum constants
-Property values in `input` declarations SHALL reference enum constants defined in `std.input`. The recognized constant namespaces are: `Key`, `MouseButton`, `GamepadButton`, `GamepadAxis`.
+Binding property values in `input` declarations SHALL be resolved through semantic symbol resolution to members of the `std.input` enums `Key`, `MouseButton`, `GamepadButton`, or `GamepadAxis`, in any spelling the import policy admits (alias-qualified such as `inp.Key.Space`, or canonical-qualified such as `std.input.Key.Space`). Bare unqualified spellings (`Key.Space`) SHALL be rejected under the ordinary import policy unless the enclosing module declares a local `Key`, with a diagnostic suggesting a qualified spelling. Each binding property key SHALL require the matching enum: `key`, `negative`, and `positive` require `Key`; `mouse` requires `MouseButton`; `gamepad` requires `GamepadButton` for `button` inputs and `GamepadAxis` for `axis` inputs. Non-binding properties keep their scalar types (`invert` requires `bool`). An unresolved name, an unknown enum member, or a member of the wrong enum SHALL each be a compile error; the semantic analyzer SHALL attach the resolved enum member identity to the property value for downstream consumption.
 
-#### Scenario: Key enum constant accepted
-- **WHEN** `key = Key.Space` appears in a button input declaration
-- **THEN** the semantic analyzer accepts the value as a valid `Key` constant
+#### Scenario: Alias-qualified key constant accepted
+- **WHEN** `key = inp.Key.Space` appears in a button input declaration with `use std.input as inp`
+- **THEN** the semantic analyzer resolves the value to enum member `std.input.Key.Space` and attaches the resolved identity
 
-#### Scenario: GamepadAxis constant accepted
-- **WHEN** `gamepad = GamepadAxis.LeftX` appears in an axis input declaration
-- **THEN** the semantic analyzer accepts the value as a valid `GamepadAxis` constant
+#### Scenario: Canonical-qualified constant accepted
+- **WHEN** `mouse = std.input.MouseButton.Left` appears in a button input declaration
+- **THEN** the semantic analyzer resolves the value to enum member `std.input.MouseButton.Left`
+
+#### Scenario: Bare spelling rejected with guidance
+- **WHEN** `key = Key.Space` appears and the module has `use std.input as inp` but no local `Key` declaration
+- **THEN** the semantic analyzer reports an unknown-symbol error suggesting `inp.Key.Space` or `std.input.Key.Space`
 
 #### Scenario: Unknown constant rejected
-- **WHEN** `key = Key.Unknown999` appears in a button input declaration
-- **THEN** the semantic analyzer reports an error: `Key.Unknown999` is not a known key constant
+- **WHEN** `key = inp.Key.Unknown999` appears in a button input declaration
+- **THEN** the semantic analyzer reports that `Unknown999` is not a member of enum `std.input.Key`
+
+#### Scenario: Wrong enum for property key rejected
+- **WHEN** `key = inp.MouseButton.Left` appears in a button input declaration
+- **THEN** the semantic analyzer reports that property `key` requires a `std.input.Key` member
+
+#### Scenario: Axis gamepad property uses GamepadAxis
+- **WHEN** `gamepad = inp.GamepadAxis.LeftX` appears in an axis input declaration
+- **THEN** the semantic analyzer resolves the value to enum member `std.input.GamepadAxis.LeftX`
 
 ### Requirement: Input identifiers resolve to InputButton or InputAxis types
 The semantic analyzer SHALL resolve `button` input declaration names to type `InputButton` and `axis` input declaration names to type `InputAxis` at all use sites.

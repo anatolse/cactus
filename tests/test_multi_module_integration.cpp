@@ -428,4 +428,326 @@ TEST_CASE("integration: stdlib on input handlers run before root-module handlers
     fs::remove_all(build_dir, ec);
 }
 
+// ── Editor glue emission under canonical trait keys ─────────────────────────
+// (fix-editor-glue-canonical-traits, D5) Programs linked from artifacts key
+// DecoratedProgram.traits by canonical id; editor glue emission must survive
+// that keying. Hand-built simple-name-keyed programs would pass regardless.
+
+static fs::path stdlib_dir() {
+    return fs::path(CACTUS_TEST_FIXTURES_DIR).parent_path().parent_path() / "stdlib";
+}
+
+/// Mirrors src/main.cpp extract_pub_symbols: pub symbols (including events)
+/// from a live compiled module, for downstream semantic analysis.
+static ImportedSymbols pub_symbols_from(const std::string& module_name, const DecoratedProgram& prog) {
+    ImportedSymbols syms;
+    syms.module_name = module_name;
+    for (const auto& [name, trait] : prog.traits) {
+        if (!trait.is_pub) {
+            continue;
+        }
+        auto exported = trait;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = make_symbol_id(SymbolKind::Trait, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.traits[name]     = std::move(exported);
+    }
+    for (const auto& [name, strct] : prog.structs) {
+        auto exported = strct;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = make_symbol_id(SymbolKind::Struct, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.structs[name]    = std::move(exported);
+    }
+    for (const auto& [name, enm] : prog.enums) {
+        auto exported = enm;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = make_symbol_id(SymbolKind::Enum, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.enums[name]      = std::move(exported);
+    }
+    for (const auto& [name, func] : prog.funcs) {
+        if (!func.is_pub) {
+            continue;
+        }
+        auto exported = func;
+        if (!exported.symbol_id.has_value()) {
+            exported.symbol_id = make_symbol_id(SymbolKind::Func, module_name, name);
+        }
+        exported.module_name  = exported.symbol_id->module.name;
+        exported.canonical_id = make_canonical_id(*exported.symbol_id);
+        exported.name         = exported.symbol_id->local_name;
+        syms.funcs[name]      = std::move(exported);
+    }
+    for (const auto& name : prog.pub_templates) {
+        const auto symbol = make_symbol_id(SymbolKind::Template, module_name, name);
+        ImportedTemplate tmpl;
+        tmpl.name            = symbol.local_name;
+        tmpl.module_name     = symbol.module.name;
+        tmpl.canonical_id    = make_canonical_id(symbol);
+        tmpl.symbol_id       = symbol;
+        syms.templates[name] = tmpl;
+    }
+    for (const auto& dep : prog.dependency_graph) {
+        const auto symbol = make_symbol_id(SymbolKind::System, module_name, dep.system_name);
+        ImportedSystem sys;
+        sys.name                      = symbol.local_name;
+        sys.module_name               = symbol.module.name;
+        sys.canonical_id              = make_canonical_id(symbol);
+        sys.symbol_id                 = symbol;
+        sys.after_systems             = dep.after_systems;
+        syms.systems[dep.system_name] = sys;
+    }
+    syms.events = prog.pub_events;
+    for (const auto& name : prog.pub_events) {
+        const auto symbol        = make_symbol_id(SymbolKind::Event, module_name, name);
+        syms.event_symbols[name] = ImportedEvent{.name         = symbol.local_name,
+                                                 .module_name  = symbol.module.name,
+                                                 .canonical_id = make_canonical_id(symbol),
+                                                 .symbol_id    = symbol};
+    }
+    return syms;
+}
+
+/// Mirrors src/main.cpp's multi-module pipeline: resolve against the real
+/// stdlib, compile+save each module in topo order, link the artifacts, and
+/// attach the merged codegen AST plus root module name.
+static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_source,
+                                                        const std::string& root_module,
+                                                        const fs::path& build_dir,
+                                                        ProgramNode& merged_ast_out) {
+    fs::create_directories(build_dir);
+    const auto root_file = build_dir / (root_module + ".cactus");
+    {
+        std::ofstream ofs(root_file);
+        ofs << root_source;
+    }
+    const std::vector<fs::path> search_paths{stdlib_dir()};
+
+    ErrorReporter resolve_errors;
+    ModuleResolver resolver(resolve_errors);
+    auto modules = resolver.resolve(root_file, search_paths);
+    REQUIRE_FALSE(resolve_errors.has_errors());
+    REQUIRE_FALSE(modules.empty());
+
+    std::unordered_map<std::string, DecoratedProgram> compiled;
+    std::vector<fs::path> artifact_paths;
+    std::vector<std::unique_ptr<ProgramNode>> module_asts;
+
+    // std.core lifecycle events are implicitly in scope for every module.
+    {
+        const auto std_core_path = ModuleResolver::locate_file("std.core", search_paths);
+        REQUIRE_FALSE(std_core_path.empty());
+        ErrorReporter core_errors;
+        auto core_prog = compile_file(std_core_path, core_errors);
+        REQUIRE_FALSE(core_errors.has_errors());
+        REQUIRE(core_prog.has_value());
+        ModuleArtifact core_artifact(core_errors);
+        REQUIRE(core_artifact.save(*core_prog, "std.core", build_dir));
+        artifact_paths.push_back(build_dir / "std.core.cmod");
+        compiled["std.core"] = std::move(*core_prog);
+    }
+
+    for (const auto& mod : modules) {
+        if (compiled.contains(mod.qualified_name)) {
+            continue;
+        }
+        std::ifstream ifs(mod.file_path);
+        REQUIRE(ifs.good());
+        std::ostringstream src;
+        src << ifs.rdbuf();
+
+        ErrorReporter mod_errors;
+        auto ast = std::make_unique<ProgramNode>();
+        Lexer lexer(src.str(), mod.file_path.string(), mod_errors);
+        auto tokens = lexer.tokenize();
+        REQUIRE_FALSE(mod_errors.has_errors());
+        Parser parser(std::move(tokens), mod_errors);
+        *ast = parser.parse_program();
+        REQUIRE_FALSE(mod_errors.has_errors());
+
+        ModuleImports imports;
+        if (mod.qualified_name != "std.core") {
+            imports.add("std.core", pub_symbols_from("std.core", compiled.at("std.core")), {},
+                        compiled.at("std.core").non_pub_templates);
+        }
+        for (const auto& dep_name : mod.dependencies) {
+            auto it = compiled.find(dep_name);
+            if (it == compiled.end()) {
+                continue;
+            }
+            std::vector<std::string> qualifiers;
+            for (const auto& decl : ast->declarations) {
+                const auto* use = std::get_if<UseNode>(&decl);
+                if (use != nullptr && use->module_name == dep_name) {
+                    qualifiers.push_back(use->alias.value_or(use->module_name));
+                }
+            }
+            if (qualifiers.empty()) {
+                qualifiers.push_back(dep_name);
+            }
+            for (const auto& qualifier : qualifiers) {
+                imports.add(qualifier, pub_symbols_from(dep_name, it->second), {}, it->second.non_pub_templates);
+            }
+        }
+
+        SemanticAnalyzer analyzer(mod_errors);
+        auto dec = analyzer.analyze(*ast, imports);
+        if (mod_errors.has_errors()) {
+            for (const auto& diag : mod_errors.diagnostics()) {
+                UNSCOPED_INFO(mod.qualified_name << ": " << diag.message);
+            }
+        }
+        REQUIRE_FALSE(mod_errors.has_errors());
+
+        ModuleArtifact artifact(mod_errors);
+        REQUIRE(artifact.save(dec, mod.qualified_name, build_dir));
+        artifact_paths.push_back(build_dir / (mod.qualified_name + ".cmod"));
+
+        merged_ast_out.declarations.insert(merged_ast_out.declarations.end(),
+                                           std::make_move_iterator(ast->declarations.begin()),
+                                           std::make_move_iterator(ast->declarations.end()));
+        module_asts.push_back(std::move(ast));
+        compiled[mod.qualified_name] = std::move(dec);
+    }
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link(artifact_paths);
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(merged.has_value());
+    merged->ast         = &merged_ast_out;
+    merged->module_name = root_module;
+    return merged;
+}
+
+TEST_CASE("integration: linked 2D editor program emits hit-test/spawn glue and 2D rig",
+          "[integration][editor][canonical]") {
+    auto build_dir = integration_build_dir() / "editor_glue_2d";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module editor2d_app\n"
+        "use std.transform.flat as tf\n"
+        "use std.physics.flat as phys\n"
+        "use std.camera.flat as cam2d\n"
+        "use std.camera.viewport as vp\n"
+        "use std.editor as editor\n"
+        "\n"
+        "pub template Crate:\n"
+        "    tf.WorldTransform\n"
+        "    phys.BoxCollider:\n"
+        "        size = vec2(1.0, 1.0)\n"
+        "\n"
+        "pub entity Cam:\n"
+        "    cam2d.Camera:\n"
+        "        zoom = 32.0\n"
+        "    vp.Viewport\n"
+        "\n"
+        "pub entity Crate1:\n"
+        "    tf.WorldTransform\n"
+        "    phys.BoxCollider:\n"
+        "        size = vec2(1.0, 1.0)\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "editor2d_app", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+    // Linked programs key traits canonically — the shape this change fixes.
+    REQUIRE(merged->traits.contains("std.transform.flat.WorldTransform"));
+    REQUIRE(merged->traits.contains("std.transform.volume.WorldTransform"));
+
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    // Hit-test and spawn impls are registered with resolved component names.
+    CHECK(code.find("register_editor_hit_test_impl") != std::string::npos);
+    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
+    CHECK(code.find("reg.view<std_transform_flat__WorldTransform, std_physics_flat__BoxCollider>") !=
+          std::string::npos);
+    CHECK(code.find("wt->position = pos2d") != std::string::npos);
+
+    // 2D rig branch and viewport camera helper.
+    CHECK(code.find("EditorCamera2D{.view_center") != std::string::npos);
+    CHECK(code.find("set_active_camera_2d") != std::string::npos);
+
+    // Edit-mode HUD overlay gated on the resolved EditorState component.
+    CHECK(code.find("registry.view<std_editor__EditorState>()") != std::string::npos);
+    CHECK(code.find("EDIT [") != std::string::npos);
+
+    // No 3D glue for a flat-only root program.
+    CHECK(code.find("register_editor_raycast_impl") == std::string::npos);
+    CHECK(code.find("set_active_camera_3d") == std::string::npos);
+
+    // Dimensionality is deterministic across runs.
+    CHECK(code == CppEnttCodegen::generate(*merged));
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("integration: linked 3D editor program emits raycast glue and 3D rig",
+          "[integration][editor][canonical]") {
+    auto build_dir = integration_build_dir() / "editor_glue_3d";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module editor3d_app\n"
+        "use std.transform.volume as tv\n"
+        "use std.render.models as models\n"
+        "use std.camera.volume as cam3d\n"
+        "use std.camera.viewport as vp\n"
+        "use std.editor as editor\n"
+        "\n"
+        "asset Bot: model = \"bot.glb\"\n"
+        "\n"
+        "pub template Robot:\n"
+        "    tv.WorldTransform\n"
+        "    models.ModelRenderer:\n"
+        "        model = Bot\n"
+        "        visible = true\n"
+        "\n"
+        "pub entity MainCamera:\n"
+        "    tv.WorldTransform\n"
+        "    cam3d.Camera:\n"
+        "        fov_y = 60.0\n"
+        "    vp.Viewport\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "editor3d_app", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    // Raycast and spawn impls with resolved volume component names.
+    CHECK(code.find("register_editor_raycast_impl") != std::string::npos);
+    CHECK(code.find("register_editor_spawn_impl") != std::string::npos);
+    CHECK(code.find("reg.view<std_transform_volume__WorldTransform, std_render_models__ModelRenderer>") !=
+          std::string::npos);
+    CHECK(code.find("wt->position = pos3d") != std::string::npos);
+
+    // 3D rig branch of camera_enter and the 3D viewport camera helper.
+    CHECK(code.find("if (use_3d)") != std::string::npos);
+    CHECK(code.find("EditorCamera3D{.focus") != std::string::npos);
+    CHECK(code.find("set_active_camera_3d") != std::string::npos);
+
+    // No 2D glue for a volume-only root program.
+    CHECK(code.find("register_editor_hit_test_impl") == std::string::npos);
+    CHECK(code.find("set_active_camera_2d") == std::string::npos);
+    CHECK(code.find("EditorCamera2D{.view_center") == std::string::npos);
+
+    // Dimensionality is deterministic across runs.
+    CHECK(code == CppEnttCodegen::generate(*merged));
+
+    fs::remove_all(build_dir, ec);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

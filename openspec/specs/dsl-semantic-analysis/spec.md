@@ -140,11 +140,26 @@ The semantic analyzer SHALL verify that all `emit` statements reference declared
 - **THEN** the analyzer treats `amount` as a read-only field of the `Damage` event type
 
 ### Requirement: Dependency graph construction
-The semantic analyzer SHALL build a dependency graph of systems based on their trait access patterns and event relationships. This graph SHALL be included in the DecoratedProgram.
+The semantic analyzer SHALL build a canonical handler execution graph from phase dependencies, per-handler inferred or declared contracts, explicit handler ordering, data/effect conflicts, event production and consumption, and activation commits. The graph SHALL be included in the DecoratedProgram and SHALL preserve independent nodes as parallelizable dependency levels.
 
-#### Scenario: Independent systems detected
-- **WHEN** system A reads trait Position and system B reads trait Inventory with no overlap
-- **THEN** the dependency graph marks them as independent (parallelizable)
+#### Scenario: Handler contracts are not merged by system
+- **WHEN** one system has a tick handler that writes Position and a Damaged handler that writes Health
+- **THEN** the graph records those accesses on separate handler nodes
+
+#### Scenario: Filter selection adds no read
+- **WHEN** a handler filters Position but does not access its data
+- **THEN** Position is not added to the handler reads set
+
+#### Scenario: Event edge is inferred
+- **WHEN** one handler may emit Contact and another handles Contact
+- **THEN** the graph records the producer-to-consumer event-flow relation
+
+### Requirement: Phase and external-event semantic validation
+The semantic analyzer SHALL resolve external-event and phase declarations canonically, type-check phase field initializers, validate phase cadence constants and dependency acyclicity, and resolve each handler trigger unambiguously as either a phase or an event.
+
+#### Scenario: Trigger kind is preserved
+- **WHEN** `on tick` resolves to a phase and `on Damaged` resolves to an event
+- **THEN** the decorated handlers preserve distinct phase-trigger and event-trigger kinds
 
 ### Requirement: Accept imported symbols from dependency modules
 The semantic analyzer SHALL accept imported public symbols from dependency modules keyed by module path or alias. Imported symbols SHALL be resolved only through an explicit module qualifier or alias, except for symbols provided by the implicit `std.core` prelude. Unique unqualified imported-symbol lookup SHALL NOT be performed for ordinary modules.

@@ -784,3 +784,21 @@ The parser SHALL accept named arguments in query call expressions using `IDENTIF
 - **WHEN** source contains `query.overlap_box[Pickup](center = p, size = s)`
 - **THEN** the parser accepts both named arguments and preserves their names in the AST
 
+### Requirement: External event and phase parsing
+The parser SHALL accept `[pub] extern event` and `phase` as module-scope declarations. A phase body SHALL parse `from:`, `after:`, `every:`, `max:`, and typed initialized field entries in their defined structural positions.
+
+#### Scenario: Frame and phase chain parse
+- **WHEN** source declares external frame plus input, fixed_tick, tick, late_tick, and render phases
+- **THEN** the AST preserves event fields, phase dependencies, cadence expressions, limits, and field initializers
+
+### Requirement: External handler contract parsing
+The parser SHALL accept `on Trigger:` blocks inside `extern system` declarations and parse their `after`, `reads`, `writes`, `emits`, `commands`, and `effects` clauses. It SHALL accept a leading handler `after:` block in a regular handler before executable statements.
+
+#### Scenario: External render handler parses
+- **WHEN** SpriteRenderer declares `on render` with reads and graphics effects
+- **THEN** the AST contains an external render handler and its contract entries
+
+#### Scenario: Filterless external handler parses
+- **WHEN** InputSource declares only `on input` with `emits: InputSample`
+- **THEN** parsing succeeds without requiring a filter clause
+

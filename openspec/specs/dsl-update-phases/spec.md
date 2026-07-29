@@ -1,40 +1,19 @@
 ## Requirements
 
 ### Requirement: Four-phase per-frame update model
-The DSL SHALL define four named lifecycle event handlers that map to a fixed frame execution order. A system participates in a phase by declaring the corresponding handler. A system MAY declare handlers for multiple phases.
+The standard library SHALL declare runtime-rooted phases in the invariant order input -> fixed_tick -> tick -> late_tick -> render. Systems SHALL participate by declaring handlers for those phase symbols. Input, tick, late_tick, and render SHALL activate once per frame; fixed_tick SHALL activate zero or more times under its declared accumulator cadence and catch-up limit.
 
-| Handler name | Phase | Lifecycle data access | Runs per frame |
-|---|---|---|---|
-| `on input:` | Input | `input` or handler alias | Once |
-| `on fixed_tick:` | Physics | `fixed_tick.dt` or handler alias | 0..N (accumulator model) |
-| `on tick:` | Update | `tick.dt` or handler alias | Once |
-| `on late_tick:` | Post-update | `late_tick.dt` or handler alias | Once |
+#### Scenario: Input precedes physics
+- **WHEN** one runtime frame occurrence is injected
+- **THEN** all input handlers complete before any fixed_tick repetition begins
 
-The execution order within a frame SHALL be:
+#### Scenario: Render follows late update
+- **WHEN** a frame reaches late_tick completion
+- **THEN** render activates once after late_tick and receives the declared interpolation alpha
 
-```
-on input:
-  → event cascade   [depth ≤ max_cascade_depth]
-on fixed_tick:
-  → event cascade   [per fixed step, depth ≤ max_cascade_depth]
-on tick:
-  → event cascade   [depth ≤ max_cascade_depth]
-on late_tick:
-  → event cascade   [depth > max_cascade_depth → deferred to next frame]
-RENDER              [backend, not user code]
-```
-
-#### Scenario: System with input handler runs once per frame before physics
-- **WHEN** a system declares `on input:` and `on fixed_tick:`
-- **THEN** the runtime executes `on input:` for all matching entities before executing any `on fixed_tick:` in the same frame
-
-#### Scenario: System with only late_tick participates only in post-update phase
-- **WHEN** a system declares only `on late_tick:`
-- **THEN** the runtime does not invoke the system during input, fixed_tick, or tick phases
-
-#### Scenario: Multiple handlers in same system all execute
-- **WHEN** a system declares `on tick:` and `on late_tick:`
-- **THEN** both handlers execute each frame, tick before late_tick, using the same filter
+#### Scenario: Fixed tick can repeat
+- **WHEN** accumulated frame time contains multiple fixed intervals
+- **THEN** fixed_tick activates once per due interval up to its declared max before tick begins
 
 ### Requirement: `on input` handler is parameter-free
 The `on input:` handler SHALL use the parameter-free lifecycle-handler form. Input-phase data is accessed through the lifecycle event binding (`input`) or an explicit handler alias.
@@ -69,13 +48,3 @@ The `filter:` and `exclude:` clauses of a `system` declaration SHALL apply unifo
 - **WHEN** a system declares `filter: Transform, FollowCamera` and both `on tick:` and `on late_tick:`
 - **THEN** both handlers operate on entities that have both `Transform` and `FollowCamera` traits
 
-### Requirement: `fixed_tick` and `late_tick` remain lifecycle event names
-The lifecycle event name set SHALL include `tick`, `fixed_tick`, `late_tick`, `spawn`, `destroy`, `load`, `unload`, and `input`.
-
-#### Scenario: fixed_tick recognized as lifecycle name
-- **WHEN** `on fixed_tick:` appears in a system
-- **THEN** the parser and semantic model recognize `fixed_tick` as a reserved lifecycle event name and not a user-defined event
-
-#### Scenario: late_tick recognized as lifecycle name
-- **WHEN** `on late_tick:` appears in a system
-- **THEN** the parser and semantic model recognize `late_tick` as a reserved lifecycle event name and not a user-defined event

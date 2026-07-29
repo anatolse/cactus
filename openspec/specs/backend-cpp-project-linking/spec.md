@@ -63,3 +63,14 @@ Build configuration SHALL compile generated backend output containing the select
 - **WHEN** CMake configures generated-example executable targets
 - **THEN** the configuration does not write a host `main()` implementation into the build tree as a substitute for backend-owned source
 
+### Requirement: User-library ABI is per external handler
+Generated project output SHALL declare one canonical user-library callback ABI per user-defined external handler. The ABI SHALL encode trigger data, selected entity context when applicable, const reads, mutable writes, and capability-limited event, command, and effect interfaces from the handler contract.
+
+#### Scenario: Multiple external handlers link independently
+- **WHEN** one extern system handles fixed_tick and Reset
+- **THEN** generated output references two distinct user-library symbols and either may produce an independent link error
+
+#### Scenario: Contract change changes ABI
+- **WHEN** a trait moves from reads to writes in an external handler contract
+- **THEN** the generated callback declaration changes from immutable to mutable trait access
+

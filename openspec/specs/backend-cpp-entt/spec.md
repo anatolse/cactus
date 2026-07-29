@@ -913,3 +913,36 @@ The cpp-entt backend SHALL emit keyboard and mouse binding constants for `input`
 - **WHEN** an input binding property reaches code generation without a resolved enum member identity
 - **THEN** generation fails with an internal error identifying the input declaration, instead of emitting a dead binding such as `0` or `-1`
 
+### Requirement: Generated phase scheduler
+The cpp-entt backend SHALL generate execution from the DecoratedProgram phase and handler graph rather than hard-coded lifecycle names or extern-system name/filter heuristics. It SHALL implement the declared accumulator, max catch-up, phase barriers, stable topological order, and synthesized periodic `dt` and `alpha` fields.
+
+#### Scenario: Standard frame schedule follows declarations
+- **WHEN** the standard frame, input, fixed_tick, tick, late_tick, and render declarations are linked
+- **THEN** generated code executes their declared activation graph without special-casing system names
+
+#### Scenario: Fixed catch-up and alpha are generated
+- **WHEN** fixed_tick declares `every: 1.0 / 60.0` and `max: 8`
+- **THEN** generated code runs at most eight repetitions, drops excess whole steps, preserves the remainder, and computes alpha
+
+### Requirement: Activation command buffer and event cascade
+The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary.
+
+#### Scenario: Structural command is deferred to commit
+- **WHEN** a fixed_tick handler issues `spawn Particle`
+- **THEN** the entity is created at the repetition commit and is selectable by the next activation
+
+#### Scenario: Event consumer runs before commit
+- **WHEN** a phase handler emits Contact and a Contact handler issues commands
+- **THEN** the Contact cascade completes and its commands join the same activation commit
+
+### Requirement: Contract-shaped external handler lowering
+The cpp-entt backend SHALL lower each external handler to a callback or recognized runtime implementation whose const/mutable component access, event emitter, command interface, and effect services are bounded by its declared contract. Selectionless handlers SHALL be invoked once; selected handlers SHALL use typed EnTT views.
+
+#### Scenario: External renderer uses declared render phase
+- **WHEN** SpriteRenderer declares `on render`, trait reads, and `effects: graphics`
+- **THEN** it executes in the render handler graph without renderer-name scheduling heuristics
+
+#### Scenario: External producer runs once
+- **WHEN** selectionless InputSource handles input
+- **THEN** generated code calls it once rather than iterating registry entities
+

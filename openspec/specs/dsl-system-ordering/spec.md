@@ -1,43 +1,7 @@
 ## Requirements
 
 ### Requirement: `after:` clause on system declarations
-A `system` declaration MAY include an optional `after:` clause that lists one or more system names, one per indented line (identical block structure to `filter:` and `exclude:`). The `after:` clause declares that this system must execute after all listed systems within the same execution phase. The clause appears after `filter:` and `exclude:` blocks and before the first event handler.
-
-```ebnf
-system_decl     = "system" IDENTIFIER ":" NEWLINE INDENT
-                  [ filter_clause ]
-                  [ exclude_clause ]
-                  [ after_clause ]
-                  { event_handler }
-                  DEDENT ;
-after_clause    = "after" ":" NEWLINE INDENT
-                  { IDENTIFIER NEWLINE }
-                  DEDENT ;
-```
-
-Example:
-```cactus
-system SceneRenderSystem:
-    filter:
-        Renderer as r
-    on tick(dt: float):
-        # draw world objects
-
-system UIRenderSystem:
-    filter:
-        UIRenderer as ui
-    after:
-        SceneRenderSystem
-    on tick(dt: float):
-        # draw HUD on top of scene
-
-system DebugOverlaySystem:
-    after:
-        SceneRenderSystem
-        UIRenderSystem
-    on tick(dt: float):
-        # draw debug info on top of everything
-```
+A system-level `after:` clause SHALL be compatibility shorthand over handler nodes. For each named predecessor system, it SHALL order only pairs of handlers with the same resolved phase or event trigger. A handler MAY additionally declare a leading `after:` block for exact canonical handler dependencies.
 
 #### Scenario: System with no `after:` clause is valid
 - **WHEN** a `system` declaration contains no `after:` block
@@ -55,6 +19,18 @@ system DebugOverlaySystem:
 - **WHEN** a system body has `filter:`, then `exclude:`, then `after:`, then `on tick():`
 - **THEN** the parser accepts the ordering and populates all clauses correctly
 
+#### Scenario: Matching phase handlers are ordered
+- **WHEN** B is after A and both systems handle tick
+- **THEN** B.tick executes after A.tick
+
+#### Scenario: Different triggers do not receive an edge
+- **WHEN** A handles tick and B handles Damaged
+- **THEN** system-level `B after A` does not create a cross-trigger edge
+
+#### Scenario: Precise handler dependency is accepted
+- **WHEN** B.tick explicitly lists A.tick in its handler `after:` block
+- **THEN** the handler graph contains that exact edge
+
 ### Requirement: `after:` system name resolution
 The semantic analyzer SHALL verify that every identifier listed in an `after:` clause resolves to a declared `system` in the current compiled program (all linked modules). Referencing a non-existent system name SHALL produce a compile error.
 
@@ -71,7 +47,7 @@ The semantic analyzer SHALL verify that every identifier listed in an `after:` c
 - **THEN** the semantic analyzer reports an error: "'Position' is not a system"
 
 ### Requirement: `after:` ordering cycle detection
-The semantic analyzer SHALL detect cycles in the `after:` ordering graph and report them as compile errors. A cycle occurs when system A is constrained to run after system B and system B is transitively constrained to run after system A.
+The semantic analyzer SHALL detect cycles after expanding system shorthand and combining explicit handler ordering with inferred handler conflict edges. Diagnostics SHALL identify the canonical handler-node cycle.
 
 #### Scenario: Direct cycle detected
 - **WHEN** `system A:` declares `after: B` and `system B:` declares `after: A`
@@ -84,6 +60,10 @@ The semantic analyzer SHALL detect cycles in the `after:` ordering graph and rep
 #### Scenario: Linear chain with no cycle is valid
 - **WHEN** `system C: after: B` and `system B: after: A` with no back-edges
 - **THEN** the semantic analyzer accepts the declarations and the execution order is A → B → C
+
+#### Scenario: Combined cycle is rejected
+- **WHEN** explicit and inferred edges form A.tick -> B.tick -> A.tick
+- **THEN** semantic analysis reports the handler-level cycle path
 
 ### Requirement: `after:` edges stored in DecoratedProgram dependency graph
 The semantic analyzer SHALL store validated `after:` ordering constraints in the `SystemInfo` structure inside the `DecoratedProgram`. Each system's `SystemInfo` SHALL include a list of system names that it must follow.

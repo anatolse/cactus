@@ -37,19 +37,25 @@ The language SHALL be described as a gameplay-focused DSL optimized for expressi
 The Cactus execution model SHALL be fully predictable. Authors SHALL be able to reason about when and how every statement executes without consulting backend implementation details.
 
 The following timing guarantees SHALL be documented and honored by all backends:
-1. **Phase order**: input → fixed_tick → tick → late_tick → render.
-2. **System order within a phase**: deterministic and defined by `after:` constraints plus declaration order.
-3. **Event delivery**: events are delivered within the current phase's cascade depth; events beyond the allowed cascade are deferred.
-4. **Structural change timing**: `add`, `remove`, `spawn`, and `destroy` take effect according to the documented handler/event model rather than hidden backend batching semantics.
-5. **`order by:` timing**: sorting occurs at a defined point before the handler iteration loop.
+1. **Phase order**: declared `from:` and `after:` dependencies define activation barriers; the standard graph is input -> fixed_tick* -> tick -> late_tick -> render.
+2. **Handler order within an activation**: explicit handler ordering and inferred contract-conflict edges define dependencies, with stable declaration order resolving otherwise ambiguous conflicts.
+3. **Event delivery**: emitted events activate contracted consumer nodes within the current activation's bounded cascade; overflow follows the documented deferral rule.
+4. **Structural change timing**: `add`, `remove`, `spawn`, and `destroy` commit after the complete handler/event cascade of each activation or fixed-step repetition.
+5. **Fixed-step timing**: periodic cadence, catch-up cap, dropped excess time, fixed `dt`, and interpolation `alpha` follow phase declarations identically on every backend.
+6. **External effects**: matching effect domains are observably serialized by graph order.
+7. **`order by:` timing**: sorting occurs at a defined point before selected handler iteration and contributes trait reads to that handler contract.
 
-#### Scenario: Phase order is invariant
-- **WHEN** a program declares systems with `on input:`, `on tick:`, and `on late_tick:` handlers
-- **THEN** all `on input:` handlers execute before all `on tick:` handlers, which execute before all `on late_tick:` handlers
+#### Scenario: Phase barrier is invariant
+- **WHEN** fixed_tick repeats during a frame
+- **THEN** tick begins only after all fixed repetitions and their commits
 
-#### Scenario: System order within phase is deterministic
-- **WHEN** two systems have `after:` ordering constraints
-- **THEN** the constrained system always executes after the system it depends on within the same phase
+#### Scenario: Contract order is invariant
+- **WHEN** one handler writes a trait consumed by another in the same activation
+- **THEN** every backend honors the corresponding handler graph dependency
+
+#### Scenario: Structural visibility is invariant
+- **WHEN** a handler queues a structural command
+- **THEN** no handler in the same activation observes the structural result before commit
 
 ### Requirement: ECS is the primary gameplay model, with explicit boundaries
 Cactus SHALL remain ECS-first for gameplay modeling, but the language philosophy SHALL explicitly distinguish gameplay concerns from presentation and engine-plumbing concerns.

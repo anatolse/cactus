@@ -113,3 +113,14 @@ When a reference that linking or code generation consumes fails to resolve, the 
 #### Scenario: Downstream phase rejects missing resolution loudly
 - **WHEN** code generation encounters a consumed reference without a resolved symbol identity despite error-free analysis
 - **THEN** generation fails with an internal error rather than emitting fallback output
+
+### Requirement: Canonical phase symbols and handler triggers
+Phase declarations SHALL have canonical symbol identities and SHALL participate in the uniform module-scope resolution routine. Decorated handler triggers SHALL store a canonical symbol plus an explicit phase-or-event kind, and downstream phases MUST NOT infer trigger meaning from source spelling.
+
+#### Scenario: Standard tick phase resolves through prelude
+- **WHEN** a system declares `on tick` without explicitly importing std.core
+- **THEN** the handler resolves to canonical phase `std.core.tick`
+
+#### Scenario: Qualified custom phase resolves
+- **WHEN** a handler references an imported public phase through its module qualifier
+- **THEN** semantic analysis stores that phase's canonical symbol identity

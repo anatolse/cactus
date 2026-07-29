@@ -84,3 +84,21 @@ The `extract_pub_symbols` function SHALL read the funcs section and include `pub
 #### Scenario: extract_pub_symbols includes pub extern funcs
 - **WHEN** `extract_pub_symbols` is called on a `.cmod` containing `pub extern func lerp`
 - **THEN** `ImportedSymbols.funcs["lerp"]` is present with `is_extern = true` and correct signature
+
+### Requirement: Execution declarations and graph round-trip
+Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler contracts, explicit ordering, and handler execution-graph edges without collapsing them into system-level summaries. The artifact format version SHALL be incremented.
+
+#### Scenario: Handler graph survives round-trip
+- **WHEN** a module containing phase and event handlers is saved and loaded
+- **THEN** every canonical handler, contract set, trigger kind, and graph edge is identical after loading
+
+#### Scenario: Old artifact version is rejected
+- **WHEN** the linker reads an artifact predating handler-level graph serialization
+- **THEN** it reports an incompatible artifact version and requests recompilation
+
+### Requirement: Public runtime symbols export through artifacts
+Public external events and public phases SHALL be included in extracted imported symbols with canonical identity and the metadata needed for semantic validation by dependent modules.
+
+#### Scenario: Imported phase metadata is available
+- **WHEN** a dependent module imports a public periodic phase
+- **THEN** its artifact symbols expose the phase trigger identity, fields, and cadence/completion metadata required for resolution

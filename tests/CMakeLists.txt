@@ -134,6 +134,9 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_SOURCE="examples/split-screen-forest-bombs/forest_bombs.cactus"
     CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP="${SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP}"
     CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_TARGET="example_split_screen_forest_bombs_generated"
+
+    CACTUS_EXTERNAL_HANDLER_LINK_TARGET="example_external_handler_user_library"
+    CACTUS_EXTERNAL_HANDLER_MISSING_TARGET="example_external_handler_missing_implementations"
 )
 
 add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)

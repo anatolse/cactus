@@ -6,6 +6,7 @@
 #include "frontend/ast.hpp"
 #include "frontend/symbol_identity.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -19,12 +20,14 @@ namespace cactus {
 struct ResolvedField {
     std::string name;
     TypeInfo type;
-    bool is_let      = false;
-    bool is_var      = false;
-    bool is_persist  = false;
-    bool is_sync     = false;
-    bool is_pub      = false;
-    bool has_default = false;
+    bool is_let             = false;
+    bool is_var             = false;
+    bool is_persist         = false;
+    bool is_sync            = false;
+    bool is_pub             = false;
+    bool has_default        = false;
+    bool is_synthesized     = false;
+    bool is_completion_only = false;
 };
 
 // Canonical identity mixin — present on all module-scope resolved declarations.
@@ -44,6 +47,9 @@ struct ResolvedFunc : CanonicalIdentity {
     bool is_pub    = false;
     bool is_extern = false;
     bool is_stdlib = false;
+    // nullopt means an extern binding has no known summary and must be treated
+    // conservatively as `external`; an empty set is an explicitly pure binding.
+    std::optional<std::unordered_set<std::string>> effect_summary;
     std::vector<ResolvedParam> params;
     std::optional<TypeInfo> return_type;
 };
@@ -65,6 +71,27 @@ struct ResolvedEnum : CanonicalIdentity {
     std::vector<std::string> variants;
 };
 
+struct ResolvedEvent : CanonicalIdentity {
+    std::string name;
+    std::vector<ResolvedField> fields;
+    bool is_pub      = false;
+    bool is_external = false;
+};
+
+struct ResolvedPhase : CanonicalIdentity {
+    std::string name;
+    std::vector<ResolvedField> fields;
+    std::vector<ResolvedHandlerTrigger> from_sources;
+    std::vector<ResolvedHandlerTrigger> after_phases;
+    std::vector<SymbolId> upstream_phases;
+    std::optional<SymbolId> runtime_root;
+    std::optional<double> every_seconds;
+    std::optional<std::int64_t> max_repetitions;
+    bool is_pub    = false;
+    bool has_every = false;
+    bool has_max   = false;
+};
+
 /// Codegen-facing source module view. The AST remains the parsed syntax tree,
 /// but semantic analysis mutates its module-scope reference sites with resolved
 /// SymbolIds. Linkers preserve these per-module views instead of fabricating a
@@ -84,6 +111,125 @@ struct SystemDependency {
     std::vector<SymbolId> resolved_after_system_ids;  // resolved after: system identities
 };
 
+struct InferredHandlerCommand {
+    HandlerCommandKind kind = HandlerCommandKind::Destroy;
+    std::optional<SymbolId> target;
+
+    friend bool operator==(const InferredHandlerCommand&, const InferredHandlerCommand&) = default;
+};
+
+/// Canonical identity of one executable handler. A handler is identified by
+/// its owning system and resolved trigger rather than by source spelling.
+struct HandlerIdentity {
+    SymbolId system;
+    ResolvedHandlerTrigger trigger;
+
+    [[nodiscard]] std::string canonical_id() const {
+        return make_canonical_id(system) + "/on " + make_canonical_id(trigger.symbol);
+    }
+
+    friend bool operator==(const HandlerIdentity&, const HandlerIdentity&) = default;
+};
+
+struct HandlerIdentityHash {
+    [[nodiscard]] std::size_t operator()(const HandlerIdentity& handler) const noexcept {
+        std::size_t seed = SymbolIdHash{}(handler.system);
+        seed ^= SymbolIdHash{}(handler.trigger.symbol) + 0x9E3779B9U + (seed << 6U) + (seed >> 2U);
+        seed ^= std::hash<std::uint8_t>{}(static_cast<std::uint8_t>(handler.trigger.kind)) + 0x9E3779B9U +
+                (seed << 6U) + (seed >> 2U);
+        return seed;
+    }
+};
+
+/// Stable source/link order. ProgramLinker assigns module_index while the
+/// frontend records declaration and handler indices from source order.
+struct DeclarationOrder {
+    std::uint64_t module_index      = 0;
+    std::uint64_t declaration_index = 0;
+    std::uint64_t handler_index     = 0;
+
+    friend bool operator==(const DeclarationOrder&, const DeclarationOrder&) = default;
+};
+
+struct HandlerContract {
+    std::vector<SymbolId> selection;
+    std::vector<SymbolId> exclusion;
+    bool is_selectionless = true;
+    std::unordered_set<SymbolId> reads;
+    std::unordered_set<SymbolId> writes;
+    std::unordered_set<SymbolId> emits;
+    std::vector<InferredHandlerCommand> commands;
+    std::unordered_set<std::string> effects;
+};
+
+/// Transitional inference result retained for focused semantic tests and old
+/// consumers while HandlerNode becomes the authoritative execution record.
+struct InferredHandlerContract : HandlerContract {
+    SymbolId system;
+    ResolvedHandlerTrigger trigger;
+};
+
+enum class HandlerImplementationKind : std::uint8_t { Cactus, External };
+
+struct HandlerNode {
+    HandlerIdentity identity;
+    HandlerImplementationKind implementation = HandlerImplementationKind::Cactus;
+    HandlerContract contract;
+    std::vector<HandlerIdentity> explicit_after;
+    DeclarationOrder declaration_order;
+    SourceLocation location;
+};
+
+struct PhasePlan {
+    SymbolId phase;
+    std::vector<ResolvedHandlerTrigger> source_dependencies;
+    std::vector<SymbolId> completion_dependencies;
+    std::vector<ResolvedField> fields;
+    std::optional<SymbolId> runtime_root;
+    std::optional<double> every_seconds;
+    std::optional<std::int64_t> max_repetitions;
+    DeclarationOrder declaration_order;
+};
+
+enum class ScheduleEdgeKind : std::uint8_t { ExplicitHandler, ExplicitSystem, DataConflict, EffectConflict };
+enum class ScheduleEdgeOrientation : std::uint8_t { Explicit, WriterBeforeReader, DeclarationOrder };
+
+struct ScheduleEdge {
+    HandlerIdentity before;
+    HandlerIdentity after;
+    ScheduleEdgeKind kind               = ScheduleEdgeKind::DataConflict;
+    ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::DeclarationOrder;
+    std::vector<SymbolId> trait_provenance;
+    std::vector<std::string> effect_provenance;
+};
+
+struct PhaseBarrierEdge {
+    SymbolId upstream_phase;
+    HandlerIdentity downstream_handler;
+};
+
+struct EventFlowEdge {
+    HandlerIdentity producer;
+    SymbolId event;
+    HandlerIdentity consumer;
+};
+
+struct DependencyLevel {
+    ResolvedHandlerTrigger activation;
+    std::uint64_t index = 0;
+    std::vector<HandlerIdentity> handlers;
+};
+
+struct ExecutionGraph {
+    std::vector<PhasePlan> phases;
+    std::vector<HandlerNode> handlers;
+    std::vector<ScheduleEdge> schedule_edges;
+    std::vector<PhaseBarrierEdge> phase_barriers;
+    std::vector<EventFlowEdge> event_flows;
+    std::vector<HandlerIdentity> stable_topological_order;
+    std::vector<DependencyLevel> dependency_levels;
+};
+
 struct DecoratedProgram {
     std::string module_name;  // this program's explicit declaring module name
     // Map key: simple local declaration name. Each declaration still carries a non-empty
@@ -93,10 +239,14 @@ struct DecoratedProgram {
     std::unordered_map<std::string, ResolvedStruct> structs;
     std::unordered_map<std::string, ResolvedEnum> enums;
     std::unordered_map<std::string, ResolvedFunc> funcs;
+    std::unordered_map<std::string, ResolvedEvent> events;
+    std::unordered_map<std::string, ResolvedPhase> phases;
     std::unordered_set<std::string> pub_templates;
     std::unordered_set<std::string> non_pub_templates;
     std::unordered_set<std::string> pub_events;  // pub event names (for ImportedSymbols export)
     std::vector<SystemDependency> dependency_graph;
+    std::vector<InferredHandlerContract> handler_contracts;
+    ExecutionGraph execution_graph;
     std::vector<ResolvedSourceModule> source_modules;
     StringPool string_pool;
     ProgramNode* ast = nullptr;  // non-owning pointer to original AST
@@ -128,6 +278,21 @@ struct ImportedEvent {
     std::string module_name;
     std::string canonical_id;
     std::optional<SymbolId> symbol_id;
+    std::vector<ResolvedField> fields;
+    bool is_external = false;
+};
+
+/// Canonical identity and public metadata for an imported phase.
+struct ImportedPhase {
+    std::string name;
+    std::string module_name;
+    std::string canonical_id;
+    std::optional<SymbolId> symbol_id;
+    std::vector<ResolvedField> fields;
+    std::vector<SymbolId> upstream_phases;
+    std::optional<SymbolId> runtime_root;
+    std::optional<double> every_seconds;
+    std::optional<std::int64_t> max_repetitions;
 };
 
 /// Canonical identity for an imported function (extern funcs).
@@ -150,6 +315,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ImportedTemplate> templates;         // pub templates with canonical identity
     std::unordered_set<std::string> events;                              // legacy pub event names
     std::unordered_map<std::string, ImportedEvent> event_symbols;        // pub events with canonical identity
+    std::unordered_map<std::string, ImportedPhase> phase_symbols;        // pub phases with canonical identity
     std::unordered_map<std::string, ImportedSystem> systems;             // systems with canonical identity
     std::unordered_map<std::string, ImportedFunc> func_symbols;          // pub funcs with canonical identity
     std::unordered_map<std::string, ImportedTemplate> template_symbols;  // pub templates with canonical identity
@@ -174,6 +340,7 @@ struct ModuleImports {
     std::unordered_map<std::string, std::vector<std::string>> func_providers;
     std::unordered_map<std::string, std::vector<std::string>> template_providers;
     std::unordered_map<std::string, std::vector<std::string>> event_providers;
+    std::unordered_map<std::string, std::vector<std::string>> phase_providers;
     std::unordered_map<std::string, std::vector<std::string>> system_providers;
 
     [[nodiscard]] bool empty() const {
@@ -233,7 +400,9 @@ private:
     void check_func_purity_expr(const ExprNode& expr, const std::string& func_name);
     void check_no_recursion(ProgramNode& program);
     void check_persist_sync(ProgramNode& program);
+    void validate_phase_declarations(ProgramNode& program);
     void validate_system_filters(ProgramNode& program);
+    void validate_external_handler_contracts(ProgramNode& program);
     void validateOrderByClause(const SystemNode& system);
     void validateOrderByClause(const ExternSystemNode& system);
     void validate_event_usage(ProgramNode& program);
@@ -292,6 +461,7 @@ private:
     const ResolvedTrait* find_resolved_trait(const SymbolId& symbol) const;
     const ResolvedTrait* find_resolved_trait(const std::optional<SymbolId>& symbol,
                                              const std::string& fallback_name) const;
+    const ResolvedFunc* find_resolved_func(const SymbolId& symbol) const;
     const ResolvedStruct* find_resolved_event(const std::string& name) const;
     TypeInfo infer_expr_type(const ExprNode& expr,
                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
@@ -308,6 +478,8 @@ private:
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);
     void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep);
+    InferredHandlerContract infer_regular_handler_contract(const SystemNode& system,
+                                                           const EventHandlerNode& handler) const;
 
     // Phase 3: std.text.format validation
     bool is_std_text_format_callee(const ExprNode& callee) const;
@@ -353,6 +525,21 @@ private:
     /// Resolve an event reference (dotted or simple) to its canonical SymbolId.
     /// Returns nullopt if the event is not found.
     std::optional<SymbolId> try_resolve_event_ref_to_symbol(const std::string& ref) const;
+
+    /// Resolve a phase reference (dotted or simple) to its canonical SymbolId.
+    std::optional<SymbolId> try_resolve_phase_ref_to_symbol(const std::string& ref) const;
+
+    /// Resolve a regular or external handler trigger and preserve its semantic kind.
+    std::optional<ResolvedHandlerTrigger> try_resolve_handler_trigger(const std::string& ref) const;
+
+    /// Return whether a canonical event symbol has runtime-only external provenance.
+    [[nodiscard]] bool is_external_event(const SymbolId& symbol) const;
+
+    /// Return phase-analysis metadata by canonical identity.
+    [[nodiscard]] const std::vector<ResolvedField>* find_event_fields(const SymbolId& symbol) const;
+    [[nodiscard]] const ResolvedPhase* find_local_phase(const SymbolId& symbol) const;
+    [[nodiscard]] const ImportedPhase* find_imported_phase(const SymbolId& symbol) const;
+    [[nodiscard]] const std::vector<ResolvedField>* find_phase_fields(const SymbolId& symbol) const;
 
     /// Resolve a system name to its canonical SymbolId.
     std::optional<SymbolId> try_resolve_system_ref_to_symbol(const std::string& ref) const;
@@ -416,6 +603,7 @@ private:
     std::unordered_set<std::string> enum_names_;
     std::unordered_set<std::string> trait_names_;
     std::unordered_set<std::string> event_names_;
+    std::unordered_set<std::string> phase_names_;
     std::unordered_set<std::string> func_names_;
     std::unordered_set<std::string> system_names_;
     std::unordered_set<std::string> const_names_;

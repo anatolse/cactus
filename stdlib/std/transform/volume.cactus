@@ -25,5 +25,12 @@ extern system TransformPropagation:
         LocalTransform
         WorldTransform
 
+    on late_tick:
+        reads:
+            LocalTransform
+            Parent
+        writes:
+            WorldTransform
+
 # Returns WorldTransform.position for a live entity, or vec3(0,0,0) if stale.
 pub extern func world_position(of: entity_id) vec3

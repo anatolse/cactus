@@ -1,15 +1,18 @@
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 
+#include "frontend/symbol_identity.hpp"
+
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
-#include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -19,21 +22,38 @@ namespace cactus {
 
 namespace {
 
+std::string snake_case(const std::string& value);
+std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);
+
 bool program_uses_module(const DecoratedProgram& program, std::string_view module_name) {
-    if (program.ast == nullptr) { return false; }
+    if (program.ast == nullptr) {
+        return false;
+    }
     for (const auto& decl : program.ast->declarations) {
         if (const auto* use = std::get_if<UseNode>(&decl)) {
-            if (use->module_name == module_name) { return true; }
+            if (use->module_name == module_name) {
+                return true;
+            }
         }
     }
     return false;
 }
 
-bool uses_text_format(const DecoratedProgram& program)            { return program_uses_module(program, "std.text"); }
-bool module_uses_camera_flat(const DecoratedProgram& program)     { return program_uses_module(program, "std.camera.flat"); }
-bool module_uses_camera_viewport(const DecoratedProgram& program) { return program_uses_module(program, "std.camera.viewport"); }
-bool module_uses_camera_volume(const DecoratedProgram& program)   { return program_uses_module(program, "std.camera.volume"); }
-bool module_uses_editor(const DecoratedProgram& program)          { return program_uses_module(program, "std.editor"); }
+bool uses_text_format(const DecoratedProgram& program) {
+    return program_uses_module(program, "std.text");
+}
+bool module_uses_camera_flat(const DecoratedProgram& program) {
+    return program_uses_module(program, "std.camera.flat");
+}
+bool module_uses_camera_viewport(const DecoratedProgram& program) {
+    return program_uses_module(program, "std.camera.viewport");
+}
+bool module_uses_camera_volume(const DecoratedProgram& program) {
+    return program_uses_module(program, "std.camera.volume");
+}
+bool module_uses_editor(const DecoratedProgram& program) {
+    return program_uses_module(program, "std.editor");
+}
 
 // Task 6.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
@@ -43,6 +63,803 @@ bool has_extern_funcs(const DecoratedProgram& program) {
         }
     }
     return false;
+}
+
+std::string runtime_value_cpp_type(const TypeInfo& type) {
+    if (type.kind == TypeKind::EntityId) {
+        return "entt::entity";
+    }
+    return EnttCodegenUtils::type_to_cpp(type);
+}
+
+std::string event_runtime_cpp_type(const DecoratedProgram& program, const SymbolId& event) {
+    if (program.ast != nullptr) {
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* node = std::get_if<EventNode>(&decl);
+                node != nullptr && node->resolved_event_id.has_value() && *node->resolved_event_id == event) {
+                const auto& module = node->module_name.empty() ? program.module_name : node->module_name;
+                return canonical_to_cpp_name(module, node->name) + "Event";
+            }
+        }
+    }
+    const auto canonical = make_canonical_id(event);
+    for (const auto& [_, resolved] : program.events) {
+        if ((resolved.symbol_id.has_value() && *resolved.symbol_id == event) || resolved.canonical_id == canonical) {
+            return canonical_to_cpp_name(resolved.module_name, resolved.name) + "Event";
+        }
+    }
+    return event_cpp_type_name(event);
+}
+
+std::string handler_trigger_cpp_type(const DecoratedProgram& program, const ResolvedHandlerTrigger& trigger) {
+    if (trigger.kind == HandlerTriggerKind::Event) {
+        return event_runtime_cpp_type(program, trigger.symbol);
+    }
+    return "cactus::runtime::entt_backend::" + canonical_to_cpp_name(trigger.symbol) + "PhaseRuntimeState";
+}
+
+std::string external_handler_callback_name(const HandlerIdentity& identity) {
+    return "cactus_external__" + canonical_to_cpp_name(identity.system) + "__on__" +
+           canonical_to_cpp_name(identity.trigger.symbol);
+}
+
+std::vector<SymbolId> sorted_symbols(const std::unordered_set<SymbolId>& symbols) {
+    std::vector<SymbolId> result(symbols.begin(), symbols.end());
+    std::ranges::sort(
+        result, [](const auto& left, const auto& right) { return make_canonical_id(left) < make_canonical_id(right); });
+    return result;
+}
+
+std::vector<std::string> sorted_strings(const std::unordered_set<std::string>& strings) {
+    std::vector<std::string> result(strings.begin(), strings.end());
+    std::ranges::sort(result);
+    return result;
+}
+
+std::string external_handler_capability_name(const HandlerIdentity& identity) {
+    return "CactusCapabilities__" + canonical_to_cpp_name(identity.system) + "__on__" +
+           canonical_to_cpp_name(identity.trigger.symbol);
+}
+
+std::string external_handler_command_method_name(const InferredHandlerCommand& command) {
+    std::string name = "command_" + std::string(handler_command_kind_name(command.kind));
+    if (command.target.has_value()) {
+        name += "_" + canonical_to_cpp_name(*command.target);
+    }
+    return name;
+}
+
+std::string external_handler_effect_method_name(const std::string& effect) {
+    std::string name = "effect_";
+    for (const char character : effect) {
+        if (character == '.') {
+            name += "__";
+        } else if (std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '_') {
+            name += character;
+        } else {
+            name += '_';
+        }
+    }
+    return name;
+}
+
+const TemplateNode* find_template(const DecoratedProgram& program, const SymbolId& template_id) {
+    if (program.ast == nullptr) {
+        return nullptr;
+    }
+    for (const auto& declaration : program.ast->declarations) {
+        const auto* template_node = std::get_if<TemplateNode>(&declaration);
+        if (template_node != nullptr && template_node->resolved_template_id.has_value() &&
+            *template_node->resolved_template_id == template_id) {
+            return template_node;
+        }
+    }
+    return nullptr;
+}
+
+const ExternSystemNode* find_external_system(const DecoratedProgram& program, const SymbolId& system_id) {
+    if (program.ast == nullptr) {
+        return nullptr;
+    }
+    for (const auto& declaration : program.ast->declarations) {
+        const auto* system = std::get_if<ExternSystemNode>(&declaration);
+        if (system != nullptr && system->resolved_system_id.has_value() && *system->resolved_system_id == system_id) {
+            return system;
+        }
+    }
+    return nullptr;
+}
+
+bool is_user_external_handler(const DecoratedProgram& program, const HandlerNode& node) {
+    const auto* system = find_external_system(program, node.identity.system);
+    return node.implementation == HandlerImplementationKind::External && (system == nullptr || !system->is_stdlib);
+}
+
+bool has_compiler_owned_external_handler(const DecoratedProgram& program, const ExternSystemNode& system) {
+    if (!system.resolved_system_id.has_value()) {
+        return false;
+    }
+    return std::ranges::any_of(program.execution_graph.handlers, [&](const auto& handler) {
+        return handler.identity.system == *system.resolved_system_id &&
+               handler.implementation == HandlerImplementationKind::External &&
+               !is_user_external_handler(program, handler);
+    });
+}
+
+bool has_user_external_handler(const DecoratedProgram& program, const ExternSystemNode& system) {
+    if (!system.resolved_system_id.has_value()) {
+        return false;
+    }
+    return std::ranges::any_of(program.execution_graph.handlers, [&](const auto& handler) {
+        return handler.identity.system == *system.resolved_system_id && is_user_external_handler(program, handler);
+    });
+}
+
+std::string emit_external_command_forward_declarations(const DecoratedProgram& program) {
+    if (program.execution_graph.phases.empty()) {
+        return {};
+    }
+
+    std::unordered_set<std::string> declarations;
+    for (const auto& node : program.execution_graph.handlers) {
+        if (!is_user_external_handler(program, node)) {
+            continue;
+        }
+        for (const auto& command : node.contract.commands) {
+            if (command.kind != HandlerCommandKind::Spawn || !command.target.has_value()) {
+                continue;
+            }
+            const auto* template_node = find_template(program, *command.target);
+            if (template_node == nullptr) {
+                throw std::runtime_error("cpp-entt cannot lower external spawn capability for missing template '" +
+                                         make_canonical_id(*command.target) + "'");
+            }
+            declarations.insert("entt::entity " +
+                                archetype_create_at_function_name(program.module_name, template_node->name) +
+                                "(entt::registry& registry, entt::entity hint);");
+        }
+    }
+    if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
+        declarations.insert(
+            "[[maybe_unused]] static void cactus_destroy_entity_recursive("
+            "entt::registry& registry, entt::entity entity);");
+    }
+    if (declarations.empty()) {
+        return {};
+    }
+
+    std::vector<std::string> ordered(declarations.begin(), declarations.end());
+    std::ranges::sort(ordered);
+    std::ostringstream out;
+    out << "// ── External Command Target Declarations ─────────────────────────────\n\n";
+    for (const auto& declaration : ordered) {
+        out << declaration << "\n";
+    }
+    out << "\n";
+    return out.str();
+}
+
+std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
+    if (program.execution_graph.phases.empty()) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << "// ── Contract-Shaped External Handler ABI ────────────────────────────\n\n";
+    out << "namespace cactus::runtime::entt_backend {\n\n";
+    out << "struct CactusEffectService {\n";
+    out << "    std::string_view domain;\n";
+    out << "};\n\n";
+    for (const auto& node : program.execution_graph.handlers) {
+        if (!is_user_external_handler(program, node)) {
+            continue;
+        }
+        const auto capability_name = external_handler_capability_name(node.identity);
+        out << "struct " << capability_name << " {\n";
+        out << "    entt::registry& registry;\n";
+        for (const auto& event : sorted_symbols(node.contract.emits)) {
+            const auto event_name = canonical_to_cpp_name(event);
+            const auto event_type = event_runtime_cpp_type(program, event);
+            out << "    void emit_" << event_name << "(" << event_type << " occurrence) const {\n";
+            out << "        generated_emit_event(std::move(occurrence));\n";
+            out << "    }\n";
+        }
+        std::unordered_set<std::string> emitted_commands;
+        for (const auto& command : node.contract.commands) {
+            const auto method_name = external_handler_command_method_name(command);
+            if (!emitted_commands.insert(method_name).second) {
+                continue;
+            }
+            switch (command.kind) {
+                case HandlerCommandKind::Spawn: {
+                    if (!command.target.has_value()) {
+                        throw std::runtime_error("cpp-entt received an external spawn capability without a target");
+                    }
+                    const auto* template_node = find_template(program, *command.target);
+                    if (template_node == nullptr) {
+                        throw std::runtime_error(
+                            "cpp-entt cannot lower external spawn capability for missing template '" +
+                            make_canonical_id(*command.target) + "'");
+                    }
+                    const auto factory = archetype_create_at_function_name(program.module_name, template_node->name);
+                    out << "    [[nodiscard]] entt::entity " << method_name << "() const {\n";
+                    out << "        const auto entity = generated_reserve_entity(registry);\n";
+                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Spawn,\n";
+                    out << "            [entity](entt::registry& registry) { (void)::" << factory
+                        << "(registry, entity); });\n";
+                    out << "        return entity;\n";
+                    out << "    }\n";
+                    break;
+                }
+                case HandlerCommandKind::Destroy: {
+                    out << "    void " << method_name << "(entt::entity target) const {\n";
+                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Destroy,\n";
+                    out << "            [target](entt::registry& registry) {\n";
+                    out << "                if (!registry.valid(target)) { return; }\n";
+                    if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
+                        out << "                ::cactus_destroy_entity_recursive(registry, target);\n";
+                    } else {
+                        out << "                registry.destroy(target);\n";
+                    }
+                    out << "            });\n";
+                    out << "    }\n";
+                    break;
+                }
+                case HandlerCommandKind::Add: {
+                    if (!command.target.has_value()) {
+                        throw std::runtime_error("cpp-entt received an external add capability without a target");
+                    }
+                    const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
+                    out << "    void " << method_name << "(entt::entity target, " << type << " value = {}) const {\n";
+                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Add,\n";
+                    out << "            [target, value = std::move(value)](entt::registry& registry) mutable {\n";
+                    out << "                if (!registry.valid(target)) { return; }\n";
+                    out << "                ::cancel_projected_" << type << "(target);\n";
+                    out << "                registry.emplace_or_replace<" << type << ">(target, std::move(value));\n";
+                    out << "            });\n";
+                    out << "    }\n";
+                    break;
+                }
+                case HandlerCommandKind::Remove: {
+                    if (!command.target.has_value()) {
+                        throw std::runtime_error("cpp-entt received an external remove capability without a target");
+                    }
+                    const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
+                    out << "    void " << method_name << "(entt::entity target) const {\n";
+                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Remove,\n";
+                    out << "            [target](entt::registry& registry) {\n";
+                    out << "                if (!registry.valid(target)) { return; }\n";
+                    out << "                ::cancel_projected_" << type << "(target);\n";
+                    out << "                if (registry.all_of<" << type << ">(target)) { registry.remove<" << type
+                        << ">(target); }\n";
+                    out << "            });\n";
+                    out << "    }\n";
+                    break;
+                }
+            }
+        }
+        for (const auto& effect : sorted_strings(node.contract.effects)) {
+            out << "    [[nodiscard]] CactusEffectService " << external_handler_effect_method_name(effect)
+                << "() const noexcept {\n";
+            out << "        return CactusEffectService{.domain = \"" << effect << "\"};\n";
+            out << "    }\n";
+        }
+        out << "};\n\n";
+    }
+    out << "}  // namespace cactus::runtime::entt_backend\n\n";
+
+    for (const auto& node : program.execution_graph.handlers) {
+        if (!is_user_external_handler(program, node)) {
+            continue;
+        }
+        const auto trigger_type = handler_trigger_cpp_type(program, node.identity.trigger);
+        out << "void " << external_handler_callback_name(node.identity) << "(const " << trigger_type << "& trigger";
+        if (!node.contract.is_selectionless) {
+            out << ", entt::entity entity";
+        }
+        const auto reads  = sorted_symbols(node.contract.reads);
+        const auto writes = sorted_symbols(node.contract.writes);
+        for (const auto& trait : reads) {
+            if (node.contract.writes.contains(trait)) {
+                continue;
+            }
+            const auto type = EnttCodegenUtils::trait_cpp_name(trait);
+            out << ", const " << type << "& read_" << type;
+        }
+        for (const auto& trait : writes) {
+            const auto type = EnttCodegenUtils::trait_cpp_name(trait);
+            out << ", " << type << "& write_" << type;
+        }
+        out << ", const cactus::runtime::entt_backend::" << external_handler_capability_name(node.identity)
+            << "& capabilities);\n\n";
+    }
+    return out.str();
+}
+
+void emit_external_handler_call(std::ostringstream& out,
+                                const HandlerNode& node,
+                                std::string_view trigger,
+                                std::string_view indent) {
+    const auto reads                = sorted_symbols(node.contract.reads);
+    const auto writes               = sorted_symbols(node.contract.writes);
+    std::vector<SymbolId> selection = reads;
+    for (const auto& trait : writes) {
+        if (std::ranges::find(selection, trait) == selection.end()) {
+            selection.push_back(trait);
+        }
+    }
+    std::ranges::sort(selection, [](const auto& left, const auto& right) {
+        return make_canonical_id(left) < make_canonical_id(right);
+    });
+
+    const auto emit_callback = [&](std::string_view callback_indent) {
+        out << callback_indent << "::" << external_handler_callback_name(node.identity) << "(" << trigger;
+        if (!node.contract.is_selectionless) {
+            out << ", entity";
+        }
+        for (const auto& trait : reads) {
+            if (node.contract.writes.contains(trait)) {
+                continue;
+            }
+            out << ", registry.get<" << EnttCodegenUtils::trait_cpp_name(trait) << ">(entity)";
+        }
+        for (const auto& trait : writes) {
+            out << ", registry.get<" << EnttCodegenUtils::trait_cpp_name(trait) << ">(entity)";
+        }
+        out << ", " << external_handler_capability_name(node.identity) << "{registry});\n";
+    };
+
+    if (node.contract.is_selectionless) {
+        emit_callback(indent);
+        return;
+    }
+    out << indent << "for (const auto entity : registry.view<";
+    for (std::size_t index = 0; index < selection.size(); ++index) {
+        out << (index == 0 ? "" : ", ") << EnttCodegenUtils::trait_cpp_name(selection[index]);
+    }
+    out << ">()) {\n";
+    emit_callback(std::string(indent) + "    ");
+    out << indent << "}\n";
+}
+
+std::string emit_resolved_event(const ResolvedEvent& event) {
+    std::ostringstream out;
+    out << "struct " << canonical_to_cpp_name(event.module_name, event.name) << "Event {\n";
+    for (const auto& field : event.fields) {
+        out << "    " << runtime_value_cpp_type(field.type) << " " << field.name << "{};\n";
+    }
+    out << "};\n";
+    return out.str();
+}
+
+std::string cpp_double_literal(double value) {
+    std::ostringstream literal;
+    literal << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+    if (literal.str().find_first_of(".eE") == std::string::npos) {
+        literal << ".0";
+    }
+    return literal.str();
+}
+
+std::vector<const PhasePlan*> phase_activation_order(const DecoratedProgram& program) {
+    std::vector<const PhasePlan*> remaining;
+    remaining.reserve(program.execution_graph.phases.size());
+    for (const auto& phase : program.execution_graph.phases) {
+        remaining.push_back(&phase);
+    }
+    std::ranges::sort(remaining, [](const auto* left, const auto* right) {
+        if (left->declaration_order.declaration_index != right->declaration_order.declaration_index) {
+            return left->declaration_order.declaration_index < right->declaration_order.declaration_index;
+        }
+        return make_canonical_id(left->phase) < make_canonical_id(right->phase);
+    });
+
+    std::vector<const PhasePlan*> ordered;
+    std::unordered_set<SymbolId> completed;
+    while (!remaining.empty()) {
+        const auto ready = std::ranges::find_if(remaining, [&](const auto* phase) {
+            const bool completion_ready = std::ranges::all_of(
+                phase->completion_dependencies, [&](const auto& dependency) { return completed.contains(dependency); });
+            const bool source_ready = std::ranges::all_of(phase->source_dependencies, [&](const auto& dependency) {
+                return dependency.kind != HandlerTriggerKind::Phase || completed.contains(dependency.symbol);
+            });
+            return completion_ready && source_ready;
+        });
+        if (ready == remaining.end()) {
+            throw std::runtime_error("cpp-entt codegen received a cyclic phase activation graph");
+        }
+        ordered.push_back(*ready);
+        completed.insert((*ready)->phase);
+        remaining.erase(ready);
+    }
+    return ordered;
+}
+
+std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
+    if (program.execution_graph.phases.empty()) {
+        return {};
+    }
+
+    std::vector<const ResolvedEvent*> all_events;
+    std::vector<const ResolvedEvent*> external_events;
+    for (const auto& [_, event] : program.events) {
+        if (event.symbol_id.has_value()) {
+            all_events.push_back(&event);
+        }
+        if (event.is_external && event.symbol_id.has_value()) {
+            external_events.push_back(&event);
+        }
+    }
+    std::ranges::sort(all_events,
+                      [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
+    std::ranges::sort(external_events,
+                      [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
+
+    std::ostringstream out;
+    out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
+    out << "namespace cactus::runtime::entt_backend {\n\n";
+    out << "inline constexpr std::size_t kCactusMaxEventCascadeDepth = 64;\n\n";
+    if (all_events.empty()) {
+        out << "using CactusEventOccurrence = std::variant<std::monostate>;\n";
+    } else {
+        out << "using CactusEventOccurrence = std::variant<";
+        for (std::size_t index = 0; index < all_events.size(); ++index) {
+            out << (index == 0 ? "" : ", ") << event_runtime_cpp_type(program, *all_events[index]->symbol_id);
+        }
+        out << ">;\n";
+    }
+    out << "struct CactusQueuedEvent {\n";
+    out << "    CactusEventOccurrence occurrence;\n";
+    out << "    std::size_t cascade_depth{};\n";
+    out << "};\n\n";
+    out << "struct CactusStructuralCommand {\n";
+    out << "    enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };\n";
+    out << "    Kind kind{};\n";
+    out << "    std::function<void(entt::registry&)> apply;\n";
+    out << "};\n\n";
+    out << "struct CactusActivationRuntime {\n";
+    out << "    std::deque<CactusQueuedEvent> root_event_queue;\n";
+    out << "    std::deque<CactusQueuedEvent> event_queue;\n";
+    out << "    std::deque<CactusQueuedEvent> deferred_events;\n";
+    out << "    std::vector<CactusStructuralCommand> commands;\n";
+    out << "    std::size_t current_cascade_depth{};\n";
+    out << "    entt::entt_traits<entt::entity>::entity_type next_reserved_entity =\n";
+    out << "        entt::entt_traits<entt::entity>::entity_mask - 1U;\n";
+    out << "    bool active{};\n";
+    out << "};\n\n";
+
+    for (const auto& phase : program.execution_graph.phases) {
+        const auto phase_name = canonical_to_cpp_name(phase.phase);
+        out << "struct " << phase_name << "PhaseRuntimeState {\n";
+        if (phase.every_seconds.has_value()) {
+            out << "    double accumulator{};\n";
+            out << "    double alpha{};\n";
+        }
+        out << "    std::uint64_t completed_batches{};\n";
+        for (const auto& field : phase.fields) {
+            if (field.is_completion_only) {
+                continue;
+            }
+            out << "    " << runtime_value_cpp_type(field.type) << " " << field.name << "{};\n";
+        }
+        out << "};\n\n";
+    }
+
+    out << "struct CactusSchedulerState {\n";
+    out << "    CactusActivationRuntime activation;\n";
+    for (const auto& phase : program.execution_graph.phases) {
+        const auto phase_name = canonical_to_cpp_name(phase.phase);
+        out << "    " << phase_name << "PhaseRuntimeState " << phase_name << ";\n";
+    }
+    out << "};\n\n";
+    out << "CactusSchedulerState& generated_scheduler_state() {\n";
+    out << "    static CactusSchedulerState state;\n";
+    out << "    return state;\n";
+    out << "}\n\n";
+
+    out << "entt::entity generated_reserve_entity(entt::registry& registry) {\n";
+    out << "    using Traits = entt::entt_traits<entt::entity>;\n";
+    out << "    auto& next = generated_scheduler_state().activation.next_reserved_entity;\n";
+    out << "    while (next != 0U) {\n";
+    out << "        const auto candidate = Traits::construct(next--, 0U);\n";
+    out << "        if (!registry.valid(candidate)) {\n";
+    out << "            return candidate;\n";
+    out << "        }\n";
+    out << "    }\n";
+    out << "    throw std::runtime_error(\"cactus deferred entity identifier space exhausted\");\n";
+    out << "}\n\n";
+
+    out << "void generated_queue_structural_command(CactusStructuralCommand::Kind kind,\n";
+    out << "                                        std::function<void(entt::registry&)> apply) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    if (!activation.active) {\n";
+    out << "        throw std::runtime_error(\"cactus structural command queued outside an activation\");\n";
+    out << "    }\n";
+    out << "    activation.commands.push_back(CactusStructuralCommand{.kind = kind, .apply = std::move(apply)});\n";
+    out << "}\n\n";
+
+    out << "void generated_commit_activation(entt::registry& registry) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    auto commands = std::move(activation.commands);\n";
+    out << "    activation.commands.clear();\n";
+    out << "    for (auto& command : commands) {\n";
+    out << "        command.apply(registry);\n";
+    out << "    }\n";
+    out << "}\n\n";
+
+    for (const auto* event : external_events) {
+        const auto type = event_runtime_cpp_type(program, *event->symbol_id);
+        out << "void generated_inject_external_event(" << type << " occurrence) {\n";
+        out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
+        out << "        CactusQueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
+        out << "}\n\n";
+    }
+
+    out << "template <typename Occurrence>\n";
+    out << "void generated_emit_event(Occurrence occurrence) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    const auto next_depth = activation.current_cascade_depth + 1;\n";
+    out << "    auto queued = CactusQueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = next_depth};\n";
+    out << "    if (next_depth > kCactusMaxEventCascadeDepth) {\n";
+    out << "        queued.cascade_depth = 0;\n";
+    out << "        activation.deferred_events.push_back(std::move(queued));\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    activation.event_queue.push_back(std::move(queued));\n";
+    out << "}\n\n";
+
+    out << "template <typename Occurrence>\n";
+    out << "void generated_dispatch_event(entt::registry&, const Occurrence&) {}\n\n";
+    out << "void generated_drain_event_cascade(entt::registry& registry);\n\n";
+
+    out << "struct CactusStableHandlerDispatch {\n";
+    out << "    std::string_view canonical_id;\n";
+    out << "    bool selectionless;\n";
+    out << "};\n";
+    out << "inline constexpr std::array<CactusStableHandlerDispatch, "
+        << program.execution_graph.stable_topological_order.size() << "> kCactusStableHandlerDispatch = {{\n";
+    for (const auto& identity : program.execution_graph.stable_topological_order) {
+        const auto found = std::ranges::find_if(program.execution_graph.handlers,
+                                                [&](const auto& handler) { return handler.identity == identity; });
+        out << "    {\"" << identity.canonical_id() << "\", "
+            << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless ? "true" : "false")
+            << "},\n";
+    }
+    out << "}};\n\n";
+
+    out << "template <typename Occurrence>\n";
+    out << "void generated_process_root_event(entt::registry&, const Occurrence&) {}\n\n";
+
+    const auto phase_order = phase_activation_order(program);
+    for (const auto* phase : phase_order) {
+        if (!phase->runtime_root.has_value()) {
+            continue;
+        }
+        const auto phase_name = canonical_to_cpp_name(phase->phase);
+        const auto root_type  = event_runtime_cpp_type(program, *phase->runtime_root);
+        out << "void generated_dispatch_phase_" << phase_name << "(entt::registry&, const " << phase_name
+            << "PhaseRuntimeState&);\n\n";
+        out << "void generated_run_phase_batch_" << phase_name << "(entt::registry& registry, const " << root_type
+            << "& root_event) {\n";
+        out << "    auto& scheduler = generated_scheduler_state();\n";
+        out << "    auto& phase = scheduler." << phase_name << ";\n";
+        if (phase->every_seconds.has_value()) {
+            const auto interval = *phase->every_seconds;
+            out << "    constexpr double interval = " << cpp_double_literal(interval) << ";\n";
+            out << "    phase.accumulator += static_cast<double>(root_event.dt);\n";
+            out << "    const auto due = static_cast<std::uint64_t>(std::floor(phase.accumulator / interval));\n";
+            if (phase->max_repetitions.has_value()) {
+                out << "    constexpr std::uint64_t max_repetitions = " << *phase->max_repetitions << ";\n";
+                out << "    const auto repetitions = std::min(due, max_repetitions);\n";
+            } else {
+                out << "    const auto repetitions = due;\n";
+            }
+            out << "    phase.dt = interval;\n";
+            out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
+            out << "        scheduler.activation.active = true;\n";
+            out << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            out << "        generated_drain_event_cascade(registry);\n";
+            out << "        generated_commit_activation(registry);\n";
+            out << "        scheduler.activation.active = false;\n";
+            out << "    }\n";
+            out << "    phase.accumulator -= static_cast<double>(due) * interval;\n";
+            out << "    if (phase.accumulator < 0.0) { phase.accumulator = 0.0; }\n";
+            out << "    if (phase.accumulator >= interval) { phase.accumulator = std::fmod(phase.accumulator, "
+                   "interval); }\n";
+            out << "    phase.alpha = phase.accumulator / interval;\n";
+        } else {
+            out << "    (void)root_event;\n";
+            out << "    scheduler.activation.active = true;\n";
+            out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            out << "    generated_drain_event_cascade(registry);\n";
+            out << "    generated_commit_activation(registry);\n";
+            out << "    scheduler.activation.active = false;\n";
+        }
+        out << "    ++phase.completed_batches;\n";
+        out << "}\n\n";
+    }
+
+    for (const auto* event : external_events) {
+        const auto root_type = event_runtime_cpp_type(program, *event->symbol_id);
+        out << "void generated_process_root_event(entt::registry& registry, const " << root_type << "& root_event) {\n";
+        for (const auto* phase : phase_order) {
+            if (phase->runtime_root.has_value() && *phase->runtime_root == *event->symbol_id) {
+                out << "    generated_run_phase_batch_" << canonical_to_cpp_name(phase->phase)
+                    << "(registry, root_event);\n";
+            }
+        }
+        out << "}\n\n";
+    }
+
+    out << "void generated_drain_external_events(entt::registry& registry) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    auto& queue = activation.root_event_queue;\n";
+    out << "    while (!activation.deferred_events.empty()) {\n";
+    out << "        queue.push_back(std::move(activation.deferred_events.front()));\n";
+    out << "        activation.deferred_events.pop_front();\n";
+    out << "    }\n";
+    out << "    while (!queue.empty()) {\n";
+    out << "        auto queued = std::move(queue.front());\n";
+    out << "        queue.pop_front();\n";
+    out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence); },\n";
+    out << "                   queued.occurrence);\n";
+    out << "    }\n";
+    out << "}\n\n";
+    out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    return out.str();
+}
+
+std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
+    if (program.execution_graph.phases.empty() || program.ast == nullptr) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << "namespace cactus::runtime::entt_backend {\n\n";
+    for (const auto& phase : program.execution_graph.phases) {
+        const auto phase_name = canonical_to_cpp_name(phase.phase);
+        out << "void generated_dispatch_phase_" << phase_name << "(entt::registry& registry, const " << phase_name
+            << "PhaseRuntimeState& phase) {\n";
+        out << "    (void)phase;\n";
+        bool emitted = false;
+        for (const auto& identity : program.execution_graph.stable_topological_order) {
+            if (identity.trigger.kind != HandlerTriggerKind::Phase || identity.trigger.symbol != phase.phase) {
+                continue;
+            }
+            const auto graph_node = std::ranges::find_if(program.execution_graph.handlers,
+                                                         [&](const auto& node) { return node.identity == identity; });
+            if (graph_node == program.execution_graph.handlers.end()) {
+                continue;
+            }
+            if (is_user_external_handler(program, *graph_node)) {
+                emit_external_handler_call(out, *graph_node, "phase", "    ");
+                emitted = true;
+                continue;
+            }
+            if (graph_node->implementation == HandlerImplementationKind::External) {
+                const auto* system = find_external_system(program, graph_node->identity.system);
+                if (system != nullptr && system->is_stdlib) {
+                    out << "    ::" << system_function_name(program.module_name, system->name, "tick")
+                        << "(registry);\n";
+                    emitted = true;
+                }
+                continue;
+            }
+            if (graph_node->implementation != HandlerImplementationKind::Cactus) {
+                continue;
+            }
+            for (const auto& declaration : program.ast->declarations) {
+                const auto* system = std::get_if<SystemNode>(&declaration);
+                if (system == nullptr || !system->resolved_system_id.has_value() ||
+                    *system->resolved_system_id != identity.system) {
+                    continue;
+                }
+                const auto handler = std::ranges::find_if(system->handlers, [&](const auto& candidate) {
+                    return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
+                });
+                if (handler == system->handlers.end()) {
+                    continue;
+                }
+                out << "    ::"
+                    << system_function_name(program.module_name,
+                                            system->name,
+                                            handler->event_name.find('.') == std::string::npos
+                                                ? handler->event_name
+                                                : canonical_to_cpp_name(identity.trigger.symbol))
+                    << "(registry, phase);\n";
+                emitted = true;
+                break;
+            }
+        }
+        if (!emitted) {
+            out << "    (void)registry;\n";
+            out << "    (void)phase;\n";
+        }
+        out << "}\n\n";
+    }
+
+    std::vector<const ResolvedEvent*> events;
+    for (const auto& [_, event] : program.events) {
+        if (event.symbol_id.has_value()) {
+            events.push_back(&event);
+        }
+    }
+    std::ranges::sort(events,
+                      [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
+    for (const auto* event : events) {
+        const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
+        out << "void generated_dispatch_event(entt::registry& registry, const " << event_type << "& occurrence) {\n";
+        out << "    (void)occurrence;\n";
+        bool emitted = false;
+        for (const auto& identity : program.execution_graph.stable_topological_order) {
+            if (identity.trigger.kind != HandlerTriggerKind::Event || identity.trigger.symbol != *event->symbol_id) {
+                continue;
+            }
+            const auto graph_node = std::ranges::find_if(program.execution_graph.handlers,
+                                                         [&](const auto& node) { return node.identity == identity; });
+            if (graph_node == program.execution_graph.handlers.end()) {
+                continue;
+            }
+            if (is_user_external_handler(program, *graph_node)) {
+                emit_external_handler_call(out, *graph_node, "occurrence", "    ");
+                emitted = true;
+                continue;
+            }
+            if (graph_node->implementation == HandlerImplementationKind::External) {
+                const auto* system = find_external_system(program, graph_node->identity.system);
+                if (system != nullptr && system->is_stdlib) {
+                    out << "    ::" << system_function_name(program.module_name, system->name, "tick")
+                        << "(registry);\n";
+                    emitted = true;
+                }
+                continue;
+            }
+            if (graph_node->implementation != HandlerImplementationKind::Cactus) {
+                continue;
+            }
+            for (const auto& declaration : program.ast->declarations) {
+                const auto* system = std::get_if<SystemNode>(&declaration);
+                if (system == nullptr || !system->resolved_system_id.has_value() ||
+                    *system->resolved_system_id != identity.system) {
+                    continue;
+                }
+                const auto handler = std::ranges::find_if(system->handlers, [&](const auto& candidate) {
+                    return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
+                });
+                if (handler == system->handlers.end()) {
+                    continue;
+                }
+                out << "    ::"
+                    << system_function_name(program.module_name,
+                                            system->name,
+                                            handler->event_name.find('.') == std::string::npos
+                                                ? handler->event_name
+                                                : canonical_to_cpp_name(identity.trigger.symbol))
+                    << "(registry, occurrence);\n";
+                emitted = true;
+                break;
+            }
+        }
+        if (!emitted) {
+            out << "    (void)registry;\n";
+            out << "    (void)occurrence;\n";
+        }
+        out << "}\n\n";
+    }
+
+    out << "void generated_drain_event_cascade(entt::registry& registry) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    while (!activation.event_queue.empty()) {\n";
+    out << "        auto queued = std::move(activation.event_queue.front());\n";
+    out << "        activation.event_queue.pop_front();\n";
+    out << "        activation.current_cascade_depth = queued.cascade_depth;\n";
+    out << "        std::visit([&](const auto& occurrence) { generated_dispatch_event(registry, occurrence); },\n";
+    out << "                   queued.occurrence);\n";
+    out << "    }\n";
+    out << "    activation.current_cascade_depth = 0;\n";
+    out << "}\n\n";
+    out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    return out.str();
 }
 
 std::string emit_projected_trait_registry_helpers(const DecoratedProgram& program) {
@@ -67,7 +884,8 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
         out << "    }\n";
         out << "    projected_" << cpp_name << "_entities.push_back(entity);\n";
         if (trait.fields.empty()) {
-            out << "    projected_" << cpp_name << "_previous.emplace(entity, registry.all_of<" << cpp_name << ">(entity));\n";
+            out << "    projected_" << cpp_name << "_previous.emplace(entity, registry.all_of<" << cpp_name
+                << ">(entity));\n";
         } else {
             out << "    if (auto* previous = registry.try_get<" << cpp_name << ">(entity); previous != nullptr) {\n";
             out << "        projected_" << cpp_name << "_previous.emplace(entity, *previous);\n";
@@ -77,7 +895,8 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
         }
         out << "}\n\n";
         if (trait.fields.empty()) {
-            out << "[[maybe_unused]] void project_" << cpp_name << "(entt::registry& registry, entt::entity entity) {\n";
+            out << "[[maybe_unused]] void project_" << cpp_name
+                << "(entt::registry& registry, entt::entity entity) {\n";
             out << "    remember_projected_" << cpp_name << "(registry, entity);\n";
             out << "    registry.emplace_or_replace<" << cpp_name << ">(entity);\n";
             out << "}\n\n";
@@ -228,95 +1047,6 @@ std::string asset_register_call(const AssetDeclNode& asset) {
     return {};
 }
 
-std::string filter_simple_name(const FilterEntry& entry) {
-    auto dot = entry.qualified_name.rfind('.');
-    return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
-}
-
-bool filter_has_trait(const FilterClause& filter, const std::string& qualified, const std::string& simple) {
-    for (const auto& entry : filter.entries) {
-        if (entry.qualified_name == qualified || filter_simple_name(entry) == simple) {
-            return true;
-        }
-    }
-    return std::ranges::find(filter.trait_names, simple) != filter.trait_names.end();
-}
-
-bool uses_stdlib_extern_contract(const ExternSystemNode& sys) {
-    if (sys.is_stdlib) {
-        return true;
-    }
-    // Filter entries with stdlib-qualified traits (user systems that integrate with stdlib).
-    if (std::ranges::any_of(sys.filter.entries,
-                            [](const auto& entry) { return entry.qualified_name.rfind("std.", 0) == 0; })) {
-        return true;
-    }
-    // Name-based fallback for test scenarios where resolved module identities are unavailable.
-    static const std::unordered_set<std::string> kKnownStdlibExternSystems = {
-        "ShapeRenderer",        "SpriteRenderer",      "AnimatedSpriteSystem",
-        "MeshRenderer",         "ModelRendererSystem",  "ModelAnimationSystem",
-        "BillboardRenderer",    "PointLightSystem",     "DirectionalLightSystem",
-        "TextRenderer2D",       "TextRenderer3D",       "ScreenLabelSystem",
-        "TransformPropagation", "EditorTemplatePalette","EditorPropertyPanel",
-        "GizmoRenderer2D",      "GizmoRenderer3D",
-    };
-    return kKnownStdlibExternSystems.contains(sys.name);
-}
-
-bool is_render_phase_extern(const ExternSystemNode& sys, const DecoratedProgram& program) {
-    (void)program;
-    if (!uses_stdlib_extern_contract(sys)) {
-        return false;
-    }
-    // ModelAnimationSystem is deliberately absent: it advances ModelAnimator
-    // time and must run in the update phase (the default for externs).
-    if (sys.name == "ShapeRenderer") {
-        return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "std.render.shapes.Shape", "Shape");
-    }
-    if (sys.name == "SpriteRenderer") {
-        return filter_has_trait(sys.filter, "std.transform.flat.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "std.render.sprites.Renderer", "Renderer");
-    }
-    if (sys.name == "MeshRenderer") {
-        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "std.render.meshes.Renderer", "Renderer");
-    }
-    if (sys.name == "ModelRendererSystem") {
-        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "std.render.models.ModelRenderer", "ModelRenderer");
-    }
-    if (sys.name == "BillboardRenderer") {
-        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "std.render.meshes.BillboardRenderer", "BillboardRenderer");
-    }
-    if (sys.name == "PointLightSystem") {
-        return filter_has_trait(sys.filter, "std.transform.volume.WorldTransform", "WorldTransform") &&
-               filter_has_trait(sys.filter, "std.render.meshes.PointLight", "PointLight");
-    }
-    if (sys.name == "DirectionalLightSystem") {
-        return filter_has_trait(sys.filter, "std.render.meshes.DirectionalLight", "DirectionalLight");
-    }
-    if (sys.name == "TextRenderer2D") {
-        return filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
-    }
-    if (sys.name == "TextRenderer3D") {
-        return filter_has_trait(sys.filter, "std.render.text.TextLabel", "TextLabel");
-    }
-    if (sys.name == "ScreenLabelSystem") {
-        return filter_has_trait(sys.filter, "std.render.text.ScreenLabel", "ScreenLabel");
-    }
-    if (sys.name == "GizmoRenderer2D" || sys.name == "GizmoRenderer3D" ||
-        sys.name == "EditorTemplatePalette" || sys.name == "EditorPropertyPanel") {
-        return uses_stdlib_extern_contract(sys);
-    }
-    return false;
-}
-
-bool is_update_phase_extern(const ExternSystemNode& sys, const DecoratedProgram& program) {
-    return !is_render_phase_extern(sys, program);
-}
-
 // Input bindings are emitted from the resolved enum member identity attached
 // by semantic analysis (unified-name-resolution change) — never from source
 // spelling or AST shape, which broke when examples moved to alias-qualified
@@ -380,6 +1110,10 @@ std::string archetype_create_function_name(const std::string& module_name, const
     return "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name));
 }
 
+std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name) {
+    return archetype_create_function_name(module_name, archetype_name) + "_at";
+}
+
 void emit_archetype_trait_initializers(std::ostringstream& out,
                                        const std::vector<ArchetypeTraitEntry>& traits,
                                        const DecoratedProgram& program,
@@ -387,14 +1121,14 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
                                        int indent) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     for (const auto& trait : traits) {
-        const std::string cpp_name = EnttCodegenUtils::trait_cpp_name(
-            trait.resolved_trait_id, trait.trait_name, program);
+        const std::string cpp_name =
+            EnttCodegenUtils::trait_cpp_name(trait.resolved_trait_id, trait.trait_name, program);
         // Prefer canonical key lookup; fall back to source-name lookup for
         // single-module programs that don't go through the artifact linker.
         const std::string lookup_key = trait.resolved_trait_id.has_value()
                                            ? cactus::make_canonical_id(*trait.resolved_trait_id)
                                            : trait.trait_name;
-        auto resolved_trait = program.traits.find(lookup_key);
+        auto resolved_trait          = program.traits.find(lookup_key);
         if (resolved_trait == program.traits.end()) {
             resolved_trait = program.traits.find(trait.trait_name);
         }
@@ -422,7 +1156,14 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
                                              const std::vector<ArchetypeTraitEntry>& traits,
                                              const DecoratedProgram& program) {
     std::ostringstream out;
-    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name) << "(entt::registry& registry) {\n";
+    out << "entt::entity " << archetype_create_at_function_name(program.module_name, archetype_name)
+        << "(entt::registry& registry, entt::entity hint) {\n";
+    out << "    auto entity = registry.create(hint);\n";
+    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    out << "    return entity;\n";
+    out << "}\n\n";
+    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name)
+        << "(entt::registry& registry) {\n";
     out << "    auto entity = registry.create();\n";
     emit_archetype_trait_initializers(out, traits, program, "entity", 1);
     out << "    return entity;\n";
@@ -445,6 +1186,12 @@ std::string archetype_node_create_function_name(const std::string& module_name,
     return name;
 }
 
+std::string archetype_node_create_at_function_name(const std::string& module_name,
+                                                   const std::string& archetype_name,
+                                                   const std::vector<std::string>& role_path) {
+    return archetype_node_create_function_name(module_name, archetype_name, role_path) + "_at";
+}
+
 void emit_archetype_node_helpers(std::ostringstream& out,
                                  const std::string& archetype_name,
                                  const std::vector<ChildArchetypeNode>& children,
@@ -452,7 +1199,8 @@ void emit_archetype_node_helpers(std::ostringstream& out,
                                  std::vector<std::string>& role_path) {
     for (const auto& child : children) {
         role_path.push_back(child.role);
-        out << "static entt::entity " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
+        out << "static entt::entity "
+            << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
             << "(entt::registry& registry) {\n";
         out << "    auto entity = registry.create();\n";
         emit_archetype_trait_initializers(out, child.traits, program, "entity", 1);
@@ -478,8 +1226,8 @@ void emit_child_creation_sequence(std::ostringstream& out,
     for (const auto& child : children) {
         const std::string var = var_prefix + "_" + std::to_string(index);
         role_path.push_back(child.role);
-        out << "    auto " << var << " = " << archetype_node_create_function_name(module_name, archetype_name, role_path)
-            << "(registry);\n";
+        out << "    auto " << var << " = "
+            << archetype_node_create_function_name(module_name, archetype_name, role_path) << "(registry);\n";
         const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
         out << "    registry.emplace_or_replace<" << parent_cpp << ">(" << var << ", " << parent_cpp
             << "{.parent = " << parent_var << "});\n";
@@ -503,6 +1251,13 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     std::ostringstream out;
     std::vector<std::string> role_path;
 
+    out << "static entt::entity "
+        << archetype_node_create_at_function_name(program.module_name, archetype_name, role_path)
+        << "(entt::registry& registry, entt::entity hint) {\n";
+    out << "    auto entity = registry.create(hint);\n";
+    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    out << "    return entity;\n";
+    out << "}\n\n";
     out << "static entt::entity " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
         << "(entt::registry& registry) {\n";
     out << "    auto entity = registry.create();\n";
@@ -511,9 +1266,22 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     out << "}\n\n";
     emit_archetype_node_helpers(out, archetype_name, children, program, role_path);
 
-    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name) << "(entt::registry& registry) {\n";
-    out << "    auto entity = " << archetype_node_create_function_name(program.module_name, archetype_name, role_path) << "(registry);\n";
-    emit_child_creation_sequence(out, program.module_name, archetype_name, children, "entity", "__child", role_path, program);
+    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name)
+        << "(entt::registry& registry) {\n";
+    out << "    auto entity = " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
+        << "(registry);\n";
+    emit_child_creation_sequence(
+        out, program.module_name, archetype_name, children, "entity", "__child", role_path, program);
+    out << "    return entity;\n";
+    out << "}\n\n";
+
+    out << "entt::entity " << archetype_create_at_function_name(program.module_name, archetype_name)
+        << "(entt::registry& registry, entt::entity hint) {\n";
+    out << "    auto entity = "
+        << archetype_node_create_at_function_name(program.module_name, archetype_name, role_path)
+        << "(registry, hint);\n";
+    emit_child_creation_sequence(
+        out, program.module_name, archetype_name, children, "entity", "__child", role_path, program);
     out << "    return entity;\n";
     out << "}\n\n";
     return out.str();
@@ -548,32 +1316,6 @@ bool has_collision_event_decl(const ProgramNode* ast) {
         const auto* event = std::get_if<EventNode>(&decl);
         return event != nullptr && event->name == "CollisionEnter";
     });
-}
-
-bool has_load_event_decl(const ProgramNode* ast) {
-    if (ast == nullptr) {
-        return false;
-    }
-    return std::ranges::any_of(ast->declarations, [](const auto& decl) {
-        const auto* event = std::get_if<EventNode>(&decl);
-        return event != nullptr && event->name == "load";
-    });
-}
-
-bool program_has_load_handlers(const DecoratedProgram& program) {
-    if (program.ast == nullptr) {
-        return false;
-    }
-    for (const auto& decl : program.ast->declarations) {
-        if (const auto* sys = std::get_if<SystemNode>(&decl)) {
-            for (const auto& handler : sys->handlers) {
-                if (handler.event_name == "load") {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
 }
 
 bool has_flat_collider_support(const DecoratedProgram& program) {
@@ -616,7 +1358,8 @@ std::string emit_flat_query_fallback_helpers(const DecoratedProgram& program) {
     std::ostringstream out;
     out << "\n// ── Stdlib 2D Query Fallbacks ────────────────────────────────────────────────\n\n";
     out << "namespace {\n\n";
-    out << qc2d << " cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {\n";
+    out << qc2d
+        << " cactus_flat_contact(entt::entity entity, Vector2 normal, float distance, Vector2 overlap) noexcept {\n";
     out << "    return " << qc2d << "{.other = entity, .normal = normal, .distance = distance, .overlap = overlap};\n";
     out << "}\n\n";
     out << qr2d << " cactus_empty_query_result() noexcept {\n";
@@ -669,31 +1412,15 @@ std::string collision_event_type(const DecoratedProgram& program) {
     if (program.ast != nullptr) {
         for (const auto& decl : program.ast->declarations) {
             if (const auto* ev = std::get_if<EventNode>(&decl)) {
-                if (ev->name != "CollisionEnter") { continue; }
+                if (ev->name != "CollisionEnter") {
+                    continue;
+                }
                 const std::string& mod = ev->module_name.empty() ? program.module_name : ev->module_name;
                 return canonical_to_cpp_name(mod, ev->name) + "Event";
             }
         }
     }
     return canonical_to_cpp_name(program.module_name, "CollisionEnter") + "Event";
-}
-
-// Returns the C++ type name for the load lifecycle event. If the program
-// declares its own `event load`, returns the canonical form (e.g.
-// main__loadEvent); otherwise returns "loadEvent" to match the synthetic struct
-// emitted when no user-declared load event exists.
-std::string load_event_type(const DecoratedProgram& program) {
-    if (program.ast != nullptr) {
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* ev = std::get_if<EventNode>(&decl)) {
-                if (ev->name == "load") {
-                    const std::string& mod = ev->module_name.empty() ? program.module_name : ev->module_name;
-                    return canonical_to_cpp_name(mod, "load") + "Event";
-                }
-            }
-        }
-    }
-    return "loadEvent";
 }
 
 std::string emit_flat_collision_helpers(const DecoratedProgram& program) {
@@ -703,19 +1430,23 @@ std::string emit_flat_collision_helpers(const DecoratedProgram& program) {
         while ((pos = s.find(from, pos)) != std::string::npos) {
             const bool ok = (pos == 0 || !is_ident(s[pos - 1])) &&
                             (pos + from.size() == s.size() || !is_ident(s[pos + from.size()]));
-            if (ok) { s.replace(pos, from.size(), to); pos += to.size(); }
-            else    { pos += from.size(); }
+            if (ok) {
+                s.replace(pos, from.size(), to);
+                pos += to.size();
+            } else {
+                pos += from.size();
+            }
         }
     };
-    const auto wt   = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
-    const auto col  = EnttCodegenUtils::trait_cpp_name("std.physics.flat.Collider", program);
-    const auto box  = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
-    const auto cir  = EnttCodegenUtils::trait_cpp_name("CircleCollider", program);
-    const auto cap  = EnttCodegenUtils::trait_cpp_name("std.physics.flat.CapsuleCollider", program);
-    const auto qc2d = EnttCodegenUtils::struct_cpp_name("QueryContact2D", program);
-    const auto qr2d = EnttCodegenUtils::struct_cpp_name("QueryResult2D", program);
-    const auto qrk  = EnttCodegenUtils::enum_cpp_name("QueryResultKind", program);
-    const auto cee  = collision_event_type(program);
+    const auto wt    = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
+    const auto col   = EnttCodegenUtils::trait_cpp_name("std.physics.flat.Collider", program);
+    const auto box   = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
+    const auto cir   = EnttCodegenUtils::trait_cpp_name("CircleCollider", program);
+    const auto cap   = EnttCodegenUtils::trait_cpp_name("std.physics.flat.CapsuleCollider", program);
+    const auto qc2d  = EnttCodegenUtils::struct_cpp_name("QueryContact2D", program);
+    const auto qr2d  = EnttCodegenUtils::struct_cpp_name("QueryResult2D", program);
+    const auto qrk   = EnttCodegenUtils::enum_cpp_name("QueryResultKind", program);
+    const auto cee   = collision_event_type(program);
     std::string code = R"(
 // ── Stdlib 2D Collider Runtime ───────────────────────────────────────────────
 
@@ -1011,14 +1742,14 @@ void cactus_dispatch_stdlib_flat_collisions(entt::registry& registry, entt::disp
 
 )";
     replace_token(code, "CollisionEnterEvent", cee);
-    replace_token(code, "CapsuleCollider",     cap);
-    replace_token(code, "CircleCollider",      cir);
-    replace_token(code, "BoxCollider",         box);
-    replace_token(code, "WorldTransform",      wt);
-    replace_token(code, "QueryContact2D",      qc2d);
-    replace_token(code, "QueryResult2D",       qr2d);
-    replace_token(code, "QueryResultKind",     qrk);
-    replace_token(code, "Collider",            col);
+    replace_token(code, "CapsuleCollider", cap);
+    replace_token(code, "CircleCollider", cir);
+    replace_token(code, "BoxCollider", box);
+    replace_token(code, "WorldTransform", wt);
+    replace_token(code, "QueryContact2D", qc2d);
+    replace_token(code, "QueryResult2D", qr2d);
+    replace_token(code, "QueryResultKind", qrk);
+    replace_token(code, "Collider", col);
     return code;
 }
 
@@ -1029,16 +1760,20 @@ std::string emit_volume_collision_helpers(const DecoratedProgram& program) {
         while ((pos = s.find(from, pos)) != std::string::npos) {
             const bool ok = (pos == 0 || !is_ident(s[pos - 1])) &&
                             (pos + from.size() == s.size() || !is_ident(s[pos + from.size()]));
-            if (ok) { s.replace(pos, from.size(), to); pos += to.size(); }
-            else    { pos += from.size(); }
+            if (ok) {
+                s.replace(pos, from.size(), to);
+                pos += to.size();
+            } else {
+                pos += from.size();
+            }
         }
     };
-    const auto wt  = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-    const auto col = EnttCodegenUtils::trait_cpp_name("std.physics.volume.Collider", program);
-    const auto box = EnttCodegenUtils::trait_cpp_name("std.physics.volume.BoxCollider", program);
-    const auto sph = EnttCodegenUtils::trait_cpp_name("SphereCollider", program);
-    const auto cap = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CapsuleCollider", program);
-    const auto cee = collision_event_type(program);
+    const auto wt    = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const auto col   = EnttCodegenUtils::trait_cpp_name("std.physics.volume.Collider", program);
+    const auto box   = EnttCodegenUtils::trait_cpp_name("std.physics.volume.BoxCollider", program);
+    const auto sph   = EnttCodegenUtils::trait_cpp_name("SphereCollider", program);
+    const auto cap   = EnttCodegenUtils::trait_cpp_name("std.physics.volume.CapsuleCollider", program);
+    const auto cee   = collision_event_type(program);
     std::string code = R"(
 // ── Stdlib 3D Collider Runtime ───────────────────────────────────────────────
 
@@ -1162,16 +1897,34 @@ void cactus_dispatch_stdlib_volume_collisions(entt::registry& registry, entt::di
 
 )";
     replace_token(code, "CollisionEnterEvent", cee);
-    replace_token(code, "CapsuleCollider",     cap);
-    replace_token(code, "SphereCollider",      sph);
-    replace_token(code, "BoxCollider",         box);
-    replace_token(code, "WorldTransform",      wt);
-    replace_token(code, "Collider",            col);
+    replace_token(code, "CapsuleCollider", cap);
+    replace_token(code, "SphereCollider", sph);
+    replace_token(code, "BoxCollider", box);
+    replace_token(code, "WorldTransform", wt);
+    replace_token(code, "Collider", col);
     return code;
 }
 
-std::string emit_backend_main() {
+const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program) {
+    const ResolvedEvent* fallback = nullptr;
+    for (const auto& [_, event] : program.events) {
+        if (!event.is_external || event.name != "frame" || !event.symbol_id.has_value()) {
+            continue;
+        }
+        if (event.symbol_id->module.name == "std.core") {
+            return &event;
+        }
+        if (fallback == nullptr || event.canonical_id < fallback->canonical_id) {
+            fallback = &event;
+        }
+    }
+    return fallback;
+}
+
+std::string emit_backend_main(const DecoratedProgram& program) {
     std::ostringstream out;
+    const auto* frame_event       = find_external_frame_event(program);
+    const bool graph_driven_frame = !program.execution_graph.phases.empty() && frame_event != nullptr;
     out << "\n// ── Backend Entry Point ───────────────────────────────────────────────\n\n";
     out << "#ifndef CACTUS_GENERATED_NO_MAIN\n";
     out << "int main() try {\n";
@@ -1185,10 +1938,17 @@ std::string emit_backend_main() {
     out << "    cactus::runtime::entt_backend::generated_load_project(registry);\n";
     out << "    while (!WindowShouldClose()) {\n";
     out << "        const float dt = GetFrameTime();\n";
-    out << "        cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);\n";
     out << "        BeginDrawing();\n";
     out << "        ClearBackground(RAYWHITE);\n";
-    out << "        cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);\n";
+    if (graph_driven_frame) {
+        const auto frame_type = event_runtime_cpp_type(program, *frame_event->symbol_id);
+        out << "        cactus::runtime::entt_backend::generated_inject_external_event(" << frame_type
+            << "{.dt = dt});\n";
+        out << "        cactus::runtime::entt_backend::generated_drain_external_events(registry);\n";
+    } else {
+        out << "        cactus::runtime::entt_backend::generated_update_project(registry, dispatcher, dt);\n";
+        out << "        cactus::runtime::entt_backend::generated_render_project(registry, dispatcher);\n";
+    }
     out << "        EndDrawing();\n";
     out << "    }\n\n";
     out << "    CloseWindow();\n";
@@ -1221,7 +1981,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
            "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
            "readability-redundant-member-init,readability-simplify-boolean-expr,"
            "readability-braces-around-statements,readability-isolate-declaration,"
-           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses)\n";
+           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses,"
+           "performance-move-const-arg,readability-named-parameter,modernize-use-designated-initializers,"
+           "readability-use-std-min-max)\n";
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
     out << "\n";
@@ -1239,8 +2001,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         // which transitively imports both), disambiguate by WorldTransform dimensionality:
         // 3D programs use volume camera, 2D programs use flat camera.
         const std::string camera_cpp = (uses_volume && wt_usage.volume)
-            ? EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program)
-            : EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
+                                           ? EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program)
+                                           : EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
         out << "// Suppress raylib Camera typedef; DSL Camera struct takes this name\n";
         out << "#define Camera " << camera_cpp << "\n";
     }
@@ -1251,18 +2013,28 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <array>\n";
     out << "#include <cmath>\n";
     out << "#include <cstdint>\n";
+    if (!program.execution_graph.phases.empty()) {
+        out << "#include <deque>\n";
+        out << "#include <functional>\n";
+    }
     out << "#include <limits>\n";
     out << "#include <optional>\n";
     out << "#include <string>\n";
     out << "#include <unordered_map>\n";
     out << "#include <unordered_set>\n";
+    if (!program.execution_graph.phases.empty()) {
+        out << "#include <string_view>\n";
+        out << "#include <stdexcept>\n";
+        out << "#include <utility>\n";
+        out << "#include <variant>\n";
+    }
     out << "#include <vector>\n";
     if (uses_text) {
         out << "#include <format>\n";
     }
     // Task 6.2: Include runtime header when extern funcs are present
     if (has_extern_funcs(program)) {
-        out << "#include \"cactus_runtime.hpp\"\n";
+        out << "#include \"common/cactus_runtime.hpp\"\n";
     }
     out << "\n";
 
@@ -1281,19 +2053,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "inline cactus::runtime::Quat quat(float x, float y, float z, float w) {\n";
     out << "    return cactus::runtime::Quat{.x = x, .y = y, .z = z, .w = w};\n";
     out << "}\n\n";
-
-    // Built-in runtime helpers for generated examples
-    out << "struct TickEvent {\n";
-    out << "    float dt;\n";
-    out << "};\n";
-    out << "\n";
-
-    // Startup load-phase marker (dsl-scene-loading): load handlers take a
-    // loadEvent parameter; a linked `event load` declaration supplies its own.
-    if (program_has_load_handlers(program) && !has_load_event_decl(program.ast)) {
-        out << "struct loadEvent {};\n";
-        out << "\n";
-    }
 
     if (program.ast != nullptr) {
         bool has_axis_input   = false;
@@ -1414,8 +2173,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                     // Consumed keys contribute 0.0 so editor-owned controls stay
                     // invisible to same-key gameplay axes (editor input override).
                     const auto axis_side = [](const std::string& key) {
-                        return "((!is_input_key_consumed(" + key + ") && IsKeyDown(" + key +
-                               ")) ? 1.0F : 0.0F)";
+                        return "((!is_input_key_consumed(" + key + ") && IsKeyDown(" + key + ")) ? 1.0F : 0.0F)";
                     };
                     std::string negative = "0";
                     std::string positive = "0";
@@ -1548,7 +2306,22 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << EnttEventEmitter::emit_event(*event, program) << "\n";
             }
         }
+    } else {
+        std::vector<const ResolvedEvent*> events;
+        events.reserve(program.events.size());
+        for (const auto& [_, event] : program.events) {
+            events.push_back(&event);
+        }
+        std::ranges::sort(events,
+                          [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
+        for (const auto* event : events) {
+            out << emit_resolved_event(*event) << "\n";
+        }
     }
+
+    out << emit_external_command_forward_declarations(program);
+    out << emit_graph_scheduler_state(program);
+    out << emit_graph_external_handler_abi(program);
 
     const bool has_flat_colliders   = has_flat_collider_support(program);
     const bool has_volume_colliders = has_volume_collider_support(program);
@@ -1574,7 +2347,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     }
 
     out << EnttSystemEmitter::emit_entt_hierarchy_helpers(program);
-
 
     // Persist serialization stubs
     out << "// ── Persist Serialization ────────────────────────────────────────────\n\n";
@@ -1653,7 +2425,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         for (const auto& decl : program.ast->declarations) {
             if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
                 if (tmpl->is_pub) {
-                    out << "    {\"" << tmpl->name << "\", " << archetype_create_function_name(program.module_name, tmpl->name) << "},\n";
+                    out << "    {\"" << tmpl->name << "\", "
+                        << archetype_create_function_name(program.module_name, tmpl->name) << "},\n";
                 }
             }
         }
@@ -1667,11 +2440,19 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             if (auto* sys = std::get_if<SystemNode>(&decl)) {
                 out << EnttSystemEmitter::emit_system(*sys, program);
             }
-            if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-                out << EnttSystemEmitter::emit_extern_system(*sys, program);
+            if (auto* sys = std::get_if<ExternSystemNode>(&decl); sys != nullptr) {
+                if (has_compiler_owned_external_handler(program, *sys)) {
+                    out << EnttSystemEmitter::emit_extern_system(*sys, program);
+                } else if (program.execution_graph.phases.empty() && has_user_external_handler(program, *sys)) {
+                    throw std::runtime_error("cpp-entt user external system '" +
+                                             make_canonical_id(*sys->resolved_system_id) +
+                                             "' requires a linked phase graph and contract-shaped callback ABI");
+                }
             }
         }
     }
+
+    out << emit_graph_handler_dispatch(program);
 
     // Dispatcher setup
     out << "// ── Event Dispatcher ────────────────────────────────────────────────\n\n";
@@ -1757,8 +2538,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            for (auto entity : view) {\n";
         out << "                const auto& xform = reg.get<" << wt2d_cpp << ">(entity);\n";
         out << "                const auto& box   = reg.get<" << box_cpp << ">(entity);\n";
-        out << "                if (world_pos.x < xform.position.x || world_pos.x > xform.position.x + box.size.x) { continue; }\n";
-        out << "                if (world_pos.y < xform.position.y || world_pos.y > xform.position.y + box.size.y) { continue; }\n";
+        out << "                if (world_pos.x < xform.position.x || world_pos.x > xform.position.x + box.size.x) { "
+               "continue; }\n";
+        out << "                if (world_pos.y < xform.position.y || world_pos.y > xform.position.y + box.size.y) { "
+               "continue; }\n";
         out << "                return entity;\n";
         out << "            }\n";
         out << "            return entt::entity{entt::null};\n";
@@ -1843,7 +2626,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "            if (!use_3d) {\n";
                 out << "                auto __cam2d = cactus::runtime::entt_backend::get_active_camera_2d();\n";
                 out << "                if (__cam2d.zoom == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<" << vp_cpp_rig << ", " << cam2d_cpp << ">().each()) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam] : reg.view<" << vp_cpp_rig << ", "
+                    << cam2d_cpp << ">().each()) {\n";
                 out << "                        if (__vp.active) {\n";
                 out << "                            __cam2d.target = __cam.offset;\n";
                 out << "                            __cam2d.zoom = (__cam.zoom == 0.0F) ? 1.0F : __cam.zoom;\n";
@@ -1854,14 +2638,19 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                if (__cam2d.zoom == 0.0F) { __cam2d.zoom = 1.0F; }\n";
                 out << "                std::vector<entt::entity> __saved;\n";
                 out << "                for (auto __ent : reg.view<" << vp_cpp_rig << ">()) {\n";
-                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig << ">(__ent); __vp != nullptr && __vp->active) {\n";
+                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig
+                    << ">(__ent); __vp != nullptr && __vp->active) {\n";
                 out << "                        __saved.push_back(__ent); __vp->active = false;\n";
                 out << "                    }\n";
                 out << "                }\n";
-                out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
+                out << "                "
+                       "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
-                out << "                reg.emplace<" << ec2d_cpp_rig << ">(__rig, " << ec2d_cpp_rig << "{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, .min_zoom = 0.05F, .max_zoom = 20.0F});\n";
-                out << "                reg.emplace<" << cam2d_cpp << ">(__rig, " << cam2d_cpp << "{.zoom = __cam2d.zoom, .offset = __cam2d.target});\n";
+                out << "                reg.emplace<" << ec2d_cpp_rig << ">(__rig, " << ec2d_cpp_rig
+                    << "{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, "
+                       ".min_zoom = 0.05F, .max_zoom = 20.0F});\n";
+                out << "                reg.emplace<" << cam2d_cpp << ">(__rig, " << cam2d_cpp
+                    << "{.zoom = __cam2d.zoom, .offset = __cam2d.target});\n";
                 out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
                 out << "                return __rig;\n";
                 out << "            }\n";
@@ -1870,12 +2659,15 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "            if (use_3d) {\n";
                 out << "                auto __cam3d = cactus::runtime::entt_backend::get_active_camera_3d();\n";
                 out << "                if (__cam3d.fovy == 0.0F) {\n";
-                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<" << vp_cpp_rig << ", " << cam3d_cpp << ", " << wt3d_cpp << ">().each()) {\n";
+                out << "                    for (const auto& [__e, __vp, __cam, __wt] : reg.view<" << vp_cpp_rig << ", "
+                    << cam3d_cpp << ", " << wt3d_cpp << ">().each()) {\n";
                 out << "                        if (__vp.active) {\n";
                 out << "                            __cam3d.fovy = __cam.fov_y;\n";
                 out << "                            __cam3d.position = __wt.position;\n";
-                out << "                            const Vector3 __fwd = cactus::runtime::stdlib::math::quat::forward(__wt.rotation);\n";
-                out << "                            __cam3d.target = {.x = __wt.position.x + __fwd.x, .y = __wt.position.y + __fwd.y, .z = __wt.position.z + __fwd.z};\n";
+                out << "                            const Vector3 __fwd = "
+                       "cactus::runtime::stdlib::math::quat::forward(__wt.rotation);\n";
+                out << "                            __cam3d.target = {.x = __wt.position.x + __fwd.x, .y = "
+                       "__wt.position.y + __fwd.y, .z = __wt.position.z + __fwd.z};\n";
                 out << "                            break;\n";
                 out << "                        }\n";
                 out << "                    }\n";
@@ -1890,23 +2682,32 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                const float __dx = __pos.x - __tgt.x;\n";
                 out << "                const float __dy = __pos.y - __tgt.y;\n";
                 out << "                const float __dz = __pos.z - __tgt.z;\n";
-                out << "                const float __dist = cactus::runtime::stdlib::math::vec3::length(Vector3{.x = __dx, .y = __dy, .z = __dz});\n";
+                out << "                const float __dist = cactus::runtime::stdlib::math::vec3::length(Vector3{.x = "
+                       "__dx, .y = __dy, .z = __dz});\n";
                 out << "                const float __distance = (__dist < 0.1F) ? 0.1F : __dist;\n";
                 out << "                const float __pitch = std::asin(std::clamp(__dy / __distance, -1.0F, 1.0F));\n";
                 out << "                const float __yaw = std::atan2(-__dx, -__dz);\n";
-                out << "                const Quat __rot = cactus::runtime::stdlib::math::quat::from_euler(__pitch, __yaw, 0.0F);\n";
+                out << "                const Quat __rot = cactus::runtime::stdlib::math::quat::from_euler(__pitch, "
+                       "__yaw, 0.0F);\n";
                 out << "                std::vector<entt::entity> __saved;\n";
                 out << "                for (auto __ent : reg.view<" << vp_cpp_rig << ">()) {\n";
-                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig << ">(__ent); __vp != nullptr && __vp->active) {\n";
+                out << "                    if (auto* __vp = reg.try_get<" << vp_cpp_rig
+                    << ">(__ent); __vp != nullptr && __vp->active) {\n";
                 out << "                        __saved.push_back(__ent); __vp->active = false;\n";
                 out << "                    }\n";
                 out << "                }\n";
-                out << "                cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
+                out << "                "
+                       "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
-                out << "                reg.emplace<" << ec3d_cpp_rig << ">(__rig, " << ec3d_cpp_rig << "{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = 0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, .min_distance = 0.1F, .max_distance = 1000.0F});\n";
-                out << "                reg.emplace<" << cam3d_cpp << ">(__rig, " << cam3d_cpp << "{.fov_y = __cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
+                out << "                reg.emplace<" << ec3d_cpp_rig << ">(__rig, " << ec3d_cpp_rig
+                    << "{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = "
+                       "0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, "
+                       ".min_distance = 0.1F, .max_distance = 1000.0F});\n";
+                out << "                reg.emplace<" << cam3d_cpp << ">(__rig, " << cam3d_cpp
+                    << "{.fov_y = __cam3d.fovy, .near = 0.1F, .far = 1000.0F});\n";
                 out << "                reg.emplace<" << vp_cpp_rig << ">(__rig);\n";
-                out << "                reg.emplace<" << wt3d_cpp << ">(__rig, " << wt3d_cpp << "{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
+                out << "                reg.emplace<" << wt3d_cpp << ">(__rig, " << wt3d_cpp
+                    << "{.position = __pos, .rotation = __rot, .scale = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F}});\n";
                 out << "                return __rig;\n";
                 out << "            }\n";
             }
@@ -1917,7 +2718,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        [](entt::registry& reg, entt::entity rig) {\n";
         out << "            if (reg.valid(rig)) { reg.destroy(rig); }\n";
         out << "            for (auto __saved_ent : cactus::runtime::entt_backend::editor_saved_viewports()) {\n";
-        out << "                if (auto* __vp = reg.try_get<" << vp_cpp_rig << ">(__saved_ent)) { __vp->active = true; }\n";
+        out << "                if (auto* __vp = reg.try_get<" << vp_cpp_rig
+            << ">(__saved_ent)) { __vp->active = true; }\n";
         out << "            }\n";
         out << "            cactus::runtime::entt_backend::set_editor_saved_viewports({});\n";
         out << "        });\n";
@@ -1964,81 +2766,21 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     }
     out << "}\n\n";
 
-    // Startup load phase (dsl-scene-loading): fire every system's load handler
-    // once after root-module entities exist, in tick-dispatch system order.
+    // Retained as an empty compatibility hook for hosts built against runtime.hpp.
+    // Runtime activation is driven exclusively by typed external-event injection.
     out << "void generated_load_project(entt::registry& registry) {\n";
     out << "    (void)registry;\n";
-    if (program.ast != nullptr) {
-        for (auto& decl : program.ast->declarations) {
-            if (auto* sys = std::get_if<SystemNode>(&decl)) {
-                for (auto& handler : sys->handlers) {
-                    if (handler.event_name == "load") {
-                        out << "    " << system_function_name(program.module_name, sys->name,"load") << "(registry, " << load_event_type(program) << "{});\n";
-                    }
-                }
-            }
-        }
-    }
     out << "}\n\n";
 
     out << "void generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt) {\n";
 
+    out << "    (void)registry;\n";
     out << "    (void)dt;\n\n";
 
     // Editor input override: consumption only lasts one frame, so clear it
     // before any input handler runs (stdlib editor handlers consume first,
     // gameplay handlers later in the same frame observe the consumed state).
     out << "    cactus::runtime::entt_backend::reset_consumed_input();\n\n";
-
-    // Call system input handlers
-    if (program.ast != nullptr) {
-        bool emits_input_handler = false;
-        for (auto& decl : program.ast->declarations) {
-            if (auto* sys = std::get_if<SystemNode>(&decl)) {
-                for (auto& handler : sys->handlers) {
-                    if (handler.event_name == "input") {
-                        emits_input_handler = true;
-                        break;
-                    }
-                }
-            }
-            if (emits_input_handler) {
-                break;
-            }
-        }
-        if (emits_input_handler) {
-            out << "    auto input = InputEvent{};\n";
-            for (auto& decl : program.ast->declarations) {
-                if (auto* sys = std::get_if<SystemNode>(&decl)) {
-                    for (auto& handler : sys->handlers) {
-                        if (handler.event_name == "input") {
-                            out << "    " << system_function_name(program.module_name, sys->name,"input") << "(registry, dispatcher, input);\n";
-                        }
-                    }
-                }
-            }
-            out << "\n";
-        }
-    }
-
-    // Call non-render system tick handlers
-    if (program.ast != nullptr) {
-        for (auto& decl : program.ast->declarations) {
-            if (auto* sys = std::get_if<SystemNode>(&decl)) {
-                for (auto& handler : sys->handlers) {
-                    if (handler.event_name == "tick") {
-                        out << "    " << system_function_name(program.module_name, sys->name,"tick") << "(registry, dispatcher, TickEvent{dt});\n";
-                    }
-                }
-            }
-            if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-                if (!is_update_phase_extern(*sys, program)) {
-                    continue;
-                }
-                out << "    " << system_function_name(program.module_name, sys->name,"tick") << "(registry);\n";
-            }
-        }
-    }
 
     if (has_flat_colliders) {
         out << "    ::cactus_dispatch_stdlib_flat_collisions(registry, dispatcher);\n";
@@ -2071,7 +2813,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "}\n";
         }
         if (emit_3d_helper) {
-            out << "Camera3D __translate_camera_3d(entt::entity entity, const " << cam3d_cpp << "& cam, entt::registry& registry) {\n";
+            out << "Camera3D __translate_camera_3d(entt::entity entity, const " << cam3d_cpp
+                << "& cam, entt::registry& registry) {\n";
             out << "    Camera3D cam3d{};\n";
             out << "    cam3d.fovy       = cam.fov_y;\n";
             out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
@@ -2082,34 +2825,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "        const auto& q  = xform.rotation;\n";
             out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
             out << "                          .y = xform.position.y + (2.0F * ((q.w * q.x) - (q.y * q.z))),\n";
-            out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * q.y)))))};\n";
+            out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * "
+                   "q.y)))))};\n";
             out << "    }\n";
             out << "    return cam3d;\n";
             out << "}\n";
         }
         out << "}  // namespace\n\n";
     }
-
-    // Screen labels are window-global (drawn once after all viewports), so the
-    // per-viewport pass must not re-submit them; every other render extern runs
-    // per viewport inside its scissor + camera.
-    enum class RenderPhaseSelection : std::uint8_t { All, PerViewport, WindowGlobal };
-    auto emit_render_phase_calls = [&](std::string_view indent, RenderPhaseSelection selection) {
-        if (program.ast == nullptr) { return; }
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-                if (!is_render_phase_extern(*sys, program)) {
-                    continue;
-                }
-                const bool window_global = sys->name == "ScreenLabelSystem";
-                if ((selection == RenderPhaseSelection::PerViewport && window_global) ||
-                    (selection == RenderPhaseSelection::WindowGlobal && !window_global)) {
-                    continue;
-                }
-                out << indent << system_function_name(program.module_name, sys->name,"tick") << "(registry);\n";
-            }
-        }
-    };
 
     out << "void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher) {\n";
     out << "    (void)dispatcher;\n";
@@ -2157,17 +2880,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             out << "                    __translate_camera_3d(__vp_ent, __cam, registry));\n";
             out << "            }\n";
         }
-        emit_render_phase_calls("            ", RenderPhaseSelection::PerViewport);
         // Draw this viewport's queued world content now (inside its scissor +
         // camera) so each split-screen region renders from its own camera.
         out << "            cactus::runtime::entt_backend::flush_viewport_3d();\n";
         out << "            EndScissorMode();\n";
         out << "        }\n";
         out << "    }\n";
-        // Window-global HUD labels submit once, after every viewport pass.
-        emit_render_phase_calls("    ", RenderPhaseSelection::WindowGlobal);
-    } else {
-        emit_render_phase_calls("    ", RenderPhaseSelection::All);
     }
 
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
@@ -2187,9 +2905,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
         out << "                                  .width  = static_cast<float>(GetScreenWidth()),\n";
         out << "                                  .height = static_cast<float>(GetScreenHeight())}, 3, YELLOW);\n";
-        out << "            const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", \"ROTATE\", \"SCALE\", \"PLACE\"};\n";
+        out << "            const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", \"ROTATE\", "
+               "\"SCALE\", \"PLACE\"};\n";
         out << "            const char* __mode_str = (__editor_mode >= 0 && __editor_mode < 5)\n";
-        out << "                                         ? __mode_names[static_cast<std::size_t>(__editor_mode)] : \"SELECT\";\n";
+        out << "                                         ? __mode_names[static_cast<std::size_t>(__editor_mode)] : "
+               "\"SELECT\";\n";
         out << "            std::string __hud = std::string(\"EDIT [\") + __mode_str +\n";
         out << "                                \"]  F1:toggle  W:trans  E:rot  R:scale  T:place\";\n";
         out << "            DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
@@ -2201,14 +2921,16 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "}\n";
     out << "\n}  // namespace cactus::runtime::entt_backend\n";
 
-    out << emit_backend_main();
+    out << emit_backend_main(program);
 
     out << "\n// NOLINTEND(modernize-use-std-numbers,readability-function-cognitive-complexity,"
            "bugprone-branch-clone,bugprone-reserved-identifier,bugprone-throwing-static-initialization,"
            "cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init,"
            "readability-redundant-member-init,readability-simplify-boolean-expr,"
            "readability-braces-around-statements,readability-isolate-declaration,"
-           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses)\n";
+           "readability-math-missing-parentheses,readability-qualified-auto,readability-redundant-parentheses,"
+           "performance-move-const-arg,readability-named-parameter,modernize-use-designated-initializers,"
+           "readability-use-std-min-max)\n";
 
     return out.str();
 }

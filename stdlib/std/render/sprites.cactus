@@ -42,6 +42,17 @@ extern system SpriteRenderer:
         std.transform.flat.WorldTransform
         Renderer
 
+    on render:
+        reads:
+            std.transform.flat.WorldTransform
+            Renderer
+        effects:
+            graphics
+
 extern system AnimatedSpriteSystem:
     filter:
         AnimatedSprite
+
+    on tick:
+        writes:
+            AnimatedSprite

@@ -153,17 +153,6 @@ std::string system_function_name(const SymbolId& system_id, const std::string& s
 }
 
 std::string event_cpp_type_name(const SymbolId& event_id) {
-    if (event_id.module.name == "std.core") {
-        if (event_id.local_name == "tick") {
-            return "TickEvent";
-        }
-        if (event_id.local_name == "input") {
-            return "InputEvent";
-        }
-        if (event_id.local_name == "load") {
-            return "loadEvent";
-        }
-    }
     return canonical_to_cpp_name(event_id) + "Event";
 }
 

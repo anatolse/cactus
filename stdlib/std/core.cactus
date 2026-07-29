@@ -11,24 +11,41 @@ pub trait Persistent
 pub trait Parent:
     var parent: entity_id
 
-# ── Standard Lifecycle Events ─────────────────────────────────────────────────
+# ── Standard Runtime Root and Phases ──────────────────────────────────────────
 
-# Events with a dt field (fired each frame phase)
-pub event tick:
+# Injected exactly once by the host for each runtime frame.
+pub extern event frame:
     dt: float
 
-pub event fixed_tick:
-    dt: float
+pub phase input:
+    from:
+        frame
 
-pub event late_tick:
-    dt: float
+pub phase fixed_tick:
+    after:
+        input
+    every: 1.0 / 60.0
+    max: 8
 
-# Marker lifecycle events (no fields)
+pub phase tick:
+    after:
+        fixed_tick
+    dt: float = frame.dt
+
+pub phase late_tick:
+    after:
+        tick
+    dt: float = frame.dt
+
+pub phase render:
+    after:
+        late_tick
+    alpha: float = fixed_tick.alpha
+
+# Ordinary lifecycle events (no fields)
 pub event spawn
 
 pub event destroy
-
-pub event input
 
 pub event load
 

@@ -404,6 +404,41 @@ TEST_CASE("integration: removed cpp-manual backend is rejected", "[integration][
     CHECK(result.output.find("unknown backend 'cpp-manual'") != std::string::npos);
 }
 
+TEST_CASE("integration: user library links canonical callbacks independently per external handler",
+          "[integration][examples][external-handler-abi]") {
+    REQUIRE(fs::exists(compiler_path()));
+
+    const ExampleCase example{
+        .name           = "external-handler-user-library",
+        .source_file    = repo_root() / "tests" / "fixtures" / "external_handler_linking.cactus",
+        .backend        = "cpp-entt",
+        .generated_cpp  = {},
+        .compile_target = CACTUS_EXTERNAL_HANDLER_LINK_TARGET,
+    };
+    require_success(example, "cpp-compile-link", repo_root(), build_target_command(example.compile_target));
+}
+
+TEST_CASE("integration: missing user implementations diagnose both canonical handler symbols",
+          "[integration][examples][external-handler-abi]") {
+    REQUIRE(fs::exists(compiler_path()));
+
+    const ExampleCase example{
+        .name           = "external-handler-missing-implementations",
+        .source_file    = repo_root() / "tests" / "fixtures" / "external_handler_linking.cactus",
+        .backend        = "cpp-entt",
+        .generated_cpp  = {},
+        .compile_target = CACTUS_EXTERNAL_HANDLER_MISSING_TARGET,
+    };
+    const auto result = run_command(repo_root(), example.name + "-link", build_target_command(example.compile_target));
+    CHECK(result.exit_code != 0);
+    CHECK(result.output.find(
+              "cactus_external__external_handler_linking__NativeMovement__on__external_handler_linking__fixed_tick") !=
+          std::string::npos);
+    CHECK(result.output.find(
+              "cactus_external__external_handler_linking__NativeMovement__on__external_handler_linking__Reset") !=
+          std::string::npos);
+}
+
 TEST_CASE("examples do not present removed syntax as current syntax", "[examples][drift]") {
     static const std::array<DriftPattern, 5> REMOVED_PATTERNS{{
         {"legacy apply block", std::regex{R"(\bapply\s*:)", std::regex::icase}},

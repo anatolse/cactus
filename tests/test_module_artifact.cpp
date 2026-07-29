@@ -68,6 +68,10 @@ static DecoratedProgram make_test_program() {
     return prog;
 }
 
+static SymbolId test_symbol(SymbolKind kind, const std::string& local_name) {
+    return make_symbol_id(kind, "runtime.lib", local_name);
+}
+
 // ── Artifact filename ────────────────────────────────────────────────────────
 
 TEST_CASE("ModuleArtifact: artifact_filename simple", "[artifact]") {
@@ -487,19 +491,19 @@ TEST_CASE("ModuleArtifact: canonical identity round-trips through save/load", "[
 
     // Trait with pre-set canonical identity (as set by semantic analysis).
     ResolvedTrait wt;
-    wt.name         = "WorldTransform";
-    wt.is_pub       = true;
-    wt.module_name  = "std.transform.flat";
-    wt.canonical_id = "std.transform.flat.WorldTransform";
+    wt.name                       = "WorldTransform";
+    wt.is_pub                     = true;
+    wt.module_name                = "std.transform.flat";
+    wt.canonical_id               = "std.transform.flat.WorldTransform";
     prog.traits["WorldTransform"] = wt;
 
     // Func with pre-set canonical identity.
     ResolvedFunc wp;
-    wp.name         = "world_position";
-    wp.is_pub       = true;
-    wp.is_extern    = true;
-    wp.module_name  = "std.transform.flat";
-    wp.canonical_id = "std.transform.flat.world_position";
+    wp.name                      = "world_position";
+    wp.is_pub                    = true;
+    wp.is_extern                 = true;
+    wp.module_name               = "std.transform.flat";
+    wp.canonical_id              = "std.transform.flat.world_position";
     prog.funcs["world_position"] = wp;
 
     REQUIRE(artifact.save(prog, "std.transform.flat", build_dir));
@@ -570,7 +574,7 @@ TEST_CASE("ModuleArtifact: dep_graph after_systems round-trips through save/load
     DecoratedProgram prog;
 
     SystemDependency dep;
-    dep.system_name  = "Follow2D";
+    dep.system_name = "Follow2D";
     dep.reads.insert("std.transform.flat.WorldTransform");
     dep.after_systems = {"std.transform.flat.TransformPropagation"};
     prog.dependency_graph.push_back(dep);
@@ -589,6 +593,139 @@ TEST_CASE("ModuleArtifact: dep_graph after_systems round-trips through save/load
     CHECK(d.reads.count("std.transform.flat.WorldTransform") == 1);
     REQUIRE(d.after_systems.size() == 1);
     CHECK(d.after_systems[0] == "std.transform.flat.TransformPropagation");
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "[artifact][runtime-graph][4.1]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto frame    = test_symbol(SymbolKind::Event, "frame");
+    const auto tick     = test_symbol(SymbolKind::Phase, "tick");
+    const auto position = test_symbol(SymbolKind::Trait, "Position");
+    const auto spawned  = test_symbol(SymbolKind::Event, "Spawned");
+    const auto tmpl     = test_symbol(SymbolKind::Template, "Actor");
+    const auto first    = test_symbol(SymbolKind::System, "First");
+    const auto second   = test_symbol(SymbolKind::System, "Second");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    const HandlerIdentity first_handler{.system = first, .trigger = tick_trigger};
+    const HandlerIdentity second_handler{.system = second, .trigger = tick_trigger};
+
+    DecoratedProgram prog;
+    ResolvedEvent frame_decl;
+    frame_decl.name         = "frame";
+    frame_decl.module_name  = "runtime.lib";
+    frame_decl.canonical_id = make_canonical_id(frame);
+    frame_decl.symbol_id    = frame;
+    frame_decl.is_pub       = true;
+    frame_decl.is_external  = true;
+    frame_decl.fields       = {{.name = "dt", .type = make_float_type(), .has_default = true}};
+    prog.events.emplace(frame_decl.name, frame_decl);
+    prog.pub_events.insert(frame_decl.name);
+
+    ResolvedPhase tick_decl;
+    tick_decl.name            = "tick";
+    tick_decl.module_name     = "runtime.lib";
+    tick_decl.canonical_id    = make_canonical_id(tick);
+    tick_decl.symbol_id       = tick;
+    tick_decl.is_pub          = true;
+    tick_decl.has_every       = true;
+    tick_decl.has_max         = true;
+    tick_decl.from_sources    = {{.kind = HandlerTriggerKind::Event, .symbol = frame}};
+    tick_decl.runtime_root    = frame;
+    tick_decl.every_seconds   = 0.02;
+    tick_decl.max_repetitions = 4;
+    tick_decl.fields          = {
+        {.name = "dt", .type = make_float_type(), .is_synthesized = true},
+        {.name = "alpha", .type = make_float_type(), .is_synthesized = true, .is_completion_only = true}};
+    prog.phases.emplace(tick_decl.name, tick_decl);
+
+    HandlerContract contract;
+    contract.selection        = {position};
+    contract.is_selectionless = false;
+    contract.reads            = {position};
+    contract.writes           = {position};
+    contract.emits            = {spawned};
+    contract.commands         = {{.kind = HandlerCommandKind::Spawn, .target = tmpl}};
+    contract.effects          = {"graphics"};
+    InferredHandlerContract inferred;
+    static_cast<HandlerContract&>(inferred) = contract;
+    inferred.system                         = second;
+    inferred.trigger                        = tick_trigger;
+    prog.handler_contracts.push_back(std::move(inferred));
+
+    prog.execution_graph.phases.push_back(PhasePlan{.phase               = tick,
+                                                    .source_dependencies = tick_decl.from_sources,
+                                                    .fields              = tick_decl.fields,
+                                                    .runtime_root        = frame,
+                                                    .every_seconds       = 0.02,
+                                                    .max_repetitions     = 4,
+                                                    .declaration_order   = {.declaration_index = 1}});
+    prog.execution_graph.handlers.push_back(HandlerNode{.identity          = first_handler,
+                                                        .contract          = {},
+                                                        .declaration_order = {.declaration_index = 2},
+                                                        .location          = {"runtime.cactus", 10, 3}});
+    prog.execution_graph.handlers.push_back(HandlerNode{.identity          = second_handler,
+                                                        .implementation    = HandlerImplementationKind::External,
+                                                        .contract          = contract,
+                                                        .explicit_after    = {first_handler},
+                                                        .declaration_order = {.declaration_index = 3},
+                                                        .location          = {"runtime.cactus", 20, 5}});
+    prog.execution_graph.schedule_edges.push_back(ScheduleEdge{.before            = first_handler,
+                                                               .after             = second_handler,
+                                                               .kind              = ScheduleEdgeKind::ExplicitHandler,
+                                                               .orientation       = ScheduleEdgeOrientation::Explicit,
+                                                               .trait_provenance  = {position},
+                                                               .effect_provenance = {"graphics"}});
+    prog.execution_graph.phase_barriers.push_back(
+        PhaseBarrierEdge{.upstream_phase = tick, .downstream_handler = second_handler});
+    prog.execution_graph.event_flows.push_back(
+        EventFlowEdge{.producer = first_handler, .event = spawned, .consumer = second_handler});
+    prog.execution_graph.stable_topological_order = {first_handler, second_handler};
+    prog.execution_graph.dependency_levels.push_back(
+        DependencyLevel{.activation = tick_trigger, .index = 1, .handlers = {second_handler}});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(prog, "runtime.lib", build_dir));
+    std::string module_name;
+    auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    CHECK(module_name == "runtime.lib");
+    REQUIRE(loaded->events.contains("frame"));
+    CHECK(loaded->events.at("frame").is_external);
+    CHECK(loaded->events.at("frame").fields[0].has_default);
+    REQUIRE(loaded->phases.contains("tick"));
+    CHECK(loaded->phases.at("tick").every_seconds == 0.02);
+    CHECK(loaded->phases.at("tick").max_repetitions == 4);
+    CHECK(loaded->phases.at("tick").fields[1].is_completion_only);
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    CHECK(loaded->handler_contracts[0].effects.contains("graphics"));
+    CHECK(loaded->handler_contracts[0].commands == contract.commands);
+    REQUIRE(loaded->execution_graph.handlers.size() == 2);
+    CHECK(loaded->execution_graph.handlers[1].identity == second_handler);
+    CHECK(loaded->execution_graph.handlers[1].explicit_after == std::vector<HandlerIdentity>{first_handler});
+    CHECK(loaded->execution_graph.handlers[1].location == SourceLocation{"runtime.cactus", 20, 5});
+    REQUIRE(loaded->execution_graph.schedule_edges.size() == 1);
+    CHECK(loaded->execution_graph.schedule_edges[0].trait_provenance == std::vector<SymbolId>{position});
+    CHECK(loaded->execution_graph.schedule_edges[0].effect_provenance == std::vector<std::string>{"graphics"});
+    CHECK(loaded->execution_graph.phase_barriers.size() == 1);
+    CHECK(loaded->execution_graph.event_flows.size() == 1);
+    CHECK(loaded->execution_graph.stable_topological_order ==
+          std::vector<HandlerIdentity>{first_handler, second_handler});
+    CHECK(loaded->execution_graph.dependency_levels[0].activation == tick_trigger);
+
+    auto symbols = artifact.extract_pub_symbols(build_dir / "runtime.lib.cmod");
+    REQUIRE(symbols.has_value());
+    REQUIRE(symbols->event_symbols.contains("frame"));
+    CHECK(symbols->event_symbols.at("frame").is_external);
+    CHECK(symbols->event_symbols.at("frame").symbol_id == frame);
+    REQUIRE(symbols->phase_symbols.contains("tick"));
+    CHECK(symbols->phase_symbols.at("tick").runtime_root == frame);
+    CHECK(symbols->phase_symbols.at("tick").fields[1].is_completion_only);
 
     fs::remove_all(build_dir, ec);
 }

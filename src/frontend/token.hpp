@@ -23,6 +23,7 @@ enum class TokenType {
     EXTERN,
     ASSET,
     INPUT,
+    PHASE,
 
     // Keywords — field modifiers
     LET,
@@ -56,6 +57,13 @@ enum class TokenType {
     EXCLUDE,
     AFTER,
     TARGET,
+    EVERY,
+    MAX,
+    READS,
+    WRITES,
+    EMITS,
+    COMMANDS,
+    EFFECTS,
 
     // Keywords — functional
     MAP,
@@ -171,6 +179,8 @@ inline const char* token_type_to_string(TokenType t) {
             return "ASSET";
         case TokenType::INPUT:
             return "INPUT";
+        case TokenType::PHASE:
+            return "PHASE";
         case TokenType::LET:
             return "LET";
         case TokenType::VAR:
@@ -225,6 +235,20 @@ inline const char* token_type_to_string(TokenType t) {
             return "AFTER";
         case TokenType::TARGET:
             return "TARGET";
+        case TokenType::EVERY:
+            return "EVERY";
+        case TokenType::MAX:
+            return "MAX";
+        case TokenType::READS:
+            return "READS";
+        case TokenType::WRITES:
+            return "WRITES";
+        case TokenType::EMITS:
+            return "EMITS";
+        case TokenType::COMMANDS:
+            return "COMMANDS";
+        case TokenType::EFFECTS:
+            return "EFFECTS";
         case TokenType::MAP:
             return "MAP";
         case TokenType::REDUCE:

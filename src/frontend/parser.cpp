@@ -65,6 +65,7 @@ bool Parser::is_synchronization_point() const {
         case TokenType::STRUCT:
         case TokenType::ENUM:
         case TokenType::EVENT:
+        case TokenType::PHASE:
         case TokenType::ENTITY:
         case TokenType::TEMPLATE:
         case TokenType::VIEW:
@@ -190,6 +191,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::EVENT) {
         return parse_event();
     }
+    if (tok.type == TokenType::PHASE) {
+        return parse_phase();
+    }
     if (tok.type == TokenType::TEMPLATE) {
         return parse_template(false);
     }
@@ -222,6 +226,10 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
             if (peek_next().type == TokenType::SYSTEM) {
                 return parse_extern_system();
             }
+            if (peek_next().type == TokenType::EVENT) {
+                advance();
+                return parse_event(true, true);
+            }
             return parse_extern_func(true);
         }
         if (check(TokenType::ASSET)) {
@@ -232,6 +240,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         }
         if (check(TokenType::EVENT)) {
             return parse_event(true);
+        }
+        if (check(TokenType::PHASE)) {
+            return parse_phase(true);
         }
         // pub enum / pub struct — visibility currently not tracked, parsed as module-private
         if (check(TokenType::ENUM)) {
@@ -254,6 +265,10 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::EXTERN) {
         if (peek_next().type == TokenType::SYSTEM) {
             return parse_extern_system();
+        }
+        if (peek_next().type == TokenType::EVENT) {
+            advance();
+            return parse_event(false, true);
         }
         return parse_extern_func(false);
     }
@@ -582,41 +597,16 @@ bool is_event_field_modifier_token(TokenType type) {
 // ── Lifecycle Event Name Helper ─────────────────────────────────────────────
 
 std::string Parser::parse_lifecycle_event_name() {
-    switch (peek().type) {
-        case TokenType::SPAWN: {
-            auto v = advance().value;
-            return v;
-        }
-        case TokenType::DESTROY: {
-            auto v = advance().value;
-            return v;
-        }
-        case TokenType::LOAD: {
-            auto v = advance().value;
-            return v;
-        }
-        case TokenType::UNLOAD: {
-            auto v = advance().value;
-            return v;
-        }
-        case TokenType::FIXED_TICK: {
-            auto v = advance().value;
-            return v;
-        }
-        case TokenType::LATE_TICK: {
-            auto v = advance().value;
-            return v;
-        }
-        case TokenType::INPUT: {
-            auto v = advance().value;
-            return v;
-        }
-        case TokenType::IDENTIFIER:
-            return advance().value;
-        default:
-            errors_.error(peek().location, "expected event name");
-            return "<error>";
-    }
+    // Triggers participate in ordinary name resolution and may be local,
+    // alias-qualified, or canonically module-qualified. parse_dotted_name()
+    // also preserves support for contextual lifecycle spellings such as
+    // input/fixed_tick/late_tick.
+    return parse_dotted_name();
+}
+
+LocatedName Parser::parse_located_name() {
+    const auto location = peek().location;
+    return LocatedName{.spelling = parse_dotted_name(), .location = location};
 }
 
 // ── Event Handler ───────────────────────────────────────────────────────────
@@ -625,7 +615,8 @@ EventHandlerNode Parser::parse_event_handler() {
     auto loc = peek().location;
     consume(TokenType::ON, "expected 'on'");
     // Accept lifecycle keywords (spawn/destroy/load/unload) as event names
-    auto event_name = parse_lifecycle_event_name();
+    const auto trigger_location = peek().location;
+    auto event_name             = parse_lifecycle_event_name();
 
     // Optional 'as alias' clause
     std::optional<std::string> alias;
@@ -636,13 +627,218 @@ EventHandlerNode Parser::parse_event_handler() {
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
 
-    auto body = parse_block();
+    expect_indent();
+    std::vector<HandlerReferenceNode> after_handlers;
+    skip_newlines();
+    if (check(TokenType::AFTER)) {
+        after_handlers = parse_handler_order_block();
+    }
+
+    std::vector<std::unique_ptr<StmtNode>> body;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        if (check(TokenType::AFTER)) {
+            errors_.error(peek().location, "handler after: clause must be the first entry in the handler body");
+            parse_handler_order_block();
+            continue;
+        }
+        auto error_count_before = errors_.error_count();
+        auto stmt               = parse_statement();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            continue;
+        }
+        body.push_back(std::move(stmt));
+    }
+    expect_dedent();
 
     EventHandlerNode handler;
-    handler.event_name = event_name;
-    handler.alias      = alias;
-    handler.body       = std::move(body);
-    handler.location   = loc;
+    handler.event_name       = event_name;
+    handler.trigger_location = trigger_location;
+    handler.alias            = alias;
+    handler.after_handlers   = std::move(after_handlers);
+    handler.body             = std::move(body);
+    handler.location         = loc;
+    return handler;
+}
+
+std::vector<HandlerReferenceNode> Parser::parse_handler_order_block() {
+    const auto loc = peek().location;
+    consume(TokenType::AFTER, "expected 'after'");
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    std::vector<HandlerReferenceNode> references;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        const auto reference_location = peek().location;
+        auto system                   = parse_located_name();
+        consume(TokenType::SLASH, "expected '/' before handler trigger");
+        consume(TokenType::ON, "expected 'on' after '/' in handler reference");
+        auto trigger = parse_located_name();
+        references.push_back(HandlerReferenceNode{
+            .system = std::move(system), .trigger = std::move(trigger), .location = reference_location});
+        expect_newline();
+    }
+    expect_dedent();
+    if (references.empty()) {
+        errors_.error(loc, "handler after: block must contain at least one exact handler reference");
+    }
+    return references;
+}
+
+std::vector<LocatedName> Parser::parse_name_block(TokenType keyword, const char* clause_name) {
+    const auto loc = peek().location;
+    if (check(keyword) || (check(TokenType::IDENTIFIER) && peek().value == clause_name)) {
+        advance();
+    } else {
+        errors_.error(peek().location, std::string("expected '") + clause_name + "'");
+    }
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    std::vector<LocatedName> names;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        names.push_back(parse_located_name());
+        expect_newline();
+    }
+    expect_dedent();
+    if (names.empty()) {
+        errors_.error(loc, std::string(clause_name) + ": block must contain at least one entry");
+    }
+    return names;
+}
+
+std::vector<HandlerCommandNode> Parser::parse_command_block() {
+    const auto loc = peek().location;
+    if (check(TokenType::COMMANDS) || (check(TokenType::IDENTIFIER) && peek().value == "commands")) {
+        advance();
+    } else {
+        errors_.error(peek().location, "expected 'commands'");
+    }
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    std::vector<HandlerCommandNode> commands;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        HandlerCommandNode command;
+        command.location = peek().location;
+        if (match(TokenType::SPAWN)) {
+            command.kind   = HandlerCommandKind::Spawn;
+            command.target = parse_located_name();
+        } else if (match(TokenType::DESTROY)) {
+            command.kind = HandlerCommandKind::Destroy;
+        } else if (match(TokenType::ADD)) {
+            command.kind   = HandlerCommandKind::Add;
+            command.target = parse_located_name();
+        } else if (match(TokenType::REMOVE)) {
+            command.kind   = HandlerCommandKind::Remove;
+            command.target = parse_located_name();
+        } else {
+            errors_.error(peek().location,
+                          "expected command form: spawn Template, destroy, add Trait, or remove Trait");
+            synchronize();
+            continue;
+        }
+        expect_newline();
+        commands.push_back(std::move(command));
+    }
+    expect_dedent();
+    if (commands.empty()) {
+        errors_.error(loc, "commands: block must contain at least one command");
+    }
+    return commands;
+}
+
+ExternHandlerNode Parser::parse_extern_handler() {
+    const auto loc = peek().location;
+    consume(TokenType::ON, "expected 'on'");
+    const auto trigger_location = peek().location;
+    auto trigger_name           = parse_dotted_name();
+    std::optional<std::string> alias;
+    if (match(TokenType::AS)) {
+        alias = consume(TokenType::IDENTIFIER, "expected alias name after 'as'").value;
+    }
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    ExternHandlerNode handler;
+    handler.trigger_name     = std::move(trigger_name);
+    handler.trigger_location = trigger_location;
+    handler.alias            = std::move(alias);
+    handler.location         = loc;
+
+    bool saw_non_after_clause = false;
+    const auto at_clause      = [this](TokenType type, const char* spelling) {
+        return check(type) || (check(TokenType::IDENTIFIER) && peek().value == spelling);
+    };
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        if (check(TokenType::AFTER)) {
+            if (saw_non_after_clause || !handler.after_handlers.empty()) {
+                errors_.error(peek().location, "handler after: clause must be the first and only after: clause");
+            }
+            handler.after_handlers = parse_handler_order_block();
+        } else if (at_clause(TokenType::READS, "reads")) {
+            saw_non_after_clause = true;
+            auto entries         = parse_name_block(TokenType::READS, "reads");
+            handler.reads.insert(
+                handler.reads.end(), std::make_move_iterator(entries.begin()), std::make_move_iterator(entries.end()));
+        } else if (at_clause(TokenType::WRITES, "writes")) {
+            saw_non_after_clause = true;
+            auto entries         = parse_name_block(TokenType::WRITES, "writes");
+            handler.writes.insert(
+                handler.writes.end(), std::make_move_iterator(entries.begin()), std::make_move_iterator(entries.end()));
+        } else if (at_clause(TokenType::EMITS, "emits")) {
+            saw_non_after_clause = true;
+            auto entries         = parse_name_block(TokenType::EMITS, "emits");
+            handler.emits.insert(
+                handler.emits.end(), std::make_move_iterator(entries.begin()), std::make_move_iterator(entries.end()));
+        } else if (at_clause(TokenType::COMMANDS, "commands")) {
+            saw_non_after_clause = true;
+            auto commands        = parse_command_block();
+            handler.commands.insert(handler.commands.end(),
+                                    std::make_move_iterator(commands.begin()),
+                                    std::make_move_iterator(commands.end()));
+        } else if (at_clause(TokenType::EFFECTS, "effects")) {
+            saw_non_after_clause = true;
+            auto entries         = parse_name_block(TokenType::EFFECTS, "effects");
+            handler.effects.insert(handler.effects.end(),
+                                   std::make_move_iterator(entries.begin()),
+                                   std::make_move_iterator(entries.end()));
+        } else {
+            errors_.error(peek().location,
+                          "expected external handler clause (after, reads, writes, emits, commands, effects)");
+            // `synchronize()` intentionally preserves declaration-start tokens for
+            // top-level recovery. Inside a handler body that can otherwise leave
+            // us parked on a reserved declaration keyword forever, so consume the
+            // offending token before seeking the next line boundary.
+            advance();
+            synchronize();
+        }
+    }
+    expect_dedent();
     return handler;
 }
 
@@ -1308,15 +1504,16 @@ ViewElement Parser::parse_view_element() {
 
 // ── Event Declaration ───────────────────────────────────────────────────────
 
-EventNode Parser::parse_event(bool is_pub) {
+EventNode Parser::parse_event(bool is_pub, bool is_external) {
     auto loc = peek().location;
     consume(TokenType::EVENT, "expected 'event'");
     auto name = parse_lifecycle_event_name();
 
     EventNode node;
-    node.name     = name;
-    node.is_pub   = is_pub;
-    node.location = loc;
+    node.name        = name;
+    node.is_pub      = is_pub;
+    node.is_external = is_external;
+    node.location    = loc;
 
     // Marker event: no colon, no body (e.g., `pub event spawn`)
     if (!check(TokenType::COLON)) {
@@ -1366,6 +1563,75 @@ EventNode Parser::parse_event(bool is_pub) {
         node.fields.push_back(std::move(field));
     }
 
+    expect_dedent();
+    return node;
+}
+
+PhaseNode Parser::parse_phase(bool is_pub) {
+    const auto loc = peek().location;
+    consume(TokenType::PHASE, "expected 'phase'");
+    auto name = parse_dotted_name();
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    PhaseNode node;
+    node.name     = std::move(name);
+    node.is_pub   = is_pub;
+    node.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        if (check(TokenType::FROM)) {
+            auto entries = parse_name_block(TokenType::FROM, "from");
+            node.from_sources.insert(node.from_sources.end(),
+                                     std::make_move_iterator(entries.begin()),
+                                     std::make_move_iterator(entries.end()));
+            continue;
+        }
+        if (check(TokenType::AFTER)) {
+            auto entries = parse_name_block(TokenType::AFTER, "after");
+            node.after_phases.insert(node.after_phases.end(),
+                                     std::make_move_iterator(entries.begin()),
+                                     std::make_move_iterator(entries.end()));
+            continue;
+        }
+        if (check(TokenType::EVERY) || (check(TokenType::IDENTIFIER) && peek().value == "every")) {
+            const auto clause_loc = advance().location;
+            consume(TokenType::COLON, "expected ':'");
+            if (node.every.has_value()) {
+                errors_.error(clause_loc, "duplicate every: clause in phase");
+            }
+            node.every = parse_expression();
+            expect_newline();
+            continue;
+        }
+        if (check(TokenType::MAX) || (check(TokenType::IDENTIFIER) && peek().value == "max")) {
+            const auto clause_loc = advance().location;
+            consume(TokenType::COLON, "expected ':'");
+            if (node.max.has_value()) {
+                errors_.error(clause_loc, "duplicate max: clause in phase");
+            }
+            node.max = parse_expression();
+            expect_newline();
+            continue;
+        }
+
+        const auto field_loc = peek().location;
+        auto field_name      = parse_field_name_or_keyword_error("expected phase field or phase clause");
+        consume(TokenType::COLON, "expected ':'");
+        auto type = parse_type_ref();
+        consume(TokenType::ASSIGN, "phase fields require an initializer");
+        auto initializer = parse_expression();
+        expect_newline();
+        node.fields.push_back({.name        = std::move(field_name),
+                               .type        = std::move(type),
+                               .initializer = std::move(initializer),
+                               .location    = field_loc});
+    }
     expect_dedent();
     return node;
 }
@@ -2162,9 +2428,10 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {  // NOLINT(readability-
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(list)}, loc);
     }
 
-    // `input` keyword used as built-in object in expressions (e.g. input.axis(MoveX))
-    if (check(TokenType::INPUT)) {
-        auto name = advance().value;  // "input"
+    // Contextual lifecycle/phase spellings may be expression roots, for
+    // example `input.axis(MoveX)` and `fixed_tick.alpha` in phase fields.
+    if (check(TokenType::INPUT) || check(TokenType::FIXED_TICK) || check(TokenType::LATE_TICK)) {
+        auto name = advance().value;
         IdentExpr ident;
         ident.name     = name;
         ident.location = loc;
@@ -2387,11 +2654,10 @@ ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function
             break;
         }
         if (check(TokenType::ON)) {
-            errors_.error(peek().location, "`extern system` cannot have event handlers; use `system` instead");
-            parse_event_handler();
+            node.handlers.push_back(parse_extern_handler());
             continue;
         }
-        errors_.error(peek().location, "expected extern system clause (filter, exclude, order by, after, target)");
+        errors_.error(peek().location, "expected extern system clause or contracted handler");
         synchronize();
     }
 

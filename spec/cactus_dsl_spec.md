@@ -1,6 +1,6 @@
 # Cactus DSL Language Specification
 
-**Version:** 0.4.0  
+**Version:** 0.5.0
 **Status:** Draft
 
 ## 1. Overview
@@ -47,9 +47,9 @@ The current gameplay-core profile includes:
 - `module`, `use`, `const`
 - `struct`, `enum`, `trait`
 - `entity`, `template`
-- `system`, `event`, `func`, `extern func`
+- `system`, `extern system`, `event`, `extern event`, `phase`, `func`, `extern func`
 - `asset`, `input`
-- handlers: `on input:`, `on fixed_tick:`, `on tick:`, `on late_tick:`, `on spawn:`, `on destroy:`, `on load:`, `on unload:`
+- handlers triggered by declared phases or ordinary events, such as `on input:`, `on fixed_tick:`, `on tick:`, and `on PlayerDamaged:`
 - statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit`, `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
 
 ### 1.3 Deferred / Non-Normative Items
@@ -86,10 +86,11 @@ Single-line comments start with `#` and extend to the end of the line.
 
 ```text
 module  use     const   struct  enum    trait   entity  template
-system  event   func    extern  asset   input
+system  event   phase   func    extern  asset   input
 let     var     persist sync    pub
 on      emit    if      else    match   return
-filter  exclude order   by      after   as
+filter  exclude order   by      after   as      every  max
+reads   writes  emits   commands effects
 spawn   destroy load    add     remove  project for     in
 to      from    self
 true    false   and     or      not
@@ -112,7 +113,7 @@ fixed_tick late_tick
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
                 | enum_decl | trait_decl | entity_decl | template_decl
-                | system_decl | extern_system_decl | event_decl
+                | system_decl | extern_system_decl | event_decl | phase_decl
                 | func_decl | extern_func_decl | asset_decl | input_decl ;
 ```
 
@@ -315,7 +316,7 @@ Creation semantics (all creation paths — `spawn`, `entity … from …`, and t
 - Creating a hierarchical archetype creates one entity per node and returns/exposes the **root** entity. Descendants are implementation-owned; child role names do not introduce global entity declarations or `entity_id` constants.
 - Every non-root node receives a generated `Parent` relation whose `parent` field references the entity created for its **immediate** containing node (grandchildren point at their parent, not the root).
 - Creation order is deterministic parent-first preorder: the root, then each child in source order, each child's descendants before the next sibling.
-- Hierarchical archetypes are pure syntactic sugar for the equivalent hand-written flat archetypes plus `Parent` traits plus sequential creation. Lifecycle events fire exactly as they would for that hand-written sequence; no whole-tree deferral is introduced.
+- Hierarchical archetypes are pure syntactic sugar for the equivalent hand-written flat archetypes plus `Parent` traits plus sequential creation. They do not synthesize lifecycle events or whole-tree deferral.
 
 Rules:
 
@@ -401,15 +402,19 @@ system PatrolSystem:
 
 ### 3.9 Event Handlers
 
-Handlers are parameter-free in the current profile. Handler-local event data is accessed through the lifecycle/event binding itself or through an explicit alias.
+Handlers are parameter-free in the current profile. Handler-local phase/event data is accessed through the trigger binding itself or through an explicit alias.
 
 ```ebnf
 event_handler   = "on" event_name [ "as" IDENTIFIER ] ":" NEWLINE INDENT
+                  [ handler_after_clause ]
                   { statement }
                   DEDENT ;
 
-event_name      = IDENTIFIER | "input" | "fixed_tick" | "tick" | "late_tick"
-                | "spawn" | "destroy" | "load" | "unload" ;
+event_name      = dotted_name ;
+
+handler_after_clause = "after" ":" NEWLINE INDENT
+                       { dotted_name NEWLINE }
+                       DEDENT ;
 ```
 
 ```cactus
@@ -428,36 +433,102 @@ on PlayerDamaged as dmg:
 
 ### 3.10 Extern Systems
 
-`extern system` is an advanced backend-facing declaration. It declares a filtered/ordered pass whose implementation is provided by the backend.
+`extern system` is an advanced backend-facing declaration. Its implementation is provided by a compiler-owned adapter or by a user library, but every extern system still declares one or more triggered handlers. Handler contracts are mandatory and shape both scheduling and the generated callback ABI.
 
 ```ebnf
 extern_system_decl = "extern" "system" IDENTIFIER ":" NEWLINE INDENT
                      [ filter_clause ]
                      [ exclude_clause ]
                      [ order_by_clause ]
-                     [ after_clause ]
+                     { extern_handler }
                      DEDENT ;
+
+extern_handler      = "on" event_name ":" NEWLINE INDENT
+                      [ handler_after_clause ]
+                      { contract_clause }
+                      DEDENT ;
+
+contract_clause     = ( "reads" | "writes" | "emits" | "effects" ) ":"
+                      NEWLINE INDENT { dotted_name NEWLINE } DEDENT
+                    | "commands" ":" NEWLINE INDENT
+                      { command_capability NEWLINE } DEDENT ;
+
+command_capability  = "spawn" dotted_name
+                    | "destroy"
+                    | "add" dotted_name
+                    | "remove" dotted_name ;
 ```
 
-### 3.11 Events
+```cactus
+extern system NativeMovement:
+    filter:
+        Position
+        Velocity
+    on fixed_tick:
+        reads:
+            Velocity
+        writes:
+            Position
+        effects:
+            physics
+
+extern system InputSource:
+    on input:
+        writes:
+            PlayerInput
+        effects:
+            input
+```
+
+An extern handler is **selectionless** when its owner has neither `filter:` nor `exclude:` and therefore runs once per trigger occurrence. Any filter or exclude clause creates an entity-selection pass. Selection does not itself grant read access: every component access by an extern handler must appear in `reads:` or `writes:`. `writes:` includes read access to the same trait.
+
+### 3.11 Events and Phases
 
 Events are typed gameplay messages.
 
 ```ebnf
-event_decl       = [ "pub" ] "event" IDENTIFIER
+event_decl       = [ "pub" ] [ "extern" ] "event" IDENTIFIER
                    [ ":" NEWLINE INDENT
                      { event_field_decl }
                      DEDENT ] ;
 
 event_field_decl = IDENTIFIER ":" type_ref NEWLINE ;
+
+phase_decl       = [ "pub" ] "phase" IDENTIFIER ":" NEWLINE INDENT
+                   ( from_clause | phase_after_clause )
+                   [ every_clause ] [ max_clause ]
+                   { phase_field_decl }
+                   DEDENT ;
+
+from_clause      = "from" ":" NEWLINE INDENT { dotted_name NEWLINE } DEDENT ;
+phase_after_clause = "after" ":" NEWLINE INDENT { dotted_name NEWLINE } DEDENT ;
+every_clause     = "every" ":" constant_expression NEWLINE ;
+max_clause       = "max" ":" INTEGER_LITERAL NEWLINE ;
+phase_field_decl = IDENTIFIER ":" type_ref "=" expression NEWLINE ;
 ```
 
 ```cactus
 event PlayerDamaged:
     amount: int
 
-pub event spawn
+pub extern event frame:
+    dt: float
+
+pub phase fixed_tick:
+    from:
+        frame
+    every: 1.0 / 60.0
+    max: 8
+
+pub phase render:
+    after:
+        fixed_tick
+    alpha: float = fixed_tick.alpha
 ```
+
+Ordinary events may be emitted by handlers. External events are injected only by the host/runtime and cannot be authored with `emit`. A phase is a typed activation barrier, not an event. `from:` declares a runtime source lineage; `after:` declares completed upstream phases. A phase must resolve to one unambiguous external-event root lineage.
+
+Non-periodic phase fields are initialized from the current root occurrence or completed upstream phase results. A periodic phase synthesizes `dt` equal to its interval. It also produces `alpha` after its repetition barrier; `alpha` is available to downstream phases, not to the periodic phase's own handlers.
 
 ### 3.12 Functions
 
@@ -536,7 +607,7 @@ spawn_expr      = "spawn" IDENTIFIER ":" NEWLINE INDENT
                   DEDENT ;
 ```
 
-`spawn TemplateName:` is runtime entity creation. It creates an `entity_id` from the named template's already-composed archetype, then applies the spawn body's nested trait override blocks. Unlike body-level `use TemplateName`, `spawn` can run inside handlers, creates a new entity, and participates in `on spawn` lifecycle delivery.
+`spawn TemplateName:` is runtime entity creation. It creates an `entity_id` from the named template's already-composed archetype, then applies the spawn body's nested trait override blocks. Unlike body-level `use TemplateName`, `spawn` can run inside handlers and creates a new entity at the activation commit boundary.
 
 ### 3.16 Statements
 
@@ -644,11 +715,10 @@ Trait fields in systems are accessed through:
 - `alias.field` if a filter alias is declared
 - `TraitName.field` if no alias is declared
 
-Lifecycle and event payloads are accessed through:
+Phase and event payloads are accessed through:
 
-- `input`, `fixed_tick`, `tick`, `late_tick`, `spawn`, `destroy`, `load`, `unload`
+- the declared trigger name, such as `input`, `fixed_tick`, `tick`, or `PlayerDamaged`
 - or a handler alias declared with `on ... as alias:`
-- or the user event name itself / its alias
 
 ```cactus
 system Move:
@@ -700,41 +770,88 @@ String literals are only allowed in:
 
 - `filter:` selects entities
 - `exclude:` removes entities from consideration
-- `after:` constrains system order within a phase
+- a leading handler `after:` names canonical handler identities and constrains order for that trigger
+- legacy system-level `after:` expands only between handlers with the same canonical trigger and never creates cross-trigger edges
 - `order by:` constrains iteration order for a system pass
+- `filter:` and `exclude:` select entities but do not imply component reads
+- regular handler contracts are inferred from their bodies; extern handler contracts are declared explicitly
+
+Every handler has a canonical identity composed from its module, owning system, and resolved phase/event trigger. Co-eligible handlers are serialized for write/read, read/write, write/write, and matching observable-effect conflicts. Read/read and filter overlap do not conflict. Edge direction uses explicit `after:` first, then one-way writer-before-reader dependencies, then stable linked declaration order for remaining conflicts. The combined handler schedule must be acyclic.
 
 ## 5. Execution Model
 
 ### 5.1 Frame Phases
 
-Each rendered frame executes in this order:
+The standard library declares a canonical graph rooted at the external `frame` event:
 
 ```text
-input
-fixed_tick (0..N times)
-tick
-late_tick
-render
+frame -> input -> fixed_tick -> tick -> late_tick -> render
 ```
 
-Events cascade between these phases according to the runtime's configured cascade depth.
+The host injects exactly one typed `frame { dt = ... }` occurrence per host frame. Runtime dispatch follows phase metadata, never lifecycle spelling or renderer names.
+
+The canonical declarations are equivalent to:
+
+```cactus
+pub extern event frame:
+    dt: float
+
+pub phase input:
+    from:
+        frame
+
+pub phase fixed_tick:
+    after:
+        input
+    every: 1.0 / 60.0
+    max: 8
+
+pub phase tick:
+    after:
+        fixed_tick
+    dt: float = frame.dt
+
+pub phase late_tick:
+    after:
+        tick
+    dt: float = frame.dt
+
+pub phase render:
+    after:
+        late_tick
+    alpha: float = fixed_tick.alpha
+```
+
+For a periodic phase with interval `every` and catch-up cap `max`, each root occurrence performs:
+
+```text
+accumulator += root.dt
+due = floor(accumulator / every)
+run = min(due, max)
+repeat run times:
+    activate with dt = every
+    drain the activation event cascade
+    commit structural commands
+accumulator -= due * every
+alpha = accumulator / every
+```
+
+Subtracting `due` deliberately drops capped whole steps while preserving the fractional remainder, so `0 <= alpha < 1` and backlog cannot grow permanently. Each repetition is a separate activation and commit boundary.
 
 ### 5.2 Scene Loading
 
 `load module.name` transitions to another module-as-scene. Conceptually:
 
-1. unload old scene entities
+1. remove old scene entities
 2. instantiate new scene entities
-3. fire `on load:` handlers for the new scene
+
+Scene loading does not synthesize handlers by trigger spelling. Projects that need initialization work model it with an explicit runtime event or phase.
 
 ### 5.3 Structural Changes
 
-The gameplay model relies on explicit structural changes:
+`spawn`, `destroy`, `add`, and `remove` are buffered in an activation-local deterministic command list. An activation runs its phase handlers, dispatches emitted events, and drains the bounded event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection midway through an activation. A spawn committed after periodic repetition N is selectable in repetition N+1.
 
-- `spawn` creates entities from templates
-- `destroy` removes entities
-- `add` attaches gameplay state traits
-- `remove` detaches gameplay state traits
+Events emitted during an activation are delivered in deterministic queue order. Event handlers follow their own stable graph schedule and may emit further events. Feedback cycles are allowed, but cascade depth is bounded; overflow occurrences are deferred to a later activation. Commands produced by deferred delivery belong to that later activation. Effect calls happen when their handler executes and are not rolled back; matching effect domains are serialized by graph order.
 
 ## 6. Gameplay-Core Examples
 
@@ -827,7 +944,9 @@ The gameplay core is extended by stdlib modules and backend-provided declaration
 
 ### 7.3 Extern Systems
 
-`extern system` is used when the backend supplies the full implementation of a filtered pass, such as a renderer or a backend-driven transform/physics pass.
+`extern system` is used when a compiler-owned adapter or user library supplies handler implementations. The generated ABI is per handler and includes its canonical trigger identity. Selected callbacks receive only the declared const read references, mutable write references, entity context, and restricted event/command/effect adapters. Selectionless callbacks receive trigger data and declared capabilities but no entity. An unrestricted registry is not part of the user callback surface.
+
+Renderers are ordinary `on render` handlers with `effects: graphics`; input producers are typically selectionless `on input` handlers. Runtime scheduling never infers behavior from a system name, filter shape, or lifecycle-like trigger spelling.
 
 These surfaces are active, but they are **not the minimal gameplay-core language story**.
 
@@ -849,13 +968,17 @@ The following older forms are not normative in the current profile:
 - `enable` / `disable` as the documented runtime trait mutation model
 - parenthesized `emit Event(...)` as the main documented event form
 - flat `spawn Foo(...)` override syntax as the main documented spawn form
-- parameterized lifecycle handler forms such as `on tick(dt: float):`
+- parameterized handler forms such as `on tick(dt: float):`
+- handlerless extern systems or extern filters treated as implicit reads
+- relying on lifecycle names or renderer names to select a runtime hook
 
 Prefer:
 
 - nested trait blocks in `entity`, `template`, and `spawn`
 - `emit EventName:` with payload block syntax
-- `on tick:` / `tick.dt`
+- explicit `extern event` roots and `phase` declarations
+- `on tick:` / `tick.dt` where `tick` resolves to a declared phase
+- explicit extern handler contracts and handler-level `after:`
 - `add` / `remove`
 
 ### 8.3 Example Hygiene

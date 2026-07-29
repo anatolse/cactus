@@ -399,6 +399,30 @@ TEST_CASE("Lexer: new keyword string representations", "[lexer][dsl-spec-new-fea
     CHECK(std::string(token_type_to_string(TokenType::LATE_TICK)) == "LATE_TICK");
 }
 
+TEST_CASE("Lexer: phase syntax token kinds have debug names", "[lexer][phase][handler-contract]") {
+    auto tokens = lex("phase");
+    auto types  = token_types(tokens);
+    REQUIRE(types.size() == 1);
+    CHECK(types[0] == TokenType::PHASE);
+
+    // Clause words are contextual so existing declarations such as
+    // `std.math.max` and fields named `max` remain source-compatible.
+    auto clause_tokens = token_types(lex("every max reads writes emits commands effects"));
+    REQUIRE(clause_tokens.size() == 7);
+    for (auto type : clause_tokens) {
+        CHECK(type == TokenType::IDENTIFIER);
+    }
+
+    CHECK(std::string(token_type_to_string(TokenType::PHASE)) == "PHASE");
+    CHECK(std::string(token_type_to_string(TokenType::EVERY)) == "EVERY");
+    CHECK(std::string(token_type_to_string(TokenType::MAX)) == "MAX");
+    CHECK(std::string(token_type_to_string(TokenType::READS)) == "READS");
+    CHECK(std::string(token_type_to_string(TokenType::WRITES)) == "WRITES");
+    CHECK(std::string(token_type_to_string(TokenType::EMITS)) == "EMITS");
+    CHECK(std::string(token_type_to_string(TokenType::COMMANDS)) == "COMMANDS");
+    CHECK(std::string(token_type_to_string(TokenType::EFFECTS)) == "EFFECTS");
+}
+
 // ── extern-func keyword tests ─────────────────────────────────────────────────
 
 TEST_CASE("Lexer: extern keyword", "[lexer][extern-func]") {

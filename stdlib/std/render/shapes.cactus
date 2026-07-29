@@ -18,3 +18,10 @@ extern system ShapeRenderer:
     filter:
         tf.WorldTransform
         Shape
+
+    on render:
+        reads:
+            tf.WorldTransform
+            Shape
+        effects:
+            graphics

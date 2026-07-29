@@ -242,6 +242,40 @@ set(EDITOR_TEST_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/editor-test.gene
 set(EDITOR_3D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/editor-3d.generated.cpp")
 set(SPLIT_SCREEN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/split-screen.generated.cpp")
 set(SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/split-screen-forest-bombs.generated.cpp")
+set(EXTERNAL_HANDLER_LINK_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/external-handler-link.generated.cpp")
+
+add_custom_command(
+    OUTPUT "${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<SHELL_PATH:${CACTUS_GENERATED_EXAMPLES_DIR}>"
+    COMMAND $<TARGET_FILE:cactus>
+            "$<SHELL_PATH:${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/external_handler_linking.cactus>"
+            --backend cpp-entt
+            --output "$<SHELL_PATH:${EXTERNAL_HANDLER_LINK_GENERATED_CPP}>"
+    DEPENDS cactus "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/external_handler_linking.cactus"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Generating per-handler user-library ABI fixture"
+    VERBATIM
+)
+set_source_files_properties("${EXTERNAL_HANDLER_LINK_GENERATED_CPP}" PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE)
+
+foreach(target_name IN ITEMS
+        example_external_handler_user_library
+        example_external_handler_missing_implementations)
+    add_executable(${target_name} EXCLUDE_FROM_ALL
+        tests/example_manual_generated_main.cpp
+        "${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
+    )
+    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_include_directories(${target_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_definitions(${target_name} PRIVATE
+        CACTUS_EXTERNAL_HANDLER_GENERATED_CPP="${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
+    )
+    target_link_libraries(${target_name} PRIVATE cactus_runtime_cpp_entt raylib EnTT::EnTT)
+    set_property(TARGET ${target_name} PROPERTY CXX_CLANG_TIDY "")
+endforeach()
+target_compile_definitions(example_external_handler_missing_implementations PRIVATE
+    CACTUS_EXTERNAL_HANDLER_MISSING_IMPLEMENTATIONS
+)
 
 cactus_add_example(example_blue_square_generated
     SOURCE "examples/blue-square/square.cactus"

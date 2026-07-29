@@ -22,6 +22,14 @@ extern system ModelRendererSystem:
         tv.WorldTransform
         ModelRenderer
 
+    on render:
+        reads:
+            tv.WorldTransform
+            ModelRenderer
+            ModelAnimator
+        effects:
+            graphics
+
 # ── Skeletal Animation ────────────────────────────────────────────────────────
 # Optional companion to ModelRenderer. Entities without ModelAnimator render at
 # the model's bind pose. Entities sharing one model asset animate independently.
@@ -43,6 +51,14 @@ extern system ModelAnimationSystem:
     filter:
         ModelRenderer
         ModelAnimator
+
+    on tick:
+        reads:
+            ModelRenderer
+        writes:
+            ModelAnimator
+        effects:
+            graphics
 
 # Number of animation clips in the model file (0 if the handle is unresolvable).
 # Triggers a lazy model load, so it works before the model's first draw.

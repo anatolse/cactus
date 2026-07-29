@@ -49,6 +49,7 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"project", TokenType::PROJECT},
         {"asset", TokenType::ASSET},
         {"input", TokenType::INPUT},
+        {"phase", TokenType::PHASE},
         {"fixed_tick", TokenType::FIXED_TICK},
         {"late_tick", TokenType::LATE_TICK},
         {"map", TokenType::MAP},

@@ -76,6 +76,74 @@ static ErrorReporter parse_fixture_expect_errors_with_timeout(const std::string&
     return future.get();
 }
 
+TEST_CASE("AST: runtime phase and handler reference values support equality and debug output",
+          "[ast][phase][handler-contract]") {
+    const SourceLocation location{"runtime.cactus", 12, 9};
+    const SourceLocation same_location{"runtime.cactus", 12, 9};
+    const SourceLocation other_location{"runtime.cactus", 13, 9};
+    CHECK(location == same_location);
+    CHECK_FALSE(location == other_location);
+
+    std::ostringstream location_debug;
+    location_debug << location;
+    CHECK(location_debug.str() == "runtime.cactus:12:9");
+
+    const LocatedName phase_name{.spelling = "std.core.tick", .location = location};
+    const LocatedName phase_name_copy{.spelling = "std.core.tick", .location = same_location};
+    CHECK(phase_name == phase_name_copy);
+    CHECK(phase_name.debug_string() == "std.core.tick@runtime.cactus:12:9");
+
+    std::ostringstream phase_debug;
+    phase_debug << phase_name;
+    CHECK(phase_debug.str() == phase_name.debug_string());
+
+    const HandlerReferenceNode reference{
+        .system   = LocatedName{.spelling = "game.Animation", .location = location},
+        .trigger  = phase_name,
+        .location = location,
+    };
+    const HandlerReferenceNode reference_copy{
+        .system   = LocatedName{.spelling = "game.Animation", .location = same_location},
+        .trigger  = phase_name_copy,
+        .location = same_location,
+    };
+    CHECK(reference == reference_copy);
+    CHECK(reference.spelling() == "game.Animation/on std.core.tick");
+    CHECK(reference.debug_string() == "game.Animation/on std.core.tick@runtime.cactus:12:9");
+
+    const ResolvedHandlerTrigger trigger{
+        .kind   = HandlerTriggerKind::Phase,
+        .symbol = make_symbol_id(SymbolKind::Phase, "std.core", "tick"),
+    };
+    const ResolvedHandlerTrigger trigger_copy{
+        .kind   = HandlerTriggerKind::Phase,
+        .symbol = make_symbol_id(SymbolKind::Phase, "std.core", "tick"),
+    };
+    CHECK(trigger == trigger_copy);
+    CHECK(trigger.debug_string() == "phase std.core.tick");
+
+    std::ostringstream trigger_debug;
+    trigger_debug << trigger;
+    CHECK(trigger_debug.str() == trigger.debug_string());
+
+    const HandlerCommandNode command{
+        .kind     = HandlerCommandKind::Spawn,
+        .target   = LocatedName{.spelling = "game.Projectile", .location = location},
+        .location = location,
+    };
+    const HandlerCommandNode command_copy{
+        .kind     = HandlerCommandKind::Spawn,
+        .target   = LocatedName{.spelling = "game.Projectile", .location = same_location},
+        .location = same_location,
+    };
+    CHECK(command == command_copy);
+    CHECK(command.debug_string() == "spawn game.Projectile@runtime.cactus:12:9");
+
+    std::ostringstream command_debug;
+    command_debug << command;
+    CHECK(command_debug.str() == command.debug_string());
+}
+
 TEST_CASE("Parser: module declaration", "[parser]") {
     auto prog = parse("module player\n");
     REQUIRE(prog.declarations.size() == 1);
@@ -1367,7 +1435,7 @@ TEST_CASE("Parser: system without order by leaves clause empty", "[parser][syste
     CHECK(sys.order_by.empty());
 }
 
-TEST_CASE("Parser: extern system with handler produces error", "[parser][extern-system]") {
+TEST_CASE("Parser: extern system rejects executable handler statements", "[parser][extern-system]") {
     auto errors = parse_expect_errors(
         "extern system Bad:\n"
         "    filter:\n"
@@ -1375,6 +1443,247 @@ TEST_CASE("Parser: extern system with handler produces error", "[parser][extern-
         "    on tick:\n"
         "        pass\n");
     REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: canonical frame phase graph preserves dependencies and initializers",
+          "[parser][phase][frame-graph]") {
+    auto prog = parse(
+        "module std.core\n"
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "pub phase input:\n"
+        "    from:\n"
+        "        frame\n"
+        "pub phase fixed_tick:\n"
+        "    after:\n"
+        "        input\n"
+        "    every: 1.0 / 60.0\n"
+        "    max: 8\n"
+        "pub phase tick:\n"
+        "    after:\n"
+        "        fixed_tick\n"
+        "    dt: float = frame.dt\n"
+        "pub phase late_tick:\n"
+        "    after:\n"
+        "        tick\n"
+        "    dt: float = frame.dt\n"
+        "pub phase render:\n"
+        "    after:\n"
+        "        late_tick\n"
+        "    alpha: float = fixed_tick.alpha\n");
+
+    REQUIRE(prog.declarations.size() == 7);
+    const auto& frame = std::get<EventNode>(prog.declarations[1]);
+    CHECK(frame.is_pub);
+    CHECK(frame.is_external);
+    CHECK(frame.location.line == 2);
+    REQUIRE(frame.fields.size() == 1);
+    CHECK(frame.fields[0].location.line == 3);
+
+    const auto& input = std::get<PhaseNode>(prog.declarations[2]);
+    CHECK(input.name == "input");
+    REQUIRE(input.from_sources.size() == 1);
+    CHECK(input.from_sources[0].spelling == "frame");
+    CHECK(input.from_sources[0].location.line == 6);
+    CHECK(input.location.line == 4);
+
+    const auto& fixed_tick = std::get<PhaseNode>(prog.declarations[3]);
+    REQUIRE(fixed_tick.after_phases.size() == 1);
+    CHECK(fixed_tick.after_phases[0].spelling == "input");
+    REQUIRE(fixed_tick.every.has_value());
+    REQUIRE(fixed_tick.max.has_value());
+
+    const auto& tick = std::get<PhaseNode>(prog.declarations[4]);
+    REQUIRE(tick.after_phases.size() == 1);
+    CHECK(tick.after_phases[0].spelling == "fixed_tick");
+    REQUIRE(tick.fields.size() == 1);
+    CHECK(tick.fields[0].name == "dt");
+    CHECK(tick.fields[0].location.line == 15);
+
+    const auto& late_tick = std::get<PhaseNode>(prog.declarations[5]);
+    REQUIRE(late_tick.after_phases.size() == 1);
+    CHECK(late_tick.after_phases[0].spelling == "tick");
+    REQUIRE(late_tick.fields.size() == 1);
+
+    const auto& render = std::get<PhaseNode>(prog.declarations[6]);
+    REQUIRE(render.after_phases.size() == 1);
+    CHECK(render.after_phases[0].spelling == "late_tick");
+    REQUIRE(render.fields.size() == 1);
+    const auto* alpha_member = std::get_if<MemberExpr>(&render.fields[0].initializer->expr);
+    REQUIRE(alpha_member != nullptr);
+    CHECK(alpha_member->member == "alpha");
+    const auto* fixed_tick_root = std::get_if<IdentExpr>(&alpha_member->object->expr);
+    REQUIRE(fixed_tick_root != nullptr);
+    CHECK(fixed_tick_root->name == "fixed_tick");
+}
+
+TEST_CASE("Parser: selectionless producer and selected renderer contracts preserve qualified entries",
+          "[parser][extern-system][handler-contract]") {
+    auto prog = parse(
+        "extern system InputSource:\n"
+        "    on std.core.input as input_phase:\n"
+        "        emits:\n"
+        "            game.input.InputSample\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        render.Sprite as sprite\n"
+        "        transform.WorldTransform as world\n"
+        "    on std.core.render:\n"
+        "        after:\n"
+        "            game.Animation/on std.core.render\n"
+        "        reads:\n"
+        "            render.Sprite\n"
+        "            transform.WorldTransform\n"
+        "        effects:\n"
+        "            graphics\n");
+
+    REQUIRE(prog.declarations.size() == 2);
+    const auto& producer = std::get<ExternSystemNode>(prog.declarations[0]);
+    CHECK(producer.filter.entries.empty());
+    CHECK(producer.exclude.entries.empty());
+    REQUIRE(producer.handlers.size() == 1);
+    CHECK(producer.handlers[0].trigger_name == "std.core.input");
+    CHECK(producer.handlers[0].trigger_location == SourceLocation{"test.cactus", 3, 8});
+    REQUIRE(producer.handlers[0].alias.has_value());
+    CHECK(*producer.handlers[0].alias == "input_phase");
+    REQUIRE(producer.handlers[0].emits.size() == 1);
+    CHECK(producer.handlers[0].emits[0].spelling == "game.input.InputSample");
+    CHECK(producer.handlers[0].emits[0].location == SourceLocation{"test.cactus", 5, 13});
+
+    const auto& renderer = std::get<ExternSystemNode>(prog.declarations[1]);
+    REQUIRE(renderer.filter.entries.size() == 2);
+    REQUIRE(renderer.handlers.size() == 1);
+    const auto& render_handler = renderer.handlers[0];
+    CHECK(render_handler.trigger_name == "std.core.render");
+    CHECK(render_handler.trigger_location == SourceLocation{"test.cactus", 10, 8});
+    REQUIRE(render_handler.after_handlers.size() == 1);
+    CHECK(render_handler.after_handlers[0].spelling() == "game.Animation/on std.core.render");
+    CHECK(render_handler.after_handlers[0].location == SourceLocation{"test.cactus", 12, 13});
+    REQUIRE(render_handler.reads.size() == 2);
+    CHECK(render_handler.reads[0].spelling == "render.Sprite");
+    CHECK(render_handler.reads[1].spelling == "transform.WorldTransform");
+    CHECK(render_handler.reads[0].location == SourceLocation{"test.cactus", 14, 13});
+    CHECK(render_handler.reads[1].location == SourceLocation{"test.cactus", 15, 13});
+    REQUIRE(render_handler.effects.size() == 1);
+    CHECK(render_handler.effects[0].spelling == "graphics");
+    CHECK(render_handler.effects[0].location == SourceLocation{"test.cactus", 17, 13});
+    CHECK(render_handler.location.line == 10);
+}
+
+TEST_CASE("Parser: handler after clause must precede executable statements", "[parser][handler-contract][errors]") {
+    auto errors = parse_expect_errors(
+        "system Move:\n"
+        "    on tick:\n"
+        "        let elapsed = 1\n"
+        "        after:\n"
+        "            game.Input/on tick\n");
+
+    bool found = false;
+    for (const auto& diagnostic : errors.diagnostics()) {
+        if (diagnostic.message.find("handler after: clause must be the first entry") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("Parser: phase and contract clauses require indented blocks", "[parser][phase][handler-contract][errors]") {
+    auto phase_errors = parse_expect_errors(
+        "phase tick:\n"
+        "    from:\n"
+        "    frame\n");
+    CHECK(phase_errors.has_errors());
+
+    auto contract_errors = parse_expect_errors(
+        "extern system InputSource:\n"
+        "    on input:\n"
+        "        emits:\n"
+        "        InputSample\n");
+    CHECK(contract_errors.has_errors());
+}
+
+TEST_CASE("Parser: malformed external handler aliases recover without looping",
+          "[parser][handler-contract][errors][recovery]") {
+    auto errors = parse_expect_errors(
+        "extern system InputSource:\n"
+        "    on input as phase:\n"
+        "        emits:\n"
+        "            InputSample\n");
+
+    CHECK(errors.has_errors());
+}
+
+TEST_CASE("Parser: phases, external events, handler order, and external contracts",
+          "[parser][phase][extern-system][handler-contract]") {
+    auto prog = parse(
+        "extern event HostTick:\n"
+        "    dt: float\n"
+        "pub phase Update:\n"
+        "    from:\n"
+        "        HostTick\n"
+        "    every: 0.016\n"
+        "    max: 4\n"
+        "    dt: float = 0.0\n"
+        "system Move:\n"
+        "    on Update:\n"
+        "        after:\n"
+        "            game.Input/on Update\n"
+        "        let elapsed = 1\n"
+        "extern system Physics:\n"
+        "    on Update:\n"
+        "        reads:\n"
+        "            Position\n"
+        "        writes:\n"
+        "            Velocity\n"
+        "        emits:\n"
+        "            Collision\n"
+        "        commands:\n"
+        "            spawn Projectile\n"
+        "            destroy\n"
+        "            add Active\n"
+        "            remove Sleeping\n"
+        "        effects:\n"
+        "            physics.step\n");
+
+    REQUIRE(prog.declarations.size() == 4);
+    const auto& event = std::get<EventNode>(prog.declarations[0]);
+    CHECK(event.is_external);
+    CHECK(event.name == "HostTick");
+
+    const auto& phase = std::get<PhaseNode>(prog.declarations[1]);
+    CHECK(phase.is_pub);
+    CHECK(phase.name == "Update");
+    REQUIRE(phase.from_sources.size() == 1);
+    CHECK(phase.from_sources[0].spelling == "HostTick");
+    REQUIRE(phase.every.has_value());
+    REQUIRE(phase.max.has_value());
+    REQUIRE(phase.fields.size() == 1);
+    CHECK(phase.fields[0].name == "dt");
+
+    const auto& system = std::get<SystemNode>(prog.declarations[2]);
+    REQUIRE(system.handlers.size() == 1);
+    REQUIRE(system.handlers[0].after_handlers.size() == 1);
+    CHECK(system.handlers[0].after_handlers[0].spelling() == "game.Input/on Update");
+    REQUIRE(system.handlers[0].body.size() == 1);
+
+    const auto& external = std::get<ExternSystemNode>(prog.declarations[3]);
+    REQUIRE(external.handlers.size() == 1);
+    const auto& contract = external.handlers[0];
+    CHECK(contract.trigger_name == "Update");
+    REQUIRE(contract.reads.size() == 1);
+    CHECK(contract.reads[0].spelling == "Position");
+    REQUIRE(contract.writes.size() == 1);
+    CHECK(contract.writes[0].spelling == "Velocity");
+    REQUIRE(contract.emits.size() == 1);
+    CHECK(contract.emits[0].spelling == "Collision");
+    REQUIRE(contract.effects.size() == 1);
+    CHECK(contract.effects[0].spelling == "physics.step");
+    REQUIRE(contract.commands.size() == 4);
+    CHECK(contract.commands[0].kind == HandlerCommandKind::Spawn);
+    CHECK(contract.commands[1].kind == HandlerCommandKind::Destroy);
+    CHECK(contract.commands[2].kind == HandlerCommandKind::Add);
+    CHECK(contract.commands[3].kind == HandlerCommandKind::Remove);
 }
 
 TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait-match]") {

@@ -45,6 +45,23 @@ TEST_CASE("symbol identity: equality and hash include kind, module, and local na
     CHECK(symbols.contains(flat_struct));
 }
 
+TEST_CASE("symbol identity: phase is distinct from event with the same canonical spelling",
+          "[symbol-identity][phase]") {
+    const auto event = make_symbol_id(SymbolKind::Event, "std.core", "tick");
+    const auto phase = make_symbol_id(SymbolKind::Phase, "std.core", "tick");
+
+    CHECK(symbol_kind_name(event.kind) == std::string("event"));
+    CHECK(symbol_kind_name(phase.kind) == std::string("phase"));
+    CHECK(canonical_string(event) == "std.core.tick");
+    CHECK(canonical_string(phase) == "std.core.tick");
+    CHECK(event != phase);
+
+    std::unordered_set<SymbolId> symbols{event, phase};
+    CHECK(symbols.size() == 2);
+    CHECK(symbols.contains(event));
+    CHECK(symbols.contains(phase));
+}
+
 TEST_CASE("symbol identity: C++ identifiers derive from module and local name", "[symbol-identity]") {
     const SymbolId flat_transform{
         .kind = SymbolKind::Trait, .module = ModuleId{.name = "std.transform.flat"}, .local_name = "WorldTransform"};

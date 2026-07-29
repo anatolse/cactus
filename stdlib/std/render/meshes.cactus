@@ -55,11 +55,31 @@ extern system MeshRenderer:
         tv.WorldTransform
         Renderer
 
+    on render:
+        reads:
+            tv.WorldTransform
+            Renderer
+        effects:
+            graphics
+
 extern system PointLightSystem:
     filter:
         tv.WorldTransform
         PointLight
 
+    on render:
+        reads:
+            tv.WorldTransform
+            PointLight
+        effects:
+            graphics
+
 extern system DirectionalLightSystem:
     filter:
         DirectionalLight
+
+    on render:
+        reads:
+            DirectionalLight
+        effects:
+            graphics

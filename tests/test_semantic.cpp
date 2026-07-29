@@ -4,6 +4,7 @@
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
+#include "frontend/symbol_identity.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -267,10 +268,12 @@ TEST_CASE("Semantic: dependency graph built", "[semantic]") {
                           "        Pos\n"
                           "    on tick as t:\n"
                           "        x = x + t.dt\n");
-    REQUIRE(result.dependency_graph.size() == 1);
-    CHECK(result.dependency_graph[0].system_name == "Move");
-    CHECK(result.dependency_graph[0].reads.count("test.Pos"));
-    CHECK(result.dependency_graph[0].writes.count("x"));
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    CHECK(contract.system.local_name == "Move");
+    const auto pos_symbol = make_symbol_id(SymbolKind::Trait, "test", "Pos");
+    CHECK(contract.reads.contains(pos_symbol));
+    CHECK(contract.writes.contains(pos_symbol));
 }
 
 TEST_CASE("Semantic: duplicate struct error", "[semantic]") {
@@ -416,11 +419,17 @@ TEST_CASE("Semantic: std.physics.flat query types and extern funcs resolve",
 
 TEST_CASE("Semantic: extern system with filter is valid", "[semantic][extern-system]") {
     CHECK_FALSE(
-        analyze_has_errors("trait Position:\n"
+        analyze_has_errors(STDLIB_EVENTS +
+                           "trait Position:\n"
                            "    var x: float\n"
                            "extern system SpriteRenderer:\n"
                            "    filter:\n"
-                           "        Position\n"));
+                           "        Position\n"
+                           "    on tick:\n"
+                           "        reads:\n"
+                           "            Position\n"
+                           "        effects:\n"
+                           "            graphics\n"));
 }
 
 TEST_CASE("Semantic: extern system requires filter", "[semantic][extern-system]") {
@@ -618,13 +627,13 @@ TEST_CASE("Semantic: trait match valid", "[semantic][trait-match]") {
         analyze_has_errors("event Collision:\n"
                            "    other: entity_id\n"
                            "trait Boss:\n"
-                           "    var phase: int\n"
+                           "    var stage: int\n"
                            "trait Spike\n"
                            "system Combat:\n"
                            "    on Collision as c:\n"
                            "        match c.other:\n"
                            "            Boss as b =>\n"
-                           "                let x = b.phase\n"
+                           "                let x = b.stage\n"
                            "            Spike =>\n"
                            "                let y = 1\n"));
 }
@@ -861,11 +870,13 @@ TEST_CASE("Semantic: project participates in dependency writes", "[semantic][pro
                           "    filter:\n"
                           "        Health\n"
                           "    on tick:\n"
+                          "        let x = hp\n"
                           "        project DamageFlash\n");
 
-    REQUIRE(result.dependency_graph.size() == 1);
-    CHECK(result.dependency_graph[0].reads.count("test.Health") == 1);
-    CHECK(result.dependency_graph[0].writes.count("DamageFlash") == 1);
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    CHECK(contract.reads.contains(make_symbol_id(SymbolKind::Trait, "test", "Health")));
+    CHECK(contract.writes.contains(make_symbol_id(SymbolKind::Trait, "test", "DamageFlash")));
 }
 
 // ── std.text.format semantic tests (add-stdlib-text-format) ───────────────────

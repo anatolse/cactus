@@ -330,16 +330,21 @@ static std::optional<DecoratedProgram> compile_source(const std::string& source,
     return decorated;
 }
 
-TEST_CASE("integration: stdlib on input handlers run before root-module handlers", "[integration][editor][input]") {
+TEST_CASE("integration: imported input phase handlers preserve linked declaration order",
+          "[integration][phase][input]") {
     auto build_dir = integration_build_dir() / "input_order";
     std::error_code ec;
     fs::remove_all(build_dir, ec);
 
-    // Step 1: Compile a stdlib-like module with an `on input` system.
+    // Step 1: Compile a dependency that owns the frame root and input phase.
     const std::string lib_source =
         "module editorlib\n"
         "\n"
-        "pub event input\n"
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "pub phase input:\n"
+        "    from:\n"
+        "        frame\n"
         "pub trait EditorNavState:\n"
         "    var moves: float\n"
         "system EditorNav:\n"
@@ -364,7 +369,17 @@ TEST_CASE("integration: stdlib on input handlers run before root-module handlers
             lib_syms.traits[name] = trait;
         }
     }
-    lib_syms.events.insert("input");
+    const auto input_symbol         = make_symbol_id(SymbolKind::Phase, "editorlib", "input");
+    const auto& input_phase         = lib_prog->phases.at("input");
+    lib_syms.phase_symbols["input"] = ImportedPhase{.name            = input_symbol.local_name,
+                                                    .module_name     = input_symbol.module.name,
+                                                    .canonical_id    = make_canonical_id(input_symbol),
+                                                    .symbol_id       = input_symbol,
+                                                    .fields          = input_phase.fields,
+                                                    .upstream_phases = input_phase.upstream_phases,
+                                                    .runtime_root    = input_phase.runtime_root,
+                                                    .every_seconds   = input_phase.every_seconds,
+                                                    .max_repetitions = input_phase.max_repetitions};
     ModuleImports root_imports;
     root_imports.add("editorlib", std::move(lib_syms));
 
@@ -377,7 +392,7 @@ TEST_CASE("integration: stdlib on input handlers run before root-module handlers
         "system GameplayInput:\n"
         "    filter:\n"
         "        PlayerState\n"
-        "    on input:\n"
+        "    on editorlib.input:\n"
         "        moves = moves + 1.0\n";
     ErrorReporter root_errors;
     ProgramNode root_ast;
@@ -408,21 +423,17 @@ TEST_CASE("integration: stdlib on input handlers run before root-module handlers
 
     const auto code = CppEnttCodegen::generate(*merged);
 
-    // Step 4: The generated update resets consumed input first, then invokes
-    // the stdlib module's input handler before the root gameplay handler.
-    const auto update_start = code.find("void generated_update_project");
-    REQUIRE(update_start != std::string::npos);
-    const auto update_end = code.find("\n}\n", update_start);
-    REQUIRE(update_end != std::string::npos);
-    const auto update = code.substr(update_start, update_end - update_start);
-
-    const auto reset_pos    = update.find("cactus::runtime::entt_backend::reset_consumed_input();");
-    const auto editor_pos   = update.find("editor_nav_input(registry, dispatcher, input);");
-    const auto gameplay_pos = update.find("gameplay_input_input(registry, dispatcher, input);");
-    REQUIRE(reset_pos != std::string::npos);
+    // Step 4: Graph dispatch uses the canonical phase identity and stable linked
+    // declaration order: dependency handler first, root handler second.
+    const auto dispatch_start = code.find("void generated_dispatch_phase_editorlib__input(entt::registry& registry");
+    REQUIRE(dispatch_start != std::string::npos);
+    const auto dispatch_end = code.find("\n}\n", dispatch_start);
+    REQUIRE(dispatch_end != std::string::npos);
+    const auto dispatch     = code.substr(dispatch_start, dispatch_end - dispatch_start);
+    const auto editor_pos   = dispatch.find("editor_nav_input(registry, phase);");
+    const auto gameplay_pos = dispatch.find("gameplay_input_editorlib__input(registry, phase);");
     REQUIRE(editor_pos != std::string::npos);
     REQUIRE(gameplay_pos != std::string::npos);
-    CHECK(reset_pos < editor_pos);
     CHECK(editor_pos < gameplay_pos);
 
     fs::remove_all(build_dir, ec);
@@ -435,6 +446,45 @@ TEST_CASE("integration: stdlib on input handlers run before root-module handlers
 
 static fs::path stdlib_dir() {
     return fs::path(CACTUS_TEST_FIXTURES_DIR).parent_path().parent_path() / "stdlib";
+}
+
+TEST_CASE("integration: std.core declares canonical external frame and phase graph",
+          "[integration][stdlib][phase][7.1]") {
+    const std::vector<fs::path> search_paths{stdlib_dir()};
+    const auto core_path = ModuleResolver::locate_file("std.core", search_paths);
+    REQUIRE_FALSE(core_path.empty());
+
+    ErrorReporter errors;
+    const auto core = compile_file(core_path, errors);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(core.has_value());
+
+    REQUIRE(core->events.contains("frame"));
+    const auto& frame = core->events.at("frame");
+    CHECK(frame.is_pub);
+    CHECK(frame.is_external);
+    REQUIRE(frame.symbol_id.has_value());
+    CHECK(*frame.symbol_id == make_symbol_id(SymbolKind::Event, "std.core", "frame"));
+    CHECK_FALSE(core->events.contains("input"));
+    CHECK_FALSE(core->events.contains("fixed_tick"));
+    CHECK_FALSE(core->events.contains("tick"));
+    CHECK_FALSE(core->events.contains("late_tick"));
+
+    for (const auto* phase_name : {"input", "fixed_tick", "tick", "late_tick", "render"}) {
+        REQUIRE(core->phases.contains(phase_name));
+        CHECK(core->phases.at(phase_name).is_pub);
+    }
+    const auto frame_id = make_symbol_id(SymbolKind::Event, "std.core", "frame");
+    REQUIRE(core->phases.at("input").runtime_root.has_value());
+    CHECK(*core->phases.at("input").runtime_root == frame_id);
+    REQUIRE(core->phases.at("fixed_tick").every_seconds.has_value());
+    CHECK(*core->phases.at("fixed_tick").every_seconds > 0.016);
+    CHECK(*core->phases.at("fixed_tick").every_seconds < 0.017);
+    CHECK(core->phases.at("fixed_tick").max_repetitions == 8);
+    REQUIRE(core->phases.at("render").after_phases.size() == 1);
+    CHECK(core->phases.at("render").after_phases.front().symbol ==
+          make_symbol_id(SymbolKind::Phase, "std.core", "late_tick"));
+    CHECK(core->execution_graph.phases.size() == 5);
 }
 
 /// Mirrors src/main.cpp extract_pub_symbols: pub symbols (including events)
@@ -507,13 +557,33 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
         sys.after_systems             = dep.after_systems;
         syms.systems[dep.system_name] = sys;
     }
-    syms.events = prog.pub_events;
-    for (const auto& name : prog.pub_events) {
-        const auto symbol        = make_symbol_id(SymbolKind::Event, module_name, name);
+    for (const auto& [name, event] : prog.events) {
+        if (!event.is_pub) {
+            continue;
+        }
+        const auto symbol = event.symbol_id.value_or(make_symbol_id(SymbolKind::Event, module_name, name));
+        syms.events.insert(name);
         syms.event_symbols[name] = ImportedEvent{.name         = symbol.local_name,
                                                  .module_name  = symbol.module.name,
                                                  .canonical_id = make_canonical_id(symbol),
-                                                 .symbol_id    = symbol};
+                                                 .symbol_id    = symbol,
+                                                 .fields       = event.fields,
+                                                 .is_external  = event.is_external};
+    }
+    for (const auto& [name, phase] : prog.phases) {
+        if (!phase.is_pub) {
+            continue;
+        }
+        const auto symbol        = phase.symbol_id.value_or(make_symbol_id(SymbolKind::Phase, module_name, name));
+        syms.phase_symbols[name] = ImportedPhase{.name            = symbol.local_name,
+                                                 .module_name     = symbol.module.name,
+                                                 .canonical_id    = make_canonical_id(symbol),
+                                                 .symbol_id       = symbol,
+                                                 .fields          = phase.fields,
+                                                 .upstream_phases = phase.upstream_phases,
+                                                 .runtime_root    = phase.runtime_root,
+                                                 .every_seconds   = phase.every_seconds,
+                                                 .max_repetitions = phase.max_repetitions};
     }
     return syms;
 }
@@ -543,7 +613,7 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
     std::vector<fs::path> artifact_paths;
     std::vector<std::unique_ptr<ProgramNode>> module_asts;
 
-    // std.core lifecycle events are implicitly in scope for every module.
+    // std.core runtime declarations are implicitly in scope for every module.
     {
         const auto std_core_path = ModuleResolver::locate_file("std.core", search_paths);
         REQUIRE_FALSE(std_core_path.empty());
@@ -577,7 +647,9 @@ static std::optional<DecoratedProgram> link_with_stdlib(const std::string& root_
 
         ModuleImports imports;
         if (mod.qualified_name != "std.core") {
-            imports.add("std.core", pub_symbols_from("std.core", compiled.at("std.core")), {},
+            imports.add("std.core",
+                        pub_symbols_from("std.core", compiled.at("std.core")),
+                        {},
                         compiled.at("std.core").non_pub_templates);
         }
         for (const auto& dep_name : mod.dependencies) {
@@ -693,8 +765,7 @@ TEST_CASE("integration: linked 2D editor program emits hit-test/spawn glue and 2
     fs::remove_all(build_dir, ec);
 }
 
-TEST_CASE("integration: linked 3D editor program emits raycast glue and 3D rig",
-          "[integration][editor][canonical]") {
+TEST_CASE("integration: linked 3D editor program emits raycast glue and 3D rig", "[integration][editor][canonical]") {
     auto build_dir = integration_build_dir() / "editor_glue_3d";
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -748,6 +819,73 @@ TEST_CASE("integration: linked 3D editor program emits raycast glue and 3D rig",
     CHECK(code == CppEnttCodegen::generate(*merged));
 
     fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("integration: proposal frame graph and contracted handlers lower end to end",
+          "[integration][runtime-phases][handler-contract][8.2]") {
+    ErrorReporter errors;
+    const auto fixture_path = fs::path(CACTUS_TEST_FIXTURES_DIR) / "runtime_phase_contracts.cactus";
+    std::ifstream fixture(fixture_path);
+    REQUIRE(fixture.good());
+    std::ostringstream fixture_source;
+    fixture_source << fixture.rdbuf();
+    ProgramNode fixture_ast;
+    auto decorated = compile_source(fixture_source.str(), fixture_path.string(), fixture_ast, errors);
+
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(decorated.has_value());
+    REQUIRE(decorated->execution_graph.phases.size() == 5);
+    REQUIRE(decorated->execution_graph.handlers.size() == 4);
+
+    const auto handler = [](const std::string& system, HandlerTriggerKind kind, const std::string& trigger) {
+        return HandlerIdentity{
+            .system  = make_symbol_id(SymbolKind::System, "runtime_phase_contracts", system),
+            .trigger = ResolvedHandlerTrigger{
+                .kind   = kind,
+                .symbol = make_symbol_id(kind == HandlerTriggerKind::Phase ? SymbolKind::Phase : SymbolKind::Event,
+                                         "runtime_phase_contracts",
+                                         trigger)}};
+    };
+    const auto find_handler = [&](const HandlerIdentity& identity) -> const HandlerNode* {
+        const auto it = std::ranges::find_if(decorated->execution_graph.handlers,
+                                             [&](const HandlerNode& node) { return node.identity == identity; });
+        return it == decorated->execution_graph.handlers.end() ? nullptr : &*it;
+    };
+
+    const auto* input = find_handler(handler("InputSource", HandlerTriggerKind::Phase, "input"));
+    REQUIRE(input != nullptr);
+    CHECK(input->contract.is_selectionless);
+    CHECK(input->contract.emits.size() == 1);
+    CHECK(input->contract.effects == std::unordered_set<std::string>{"input"});
+
+    const auto* movement = find_handler(handler("NativeMovement", HandlerTriggerKind::Phase, "fixed_tick"));
+    REQUIRE(movement != nullptr);
+    CHECK_FALSE(movement->contract.is_selectionless);
+    CHECK(movement->contract.reads ==
+          std::unordered_set<SymbolId>{make_symbol_id(SymbolKind::Trait, "runtime_phase_contracts", "Position"),
+                                       make_symbol_id(SymbolKind::Trait, "runtime_phase_contracts", "Velocity")});
+    CHECK(movement->contract.writes.size() == 1);
+    CHECK(movement->contract.emits.size() == 1);
+    CHECK(movement->contract.commands.size() == 1);
+    CHECK(movement->contract.effects == std::unordered_set<std::string>{"physics"});
+
+    const auto* renderer = find_handler(handler("SpriteRenderer", HandlerTriggerKind::Phase, "render"));
+    REQUIRE(renderer != nullptr);
+    CHECK(renderer->contract.reads.size() == 2);
+    CHECK(renderer->contract.effects == std::unordered_set<std::string>{"graphics"});
+
+    const auto* audio = find_handler(handler("AudioOutput", HandlerTriggerKind::Event, "SoundRequested"));
+    REQUIRE(audio != nullptr);
+    CHECK(audio->contract.is_selectionless);
+    CHECK(audio->contract.effects == std::unordered_set<std::string>{"audio"});
+
+    const auto code = CppEnttCodegen::generate(*decorated);
+    CHECK(code.find("generated_inject_external_event(runtime_phase_contracts__frameEvent occurrence)") !=
+          std::string::npos);
+    CHECK(code.find("NativeMovement__on__runtime_phase_contracts__fixed_tick") != std::string::npos);
+    CHECK(code.find("SpriteRenderer__on__runtime_phase_contracts__render") != std::string::npos);
+    CHECK(code.find("InputSource__on__runtime_phase_contracts__input") != std::string::npos);
+    CHECK(code.find("AudioOutput__on__runtime_phase_contracts__SoundRequested") != std::string::npos);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

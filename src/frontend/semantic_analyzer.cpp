@@ -4,9 +4,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <ranges>
 #include <sstream>
+#include <string_view>
 
 namespace cactus {
 
@@ -252,6 +256,96 @@ TypeInfo find_field_type_in(const FieldContainer& fields, const std::string& mem
         }
     }
     return make_unknown_type();
+}
+
+template <typename FieldContainer>
+const ResolvedField* find_field_in(const FieldContainer& fields, const std::string& member) {
+    const auto found = std::ranges::find_if(fields, [&member](const auto& field) { return field.name == member; });
+    return found == fields.end() ? nullptr : &*found;
+}
+
+bool same_type(const TypeInfo& lhs, const TypeInfo& rhs) {
+    if (lhs.kind != rhs.kind) {
+        return false;
+    }
+    if ((lhs.kind == TypeKind::Struct || lhs.kind == TypeKind::Enum) && lhs.symbol_id.has_value() &&
+        rhs.symbol_id.has_value()) {
+        return *lhs.symbol_id == *rhs.symbol_id;
+    }
+    if (lhs.kind == TypeKind::List && lhs.element != nullptr && rhs.element != nullptr) {
+        return same_type(*lhs.element, *rhs.element);
+    }
+    return true;
+}
+
+struct NumericConstant {
+    TypeKind kind = TypeKind::Unknown;
+    long double value{};
+};
+
+std::optional<NumericConstant> evaluate_numeric_constant(
+    const ExprNode& expr,
+    const std::unordered_map<std::string, const ExprNode*>& constants,
+    std::unordered_set<std::string>& evaluating) {
+    if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
+        try {
+            if (literal->kind == LiteralExpr::Kind::Int) {
+                return NumericConstant{.kind = TypeKind::Int, .value = std::stold(literal->value)};
+            }
+            if (literal->kind == LiteralExpr::Kind::Float) {
+                return NumericConstant{.kind = TypeKind::Float, .value = std::stold(literal->value)};
+            }
+        } catch (...) {
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        const auto found = constants.find(ident->name);
+        if (found == constants.end() || !evaluating.insert(ident->name).second) {
+            return std::nullopt;
+        }
+        auto value = evaluate_numeric_constant(*found->second, constants, evaluating);
+        evaluating.erase(ident->name);
+        return value;
+    }
+    if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
+        auto operand = evaluate_numeric_constant(*unary->operand, constants, evaluating);
+        if (!operand.has_value() || unary->op != "-") {
+            return std::nullopt;
+        }
+        operand->value = -operand->value;
+        return operand;
+    }
+    const auto* binary = std::get_if<BinaryExpr>(&expr.expr);
+    if (binary == nullptr) {
+        return std::nullopt;
+    }
+    auto left  = evaluate_numeric_constant(*binary->left, constants, evaluating);
+    auto right = evaluate_numeric_constant(*binary->right, constants, evaluating);
+    if (!left.has_value() || !right.has_value()) {
+        return std::nullopt;
+    }
+    const auto result_kind =
+        left->kind == TypeKind::Float || right->kind == TypeKind::Float ? TypeKind::Float : TypeKind::Int;
+    if (binary->op == "+") {
+        return NumericConstant{.kind = result_kind, .value = left->value + right->value};
+    }
+    if (binary->op == "-") {
+        return NumericConstant{.kind = result_kind, .value = left->value - right->value};
+    }
+    if (binary->op == "*") {
+        return NumericConstant{.kind = result_kind, .value = left->value * right->value};
+    }
+    if (binary->op == "/" && right->value != 0.0L) {
+        const auto quotient = left->value / right->value;
+        return NumericConstant{.kind  = result_kind,
+                               .value = result_kind == TypeKind::Int ? std::trunc(quotient) : quotient};
+    }
+    if (binary->op == "%" && result_kind == TypeKind::Int && right->value != 0.0L) {
+        return NumericConstant{.kind = TypeKind::Int, .value = std::fmod(left->value, right->value)};
+    }
+    return std::nullopt;
 }
 
 TypeInfo make_resolved_user_type(TypeKind kind, const SymbolId& symbol, std::string display_name = {}) {
@@ -699,6 +793,33 @@ bool is_format_supported_type(TypeKind kind) {
 
 const std::vector<ChildOverrideNode> kNoChildOverrides;
 
+std::optional<std::unordered_set<std::string>> known_stdlib_effect_summary(const SymbolId& symbol) {
+    if (symbol.kind != SymbolKind::Func) {
+        return std::nullopt;
+    }
+
+    const auto& module = symbol.module.name;
+    if (module == "std.math" || module.starts_with("std.math.") || module == "std.random") {
+        return std::unordered_set<std::string>{};
+    }
+    if (module == "std.input") {
+        return std::unordered_set<std::string>{"input"};
+    }
+    if (module.starts_with("std.camera.") || module == "std.render" || module.starts_with("std.render.")) {
+        return std::unordered_set<std::string>{"graphics"};
+    }
+    if (module == "std.editor") {
+        return std::unordered_set<std::string>{"editor"};
+    }
+    if (module == "std.physics" || module.starts_with("std.physics.")) {
+        return std::unordered_set<std::string>{"physics"};
+    }
+    if (module == "std.query" || module == "std.transform" || module.starts_with("std.transform.")) {
+        return std::unordered_set<std::string>{"world"};
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 // ── ModuleImports::add ──────────────────────────────────────────────────────
@@ -718,6 +839,9 @@ void ModuleImports::add(const std::string& qualifier,
     }
     for (auto& [name, func] : pub_syms.funcs) {
         ensure_symbol_identity(func, SymbolKind::Func, pub_syms.module_name, name);
+        if (func.is_extern && !func.effect_summary.has_value()) {
+            func.effect_summary = known_stdlib_effect_summary(*func.symbol_id);
+        }
     }
     for (auto& [name, tmpl] : pub_syms.templates) {
         const auto symbol = tmpl.symbol_id.value_or(make_symbol_id(SymbolKind::Template, pub_syms.module_name, name));
@@ -742,6 +866,13 @@ void ModuleImports::add(const std::string& qualifier,
         event.canonical_id = make_canonical_id(symbol);
         event.symbol_id    = symbol;
         pub_syms.events.insert(symbol.local_name);
+    }
+    for (auto& [name, phase] : pub_syms.phase_symbols) {
+        const auto symbol  = phase.symbol_id.value_or(make_symbol_id(SymbolKind::Phase, pub_syms.module_name, name));
+        phase.name         = symbol.local_name;
+        phase.module_name  = symbol.module.name;
+        phase.canonical_id = make_canonical_id(symbol);
+        phase.symbol_id    = symbol;
     }
     for (auto& [name, sys] : pub_syms.systems) {
         const auto symbol = sys.symbol_id.value_or(make_symbol_id(SymbolKind::System, pub_syms.module_name, name));
@@ -787,6 +918,9 @@ void ModuleImports::add(const std::string& qualifier,
     for (const auto& [ev_name, _] : pub_syms.event_symbols) {
         event_providers[ev_name].push_back(qualifier);
     }
+    for (const auto& [phase_name, _] : pub_syms.phase_symbols) {
+        phase_providers[phase_name].push_back(qualifier);
+    }
     // Index imported extern system names (for after: resolution)
     for (const auto& [sys_name, _] : pub_syms.systems) {
         system_providers[sys_name].push_back(qualifier);
@@ -820,6 +954,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     enum_names_.clear();
     trait_names_.clear();
     event_names_.clear();
+    phase_names_.clear();
     func_names_.clear();
     system_names_.clear();
     const_names_.clear();
@@ -859,6 +994,8 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     check_no_recursion(program);
     check_persist_sync(program);
     validate_system_filters(program);
+    validate_phase_declarations(program);
+    validate_external_handler_contracts(program);
     validate_event_usage(program);
     validate_text_format_calls(program);
 
@@ -916,9 +1053,16 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                                           : make_symbol_id(SymbolKind::Event, syms.module_name, ev_name);
                 ResolvedStruct event_stub;
                 event_stub.name = event_id.local_name;
+                if (const auto imported_event = syms.event_symbols.find(ev_name);
+                    imported_event != syms.event_symbols.end()) {
+                    event_stub.fields = imported_event->second.fields;
+                }
                 assign_canonical_identity(event_stub, event_id);
                 event_structs_[ev_name] = std::move(event_stub);
             }
+        }
+        for (const auto& [phase_name, _] : syms.phase_symbols) {
+            phase_names_.insert(phase_name);
         }
     }
 
@@ -946,6 +1090,9 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                     if (node.is_pub) {
                         result_.pub_events.insert(node.name);
                     }
+                } else if constexpr (std::is_same_v<T, PhaseNode>) {
+                    declare_module_scope_symbol(SymbolKind::Phase, node.name, node.location);
+                    phase_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
                     node.is_stdlib = current_module_is_stdlib_;
                     declare_module_scope_symbol(SymbolKind::Func, node.name, node.location);
@@ -1012,10 +1159,16 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                     }
                     result_.enums[node.name] = std::move(re);
                 } else if constexpr (std::is_same_v<T, EventNode>) {
-                    const auto event_id = make_symbol_id(SymbolKind::Event, current_module_id_, node.name);
+                    const auto event_id    = make_symbol_id(SymbolKind::Event, current_module_id_, node.name);
+                    node.resolved_event_id = event_id;
                     ResolvedStruct rs;
                     rs.name = event_id.local_name;
                     assign_canonical_identity(rs, event_id);
+                    ResolvedEvent re;
+                    re.name        = event_id.local_name;
+                    re.is_pub      = node.is_pub;
+                    re.is_external = node.is_external;
+                    assign_canonical_identity(re, event_id);
                     for (auto& f : node.fields) {
                         ResolvedField rf;
                         rf.name        = f.name;
@@ -1026,9 +1179,29 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                         rf.is_sync     = f.modifiers.is_sync;
                         rf.is_pub      = f.modifiers.is_pub;
                         rf.has_default = f.default_value.has_value();
-                        rs.fields.push_back(std::move(rf));
+                        rs.fields.push_back(rf);
+                        re.fields.push_back(std::move(rf));
                     }
                     event_structs_[node.name] = std::move(rs);
+                    result_.events[node.name] = std::move(re);
+                } else if constexpr (std::is_same_v<T, PhaseNode>) {
+                    const auto phase_id    = make_symbol_id(SymbolKind::Phase, current_module_id_, node.name);
+                    node.resolved_phase_id = phase_id;
+                    ResolvedPhase rp;
+                    rp.name      = phase_id.local_name;
+                    rp.is_pub    = node.is_pub;
+                    rp.has_every = node.every.has_value();
+                    rp.has_max   = node.max.has_value();
+                    assign_canonical_identity(rp, phase_id);
+                    for (auto& f : node.fields) {
+                        ResolvedField rf;
+                        rf.name        = f.name;
+                        rf.type        = resolve_type_ref(f.type);
+                        rf.is_let      = true;
+                        rf.has_default = true;
+                        rp.fields.push_back(std::move(rf));
+                    }
+                    result_.phases[node.name] = std::move(rp);
                 }
             },
             decl);
@@ -1082,6 +1255,11 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                     rf.is_pub    = node.is_pub;
                     rf.is_extern = node.is_extern;
                     rf.is_stdlib = node.is_stdlib;
+                    if (!rf.is_extern) {
+                        rf.effect_summary = std::unordered_set<std::string>{};
+                    } else {
+                        rf.effect_summary = known_stdlib_effect_summary(func_id);
+                    }
                     for (auto& p : node.params) {
                         ResolvedParam rp;
                         rp.name = p.name;
@@ -1343,18 +1521,51 @@ void SemanticAnalyzer::resolve_trait_references(
                         use.resolved_template_id = try_resolve_template_ref_to_symbol(use.template_name);
                     }
                     resolve_child_archetypes(node.children);
+                } else if constexpr (std::is_same_v<T, PhaseNode>) {
+                    node.resolved_phase_id = make_symbol_id(SymbolKind::Phase, current_module_id_, node.name);
+                    node.resolved_from.clear();
+                    for (const auto& source : node.from_sources) {
+                        if (auto symbol = try_resolve_event_ref_to_symbol(source.spelling); symbol.has_value()) {
+                            node.resolved_from.push_back(
+                                ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = *symbol});
+                        }
+                    }
+                    node.resolved_after.clear();
+                    for (const auto& dependency : node.after_phases) {
+                        if (auto symbol = try_resolve_phase_ref_to_symbol(dependency.spelling); symbol.has_value()) {
+                            node.resolved_after.push_back(
+                                ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Phase, .symbol = *symbol});
+                        }
+                    }
+                    if (node.every.has_value()) {
+                        resolve_expr(**node.every);
+                    }
+                    if (node.max.has_value()) {
+                        resolve_expr(**node.max);
+                    }
+                    for (auto& field : node.fields) {
+                        resolve_expr(*field.initializer);
+                    }
+                    auto phase_it = result_.phases.find(node.name);
+                    if (phase_it != result_.phases.end()) {
+                        phase_it->second.from_sources = node.resolved_from;
+                        phase_it->second.after_phases = node.resolved_after;
+                    }
                 } else if constexpr (std::is_same_v<T, SystemNode>) {
                     node.resolved_system_id = make_symbol_id(SymbolKind::System, current_module_id_, node.name);
                     resolve_filter_clause(node.filter);
                     resolve_filter_clause(node.exclude);
                     for (auto& handler : node.handlers) {
-                        handler.resolved_event_id = try_resolve_event_ref_to_symbol(handler.event_name);
+                        handler.resolved_trigger = try_resolve_handler_trigger(handler.event_name);
                         resolve_stmts(handler.body);
                     }
                 } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
                     node.resolved_system_id = make_symbol_id(SymbolKind::System, current_module_id_, node.name);
                     resolve_filter_clause(node.filter);
                     resolve_filter_clause(node.exclude);
+                    for (auto& handler : node.handlers) {
+                        handler.resolved_trigger = try_resolve_handler_trigger(handler.trigger_name);
+                    }
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
                     node.resolved_func_id = make_symbol_id(SymbolKind::Func, current_module_id_, node.name);
                     resolve_stmts(node.body);
@@ -1957,6 +2168,288 @@ void SemanticAnalyzer::validateOrderByClause(const ExternSystemNode& system) {
     validateOrderByClause(proxy);
 }
 
+void SemanticAnalyzer::validate_phase_declarations(
+    ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
+    std::unordered_map<std::string, PhaseNode*> local_phases;
+    std::vector<std::string> phase_order;
+    std::unordered_map<std::string, const ExprNode*> constants;
+    for (auto& declaration : program.declarations) {
+        if (auto* phase = std::get_if<PhaseNode>(&declaration)) {
+            local_phases[phase->name] = phase;
+            phase_order.push_back(phase->name);
+        } else if (auto* block = std::get_if<ConstBlockNode>(&declaration)) {
+            for (const auto& assignment : block->assignments) {
+                constants[assignment.name] = assignment.value.get();
+            }
+        }
+    }
+
+    for (const auto& name : phase_order) {
+        auto* phase = local_phases.at(name);
+        if (phase->from_sources.empty() && phase->after_phases.empty()) {
+            errors_.error(phase->location,
+                          "phase '" + phase->name + "' requires a non-empty 'from:' or 'after:' block");
+        }
+        for (const auto& source : phase->from_sources) {
+            const auto resolved = resolve_name(dotted_segments(source.spelling));
+            if (!resolved.has_value() || !resolved->member_segments.empty()) {
+                (void)resolve_name_required(dotted_segments(source.spelling), source.location);
+                continue;
+            }
+            if (resolved->symbol.kind != SymbolKind::Event) {
+                errors_.error(source.location,
+                              "phase 'from:' dependency '" + source.spelling +
+                                  "' must reference an external event, got " + symbol_kind_name(resolved->symbol.kind));
+            } else if (!is_external_event(resolved->symbol)) {
+                errors_.error(source.location,
+                              "phase 'from:' dependency '" + source.spelling + "' must reference an external event");
+            }
+        }
+        for (const auto& dependency : phase->after_phases) {
+            const auto resolved = resolve_name(dotted_segments(dependency.spelling));
+            if (!resolved.has_value() || !resolved->member_segments.empty()) {
+                (void)resolve_name_required(dotted_segments(dependency.spelling), dependency.location);
+                continue;
+            }
+            if (resolved->symbol.kind != SymbolKind::Phase) {
+                errors_.error(dependency.location,
+                              "phase 'after:' dependency '" + dependency.spelling + "' must reference a phase, got " +
+                                  symbol_kind_name(resolved->symbol.kind));
+            }
+        }
+
+        auto& resolved_phase = result_.phases.at(name);
+        if (phase->max.has_value() && !phase->every.has_value()) {
+            errors_.error(phase->location, "phase '" + name + "' may declare 'max:' only together with 'every:'");
+        }
+        if (phase->every.has_value()) {
+            std::unordered_set<std::string> evaluating;
+            const auto value = evaluate_numeric_constant(**phase->every, constants, evaluating);
+            if (!value.has_value() || value->kind != TypeKind::Float || !std::isfinite(value->value) ||
+                value->value <= 0.0L) {
+                errors_.error((**phase->every).location,
+                              "phase '" + name + "' every value must be a positive compile-time float");
+            } else {
+                resolved_phase.every_seconds = static_cast<double>(value->value);
+            }
+        }
+        if (phase->max.has_value()) {
+            std::unordered_set<std::string> evaluating;
+            const auto value = evaluate_numeric_constant(**phase->max, constants, evaluating);
+            if (!value.has_value() || value->kind != TypeKind::Int || value->value <= 0.0L ||
+                value->value > static_cast<long double>(std::numeric_limits<std::int64_t>::max())) {
+                errors_.error((**phase->max).location,
+                              "phase '" + name + "' max value must be a positive compile-time integer");
+            } else {
+                resolved_phase.max_repetitions = static_cast<std::int64_t>(value->value);
+            }
+        }
+    }
+
+    enum class Visit : std::uint8_t { Visiting, Done };
+    std::unordered_map<std::string, Visit> visit;
+    std::vector<std::string> stack;
+    std::unordered_set<std::string> reported_cycles;
+    std::function<void(const std::string&)> resolve_lineage = [&](const std::string& name) {
+        if (visit.contains(name)) {
+            if (visit.at(name) == Visit::Visiting) {
+                const auto cycle_start = std::ranges::find(stack, name);
+                std::ostringstream path;
+                for (auto it = cycle_start; it != stack.end(); ++it) {
+                    if (it != cycle_start) {
+                        path << " -> ";
+                    }
+                    path << make_canonical_id(current_module_name_, *it);
+                }
+                path << " -> " << make_canonical_id(current_module_name_, name);
+                if (reported_cycles.insert(path.str()).second) {
+                    errors_.error(local_phases.at(name)->location, "phase cycle: " + path.str());
+                }
+            }
+            return;
+        }
+
+        visit[name] = Visit::Visiting;
+        stack.push_back(name);
+        auto& resolved_phase = result_.phases.at(name);
+        std::unordered_set<SymbolId, SymbolIdHash> roots;
+        std::unordered_set<SymbolId, SymbolIdHash> upstream;
+        for (const auto& source : local_phases.at(name)->resolved_from) {
+            if (is_external_event(source.symbol)) {
+                roots.insert(source.symbol);
+            }
+        }
+        for (const auto& dependency : local_phases.at(name)->resolved_after) {
+            const auto& symbol = dependency.symbol;
+            upstream.insert(symbol);
+            if (symbol.module == current_module_id_) {
+                resolve_lineage(symbol.local_name);
+                const auto& local = result_.phases.at(symbol.local_name);
+                if (local.runtime_root.has_value()) {
+                    roots.insert(*local.runtime_root);
+                }
+                upstream.insert(local.upstream_phases.begin(), local.upstream_phases.end());
+            } else if (const auto* imported = find_imported_phase(symbol); imported != nullptr) {
+                if (imported->runtime_root.has_value()) {
+                    roots.insert(*imported->runtime_root);
+                } else {
+                    errors_.error(local_phases.at(name)->location,
+                                  "imported phase '" + make_canonical_id(symbol) +
+                                      "' has no runtime-root lineage metadata; recompile its module");
+                }
+                upstream.insert(imported->upstream_phases.begin(), imported->upstream_phases.end());
+            }
+        }
+        resolved_phase.upstream_phases.assign(upstream.begin(), upstream.end());
+        std::ranges::sort(resolved_phase.upstream_phases, [](const SymbolId& lhs, const SymbolId& rhs) {
+            return make_canonical_id(lhs) < make_canonical_id(rhs);
+        });
+        if (roots.size() == 1) {
+            resolved_phase.runtime_root = *roots.begin();
+        } else if (roots.size() > 1) {
+            std::vector<std::string> canonical_roots;
+            canonical_roots.reserve(roots.size());
+            for (const auto& root : roots) {
+                canonical_roots.push_back(make_canonical_id(root));
+            }
+            std::ranges::sort(canonical_roots);
+            std::ostringstream message;
+            message << "phase '" << make_canonical_id(current_module_name_, name)
+                    << "' has ambiguous runtime-root lineage:";
+            for (const auto& root : canonical_roots) {
+                message << " '" << root << "'";
+            }
+            errors_.error(local_phases.at(name)->location, message.str());
+        }
+        stack.pop_back();
+        visit[name] = Visit::Done;
+    };
+    for (const auto& name : phase_order) {
+        resolve_lineage(name);
+    }
+
+    // Synthesize all periodic outputs before checking any downstream
+    // initializer. This makes field availability follow the phase DAG rather
+    // than unordered-map iteration order (for example, render may consume
+    // fixed_tick.alpha regardless of declaration/container traversal order).
+    for (const auto& name : phase_order) {
+        auto* phase          = local_phases.at(name);
+        auto& resolved_phase = result_.phases.at(name);
+        std::unordered_set<std::string> field_names;
+        for (const auto& field : phase->fields) {
+            if (!field_names.insert(field.name).second) {
+                errors_.error(field.location, "duplicate field '" + field.name + "' in phase '" + name + "'");
+            }
+        }
+        if (resolved_phase.every_seconds.has_value()) {
+            for (const auto* synthetic_name : {"dt", "alpha"}) {
+                if (field_names.contains(synthetic_name)) {
+                    errors_.error(
+                        phase->location,
+                        "periodic phase '" + name + "' cannot declare synthesized field '" + synthetic_name + "'");
+                    continue;
+                }
+                ResolvedField synthetic;
+                synthetic.name               = synthetic_name;
+                synthetic.type               = make_float_type();
+                synthetic.is_let             = true;
+                synthetic.has_default        = true;
+                synthetic.is_synthesized     = true;
+                synthetic.is_completion_only = std::string_view{synthetic_name} == "alpha";
+                resolved_phase.fields.push_back(std::move(synthetic));
+            }
+            if (resolved_phase.runtime_root.has_value()) {
+                const auto* root_fields = find_event_fields(*resolved_phase.runtime_root);
+                const auto* root_dt     = root_fields == nullptr ? nullptr : find_field_in(*root_fields, "dt");
+                if (root_dt == nullptr || root_dt->type.kind != TypeKind::Float) {
+                    errors_.error(phase->location,
+                                  "periodic phase '" + name + "' requires runtime root '" +
+                                      make_canonical_id(*resolved_phase.runtime_root) +
+                                      "' to provide float field 'dt'");
+                }
+            }
+        }
+    }
+
+    for (const auto& name : phase_order) {
+        auto* phase                = local_phases.at(name);
+        const auto& resolved_phase = result_.phases.at(name);
+        std::unordered_set<SymbolId, SymbolIdHash> allowed_phases(resolved_phase.upstream_phases.begin(),
+                                                                  resolved_phase.upstream_phases.end());
+        std::function<TypeInfo(const ExprNode&)> infer_phase_expr = [&](const ExprNode& expr) -> TypeInfo {
+            if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
+                switch (literal->kind) {
+                    case LiteralExpr::Kind::Int:
+                        return make_int_type();
+                    case LiteralExpr::Kind::Float:
+                        return make_float_type();
+                    case LiteralExpr::Kind::String:
+                        return make_string_type();
+                    case LiteralExpr::Kind::HexColor:
+                        return make_color_type();
+                    case LiteralExpr::Kind::Bool:
+                        return make_bool_type();
+                }
+            }
+            if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
+                return infer_phase_expr(*unary->operand);
+            }
+            if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
+                const auto left  = infer_phase_expr(*binary->left);
+                const auto right = infer_phase_expr(*binary->right);
+                if (left.kind == TypeKind::Float || right.kind == TypeKind::Float) {
+                    return make_float_type();
+                }
+                return left.kind == TypeKind::Int && right.kind == TypeKind::Int ? make_int_type()
+                                                                                 : make_unknown_type();
+            }
+            const auto* member  = std::get_if<MemberExpr>(&expr.expr);
+            const auto segments = member == nullptr ? std::nullopt : member_chain_segments(*member);
+            if (!segments.has_value()) {
+                errors_.error(expr.location, "phase field initializer must read upstream activation data");
+                return make_unknown_type();
+            }
+            const auto resolved = resolve_name(*segments);
+            if (!resolved.has_value() || resolved->member_segments.size() != 1) {
+                (void)resolve_name_required(*segments, expr.location);
+                return make_unknown_type();
+            }
+            const auto& source_symbol                = resolved->symbol;
+            const auto& member_name                  = resolved->member_segments.front();
+            const std::vector<ResolvedField>* fields = nullptr;
+            if (source_symbol.kind == SymbolKind::Event && resolved_phase.runtime_root == source_symbol) {
+                fields = find_event_fields(source_symbol);
+            } else if (source_symbol.kind == SymbolKind::Phase && allowed_phases.contains(source_symbol)) {
+                fields = find_phase_fields(source_symbol);
+            } else {
+                errors_.error(expr.location,
+                              "phase '" + name + "' initializer cannot read non-upstream value '" +
+                                  make_canonical_id(source_symbol) + "'");
+                return make_unknown_type();
+            }
+            const auto* source_field = fields == nullptr ? nullptr : find_field_in(*fields, member_name);
+            if (source_field == nullptr) {
+                errors_.error(
+                    expr.location,
+                    "unknown activation field '" + member_name + "' on '" + make_canonical_id(source_symbol) + "'");
+                return make_unknown_type();
+            }
+            return source_field->type;
+        };
+
+        for (std::size_t index = 0; index < phase->fields.size(); ++index) {
+            const auto actual   = infer_phase_expr(*phase->fields[index].initializer);
+            const auto expected = resolved_phase.fields[index].type;
+            if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
+                !same_type(actual, expected)) {
+                errors_.error(phase->fields[index].location,
+                              "phase field '" + name + "." + phase->fields[index].name + "' has type '" +
+                                  expected.name + "' but initializer has type '" + actual.name + "'");
+            }
+        }
+    }
+}
+
 void SemanticAnalyzer::validate_system_filters(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
@@ -1995,13 +2488,6 @@ void SemanticAnalyzer::validate_system_filters(
             validateOrderByClause(*sys);
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            bool has_filter = !sys->filter.entries.empty() || !sys->filter.trait_names.empty();
-            if (!has_filter) {
-                errors_.error(
-                    sys->location,
-                    "`extern system` requires a `filter:` clause (no-filter extern systems are not supported)");
-            }
-
             if (!sys->filter.entries.empty()) {
                 for (auto& entry : sys->filter.entries) {
                     std::string simple_name;
@@ -2027,11 +2513,179 @@ void SemanticAnalyzer::validate_system_filters(
     }
 }
 
+void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program) {
+    const auto valid_effect_domain = [](const std::string& domain) {
+        if (domain.empty() || domain.front() == '.' || domain.back() == '.') {
+            return false;
+        }
+        bool at_segment_start = true;
+        for (const unsigned char ch : domain) {
+            if (ch == '.') {
+                if (at_segment_start) {
+                    return false;
+                }
+                at_segment_start = true;
+                continue;
+            }
+            if (at_segment_start ? !(std::isalpha(ch) || ch == '_') : !(std::isalnum(ch) || ch == '_')) {
+                return false;
+            }
+            at_segment_start = false;
+        }
+        return !at_segment_start;
+    };
+
+    for (auto& decl : program.declarations) {
+        auto* system = std::get_if<ExternSystemNode>(&decl);
+        if (system == nullptr) {
+            continue;
+        }
+        if (system->handlers.empty()) {
+            errors_.error(system->location,
+                          "extern system '" + system->name + "' requires at least one external handler contract");
+            continue;
+        }
+
+        std::unordered_map<std::string, SymbolId> aliases;
+        const auto add_filter_aliases = [this, &aliases](const FilterClause& clause) {
+            for (const auto& entry : clause.entries) {
+                auto symbol = entry.resolved_trait_id.has_value()
+                                  ? entry.resolved_trait_id
+                                  : try_resolve_trait_ref_to_symbol(entry.qualified_name);
+                if (!symbol.has_value()) {
+                    continue;
+                }
+                const auto dot = entry.qualified_name.rfind('.');
+                aliases[dot == std::string::npos ? entry.qualified_name : entry.qualified_name.substr(dot + 1)] =
+                    *symbol;
+                if (entry.alias.has_value()) {
+                    aliases[*entry.alias] = *symbol;
+                }
+            }
+            for (const auto& name : clause.trait_names) {
+                if (auto symbol = try_resolve_trait_ref_to_symbol(name); symbol.has_value()) {
+                    aliases[name] = *symbol;
+                }
+            }
+        };
+        add_filter_aliases(system->filter);
+        add_filter_aliases(system->exclude);
+
+        for (auto& handler : system->handlers) {
+            handler.resolved_reads.clear();
+            handler.resolved_writes.clear();
+            handler.resolved_emits.clear();
+            handler.resolved_effects.clear();
+
+            const auto resolve_traits = [this, &aliases, &system](const std::vector<LocatedName>& entries,
+                                                                  std::vector<SymbolId>& output,
+                                                                  const char* clause) {
+                std::unordered_set<SymbolId> seen;
+                for (const auto& entry : entries) {
+                    std::optional<SymbolId> symbol;
+                    if (const auto alias = aliases.find(entry.spelling); alias != aliases.end()) {
+                        symbol = alias->second;
+                    } else {
+                        symbol = try_resolve_trait_ref_to_symbol(entry.spelling);
+                    }
+                    if (!symbol.has_value()) {
+                        errors_.error(entry.location,
+                                      "unknown " + std::string(clause) + " contract entry '" + entry.spelling +
+                                          "' in extern system '" + system->name + "'");
+                        continue;
+                    }
+                    if (!seen.insert(*symbol).second) {
+                        errors_.error(entry.location,
+                                      "duplicate " + std::string(clause) + " contract entry '" +
+                                          make_canonical_id(*symbol) + "'");
+                        continue;
+                    }
+                    output.push_back(*symbol);
+                }
+            };
+            resolve_traits(handler.reads, handler.resolved_reads, "reads");
+            resolve_traits(handler.writes, handler.resolved_writes, "writes");
+
+            std::unordered_set<SymbolId> emitted;
+            for (const auto& entry : handler.emits) {
+                auto symbol = try_resolve_event_ref_to_symbol(entry.spelling);
+                if (!symbol.has_value()) {
+                    errors_.error(entry.location, "unknown emits contract event '" + entry.spelling + "'");
+                    continue;
+                }
+                if (!emitted.insert(*symbol).second) {
+                    errors_.error(entry.location,
+                                  "duplicate emits contract entry '" + make_canonical_id(*symbol) + "'");
+                    continue;
+                }
+                handler.resolved_emits.push_back(*symbol);
+            }
+
+            std::unordered_set<std::string> commands;
+            for (auto& command : handler.commands) {
+                std::optional<SymbolId> target;
+                if (command.kind == HandlerCommandKind::Destroy) {
+                    if (command.target.has_value()) {
+                        errors_.error(command.location, "destroy command must not name a target");
+                    }
+                } else if (!command.target.has_value()) {
+                    errors_.error(command.location,
+                                  std::string(handler_command_kind_name(command.kind)) + " command requires a target");
+                } else if (command.kind == HandlerCommandKind::Spawn) {
+                    target = try_resolve_ref_of_kind(command.target->spelling, {SymbolKind::Template});
+                    if (!target.has_value()) {
+                        errors_.error(command.target->location,
+                                      "spawn command target '" + command.target->spelling + "' is not a template");
+                    }
+                } else {
+                    target = try_resolve_trait_ref_to_symbol(command.target->spelling);
+                    if (!target.has_value()) {
+                        errors_.error(command.target->location,
+                                      std::string(handler_command_kind_name(command.kind)) + " command target '" +
+                                          command.target->spelling + "' is not a trait");
+                    }
+                }
+                command.resolved_target_id = target;
+                const auto key             = std::string(handler_command_kind_name(command.kind)) +
+                                             (target.has_value() ? ":" + make_canonical_id(*target) : "");
+                if (!commands.insert(key).second) {
+                    errors_.error(command.location, "duplicate commands contract entry '" + key + "'");
+                }
+            }
+
+            std::unordered_set<std::string> effects;
+            for (const auto& entry : handler.effects) {
+                if (!valid_effect_domain(entry.spelling)) {
+                    errors_.error(entry.location, "invalid effect domain '" + entry.spelling + "'");
+                    continue;
+                }
+                if (!effects.insert(entry.spelling).second) {
+                    errors_.error(entry.location, "duplicate effects contract entry '" + entry.spelling + "'");
+                    continue;
+                }
+                handler.resolved_effects.push_back(entry.spelling);
+            }
+        }
+    }
+}
+
 // ── Phase 3f: Event Usage Validation ────────────────────────────────────────
 
 void SemanticAnalyzer::validate_event_usage(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+            for (const auto& handler : sys->handlers) {
+                for (const auto& emitted : handler.emits) {
+                    const auto symbol = try_resolve_event_ref_to_symbol(emitted.spelling);
+                    if (symbol.has_value() && is_external_event(*symbol)) {
+                        errors_.error(
+                            emitted.location,
+                            "external event '" + make_canonical_id(*symbol) + "' can only be emitted by the runtime");
+                    }
+                }
+            }
+        }
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             // Build set of filter-bound names (trait names and their aliases) for alias conflict check
             std::unordered_set<std::string> filter_bound;
@@ -2070,10 +2724,14 @@ void SemanticAnalyzer::validate_event_usage(
                     }
                 }
 
-                // Validate event is declared (must be in event_names_ — either local or imported from std.core)
-                if (!event_names_.contains(handler.event_name)) {
-                    errors_.error(handler.location,
-                                  "system '" + sys->name + "' handles unknown event '" + handler.event_name + "'");
+                const bool event_trigger =
+                    handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Event;
+                const bool phase_trigger =
+                    handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Phase;
+                if (!event_trigger && !phase_trigger) {
+                    errors_.error(
+                        handler.location,
+                        "system '" + sys->name + "' handles unknown event or phase '" + handler.event_name + "'");
                 }
                 // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
                 if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
@@ -2082,7 +2740,18 @@ void SemanticAnalyzer::validate_event_usage(
                                       *handler.alias + "' already in scope");
                 }
 
-                const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
+                std::optional<ResolvedStruct> phase_activation;
+                const ResolvedStruct* handler_event = event_trigger ? find_resolved_event(handler.event_name) : nullptr;
+                if (phase_trigger) {
+                    const auto& phase_symbol = handler.resolved_trigger->symbol;
+                    if (const auto* fields = find_phase_fields(phase_symbol); fields != nullptr) {
+                        phase_activation.emplace();
+                        phase_activation->name   = phase_symbol.local_name;
+                        phase_activation->fields = *fields;
+                        assign_canonical_identity(*phase_activation, phase_symbol);
+                        handler_event = &*phase_activation;
+                    }
+                }
                 std::unordered_map<std::string, TypeInfo> local_bindings;
                 if (handler_event != nullptr) {
                     const auto symbol = resolved_decl_symbol(
@@ -2114,8 +2783,16 @@ void SemanticAnalyzer::validate_event_stmts(
     auto locals = local_bindings;
 
     auto validate_emit = [this, &filter_bindings, &locals, handler_event](const EmitStmt& emit) {
-        if (!event_names_.contains(emit.event_name)) {
+        const auto event_symbol = emit.resolved_event_id.has_value() ? emit.resolved_event_id
+                                                                     : try_resolve_event_ref_to_symbol(emit.event_name);
+        if (!event_symbol.has_value()) {
             errors_.error(emit.location, "undeclared event '" + emit.event_name + "'");
+            return;
+        }
+        if (is_external_event(*event_symbol)) {
+            errors_.error(
+                emit.location,
+                "external event '" + make_canonical_id(*event_symbol) + "' can only be emitted by the runtime");
             return;
         }
 
@@ -2422,38 +3099,57 @@ void SemanticAnalyzer::validate_trait_match_stmt(
 
 void SemanticAnalyzer::build_dependency_graph(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    // Resolve a filter entry to its canonical trait ID for the dependency graph (task 3.7).
-    auto filter_entry_canonical = [this](const FilterEntry& entry) -> std::string {
-        auto canonical = resolve_trait_ref_to_canonical(entry.qualified_name, entry.location);
-        if (!canonical.empty()) {
-            return canonical;
-        }
-        // Fallback: use simple name (resolution errors already reported elsewhere).
-        auto dot = entry.qualified_name.rfind('.');
-        return (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
-    };
-
-    auto add_dep_from_filter = [&](const auto& sys, SystemDependency& dep) {
-        if (!sys.filter.entries.empty()) {
-            for (const auto& entry : sys.filter.entries) {
-                dep.reads.insert(filter_entry_canonical(entry));
+    for (std::size_t declaration_index = 0; declaration_index < program.declarations.size(); ++declaration_index) {
+        auto& decl = program.declarations[declaration_index];
+        if (const auto* phase = std::get_if<PhaseNode>(&decl)) {
+            const auto resolved = result_.phases.find(phase->name);
+            if (resolved != result_.phases.end() && resolved->second.symbol_id.has_value()) {
+                PhasePlan plan;
+                plan.phase               = *resolved->second.symbol_id;
+                plan.source_dependencies = resolved->second.from_sources;
+                plan.completion_dependencies.reserve(resolved->second.after_phases.size());
+                for (const auto& dependency : resolved->second.after_phases) {
+                    plan.completion_dependencies.push_back(dependency.symbol);
+                }
+                plan.fields                              = resolved->second.fields;
+                plan.runtime_root                        = resolved->second.runtime_root;
+                plan.every_seconds                       = resolved->second.every_seconds;
+                plan.max_repetitions                     = resolved->second.max_repetitions;
+                plan.declaration_order.declaration_index = declaration_index;
+                result_.execution_graph.phases.push_back(std::move(plan));
             }
-        } else {
-            for (const auto& t : sys.filter.trait_names) {
-                dep.reads.insert(make_canonical_id(current_module_name_, t));
-            }
         }
-    };
-
-    for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             SystemDependency dep;
             dep.system_name = sys->name;  // simple name (task 5.4 will migrate to canonical)
             dep.system_id   = sys->resolved_system_id;
-            add_dep_from_filter(*sys, dep);
 
-            for (auto& handler : sys->handlers) {
+            std::vector<ResolvedHandlerTrigger> declared_triggers;
+            for (std::size_t handler_index = 0; handler_index < sys->handlers.size(); ++handler_index) {
+                auto& handler = sys->handlers[handler_index];
                 collect_system_deps(handler.body, dep);
+                if (handler.resolved_trigger.has_value() && sys->resolved_system_id.has_value()) {
+                    if (std::ranges::find(declared_triggers, *handler.resolved_trigger) != declared_triggers.end()) {
+                        errors_.error(handler.trigger_location,
+                                      "duplicate handler trigger '" + handler.resolved_trigger->debug_string() +
+                                          "' in system '" + make_canonical_id(*sys->resolved_system_id) + "'");
+                        continue;
+                    }
+                    declared_triggers.push_back(*handler.resolved_trigger);
+
+                    auto inferred = infer_regular_handler_contract(*sys, handler);
+                    result_.handler_contracts.push_back(inferred);
+
+                    HandlerNode node;
+                    node.identity =
+                        HandlerIdentity{.system = *sys->resolved_system_id, .trigger = *handler.resolved_trigger};
+                    node.implementation    = HandlerImplementationKind::Cactus;
+                    node.contract          = static_cast<const HandlerContract&>(inferred);
+                    node.declaration_order = DeclarationOrder{
+                        .module_index = 0, .declaration_index = declaration_index, .handler_index = handler_index};
+                    node.location = handler.location;
+                    result_.execution_graph.handlers.push_back(std::move(node));
+                }
             }
 
             result_.dependency_graph.push_back(std::move(dep));
@@ -2462,10 +3158,368 @@ void SemanticAnalyzer::build_dependency_graph(
             SystemDependency dep;
             dep.system_name = sys->name;
             dep.system_id   = sys->resolved_system_id;
-            add_dep_from_filter(*sys, dep);
+
+            std::unordered_map<std::string, SymbolId> filter_aliases;
+            for (const auto& entry : sys->filter.entries) {
+                if (!entry.resolved_trait_id.has_value()) {
+                    continue;
+                }
+                filter_aliases[entry.qualified_name]                = *entry.resolved_trait_id;
+                filter_aliases[entry.resolved_trait_id->local_name] = *entry.resolved_trait_id;
+                if (entry.alias.has_value()) {
+                    filter_aliases[*entry.alias] = *entry.resolved_trait_id;
+                }
+            }
+            for (std::size_t index = 0;
+                 index < sys->filter.trait_names.size() && index < sys->filter.resolved_trait_ids.size();
+                 ++index) {
+                filter_aliases[sys->filter.trait_names[index]] = sys->filter.resolved_trait_ids[index];
+            }
+
+            std::vector<ResolvedHandlerTrigger> declared_triggers;
+            for (std::size_t handler_index = 0; handler_index < sys->handlers.size(); ++handler_index) {
+                const auto& handler = sys->handlers[handler_index];
+                if (!handler.resolved_trigger.has_value() || !sys->resolved_system_id.has_value()) {
+                    if (!handler.resolved_trigger.has_value()) {
+                        errors_.error(handler.trigger_location,
+                                      "extern system '" + sys->name + "' handles unknown event or phase '" +
+                                          handler.trigger_name + "'");
+                    }
+                    continue;
+                }
+                if (std::ranges::find(declared_triggers, *handler.resolved_trigger) != declared_triggers.end()) {
+                    errors_.error(handler.trigger_location,
+                                  "duplicate handler trigger '" + handler.resolved_trigger->debug_string() +
+                                      "' in extern system '" + make_canonical_id(*sys->resolved_system_id) + "'");
+                    continue;
+                }
+                declared_triggers.push_back(*handler.resolved_trigger);
+
+                HandlerContract contract;
+                contract.selection        = sys->filter.resolved_trait_ids;
+                contract.exclusion        = sys->exclude.resolved_trait_ids;
+                contract.is_selectionless = contract.selection.empty() && contract.exclusion.empty();
+                contract.reads.insert(handler.resolved_reads.begin(), handler.resolved_reads.end());
+                for (const auto& write : handler.resolved_writes) {
+                    contract.reads.insert(write);
+                    contract.writes.insert(write);
+                }
+                for (const auto& sort_key : sys->order_by) {
+                    if (const auto found = filter_aliases.find(sort_key.alias); found != filter_aliases.end()) {
+                        contract.reads.insert(found->second);
+                    }
+                }
+                contract.emits.insert(handler.resolved_emits.begin(), handler.resolved_emits.end());
+                for (const auto& command : handler.commands) {
+                    InferredHandlerCommand inferred_command{.kind = command.kind, .target = command.resolved_target_id};
+                    if (std::ranges::find(contract.commands, inferred_command) == contract.commands.end()) {
+                        contract.commands.push_back(std::move(inferred_command));
+                    }
+                }
+                contract.effects.insert(handler.resolved_effects.begin(), handler.resolved_effects.end());
+
+                HandlerNode node;
+                node.identity =
+                    HandlerIdentity{.system = *sys->resolved_system_id, .trigger = *handler.resolved_trigger};
+                node.implementation    = HandlerImplementationKind::External;
+                node.contract          = std::move(contract);
+                node.declaration_order = DeclarationOrder{
+                    .module_index = 0, .declaration_index = declaration_index, .handler_index = handler_index};
+                node.location = handler.location;
+                result_.execution_graph.handlers.push_back(std::move(node));
+            }
             result_.dependency_graph.push_back(std::move(dep));
         }
     }
+
+    // Phase completion is a barrier relation, not an ordinary handler-order
+    // edge. A downstream phase activation can begin only after each direct
+    // upstream phase has completed its entire activation batch (including all
+    // periodic repetitions), so attach every direct phase dependency to every
+    // handler selected by the downstream phase.
+    for (const auto& phase : result_.execution_graph.phases) {
+        for (const auto& upstream : phase.completion_dependencies) {
+            for (const auto& handler : result_.execution_graph.handlers) {
+                if (handler.identity.trigger.kind == HandlerTriggerKind::Phase &&
+                    handler.identity.trigger.symbol == phase.phase) {
+                    result_.execution_graph.phase_barriers.push_back(
+                        PhaseBarrierEdge{.upstream_phase = upstream, .downstream_handler = handler.identity});
+                }
+            }
+        }
+    }
+
+    // Event delivery is deliberately separate from schedule dependencies:
+    // producer/consumer feedback is legal and bounded by runtime cascade
+    // semantics. Sort each producer's canonical event IDs so graph artifacts
+    // never inherit unordered_set iteration order.
+    for (const auto& producer : result_.execution_graph.handlers) {
+        std::vector<SymbolId> emitted(producer.contract.emits.begin(), producer.contract.emits.end());
+        std::ranges::sort(emitted, [](const SymbolId& left, const SymbolId& right) {
+            return make_canonical_id(left) < make_canonical_id(right);
+        });
+        for (const auto& event : emitted) {
+            for (const auto& consumer : result_.execution_graph.handlers) {
+                if (consumer.identity.trigger.kind == HandlerTriggerKind::Event &&
+                    consumer.identity.trigger.symbol == event) {
+                    result_.execution_graph.event_flows.push_back(
+                        EventFlowEdge{.producer = producer.identity, .event = event, .consumer = consumer.identity});
+                }
+            }
+        }
+    }
+}
+
+InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
+    const SystemNode& system,
+    const EventHandlerNode& handler) const {  // NOLINT(readability-function-cognitive-complexity)
+    InferredHandlerContract contract;
+    contract.system           = *system.resolved_system_id;
+    contract.trigger          = *handler.resolved_trigger;
+    contract.selection        = system.filter.resolved_trait_ids;
+    contract.exclusion        = system.exclude.resolved_trait_ids;
+    contract.is_selectionless = contract.selection.empty() && contract.exclusion.empty();
+
+    std::unordered_map<std::string, SymbolId> aliases;
+    auto bind_clause = [this, &aliases](const FilterClause& clause) {
+        for (const auto& entry : clause.entries) {
+            auto symbol = entry.resolved_trait_id.has_value() ? entry.resolved_trait_id
+                                                              : try_resolve_trait_ref_to_symbol(entry.qualified_name);
+            if (!symbol.has_value()) {
+                continue;
+            }
+            aliases[entry.qualified_name] = *symbol;
+            aliases[symbol->local_name]   = *symbol;
+            if (entry.alias.has_value()) {
+                aliases[*entry.alias] = *symbol;
+            }
+        }
+        for (const auto& name : clause.trait_names) {
+            if (auto symbol = try_resolve_trait_ref_to_symbol(name); symbol.has_value()) {
+                aliases[name] = *symbol;
+            }
+        }
+    };
+    bind_clause(system.filter);
+
+    auto add_read  = [&contract](const SymbolId& symbol) { contract.reads.insert(symbol); };
+    auto add_write = [&contract](const SymbolId& symbol) {
+        // Contract writes are read/write capabilities, not write-only access.
+        contract.reads.insert(symbol);
+        contract.writes.insert(symbol);
+    };
+    auto add_command = [&contract](HandlerCommandKind kind, std::optional<SymbolId> target) {
+        InferredHandlerCommand command{.kind = kind, .target = std::move(target)};
+        if (std::ranges::find(contract.commands, command) == contract.commands.end()) {
+            contract.commands.push_back(std::move(command));
+        }
+    };
+    auto add_call_effects = [this, &contract](const std::optional<SymbolId>& callee) {
+        if (!callee.has_value()) {
+            return;
+        }
+        const auto* function = find_resolved_func(*callee);
+        if (function == nullptr || !function->is_extern) {
+            return;
+        }
+        if (function->effect_summary.has_value()) {
+            contract.effects.insert(function->effect_summary->begin(), function->effect_summary->end());
+        } else {
+            contract.effects.insert("external");
+        }
+    };
+    auto trait_for_field = [this, &aliases](const std::string& field) -> std::optional<SymbolId> {
+        std::optional<SymbolId> match;
+        for (const auto& [_, symbol] : aliases) {
+            const auto* trait = find_resolved_trait(make_canonical_id(symbol));
+            if (trait == nullptr || !std::ranges::any_of(trait->fields, [&field](const auto& candidate) {
+                    return candidate.name == field;
+                })) {
+                continue;
+            }
+            if (match.has_value() && *match != symbol) {
+                return std::nullopt;
+            }
+            match = symbol;
+        }
+        return match;
+    };
+
+    using LocalNames = std::unordered_set<std::string>;
+    std::function<void(const std::vector<ChildOverrideNode>&, const LocalNames&)> visit_child_overrides;
+    std::function<void(const ExprNode&, const LocalNames&)> visit_expr;
+    std::function<void(const std::vector<std::unique_ptr<StmtNode>>&, LocalNames)> visit_stmts;
+    visit_child_overrides = [&](const std::vector<ChildOverrideNode>& overrides, const LocalNames& locals) {
+        for (const auto& child : overrides) {
+            for (const auto& trait : child.traits) {
+                for (const auto& field : trait.assignments) {
+                    visit_expr(*field.value, locals);
+                }
+            }
+            visit_child_overrides(child.children, locals);
+        }
+    };
+    visit_expr = [&](const ExprNode& expr, const LocalNames& locals) {
+        std::visit(
+            [&](const auto& node) {
+                using E = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<E, IdentExpr>) {
+                    if (!locals.contains(node.name)) {
+                        if (auto trait = trait_for_field(node.name); trait.has_value()) {
+                            add_read(*trait);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                    visit_expr(*node.left, locals);
+                    visit_expr(*node.right, locals);
+                } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                    visit_expr(*node.operand, locals);
+                } else if constexpr (std::is_same_v<E, CallExpr>) {
+                    add_call_effects(node.resolved_callee_id);
+                    for (const auto& arg : node.args)
+                        visit_expr(*arg, locals);
+                } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                    if (const auto* owner = std::get_if<IdentExpr>(&node.object->expr);
+                        owner != nullptr && aliases.contains(owner->name)) {
+                        add_read(aliases.at(owner->name));
+                    } else {
+                        visit_expr(*node.object, locals);
+                    }
+                } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                    auto lambda_locals = locals;
+                    lambda_locals.insert(node.params.begin(), node.params.end());
+                    visit_expr(*node.body, lambda_locals);
+                } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                    visit_expr(*node.source, locals);
+                    for (const auto& operation : node.operations) {
+                        for (const auto& arg : operation.args)
+                            visit_expr(*arg, locals);
+                    }
+                } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                    visit_expr(*node.subject, locals);
+                    for (const auto& arm : node.arms) {
+                        visit_expr(*arm.pattern, locals);
+                        visit_expr(*arm.body, locals);
+                    }
+                } else if constexpr (std::is_same_v<E, IfExpr>) {
+                    visit_expr(*node.condition, locals);
+                    visit_expr(*node.then_expr, locals);
+                    visit_expr(*node.else_expr, locals);
+                } else if constexpr (std::is_same_v<E, ListExpr>) {
+                    for (const auto& element : node.elements)
+                        visit_expr(*element, locals);
+                } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                    add_command(HandlerCommandKind::Spawn, node.resolved_template_id);
+                    for (const auto& override_entry : node.overrides) {
+                        for (const auto& field : override_entry.assignments)
+                            visit_expr(*field.value, locals);
+                    }
+                    visit_child_overrides(node.child_overrides, locals);
+                } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                    add_call_effects(node.resolved_callee_id);
+                    for (const auto& arg : node.named_args)
+                        visit_expr(*arg.value, locals);
+                }
+            },
+            expr.expr);
+    };
+    visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts, LocalNames locals) {
+        for (const auto& stmt : stmts) {
+            std::visit(
+                [&](const auto& node) {
+                    using S = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<S, LetStmt>) {
+                        visit_expr(*node.value, locals);
+                        locals.insert(node.name);
+                    } else if constexpr (std::is_same_v<S, VarAssign>) {
+                        visit_expr(*node.value, locals);
+                        if (locals.contains(node.name)) {
+                            return;
+                        }
+                        if (auto alias = aliases.find(node.name); alias != aliases.end()) {
+                            add_write(alias->second);
+                        } else if (auto trait = trait_for_field(node.name); trait.has_value()) {
+                            add_write(*trait);
+                        }
+                    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+                        if (node.resolved_event_id.has_value())
+                            contract.emits.insert(*node.resolved_event_id);
+                        if (node.target.has_value())
+                            visit_expr(**node.target, locals);
+                        for (const auto& field : node.payload)
+                            visit_expr(*field.value, locals);
+                    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                        add_command(HandlerCommandKind::Spawn, node.resolved_template_id);
+                        for (const auto& override_entry : node.overrides) {
+                            for (const auto& field : override_entry.assignments)
+                                visit_expr(*field.value, locals);
+                        }
+                        visit_child_overrides(node.child_overrides, locals);
+                    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+                        add_command(HandlerCommandKind::Destroy, std::nullopt);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                        add_command(HandlerCommandKind::Add, node.resolved_trait_id);
+                        for (const auto& field : node.args)
+                            visit_expr(*field.value, locals);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+                        add_command(HandlerCommandKind::Remove, node.resolved_trait_id);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                        if (node.resolved_trait_id.has_value())
+                            add_write(*node.resolved_trait_id);
+                        for (const auto& field : node.args)
+                            visit_expr(*field.value, locals);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                        if (node.value.has_value())
+                            visit_expr(**node.value, locals);
+                    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                        visit_expr(*node.expr, locals);
+                    } else if constexpr (std::is_same_v<S, IfStmt>) {
+                        visit_expr(*node.condition, locals);
+                        visit_stmts(node.then_body, locals);
+                        visit_stmts(node.else_body, locals);
+                    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                        visit_expr(*node.iterable, locals);
+                        auto loop_locals = locals;
+                        loop_locals.insert(node.var_name);
+                        visit_stmts(node.body, std::move(loop_locals));
+                    } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                        visit_expr(*node.subject, locals);
+                        for (const auto& arm : node.arms) {
+                            if (arm.resolved_trait_id.has_value())
+                                add_read(*arm.resolved_trait_id);
+                            auto arm_locals = locals;
+                            if (arm.alias.has_value())
+                                arm_locals.insert(*arm.alias);
+                            visit_stmts(arm.body, std::move(arm_locals));
+                        }
+                        if (node.wildcard.has_value())
+                            visit_stmts(node.wildcard->body, locals);
+                    }
+                },
+                stmt->stmt);
+        }
+    };
+
+    for (const auto& key : system.order_by) {
+        if (auto alias = aliases.find(key.alias); alias != aliases.end()) {
+            add_read(alias->second);
+        }
+    }
+    LocalNames handler_locals;
+    handler_locals.insert(handler.event_name);
+    if (handler.alias.has_value()) {
+        handler_locals.insert(*handler.alias);
+    }
+    visit_stmts(handler.body, std::move(handler_locals));
+    return contract;
 }
 
 void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep) {
@@ -2715,6 +3769,26 @@ const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const std::optional<S
     return find_resolved_trait(fallback_name);
 }
 
+const ResolvedFunc* SemanticAnalyzer::find_resolved_func(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Func) {
+        return nullptr;
+    }
+    if (symbol.module == current_module_id_) {
+        const auto found = result_.funcs.find(symbol.local_name);
+        return found == result_.funcs.end() ? nullptr : &found->second;
+    }
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != symbol.module.name) {
+            continue;
+        }
+        const auto found = imported.funcs.find(symbol.local_name);
+        if (found != imported.funcs.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
 const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& name) const {
     auto it = event_structs_.find(name);
     if (it != event_structs_.end()) {
@@ -2776,6 +3850,94 @@ std::optional<SymbolId> SemanticAnalyzer::try_resolve_event_ref_to_symbol(const 
     return try_resolve_ref_of_kind(ref, {SymbolKind::Event});
 }
 
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_phase_ref_to_symbol(const std::string& ref) const {
+    return try_resolve_ref_of_kind(ref, {SymbolKind::Phase});
+}
+
+std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_handler_trigger(const std::string& ref) const {
+    auto symbol = try_resolve_ref_of_kind(ref, {SymbolKind::Event, SymbolKind::Phase});
+    if (!symbol.has_value()) {
+        return std::nullopt;
+    }
+    const auto kind = symbol->kind == SymbolKind::Phase ? HandlerTriggerKind::Phase : HandlerTriggerKind::Event;
+    return ResolvedHandlerTrigger{.kind = kind, .symbol = *symbol};
+}
+
+bool SemanticAnalyzer::is_external_event(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Event) {
+        return false;
+    }
+    if (symbol.module == current_module_id_) {
+        if (const auto it = result_.events.find(symbol.local_name); it != result_.events.end()) {
+            return it->second.is_external;
+        }
+        return false;
+    }
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != symbol.module.name) {
+            continue;
+        }
+        if (const auto it = imported.event_symbols.find(symbol.local_name); it != imported.event_symbols.end()) {
+            return it->second.is_external;
+        }
+    }
+    return false;
+}
+
+const std::vector<ResolvedField>* SemanticAnalyzer::find_event_fields(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Event) {
+        return nullptr;
+    }
+    if (symbol.module == current_module_id_) {
+        if (const auto found = result_.events.find(symbol.local_name); found != result_.events.end()) {
+            return &found->second.fields;
+        }
+        return nullptr;
+    }
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != symbol.module.name) {
+            continue;
+        }
+        if (const auto found = imported.event_symbols.find(symbol.local_name); found != imported.event_symbols.end()) {
+            return &found->second.fields;
+        }
+    }
+    return nullptr;
+}
+
+const ResolvedPhase* SemanticAnalyzer::find_local_phase(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Phase || symbol.module != current_module_id_) {
+        return nullptr;
+    }
+    const auto found = result_.phases.find(symbol.local_name);
+    return found == result_.phases.end() ? nullptr : &found->second;
+}
+
+const ImportedPhase* SemanticAnalyzer::find_imported_phase(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Phase || symbol.module == current_module_id_) {
+        return nullptr;
+    }
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != symbol.module.name) {
+            continue;
+        }
+        if (const auto found = imported.phase_symbols.find(symbol.local_name); found != imported.phase_symbols.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
+const std::vector<ResolvedField>* SemanticAnalyzer::find_phase_fields(const SymbolId& symbol) const {
+    if (const auto* local = find_local_phase(symbol); local != nullptr) {
+        return &local->fields;
+    }
+    if (const auto* imported = find_imported_phase(symbol); imported != nullptr) {
+        return &imported->fields;
+    }
+    return nullptr;
+}
+
 // ── Task 3.4: Canonical system ID resolution ────────────────────────────────────
 
 std::optional<SymbolId> SemanticAnalyzer::try_resolve_system_ref_to_symbol(const std::string& ref) const {
@@ -2826,8 +3988,7 @@ const ImportedSymbols* SemanticAnalyzer::find_imported_module(const std::string&
     return nullptr;
 }
 
-std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedSymbols& syms,
-                                                                 const std::string& name) {
+std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedSymbols& syms, const std::string& name) {
     // One namespace per module: at most one of these maps can hold the name.
     if (auto trait_it = syms.traits.find(name); trait_it != syms.traits.end()) {
         return resolved_decl_symbol(trait_it->second, SymbolKind::Trait, syms.module_name, name);
@@ -2846,6 +4007,9 @@ std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedS
     }
     if (auto event_it = syms.event_symbols.find(name); event_it != syms.event_symbols.end()) {
         return event_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Event, syms.module_name, name));
+    }
+    if (auto phase_it = syms.phase_symbols.find(name); phase_it != syms.phase_symbols.end()) {
+        return phase_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Phase, syms.module_name, name));
     }
     if (auto sys_it = syms.systems.find(name); sys_it != syms.systems.end()) {
         return sys_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::System, syms.module_name, name));
@@ -2947,6 +4111,8 @@ std::optional<ResolvedRef> SemanticAnalyzer::resolve_name_required(const std::ve
         add_suggestions(imports_.trait_providers);
         add_suggestions(imports_.struct_providers);
         add_suggestions(imports_.func_providers);
+        add_suggestions(imports_.event_providers);
+        add_suggestions(imports_.phase_providers);
     }
 
     std::string message = "unknown symbol '" + spelled + "'";
@@ -2978,8 +4144,7 @@ std::optional<SymbolId> SemanticAnalyzer::resolve_callee_symbol(const ExprNode& 
         return std::nullopt;
     }
     auto resolved = resolve_name(*segments);
-    if (!resolved.has_value() || !resolved->member_segments.empty() ||
-        resolved->symbol.kind != SymbolKind::Func) {
+    if (!resolved.has_value() || !resolved->member_segments.empty() || resolved->symbol.kind != SymbolKind::Func) {
         return std::nullopt;
     }
     return resolved->symbol;
@@ -3022,8 +4187,7 @@ void SemanticAnalyzer::resolve_enum_member_expr(MemberExpr& member, const Source
     }
     const auto canonical = make_canonical_id(resolved->symbol);
     if (resolved->member_segments.size() > 1) {
-        errors_.error(loc,
-                      "enum member '" + resolved->member_segments[0] + "' of '" + canonical + "' has no members");
+        errors_.error(loc, "enum member '" + resolved->member_segments[0] + "' of '" + canonical + "' has no members");
         return;
     }
     const ResolvedEnum* enum_decl = find_resolved_enum(resolved->symbol);
@@ -3076,8 +4240,8 @@ void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
             const auto& rem = *member->resolved_enum_member;
             if (rem.enum_id.module.name != "std.input" || rem.enum_id.local_name != expected) {
                 errors_.error(prop.location,
-                              "input property '" + prop.key + "' requires a " + expected_canonical +
-                                  " member, got '" + make_canonical_id(rem.enum_id) + "." + rem.member + "'");
+                              "input property '" + prop.key + "' requires a " + expected_canonical + " member, got '" +
+                                  make_canonical_id(rem.enum_id) + "." + rem.member + "'");
             }
             continue;
         }
@@ -3097,8 +4261,8 @@ void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
                 continue;  // unknown-member error already reported by resolve_enum_member_expr
             }
             errors_.error(prop.location,
-                          "input property '" + prop.key + "' requires a " + expected_canonical +
-                              " member, got '" + make_canonical_id(resolved->symbol) + "'");
+                          "input property '" + prop.key + "' requires a " + expected_canonical + " member, got '" +
+                              make_canonical_id(resolved->symbol) + "'");
             continue;
         }
         (void)resolve_name_required(*segments, prop.location);
@@ -3468,7 +4632,19 @@ void SemanticAnalyzer::validate_text_format_calls(ProgramNode& program) {
                             }
                         }
 
+                        std::optional<ResolvedStruct> phase_activation;
                         const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
+                        if (handler.resolved_trigger.has_value() &&
+                            handler.resolved_trigger->kind == HandlerTriggerKind::Phase) {
+                            const auto& phase_symbol = handler.resolved_trigger->symbol;
+                            if (const auto* fields = find_phase_fields(phase_symbol); fields != nullptr) {
+                                phase_activation.emplace();
+                                phase_activation->name   = phase_symbol.local_name;
+                                phase_activation->fields = *fields;
+                                assign_canonical_identity(*phase_activation, phase_symbol);
+                                handler_event = &*phase_activation;
+                            }
+                        }
                         std::unordered_map<std::string, TypeInfo> local_bindings;
                         if (handler_event != nullptr) {
                             const auto symbol = resolved_decl_symbol(
@@ -3584,7 +4760,14 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             return find_field_type_in(trait_it->second->fields, member->member);
         }
         if (handler_event != nullptr && owner->name == handler_event->name) {
-            return find_field_type_in(handler_event->fields, member->member);
+            const auto* field = find_field_in(handler_event->fields, member->member);
+            if (field != nullptr && field->is_completion_only && handler_event->symbol_id.has_value() &&
+                handler_event->symbol_id->kind == SymbolKind::Phase) {
+                errors_.error(expr.location,
+                              "phase completion field '" + make_canonical_id(*handler_event->symbol_id) + "." +
+                                  member->member + "' is available only to downstream phases");
+            }
+            return field == nullptr ? make_unknown_type() : field->type;
         }
         if (auto local_it = local_bindings.find(owner->name);
             local_it != local_bindings.end() && local_it->second.kind == TypeKind::Struct) {
@@ -3614,6 +4797,15 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                     if (const auto* trait = find_resolved_trait(make_canonical_id(symbol)); trait != nullptr) {
                         return find_field_type_in(trait->fields, member->member);
                     }
+                } else if (symbol.kind == SymbolKind::Phase) {
+                    const auto* fields = find_phase_fields(symbol);
+                    const auto* field  = fields == nullptr ? nullptr : find_field_in(*fields, member->member);
+                    if (field != nullptr && field->is_completion_only) {
+                        errors_.error(expr.location,
+                                      "phase completion field '" + make_canonical_id(symbol) + "." + member->member +
+                                          "' is available only to downstream phases");
+                    }
+                    return field == nullptr ? make_unknown_type() : field->type;
                 }
             }
 
@@ -4936,12 +6128,6 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
                     for (auto& handler : node.handlers) {
                         validate_context_stmts(handler.body, node.name, true);
                     }
-                } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
-                    if (node.filter.entries.empty() && node.filter.trait_names.empty()) {
-                        errors_.error(node.location,
-                                      "`extern system` requires a `filter:` clause (no-filter extern systems are "
-                                      "not supported)");
-                    }
                 }
             },
             decl);
@@ -5022,32 +6208,50 @@ void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
 
 void SemanticAnalyzer::validate_after_clauses(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    // Collect local system names and build canonical ID map (task 3.4 / 3.7).
     std::unordered_set<std::string> local_system_names;
+    std::unordered_set<SymbolId> local_system_ids;
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             local_system_names.insert(sys->name);
+            if (sys->resolved_system_id.has_value()) {
+                local_system_ids.insert(*sys->resolved_system_id);
+            }
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
             local_system_names.insert(sys->name);
+            if (sys->resolved_system_id.has_value()) {
+                local_system_ids.insert(*sys->resolved_system_id);
+            }
         }
     }
 
-    // Resolve each system's after_systems to canonical IDs and validate.
-    // after_resolved: local_simple_name → list of canonical system IDs it runs after.
     std::unordered_map<std::string, std::vector<std::string>> after_resolved;
     for (auto& decl : program.declarations) {
-        auto resolve_after = [&](const auto& sys) {
-            const auto self_canonical = make_canonical_id(current_module_name_, sys.name);
+        auto resolve_after = [&](auto& sys) {
+            sys.resolved_after_system_ids.clear();
+            if (!sys.resolved_system_id.has_value()) {
+                return;
+            }
+            std::unordered_set<SymbolId> seen;
             for (const auto& after_ref : sys.after_systems) {
-                auto canonical = resolve_system_after_ref(after_ref, sys.location, local_system_names);
-                if (canonical.empty()) {
-                    errors_.error(sys.location, "unknown system '" + after_ref + "' in after clause");
-                } else if (canonical == self_canonical) {
-                    errors_.error(sys.location, "system '" + sys.name + "' cannot list itself in after:");
-                } else {
-                    after_resolved[sys.name].push_back(canonical);
+                auto predecessor = resolve_system_after_ref_to_symbol(after_ref, sys.location, local_system_names);
+                if (!predecessor.has_value()) {
+                    const auto previous_errors = errors_.error_count();
+                    (void)resolve_system_after_ref(after_ref, sys.location, local_system_names);
+                    if (errors_.error_count() == previous_errors) {
+                        errors_.error(sys.location, "unknown system '" + after_ref + "' in after clause");
+                    }
+                    continue;
                 }
+                if (*predecessor == *sys.resolved_system_id) {
+                    errors_.error(sys.location, "system '" + sys.name + "' cannot list itself in after:");
+                    continue;
+                }
+                if (!seen.insert(*predecessor).second) {
+                    continue;
+                }
+                sys.resolved_after_system_ids.push_back(*predecessor);
+                after_resolved[sys.name].push_back(make_canonical_id(*predecessor));
             }
         };
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
@@ -5058,96 +6262,384 @@ void SemanticAnalyzer::validate_after_clauses(
         }
     }
 
-    // Build adjacency graph for cycle detection using canonical IDs.
-    std::unordered_map<std::string, std::vector<std::string>> after_graph;
+    // Preserve the compatibility dependency view while the handler graph is
+    // the authoritative representation of executable ordering.
+    for (auto& dep : result_.dependency_graph) {
+        if (const auto found = after_resolved.find(dep.system_name); found != after_resolved.end()) {
+            dep.after_systems = found->second;
+        }
+    }
+
+    std::unordered_map<HandlerIdentity, HandlerNode*, HandlerIdentityHash> nodes;
+    for (auto& node : result_.execution_graph.handlers) {
+        nodes.emplace(node.identity, &node);
+    }
+
+    auto add_edge = [&](HandlerNode& dependent,
+                        const HandlerIdentity& predecessor,
+                        ScheduleEdgeKind kind,
+                        const SourceLocation& location,
+                        bool require_local_node) {
+        if (predecessor == dependent.identity) {
+            errors_.error(location, "handler '" + dependent.identity.canonical_id() + "' cannot list itself in after:");
+            return;
+        }
+        if (require_local_node && local_system_ids.contains(predecessor.system) && !nodes.contains(predecessor)) {
+            errors_.error(location, "unknown handler '" + predecessor.canonical_id() + "' in after: clause");
+            return;
+        }
+        if (std::ranges::find(dependent.explicit_after, predecessor) == dependent.explicit_after.end()) {
+            dependent.explicit_after.push_back(predecessor);
+        }
+        const auto duplicate = std::ranges::find_if(result_.execution_graph.schedule_edges, [&](const auto& edge) {
+            return edge.before == predecessor && edge.after == dependent.identity && edge.kind == kind;
+        });
+        if (duplicate == result_.execution_graph.schedule_edges.end()) {
+            result_.execution_graph.schedule_edges.push_back(
+                ScheduleEdge{.before      = predecessor,
+                             .after       = dependent.identity,
+                             .kind        = kind,
+                             .orientation = ScheduleEdgeOrientation::Explicit});
+        }
+    };
+
     for (auto& decl : program.declarations) {
-        auto add_to_graph = [&](const auto& sys) {
-            const auto canonical = make_canonical_id(current_module_name_, sys.name);
-            after_graph[canonical] =
-                after_resolved.count(sys.name) ? after_resolved.at(sys.name) : std::vector<std::string>{};
+        auto expand_system = [&](auto& system) {
+            if (!system.resolved_system_id.has_value()) {
+                return;
+            }
+
+            for (auto& dependent : result_.execution_graph.handlers) {
+                if (dependent.identity.system != *system.resolved_system_id) {
+                    continue;
+                }
+                for (const auto& predecessor_system : system.resolved_after_system_ids) {
+                    const HandlerIdentity predecessor{.system  = predecessor_system,
+                                                      .trigger = dependent.identity.trigger};
+                    // A local predecessor with no matching trigger is not an
+                    // edge. Imported candidates are retained for linker
+                    // validation once their handler metadata is available.
+                    if (local_system_ids.contains(predecessor_system) && !nodes.contains(predecessor)) {
+                        continue;
+                    }
+                    add_edge(dependent, predecessor, ScheduleEdgeKind::ExplicitSystem, system.location, false);
+                }
+            }
+
+            for (std::size_t handler_index = 0; handler_index < system.handlers.size(); ++handler_index) {
+                const auto& handler = system.handlers[handler_index];
+                if (!handler.resolved_trigger.has_value()) {
+                    continue;
+                }
+                const HandlerIdentity dependent_identity{.system  = *system.resolved_system_id,
+                                                         .trigger = *handler.resolved_trigger};
+                const auto dependent_it = nodes.find(dependent_identity);
+                if (dependent_it == nodes.end() ||
+                    dependent_it->second->declaration_order.handler_index != handler_index) {
+                    continue;
+                }
+                auto& dependent = *dependent_it->second;
+                for (const auto& reference : handler.after_handlers) {
+                    auto predecessor_system = resolve_system_after_ref_to_symbol(
+                        reference.system.spelling, reference.system.location, local_system_names);
+                    if (!predecessor_system.has_value()) {
+                        const auto previous_errors = errors_.error_count();
+                        (void)resolve_system_after_ref(
+                            reference.system.spelling, reference.system.location, local_system_names);
+                        if (errors_.error_count() == previous_errors) {
+                            errors_.error(
+                                reference.system.location,
+                                "unknown system '" + reference.system.spelling + "' in handler after: clause");
+                        }
+                        continue;
+                    }
+                    const auto predecessor_trigger = try_resolve_handler_trigger(reference.trigger.spelling);
+                    if (!predecessor_trigger.has_value()) {
+                        errors_.error(
+                            reference.trigger.location,
+                            "unknown handler trigger '" + reference.trigger.spelling + "' in handler after: clause");
+                        continue;
+                    }
+                    if (*predecessor_trigger != dependent.identity.trigger) {
+                        errors_.error(reference.location,
+                                      "handler dependency '" + reference.spelling() + "' is not eligible for '" +
+                                          dependent.identity.canonical_id() + "': resolved triggers differ");
+                        continue;
+                    }
+                    add_edge(dependent,
+                             HandlerIdentity{.system = *predecessor_system, .trigger = *predecessor_trigger},
+                             ScheduleEdgeKind::ExplicitHandler,
+                             reference.location,
+                             true);
+                }
+            }
         };
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            add_to_graph(*sys);
-        }
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            add_to_graph(*sys);
+        if (auto* system = std::get_if<SystemNode>(&decl)) {
+            expand_system(*system);
+        } else if (auto* system = std::get_if<ExternSystemNode>(&decl)) {
+            expand_system(*system);
         }
     }
 
-    // Build a set of valid canonical IDs for cycle-skip guard.
-    std::unordered_set<std::string> all_canonical;
-    for (const auto& [canonical, _] : after_graph) {
-        all_canonical.insert(canonical);
+    // Contracts create serialization requirements only between handlers that
+    // are co-eligible for the same canonical trigger. Detect the conflict
+    // independently from its direction so provenance survives whichever
+    // ordering rule wins.
+    std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> explicit_adjacency;
+    for (const auto& edge : result_.execution_graph.schedule_edges) {
+        if ((edge.kind == ScheduleEdgeKind::ExplicitHandler || edge.kind == ScheduleEdgeKind::ExplicitSystem) &&
+            nodes.contains(edge.before) && nodes.contains(edge.after)) {
+            explicit_adjacency[edge.before].push_back(edge.after);
+        }
+    }
+    const auto explicitly_precedes = [&](const HandlerIdentity& before, const HandlerIdentity& after) {
+        std::vector<HandlerIdentity> pending{before};
+        std::unordered_set<HandlerIdentity, HandlerIdentityHash> visited;
+        while (!pending.empty()) {
+            auto current = pending.back();
+            pending.pop_back();
+            if (!visited.insert(current).second) {
+                continue;
+            }
+            if (current == after) {
+                return true;
+            }
+            if (const auto found = explicit_adjacency.find(current); found != explicit_adjacency.end()) {
+                pending.insert(pending.end(), found->second.begin(), found->second.end());
+            }
+        }
+        return false;
+    };
+    const auto declaration_precedes = [](const HandlerNode& left, const HandlerNode& right) {
+        const auto& lhs = left.declaration_order;
+        const auto& rhs = right.declaration_order;
+        if (lhs.module_index != rhs.module_index) {
+            return lhs.module_index < rhs.module_index;
+        }
+        if (lhs.declaration_index != rhs.declaration_index) {
+            return lhs.declaration_index < rhs.declaration_index;
+        }
+        if (lhs.handler_index != rhs.handler_index) {
+            return lhs.handler_index < rhs.handler_index;
+        }
+        return left.identity.canonical_id() < right.identity.canonical_id();
+    };
+    const auto canonical_trait_less = [](const SymbolId& left, const SymbolId& right) {
+        return make_canonical_id(left) < make_canonical_id(right);
+    };
+    const auto add_unique_trait = [](std::vector<SymbolId>& traits, const SymbolId& trait) {
+        if (std::ranges::find(traits, trait) == traits.end()) {
+            traits.push_back(trait);
+        }
+    };
+
+    for (std::size_t left_index = 0; left_index < result_.execution_graph.handlers.size(); ++left_index) {
+        const auto& left = result_.execution_graph.handlers[left_index];
+        for (std::size_t right_index = left_index + 1; right_index < result_.execution_graph.handlers.size();
+             ++right_index) {
+            const auto& right = result_.execution_graph.handlers[right_index];
+            if (left.identity.trigger != right.identity.trigger) {
+                continue;
+            }
+
+            std::vector<SymbolId> trait_provenance;
+            bool left_writes_right = false;
+            bool right_writes_left = false;
+            for (const auto& trait : left.contract.writes) {
+                if (right.contract.reads.contains(trait)) {
+                    left_writes_right = true;
+                    add_unique_trait(trait_provenance, trait);
+                }
+            }
+            for (const auto& trait : right.contract.writes) {
+                if (left.contract.reads.contains(trait)) {
+                    right_writes_left = true;
+                    add_unique_trait(trait_provenance, trait);
+                }
+            }
+            std::ranges::sort(trait_provenance, canonical_trait_less);
+
+            std::vector<std::string> effect_provenance;
+            for (const auto& effect : left.contract.effects) {
+                if (right.contract.effects.contains(effect)) {
+                    effect_provenance.push_back(effect);
+                }
+            }
+            std::ranges::sort(effect_provenance);
+            if (trait_provenance.empty() && effect_provenance.empty()) {
+                continue;
+            }
+
+            const HandlerNode* before           = nullptr;
+            const HandlerNode* after            = nullptr;
+            ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::DeclarationOrder;
+            if (explicitly_precedes(left.identity, right.identity)) {
+                before      = &left;
+                after       = &right;
+                orientation = ScheduleEdgeOrientation::Explicit;
+            } else if (explicitly_precedes(right.identity, left.identity)) {
+                before      = &right;
+                after       = &left;
+                orientation = ScheduleEdgeOrientation::Explicit;
+            } else if (left_writes_right != right_writes_left) {
+                before      = left_writes_right ? &left : &right;
+                after       = left_writes_right ? &right : &left;
+                orientation = ScheduleEdgeOrientation::WriterBeforeReader;
+            } else if (declaration_precedes(left, right)) {
+                before = &left;
+                after  = &right;
+            } else {
+                before = &right;
+                after  = &left;
+            }
+
+            if (!trait_provenance.empty()) {
+                result_.execution_graph.schedule_edges.push_back(
+                    ScheduleEdge{.before           = before->identity,
+                                 .after            = after->identity,
+                                 .kind             = ScheduleEdgeKind::DataConflict,
+                                 .orientation      = orientation,
+                                 .trait_provenance = std::move(trait_provenance)});
+            }
+            if (!effect_provenance.empty()) {
+                result_.execution_graph.schedule_edges.push_back(
+                    ScheduleEdge{.before            = before->identity,
+                                 .after             = after->identity,
+                                 .kind              = ScheduleEdgeKind::EffectConflict,
+                                 .orientation       = orientation,
+                                 .effect_provenance = std::move(effect_provenance)});
+            }
+        }
     }
 
-    // DFS cycle detection on canonical IDs.
+    // Preserve the old immediate cycle guarantee, but validate the expanded
+    // handler graph rather than an over-approximated system graph.
     enum class Color : uint8_t { White, Gray, Black };
-    std::unordered_map<std::string, Color> color;
-    for (auto& [name, _] : after_graph) {
-        color[name] = Color::White;
+    std::unordered_map<HandlerIdentity, Color, HandlerIdentityHash> color;
+    std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> adjacency;
+    for (const auto& [identity, _] : nodes) {
+        color[identity] = Color::White;
     }
-
-    std::function<bool(const std::string&, std::vector<std::string>&)> dfs =
-        [&](const std::string& node,
-            std::vector<std::string>& path) -> bool {  // NOLINT(readability-function-cognitive-complexity)
+    for (const auto& edge : result_.execution_graph.schedule_edges) {
+        if (nodes.contains(edge.before) && nodes.contains(edge.after)) {
+            adjacency[edge.before].push_back(edge.after);
+        }
+    }
+    std::vector<HandlerIdentity> path;
+    std::unordered_set<std::string> reported_cycles;
+    std::function<void(const HandlerIdentity&)> dfs = [&](const HandlerIdentity& node) {
         color[node] = Color::Gray;
         path.push_back(node);
-        auto it = after_graph.find(node);
-        if (it != after_graph.end()) {
-            for (const auto& neighbor : it->second) {
-                if (!all_canonical.contains(neighbor)) {
-                    continue;  // imported system — no local node, skip cycle check
-                }
-                if (color.count(neighbor) == 0) {
-                    color[neighbor] = Color::White;
-                }
-                if (color[neighbor] == Color::Gray) {
-                    std::string cycle_path;
-                    bool in_cycle = false;
-                    for (const auto& p : path) {
-                        if (p == neighbor) {
-                            in_cycle = true;
-                        }
-                        if (in_cycle) {
-                            if (!cycle_path.empty()) {
-                                cycle_path += " -> ";
-                            }
-                            cycle_path += p;
-                        }
+        for (const auto& neighbor : adjacency[node]) {
+            if (color[neighbor] == Color::Gray) {
+                const auto cycle_start = std::ranges::find(path, neighbor);
+                std::ostringstream cycle;
+                for (auto it = cycle_start; it != path.end(); ++it) {
+                    if (it != cycle_start) {
+                        cycle << " -> ";
                     }
-                    cycle_path += " -> " + neighbor;
-                    errors_.error({}, "cycle in system ordering: " + cycle_path);
-                    color[node] = Color::Black;
-                    path.pop_back();
-                    return true;
+                    cycle << it->canonical_id();
                 }
-                if (color[neighbor] == Color::White) {
-                    if (dfs(neighbor, path)) {
-                        color[node] = Color::Black;
-                        path.pop_back();
-                        return true;
-                    }
+                cycle << " -> " << neighbor.canonical_id();
+                if (reported_cycles.insert(cycle.str()).second) {
+                    errors_.error({}, "handler cycle: " + cycle.str());
                 }
+            } else if (color[neighbor] == Color::White) {
+                dfs(neighbor);
             }
         }
         color[node] = Color::Black;
         path.pop_back();
-        return false;
     };
-
-    for (auto& [name, _] : after_graph) {
-        if (color[name] == Color::White) {
-            std::vector<std::string> path;
-            dfs(name, path);
+    for (const auto& handler : result_.execution_graph.handlers) {
+        if (color[handler.identity] == Color::White) {
+            dfs(handler.identity);
         }
     }
 
-    // Populate after_systems in dependency graph with canonical IDs (task 3.7).
-    for (auto& dep : result_.dependency_graph) {
-        // dep.system_name is the simple name; find canonical after entries via after_resolved.
-        auto it = after_resolved.find(dep.system_name);
-        if (it != after_resolved.end()) {
-            dep.after_systems = it->second;
+    // Finalize each activation-local scheduling DAG independently. A wave of
+    // currently-ready handlers is one parallelizable dependency level; stable
+    // declaration order within the wave is the sequential backend's tie-break.
+    // Multiple provenance edges between the same pair represent one scheduling
+    // dependency and therefore contribute only one indegree.
+    std::vector<ResolvedHandlerTrigger> activations;
+    for (const auto& handler : result_.execution_graph.handlers) {
+        if (std::ranges::find(activations, handler.identity.trigger) == activations.end()) {
+            activations.push_back(handler.identity.trigger);
+        }
+    }
+    const auto activation_precedes = [&](const ResolvedHandlerTrigger& left, const ResolvedHandlerTrigger& right) {
+        const auto left_node = std::ranges::find_if(
+            result_.execution_graph.handlers, [&](const auto& handler) { return handler.identity.trigger == left; });
+        const auto right_node = std::ranges::find_if(
+            result_.execution_graph.handlers, [&](const auto& handler) { return handler.identity.trigger == right; });
+        if (left_node != result_.execution_graph.handlers.end() &&
+            right_node != result_.execution_graph.handlers.end() && left_node != right_node) {
+            return declaration_precedes(*left_node, *right_node);
+        }
+        if (left.kind != right.kind) {
+            return left.kind < right.kind;
+        }
+        return make_canonical_id(left.symbol) < make_canonical_id(right.symbol);
+    };
+    std::ranges::sort(activations, activation_precedes);
+
+    for (const auto& activation : activations) {
+        std::vector<const HandlerNode*> activation_nodes;
+        for (const auto& handler : result_.execution_graph.handlers) {
+            if (handler.identity.trigger == activation) {
+                activation_nodes.push_back(&handler);
+            }
+        }
+        std::ranges::sort(activation_nodes, [&](const HandlerNode* left, const HandlerNode* right) {
+            return declaration_precedes(*left, *right);
+        });
+
+        std::unordered_map<HandlerIdentity, std::uint64_t, HandlerIdentityHash> indegree;
+        std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> activation_adjacency;
+        for (const auto* node : activation_nodes) {
+            indegree[node->identity] = 0;
+        }
+        std::unordered_set<std::string> dependency_pairs;
+        for (const auto& edge : result_.execution_graph.schedule_edges) {
+            if (edge.before.trigger != activation || edge.after.trigger != activation ||
+                !indegree.contains(edge.before) || !indegree.contains(edge.after)) {
+                continue;
+            }
+            const auto pair_key = edge.before.canonical_id() + "\n" + edge.after.canonical_id();
+            if (!dependency_pairs.insert(pair_key).second) {
+                continue;
+            }
+            activation_adjacency[edge.before].push_back(edge.after);
+            ++indegree[edge.after];
+        }
+
+        std::unordered_set<HandlerIdentity, HandlerIdentityHash> emitted;
+        std::uint64_t level_index = 0;
+        while (emitted.size() < activation_nodes.size()) {
+            std::vector<HandlerIdentity> ready;
+            for (const auto* node : activation_nodes) {
+                if (!emitted.contains(node->identity) && indegree[node->identity] == 0) {
+                    ready.push_back(node->identity);
+                }
+            }
+            if (ready.empty()) {
+                // The DFS above already emitted canonical cycle diagnostics.
+                break;
+            }
+
+            result_.execution_graph.dependency_levels.push_back(
+                DependencyLevel{.activation = activation, .index = level_index++, .handlers = ready});
+            result_.execution_graph.stable_topological_order.insert(
+                result_.execution_graph.stable_topological_order.end(), ready.begin(), ready.end());
+            for (const auto& identity : ready) {
+                emitted.insert(identity);
+                for (const auto& dependent : activation_adjacency[identity]) {
+                    if (indegree[dependent] > 0) {
+                        --indegree[dependent];
+                    }
+                }
+            }
         }
     }
 }

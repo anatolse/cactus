@@ -41,6 +41,17 @@ static DecoratedProgram make_program(const std::string& trait_name, bool is_pub,
     return prog;
 }
 
+static SymbolId linked_symbol(SymbolKind kind, const std::string& module, const std::string& name) {
+    return make_symbol_id(kind, module, name);
+}
+
+static HandlerNode linked_handler(const SymbolId& system,
+                                  const ResolvedHandlerTrigger& trigger,
+                                  std::uint64_t declaration_index) {
+    return HandlerNode{.identity          = {.system = system, .trigger = trigger},
+                       .declaration_order = {.declaration_index = declaration_index}};
+}
+
 // ── Task 5.2: Incremental merge — distinct types ──────────────────────────────
 
 TEST_CASE("program_linker: merge two programs with distinct traits", "[linker][5.2]") {
@@ -258,10 +269,10 @@ TEST_CASE("program_linker: std.transform.flat and std.transform.volume link with
         prog.module_name = mod;
         for (const char* local : {"LocalTransform", "WorldTransform"}) {
             ResolvedTrait t;
-            t.name         = local;
-            t.is_pub       = true;
-            t.module_name  = mod;
-            t.canonical_id = mod + "." + local;
+            t.name             = local;
+            t.is_pub           = true;
+            t.module_name      = mod;
+            t.canonical_id     = mod + "." + local;
             prog.traits[local] = t;
         }
         return prog;
@@ -278,8 +289,7 @@ TEST_CASE("program_linker: std.transform.flat and std.transform.volume link with
 
     ErrorReporter link_errors;
     ProgramLinker linker(link_errors);
-    auto merged = linker.link({build_dir / "std.transform.flat.cmod",
-                               build_dir / "std.transform.volume.cmod"});
+    auto merged = linker.link({build_dir / "std.transform.flat.cmod", build_dir / "std.transform.volume.cmod"});
 
     CHECK_FALSE(link_errors.has_errors());
     REQUIRE(merged.has_value());
@@ -298,18 +308,18 @@ TEST_CASE("program_linker: duplicate canonical identity from distinct artifacts 
     // two artifacts both claiming to define the same canonical symbol).
     DecoratedProgram prog_a;
     ResolvedTrait ta;
-    ta.name         = "Position";
-    ta.is_pub       = true;
-    ta.module_name  = "shared";
-    ta.canonical_id = "shared.Position";
+    ta.name                   = "Position";
+    ta.is_pub                 = true;
+    ta.module_name            = "shared";
+    ta.canonical_id           = "shared.Position";
     prog_a.traits["Position"] = ta;
 
     DecoratedProgram prog_b;
     ResolvedTrait tb;
-    tb.name         = "Position";
-    tb.is_pub       = true;
-    tb.module_name  = "shared";
-    tb.canonical_id = "shared.Position";  // same canonical_id as prog_a
+    tb.name                   = "Position";
+    tb.is_pub                 = true;
+    tb.module_name            = "shared";
+    tb.canonical_id           = "shared.Position";  // same canonical_id as prog_a
     prog_b.traits["Position"] = tb;
 
     ErrorReporter save_errors;
@@ -330,5 +340,134 @@ TEST_CASE("program_linker: duplicate canonical identity from distinct artifacts 
     CHECK(msg.find("shared.Position") != std::string::npos);
 
     fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("program_linker: rebuilds cross-module conflicts and event flow", "[linker][runtime-graph][4.4]") {
+    const auto tick     = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const auto spawned  = linked_symbol(SymbolKind::Event, "runtime", "Spawned");
+    const auto position = linked_symbol(SymbolKind::Trait, "runtime", "Position");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    const ResolvedHandlerTrigger spawned_trigger{.kind = HandlerTriggerKind::Event, .symbol = spawned};
+
+    DecoratedProgram producer_program;
+    auto producer = linked_handler(linked_symbol(SymbolKind::System, "producer", "Move"), tick_trigger, 4);
+    producer.contract.reads.insert(position);
+    producer.contract.writes.insert(position);
+    producer.contract.emits.insert(spawned);
+    producer_program.execution_graph.handlers.push_back(producer);
+
+    DecoratedProgram consumer_program;
+    auto reader = linked_handler(linked_symbol(SymbolKind::System, "consumer", "Observe"), tick_trigger, 1);
+    reader.contract.reads.insert(position);
+    consumer_program.execution_graph.handlers.push_back(reader);
+    auto consumer = linked_handler(linked_symbol(SymbolKind::System, "consumer", "Consume"), spawned_trigger, 2);
+    consumer_program.execution_graph.handlers.push_back(consumer);
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, producer_program, "producer"));
+    REQUIRE(linker.merge_into(merged, consumer_program, "consumer"));
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(merged.execution_graph.handlers.size() == 3);
+    CHECK(merged.execution_graph.handlers[0].declaration_order.module_index == 0);
+    CHECK(merged.execution_graph.handlers[1].declaration_order.module_index == 1);
+
+    const auto conflict = std::ranges::find_if(merged.execution_graph.schedule_edges, [&](const auto& edge) {
+        return edge.kind == ScheduleEdgeKind::DataConflict && edge.before == producer.identity &&
+               edge.after == reader.identity;
+    });
+    REQUIRE(conflict != merged.execution_graph.schedule_edges.end());
+    CHECK(conflict->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+    CHECK(conflict->trait_provenance == std::vector<SymbolId>{position});
+    REQUIRE(merged.execution_graph.event_flows.size() == 1);
+    CHECK(merged.execution_graph.event_flows[0].producer == producer.identity);
+    CHECK(merged.execution_graph.event_flows[0].consumer == consumer.identity);
+    CHECK(merged.execution_graph.stable_topological_order[0] == producer.identity);
+    CHECK(merged.execution_graph.stable_topological_order[1] == reader.identity);
+}
+
+TEST_CASE("program_linker: artifact link preserves explicit cross-module edge and graph levels",
+          "[linker][runtime-graph][artifact][4.4]") {
+    auto build_dir = linker_build_dir() / "runtime_graph";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto frame = linked_symbol(SymbolKind::Event, "runtime", "frame");
+    const auto tick  = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    const auto first = linked_handler(linked_symbol(SymbolKind::System, "base", "First"), tick_trigger, 3);
+    auto second      = linked_handler(linked_symbol(SymbolKind::System, "app", "Second"), tick_trigger, 1);
+    second.explicit_after.push_back(first.identity);
+
+    DecoratedProgram base;
+    base.execution_graph.handlers.push_back(first);
+    base.execution_graph.phases.push_back(
+        PhasePlan{.phase               = tick,
+                  .source_dependencies = {{.kind = HandlerTriggerKind::Event, .symbol = frame}},
+                  .runtime_root        = frame,
+                  .declaration_order   = {.declaration_index = 2}});
+
+    DecoratedProgram app;
+    app.execution_graph.handlers.push_back(second);
+    app.execution_graph.schedule_edges.push_back(ScheduleEdge{.before      = first.identity,
+                                                              .after       = second.identity,
+                                                              .kind        = ScheduleEdgeKind::ExplicitHandler,
+                                                              .orientation = ScheduleEdgeOrientation::Explicit});
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(base, "base", build_dir));
+    REQUIRE(artifact.save(app, "app", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({build_dir / "base.cmod", build_dir / "app.cmod"});
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(linked.has_value());
+    REQUIRE(linked->execution_graph.phases.size() == 1);
+    CHECK(linked->execution_graph.phases[0].runtime_root == frame);
+    REQUIRE(linked->execution_graph.schedule_edges.size() == 1);
+    CHECK(linked->execution_graph.schedule_edges[0].kind == ScheduleEdgeKind::ExplicitHandler);
+    CHECK(linked->execution_graph.stable_topological_order ==
+          std::vector<HandlerIdentity>{first.identity, second.identity});
+    REQUIRE(linked->execution_graph.dependency_levels.size() == 2);
+    CHECK(linked->execution_graph.dependency_levels[0].handlers == std::vector<HandlerIdentity>{first.identity});
+    CHECK(linked->execution_graph.dependency_levels[1].handlers == std::vector<HandlerIdentity>{second.identity});
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("program_linker: linked handler cycles are rejected canonically", "[linker][runtime-graph][4.4]") {
+    const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    auto first  = linked_handler(linked_symbol(SymbolKind::System, "left", "First"), trigger, 0);
+    auto second = linked_handler(linked_symbol(SymbolKind::System, "right", "Second"), trigger, 0);
+    first.explicit_after.push_back(second.identity);
+    second.explicit_after.push_back(first.identity);
+
+    DecoratedProgram left;
+    left.execution_graph.handlers.push_back(first);
+    left.execution_graph.schedule_edges.push_back(ScheduleEdge{.before      = second.identity,
+                                                               .after       = first.identity,
+                                                               .kind        = ScheduleEdgeKind::ExplicitHandler,
+                                                               .orientation = ScheduleEdgeOrientation::Explicit});
+    DecoratedProgram right;
+    right.execution_graph.handlers.push_back(second);
+    right.execution_graph.schedule_edges.push_back(ScheduleEdge{.before      = first.identity,
+                                                                .after       = second.identity,
+                                                                .kind        = ScheduleEdgeKind::ExplicitHandler,
+                                                                .orientation = ScheduleEdgeOrientation::Explicit});
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, left, "left"));
+    CHECK_FALSE(linker.merge_into(merged, right, "right"));
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics().back().message.find("handler cycle:") != std::string::npos);
+    CHECK(errors.diagnostics().back().message.find(first.identity.canonical_id()) != std::string::npos);
+    CHECK(errors.diagnostics().back().message.find(second.identity.canonical_id()) != std::string::npos);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

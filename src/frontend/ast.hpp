@@ -172,8 +172,8 @@ struct CallExpr {
 // Resolved enum-member identity for member chains like `inp.Key.A` whose head
 // names an enum type. Set by semantic analysis; source spelling is preserved.
 struct ResolvedEnumMember {
-    SymbolId enum_id;    // e.g. Enum std.input / "Key"
-    std::string member;  // "A" — validated against the enum's declared members
+    SymbolId enum_id;         // e.g. Enum std.input / "Key"
+    std::string member;       // "A" — validated against the enum's declared members
     std::int32_t index = -1;  // member ordinal within the enum declaration
 };
 
@@ -388,11 +388,141 @@ struct StmtNode {
 
 // ── Event Handler ───────────────────────────────────────────────────────────
 
+struct LocatedName {
+    std::string spelling;
+    SourceLocation location;
+
+    [[nodiscard]] std::string debug_string() const {
+        return spelling + "@" + location.filename + ":" + std::to_string(location.line) + ":" +
+               std::to_string(location.column);
+    }
+
+    friend bool operator==(const LocatedName&, const LocatedName&) = default;
+
+    friend std::ostream& operator<<(std::ostream& out, const LocatedName& name) {
+        return out << name.debug_string();
+    }
+};
+
+struct HandlerReferenceNode {
+    LocatedName system;
+    LocatedName trigger;
+    SourceLocation location;
+
+    [[nodiscard]] std::string spelling() const {
+        return system.spelling + "/on " + trigger.spelling;
+    }
+
+    [[nodiscard]] std::string debug_string() const {
+        return spelling() + "@" + location.filename + ":" + std::to_string(location.line) + ":" +
+               std::to_string(location.column);
+    }
+
+    friend bool operator==(const HandlerReferenceNode&, const HandlerReferenceNode&) = default;
+
+    friend std::ostream& operator<<(std::ostream& out, const HandlerReferenceNode& reference) {
+        return out << reference.debug_string();
+    }
+};
+
+enum class HandlerTriggerKind : std::uint8_t { Event, Phase };
+
+[[nodiscard]] inline const char* handler_trigger_kind_name(HandlerTriggerKind kind) {
+    switch (kind) {
+        case HandlerTriggerKind::Event:
+            return "event";
+        case HandlerTriggerKind::Phase:
+            return "phase";
+    }
+    return "unknown";
+}
+
+inline std::ostream& operator<<(std::ostream& out, HandlerTriggerKind kind) {
+    return out << handler_trigger_kind_name(kind);
+}
+
+struct ResolvedHandlerTrigger {
+    HandlerTriggerKind kind = HandlerTriggerKind::Event;
+    SymbolId symbol;
+
+    [[nodiscard]] std::string debug_string() const {
+        return std::string(handler_trigger_kind_name(kind)) + " " + make_canonical_id(symbol);
+    }
+
+    friend bool operator==(const ResolvedHandlerTrigger&, const ResolvedHandlerTrigger&) = default;
+
+    friend std::ostream& operator<<(std::ostream& out, const ResolvedHandlerTrigger& trigger) {
+        return out << trigger.debug_string();
+    }
+};
+
 struct EventHandlerNode {
     std::string event_name;
-    std::optional<SymbolId> resolved_event_id;  // set by semantic analysis; source spelling is preserved
-    std::optional<std::string> alias;           // optional 'as alias' clause
+    SourceLocation trigger_location;
+    std::optional<ResolvedHandlerTrigger> resolved_trigger;
+    std::optional<std::string> alias;                  // optional 'as alias' clause
+    std::vector<HandlerReferenceNode> after_handlers;  // exact handler references from a leading after: block
     std::vector<std::unique_ptr<StmtNode>> body;
+    SourceLocation location;
+};
+
+enum class HandlerCommandKind : std::uint8_t { Spawn, Destroy, Add, Remove };
+
+[[nodiscard]] inline const char* handler_command_kind_name(HandlerCommandKind kind) {
+    switch (kind) {
+        case HandlerCommandKind::Spawn:
+            return "spawn";
+        case HandlerCommandKind::Destroy:
+            return "destroy";
+        case HandlerCommandKind::Add:
+            return "add";
+        case HandlerCommandKind::Remove:
+            return "remove";
+    }
+    return "unknown";
+}
+
+inline std::ostream& operator<<(std::ostream& out, HandlerCommandKind kind) {
+    return out << handler_command_kind_name(kind);
+}
+
+struct HandlerCommandNode {
+    HandlerCommandKind kind = HandlerCommandKind::Destroy;
+    std::optional<LocatedName> target;
+    std::optional<SymbolId> resolved_target_id;
+    SourceLocation location;
+
+    [[nodiscard]] std::string debug_string() const {
+        std::string result = handler_command_kind_name(kind);
+        if (target.has_value()) {
+            result += " " + target->spelling;
+        }
+        return result + "@" + location.filename + ":" + std::to_string(location.line) + ":" +
+               std::to_string(location.column);
+    }
+
+    friend bool operator==(const HandlerCommandNode&, const HandlerCommandNode&) = default;
+
+    friend std::ostream& operator<<(std::ostream& out, const HandlerCommandNode& command) {
+        return out << command.debug_string();
+    }
+};
+
+struct ExternHandlerNode {
+    std::string trigger_name;
+    SourceLocation trigger_location;
+    std::optional<ResolvedHandlerTrigger> resolved_trigger;
+    std::optional<std::string> alias;
+    std::vector<HandlerReferenceNode> after_handlers;
+    std::vector<LocatedName> reads;
+    std::vector<LocatedName> writes;
+    std::vector<LocatedName> emits;
+    std::vector<HandlerCommandNode> commands;
+    std::vector<LocatedName> effects;
+    std::vector<SymbolId> resolved_reads;
+    std::vector<SymbolId> resolved_writes;
+    std::vector<SymbolId> resolved_emits;
+    std::vector<std::string> resolved_effects;
     SourceLocation location;
 };
 
@@ -522,6 +652,7 @@ struct ExternSystemNode {
     std::vector<SortKey> order_by;
     std::vector<std::string> after_systems;
     std::optional<std::string> target;
+    std::vector<ExternHandlerNode> handlers;
     SourceLocation location;
 };
 
@@ -541,9 +672,32 @@ struct ViewNode {
 
 struct EventNode {
     std::string name;
-    bool is_pub = false;
+    bool is_pub      = false;
+    bool is_external = false;
+    std::optional<SymbolId> resolved_event_id;
     std::string module_name;  // set by codegen merge to track source module
     std::vector<FieldNode> fields;
+    SourceLocation location;
+};
+
+struct PhaseFieldNode {
+    std::string name;
+    TypeRef type;
+    std::unique_ptr<ExprNode> initializer;
+    SourceLocation location;
+};
+
+struct PhaseNode {
+    std::string name;
+    bool is_pub = false;
+    std::optional<SymbolId> resolved_phase_id;
+    std::vector<LocatedName> from_sources;
+    std::vector<LocatedName> after_phases;
+    std::vector<ResolvedHandlerTrigger> resolved_from;
+    std::vector<ResolvedHandlerTrigger> resolved_after;
+    std::optional<std::unique_ptr<ExprNode>> every;
+    std::optional<std::unique_ptr<ExprNode>> max;
+    std::vector<PhaseFieldNode> fields;
     SourceLocation location;
 };
 
@@ -617,6 +771,7 @@ using Declaration = std::variant<ModuleNode,
                                  ExternSystemNode,
                                  ViewNode,
                                  EventNode,
+                                 PhaseNode,
                                  FuncNode,
                                  AssetDeclNode,
                                  InputDeclNode>;

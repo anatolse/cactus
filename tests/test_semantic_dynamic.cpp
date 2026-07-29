@@ -958,48 +958,72 @@ TEST_CASE("Semantic: all seven clean-named editor extern funcs with string/int/v
 TEST_CASE("Semantic: extern system EditorTemplatePalette filter on EditorState is valid",
           "[semantic][stdlib][editor][extern-system]") {
     CHECK_FALSE(
-        analyze_errors("pub trait EditorState:\n"
+        analyze_errors("pub event render\n"
+                       "pub trait EditorState:\n"
                        "    var active: bool = true\n"
                        "    var mode: int = 0\n"
                        "    var selected: entity_id\n"
                        "pub extern system EditorTemplatePalette:\n"
                        "    filter:\n"
-                       "        EditorState\n"));
+                       "        EditorState\n"
+                       "    on render:\n"
+                       "        writes:\n"
+                       "            EditorState\n"
+                       "        effects:\n"
+                       "            graphics\n"));
 }
 
 TEST_CASE("Semantic: extern system EditorPropertyPanel filter on EditorState is valid",
           "[semantic][stdlib][editor][extern-system]") {
     CHECK_FALSE(
-        analyze_errors("pub trait EditorState:\n"
+        analyze_errors("pub event render\n"
+                       "pub trait EditorState:\n"
                        "    var active: bool = true\n"
                        "    var mode: int = 0\n"
                        "pub extern system EditorPropertyPanel:\n"
                        "    filter:\n"
-                       "        EditorState\n"));
+                       "        EditorState\n"
+                       "    on render:\n"
+                       "        reads:\n"
+                       "            EditorState\n"
+                       "        effects:\n"
+                       "            graphics\n"));
 }
 
 TEST_CASE("Semantic: extern system GizmoRenderer2D filter on EditorGizmo2D is valid",
           "[semantic][stdlib][editor][extern-system]") {
     CHECK_FALSE(
-        analyze_errors("pub trait EditorGizmo2D:\n"
+        analyze_errors("pub event render\n"
+                       "pub trait EditorGizmo2D:\n"
                        "    var mode: int = 1\n"
                        "    var color: color = #00FF00FF\n"
                        "    var size: float = 1.0\n"
                        "pub extern system GizmoRenderer2D:\n"
                        "    filter:\n"
-                       "        EditorGizmo2D\n"));
+                       "        EditorGizmo2D\n"
+                       "    on render:\n"
+                       "        reads:\n"
+                       "            EditorGizmo2D\n"
+                       "        effects:\n"
+                       "            graphics\n"));
 }
 
 TEST_CASE("Semantic: extern system GizmoRenderer3D filter on EditorGizmo3D is valid",
           "[semantic][stdlib][editor][extern-system]") {
     CHECK_FALSE(
-        analyze_errors("pub trait EditorGizmo3D:\n"
+        analyze_errors("pub event render\n"
+                       "pub trait EditorGizmo3D:\n"
                        "    var mode: int = 1\n"
                        "    var color: color = #00FF00FF\n"
                        "    var size: float = 1.0\n"
                        "pub extern system GizmoRenderer3D:\n"
                        "    filter:\n"
-                       "        EditorGizmo3D\n"));
+                       "        EditorGizmo3D\n"
+                       "    on render:\n"
+                       "        reads:\n"
+                       "            EditorGizmo3D\n"
+                       "        effects:\n"
+                       "            graphics\n"));
 }
 
 // ── Hierarchical entity templates (dsl-hierarchical-entity-templates) ───────

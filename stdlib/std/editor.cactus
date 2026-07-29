@@ -192,17 +192,47 @@ pub extern system EditorTemplatePalette:
     filter:
         EditorState
 
+    on render:
+        writes:
+            EditorState
+        effects:
+            graphics
+
 pub extern system EditorPropertyPanel:
     filter:
         EditorState
 
+    on render:
+        reads:
+            EditorState
+        effects:
+            graphics
+
 pub extern system GizmoRenderer2D:
     filter:
         EditorGizmo2D
+        transform2d.WorldTransform
+
+    on render:
+        reads:
+            EditorState
+            EditorGizmo2D
+            transform2d.WorldTransform
+        effects:
+            graphics
 
 pub extern system GizmoRenderer3D:
     filter:
         EditorGizmo3D
+        transform3d.WorldTransform
+
+    on render:
+        reads:
+            EditorState
+            EditorGizmo3D
+            transform3d.WorldTransform
+        effects:
+            graphics
 
 # ── Built-in Editor Systems ───────────────────────────────────────────────────
 

@@ -161,14 +161,37 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
         sys.after_systems             = dep.after_systems;
         syms.systems[dep.system_name] = sys;
     }
-    // Export pub event names so downstream modules can validate handlers
-    syms.events = prog.pub_events;
-    for (const auto& name : prog.pub_events) {
-        const auto symbol        = cactus::make_symbol_id(cactus::SymbolKind::Event, module_name, name);
+    // Export public runtime declarations with their typed canonical identity
+    // and external-event provenance intact.
+    for (const auto& [name, event] : prog.events) {
+        if (!event.is_pub) {
+            continue;
+        }
+        const auto symbol =
+            event.symbol_id.value_or(cactus::make_symbol_id(cactus::SymbolKind::Event, module_name, name));
+        syms.events.insert(name);
         syms.event_symbols[name] = cactus::ImportedEvent{.name         = symbol.local_name,
                                                          .module_name  = symbol.module.name,
                                                          .canonical_id = cactus::make_canonical_id(symbol),
-                                                         .symbol_id    = symbol};
+                                                         .symbol_id    = symbol,
+                                                         .fields       = event.fields,
+                                                         .is_external  = event.is_external};
+    }
+    for (const auto& [name, phase] : prog.phases) {
+        if (!phase.is_pub) {
+            continue;
+        }
+        const auto symbol =
+            phase.symbol_id.value_or(cactus::make_symbol_id(cactus::SymbolKind::Phase, module_name, name));
+        syms.phase_symbols[name] = cactus::ImportedPhase{.name            = symbol.local_name,
+                                                         .module_name     = symbol.module.name,
+                                                         .canonical_id    = cactus::make_canonical_id(symbol),
+                                                         .symbol_id       = symbol,
+                                                         .fields          = phase.fields,
+                                                         .upstream_phases = phase.upstream_phases,
+                                                         .runtime_root    = phase.runtime_root,
+                                                         .every_seconds   = phase.every_seconds,
+                                                         .max_repetitions = phase.max_repetitions};
     }
     return syms;
 }
@@ -176,7 +199,8 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
 static bool compile_implicit_std_core(const fs::path& build_dir,
                                       const std::vector<fs::path>& search_paths,
                                       std::unordered_map<std::string, cactus::DecoratedProgram>& compiled,
-                                      std::vector<fs::path>& artifact_paths) {
+                                      std::vector<fs::path>& artifact_paths,
+                                      cactus::ProgramNode& merged_codegen_prog) {
     auto std_core_path = cactus::ModuleResolver::locate_file("std.core", search_paths);
     if (std_core_path.empty()) {
         return true;
@@ -205,6 +229,20 @@ static bool compile_implicit_std_core(const fs::path& build_dir,
 
     artifact_paths.push_back(build_dir / "std.core.cmod");
     compiled["std.core"] = std::move(dec);
+
+    // Preserve std.core's declaration ASTs for final codegen so its runtime
+    // events, phases, traits, and systems (frame, phase graph, SceneCleanup,
+    // etc.) are emitted even though it is precompiled and skipped in the
+    // per-module merge loop below. Tag events with their source module so
+    // emit_event uses the canonical module prefix.
+    for (auto& decl : std_prog->declarations) {
+        if (auto* ev = std::get_if<cactus::EventNode>(&decl)) {
+            ev->module_name = "std.core";
+        }
+    }
+    merged_codegen_prog.declarations.insert(merged_codegen_prog.declarations.end(),
+                                            std::make_move_iterator(std_prog->declarations.begin()),
+                                            std::make_move_iterator(std_prog->declarations.end()));
     return true;
 }
 
@@ -317,7 +355,7 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
         // std.core lifecycle events are implicitly in scope for every module.
         // Compile and link it up-front when available so semantic analysis and
         // downstream codegen both see the authoritative declarations.
-        if (!compile_implicit_std_core(build_dir, all_search_paths, compiled, artifact_paths)) {
+        if (!compile_implicit_std_core(build_dir, all_search_paths, compiled, artifact_paths, *merged_codegen_prog)) {
             return 1;
         }
 

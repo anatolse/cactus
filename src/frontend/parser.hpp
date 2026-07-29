@@ -51,7 +51,8 @@ private:
     SystemNode parse_system();
     ExternSystemNode parse_extern_system();
     ViewNode parse_view();
-    EventNode parse_event(bool is_pub = false);
+    EventNode parse_event(bool is_pub = false, bool is_external = false);
+    PhaseNode parse_phase(bool is_pub = false);
     FuncNode parse_func(bool is_pub);
     FuncNode parse_extern_func(bool is_pub);
     AssetDeclNode parse_asset_decl(bool is_pub);
@@ -59,6 +60,7 @@ private:
 
     // Helpers
     std::string parse_dotted_name();
+    LocatedName parse_located_name();
 
     // How a contextual `children:` block inside an archetype body is read:
     // declarations for templates/inline entities, overrides for template-backed
@@ -82,6 +84,7 @@ private:
     FieldNode parse_field();
     FieldModifiers parse_field_modifiers();
     EventHandlerNode parse_event_handler();
+    ExternHandlerNode parse_extern_handler();
     TypeRef parse_type_ref();
     FuncParam parse_param();
     std::vector<FuncParam> parse_param_list();
@@ -99,6 +102,9 @@ private:
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();
     std::vector<SortKey> parse_order_by_clause();
+    std::vector<LocatedName> parse_name_block(TokenType keyword, const char* clause_name);
+    std::vector<HandlerReferenceNode> parse_handler_order_block();
+    std::vector<HandlerCommandNode> parse_command_block();
     std::string parse_lifecycle_event_name();  // handles spawn/destroy/load/unload as names
     ViewElement parse_view_element();
 

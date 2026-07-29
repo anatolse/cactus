@@ -39,6 +39,10 @@ public:
     bool merge_into(DecoratedProgram& target, const DecoratedProgram& src, const std::string& src_module_name);
 
 private:
+    bool rebuild_execution_graph(DecoratedProgram& program, bool validate_references);
+
+    std::vector<ScheduleEdge> linked_explicit_edges_;
+
     ErrorReporter& errors_;
 
     /// Symbol origin tracking: symbol name → module that first defined it.

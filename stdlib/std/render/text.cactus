@@ -1,5 +1,8 @@
 module std.render.text
 
+use std.transform.flat as tf
+use std.transform.volume as tv
+
 # ── Text Label Rendering Trait ────────────────────────────────────────────────
 # Single trait works in both 2D and 3D contexts.
 # The active renderer is determined by the entity's WorldTransform type:
@@ -18,14 +21,30 @@ pub trait TextLabel:
 # font_size is interpreted as screen pixels.
 extern system TextRenderer2D:
     filter:
+        tf.WorldTransform
         TextLabel
+
+    on render:
+        reads:
+            tf.WorldTransform
+            TextLabel
+        effects:
+            graphics
 
 # Fires for entities with a 3D (volume) WorldTransform.
 # font_size is interpreted as world units; text is baked to a RenderTexture2D
 # cached by content and drawn as a plane mesh following the entity's orientation.
 extern system TextRenderer3D:
     filter:
+        tv.WorldTransform
         TextLabel
+
+    on render:
+        reads:
+            tv.WorldTransform
+            TextLabel
+        effects:
+            graphics
 
 # ── Window-Space Screen Labels ────────────────────────────────────────────────
 # HUD text drawn in window pixel coordinates after all viewport/world rendering.
@@ -45,3 +64,9 @@ pub trait ScreenLabel:
 extern system ScreenLabelSystem:
     filter:
         ScreenLabel
+
+    on render:
+        reads:
+            ScreenLabel
+        effects:
+            graphics

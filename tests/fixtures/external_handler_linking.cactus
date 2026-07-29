@@ -1,0 +1,37 @@
+module external_handler_linking
+
+pub extern event frame:
+    dt: float
+
+event Reset:
+    value: int
+
+trait Position:
+    var value: float = 2.0
+
+trait Velocity:
+    var value: float = 1.0
+
+phase fixed_tick:
+    from:
+        frame
+    dt: float = frame.dt
+
+entity Mover:
+    Position
+    Velocity
+
+extern system NativeMovement:
+    filter:
+        Position
+        Velocity
+    on fixed_tick:
+        reads:
+            Position
+        writes:
+            Velocity
+    on Reset:
+        reads:
+            Velocity
+        writes:
+            Position

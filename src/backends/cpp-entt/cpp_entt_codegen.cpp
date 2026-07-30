@@ -24,6 +24,8 @@ namespace {
 
 std::string snake_case(const std::string& value);
 std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);
+const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program);
+const PhasePlan* find_render_phase(const DecoratedProgram& program);
 
 bool program_uses_module(const DecoratedProgram& program, std::string_view module_name) {
     if (program.ast == nullptr) {
@@ -495,6 +497,33 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     std::ranges::sort(external_events,
                       [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
 
+    const auto* frame_event  = find_external_frame_event(program);
+    const auto* render_phase = find_render_phase(program);
+
+    // Mirrors the same flag/name computation CppEnttCodegen::generate() uses
+    // for the legacy per-viewport render loop and edit-mode HUD overlay (see
+    // the early __translate_camera_2d/3d helper emission there) — these are
+    // pure functions of `program`, so recomputing them here is safe and keeps
+    // this function self-contained rather than threading extra parameters
+    // through every call site.
+    const bool viewport_uses_flat    = module_uses_camera_flat(program);
+    const bool viewport_uses_volume  = module_uses_camera_volume(program);
+    const bool viewport_uses_editor  = module_uses_editor(program);
+    const bool render_uses_viewport  = module_uses_camera_viewport(program) && render_phase != nullptr;
+    const WorldTransformUsage render_wt_usage = EnttCodegenUtils::world_transform_usage(program);
+    const bool render_rig_is_2d      = render_wt_usage.flat || (viewport_uses_flat && !render_wt_usage.volume);
+    const bool render_rig_is_3d      = render_wt_usage.volume;
+    const std::string render_vp_cpp    = EnttCodegenUtils::trait_cpp_name("Viewport", program);
+    const std::string render_cam2d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
+    const std::string render_cam3d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
+    const bool render_emit_2d_helper =
+        render_uses_viewport && viewport_uses_flat && (render_rig_is_2d || !render_rig_is_3d);
+    const bool render_emit_3d_helper = render_uses_viewport && viewport_uses_volume && render_rig_is_3d;
+    const bool render_has_editor_state =
+        viewport_uses_editor && render_phase != nullptr && EnttCodegenUtils::has_trait(program, "EditorState");
+    const std::string render_es_cpp =
+        render_has_editor_state ? EnttCodegenUtils::trait_cpp_name("EditorState", program) : "";
+
     std::ostringstream out;
     out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
     out << "namespace cactus::runtime::entt_backend {\n\n";
@@ -630,13 +659,101 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "template <typename Occurrence>\n";
     out << "void generated_process_root_event(entt::registry&, const Occurrence&) {}\n\n";
 
+    // Emits the render phase's dispatch call. When the program links
+    // std.camera.viewport, the dispatch runs once per active viewport —
+    // bracketed by that viewport's scissor region and camera — so queued
+    // mesh/sprite submissions and immediate-mode draws (e.g. 2D shapes) both
+    // land in the right screen region using the right camera, mirroring the
+    // legacy generated_render_project's per-viewport loop (see
+    // CppEnttCodegen::generate()). Without std.camera.viewport, it's a plain
+    // single call, relying on the runtime's static default camera.
+    const auto emit_render_phase_dispatch = [&](const std::string& indent, const std::string& phase_name) {
+        if (!render_uses_viewport || (!render_emit_2d_helper && !render_emit_3d_helper)) {
+            out << indent << "generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            return;
+        }
+        out << indent << "{\n";
+        out << indent << "    const int __sw = GetScreenWidth();\n";
+        out << indent << "    const int __sh = GetScreenHeight();\n";
+        out << indent << "    static std::vector<std::pair<int,entt::entity>> __vps;\n";
+        out << indent << "    __vps.clear();\n";
+        out << indent << "    for (const auto& [__vp_e, __vp] : registry.view<" << render_vp_cpp
+            << ">().each()) {\n";
+        out << indent << "        if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
+        out << indent << "    }\n";
+        out << indent << "    std::ranges::sort(__vps);\n";
+        out << indent << "    for (auto& [__depth, __vp_ent] : __vps) {\n";
+        out << indent << "        (void)__depth;\n";
+        out << indent << "        const auto& __vp = registry.get<" << render_vp_cpp << ">(__vp_ent);\n";
+        out << indent << "        BeginScissorMode(\n";
+        out << indent << "            static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
+        out << indent << "            static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
+        out << indent << "            static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
+        out << indent << "            static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
+        out << indent << "        if (__vp.clear) { ClearBackground(__vp.clear_color); }\n";
+        if (render_emit_2d_helper) {
+            out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(__vp_ent)) {\n";
+            out << indent << "            const auto& __cam = registry.get<" << render_cam2d_cpp
+                << ">(__vp_ent);\n";
+            out << indent << "            set_active_camera_2d(__translate_camera_2d(__cam, __sw, __sh));\n";
+            out << indent << "        }\n";
+        }
+        if (render_emit_3d_helper) {
+            out << indent << (render_emit_2d_helper ? "        else if (registry.all_of<" : "        if (registry.all_of<")
+                << render_cam3d_cpp << ">(__vp_ent)) {\n";
+            out << indent << "            const auto& __cam = registry.get<" << render_cam3d_cpp
+                << ">(__vp_ent);\n";
+            out << indent << "            set_active_camera_3d(__translate_camera_3d(__vp_ent, __cam, registry));\n";
+            out << indent << "        }\n";
+        }
+        out << indent << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+        out << indent << "        flush_viewport_3d();\n";
+        out << indent << "        EndScissorMode();\n";
+        out << indent << "    }\n";
+        out << indent << "}\n";
+    };
+
+    // Edit-mode HUD overlay: screen-space (no camera transform), drawn once
+    // after the render-flush boundary closes — mirrors the legacy
+    // generated_render_project's overlay, ported here since it's hardcoded
+    // there rather than behind any phase/handler dispatch.
+    const auto emit_render_editor_overlay = [&](const std::string& indent) {
+        if (!render_has_editor_state) {
+            return;
+        }
+        out << indent << "{\n";
+        out << indent << "    bool __editor_active = false;\n";
+        out << indent << "    int  __editor_mode   = 0;\n";
+        out << indent << "    auto __ed_view = registry.view<" << render_es_cpp << ">();\n";
+        out << indent << "    for (auto __ed_ent : __ed_view) {\n";
+        out << indent << "        const auto& __es = __ed_view.get<" << render_es_cpp << ">(__ed_ent);\n";
+        out << indent << "        if (__es.active) { __editor_active = true; __editor_mode = __es.mode; break; }\n";
+        out << indent << "    }\n";
+        out << indent << "    if (__editor_active) {\n";
+        out << indent << "        DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
+        out << indent << "                              .width  = static_cast<float>(GetScreenWidth()),\n";
+        out << indent << "                              .height = static_cast<float>(GetScreenHeight())}, 3, "
+                          "YELLOW);\n";
+        out << indent << "        const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", "
+                          "\"ROTATE\", \"SCALE\", \"PLACE\"};\n";
+        out << indent << "        const char* __mode_str = (__editor_mode >= 0 && __editor_mode < 5)\n";
+        out << indent << "                                     ? __mode_names[static_cast<std::size_t>(__editor_mode)] "
+                          ": \"SELECT\";\n";
+        out << indent << "        std::string __hud = std::string(\"EDIT [\") + __mode_str +\n";
+        out << indent << "                            \"]  F1:toggle  W:trans  E:rot  R:scale  T:place\";\n";
+        out << indent << "        DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
+        out << indent << "    }\n";
+        out << indent << "}\n";
+    };
+
     const auto phase_order = phase_activation_order(program);
     for (const auto* phase : phase_order) {
         if (!phase->runtime_root.has_value()) {
             continue;
         }
-        const auto phase_name = canonical_to_cpp_name(phase->phase);
-        const auto root_type  = event_runtime_cpp_type(program, *phase->runtime_root);
+        const auto phase_name    = canonical_to_cpp_name(phase->phase);
+        const auto root_type     = event_runtime_cpp_type(program, *phase->runtime_root);
+        const bool is_render_phase_batch = phase == render_phase;
         out << "void generated_dispatch_phase_" << phase_name << "(entt::registry&, const " << phase_name
             << "PhaseRuntimeState&);\n\n";
         out << "void generated_run_phase_batch_" << phase_name << "(entt::registry& registry, const " << root_type
@@ -657,7 +774,14 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
             out << "    phase.dt = interval;\n";
             out << "    for (std::uint64_t repetition = 0; repetition < repetitions; ++repetition) {\n";
             out << "        scheduler.activation.active = true;\n";
-            out << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            if (is_render_phase_batch) {
+                out << "        begin_render_frame();\n";
+                emit_render_phase_dispatch("        ", phase_name);
+                out << "        end_render_frame();\n";
+                emit_render_editor_overlay("        ");
+            } else {
+                out << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            }
             out << "        generated_drain_event_cascade(registry);\n";
             out << "        generated_commit_activation(registry);\n";
             out << "        scheduler.activation.active = false;\n";
@@ -688,7 +812,14 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                 out << "    (void)root_event;\n";
             }
             out << "    scheduler.activation.active = true;\n";
-            out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            if (is_render_phase_batch) {
+                out << "    begin_render_frame();\n";
+                emit_render_phase_dispatch("    ", phase_name);
+                out << "    end_render_frame();\n";
+                emit_render_editor_overlay("    ");
+            } else {
+                out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
+            }
             out << "    generated_drain_event_cascade(registry);\n";
             out << "    generated_commit_activation(registry);\n";
             out << "    scheduler.activation.active = false;\n";
@@ -698,12 +829,24 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     }
 
     for (const auto* event : external_events) {
-        const auto root_type = event_runtime_cpp_type(program, *event->symbol_id);
+        const auto root_type    = event_runtime_cpp_type(program, *event->symbol_id);
+        const bool is_frame_root = event == frame_event;
         out << "void generated_process_root_event(entt::registry& registry, const " << root_type << "& root_event) {\n";
+        // Input-consumption reset fires once per real (display) frame, before
+        // any phase batch observes input — mirrors the legacy
+        // generated_update_project ordering.
+        if (is_frame_root) {
+            out << "    reset_consumed_input();\n";
+        }
         for (const auto* phase : phase_order) {
             if (phase->runtime_root.has_value() && *phase->runtime_root == *event->symbol_id) {
                 out << "    generated_run_phase_batch_" << canonical_to_cpp_name(phase->phase)
                     << "(registry, root_event);\n";
+                // Projected-trait cleanup fires once per frame, immediately
+                // after the render phase batch completes.
+                if (is_frame_root && phase == render_phase) {
+                    out << "    clear_projected_traits(registry);\n";
+                }
             }
         }
         out << "}\n\n";
@@ -1939,6 +2082,31 @@ const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program) 
     return fallback;
 }
 
+// The phase treated as "the render phase" for graph-driven codegen: the
+// phase batch whose dispatch call gets wrapped in begin_render_frame()/
+// end_render_frame() so render-phase extern systems (mesh/sprite/light/text
+// renderers, the viewport loop, editor HUD overlay, gizmos) actually flush
+// to the screen. Prefers std.core's `render` phase (present in every real
+// program); falls back to a linked program's own phase literally named
+// "render" for programs that don't import std.core. Programs with no phase
+// named "render" at all have no render-frame flush wrapped (e.g. the
+// game.scheduler test fixtures, which only declare input/fixed_tick).
+const PhasePlan* find_render_phase(const DecoratedProgram& program) {
+    const PhasePlan* fallback = nullptr;
+    for (const auto& phase : program.execution_graph.phases) {
+        if (phase.phase.local_name != "render") {
+            continue;
+        }
+        if (phase.phase.module.name == "std.core") {
+            return &phase;
+        }
+        if (fallback == nullptr || phase.phase.module.name < fallback->phase.module.name) {
+            fallback = &phase;
+        }
+    }
+    return fallback;
+}
+
 std::string emit_backend_main(const DecoratedProgram& program) {
     std::ostringstream out;
     const auto* frame_event       = find_external_frame_event(program);
@@ -2313,6 +2481,57 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             continue;
         }
         out << EnttComponentEmitter::emit_component(t) << "\n";
+    }
+
+    // ── Viewport camera-translate helpers ─────────────────────────────────────
+    // Emitted once, early — after component structs exist, before the
+    // graph-driven scheduler state (which needs to call these from the render
+    // phase batch's per-viewport wrap) and before the legacy generated_render_project
+    // (which also calls these). Defining them once here avoids a redefinition
+    // between the two call sites.
+    {
+        const bool early_rig_is_2d = wt_usage.flat || (uses_flat && !wt_usage.volume);
+        const bool early_rig_is_3d = wt_usage.volume;
+        const std::string early_cam2d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
+        const std::string early_cam3d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
+        const std::string early_wt3d_cpp =
+            EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+        const bool early_emit_2d_helper = uses_viewport && uses_flat && (early_rig_is_2d || !early_rig_is_3d);
+        const bool early_emit_3d_helper = uses_viewport && uses_volume && early_rig_is_3d;
+        if (early_emit_2d_helper || early_emit_3d_helper) {
+            out << "namespace {\n";
+            if (early_emit_2d_helper) {
+                out << "Camera2D __translate_camera_2d(const " << early_cam2d_cpp << "& cam, int sw, int sh) noexcept {\n";
+                out << "    Camera2D cam2d{};\n";
+                out << "    cam2d.target   = cam.offset;\n";
+                out << "    cam2d.zoom     = cam.zoom;\n";
+                out << "    cam2d.rotation = cam.rotation * (180.0F / 3.14159265F);\n";
+                out << "    cam2d.offset   = {.x = static_cast<float>(sw) * 0.5F,\n";
+                out << "                      .y = static_cast<float>(sh) * 0.5F};\n";
+                out << "    return cam2d;\n";
+                out << "}\n";
+            }
+            if (early_emit_3d_helper) {
+                out << "Camera3D __translate_camera_3d(entt::entity entity, const " << early_cam3d_cpp
+                    << "& cam, entt::registry& registry) {\n";
+                out << "    Camera3D cam3d{};\n";
+                out << "    cam3d.fovy       = cam.fov_y;\n";
+                out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
+                out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
+                out << "    if (registry.all_of<" << early_wt3d_cpp << ">(entity)) {\n";
+                out << "        const auto& xform = registry.get<" << early_wt3d_cpp << ">(entity);\n";
+                out << "        cam3d.position = xform.position;\n";
+                out << "        const auto& q  = xform.rotation;\n";
+                out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
+                out << "                          .y = xform.position.y + (2.0F * ((q.w * q.x) - (q.y * q.z))),\n";
+                out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * "
+                       "q.y)))))};\n";
+                out << "    }\n";
+                out << "    return cam3d;\n";
+                out << "}\n";
+            }
+            out << "}  // namespace\n\n";
+        }
     }
 
     out << emit_projected_trait_registry_helpers(program);
@@ -2810,47 +3029,16 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    dispatcher.update();\n";
     out << "}\n\n";
 
-    // ── translate_camera helpers (emitted when viewport loop is active) ──────
+    // vp_cpp/emit_2d_helper/emit_3d_helper: the __translate_camera_2d/3d
+    // function definitions themselves are emitted once, early (see above);
+    // these flags/names just drive which branches of the viewport loop below
+    // reference them.
     const std::string vp_cpp = EnttCodegenUtils::trait_cpp_name("Viewport", program);
     // 2D helper: flat camera in use and the program is not 3D-only (std.editor
     // makes uses_flat true even for 3D programs, so wt_usage gates it). The 3D
     // helper follows the root program's volume WorldTransform usage.
     const bool emit_2d_helper = uses_viewport && uses_flat && (rig_is_2d || !rig_is_3d);
     const bool emit_3d_helper = uses_viewport && uses_volume && rig_is_3d;
-    if (emit_2d_helper || emit_3d_helper) {
-        out << "namespace {\n";
-        if (emit_2d_helper) {
-            out << "Camera2D __translate_camera_2d(const " << cam2d_cpp << "& cam, int sw, int sh) noexcept {\n";
-            out << "    Camera2D cam2d{};\n";
-            out << "    cam2d.target   = cam.offset;\n";
-            out << "    cam2d.zoom     = cam.zoom;\n";
-            out << "    cam2d.rotation = cam.rotation * (180.0F / 3.14159265F);\n";
-            out << "    cam2d.offset   = {.x = static_cast<float>(sw) * 0.5F,\n";
-            out << "                      .y = static_cast<float>(sh) * 0.5F};\n";
-            out << "    return cam2d;\n";
-            out << "}\n";
-        }
-        if (emit_3d_helper) {
-            out << "Camera3D __translate_camera_3d(entt::entity entity, const " << cam3d_cpp
-                << "& cam, entt::registry& registry) {\n";
-            out << "    Camera3D cam3d{};\n";
-            out << "    cam3d.fovy       = cam.fov_y;\n";
-            out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
-            out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
-            out << "    if (registry.all_of<" << wt3d_cpp << ">(entity)) {\n";
-            out << "        const auto& xform = registry.get<" << wt3d_cpp << ">(entity);\n";
-            out << "        cam3d.position = xform.position;\n";
-            out << "        const auto& q  = xform.rotation;\n";
-            out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
-            out << "                          .y = xform.position.y + (2.0F * ((q.w * q.x) - (q.y * q.z))),\n";
-            out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * "
-                   "q.y)))))};\n";
-            out << "    }\n";
-            out << "    return cam3d;\n";
-            out << "}\n";
-        }
-        out << "}  // namespace\n\n";
-    }
 
     out << "void generated_render_project(entt::registry& registry, entt::dispatcher& dispatcher) {\n";
     out << "    (void)dispatcher;\n";

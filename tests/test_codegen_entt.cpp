@@ -3478,6 +3478,23 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     CHECK(input_call < fixed_call);
     CHECK(code.find("void generated_drain_external_events(entt::registry& registry)") != std::string::npos);
 
+    // reset_consumed_input() fires once per frame occurrence, before any phase
+    // batch runs, regardless of the module's own phase-name choices.
+    const auto reset_call = code.find("reset_consumed_input();", root_dispatch);
+    REQUIRE(reset_call != std::string::npos);
+    CHECK(reset_call < input_call);
+    // This module declares phases named "input"/"fixed_tick" but none named
+    // "render", so the graph-driven scheduler section (everything before the
+    // always-emitted legacy generated_update_project/generated_render_project,
+    // which unconditionally call these regardless of graph-driven usage) must
+    // not contain the render-flush boundary or projected-trait cleanup.
+    const auto legacy_start      = code.find("void generated_update_project");
+    REQUIRE(legacy_start != std::string::npos);
+    const auto graph_driven_code = code.substr(0, legacy_start);
+    CHECK(graph_driven_code.find("begin_render_frame()") == std::string::npos);
+    CHECK(graph_driven_code.find("end_render_frame()") == std::string::npos);
+    CHECK(graph_driven_code.find("clear_projected_traits(registry);") == std::string::npos);
+
     const auto main_start = code.find("int main()");
     const auto main_end   = code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start);
     REQUIRE(main_start != std::string::npos);
@@ -3600,6 +3617,98 @@ TEST_CASE("Codegen EnTT: declared phase fields are assigned from their resolved 
     CHECK(fixed_batch_body.find("phase.dt = interval;") != std::string::npos);
     CHECK(fixed_batch_body.find("phase.alpha = phase.accumulator / interval;") != std::string::npos);
     CHECK(fixed_batch_body.find("phase.dt = static_cast<float>(root_event.dt);") == std::string::npos);
+
+    // This module never declares phases named input/fixed_tick/tick/late_tick — its
+    // pipeline is tick -> fixed_tick -> render, from a non-std.core module. The
+    // render-flush boundary must still land on the phase literally named "render"
+    // (module-agnostic), bracketing only its dispatch call.
+    const auto render_begin_flush = code.find("begin_render_frame();", render_batch);
+    const auto render_end_flush   = code.find("end_render_frame();", render_batch);
+    REQUIRE(render_begin_flush != std::string::npos);
+    REQUIRE(render_end_flush != std::string::npos);
+    CHECK(render_begin_flush < render_dispatch);
+    CHECK(render_dispatch < render_end_flush);
+    CHECK(fixed_batch_body.find("begin_render_frame()") == std::string::npos);
+    CHECK(fixed_batch_body.find("end_render_frame()") == std::string::npos);
+    const auto tick_batch_body_full = code.substr(tick_batch, fixed_batch_decl - tick_batch);
+    CHECK(tick_batch_body_full.find("begin_render_frame()") == std::string::npos);
+    CHECK(tick_batch_body_full.find("end_render_frame()") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: graph-driven render flush wires per-frame housekeeping in the correct order",
+          "[codegen-entt][phase-runtime][render-flush]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module game.flush\n"
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "trait Renderer:\n"
+        "    let texture: texture_id\n"
+        "phase input:\n"
+        "    from:\n"
+        "        frame\n"
+        "phase render:\n"
+        "    after:\n"
+        "        input\n"
+        "extern system SpriteRenderer:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "        Renderer\n"
+        "    on render:\n"
+        "        reads:\n"
+        "            WorldTransform\n"
+        "            Renderer\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // reset_consumed_input() fires before the input phase batch, and
+    // clear_projected_traits() fires after the render phase batch, both
+    // within the frame-typed root-event handler.
+    const auto root_event_fn =
+        code.find("void generated_process_root_event(entt::registry& registry, const frameEvent& root_event)");
+    REQUIRE(root_event_fn != std::string::npos);
+    const auto reset_call =
+        code.find("reset_consumed_input();", root_event_fn);
+    const auto input_call =
+        code.find("generated_run_phase_batch_game_flush__input(registry, root_event);", root_event_fn);
+    const auto render_call =
+        code.find("generated_run_phase_batch_game_flush__render(registry, root_event);", root_event_fn);
+    const auto clear_call = code.find("clear_projected_traits(registry);", root_event_fn);
+    REQUIRE(reset_call != std::string::npos);
+    REQUIRE(input_call != std::string::npos);
+    REQUIRE(render_call != std::string::npos);
+    REQUIRE(clear_call != std::string::npos);
+    CHECK(reset_call < input_call);
+    CHECK(input_call < render_call);
+    CHECK(render_call < clear_call);
+
+    // begin_render_frame()/end_render_frame() bracket exactly the render
+    // phase's dispatch call — not the event-cascade drain or activation commit.
+    const auto render_batch = code.find("void generated_run_phase_batch_game_flush__render");
+    REQUIRE(render_batch != std::string::npos);
+    const auto begin_flush = code.find("begin_render_frame();", render_batch);
+    const auto dispatch_call =
+        code.find("generated_dispatch_phase_game_flush__render(registry, phase);", render_batch);
+    const auto end_flush     = code.find("end_render_frame();", render_batch);
+    const auto cascade_drain = code.find("generated_drain_event_cascade(registry);", render_batch);
+    const auto commit        = code.find("generated_commit_activation(registry);", render_batch);
+    REQUIRE(begin_flush != std::string::npos);
+    REQUIRE(dispatch_call != std::string::npos);
+    REQUIRE(end_flush != std::string::npos);
+    REQUIRE(cascade_drain != std::string::npos);
+    REQUIRE(commit != std::string::npos);
+    CHECK(begin_flush < dispatch_call);
+    CHECK(dispatch_call < end_flush);
+    CHECK(end_flush < cascade_drain);
+    CHECK(cascade_drain < commit);
+
+    // The input phase batch is untouched by the render-flush wrap.
+    const auto input_batch = generated_function(code, "void generated_run_phase_batch_game_flush__input");
+    CHECK(input_batch.find("begin_render_frame()") == std::string::npos);
+    CHECK(input_batch.find("end_render_frame()") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",

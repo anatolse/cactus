@@ -25,6 +25,8 @@ namespace {
 std::string snake_case(const std::string& value);
 std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);
 const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program);
+const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name);
+bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& event_symbol);
 const PhasePlan* find_render_phase(const DecoratedProgram& program);
 
 bool program_uses_module(const DecoratedProgram& program, std::string_view module_name) {
@@ -500,6 +502,16 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     const auto* frame_event  = find_external_frame_event(program);
     const auto* render_phase = find_render_phase(program);
 
+    // Commit-synthesized spawn/destroy notifications (proposal §"What Changes"):
+    // gated on consumer presence the same way the boot/teardown activations are,
+    // so programs with no `on spawn`/`on destroy` handler pay no extra runtime cost.
+    const auto* spawn_event   = find_std_core_event(program, "spawn");
+    const auto* destroy_event = find_std_core_event(program, "destroy");
+    const bool has_spawn_handler =
+        spawn_event != nullptr && program_has_event_handler(program, *spawn_event->symbol_id);
+    const bool has_destroy_handler =
+        destroy_event != nullptr && program_has_event_handler(program, *destroy_event->symbol_id);
+
     // Mirrors the same flag/name computation CppEnttCodegen::generate() uses
     // for the legacy per-viewport render loop and edit-mode HUD overlay (see
     // the early __translate_camera_2d/3d helper emission there) — these are
@@ -607,23 +619,11 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "    activation.commands.push_back(CactusStructuralCommand{.kind = kind, .apply = std::move(apply)});\n";
     out << "}\n\n";
 
-    out << "void generated_commit_activation(entt::registry& registry) {\n";
-    out << "    auto& activation = generated_scheduler_state().activation;\n";
-    out << "    auto commands = std::move(activation.commands);\n";
-    out << "    activation.commands.clear();\n";
-    out << "    for (auto& command : commands) {\n";
-    out << "        command.apply(registry);\n";
-    out << "    }\n";
-    out << "}\n\n";
-
-    for (const auto* event : external_events) {
-        const auto type = event_runtime_cpp_type(program, *event->symbol_id);
-        out << "void generated_inject_external_event(" << type << " occurrence) {\n";
-        out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
-        out << "        CactusQueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
-        out << "}\n\n";
-    }
-
+    // generated_emit_event and the generated_drain_event_cascade forward
+    // declaration are emitted ahead of generated_commit_activation (moved up
+    // from their historical position below the external-event injectors)
+    // because commit-synthesized spawn/destroy notifications call both from
+    // within generated_commit_activation's body.
     out << "template <typename Occurrence>\n";
     out << "void generated_emit_event(Occurrence occurrence) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
@@ -637,9 +637,58 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "    activation.event_queue.push_back(std::move(queued));\n";
     out << "}\n\n";
 
+    out << "void generated_drain_event_cascade(entt::registry& registry);\n\n";
+
+    out << "void generated_commit_activation(entt::registry& registry) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    if (!has_spawn_handler && !has_destroy_handler) {
+        out << "    auto commands = std::move(activation.commands);\n";
+        out << "    activation.commands.clear();\n";
+        out << "    for (auto& command : commands) {\n";
+        out << "        command.apply(registry);\n";
+        out << "    }\n";
+    } else {
+        const auto spawn_type   = has_spawn_handler ? event_runtime_cpp_type(program, *spawn_event->symbol_id) : "";
+        const auto destroy_type =
+            has_destroy_handler ? event_runtime_cpp_type(program, *destroy_event->symbol_id) : "";
+        // Looping until no new commands were queued lets an `on spawn`/`on
+        // destroy` handler that issues further spawn/destroy commands have
+        // those commands applied within the same activation, bounded by the
+        // existing kCactusMaxEventCascadeDepth cap (generated_emit_event
+        // defers instead of enqueuing once the cascade depth is exceeded, so
+        // no new commands get queued from a deferred notification and this
+        // loop terminates).
+        out << "    while (!activation.commands.empty()) {\n";
+        out << "        auto commands = std::move(activation.commands);\n";
+        out << "        activation.commands.clear();\n";
+        out << "        for (auto& command : commands) {\n";
+        out << "            command.apply(registry);\n";
+        if (has_spawn_handler) {
+            out << "            if (command.kind == CactusStructuralCommand::Kind::Spawn) {\n";
+            out << "                generated_emit_event(" << spawn_type << "{});\n";
+            out << "            }\n";
+        }
+        if (has_destroy_handler) {
+            out << "            if (command.kind == CactusStructuralCommand::Kind::Destroy) {\n";
+            out << "                generated_emit_event(" << destroy_type << "{});\n";
+            out << "            }\n";
+        }
+        out << "        }\n";
+        out << "        generated_drain_event_cascade(registry);\n";
+        out << "    }\n";
+    }
+    out << "}\n\n";
+
+    for (const auto* event : external_events) {
+        const auto type = event_runtime_cpp_type(program, *event->symbol_id);
+        out << "void generated_inject_external_event(" << type << " occurrence) {\n";
+        out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
+        out << "        CactusQueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
+        out << "}\n\n";
+    }
+
     out << "template <typename Occurrence>\n";
     out << "void generated_dispatch_event(entt::registry&, const Occurrence&) {}\n\n";
-    out << "void generated_drain_event_cascade(entt::registry& registry);\n\n";
 
     out << "struct CactusStableHandlerDispatch {\n";
     out << "    std::string_view canonical_id;\n";
@@ -2082,6 +2131,38 @@ const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program) 
     return fallback;
 }
 
+// Resolves a std.core lifecycle event (load/unload/spawn/destroy) by local
+// name, preferring the std.core declaration itself and falling back to a
+// same-named event from another linked module (mirrors
+// find_external_frame_event's resolution order for `frame`).
+const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name) {
+    const ResolvedEvent* fallback = nullptr;
+    for (const auto& [_, event] : program.events) {
+        if (event.name != name || !event.symbol_id.has_value()) {
+            continue;
+        }
+        if (event.symbol_id->module.name == "std.core") {
+            return &event;
+        }
+        if (fallback == nullptr || event.canonical_id < fallback->canonical_id) {
+            fallback = &event;
+        }
+    }
+    return fallback;
+}
+
+// Whether any handler in the execution graph's stable topological order is
+// triggered by this event — the same per-event handler-presence check
+// generated_dispatch_event's body construction already performs (see the
+// HandlerTriggerKind::Event match below), reused here to gate emission of
+// the boot/teardown activations and commit-synthesized notifications on
+// actual consumer presence.
+bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& event_symbol) {
+    return std::ranges::any_of(program.execution_graph.stable_topological_order, [&](const auto& identity) {
+        return identity.trigger.kind == HandlerTriggerKind::Event && identity.trigger.symbol == event_symbol;
+    });
+}
+
 // The phase treated as "the render phase" for graph-driven codegen: the
 // phase batch whose dispatch call gets wrapped in begin_render_frame()/
 // end_render_frame() so render-phase extern systems (mesh/sprite/light/text
@@ -2111,6 +2192,37 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     std::ostringstream out;
     const auto* frame_event       = find_external_frame_event(program);
     const bool graph_driven_frame = !program.execution_graph.phases.empty() && frame_event != nullptr;
+
+    // Boot/teardown one-shot activations (load/unload) are scoped to the
+    // graph-driven main loop only (task 2.6): the legacy generated_update_project/
+    // generated_render_project path has no currently-built example and is left
+    // untouched, so these resolve to null/false whenever graph_driven_frame is false.
+    const ResolvedEvent* load_event   = graph_driven_frame ? find_std_core_event(program, "load") : nullptr;
+    const ResolvedEvent* unload_event = graph_driven_frame ? find_std_core_event(program, "unload") : nullptr;
+    const bool has_load_handler = load_event != nullptr && program_has_event_handler(program, *load_event->symbol_id);
+    const bool has_unload_handler =
+        unload_event != nullptr && program_has_event_handler(program, *unload_event->symbol_id);
+
+    // Emitted inline here rather than inside generated_load_project's body
+    // (design task 2.5): emit_backend_main already has the event/handler-presence
+    // lookups this needs, so driving the activation from the call site avoids
+    // threading that context into a separately-defined hook function.
+    // generated_load_project stays the pre-existing empty compatibility stub for
+    // hosts built against runtime.hpp; its call site in main() is unchanged.
+    const auto emit_boundary_activation = [&](const ResolvedEvent& event) {
+        const auto event_type = event_runtime_cpp_type(program, *event.symbol_id);
+        out << "    {\n";
+        out << "        auto& boundary_activation = "
+               "cactus::runtime::entt_backend::generated_scheduler_state().activation;\n";
+        out << "        boundary_activation.active = true;\n";
+        out << "        cactus::runtime::entt_backend::generated_dispatch_event(registry, " << event_type
+            << "{});\n";
+        out << "        cactus::runtime::entt_backend::generated_drain_event_cascade(registry);\n";
+        out << "        cactus::runtime::entt_backend::generated_commit_activation(registry);\n";
+        out << "        boundary_activation.active = false;\n";
+        out << "    }\n";
+    };
+
     out << "\n// ── Backend Entry Point ───────────────────────────────────────────────\n\n";
     out << "#ifndef CACTUS_GENERATED_NO_MAIN\n";
     out << "int main() try {\n";
@@ -2122,6 +2234,9 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     out << "    cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);\n";
     out << "    cactus::runtime::entt_backend::generated_init_project(registry);\n";
     out << "    cactus::runtime::entt_backend::generated_load_project(registry);\n";
+    if (has_load_handler) {
+        emit_boundary_activation(*load_event);
+    }
     out << "    while (!WindowShouldClose()) {\n";
     out << "        const float dt = GetFrameTime();\n";
     out << "        BeginDrawing();\n";
@@ -2137,6 +2252,9 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     }
     out << "        EndDrawing();\n";
     out << "    }\n\n";
+    if (has_unload_handler) {
+        emit_boundary_activation(*unload_event);
+    }
     out << "    CloseWindow();\n";
     out << "    return 0;\n";
     out << "} catch (...) {\n";

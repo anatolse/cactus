@@ -964,14 +964,19 @@ TEST_CASE("Codegen EnTT: models.bounds_size binds to the model-prefixed runtime 
     CHECK(code.find("cactus::runtime::entt_backend::model_bounds_size(Robot)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: lifecycle-named events do not create implicit startup dispatch",
-          "[codegen-entt][dsl-scene-loading][dynamic-model-spawning]") {
+TEST_CASE("Codegen EnTT: on load handler runs via a one-shot boot activation before the frame loop",
+          "[codegen-entt][dsl-scene-loading][dynamic-model-spawning][graph-driven-lifecycle-events]") {
     ProgramNode program;
     // `pub event load` stands in for the std.core lifecycle declaration the
     // multi-module pipeline links in; the single-module analyzer needs it to
-    // accept `on load:`. It also exercises the loadEvent dedupe: the event
-    // declaration supplies the struct, so the empty marker must not be emitted.
+    // accept `on load:`. `frame` + `phase tick` make this a graph-driven
+    // program (boot/teardown activations are scoped to graph_driven_frame).
     auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
         "pub event load\n"
         "trait Marker\n"
         "trait Position:\n"
@@ -993,27 +998,52 @@ TEST_CASE("Codegen EnTT: lifecycle-named events do not create implicit startup d
 
     CHECK(count_occurrences(code, "struct loadEvent") == 1);
 
-    // The compatibility hook remains inert; only graph roots activate handlers.
-    const auto load = generated_function(code, "void generated_load_project");
-    CHECK(load.find("spawn_enemies_load") == std::string::npos);
+    // The compatibility hook remains inert; the boot activation (emitted
+    // inline in main()) is what actually dispatches to the handler.
+    const auto load_hook = generated_function(code, "void generated_load_project");
+    CHECK(load_hook.find("spawn_enemies_load") == std::string::npos);
 
-    // main() startup order: init project, then load phase, then the frame loop.
-    const auto init_pos = code.find("cactus::runtime::entt_backend::generated_init_project(registry);");
-    const auto load_pos = code.find("cactus::runtime::entt_backend::generated_load_project(registry);");
-    const auto loop_pos = code.find("while (!WindowShouldClose())");
+    // main() startup order: init project, then the (inert) load hook call,
+    // then the boot activation itself — inject the load occurrence, run its
+    // cascade, commit — all before the frame loop begins.
+    const auto main_start = code.find("int main() try {");
+    REQUIRE(main_start != std::string::npos);
+    const auto main_end = code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start);
+    REQUIRE(main_end != std::string::npos);
+    const auto main_fn = code.substr(main_start, main_end - main_start);
+
+    const auto init_pos     = main_fn.find("generated_init_project(registry);");
+    const auto load_call_pos = main_fn.find("generated_load_project(registry);");
+    const auto dispatch_pos  = main_fn.find("generated_dispatch_event(registry, loadEvent{});");
+    const auto drain_pos     = main_fn.find("generated_drain_event_cascade(registry);");
+    const auto commit_pos    = main_fn.find("generated_commit_activation(registry);");
+    const auto loop_pos      = main_fn.find("while (!WindowShouldClose())");
     REQUIRE(init_pos != std::string::npos);
-    REQUIRE(load_pos != std::string::npos);
+    REQUIRE(load_call_pos != std::string::npos);
+    REQUIRE(dispatch_pos != std::string::npos);
+    REQUIRE(drain_pos != std::string::npos);
+    REQUIRE(commit_pos != std::string::npos);
     REQUIRE(loop_pos != std::string::npos);
-    CHECK(init_pos < load_pos);
-    CHECK(load_pos < loop_pos);
+    CHECK(init_pos < load_call_pos);
+    CHECK(load_call_pos < dispatch_pos);
+    CHECK(dispatch_pos < drain_pos);
+    CHECK(drain_pos < commit_pos);
+    CHECK(commit_pos < loop_pos);
 }
 
-TEST_CASE("Codegen EnTT: programs without load handlers emit no loadEvent marker",
-          "[codegen-entt][dsl-scene-loading][dynamic-model-spawning]") {
+TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation",
+          "[codegen-entt][dsl-scene-loading][dynamic-model-spawning][graph-driven-lifecycle-events]") {
     ProgramNode program;
+    // `load` is declared (as it would be via a real `use std.core`) but no
+    // system handles it — the boot activation must not be emitted even though
+    // the program is otherwise graph-driven.
     auto decorated = full_pipeline(
-        "event tick:\n"
+        "pub extern event frame:\n"
         "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "pub event load\n"
         "trait Pos:\n"
         "    var x: float = 0.0\n"
         "system Move:\n"
@@ -1024,10 +1054,253 @@ TEST_CASE("Codegen EnTT: programs without load handlers emit no loadEvent marker
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("struct loadEvent") == std::string::npos);
+
+    // The event is declared and still gets a struct + dispatch overload
+    // (mirrors a real program linking std.core), but nothing consumes it.
+    CHECK(count_occurrences(code, "struct loadEvent") == 1);
+
     // The hook is still exported so main() and no-main hosts can call it.
-    const auto load = generated_function(code, "void generated_load_project");
-    CHECK(load.find("(void)registry;") != std::string::npos);
+    const auto load_hook = generated_function(code, "void generated_load_project");
+    CHECK(load_hook.find("(void)registry;") != std::string::npos);
+
+    const auto main_start = code.find("int main() try {");
+    REQUIRE(main_start != std::string::npos);
+    const auto main_end = code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start);
+    REQUIRE(main_end != std::string::npos);
+    const auto main_fn = code.substr(main_start, main_end - main_start);
+
+    CHECK(main_fn.find("generated_dispatch_event(registry, loadEvent{});") == std::string::npos);
+
+    // init -> load hook -> frame loop, with nothing injected between them.
+    const auto init_pos      = main_fn.find("generated_init_project(registry);");
+    const auto load_call_pos = main_fn.find("generated_load_project(registry);");
+    const auto loop_pos      = main_fn.find("while (!WindowShouldClose())");
+    REQUIRE(init_pos != std::string::npos);
+    REQUIRE(load_call_pos != std::string::npos);
+    REQUIRE(loop_pos != std::string::npos);
+    CHECK(init_pos < load_call_pos);
+    CHECK(load_call_pos < loop_pos);
+}
+
+TEST_CASE("Codegen EnTT: on unload handler runs via a one-shot teardown activation after the frame loop",
+          "[codegen-entt][dsl-scene-loading][graph-driven-lifecycle-events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "pub event unload\n"
+        "trait Marker\n"
+        "entity Bootstrap:\n"
+        "    Marker\n"
+        "system SceneCleanup:\n"
+        "    filter:\n"
+        "        Marker\n"
+        "    on unload:\n"
+        "        destroy\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK(count_occurrences(code, "struct unloadEvent") == 1);
+
+    const auto main_start = code.find("int main() try {");
+    REQUIRE(main_start != std::string::npos);
+    const auto main_end = code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start);
+    REQUIRE(main_end != std::string::npos);
+    const auto main_fn = code.substr(main_start, main_end - main_start);
+
+    // Teardown order: frame loop exits, then the unload activation (inject,
+    // cascade, commit), then CloseWindow().
+    const auto loop_pos       = main_fn.find("while (!WindowShouldClose())");
+    const auto end_drawing_pos = main_fn.find("EndDrawing();");
+    const auto dispatch_pos   = main_fn.find("generated_dispatch_event(registry, unloadEvent{});");
+    const auto drain_pos      = main_fn.find("generated_drain_event_cascade(registry);");
+    const auto commit_pos     = main_fn.find("generated_commit_activation(registry);");
+    const auto close_pos      = main_fn.find("CloseWindow();");
+    REQUIRE(loop_pos != std::string::npos);
+    REQUIRE(end_drawing_pos != std::string::npos);
+    REQUIRE(dispatch_pos != std::string::npos);
+    REQUIRE(drain_pos != std::string::npos);
+    REQUIRE(commit_pos != std::string::npos);
+    REQUIRE(close_pos != std::string::npos);
+    CHECK(loop_pos < end_drawing_pos);
+    CHECK(end_drawing_pos < dispatch_pos);
+    CHECK(dispatch_pos < drain_pos);
+    CHECK(drain_pos < commit_pos);
+    CHECK(commit_pos < close_pos);
+}
+
+TEST_CASE("Codegen EnTT: programs without an unload handler emit no teardown activation",
+          "[codegen-entt][dsl-scene-loading][graph-driven-lifecycle-events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "pub event unload\n"
+        "trait Pos:\n"
+        "    var x: float = 0.0\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on tick:\n"
+        "        x = x + tick.dt\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    CHECK(count_occurrences(code, "struct unloadEvent") == 1);
+
+    const auto main_start = code.find("int main() try {");
+    REQUIRE(main_start != std::string::npos);
+    const auto main_end = code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start);
+    REQUIRE(main_end != std::string::npos);
+    const auto main_fn = code.substr(main_start, main_end - main_start);
+
+    CHECK(main_fn.find("generated_dispatch_event(registry, unloadEvent{});") == std::string::npos);
+
+    const auto loop_pos  = main_fn.find("while (!WindowShouldClose())");
+    const auto close_pos = main_fn.find("CloseWindow();");
+    REQUIRE(loop_pos != std::string::npos);
+    REQUIRE(close_pos != std::string::npos);
+    CHECK(loop_pos < close_pos);
+}
+
+TEST_CASE("Codegen EnTT: commit emits a spawn notification only when an on spawn handler exists",
+          "[codegen-entt][graph-driven-lifecycle-events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event spawn\n"
+        "event destroy\n"
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system OnSpawn:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on spawn:\n"
+        "        x = x + 1.0\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Gating is per-event: an `on spawn` handler emits spawn-notification
+    // codegen without also emitting destroy-notification codegen.
+    const auto commit_fn = generated_function(code, "void generated_commit_activation");
+    CHECK(commit_fn.find("while (!activation.commands.empty())") != std::string::npos);
+    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Spawn") != std::string::npos);
+    CHECK(commit_fn.find("generated_emit_event(spawnEvent{});") != std::string::npos);
+    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Destroy") == std::string::npos);
+    CHECK(commit_fn.find("generated_drain_event_cascade(registry);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: commit emits a destroy notification only when an on destroy handler exists",
+          "[codegen-entt][graph-driven-lifecycle-events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event spawn\n"
+        "event destroy\n"
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system OnDestroy:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on destroy:\n"
+        "        x = x + 1.0\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto commit_fn = generated_function(code, "void generated_commit_activation");
+    CHECK(commit_fn.find("while (!activation.commands.empty())") != std::string::npos);
+    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Destroy") != std::string::npos);
+    CHECK(commit_fn.find("generated_emit_event(destroyEvent{});") != std::string::npos);
+    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Spawn") == std::string::npos);
+    CHECK(commit_fn.find("generated_drain_event_cascade(registry);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: programs without spawn/destroy handlers emit no commit notification codegen",
+          "[codegen-entt][graph-driven-lifecycle-events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event spawn\n"
+        "event destroy\n"
+        "trait Pos:\n"
+        "    var x: float = 0.0\n"
+        "system Move:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on tick:\n"
+        "        x = x + tick.dt\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto commit_fn = generated_function(code, "void generated_commit_activation");
+    CHECK(commit_fn.find("while (!activation.commands.empty())") == std::string::npos);
+    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Spawn") == std::string::npos);
+    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Destroy") == std::string::npos);
+    CHECK(commit_fn.find("generated_drain_event_cascade(registry);") == std::string::npos);
+    CHECK(commit_fn.find("for (auto& command : commands) {") != std::string::npos);
+    // The events are still declared (as they would be via a real `use
+    // std.core`) and still get struct + dispatch-overload codegen; only the
+    // commit-side notification emission is gated on handler presence.
+    CHECK(count_occurrences(code, "struct spawnEvent") == 1);
+    CHECK(count_occurrences(code, "struct destroyEvent") == 1);
+}
+
+TEST_CASE("Codegen EnTT: spawn notification emission reuses the existing cascade-depth cap",
+          "[codegen-entt][graph-driven-lifecycle-events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event spawn\n"
+        "trait Pos:\n"
+        "    var x: float\n"
+        "system OnSpawn:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on spawn:\n"
+        "        x = x + 1.0\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Commit routes the spawn notification through generated_emit_event — the
+    // same cascade-depth-bounded path (kCactusMaxEventCascadeDepth) already
+    // used for ordinary handler-emitted events — rather than pushing directly
+    // onto the event queue via a new/uncapped path.
+    const auto commit_fn = generated_function(code, "void generated_commit_activation");
+    CHECK(commit_fn.find("generated_emit_event(spawnEvent{});") != std::string::npos);
+    CHECK(commit_fn.find("activation.event_queue.push_back") == std::string::npos);
+
+    // Exactly one cascade-depth cap is declared for the whole program — no
+    // second/independent depth-limiting mechanism was introduced.
+    CHECK(count_occurrences(code, "kCactusMaxEventCascadeDepth = 64;") == 1);
+    CHECK(code.find("if (next_depth > kCactusMaxEventCascadeDepth)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {

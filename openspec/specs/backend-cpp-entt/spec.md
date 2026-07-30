@@ -943,7 +943,7 @@ This requirement does not apply to synthesized periodic-phase fields (`dt`, `alp
 - **THEN** its synthesized `dt` and `alpha` fields continue to be populated by the existing accumulator/catch-up logic, not by initializer-binding assignment
 
 ### Requirement: Activation command buffer and event cascade
-The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary.
+The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary. When the linked program has at least one handler triggered by `std.core.spawn` (respectively `std.core.destroy`), commit SHALL emit a `std.core.spawn` (respectively `std.core.destroy`) occurrence back into the same activation's cascade for each applied `Spawn` (respectively `Destroy`) command, subject to the same cascade-depth rule already applied to handler-emitted events. Programs with no handler triggered by `std.core.spawn`/`std.core.destroy` SHALL NOT emit this notification code path.
 
 #### Scenario: Structural command is deferred to commit
 - **WHEN** a fixed_tick handler issues `spawn Particle`
@@ -952,6 +952,37 @@ The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands durin
 #### Scenario: Event consumer runs before commit
 - **WHEN** a phase handler emits Contact and a Contact handler issues commands
 - **THEN** the Contact cascade completes and its commands join the same activation commit
+
+#### Scenario: Commit emits spawn notification when consumed
+- **WHEN** the linked program declares a system with an `on spawn` handler and some other handler issues `spawn Enemy`
+- **THEN** after the `Spawn` command is applied at commit, a `std.core.spawn` occurrence re-enters the same activation's cascade and the `on spawn` handler runs against the newly created entity
+
+#### Scenario: Commit emits destroy notification when consumed
+- **WHEN** the linked program declares a system with an `on destroy` handler and some other handler issues `destroy` on an entity
+- **THEN** after the `Destroy` command is applied at commit, a `std.core.destroy` occurrence re-enters the same activation's cascade and the `on destroy` handler runs
+
+#### Scenario: No spawn/destroy handler means no notification codegen
+- **WHEN** the linked program declares no handler triggered by `std.core.spawn` or `std.core.destroy`
+- **THEN** `generated_commit_activation` applies commands without emitting either notification, and no dispatch overload for `std_core__spawnEvent`/`std_core__destroyEvent` is generated
+
+### Requirement: Graph-driven main loop runs one-shot load/unload boundary activations
+When the cpp-entt backend generates the graph-driven main loop, and the linked program declares at least one handler triggered by `std.core.load`, the generated `main()` SHALL run one activation — inject a `std.core.load` root occurrence, execute its handler cascade, then commit — exactly once, after `generated_init_project` completes and before the first frame occurrence is injected. Symmetrically, when the linked program declares at least one handler triggered by `std.core.unload`, generated `main()` SHALL run one `std.core.unload` activation (inject, cascade, commit) exactly once, after the frame loop exits and before `CloseWindow()`. Neither activation SHALL execute when the corresponding trigger has no handler in the linked program.
+
+#### Scenario: Load activation runs once before the first frame
+- **WHEN** a linked program declares `system SpawnCharacters: filter: SpawnerMarker` `on load:` that queues three `spawn` commands
+- **THEN** generated `main()` runs the load activation (including its commit) after `generated_init_project` and before the loop's first `frame` injection, so all three entities exist for the first frame's phases
+
+#### Scenario: Unload activation runs once at teardown
+- **WHEN** the linked program imports `std.core` (providing `SceneCleanup`'s `on unload: destroy`)
+- **THEN** generated `main()` runs the unload activation after `WindowShouldClose()` becomes true and before `CloseWindow()`, so non-persistent entities are destroyed through the normal commit path before the window closes
+
+#### Scenario: No load handler means no boot activation
+- **WHEN** the linked program declares no handler triggered by `std.core.load`
+- **THEN** generated `main()` does not inject a `std.core.load` occurrence or run a boot activation; `generated_init_project` is followed directly by the frame loop
+
+#### Scenario: Legacy main loop is out of scope
+- **WHEN** `graph_driven_frame` is false
+- **THEN** the boot/teardown activation behavior described here is not emitted; `generated_load_project` remains the pre-existing empty compatibility stub, and legacy-mode `on load`/`on unload` dispatch is unchanged by this requirement (no currently-built example uses the legacy main loop)
 
 ### Requirement: Graph-driven main loop executes per-frame render and input housekeeping
 When the cpp-entt backend generates the graph-driven main loop (`graph_driven_frame` true — the program has a non-empty execution graph and a resolved external frame event), the generated code SHALL still execute, once per real display frame, the same housekeeping the legacy main loop performs via `generated_update_project`/`generated_render_project`:

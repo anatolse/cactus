@@ -18,7 +18,7 @@ The `std.camera.viewport` module SHALL provide a `Viewport` trait that defines a
 ---
 
 ### Requirement: Codegen emits a per-viewport render loop when std.camera.viewport is imported
-When a module imports `std.camera.viewport`, the cpp-entt codegen SHALL emit a viewport render loop inside `generated_render_project` (between `begin_render_frame` and `end_render_frame`). The loop SHALL replace the single camera-sync block in `generated_update_project` for such modules.
+When a module imports `std.camera.viewport`, the cpp-entt codegen SHALL emit a viewport render loop within the render-frame flush boundary (the code path between `begin_render_frame` and `end_render_frame`) — inside `generated_render_project` for the legacy main loop, or inside the render phase activation's dispatch for the graph-driven main loop. The loop SHALL replace the single camera-sync block in `generated_update_project` for modules using the legacy main loop.
 
 #### Scenario: Viewports rendered in depth order
 - **WHEN** two Viewport entities exist with `depth=0` and `depth=10`
@@ -51,3 +51,7 @@ When a module imports `std.camera.viewport`, the cpp-entt codegen SHALL emit a v
 #### Scenario: Viewport without Camera trait has no view transform set
 - **WHEN** a Viewport entity has neither `std.camera.flat.Camera` nor `std.camera.volume.Camera`
 - **THEN** the render loop does not call `set_active_camera_2d` or `set_active_camera_3d` for that viewport (active camera remains at its previously set value)
+
+#### Scenario: Viewport loop executes under the graph-driven main loop
+- **WHEN** a program importing `std.camera.viewport` is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
+- **THEN** the viewport render loop still executes once per frame, inside the render phase activation's dispatch, between `begin_render_frame` and `end_render_frame`

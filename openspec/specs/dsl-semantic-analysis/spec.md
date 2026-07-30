@@ -157,9 +157,23 @@ The semantic analyzer SHALL build a canonical handler execution graph from phase
 ### Requirement: Phase and external-event semantic validation
 The semantic analyzer SHALL resolve external-event and phase declarations canonically, type-check phase field initializers, validate phase cadence constants and dependency acyclicity, and resolve each handler trigger unambiguously as either a phase or an event.
 
+Each declared phase field's initializer SHALL be a single member-chain expression (e.g. `frame.dt`, `fixed_tick.alpha`) that reads a field of the phase's runtime root event or an allowed upstream phase. The analyzer SHALL retain the resolved binding — source kind (root event vs. upstream phase), resolved source symbol, and member name — on the decorated phase field so downstream code generation can reproduce the initializer without re-resolving it. A phase field initializer that is not a plain member-chain expression (for example, a literal, unary, or binary composition) SHALL be rejected with an error, since no runtime lowering is defined for it.
+
 #### Scenario: Trigger kind is preserved
 - **WHEN** `on tick` resolves to a phase and `on Damaged` resolves to an event
 - **THEN** the decorated handlers preserve distinct phase-trigger and event-trigger kinds
+
+#### Scenario: Resolved binding recorded for downstream codegen
+- **WHEN** `phase tick` declares `after: fixed_tick` and `dt: float = frame.dt`
+- **THEN** the decorated phase field for `tick.dt` records that it is bound to the runtime root event's `dt` field
+
+#### Scenario: Upstream phase binding recorded for downstream codegen
+- **WHEN** `phase render` declares `alpha: float = fixed_tick.alpha`
+- **THEN** the decorated phase field for `render.alpha` records that it is bound to upstream phase `fixed_tick`'s `alpha` field
+
+#### Scenario: Compound phase field initializer rejected
+- **WHEN** a phase field declares `dt: float = frame.dt * 2.0`
+- **THEN** semantic analysis reports that the phase field initializer must be a plain member-chain read of upstream activation data
 
 ### Requirement: Accept imported symbols from dependency modules
 The semantic analyzer SHALL accept imported public symbols from dependency modules keyed by module path or alias. Imported symbols SHALL be resolved only through an explicit module qualifier or alias, except for symbols provided by the implicit `std.core` prelude. Unique unqualified imported-symbol lookup SHALL NOT be performed for ordinary modules.

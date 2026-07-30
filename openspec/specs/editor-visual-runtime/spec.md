@@ -4,12 +4,17 @@ Define the visual rendering behavior of the in-game editor, including render-pha
 ## Requirements
 
 ### Requirement: Editor extern render systems run in the render phase
-`GizmoRenderer2D`, `GizmoRenderer3D`, `EditorTemplatePalette`, and `EditorPropertyPanel` SHALL be recognized as render-phase extern systems by `is_render_phase_extern` in the codegen. They SHALL be emitted as calls inside `generated_render_project` (between `begin_render_frame` and `end_render_frame`), not in `generated_update_project`.
+`GizmoRenderer2D`, `GizmoRenderer3D`, `EditorTemplatePalette`, and `EditorPropertyPanel` SHALL be recognized as render-phase extern systems by `is_render_phase_extern` in the codegen. They SHALL be emitted as calls within the render-frame flush boundary (the code path between `begin_render_frame` and `end_render_frame`) — inside `generated_render_project` for the legacy main loop, or inside the render phase activation's dispatch for the graph-driven main loop — not in `generated_update_project` or any non-render phase activation.
 
-#### Scenario: Editor systems placed in render phase
-- **WHEN** a module imports `std.editor` and declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern systems
+#### Scenario: Editor systems placed in render phase (legacy main loop)
+- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern systems, and is generated with the legacy main loop
 - **THEN** the generated `generated_render_project` contains calls to `gizmo_renderer2_d_tick` and `editor_template_palette_tick`
 - **THEN** the generated `generated_update_project` does NOT contain calls to `gizmo_renderer2_d_tick` or `editor_template_palette_tick`
+
+#### Scenario: Editor systems placed in render phase (graph-driven main loop)
+- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern systems, and is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
+- **THEN** the render phase activation's dispatch contains calls to `gizmo_renderer2_d_tick` and `editor_template_palette_tick`, wrapped by that frame's `begin_render_frame`/`end_render_frame` calls
+- **THEN** no other phase activation contains calls to `gizmo_renderer2_d_tick` or `editor_template_palette_tick`
 
 ### Requirement: GizmoRenderer2D draws Blender-style selection and transform handles
 When `EditorState.active` is true, `GizmoRenderer2D` SHALL open a `BeginMode2D(get_active_camera_2d())` block and draw the following for each entity that has both `EditorGizmo2D` and `WorldTransform`:
@@ -55,7 +60,7 @@ The palette SHALL only be rendered (and handle input) when `EditorState.active` 
 - **THEN** `EditorState.active_template` is set to "Box" and `EditorState.mode` is set to 4
 
 ### Requirement: Edit-mode overlay drawn in render phase
-After all other render-phase extern systems run, the codegen-emitted `generated_render_project` SHALL draw an edit-mode overlay when any EditorState entity has `active=true`. The overlay consists of:
+After all other render-phase extern systems run, the codegen SHALL draw an edit-mode overlay when any EditorState entity has `active=true`, within the same render-frame flush boundary described above (`generated_render_project` under the legacy main loop, or the render phase activation's dispatch under the graph-driven main loop). The overlay consists of:
 - A yellow rectangle outline 3px thick along the full screen boundary (`DrawRectangleLinesEx({0,0,screenW,screenH}, 3, YELLOW)`)
 - A HUD text line at position (10, 10) in yellow showing the current mode: `"EDIT [<MODE>]  F1:toggle  W:trans  E:rot  R:scale  T:place"` where `<MODE>` is one of SELECT / TRANSLATE / ROTATE / SCALE / PLACE based on `EditorState.mode`
 
@@ -66,6 +71,10 @@ After all other render-phase extern systems run, the codegen-emitted `generated_
 #### Scenario: Overlay hidden outside edit mode
 - **WHEN** `EditorState.active` is false
 - **THEN** no border and no HUD text are drawn
+
+#### Scenario: Overlay renders under the graph-driven main loop
+- **WHEN** a program using `std.editor` with `EditorState.active = true` is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
+- **THEN** the render phase activation's dispatch draws the yellow border and HUD text every frame, the same as under the legacy main loop
 
 ### Requirement: editor_hit_test_2d performs AABB test in world space
 `editor_hit_test_2d(screen_pos, mask)` SHALL convert `screen_pos` to world space using `editor_screen_to_world_2d`, then iterate all entities with `WorldTransform` and `BoxCollider`, and return the first entity whose AABB (position to position+size) contains the world point and whose `Collider.layer & mask != 0` (if `Collider` component is present; otherwise always matches). Entities with `EditorLocked` SHALL be excluded. Returns `entt::null` if no match.

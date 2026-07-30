@@ -834,8 +834,9 @@ be used as emission gates.
 #### Scenario: Edit-mode overlay emitted for a linked editor program
 - **WHEN** any linked program whose merged traits include `std.editor.EditorState` is
   generated
-- **THEN** `generated_render_project` contains the edit-mode HUD overlay block gated on
-  `EditorState.active`
+- **THEN** the edit-mode HUD overlay block gated on `EditorState.active` is emitted within
+  the render-frame flush boundary — inside `generated_render_project` for the legacy main
+  loop, or inside the render phase activation's dispatch for the graph-driven main loop
 
 #### Scenario: Emitted impl lambdas reference resolved component names
 - **WHEN** the hit-test, spawn, or raycast impl registration is emitted for a linked
@@ -924,6 +925,23 @@ The cpp-entt backend SHALL generate execution from the DecoratedProgram phase an
 - **WHEN** fixed_tick declares `every: 1.0 / 60.0` and `max: 8`
 - **THEN** generated code runs at most eight repetitions, drops excess whole steps, preserves the remainder, and computes alpha
 
+### Requirement: Phase field initializer propagation
+For each declared phase field with a resolved initializer binding, the backend SHALL emit an assignment in that phase's runtime batch function that writes the bound source value into the phase's runtime-state field before dispatching handlers. A field bound to the runtime root event SHALL be assigned from the batch function's `root_event` parameter. A field bound to an upstream phase SHALL be assigned from that upstream phase's own persisted runtime state. Each assignment SHALL be wrapped in a cast to the declared field's C++ type when the source's underlying storage type differs.
+
+This requirement does not apply to synthesized periodic-phase fields (`dt`, `alpha` on a phase with `every:`), which the backend already populates via accumulator/catch-up bookkeeping.
+
+#### Scenario: Root-event-bound field is assigned before dispatch
+- **WHEN** `phase tick` declares `dt: float = frame.dt`
+- **THEN** `generated_run_phase_batch_std_core__tick` assigns `phase.dt` from `root_event.dt` before calling `generated_dispatch_phase_std_core__tick`
+
+#### Scenario: Upstream-phase-bound field is assigned before dispatch
+- **WHEN** `phase render` declares `alpha: float = fixed_tick.alpha`
+- **THEN** `generated_run_phase_batch_std_core__render` assigns `phase.alpha` from the persisted `std_core__fixed_tick` runtime state's `alpha` field before calling `generated_dispatch_phase_std_core__render`
+
+#### Scenario: Synthesized periodic fields are unaffected
+- **WHEN** `phase fixed_tick` declares `every: 1.0 / 60.0`
+- **THEN** its synthesized `dt` and `alpha` fields continue to be populated by the existing accumulator/catch-up logic, not by initializer-binding assignment
+
 ### Requirement: Activation command buffer and event cascade
 The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary.
 
@@ -934,6 +952,31 @@ The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands durin
 #### Scenario: Event consumer runs before commit
 - **WHEN** a phase handler emits Contact and a Contact handler issues commands
 - **THEN** the Contact cascade completes and its commands join the same activation commit
+
+### Requirement: Graph-driven main loop executes per-frame render and input housekeeping
+When the cpp-entt backend generates the graph-driven main loop (`graph_driven_frame` true — the program has a non-empty execution graph and a resolved external frame event), the generated code SHALL still execute, once per real display frame, the same housekeeping the legacy main loop performs via `generated_update_project`/`generated_render_project`:
+
+- Input-consumption reset (`reset_consumed_input()`) SHALL execute before the input phase activates for that frame occurrence.
+- The render-frame flush boundary (`begin_render_frame()` / `end_render_frame()`) SHALL wrap the render phase activation's system dispatch, so render-phase extern systems (mesh/sprite/light/text renderers, the viewport loop, and the editor HUD overlay) submit draw work that reaches the screen.
+- Projected-trait cleanup (`clear_projected_traits(registry)`) SHALL execute once per frame after the render phase activation completes.
+
+This SHALL hold regardless of custom phase names — the program's identified render phase (the phase already used to decide which extern systems are render-phase systems) is the one wrapped by the render-frame flush boundary, not necessarily a phase literally named `render`.
+
+#### Scenario: Input reset runs once per frame under the graph-driven loop
+- **WHEN** a graph-driven program's main loop injects one frame occurrence
+- **THEN** `reset_consumed_input()` executes exactly once before that frame's input phase activation runs
+
+#### Scenario: Render-phase systems draw between begin and end render frame
+- **WHEN** a graph-driven program declares a `MeshRenderer`-recognized render-phase extern system
+- **THEN** the generated render phase activation calls `begin_render_frame()`, then the render-phase system dispatch, then `end_render_frame()`, in that order, every frame
+
+#### Scenario: Projected traits are cleared after the render phase completes
+- **WHEN** a graph-driven program projects a trait during a frame
+- **THEN** `clear_projected_traits(registry)` executes after that frame's render phase activation returns, and the projection is not visible on the next frame unless re-projected
+
+#### Scenario: Legacy main loop is unaffected
+- **WHEN** `graph_driven_frame` is false
+- **THEN** `generated_update_project`/`generated_render_project` continue to perform this housekeeping exactly as before, and the graph-driven housekeeping described above is not emitted
 
 ### Requirement: Contract-shaped external handler lowering
 The cpp-entt backend SHALL lower each external handler to a callback or recognized runtime implementation whose const/mutable component access, event emitter, command interface, and effect services are bounded by its declared contract. Selectionless handlers SHALL be invoked once; selected handlers SHALL use typed EnTT views.

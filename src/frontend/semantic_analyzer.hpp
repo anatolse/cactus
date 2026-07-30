@@ -17,6 +17,16 @@ namespace cactus {
 
 // ── Decorated AST (resolved output of the semantic analyzer) ───────────────
 
+// Resolved binding for a declared phase field's initializer (e.g. `dt: float = frame.dt`).
+// Records where codegen should read the value from at runtime, without re-resolving
+// the original member-chain expression.
+struct PhaseFieldSource {
+    enum class Kind : std::uint8_t { RootEvent, UpstreamPhase };
+    Kind kind = Kind::RootEvent;
+    SymbolId source;    // the runtime root event or upstream phase this field reads from
+    std::string member;  // field name on that source
+};
+
 struct ResolvedField {
     std::string name;
     TypeInfo type;
@@ -28,6 +38,7 @@ struct ResolvedField {
     bool has_default        = false;
     bool is_synthesized     = false;
     bool is_completion_only = false;
+    std::optional<PhaseFieldSource> source_binding;
 };
 
 // Canonical identity mixin — present on all module-scope resolved declarations.

@@ -639,7 +639,11 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     tick_decl.max_repetitions = 4;
     tick_decl.fields          = {
         {.name = "dt", .type = make_float_type(), .is_synthesized = true},
-        {.name = "alpha", .type = make_float_type(), .is_synthesized = true, .is_completion_only = true}};
+        {.name = "alpha", .type = make_float_type(), .is_synthesized = true, .is_completion_only = true},
+        {.name           = "frame_dt",
+         .type           = make_float_type(),
+         .has_default    = true,
+         .source_binding = PhaseFieldSource{.kind = PhaseFieldSource::Kind::RootEvent, .source = frame, .member = "dt"}}};
     prog.phases.emplace(tick_decl.name, tick_decl);
 
     HandlerContract contract;
@@ -702,6 +706,10 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     CHECK(loaded->phases.at("tick").every_seconds == 0.02);
     CHECK(loaded->phases.at("tick").max_repetitions == 4);
     CHECK(loaded->phases.at("tick").fields[1].is_completion_only);
+    REQUIRE(loaded->phases.at("tick").fields[2].source_binding.has_value());
+    CHECK(loaded->phases.at("tick").fields[2].source_binding->kind == PhaseFieldSource::Kind::RootEvent);
+    CHECK(loaded->phases.at("tick").fields[2].source_binding->source == frame);
+    CHECK(loaded->phases.at("tick").fields[2].source_binding->member == "dt");
     REQUIRE(loaded->handler_contracts.size() == 1);
     CHECK(loaded->handler_contracts[0].effects.contains("graphics"));
     CHECK(loaded->handler_contracts[0].commands == contract.commands);
@@ -726,6 +734,8 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     REQUIRE(symbols->phase_symbols.contains("tick"));
     CHECK(symbols->phase_symbols.at("tick").runtime_root == frame);
     CHECK(symbols->phase_symbols.at("tick").fields[1].is_completion_only);
+    REQUIRE(symbols->phase_symbols.at("tick").fields[2].source_binding.has_value());
+    CHECK(symbols->phase_symbols.at("tick").fields[2].source_binding->kind == PhaseFieldSource::Kind::RootEvent);
 
     fs::remove_all(build_dir, ec);
 }

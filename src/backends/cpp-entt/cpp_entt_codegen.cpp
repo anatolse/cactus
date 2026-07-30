@@ -668,7 +668,25 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                    "interval); }\n";
             out << "    phase.alpha = phase.accumulator / interval;\n";
         } else {
-            out << "    (void)root_event;\n";
+            bool used_root_event = false;
+            for (const auto& field : phase->fields) {
+                if (!field.source_binding.has_value()) {
+                    continue;
+                }
+                const auto& binding   = *field.source_binding;
+                const auto field_type = runtime_value_cpp_type(field.type);
+                if (binding.kind == PhaseFieldSource::Kind::RootEvent) {
+                    used_root_event = true;
+                    out << "    phase." << field.name << " = static_cast<" << field_type << ">(root_event."
+                        << binding.member << ");\n";
+                } else {
+                    out << "    phase." << field.name << " = static_cast<" << field_type << ">(scheduler."
+                        << canonical_to_cpp_name(binding.source) << "." << binding.member << ");\n";
+                }
+            }
+            if (!used_root_event) {
+                out << "    (void)root_event;\n";
+            }
             out << "    scheduler.activation.active = true;\n";
             out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
             out << "    generated_drain_event_cascade(registry);\n";

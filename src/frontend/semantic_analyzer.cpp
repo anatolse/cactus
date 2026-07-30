@@ -2372,8 +2372,8 @@ void SemanticAnalyzer::validate_phase_declarations(
     }
 
     for (const auto& name : phase_order) {
-        auto* phase                = local_phases.at(name);
-        const auto& resolved_phase = result_.phases.at(name);
+        auto* phase          = local_phases.at(name);
+        auto& resolved_phase = result_.phases.at(name);
         std::unordered_set<SymbolId, SymbolIdHash> allowed_phases(resolved_phase.upstream_phases.begin(),
                                                                   resolved_phase.upstream_phases.end());
         std::function<TypeInfo(const ExprNode&)> infer_phase_expr = [&](const ExprNode& expr) -> TypeInfo {
@@ -2438,13 +2438,43 @@ void SemanticAnalyzer::validate_phase_declarations(
         };
 
         for (std::size_t index = 0; index < phase->fields.size(); ++index) {
-            const auto actual   = infer_phase_expr(*phase->fields[index].initializer);
+            auto& field_node               = phase->fields[index];
+            const auto* member_initializer = std::get_if<MemberExpr>(&field_node.initializer->expr);
+            if (member_initializer == nullptr) {
+                errors_.error(field_node.location,
+                              "phase field '" + name + "." + field_node.name +
+                                  "' initializer must be a plain member-chain read of upstream activation data");
+                continue;
+            }
+
+            const auto actual   = infer_phase_expr(*field_node.initializer);
             const auto expected = resolved_phase.fields[index].type;
             if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                 !same_type(actual, expected)) {
-                errors_.error(phase->fields[index].location,
-                              "phase field '" + name + "." + phase->fields[index].name + "' has type '" +
-                                  expected.name + "' but initializer has type '" + actual.name + "'");
+                errors_.error(field_node.location,
+                              "phase field '" + name + "." + field_node.name + "' has type '" + expected.name +
+                                  "' but initializer has type '" + actual.name + "'");
+            }
+
+            // Re-resolve the member chain (infer_phase_expr already validated it) so the
+            // binding can be recorded for codegen without threading an out-parameter
+            // through the recursive type-inference closure.
+            const auto segments = member_chain_segments(*member_initializer);
+            if (!segments.has_value()) {
+                continue;
+            }
+            const auto resolved = resolve_name(*segments);
+            if (!resolved.has_value() || resolved->member_segments.size() != 1) {
+                continue;
+            }
+            const auto& source_symbol = resolved->symbol;
+            const auto& member_name   = resolved->member_segments.front();
+            if (source_symbol.kind == SymbolKind::Event && resolved_phase.runtime_root == source_symbol) {
+                resolved_phase.fields[index].source_binding = PhaseFieldSource{
+                    .kind = PhaseFieldSource::Kind::RootEvent, .source = source_symbol, .member = member_name};
+            } else if (source_symbol.kind == SymbolKind::Phase && allowed_phases.contains(source_symbol)) {
+                resolved_phase.fields[index].source_binding = PhaseFieldSource{
+                    .kind = PhaseFieldSource::Kind::UpstreamPhase, .source = source_symbol, .member = member_name};
             }
         }
     }

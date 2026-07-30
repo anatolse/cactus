@@ -55,6 +55,12 @@ static std::unique_ptr<ExprNode> make_member_expr(const std::string& owner, cons
     return std::make_unique<ExprNode>(ExprNode::Variant{std::move(expression)}, SourceLocation{});
 }
 
+static std::unique_ptr<ExprNode> make_binary_expr(std::unique_ptr<ExprNode> left, const std::string& op,
+                                                  std::unique_ptr<ExprNode> right) {
+    BinaryExpr expression{.op = op, .left = std::move(left), .right = std::move(right), .location = {}};
+    return std::make_unique<ExprNode>(ExprNode::Variant{std::move(expression)}, SourceLocation{});
+}
+
 static EventNode make_external_event(const std::string& name, bool with_dt = false) {
     EventNode event;
     event.name        = name;
@@ -1366,6 +1372,14 @@ TEST_CASE("semantic_modules: phase analysis resolves lineage cadence and synthes
     REQUIRE(resolved_render.fields.size() == 2);
     CHECK(resolved_render.fields[0].type.kind == TypeKind::Float);
     CHECK(resolved_render.fields[1].type.kind == TypeKind::Float);
+    REQUIRE(resolved_render.fields[0].source_binding.has_value());
+    CHECK(resolved_render.fields[0].source_binding->kind == PhaseFieldSource::Kind::UpstreamPhase);
+    CHECK(resolved_render.fields[0].source_binding->source == tick_id);
+    CHECK(resolved_render.fields[0].source_binding->member == "alpha");
+    REQUIRE(resolved_render.fields[1].source_binding.has_value());
+    CHECK(resolved_render.fields[1].source_binding->kind == PhaseFieldSource::Kind::RootEvent);
+    CHECK(resolved_render.fields[1].source_binding->source == frame_id);
+    CHECK(resolved_render.fields[1].source_binding->member == "dt");
 
     REQUIRE(result.execution_graph.phases.size() == 2);
     const auto& tick_plan = result.execution_graph.phases[0];
@@ -1393,6 +1407,11 @@ TEST_CASE("semantic_modules: phase analysis resolves lineage cadence and synthes
     CHECK(render_plan.source_dependencies.empty());
     CHECK(render_plan.completion_dependencies == std::vector<SymbolId>{tick_id});
     CHECK(render_plan.runtime_root == frame_id);
+    REQUIRE(render_plan.fields.size() == 2);
+    REQUIRE(render_plan.fields[0].source_binding.has_value());
+    CHECK(render_plan.fields[0].source_binding->kind == PhaseFieldSource::Kind::UpstreamPhase);
+    REQUIRE(render_plan.fields[1].source_binding.has_value());
+    CHECK(render_plan.fields[1].source_binding->kind == PhaseFieldSource::Kind::RootEvent);
     CHECK(render_plan.declaration_order ==
           DeclarationOrder{.module_index = 0, .declaration_index = 4, .handler_index = 0});
     CHECK(result.execution_graph.handlers.empty());
@@ -1467,6 +1486,12 @@ TEST_CASE("semantic_modules: phase cadence and initializers are statically valid
     sibling_read.type.name   = "float";
     sibling_read.initializer = make_member_expr("unrelated", "dt");
     invalid.fields.push_back(std::move(sibling_read));
+    PhaseFieldNode compound;
+    compound.name        = "scaled";
+    compound.type.name   = "float";
+    compound.initializer = make_binary_expr(make_member_expr("frame", "dt"), "*",
+                                            make_literal_expr(LiteralExpr::Kind::Float, "2.0"));
+    invalid.fields.push_back(std::move(compound));
     prog.declarations.emplace_back(std::move(invalid));
 
     ErrorReporter errors;
@@ -1477,6 +1502,8 @@ TEST_CASE("semantic_modules: phase cadence and initializers are statically valid
     CHECK(has_diagnostic(errors, "phase 'invalid' max value must be a positive compile-time integer"));
     CHECK(has_diagnostic(errors, "phase field 'invalid.count' has type 'int' but initializer has type 'float'"));
     CHECK(has_diagnostic(errors, "initializer cannot read non-upstream value 'game.loop.unrelated'"));
+    CHECK(has_diagnostic(
+        errors, "phase field 'invalid.scaled' initializer must be a plain member-chain read of upstream activation data"));
 }
 
 TEST_CASE("semantic_modules: periodic completion alpha is downstream-only", "[semantic][modules][phase][2.2][errors]") {

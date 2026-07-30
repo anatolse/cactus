@@ -140,6 +140,12 @@ void ModuleArtifact::write_field(std::ostream& out, const ResolvedField& field) 
     write_bool(out, field.is_synthesized);
     write_bool(out, field.is_completion_only);
     write_type_info(out, field.type);
+    write_bool(out, field.source_binding.has_value());
+    if (field.source_binding.has_value()) {
+        write_bool(out, field.source_binding->kind == PhaseFieldSource::Kind::UpstreamPhase);
+        write_symbol_id(out, field.source_binding->source);
+        write_str(out, field.source_binding->member);
+    }
 }
 
 void ModuleArtifact::write_traits(std::ostream& out,
@@ -570,6 +576,13 @@ ResolvedField ModuleArtifact::read_field(std::istream& in) {
     field.is_synthesized     = read_bool(in);
     field.is_completion_only = read_bool(in);
     field.type               = read_type_info(in);
+    if (read_bool(in)) {
+        PhaseFieldSource binding;
+        binding.kind          = read_bool(in) ? PhaseFieldSource::Kind::UpstreamPhase : PhaseFieldSource::Kind::RootEvent;
+        binding.source        = read_symbol_id(in);
+        binding.member        = read_str(in);
+        field.source_binding = binding;
+    }
     return field;
 }
 

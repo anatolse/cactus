@@ -1,0 +1,95 @@
+module runtime_phase_contracts
+
+pub extern event frame:
+    dt: float
+
+pub phase input:
+    from:
+        frame
+
+pub phase fixed_tick:
+    after:
+        input
+    every: 0.016666667
+    max: 8
+
+pub phase tick:
+    after:
+        fixed_tick
+    dt: float = frame.dt
+
+pub phase late_tick:
+    after:
+        tick
+    dt: float = frame.dt
+
+pub phase render:
+    after:
+        late_tick
+    alpha: float = fixed_tick.alpha
+
+event InputSample:
+    axis: float
+
+event EntityMoved:
+    moved_id: entity_id
+
+event SoundRequested:
+    sound: sound_id
+
+trait Position:
+    var x: float = 0.0
+
+trait Velocity:
+    var x: float = 0.0
+
+trait Sprite:
+    var layer: int = 0
+
+template Mover:
+    Position
+    Velocity
+    Sprite
+
+entity Player from Mover:
+    Position:
+        x = 1.0
+
+extern system InputSource:
+    on input:
+        emits:
+            InputSample
+        effects:
+            input
+
+extern system NativeMovement:
+    filter:
+        Position
+        Velocity
+    on fixed_tick:
+        reads:
+            Velocity
+        writes:
+            Position
+        emits:
+            EntityMoved
+        commands:
+            spawn Mover
+        effects:
+            physics
+
+extern system SpriteRenderer:
+    filter:
+        Position
+        Sprite
+    on render:
+        reads:
+            Position
+            Sprite
+        effects:
+            graphics
+
+extern system AudioOutput:
+    on SoundRequested:
+        effects:
+            audio

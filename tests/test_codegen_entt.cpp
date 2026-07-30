@@ -3544,6 +3544,64 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     CHECK(legacy_code.find("struct TickEvent") == std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: declared phase fields are assigned from their resolved binding",
+          "[codegen-entt][phase-runtime][phase-field-initializer]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "module game.propagation\n"
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "    dt: float = frame.dt\n"
+        "phase fixed_tick:\n"
+        "    after:\n"
+        "        tick\n"
+        "    every: 0.1\n"
+        "phase render:\n"
+        "    after:\n"
+        "        fixed_tick\n"
+        "    alpha: float = fixed_tick.alpha\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    // Root-event-bound field: `tick.dt` is assigned from the batch's own `root_event` parameter.
+    const auto tick_batch = code.find("void generated_run_phase_batch_game_propagation__tick");
+    REQUIRE(tick_batch != std::string::npos);
+    const auto tick_dispatch = code.find("generated_dispatch_phase_game_propagation__tick(registry, phase);", tick_batch);
+    REQUIRE(tick_dispatch != std::string::npos);
+    const auto tick_assignment = code.find("phase.dt = static_cast<float>(root_event.dt);", tick_batch);
+    REQUIRE(tick_assignment != std::string::npos);
+    CHECK(tick_assignment < tick_dispatch);
+
+    const auto fixed_batch_decl = code.find("void generated_run_phase_batch_game_propagation__fixed_tick");
+    REQUIRE(fixed_batch_decl != std::string::npos);
+    REQUIRE(tick_batch < fixed_batch_decl);
+    const auto tick_batch_body = code.substr(tick_batch, fixed_batch_decl - tick_batch);
+    // A field is read from root_event, so the batch no longer needs to silence an unused parameter.
+    CHECK(tick_batch_body.find("(void)root_event;") == std::string::npos);
+
+    // Upstream-phase-bound field: `render.alpha` is assigned from `fixed_tick`'s own persisted runtime state.
+    const auto render_batch = code.find("void generated_run_phase_batch_game_propagation__render");
+    REQUIRE(render_batch != std::string::npos);
+    const auto render_dispatch =
+        code.find("generated_dispatch_phase_game_propagation__render(registry, phase);", render_batch);
+    REQUIRE(render_dispatch != std::string::npos);
+    const auto render_assignment =
+        code.find("phase.alpha = static_cast<float>(scheduler.game_propagation__fixed_tick.alpha);", render_batch);
+    REQUIRE(render_assignment != std::string::npos);
+    CHECK(render_assignment < render_dispatch);
+
+    // The periodic phase's own synthesized dt/alpha bookkeeping is unaffected.
+    REQUIRE(fixed_batch_decl < render_batch);
+    const auto fixed_batch_body = code.substr(fixed_batch_decl, render_batch - fixed_batch_decl);
+    CHECK(fixed_batch_body.find("phase.dt = interval;") != std::string::npos);
+    CHECK(fixed_batch_body.find("phase.alpha = phase.accumulator / interval;") != std::string::npos);
+    CHECK(fixed_batch_body.find("phase.dt = static_cast<float>(root_event.dt);") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
           "[codegen-entt][phase-runtime][event-cascade][5.4]") {
     ProgramNode program;

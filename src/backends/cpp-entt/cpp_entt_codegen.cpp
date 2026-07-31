@@ -1330,6 +1330,12 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
                                        const std::string& entity_name,
                                        int indent) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
+    // Every creation site (load-time archetypes, hierarchical children, and
+    // committed spawns) funnels through this helper, so assigning the
+    // creation ordinal here is the single choke point that covers all three.
+    out << ind << "registry.emplace<cactus::runtime::entt_backend::CactusCreationOrdinal>(" << entity_name
+        << ", cactus::runtime::entt_backend::CactusCreationOrdinal{.value = "
+           "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
     for (const auto& trait : traits) {
         const std::string cpp_name =
             EnttCodegenUtils::trait_cpp_name(trait.resolved_trait_id, trait.trait_name, program);
@@ -2311,9 +2317,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "#define Camera " << camera_cpp << "\n";
     }
     out << "\n";
-    if (uses_viewport) {
-        out << "#include <algorithm>\n";
-    }
+    out << "#include <algorithm>\n";
     out << "#include <array>\n";
     out << "#include <cmath>\n";
     out << "#include <cstdint>\n";
@@ -2600,6 +2604,24 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         out << EnttComponentEmitter::emit_component(t) << "\n";
     }
+
+    // Monotonic, non-reused per-entity creation order (dsl-pair-relations):
+    // pair handlers sort their binding snapshots by this ordinal so tuple and
+    // emitted-event order is deterministic and backend-independent. Assigned
+    // once at every entity's creation site (load-time and committed spawn both
+    // route through emit_archetype_trait_initializers), never reassigned.
+    // Emitted unconditionally (not gated on the graph-runtime/phases flag used
+    // elsewhere) since a pairs: system can exist in a program with no phase
+    // declarations, driven only by bare events.
+    out << "namespace cactus::runtime::entt_backend {\n\n";
+    out << "struct CactusCreationOrdinal {\n";
+    out << "    std::uint64_t value{};\n";
+    out << "};\n\n";
+    out << "inline std::uint64_t generated_next_creation_ordinal() {\n";
+    out << "    static std::uint64_t next = 0;\n";
+    out << "    return next++;\n";
+    out << "}\n\n";
+    out << "}  // namespace cactus::runtime::entt_backend\n\n";
 
     // ── Viewport camera-translate helpers ─────────────────────────────────────
     // Emitted once, early — after component structs exist, before the

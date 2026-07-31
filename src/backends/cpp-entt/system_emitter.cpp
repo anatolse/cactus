@@ -339,6 +339,37 @@ struct FilterBinding {
     std::string binding_name;   // variable name suffix (e.g. "WorldTransform_comp" or alias)
 };
 
+// ── Pair relation codegen scope (dsl-pair-relations) ─────────────────────────
+
+// Resolved binding-relative trait namespace for one pair binding, mirroring
+// the frontend's PairBindingScope (semantic_analyzer.hpp) but carrying the
+// generated C++ component type name instead of a canonical SymbolId — codegen
+// consumes the AST's already-resolved trait identities (via
+// EnttCodegenUtils::trait_cpp_name) and never re-derives them from source
+// dotted spelling.
+struct PairCodegenTraitAccess {
+    std::string cpp_type;
+    bool is_marker = false;
+};
+
+struct PairCodegenBinding {
+    std::string binding_name;
+    std::unordered_map<std::string, PairCodegenTraitAccess> traits;  // access key -> resolved trait
+};
+
+struct PairCodegenScope {
+    std::vector<PairCodegenBinding> bindings;  // exactly two, source order
+
+    [[nodiscard]] const PairCodegenBinding* find(const std::string& name) const {
+        for (const auto& binding : bindings) {
+            if (binding.binding_name == name) {
+                return &binding;
+            }
+        }
+        return nullptr;
+    }
+};
+
 std::vector<FilterBinding> filter_bindings(const FilterClause& filter, const DecoratedProgram& program) {
     std::vector<FilterBinding> result;
     std::unordered_set<std::string> seen_traits;
@@ -397,6 +428,67 @@ std::vector<std::string> filter_cpp_type_names(const FilterClause& filter, const
         }
     }
     return result;
+}
+
+// ── Pair binding codegen (dsl-pair-relations) ────────────────────────────────
+
+struct PairBindingCodegen {
+    std::string binding_name;
+    std::vector<std::string> cpp_types;  // dedup'd view<> template args, source order
+    PairCodegenBinding scope;            // access-key -> resolved trait, for rewrite_expr
+};
+
+// Mirrors the frontend's build_pair_scope (semantic_analyzer.cpp): consumes
+// each already-resolved trait entry (resolved_trait_id) into an access-key ->
+// cpp-type map, keyed by qualified spelling and binding-local alias, exactly
+// as the semantic analyzer's resolve_pair_member_chain expects to look up.
+PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, const DecoratedProgram& program) {
+    PairBindingCodegen result;
+    result.binding_name       = binding.name;
+    result.scope.binding_name = binding.name;
+    std::unordered_set<std::string> seen_cpp_types;
+    for (const auto& entry : binding.traits) {
+        const auto cpp_type_name =
+            EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.qualified_name, program);
+        const auto lookup_name =
+            entry.resolved_trait_id.has_value() ? make_canonical_id(*entry.resolved_trait_id) : entry.qualified_name;
+        const auto* trait    = EnttCodegenUtils::find_trait(program, lookup_name);
+        const bool is_marker = trait == nullptr || trait->fields.empty();
+        if (seen_cpp_types.insert(cpp_type_name).second) {
+            result.cpp_types.push_back(cpp_type_name);
+        }
+        const PairCodegenTraitAccess access{.cpp_type = cpp_type_name, .is_marker = is_marker};
+        result.scope.traits[entry.qualified_name] = access;
+        if (entry.alias.has_value()) {
+            result.scope.traits[*entry.alias] = access;
+        }
+    }
+    return result;
+}
+
+// Emits the deterministic snapshot-and-sort prologue for one pair binding:
+// collect matching entity handles via a typed view (finite, not materialized
+// as tuples), then sort by creation ordinal so tuple/event order is stable
+// and backend-independent (spec: "cpp-entt maintains stable entity creation
+// ordinals").
+void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodegen& binding, int indent) {
+    const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
+    out << ind << "std::vector<entt::entity> __" << binding.binding_name << "_snapshot;\n";
+    out << ind << "{\n";
+    out << ind << "    auto __" << binding.binding_name << "_view = registry.view<";
+    for (std::size_t i = 0; i < binding.cpp_types.size(); ++i) {
+        out << (i == 0 ? "" : ", ") << binding.cpp_types[i];
+    }
+    out << ">();\n";
+    out << ind << "    for (auto __pair_entity : __" << binding.binding_name << "_view) {\n";
+    out << ind << "        __" << binding.binding_name << "_snapshot.push_back(__pair_entity);\n";
+    out << ind << "    }\n";
+    out << ind << "}\n";
+    out << ind << "std::ranges::sort(__" << binding.binding_name
+        << "_snapshot, [&](entt::entity __lhs, entt::entity __rhs) {\n";
+    out << ind << "    return registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(__lhs).value <\n";
+    out << ind << "           registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(__rhs).value;\n";
+    out << ind << "});\n";
 }
 
 bool is_flat_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
@@ -661,7 +753,8 @@ static std::string rewrite_expr(const ExprNode& expr,
                                 const std::vector<std::string>& trait_names,
                                 const DecoratedProgram& program,
                                 const std::unordered_set<std::string>& pointer_aliases            = {},
-                                const std::unordered_map<std::string, std::string>& cpp_overrides = {});
+                                const std::unordered_map<std::string, std::string>& cpp_overrides = {},
+                                const PairCodegenScope* pair_scope                                = nullptr);
 
 static std::string rewrite_stmt(const StmtNode& stmt,
                                 int indent,
@@ -669,7 +762,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                 const DecoratedProgram& program,
                                 const std::unordered_set<std::string>& pointer_aliases            = {},
                                 bool dispatcher_available                                         = false,
-                                const std::unordered_map<std::string, std::string>& cpp_overrides = {});
+                                const std::unordered_map<std::string, std::string>& cpp_overrides = {},
+                                const PairCodegenScope* pair_scope                                = nullptr);
 
 static std::string trait_cpp_from_entry(const ArchetypeTraitEntry& entry, const DecoratedProgram& program) {
     return EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.trait_name, program);
@@ -680,7 +774,8 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
                                         int indent,
                                         const std::vector<std::string>& trait_names,
                                         const DecoratedProgram& program,
-                                        const std::unordered_set<std::string>& pointer_aliases) {
+                                        const std::unordered_set<std::string>& pointer_aliases,
+                                        const PairCodegenScope* pair_scope = nullptr) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     std::ostringstream out;
     for (const auto& override_entry : overrides) {
@@ -694,7 +789,7 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
         out << ind << "    auto __value = __existing ? *__existing : " << cpp_name << "{};\n";
         for (const auto& assignment : override_entry.assignments) {
             out << ind << "    __value." << assignment.name << " = "
-                << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases) << ";\n";
+                << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
         }
         out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", __value);\n";
         out << ind << "}\n";
@@ -749,7 +844,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                                        std::vector<std::string>& role_path,
                                        const std::vector<std::string>& trait_names,
                                        const DecoratedProgram& program,
-                                       const std::unordered_set<std::string>& pointer_aliases) {
+                                       const std::unordered_set<std::string>& pointer_aliases,
+                                       const PairCodegenScope* pair_scope = nullptr) {
     static const std::vector<ChildOverrideNode> NO_OVERRIDES;
     std::size_t index = 0;
     for (const auto& child : children) {
@@ -771,7 +867,7 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
             }
         }
         if (override_node != nullptr) {
-            out << emit_spawn_overrides(var, override_node->traits, 1, trait_names, program, pointer_aliases);
+            out << emit_spawn_overrides(var, override_node->traits, 1, trait_names, program, pointer_aliases, pair_scope);
         }
 
         emit_spawn_child_expansion(out,
@@ -784,7 +880,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                                    role_path,
                                    trait_names,
                                    program,
-                                   pointer_aliases);
+                                   pointer_aliases,
+                                   pair_scope);
         role_path.pop_back();
         ++index;
     }
@@ -796,7 +893,8 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                                      const std::vector<ChildArchetypeNode>& children,
                                                      const std::vector<std::string>& trait_names,
                                                      const DecoratedProgram& program,
-                                                     const std::unordered_set<std::string>& pointer_aliases) {
+                                                     const std::unordered_set<std::string>& pointer_aliases,
+                                                     const PairCodegenScope* pair_scope = nullptr) {
     std::ostringstream out;
     std::vector<std::string> role_path;
     const bool is_local_tmpl      = program.pub_templates.contains(template_id.local_name) ||
@@ -812,11 +910,11 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            auto __committed = "
             << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, __spawned);\n";
-        out << emit_spawn_overrides("__committed", root_overrides, 3, trait_names, program, pointer_aliases);
+        out << emit_spawn_overrides("__committed", root_overrides, 3, trait_names, program, pointer_aliases, pair_scope);
     } else {
         out << "    auto __spawned = " << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path)
             << "(registry);\n";
-        out << emit_spawn_overrides("__spawned", root_overrides, 1, trait_names, program, pointer_aliases);
+        out << emit_spawn_overrides("__spawned", root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
     emit_spawn_child_expansion(out,
                                tmpl_module,
@@ -828,7 +926,8 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                role_path,
                                trait_names,
                                program,
-                               pointer_aliases);
+                               pointer_aliases,
+                               pair_scope);
     if (graph_runtime) {
         out << "        });\n";
     }
@@ -840,14 +939,21 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
 static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                          const std::vector<std::string>& trait_names,
                                          const DecoratedProgram& program,
-                                         const std::unordered_set<std::string>& pointer_aliases) {
+                                         const std::unordered_set<std::string>& pointer_aliases,
+                                         const PairCodegenScope* pair_scope = nullptr) {
     const SymbolId tmpl_id = spawn.resolved_template_id.has_value()
                                  ? *spawn.resolved_template_id
                                  : make_symbol_id(SymbolKind::Template, program.module_name, spawn.template_name);
     if (!spawn.child_overrides.empty()) {
         if (const auto* children = find_template_children(program, tmpl_id)) {
-            return emit_hierarchical_spawn_expansion(
-                tmpl_id, spawn.overrides, spawn.child_overrides, *children, trait_names, program, pointer_aliases);
+            return emit_hierarchical_spawn_expansion(tmpl_id,
+                                                      spawn.overrides,
+                                                      spawn.child_overrides,
+                                                      *children,
+                                                      trait_names,
+                                                      program,
+                                                      pointer_aliases,
+                                                      pair_scope);
         }
     }
     std::ostringstream out;
@@ -858,11 +964,11 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
         out << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, __spawned);\n";
-        out << emit_spawn_overrides("__spawned", spawn.overrides, 3, trait_names, program, pointer_aliases);
+        out << emit_spawn_overrides("__spawned", spawn.overrides, 3, trait_names, program, pointer_aliases, pair_scope);
         out << "        });\n";
     } else {
         out << "    auto __spawned = " << archetype_create_function_name(tmpl_id, program) << "(registry);\n";
-        out << emit_spawn_overrides("__spawned", spawn.overrides, 1, trait_names, program, pointer_aliases);
+        out << emit_spawn_overrides("__spawned", spawn.overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
     out << "    return __spawned;\n";
     out << "})()";
@@ -1192,13 +1298,15 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          const DecoratedProgram& program,
                                          const std::unordered_set<std::string>& pointer_aliases            = {},
                                          bool dispatcher_available                                         = false,
-                                         const std::unordered_map<std::string, std::string>& cpp_overrides = {});
+                                         const std::unordered_map<std::string, std::string>& cpp_overrides = {},
+                                         const PairCodegenScope* pair_scope                                = nullptr);
 
 static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-function-cognitive-complexity)
                                 const std::vector<std::string>& trait_names,
                                 const DecoratedProgram& program,
                                 const std::unordered_set<std::string>& pointer_aliases,
-                                const std::unordered_map<std::string, std::string>& cpp_overrides) {
+                                const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                const PairCodegenScope* pair_scope) {
     auto known_fields = collect_trait_fields(trait_names, program);
 
     return std::visit(
@@ -1249,25 +1357,25 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 } else if (op == "or") {
                     op = "||";
                 }
-                return "(" + rewrite_expr(*e.left, trait_names, program, pointer_aliases, cpp_overrides) + " " + op +
-                       " " + rewrite_expr(*e.right, trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                return "(" + rewrite_expr(*e.left, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + " " + op +
+                       " " + rewrite_expr(*e.right, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
                 if (op == "not") {
                     op = "!";
                 }
-                return op + rewrite_expr(*e.operand, trait_names, program, pointer_aliases, cpp_overrides);
+                return op + rewrite_expr(*e.operand, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
                     return "registry.valid(" +
-                           rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                           rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
                 }
                 // Module-scope stdlib call: use resolved callee identity (preferred path).
                 if (e.resolved_callee_id.has_value()) {
                     const auto lowered =
                         lower_resolved_stdlib_call(*e.resolved_callee_id, e.args, [&](const ExprNode& arg) {
-                            return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides);
+                            return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                         });
                     if (!lowered.empty()) {
                         return lowered;
@@ -1282,7 +1390,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         const auto func_id =
                             make_symbol_id(SymbolKind::Func, ModuleId{.name = module_name}, ident->name);
                         return lower_resolved_stdlib_call(func_id, e.args, [&](const ExprNode& arg) {
-                            return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides);
+                            return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                         });
                     };
                     const auto func_it = program.funcs.find(ident->name);
@@ -1311,7 +1419,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                             if (i > 0) {
                                 result += ", ";
                             }
-                            result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
+                            result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                         }
                         return result + ")";
                     }
@@ -1330,7 +1438,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                         const auto lowered =
                                             lower_resolved_stdlib_call(func_id, e.args, [&](const ExprNode& arg) {
                                                 return rewrite_expr(
-                                                    arg, trait_names, program, pointer_aliases, cpp_overrides);
+                                                    arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                                             });
                                         if (!lowered.empty()) {
                                             return lowered;
@@ -1354,7 +1462,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                     result += ", ";
                                 }
                                 result +=
-                                    rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
+                                    rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                             }
                             return result + ")";
                         }
@@ -1366,7 +1474,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         }
                         if (object->name == "input" && member->member == "consume" && e.args.size() == 1) {
                             return "cactus::runtime::entt_backend::editor_consume(" +
-                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
                         }
                         // camera2d/camera3d/transform2d/transform3d are aliases declared in
                         // std.editor and are invisible from the root program's AST, so
@@ -1374,12 +1482,12 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         if (object->name == "camera2d") {
                             if (member->member == "screen_to_world" && e.args.size() == 1) {
                                 return "cactus::runtime::entt_backend::editor_screen_to_world_2d(" +
-                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) +
+                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
                                        ")";
                             }
                             if (member->member == "screen_delta_to_world" && e.args.size() == 1) {
                                 return "cactus::runtime::entt_backend::screen_delta_to_world_2d(" +
-                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) +
+                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
                                        ")";
                             }
                         }
@@ -1391,7 +1499,7 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                         result += ", ";
                                     }
                                     result +=
-                                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
+                                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                                 }
                                 return result + ")";
                             }
@@ -1402,31 +1510,69 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                         result += ", ";
                                     }
                                     result +=
-                                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
+                                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                                 }
                                 return result + ")";
                             }
                         }
                         if (object->name == "transform2d" && member->member == "world_position" && e.args.size() == 1) {
                             return "cactus::runtime::entt_backend::editor_entity_position_2d(registry, " +
-                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
                         }
                         if (object->name == "transform3d" && member->member == "world_position" && e.args.size() == 1) {
                             return "cactus::runtime::entt_backend::editor_entity_position_3d(registry, " +
-                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides) + ")";
+                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
                         }
                     }
                 }
                 std::string result =
-                    rewrite_expr(*e.callee, trait_names, program, pointer_aliases, cpp_overrides) + "(";
+                    rewrite_expr(*e.callee, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides);
+                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                // Pair-bound member chain (e.g. `body.tf.WorldTransform.position`):
+                // consume leading segments against the binding's resolved trait
+                // namespace using the same longest-prefix rule as the semantic
+                // analyzer's resolve_pair_member_chain, then fetch the trait as
+                // const (pair-bound traits are read-only) and append the
+                // remaining field path unchanged.
+                if (pair_scope != nullptr) {
+                    std::vector<std::string> segments{e.member};
+                    const ExprNode* cursor = e.object.get();
+                    while (const auto* chain_member = std::get_if<MemberExpr>(&cursor->expr)) {
+                        segments.push_back(chain_member->member);
+                        cursor = chain_member->object.get();
+                    }
+                    std::ranges::reverse(segments);
+                    if (const auto* root = std::get_if<IdentExpr>(&cursor->expr)) {
+                        if (const auto* binding = pair_scope->find(root->name)) {
+                            for (std::size_t len = std::min<std::size_t>(2, segments.size()); len >= 1; --len) {
+                                std::string key;
+                                for (std::size_t i = 0; i < len; ++i) {
+                                    if (i != 0) {
+                                        key += '.';
+                                    }
+                                    key += segments[i];
+                                }
+                                auto found = binding->traits.find(key);
+                                if (found == binding->traits.end()) {
+                                    continue;
+                                }
+                                std::string access =
+                                    "registry.get<const " + found->second.cpp_type + ">(" + root->name + ")";
+                                for (std::size_t i = len; i < segments.size(); ++i) {
+                                    access += "." + segments[i];
+                                }
+                                return access;
+                            }
+                        }
+                    }
+                }
                 // Three-level access module.EnumName.Variant: emit CanonicalEnum::Variant.
                 if (const auto* enum_member = std::get_if<MemberExpr>(&e.object->expr)) {
                     if (std::get_if<IdentExpr>(&enum_member->object->expr) != nullptr &&
@@ -1445,22 +1591,22 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         return ident->name + "->" + e.member;
                     }
                 }
-                return rewrite_expr(*e.object, trait_names, program, pointer_aliases, cpp_overrides) + "." + e.member;
+                return rewrite_expr(*e.object, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "." + e.member;
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                return emit_spawn_expression(e, trait_names, program, pointer_aliases);
+                return emit_spawn_expression(e, trait_names, program, pointer_aliases, pair_scope);
             } else if constexpr (std::is_same_v<E, ListExpr>) {
                 std::string result = "std::vector{";
                 for (size_t i = 0; i < e.elements.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*e.elements[i], trait_names, program, pointer_aliases, cpp_overrides);
+                    result += rewrite_expr(*e.elements[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 }
                 result += "}";
                 return result;
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 return lower_query_call_expr(e, program, [&](const ExprNode& arg) {
-                    return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides);
+                    return rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 });
             } else {
                 return "/* unsupported expr */";
@@ -1477,13 +1623,14 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          const DecoratedProgram& program,
                                          const std::unordered_set<std::string>& pointer_aliases,
                                          bool dispatcher_available,
-                                         const std::unordered_map<std::string, std::string>& cpp_overrides) {
+                                         const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                         const PairCodegenScope* pair_scope) {
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
     std::ostringstream out;
 
     out << ind << "{\n";
     out << ind << "    auto __match_entity = "
-        << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases, cpp_overrides) << ";\n";
+        << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
     out << ind << "    if (registry.valid(__match_entity)) {\n";
 
     bool first = true;
@@ -1508,7 +1655,7 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 
         for (const auto& stmt : arm.body) {
             out << rewrite_stmt(
-                *stmt, indent + 3, trait_names, program, arm_aliases, dispatcher_available, cpp_overrides);
+                *stmt, indent + 3, trait_names, program, arm_aliases, dispatcher_available, cpp_overrides, pair_scope);
         }
         out << ind << "        }";
         first = false;
@@ -1521,7 +1668,7 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
         out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
         for (const auto& stmt : match_stmt.wildcard->body) {
             out << rewrite_stmt(
-                *stmt, indent + 3, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
+                *stmt, indent + 3, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
         }
         out << ind << "        }\n";
     }
@@ -1538,7 +1685,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                 const DecoratedProgram& program,
                                 const std::unordered_set<std::string>& pointer_aliases,
                                 bool dispatcher_available,
-                                const std::unordered_map<std::string, std::string>& cpp_overrides) {
+                                const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                const PairCodegenScope* pair_scope) {
     auto known_fields = collect_trait_fields(trait_names, program);
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
@@ -1548,7 +1696,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, LetStmt>) {
                 return ind + "[[maybe_unused]] auto " + s.name + " = " +
-                       rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
+                       rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
                 if (known_fields.contains(s.name)) {
@@ -1571,14 +1719,14 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         const std::string prefix = ind + lhs + " " + s.op + " vec2(";
                         const std::string continuation(prefix.size(), ' ');
                         return prefix +
-                               rewrite_expr(*call->args[0], trait_names, program, pointer_aliases, cpp_overrides) +
+                               rewrite_expr(*call->args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
                                ",\n" + continuation +
-                               rewrite_expr(*call->args[1], trait_names, program, pointer_aliases, cpp_overrides) +
+                               rewrite_expr(*call->args[1], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
                                ");\n";
                     }
                 }
                 return ind + lhs + " " + s.op + " " +
-                       rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
+                       rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 std::string emit_call;
                 const bool graph_runtime = !program.execution_graph.phases.empty();
@@ -1596,12 +1744,12 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     }
                     emit_call +=
                         "." + s.payload[i].name + " = " +
-                        rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides);
+                        rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 }
                 emit_call += "});";
                 if (s.target.has_value()) {
                     const std::string TARGET =
-                        rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides);
+                        rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                     return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + "\n" + ind +
                            "}\n";
                 }
@@ -1620,7 +1768,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                                                  *children,
                                                                  trait_names,
                                                                  program,
-                                                                 pointer_aliases) +
+                                                                 pointer_aliases,
+                                                                 pair_scope) +
                                ";\n";
                     }
                 }
@@ -1636,20 +1785,20 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     result << ind << "            " << archetype_create_at_function_name(tmpl_id, program)
                            << "(registry, __spawned);\n";
                     result << emit_spawn_overrides(
-                        "__spawned", s.overrides, indent + 3, trait_names, program, pointer_aliases);
+                        "__spawned", s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
                     result << ind << "        });\n";
                 } else {
                     result << ind << "    auto __spawned = " << archetype_create_function_name(tmpl_id, program)
                            << "(registry);\n";
                     result << emit_spawn_overrides(
-                        "__spawned", s.overrides, indent + 1, trait_names, program, pointer_aliases);
+                        "__spawned", s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
                 }
                 result << ind << "}\n";
                 return result.str();
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                 std::string target =
                     s.target_expr.has_value()
-                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides)
+                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                         : "entity";
                 const bool GUARDED    = s.target_expr.has_value();
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
@@ -1669,7 +1818,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         result << ind << "            auto __value = __existing ? *__existing : " << cpp << "{};\n";
                         for (const auto& arg : s.args) {
                             result << ind << "            __value." << arg.name << " = "
-                                   << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides)
+                                   << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                                    << ";\n";
                         }
                         result << ind << "            registry.emplace_or_replace<" << cpp << ">(__target, __value);\n";
@@ -1701,7 +1850,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                        << "{};\n";
                 for (const auto& arg : s.args) {
                     result << ind << (GUARDED ? "        " : "    ") << "__value." << arg.name << " = "
-                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides) << ";\n";
+                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
                 }
                 result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">("
                        << target << ", __value);\n";
@@ -1713,7 +1862,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
                 std::string target =
                     s.target_expr.has_value()
-                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides)
+                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                         : "entity";
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
                 if (!program.execution_graph.phases.empty()) {
@@ -1738,7 +1887,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                 const std::string target =
                     s.target_expr.has_value()
-                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides)
+                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                         : "entity";
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
                 const auto simple     = s.trait_name.rfind('.') != std::string::npos
@@ -1758,7 +1907,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            << target << ");\n";
                     for (const auto& arg : s.args) {
                         result << ind << "    __projected." << arg.name << " = "
-                               << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides)
+                               << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                                << ";\n";
                     }
                 }
@@ -1768,7 +1917,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 if (!program.execution_graph.phases.empty()) {
                     const std::string target =
                         s.target_expr.has_value()
-                            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides)
+                            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                             : "entity";
                     return ind + "{\n" + ind + "    const auto __target = " + target + ";\n" + ind +
                            "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
@@ -1780,7 +1929,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 }
                 if (s.target_expr.has_value()) {
                     std::string target =
-                        rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides);
+                        rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                     return ind + "if (registry.valid(" + target + ")) {\n" + ind +
                            "    cactus_destroy_entity_recursive(registry, " + target + ");\n" + ind + "}\n";
                 }
@@ -1788,13 +1937,13 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
                     return ind + "return " +
-                           rewrite_expr(**s.value, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
+                           rewrite_expr(**s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
                 }
                 return ind + "return;\n";
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases, cpp_overrides) + ";\n";
+                return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                const auto condition = rewrite_expr(*s.condition, trait_names, program, pointer_aliases, cpp_overrides);
+                const auto condition = rewrite_expr(*s.condition, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 std::string result   = ind + "if ";
                 if (!condition.empty() && condition.front() == '(' && condition.back() == ')') {
                     result += condition;
@@ -1804,7 +1953,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 result += " {\n";
                 for (auto& inner : s.then_body) {
                     result += rewrite_stmt(
-                        *inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
+                        *inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
                 }
                 result += ind + "}";
                 if (!s.else_body.empty()) {
@@ -1823,16 +1972,16 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return result + "\n";
             } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
                 return emit_trait_match_stmt(
-                    s, indent, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
+                    s, indent, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                 const auto temp    = foreach_temp_name(s);
                 std::string result = ind + "auto " + temp + " = " +
-                                     rewrite_expr(*s.iterable, trait_names, program, pointer_aliases, cpp_overrides) +
+                                     rewrite_expr(*s.iterable, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
                                      ";\n";
                 result += ind + "for (const auto& " + s.var_name + " : " + temp + ") {\n";
                 for (const auto& inner : s.body) {
                     result += rewrite_stmt(
-                        *inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides);
+                        *inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
                 }
                 result += ind + "}\n";
                 return result;
@@ -1861,9 +2010,21 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
         filter_cpp_overrides.emplace(b.lookup_name, b.cpp_type_name);
     }
 
+    const bool is_pair_system = sys.pairs.has_value();
+    std::vector<PairBindingCodegen> pair_binding_codegens;
+    PairCodegenScope pair_codegen_scope;
+    if (is_pair_system) {
+        for (const auto& binding : sys.pairs->bindings) {
+            auto codegen = build_pair_binding_codegen(binding, program);
+            pair_codegen_scope.bindings.push_back(codegen.scope);
+            pair_binding_codegens.push_back(std::move(codegen));
+        }
+    }
+
     for (const auto& handler : sys.handlers) {
-        const auto* contract       = graph_handler_contract(sys, handler, program);
-        const bool selectionless   = contract != nullptr && contract->is_selectionless();
+        const auto* contract = graph_handler_contract(sys, handler, program);
+        const bool is_pair    = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
+        const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();
         const auto trigger_binding = handler_trigger_binding(handler);
         out << "void " << system_function_name(program.module_name, sys.name, handler_trigger_suffix(handler))
             << "(entt::registry& registry";
@@ -1871,7 +2032,26 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
         out << ") {\n";
         out << "    (void)" << trigger_binding << ";\n";
 
-        if (selectionless) {
+        if (is_pair) {
+            // A pair handler snapshots both bindings' live memberships up
+            // front (deterministic, creation-ordinal order), then iterates
+            // their directed Cartesian product left-binding-major without
+            // ever materializing the full tuple list. Component access inside
+            // the body is read-only (const), matching the read-only pair
+            // trait rule enforced by semantic analysis.
+            for (const auto& binding : pair_binding_codegens) {
+                emit_pair_binding_snapshot(out, binding, 1);
+            }
+            out << "    for (auto " << pair_binding_codegens[0].binding_name << " : __"
+                << pair_binding_codegens[0].binding_name << "_snapshot) {\n";
+            out << "        for (auto " << pair_binding_codegens[1].binding_name << " : __"
+                << pair_binding_codegens[1].binding_name << "_snapshot) {\n";
+            for (const auto& stmt : handler.body) {
+                out << rewrite_stmt(*stmt, 3, {}, program, {}, false, {}, &pair_codegen_scope);
+            }
+            out << "        }\n";
+            out << "    }\n";
+        } else if (selectionless) {
             out << "    (void)registry;\n";
             for (const auto& stmt : handler.body) {
                 out << rewrite_stmt(*stmt, 1, filter_traits, program, {}, false, filter_cpp_overrides);

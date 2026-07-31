@@ -4196,4 +4196,189 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
     CHECK(render.find("animated_sprite_system_tick") == std::string::npos);
 }
 
+// ── Pair relations (dsl-pair-relations, 5.5) ─────────────────────────────────
+
+static const std::string PAIR_CODEGEN_TRAITS =
+    "trait DynamicBody:\n"
+    "    var vx: float\n"
+    "trait Transform:\n"
+    "    var x: float\n"
+    "trait Solid:\n"
+    "    var active: bool = true\n"
+    "trait Collider:\n"
+    "    var mask: int\n"
+    "event Contact:\n"
+    "    other: entity_id\n";
+
+TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their product",
+          "[codegen-entt][pair-relations]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "system DetectContacts:\n"
+            "    pairs:\n"
+            "        body:\n"
+            "            DynamicBody\n"
+            "            Transform\n"
+            "        wall:\n"
+            "            Solid\n"
+            "            Collider\n"
+            "    on tick:\n"
+            "        if body != wall and body.Transform.x > 0.0 and wall.Collider.mask > 0:\n"
+            "            emit Contact:\n"
+            "                other = wall\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            // Two independent typed snapshots, not a materialized tuple list.
+            CHECK(code.find("std::vector<entt::entity> __body_snapshot;") != std::string::npos);
+            CHECK(code.find("registry.view<DynamicBody, Transform>()") != std::string::npos);
+            CHECK(code.find("std::vector<entt::entity> __wall_snapshot;") != std::string::npos);
+            CHECK(code.find("registry.view<Solid, Collider>()") != std::string::npos);
+            // Sorted by creation ordinal for deterministic tuple order.
+            CHECK(code.find("registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(__lhs).value <") !=
+                  std::string::npos);
+            // Left-binding-major nested iteration over the snapshots.
+            const auto body_loop = code.find("for (auto body : __body_snapshot)");
+            const auto wall_loop = code.find("for (auto wall : __wall_snapshot)");
+            REQUIRE(body_loop != std::string::npos);
+            REQUIRE(wall_loop != std::string::npos);
+            CHECK(body_loop < wall_loop);
+            // Pair-bound trait reads are const.
+            CHECK(code.find("registry.get<const Transform>(body).x") != std::string::npos);
+            CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
+            // Bare binding identifiers used directly as entity_id (emit target).
+            CHECK(code.find("(body != wall)") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other binding gets distinct access",
+          "[codegen-entt][pair-relations]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "system DetectContacts:\n"
+            "    pairs:\n"
+            "        body:\n"
+            "            Collider\n"
+            "        wall:\n"
+            "            Collider\n"
+            "    on tick:\n"
+            "        if body.Collider.mask > wall.Collider.mask:\n"
+            "            emit Contact:\n"
+            "                other = wall\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.get<const Collider>(body).mask") != std::string::npos);
+            CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: pair binding-local alias and qualified imported trait resolve to canonical access",
+          "[codegen-entt][pair-relations]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "system DetectContacts:\n"
+            "    pairs:\n"
+            "        body:\n"
+            "            DynamicBody\n"
+            "        wall:\n"
+            "            Collider as c\n"
+            "    on tick:\n"
+            "        if wall.c.mask > 0:\n"
+            "            emit Contact:\n"
+            "                other = wall\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit and buffered project",
+          "[codegen-entt][pair-relations][runtime-graph]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n" +
+            PAIR_CODEGEN_TRAITS +
+            "trait GroundContact:\n"
+            "    var active: bool = true\n"
+            "system DetectContacts:\n"
+            "    pairs:\n"
+            "        body:\n"
+            "            DynamicBody\n"
+            "        wall:\n"
+            "            Solid\n"
+            "    on tick:\n"
+            "        emit Contact to body:\n"
+            "            other = wall\n"
+            "        project GroundContact to body\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    // Creation ordinal scaffolding is emitted and assigned at entity creation.
+    CHECK(code.find("struct CactusCreationOrdinal {") != std::string::npos);
+    CHECK(code.find("generated_next_creation_ordinal()") != std::string::npos);
+    // Targeted emit still goes through the existing validity-guarded broadcast
+    // path (recipient-aware routing is a later phase) but must resolve `body`
+    // to the per-tuple loop variable, not a literal source identifier lookup.
+    CHECK(code.find("if (registry.valid(body)) {") != std::string::npos);
+    CHECK(code.find("generated_emit_event(ContactEvent{.other = wall});") != std::string::npos);
+    // Project remains an immediate (non-buffered) call, same as unary systems.
+    CHECK(code.find("project_GroundContact(registry, body);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snapshots correctly",
+          "[codegen-entt][pair-relations]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Solid\n"
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on tick:\n"
+        "        emit Contact to body:\n"
+        "            other = wall\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.view<Solid>()") != std::string::npos);
+            CHECK(code.find("std::vector<entt::entity> __wall_snapshot;") != std::string::npos);
+            CHECK(code.find("for (auto wall : __wall_snapshot)") != std::string::npos);
+        }
+    }
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -102,6 +102,8 @@ private:
     FilterClause parse_filter_clause();
     FilterClause parse_exclude_clause();
     std::vector<SortKey> parse_order_by_clause();
+    PairClause parse_pairs_clause();
+    [[nodiscard]] bool at_pairs_clause() const;
     std::vector<LocatedName> parse_name_block(TokenType keyword, const char* clause_name);
     std::vector<HandlerReferenceNode> parse_handler_order_block();
     std::vector<HandlerCommandNode> parse_command_block();

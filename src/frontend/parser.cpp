@@ -1223,10 +1223,28 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
     node.name     = name;
     node.location = loc;
 
+    SourceLocation pairs_loc;
+    bool saw_pairs = false;
+
+    skip_newlines();
+    if (at_pairs_clause()) {
+        saw_pairs               = true;
+        pairs_loc               = peek().location;
+        auto error_count_before = errors_.error_count();
+        node.pairs              = parse_pairs_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
     skip_newlines();
     if (check(TokenType::FILTER)) {
-        auto error_count_before = errors_.error_count();
-        node.filter             = parse_filter_clause();
+        auto filter_loc          = peek().location;
+        auto error_count_before  = errors_.error_count();
+        node.filter              = parse_filter_clause();
+        if (saw_pairs) {
+            errors_.error(filter_loc, "'filter:' cannot be combined with 'pairs:' on the same system");
+        }
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1235,8 +1253,12 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
     // Task 4.4: Parse optional exclude: clause
     skip_newlines();
     if (check(TokenType::EXCLUDE)) {
-        auto error_count_before = errors_.error_count();
-        node.exclude            = parse_exclude_clause();
+        auto exclude_loc         = peek().location;
+        auto error_count_before  = errors_.error_count();
+        node.exclude             = parse_exclude_clause();
+        if (saw_pairs) {
+            errors_.error(exclude_loc, "'exclude:' cannot be combined with 'pairs:' on the same system");
+        }
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1245,8 +1267,12 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
     skip_newlines();
     if (check(TokenType::IDENTIFIER) && peek().value == "order" && peek_next().type == TokenType::IDENTIFIER &&
         peek_next().value == "by") {
-        auto error_count_before = errors_.error_count();
-        node.order_by           = parse_order_by_clause();
+        auto order_loc           = peek().location;
+        auto error_count_before  = errors_.error_count();
+        node.order_by            = parse_order_by_clause();
+        if (saw_pairs) {
+            errors_.error(order_loc, "'order by:' cannot be combined with 'pairs:' on the same system");
+        }
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1342,6 +1368,71 @@ FilterClause Parser::parse_filter_clause() {
         }
     }
     expect_dedent();
+    return clause;
+}
+
+bool Parser::at_pairs_clause() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "pairs" && peek_next().type == TokenType::COLON;
+}
+
+PairClause Parser::parse_pairs_clause() {
+    auto loc = peek().location;
+    advance();  // consume contextual 'pairs' identifier
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    PairClause clause;
+    clause.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        auto error_count_before = errors_.error_count();
+        auto binding_loc        = peek().location;
+        auto binding_name       = consume(TokenType::IDENTIFIER, "expected pair binding name").value;
+        consume(TokenType::COLON, "expected ':'");
+        expect_newline();
+        expect_indent();
+
+        PairBindingNode binding;
+        binding.name     = binding_name;
+        binding.location = binding_loc;
+
+        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+            skip_newlines();
+            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+                break;
+            }
+            auto entry_loc = peek().location;
+            auto qname     = parse_dotted_name();
+            std::optional<std::string> alias;
+            if (match(TokenType::AS)) {
+                alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
+            }
+            binding.traits.push_back({.qualified_name = qname, .alias = alias, .location = entry_loc});
+            expect_newline();
+        }
+        expect_dedent();
+
+        if (binding.traits.empty()) {
+            errors_.error(binding.location,
+                           "pair binding '" + binding.name + "' must declare at least one trait");
+        }
+        clause.bindings.push_back(std::move(binding));
+
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+    expect_dedent();
+
+    if (clause.bindings.size() != 2) {
+        errors_.error(loc, "pairs: block must declare exactly two bindings");
+    }
+
     return clause;
 }
 
@@ -2580,6 +2671,17 @@ ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function
     ExternSystemNode node;
     node.name     = name;
     node.location = loc;
+
+    skip_newlines();
+    if (at_pairs_clause()) {
+        auto pairs_loc           = peek().location;
+        auto error_count_before  = errors_.error_count();
+        parse_pairs_clause();  // parsed and discarded; pair domains are regular-system-only
+        errors_.error(pairs_loc, "pair domains are regular-system-only; 'extern system' cannot declare 'pairs:'");
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
 
     skip_newlines();
     if (check(TokenType::FILTER)) {

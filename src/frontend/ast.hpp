@@ -628,6 +628,25 @@ struct SortKey {
     SourceLocation location;
 };
 
+// ── Pair Relation (dsl-pair-relations) ──────────────────────────────────────
+
+// One binding within a `pairs:` block: a binding identifier together with the
+// trait requirements selected under that binding's namespace. Trait entries
+// reuse FilterEntry's dotted-name/alias form since pair traits are declared
+// the same way as unary filter traits.
+struct PairBindingNode {
+    std::string name;
+    std::vector<FilterEntry> traits;  // at least one entry; validated by the parser
+    SourceLocation location;
+};
+
+// `pairs:` block on a regular system — exactly two bindings, in source order.
+// Mutually exclusive with filter/exclude/order_by on the same system.
+struct PairClause {
+    std::vector<PairBindingNode> bindings;  // exactly two; validated by the parser
+    SourceLocation location;
+};
+
 struct SystemNode {
     std::string name;
     bool is_stdlib = false;
@@ -635,6 +654,7 @@ struct SystemNode {
     std::vector<SymbolId> resolved_after_system_ids;  // set by semantic analysis; parallel to after_systems
     FilterClause filter;                              // empty entries = no filter (match all)
     FilterClause exclude;                             // empty entries = no exclude
+    std::optional<PairClause> pairs;                  // set when this system uses a binary pair domain
     std::vector<SortKey> order_by;
     std::vector<std::string> after_systems;  // explicit ordering: this system runs after these
     std::optional<std::string> target;       // "cpu" or "gpu"

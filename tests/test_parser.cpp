@@ -1435,6 +1435,193 @@ TEST_CASE("Parser: system without order by leaves clause empty", "[parser][syste
     CHECK(sys.order_by.empty());
 }
 
+// ── Pair relations (dsl-pair-relations) ─────────────────────────────────────
+
+TEST_CASE("Parser: pairs clause with two local-trait bindings", "[parser][pair-relations]") {
+    auto prog = parse(
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "            Transform\n"
+        "            Collider\n"
+        "        wall:\n"
+        "            Solid\n"
+        "            Collider\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.pairs.has_value());
+    REQUIRE(sys.pairs->bindings.size() == 2);
+
+    auto& body = sys.pairs->bindings[0];
+    CHECK(body.name == "body");
+    REQUIRE(body.traits.size() == 3);
+    CHECK(body.traits[0].qualified_name == "DynamicBody");
+    CHECK(body.traits[1].qualified_name == "Transform");
+    CHECK(body.traits[2].qualified_name == "Collider");
+
+    auto& wall = sys.pairs->bindings[1];
+    CHECK(wall.name == "wall");
+    REQUIRE(wall.traits.size() == 2);
+    CHECK(wall.traits[0].qualified_name == "Solid");
+    CHECK(wall.traits[1].qualified_name == "Collider");
+
+    CHECK(sys.filter.entries.empty());
+    CHECK(sys.exclude.entries.empty());
+}
+
+TEST_CASE("Parser: pairs clause preserves imported trait qualification and binding-local alias",
+          "[parser][pair-relations]") {
+    auto prog = parse(
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "            tf.WorldTransform as transform\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys  = std::get<SystemNode>(prog.declarations[0]);
+    auto& wall = sys.pairs->bindings[1];
+    REQUIRE(wall.traits.size() == 2);
+    CHECK(wall.traits[1].qualified_name == "tf.WorldTransform");
+    REQUIRE(wall.traits[1].alias.has_value());
+    CHECK(*wall.traits[1].alias == "transform");
+}
+
+TEST_CASE("Parser: pairs clause preserves source order and locations", "[parser][pair-relations]") {
+    auto prog = parse(
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.pairs.has_value());
+    CHECK(sys.pairs->bindings[0].name == "body");
+    CHECK(sys.pairs->bindings[1].name == "wall");
+    CHECK(sys.pairs->bindings[0].location.line < sys.pairs->bindings[1].location.line);
+    CHECK(sys.pairs->bindings[0].traits[0].location.line > sys.pairs->bindings[0].location.line);
+}
+
+TEST_CASE("Parser: pairs remains a contextual identifier outside system-clause position",
+          "[parser][pair-relations]") {
+    auto prog = parse(
+        "system UsesPairsLocal:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        let pairs = 1\n"
+        "        x = pairs\n");
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    CHECK_FALSE(sys.pairs.has_value());
+    REQUIRE(sys.handlers.size() == 1);
+    REQUIRE(sys.handlers[0].body.size() == 2);
+}
+
+TEST_CASE("Parser: pairs clause with one binding is rejected", "[parser][pair-relations]") {
+    auto errors = parse_expect_errors(
+        "system Bad:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: pairs clause with three bindings is rejected", "[parser][pair-relations]") {
+    auto errors = parse_expect_errors(
+        "system Bad:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            A\n"
+        "        b:\n"
+        "            B\n"
+        "        c:\n"
+        "            C\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: pairs clause with an empty binding is rejected", "[parser][pair-relations]") {
+    auto errors = parse_expect_errors(
+        "system Bad:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: pairs clause combined with filter is rejected", "[parser][pair-relations]") {
+    auto errors = parse_expect_errors(
+        "system Bad:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: pairs clause combined with exclude is rejected", "[parser][pair-relations]") {
+    auto errors = parse_expect_errors(
+        "system Bad:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    exclude:\n"
+        "        Dead\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: pairs clause combined with order by is rejected", "[parser][pair-relations]") {
+    auto errors = parse_expect_errors(
+        "system Bad:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    order by:\n"
+        "        body.DynamicBody.x\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: pairs clause on extern system is rejected", "[parser][pair-relations]") {
+    auto errors = parse_expect_errors(
+        "extern system Bad:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    target: cpu\n");
+    REQUIRE(errors.has_errors());
+}
+
 TEST_CASE("Parser: extern system rejects executable handler statements", "[parser][extern-system]") {
     auto errors = parse_expect_errors(
         "extern system Bad:\n"

@@ -6922,6 +6922,17 @@ void SemanticAnalyzer::validate_after_clauses(
         }
     };
 
+    // Conflict detection treats a projected trait as production of that trait
+    // for ordering purposes, same as a durable write, without collapsing the
+    // distinct `writes`/`projects` contract capabilities themselves (handler-contracts).
+    std::vector<std::unordered_set<SymbolId>> produced_by_handler;
+    produced_by_handler.reserve(result_.execution_graph.handlers.size());
+    for (const auto& handler : result_.execution_graph.handlers) {
+        std::unordered_set<SymbolId> produced = handler.contract.writes;
+        produced.insert(handler.contract.projects.begin(), handler.contract.projects.end());
+        produced_by_handler.push_back(std::move(produced));
+    }
+
     for (std::size_t left_index = 0; left_index < result_.execution_graph.handlers.size(); ++left_index) {
         const auto& left = result_.execution_graph.handlers[left_index];
         for (std::size_t right_index = left_index + 1; right_index < result_.execution_graph.handlers.size();
@@ -6934,13 +6945,13 @@ void SemanticAnalyzer::validate_after_clauses(
             std::vector<SymbolId> trait_provenance;
             bool left_writes_right = false;
             bool right_writes_left = false;
-            for (const auto& trait : left.contract.writes) {
+            for (const auto& trait : produced_by_handler[left_index]) {
                 if (right.contract.reads.contains(trait)) {
                     left_writes_right = true;
                     add_unique_trait(trait_provenance, trait);
                 }
             }
-            for (const auto& trait : right.contract.writes) {
+            for (const auto& trait : produced_by_handler[right_index]) {
                 if (left.contract.reads.contains(trait)) {
                     right_writes_left = true;
                     add_unique_trait(trait_provenance, trait);

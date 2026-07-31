@@ -29,3 +29,5 @@ build-remove-cpp-manual/
 openspec/changes/archive/*
 .claude/
 .cline/
+.clinerules/
+.codex/

@@ -2152,6 +2152,256 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
     }));
 }
 
+// ── Pair relations in the execution graph (dsl-pair-relations, 3.4) ─────────
+
+TEST_CASE("handler graph gives a pair handler exactly one node with its bindings and domain",
+          "[semantic][handler-graph][pair-relations]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.pairs\n"
+        "event tick\n"
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Solid:\n"
+        "    var active: bool = true\n"
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on tick:\n"
+        "        if body != wall:\n"
+        "            let x = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    REQUIRE(decorated.execution_graph.handlers.size() == 1);
+
+    const auto& node = decorated.execution_graph.handlers[0];
+    CHECK(node.contract.domain_kind == HandlerDomainKind::Pair);
+    CHECK_FALSE(node.contract.is_selectionless());
+    REQUIRE(node.contract.pair_bindings.size() == 2);
+    CHECK(node.contract.pair_bindings[0].name == "body");
+    CHECK(node.contract.pair_bindings[0].required_traits ==
+          std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "game.pairs", "DynamicBody")});
+    CHECK(node.contract.pair_bindings[1].name == "wall");
+    CHECK(node.contract.pair_bindings[1].required_traits ==
+          std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "game.pairs", "Solid")});
+}
+
+TEST_CASE("handler graph orders a pair reader after a unary writer of the same trait",
+          "[semantic][handler-graph][pair-relations]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.pairs\n"
+        "event tick\n"
+        "trait Transform:\n"
+        "    var x: float\n"
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Solid:\n"
+        "    var active: bool = true\n"
+        "extern system WriteTransform:\n"
+        "    on tick:\n"
+        "        writes:\n"
+        "            Transform\n"
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "            Transform\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on tick:\n"
+        "        if body.Transform.x > 0.0:\n"
+        "            let y = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto writer   = HandlerIdentity{.system  = make_symbol_id(SymbolKind::System, "game.pairs", "WriteTransform"),
+                                        .trigger = ResolvedHandlerTrigger{
+                                            .kind = HandlerTriggerKind::Event,
+                                            .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+    const auto detector = HandlerIdentity{
+        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+
+    const auto found = std::ranges::find_if(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
+        return edge.kind == ScheduleEdgeKind::DataConflict && edge.before == writer && edge.after == detector;
+    });
+    REQUIRE(found != decorated.execution_graph.schedule_edges.end());
+    CHECK(found->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+    CHECK(found->trait_provenance == std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "game.pairs", "Transform")});
+}
+
+TEST_CASE("handler graph orders a pair projection producer before a reader without treating it as a durable write",
+          "[semantic][handler-graph][pair-relations]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.pairs\n"
+        "event tick\n"
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Solid:\n"
+        "    var active: bool = true\n"
+        "trait GroundContact:\n"
+        "    var active: bool = true\n"
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on tick:\n"
+        "        project GroundContact to body\n"
+        "extern system ReadGroundContact:\n"
+        "    on tick:\n"
+        "        reads:\n"
+        "            GroundContact\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto ground_contact = make_symbol_id(SymbolKind::Trait, "game.pairs", "GroundContact");
+    const auto detector       = HandlerIdentity{
+        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+    const auto reader = HandlerIdentity{
+        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "ReadGroundContact"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+
+    const auto found = std::ranges::find_if(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
+        return edge.kind == ScheduleEdgeKind::DataConflict && edge.before == detector && edge.after == reader;
+    });
+    REQUIRE(found != decorated.execution_graph.schedule_edges.end());
+    CHECK(found->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+    CHECK(found->trait_provenance == std::vector<SymbolId>{ground_contact});
+
+    const auto node = std::ranges::find_if(decorated.execution_graph.handlers,
+                                           [&](const auto& handler_node) { return handler_node.identity == detector; });
+    REQUIRE(node != decorated.execution_graph.handlers.end());
+    CHECK(node->contract.projects.contains(ground_contact));
+    CHECK_FALSE(node->contract.writes.contains(ground_contact));
+}
+
+TEST_CASE("handler graph connects a pair event producer to its consumer regardless of target",
+          "[semantic][handler-graph][pair-relations]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.pairs\n"
+        "event tick\n"
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Solid:\n"
+        "    var active: bool = true\n"
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on tick:\n"
+        "        emit Contact to body:\n"
+        "            other = wall\n"
+        "system ResolveContact:\n"
+        "    on Contact:\n"
+        "        let x = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    REQUIRE(decorated.execution_graph.event_flows.size() == 1);
+
+    const auto& flow = decorated.execution_graph.event_flows[0];
+    CHECK(flow.producer.system == make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"));
+    CHECK(flow.event == make_symbol_id(SymbolKind::Event, "game.pairs", "Contact"));
+    CHECK(flow.consumer.system == make_symbol_id(SymbolKind::System, "game.pairs", "ResolveContact"));
+}
+
+TEST_CASE("handler graph honors explicit after: ordering on a pair system", "[semantic][handler-graph][pair-relations]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.pairs\n"
+        "event tick\n"
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Solid:\n"
+        "    var active: bool = true\n"
+        "system First:\n"
+        "    on tick:\n"
+        "        let a = 1\n"
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    after:\n"
+        "        First\n"
+        "    on tick:\n"
+        "        let b = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto first    = HandlerIdentity{.system  = make_symbol_id(SymbolKind::System, "game.pairs", "First"),
+                                        .trigger = ResolvedHandlerTrigger{
+                                            .kind = HandlerTriggerKind::Event,
+                                            .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+    const auto detector = HandlerIdentity{
+        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+
+    CHECK(std::ranges::any_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
+        return edge.kind == ScheduleEdgeKind::ExplicitSystem && edge.before == first && edge.after == detector;
+    }));
+}
+
+TEST_CASE("handler graph diagnoses a cycle formed through a pair handler's bound reads",
+          "[semantic][handler-graph][pair-relations][errors]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.pairs\n"
+        "event tick\n"
+        "trait DynamicBody:\n"
+        "    var vx: float\n"
+        "trait Solid:\n"
+        "    var active: bool = true\n"
+        "trait Forward:\n"
+        "    var v: int\n"
+        "trait LoopBack:\n"
+        "    var v: int\n"
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "            LoopBack\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on tick:\n"
+        "        if body.LoopBack.v > 0:\n"
+        "            let z = 1\n"
+        "extern system B:\n"
+        "    on tick:\n"
+        "        after:\n"
+        "            DetectContacts/on tick\n"
+        "        writes:\n"
+        "            Forward\n"
+        "extern system C:\n"
+        "    on tick:\n"
+        "        reads:\n"
+        "            Forward\n"
+        "        writes:\n"
+        "            LoopBack\n");
+
+    CHECK(has_diagnostic(diagnostics, "handler cycle"));
+    CHECK(has_diagnostic(diagnostics, "game.pairs.DetectContacts/on game.pairs.tick"));
+    CHECK(has_diagnostic(diagnostics, "game.pairs.B/on game.pairs.tick"));
+    CHECK(has_diagnostic(diagnostics, "game.pairs.C/on game.pairs.tick"));
+    CHECK(decorated.execution_graph.stable_topological_order.empty());
+}
+
 TEST_CASE("handler graph separates phase barriers from cyclic event flow", "[semantic][handler-graph][3.4]") {
     const auto [decorated, diagnostics] = analyze_source(
         "module game.activation\n"

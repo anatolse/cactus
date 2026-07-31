@@ -387,6 +387,144 @@ TEST_CASE("program_linker: rebuilds cross-module conflicts and event flow", "[li
     CHECK(merged.execution_graph.stable_topological_order[1] == reader.identity);
 }
 
+// ── Pair relations (dsl-pair-relations, 4.4) ─────────────────────────────────
+
+TEST_CASE("program_linker: preserves pair contract domain, bindings, bound reads, and projects across merge",
+          "[linker][pair-relations][4.4]") {
+    const auto tick           = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const auto dynamic_body   = linked_symbol(SymbolKind::Trait, "producer", "DynamicBody");
+    const auto solid          = linked_symbol(SymbolKind::Trait, "producer", "Solid");
+    const auto ground_contact = linked_symbol(SymbolKind::Trait, "producer", "GroundContact");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+
+    DecoratedProgram producer_program;
+    auto detector                   = linked_handler(linked_symbol(SymbolKind::System, "producer", "DetectContacts"),
+                                    tick_trigger,
+                                    0);
+    detector.contract.domain_kind   = HandlerDomainKind::Pair;
+    detector.contract.pair_bindings = {
+        RelationBinding{.name = "body", .required_traits = {dynamic_body}},
+        RelationBinding{.name = "wall", .required_traits = {solid}},
+    };
+    detector.contract.reads       = {dynamic_body, solid};
+    detector.contract.bound_reads = {
+        BoundTraitAccess{.binding_index = 0, .trait = dynamic_body},
+        BoundTraitAccess{.binding_index = 1, .trait = solid},
+    };
+    detector.contract.projects = {ground_contact};
+    producer_program.execution_graph.handlers.push_back(detector);
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, producer_program, "producer"));
+    REQUIRE_FALSE(errors.has_errors());
+
+    REQUIRE(merged.execution_graph.handlers.size() == 1);
+    const auto& node = merged.execution_graph.handlers[0];
+    CHECK(node.contract.domain_kind == HandlerDomainKind::Pair);
+    CHECK_FALSE(node.contract.is_selectionless());
+    REQUIRE(node.contract.pair_bindings.size() == 2);
+    CHECK(node.contract.pair_bindings[0].name == "body");
+    CHECK(node.contract.pair_bindings[0].required_traits == std::vector<SymbolId>{dynamic_body});
+    CHECK(node.contract.pair_bindings[1].name == "wall");
+    CHECK(node.contract.pair_bindings[1].required_traits == std::vector<SymbolId>{solid});
+    CHECK(node.contract.bound_reads.size() == 2);
+    CHECK(node.contract.projects.contains(ground_contact));
+    CHECK_FALSE(node.contract.writes.contains(ground_contact));
+}
+
+TEST_CASE("program_linker: rebuilds a cross-module conflict from a pair handler's projection",
+          "[linker][pair-relations][4.4]") {
+    const auto tick           = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const auto ground_contact = linked_symbol(SymbolKind::Trait, "producer", "GroundContact");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+
+    DecoratedProgram producer_program;
+    auto detector = linked_handler(linked_symbol(SymbolKind::System, "producer", "DetectContacts"), tick_trigger, 0);
+    detector.contract.domain_kind = HandlerDomainKind::Pair;
+    detector.contract.projects    = {ground_contact};
+    producer_program.execution_graph.handlers.push_back(detector);
+
+    DecoratedProgram consumer_program;
+    auto reader = linked_handler(linked_symbol(SymbolKind::System, "consumer", "ReadGroundContact"), tick_trigger, 1);
+    reader.contract.reads.insert(ground_contact);
+    consumer_program.execution_graph.handlers.push_back(reader);
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, producer_program, "producer"));
+    REQUIRE(linker.merge_into(merged, consumer_program, "consumer"));
+    REQUIRE_FALSE(errors.has_errors());
+
+    const auto conflict = std::ranges::find_if(merged.execution_graph.schedule_edges, [&](const auto& edge) {
+        return edge.kind == ScheduleEdgeKind::DataConflict && edge.before == detector.identity &&
+               edge.after == reader.identity;
+    });
+    REQUIRE(conflict != merged.execution_graph.schedule_edges.end());
+    CHECK(conflict->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+    CHECK(conflict->trait_provenance == std::vector<SymbolId>{ground_contact});
+}
+
+TEST_CASE("program_linker: artifact link preserves an imported pair trait identity without UseNode lookup",
+          "[linker][pair-relations][artifact][4.4]") {
+    auto build_dir = linker_build_dir() / "pair_import";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto tick          = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const auto solid         = linked_symbol(SymbolKind::Trait, "phys", "Solid");
+    const auto dynamic_body  = linked_symbol(SymbolKind::Trait, "game", "DynamicBody");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+
+    DecoratedProgram phys_program;
+    ResolvedTrait solid_trait;
+    solid_trait.name             = "Solid";
+    solid_trait.is_pub           = true;
+    solid_trait.module_name      = "phys";
+    solid_trait.canonical_id     = make_canonical_id(solid);
+    phys_program.traits["Solid"] = solid_trait;
+
+    DecoratedProgram game_program;
+    auto detector                   = linked_handler(linked_symbol(SymbolKind::System, "game", "DetectContacts"),
+                                    tick_trigger,
+                                    0);
+    detector.contract.domain_kind   = HandlerDomainKind::Pair;
+    detector.contract.pair_bindings = {
+        RelationBinding{.name = "body", .required_traits = {dynamic_body}},
+        // "wall" selects Solid through an imported alias — already resolved to
+        // its canonical identity by semantic analysis, same as any other
+        // aliased import; the artifact never stores the source alias.
+        RelationBinding{.name = "wall", .required_traits = {solid}},
+    };
+    detector.contract.bound_reads = {BoundTraitAccess{.binding_index = 1, .trait = solid}};
+    detector.contract.reads       = {solid};
+    game_program.execution_graph.handlers.push_back(detector);
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(phys_program, "phys", build_dir));
+    REQUIRE(artifact.save(game_program, "game", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({build_dir / "phys.cmod", build_dir / "game.cmod"});
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(linked.has_value());
+
+    REQUIRE(linked->execution_graph.handlers.size() == 1);
+    const auto& node = linked->execution_graph.handlers[0];
+    REQUIRE(node.contract.pair_bindings.size() == 2);
+    CHECK(node.contract.pair_bindings[1].name == "wall");
+    CHECK(node.contract.pair_bindings[1].required_traits == std::vector<SymbolId>{solid});
+    REQUIRE(node.contract.bound_reads.size() == 1);
+    CHECK(node.contract.bound_reads[0].trait == solid);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("program_linker: artifact link preserves explicit cross-module edge and graph levels",
           "[linker][runtime-graph][artifact][4.4]") {
     auto build_dir = linker_build_dir() / "runtime_graph";

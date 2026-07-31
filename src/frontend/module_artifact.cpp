@@ -340,11 +340,22 @@ void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<System
 }
 
 void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& contract) {
+    write_u8(out, static_cast<uint8_t>(contract.domain_kind));
     write_symbol_vector(out, contract.selection);
     write_symbol_vector(out, contract.exclusion);
-    write_bool(out, contract.is_selectionless());
+    write_u32(out, static_cast<uint32_t>(contract.pair_bindings.size()));
+    for (const auto& binding : contract.pair_bindings) {
+        write_str(out, binding.name);
+        write_symbol_vector(out, binding.required_traits);
+    }
     write_symbol_set(out, contract.reads);
+    write_u32(out, static_cast<uint32_t>(contract.bound_reads.size()));
+    for (const auto& access : contract.bound_reads) {
+        write_u64(out, static_cast<uint64_t>(access.binding_index));
+        write_symbol_id(out, access.trait);
+    }
     write_symbol_set(out, contract.writes);
+    write_symbol_set(out, contract.projects);
     write_symbol_set(out, contract.emits);
     write_u32(out, static_cast<uint32_t>(contract.commands.size()));
     for (const auto& command : contract.commands) {
@@ -804,12 +815,32 @@ std::vector<SystemDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
 
 HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     HandlerContract contract;
-    contract.selection    = read_symbol_vector(in);
-    contract.exclusion    = read_symbol_vector(in);
-    const bool selectionless = read_bool(in);
-    contract.domain_kind  = selectionless ? HandlerDomainKind::Selectionless : HandlerDomainKind::Unary;
-    contract.reads            = read_symbol_set(in);
+    contract.domain_kind = static_cast<HandlerDomainKind>(read_u8(in));
+    contract.selection   = read_symbol_vector(in);
+    contract.exclusion   = read_symbol_vector(in);
+
+    const auto binding_count = read_u32(in);
+    contract.pair_bindings.reserve(binding_count);
+    for (uint32_t i = 0; i < binding_count; ++i) {
+        RelationBinding binding;
+        binding.name             = read_str(in);
+        binding.required_traits = read_symbol_vector(in);
+        contract.pair_bindings.push_back(std::move(binding));
+    }
+
+    contract.reads = read_symbol_set(in);
+
+    const auto bound_read_count = read_u32(in);
+    contract.bound_reads.reserve(bound_read_count);
+    for (uint32_t i = 0; i < bound_read_count; ++i) {
+        BoundTraitAccess access;
+        access.binding_index = static_cast<std::size_t>(read_u64(in));
+        access.trait          = read_symbol_id(in);
+        contract.bound_reads.push_back(access);
+    }
+
     contract.writes           = read_symbol_set(in);
+    contract.projects         = read_symbol_set(in);
     contract.emits            = read_symbol_set(in);
     const auto command_count  = read_u32(in);
     contract.commands.reserve(command_count);

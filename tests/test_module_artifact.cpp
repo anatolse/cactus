@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -736,6 +737,132 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     CHECK(symbols->phase_symbols.at("tick").fields[1].is_completion_only);
     REQUIRE(symbols->phase_symbols.at("tick").fields[2].source_binding.has_value());
     CHECK(symbols->phase_symbols.at("tick").fields[2].source_binding->kind == PhaseFieldSource::Kind::RootEvent);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: pair-domain handler contract round-trips through save/load",
+          "[artifact][pair-relations][4.2]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto dynamic_body   = test_symbol(SymbolKind::Trait, "DynamicBody");
+    const auto solid          = test_symbol(SymbolKind::Trait, "Solid");
+    const auto ground_contact = test_symbol(SymbolKind::Trait, "GroundContact");
+    const auto contact_event  = test_symbol(SymbolKind::Event, "Contact");
+    const auto tick           = test_symbol(SymbolKind::Event, "tick");
+    const auto detect         = test_symbol(SymbolKind::System, "DetectContacts");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
+    const HandlerIdentity detect_handler{.system = detect, .trigger = tick_trigger};
+
+    HandlerContract contract;
+    contract.domain_kind   = HandlerDomainKind::Pair;
+    contract.pair_bindings = {
+        RelationBinding{.name = "body", .required_traits = {dynamic_body}},
+        RelationBinding{.name = "wall", .required_traits = {solid}},
+    };
+    contract.reads       = {dynamic_body, solid};
+    contract.bound_reads = {
+        BoundTraitAccess{.binding_index = 0, .trait = dynamic_body},
+        BoundTraitAccess{.binding_index = 1, .trait = solid},
+    };
+    contract.projects = {ground_contact};
+    contract.emits    = {contact_event};
+
+    InferredHandlerContract inferred;
+    static_cast<HandlerContract&>(inferred) = contract;
+    inferred.system                         = detect;
+    inferred.trigger                        = tick_trigger;
+
+    DecoratedProgram prog;
+    prog.handler_contracts.push_back(inferred);
+    prog.execution_graph.handlers.push_back(
+        HandlerNode{.identity = detect_handler, .contract = contract, .declaration_order = {.declaration_index = 0}});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(prog, "runtime.lib", build_dir));
+    std::string module_name;
+    auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    const auto& loaded_contract = loaded->handler_contracts[0];
+    CHECK(loaded_contract.domain_kind == HandlerDomainKind::Pair);
+    CHECK_FALSE(loaded_contract.is_selectionless());
+    REQUIRE(loaded_contract.pair_bindings.size() == 2);
+    CHECK(loaded_contract.pair_bindings[0].name == "body");
+    CHECK(loaded_contract.pair_bindings[0].required_traits == std::vector<SymbolId>{dynamic_body});
+    CHECK(loaded_contract.pair_bindings[1].name == "wall");
+    CHECK(loaded_contract.pair_bindings[1].required_traits == std::vector<SymbolId>{solid});
+    CHECK(loaded_contract.bound_reads.size() == 2);
+    CHECK(std::ranges::find(loaded_contract.bound_reads,
+                            BoundTraitAccess{.binding_index = 0, .trait = dynamic_body}) !=
+          loaded_contract.bound_reads.end());
+    CHECK(std::ranges::find(loaded_contract.bound_reads, BoundTraitAccess{.binding_index = 1, .trait = solid}) !=
+          loaded_contract.bound_reads.end());
+    CHECK(loaded_contract.projects.contains(ground_contact));
+    CHECK_FALSE(loaded_contract.writes.contains(ground_contact));
+    CHECK(loaded_contract.emits.contains(contact_event));
+
+    REQUIRE(loaded->execution_graph.handlers.size() == 1);
+    CHECK(loaded->execution_graph.handlers[0].contract.domain_kind == HandlerDomainKind::Pair);
+    CHECK(loaded->execution_graph.handlers[0].contract.pair_bindings.size() == 2);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: selectionless and unary contracts still round-trip after pair-domain extension",
+          "[artifact][pair-relations][4.2]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto position = test_symbol(SymbolKind::Trait, "Position");
+    const auto tick      = test_symbol(SymbolKind::Event, "tick");
+    const auto selectionless_system = test_symbol(SymbolKind::System, "Once");
+    const auto unary_system         = test_symbol(SymbolKind::System, "Move");
+    const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
+
+    HandlerContract selectionless;
+    selectionless.domain_kind = HandlerDomainKind::Selectionless;
+
+    HandlerContract unary;
+    unary.domain_kind = HandlerDomainKind::Unary;
+    unary.selection   = {position};
+    unary.reads       = {position};
+    unary.writes      = {position};
+
+    InferredHandlerContract inferred_selectionless;
+    static_cast<HandlerContract&>(inferred_selectionless) = selectionless;
+    inferred_selectionless.system                         = selectionless_system;
+    inferred_selectionless.trigger                        = tick_trigger;
+
+    InferredHandlerContract inferred_unary;
+    static_cast<HandlerContract&>(inferred_unary) = unary;
+    inferred_unary.system                         = unary_system;
+    inferred_unary.trigger                        = tick_trigger;
+
+    DecoratedProgram prog;
+    prog.handler_contracts = {inferred_selectionless, inferred_unary};
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(prog, "runtime.lib", build_dir));
+    std::string module_name;
+    auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+
+    REQUIRE(loaded->handler_contracts.size() == 2);
+    CHECK(loaded->handler_contracts[0].domain_kind == HandlerDomainKind::Selectionless);
+    CHECK(loaded->handler_contracts[0].is_selectionless());
+    CHECK(loaded->handler_contracts[0].pair_bindings.empty());
+    CHECK(loaded->handler_contracts[1].domain_kind == HandlerDomainKind::Unary);
+    CHECK_FALSE(loaded->handler_contracts[1].is_selectionless());
+    CHECK(loaded->handler_contracts[1].selection == std::vector<SymbolId>{position});
 
     fs::remove_all(build_dir, ec);
 }

@@ -336,16 +336,68 @@ The semantic analyzer SHALL verify that when `destroy` is given an expression ar
 - **WHEN** `destroy self` appears inside a system handler
 - **THEN** the analyzer accepts the destroy statement because `self` has type `entity_id`
 
+### Requirement: Pair domains resolve to canonical binding metadata
+The semantic analyzer SHALL resolve every pair trait entry to a canonical trait identity and SHALL produce ordered binding metadata for each pair handler. It SHALL reject duplicate binding names, duplicate or ambiguous binding-local aliases, unknown traits, invalid domain combinations, and pair domains with other than two non-empty bindings.
+
+#### Scenario: Imported pair traits resolve canonically
+- **WHEN** binding `body` selects `tf.WorldTransform` through an imported module alias
+- **THEN** semantic output stores the canonical WorldTransform identity under `body`
+
+#### Scenario: Duplicate pair binding is rejected
+- **WHEN** both entries in a pair clause are named `body`
+- **THEN** semantic analysis reports a duplicate pair binding
+
+### Requirement: Pair member access is resolved and typed
+The semantic analyzer SHALL type a pair binding as `entity_id` and SHALL resolve binding-relative trait, alias, field, and aggregate-member paths against that binding's selected traits. Access to a trait not selected by that binding SHALL be rejected.
+
+#### Scenario: Binding trait field has declared type
+- **WHEN** `body.Collider.mask` refers to an integer field
+- **THEN** the expression is typed as `int` and records a bound read of body.Collider
+
+#### Scenario: Cross-binding trait access is rejected
+- **WHEN** only `wall` selects Solid and code reads `body.Solid`
+- **THEN** semantic analysis reports that Solid is unavailable on `body`
+
+### Requirement: Pair mutability and implicit-entity restrictions are validated
+The semantic analyzer SHALL reject durable writes through pair-bound traits, `self`, implicit-self projection/add/remove/destroy forms, and writable trait matching on a pair binding. Explicit entity targets and spawning SHALL be validated under their existing type and command rules.
+
+#### Scenario: Explicit pair target passes entity type checking
+- **WHEN** a pair handler emits Contact to `body`
+- **THEN** targeted emit validation accepts the binding's `entity_id` type
+
+#### Scenario: Bare project is rejected in pair handler
+- **WHEN** a pair handler contains `project Contacting` with no `to` expression
+- **THEN** semantic analysis reports that no implicit entity exists
+
+### Requirement: Pair contracts expose precise and conservative accesses
+For a pair handler, semantic analysis SHALL infer the pair domain, binding-qualified trait reads, a conservative canonical trait-read union, projected outputs distinct from durable writes, emitted events, structural commands, and external effects from all reachable handler code. Pair selection alone SHALL add no read.
+
+#### Scenario: Same trait on both bindings remains distinguishable
+- **WHEN** a handler reads `body.Transform` and `wall.Transform`
+- **THEN** bound reads record both binding accesses while the conservative read set contains canonical Transform once
+
+#### Scenario: Projection is not a durable write
+- **WHEN** a pair handler projects GroundContact to `body`
+- **THEN** GroundContact is recorded as a projected output and not as a durable pair-bound write
+
 ### Requirement: `self` type-checks as `entity_id` in system handlers
-The semantic analyzer SHALL type `self` as `entity_id` when it appears inside a system event handler body.
+The semantic analyzer SHALL type `self` as `entity_id` only inside unary entity-selected system handler bodies. It SHALL reject `self` in selectionless and pair handler bodies because those domains have no unique current entity.
 
 #### Scenario: `self` accepted as add target
-- **WHEN** a handler contains `add Parent to self`
+- **WHEN** a unary entity handler contains `add Parent to self`
 - **THEN** the analyzer accepts `self` as a valid `entity_id` target expression
 
 #### Scenario: `self` accepted in entity field assignment
-- **WHEN** a handler assigns `Parent.parent = self`
+- **WHEN** a unary entity handler assigns `Parent.parent = self`
 - **THEN** the analyzer accepts the assignment because `Parent.parent` and `self` are both `entity_id`
+
+#### Scenario: `self` rejected in pair handler
+- **WHEN** a pair handler references `self`
+- **THEN** the analyzer reports that pair handlers require an explicit binding
+
+#### Scenario: `self` rejected in selectionless handler
+- **WHEN** a selectionless handler references `self`
+- **THEN** the analyzer reports that the handler has no current entity
 
 ### Requirement: `self` is rejected outside handler world context
 The semantic analyzer SHALL report an error when `self` appears outside a system event handler body.

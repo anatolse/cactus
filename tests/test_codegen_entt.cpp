@@ -4293,6 +4293,42 @@ TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other bind
     }
 }
 
+TEST_CASE("Codegen EnTT: pair binding-local alias shadowing another trait's name still resolves to its own "
+          "canonical trait, not the shadowed spelling",
+          "[codegen-entt][pair-relations]") {
+    // `wall` aliases `Solid` as `Collider`, deliberately colliding with the
+    // real `Collider` trait's name. Codegen must consume the resolved
+    // BoundTraitAccess identity attached by semantic analysis rather than
+    // re-deriving the trait from the dotted source spelling — a naive
+    // string-based resolver would mistake `wall.Collider.active` for the
+    // unrelated `Collider` trait (which has no `active` field) instead of
+    // `Solid` (which does).
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "system DetectContacts:\n"
+            "    pairs:\n"
+            "        body:\n"
+            "            DynamicBody\n"
+            "        wall:\n"
+            "            Solid as Collider\n"
+            "    on tick:\n"
+            "        if wall.Collider.active:\n"
+            "            emit Contact:\n"
+            "                other = wall\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("registry.get<const Solid>(wall).active") != std::string::npos);
+            CHECK(code.find("registry.get<const Collider>(wall)") == std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("Codegen EnTT: pair binding-local alias and qualified imported trait resolve to canonical access",
           "[codegen-entt][pair-relations]") {
     ProgramNode program;
@@ -4537,6 +4573,34 @@ TEST_CASE("Codegen EnTT: targeted external handler dispatch is gated on the reci
     const auto tail = code.substr(dispatch);
     CHECK(tail.find("if (target.has_value()) {") != std::string::npos);
     CHECK(tail.find("entt::entity entity = *target;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the field instead of shadowing the alias",
+          "[codegen-entt][assignment]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Contact:\n"
+        "    amount: int\n"
+        "trait Health:\n"
+        "    var current: int\n"
+        "system ResolveContact:\n"
+        "    filter:\n"
+        "        Health as hp\n"
+        "    on Contact as dmg:\n"
+        "        hp.current = hp.current - dmg.amount\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            // The alias `hp` is already declared as a reference to the Health
+            // component; the assignment must reuse it via ordinary member
+            // access rather than redeclaring it with `auto`, which would be a
+            // compile error (redefinition of `hp`).
+            CHECK(code.find("hp.current = (hp.current - dmg.amount);") != std::string::npos);
+            CHECK(code.find("auto hp = ") == std::string::npos);
+        }
+    }
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1723,7 +1723,22 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                        rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
-                if (known_fields.contains(s.name)) {
+                if (!s.path.empty()) {
+                    // Dotted assignment target (`alias.field...`): reconstruct the
+                    // equivalent member-access chain and lower it through the same
+                    // path ordinary reads use, so `hp.health = x` resolves `hp` as
+                    // the already-in-scope filter-alias/field reference instead of
+                    // falling into the bare-identifier "new local" branch below,
+                    // which would shadow-redeclare it.
+                    ExprNode chain(ExprNode::Variant{IdentExpr{s.name, s.location}}, s.location);
+                    for (const auto& segment : s.path) {
+                        chain = ExprNode(
+                            ExprNode::Variant{MemberExpr{
+                                std::make_unique<ExprNode>(std::move(chain)), segment, std::nullopt, s.location}},
+                            s.location);
+                    }
+                    lhs = rewrite_expr(chain, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                } else if (known_fields.contains(s.name)) {
                     auto comp = find_comp_for_field(s.name, trait_names, program);
                     if (!comp.empty()) {
                         const auto ovr = cpp_overrides.find(comp);

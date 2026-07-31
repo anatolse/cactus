@@ -16,6 +16,13 @@ The compiler SHALL produce one execution-graph node per handler with canonical i
 - **WHEN** one system declares two handlers for fixed_tick
 - **THEN** semantic analysis reports a duplicate handler trigger
 
+### Requirement: Relation cardinality does not multiply graph nodes
+A selectionless, unary, or pair handler SHALL each occupy one canonical execution-graph node. Runtime entities and pair tuples SHALL execute within that node and MUST NOT alter canonical identity or create dynamic graph nodes.
+
+#### Scenario: Pair tuple count is graph-independent
+- **WHEN** a pair handler's snapshots produce one thousand tuples
+- **THEN** the graph contains one node for that system and trigger
+
 ### Requirement: Phase and event flow edges
 The graph SHALL include phase barrier edges from upstream phase completion to downstream phase handlers and event-flow edges from a handler that may emit an event to every handler consuming that event. Event-handler nodes SHALL be activated per event occurrence within the current activation's bounded cascade.
 
@@ -26,6 +33,13 @@ The graph SHALL include phase barrier edges from upstream phase completion to do
 #### Scenario: Fixed barrier covers all repetitions
 - **WHEN** tick follows fixed_tick
 - **THEN** tick handler nodes depend on completion of the entire fixed_tick repetition batch
+
+### Requirement: Event-flow edges are recipient-independent
+The graph SHALL connect an event producer to every consumer of that event regardless of whether a runtime occurrence is broadcast or targeted. Recipient-aware relation restriction SHALL occur during delivery without changing the static event-flow graph.
+
+#### Scenario: Targeted occurrence uses existing event edge
+- **WHEN** DetectContacts may emit Contact to a body and ResolveContact consumes Contact
+- **THEN** one static event-flow edge connects the handlers and runtime routing selects the recipient
 
 ### Requirement: Commit-synthesized and scheduler-boundary producer edges
 Beyond handler-to-handler `EventFlowEdge`s, the execution graph SHALL represent two further event-producer kinds so every consumer node's trigger resolves to a declared producer:
@@ -67,6 +81,13 @@ Pair direction SHALL be chosen by explicit handler ordering first; otherwise a o
 #### Scenario: Shared graphics effects are deterministic
 - **WHEN** two render handlers declare `effects: graphics` without explicit ordering
 - **THEN** their conflict is oriented by stable declaration order
+
+### Requirement: Pair contracts participate in conservative conflicts
+Graph conflict construction SHALL use the conservative trait reads, durable writes, projected outputs, commands, and effects inferred for pair handlers. Binding-qualified reads SHALL be retained as provenance but SHALL NOT weaken correctness by removing conservative conflicts.
+
+#### Scenario: Pair reader follows unary writer
+- **WHEN** a unary handler writes Transform and a pair handler reads Transform on either binding in the same activation
+- **THEN** the graph adds the same writer-before-reader dependency required for unary consumers
 
 ### Requirement: Explicit handler ordering
 A handler SHALL accept an optional leading `after:` block naming canonical or qualified handler nodes. The referenced node MUST be eligible under the same trigger or activation context. Existing system-level `after:` SHALL remain compatibility shorthand that creates edges only between matching triggers on the referenced and dependent systems.

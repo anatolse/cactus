@@ -86,14 +86,18 @@ The `extract_pub_symbols` function SHALL read the funcs section and include `pub
 - **THEN** `ImportedSymbols.funcs["lerp"]` is present with `is_extern = true` and correct signature
 
 ### Requirement: Execution declarations and graph round-trip
-Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler contracts, explicit ordering, and handler execution-graph edges without collapsing them into system-level summaries. The artifact format version SHALL be incremented.
+Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler domain variants, pair binding names and trait identities, binding-qualified reads, projected outputs, remaining contract capabilities, explicit ordering, and handler execution-graph edges without collapsing them into system-level summaries. The artifact format version SHALL be incremented.
 
 #### Scenario: Handler graph survives round-trip
-- **WHEN** a module containing phase and event handlers is saved and loaded
-- **THEN** every canonical handler, contract set, trigger kind, and graph edge is identical after loading
+- **WHEN** a module containing selectionless, unary, and pair handlers is saved and loaded
+- **THEN** every canonical handler, domain, pair binding, contract set, trigger kind, and graph edge is identical after loading
+
+#### Scenario: Imported pair trait identity survives round-trip
+- **WHEN** a pair binding selects a trait through a module alias
+- **THEN** the loaded artifact retains its canonical trait identity without requiring the source alias
 
 #### Scenario: Old artifact version is rejected
-- **WHEN** the linker reads an artifact predating handler-level graph serialization
+- **WHEN** the linker reads an artifact predating relation-domain serialization
 - **THEN** it reports an incompatible artifact version and requests recompilation
 
 ### Requirement: Public runtime symbols export through artifacts

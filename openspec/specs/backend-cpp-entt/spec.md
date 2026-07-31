@@ -426,19 +426,47 @@ The EnTT backend SHALL recognize stdlib hierarchy extern systems for transform p
 - **WHEN** the stdlib hierarchy cascade-delete extern system is compiled
 - **THEN** the backend emits registry-aware code that recursively destroys descendants of the removed entity
 
+### Requirement: cpp-entt lowers pair domains to deterministic snapshot products
+The cpp-entt backend SHALL lower a pair handler to two typed EnTT membership passes, stable entity-creation-order snapshots, and left-binding-major nested iteration. It SHALL avoid materializing the complete Cartesian-product tuple list and SHALL bind selected component data as immutable access.
+
+#### Scenario: Same trait selected by both bindings has distinct generated access
+- **WHEN** both bindings require Collider
+- **THEN** generated code retrieves separate const Collider access for each bound entity without identifier collision
+
+#### Scenario: Empty binding snapshot produces no tuple execution
+- **WHEN** either pair binding has no live matches
+- **THEN** the generated handler body executes zero times
+
+#### Scenario: Projected membership cannot change current product
+- **WHEN** a tuple projects a required trait onto another entity
+- **THEN** generated iteration continues over the snapshots created before the first tuple
+
+### Requirement: cpp-entt maintains stable entity creation ordinals
+The generated cpp-entt runtime SHALL assign every load-time and spawned entity a monotonic, non-reused creation ordinal and SHALL use that ordinal to sort relation snapshots. Hierarchical load/spawn creation SHALL retain deterministic parent-first order, and committed spawns SHALL receive ordinals in command-commit order.
+
+#### Scenario: Repeated generation yields identical tuple event order
+- **WHEN** the same deterministic program state executes a pair handler in two runs
+- **THEN** emitted tuple occurrence order is identical
+
 ### Requirement: Targeted event dispatch guarded by validity check
-When an event is emitted with a `to expr` clause, the generated dispatch code SHALL check `registry.valid(target)` before delivering the event. If the target entity is not valid, the event is silently dropped.
+When an event is emitted with a `to expr` clause, cpp-entt SHALL evaluate the target once, retain it in the queued event envelope, and check `registry.valid(target)` before delivery. A stale target SHALL drop the event. A live target SHALL constrain unary consumers to that entity and pair consumers to tuples incident to that entity; the backend MUST NOT implement targeted emission as a validity guard around broadcast dispatch.
 
 ```cpp
-// Generated for: emit PlayerDamaged(5, walker_id) to walker_id
-if (registry.valid(walker_id)) {
-    // dispatch PlayerDamaged to walker_id's handlers
-}
+// Conceptual generated result for: emit PlayerDamaged to walker_id
+generated_emit_targeted_event(PlayerDamagedEvent{...}, walker_id);
 ```
 
 #### Scenario: targeted emit to stale entity is dropped
-- **WHEN** `emit SomeEvent(...) to dead_id` executes and `dead_id` is stale
-- **THEN** the event is not delivered to any handler; no error occurs
+- **WHEN** `emit SomeEvent to dead_id` executes and `dead_id` is stale at delivery
+- **THEN** the event is not delivered to any handler and no error occurs
+
+#### Scenario: targeted emit does not broadcast across unary view
+- **WHEN** a valid targeted event has a unary filtered consumer with several matching entities
+- **THEN** generated dispatch invokes the consumer only for the target when it satisfies the filter
+
+#### Scenario: target survives cascade deferral
+- **WHEN** a targeted event occurrence is moved to the deferred event queue
+- **THEN** its recipient is preserved for later dispatch
 
 ### Requirement: `exists(entity_id)` compiles to `registry.valid()`
 The `exists(expr)` built-in expression SHALL compile to `registry.valid(expr_value)` where `expr_value` is the resolved `entt::entity` value. The result is `bool`.

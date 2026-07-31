@@ -49,15 +49,19 @@ The program linker SHALL order declarations in the merged program such that all 
 - **THEN** the merged program lists `Position` before `EnemyAI` and both before the enemy system
 
 ### Requirement: Resolved program for code generation
-The program linker SHALL provide code generation with a merged resolved semantic representation whose module-scope references are already resolved to typed symbol identities. Code generation MUST NOT require a combined raw AST to resolve imported symbols, aliases, or module qualifiers.
+The program linker SHALL provide code generation with a merged resolved semantic representation whose module-scope references, handler domains, pair binding trait requirements, binding-qualified reads, and projected outputs are already resolved to typed canonical symbol identities. Code generation MUST NOT require a combined raw AST or imported `use` declarations to resolve pair traits, aliases, or module qualifiers.
 
 #### Scenario: Merged resolved systems retain declaring module identity
 - **WHEN** modules `A` and `B` both declare a system named `Update`
-- **THEN** the merged resolved program provides distinct system identities `A.Update` and `B.Update` to code generation
+- **THEN** the merged program provides distinct system identities `A.Update` and `B.Update` to code generation
 
 #### Scenario: Codegen does not need UseNode lookup
-- **WHEN** a module references an imported trait through alias `phys.Body`
-- **THEN** the linked resolved program exposes the referenced trait identity to code generation without requiring codegen to inspect the original `use std.physics.flat as phys` declaration
+- **WHEN** a unary filter or pair binding references an imported trait through alias `phys.Body`
+- **THEN** the linked resolved program exposes the referenced trait identity to code generation without requiring `use std.physics as phys`
+
+#### Scenario: Pair contract survives cross-module merge
+- **WHEN** a module artifact contributes a pair handler with bound reads and another module contributes conflicting handlers
+- **THEN** linking preserves the pair domain and canonical accesses used to construct and lower the merged execution graph
 
 ### Requirement: Const block merging
 The program linker SHALL merge all const blocks from all modules. Duplicate const names across modules SHALL produce an error.

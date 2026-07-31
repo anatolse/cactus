@@ -1,6 +1,6 @@
 # Cactus DSL Language Specification
 
-**Version:** 0.5.0
+**Version:** 0.6.0
 **Status:** Draft
 
 ## 1. Overview
@@ -49,8 +49,9 @@ The current gameplay-core profile includes:
 - `entity`, `template`
 - `system`, `extern system`, `event`, `extern event`, `phase`, `func`, `extern func`
 - `asset`, `input`
+- `system` selection domains: selectionless, unary `filter:`/`exclude:`/`order by:`, and binary `pairs:` relations
 - handlers triggered by declared phases or ordinary events, such as `on input:`, `on fixed_tick:`, `on tick:`, and `on PlayerDamaged:`
-- statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit`, `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
+- statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit` (broadcast or targeted with `to`), `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
 
 ### 1.3 Deferred / Non-Normative Items
 
@@ -358,16 +359,16 @@ Hierarchy syntax creates parent-child **relations only**. It does not by itself 
 
 ### 3.8 Systems
 
-Systems contain gameplay logic over filtered entities.
+Systems contain gameplay logic over filtered entities. A regular system has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`/`order by:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:`, `exclude:`, and `order by:`.
 
 ```ebnf
 system_decl     = "system" IDENTIFIER ":" NEWLINE INDENT
-                  [ filter_clause ]
-                  [ exclude_clause ]
-                  [ order_by_clause ]
+                  ( unary_domain | pairs_clause )
                   [ after_clause ]
                   { event_handler }
                   DEDENT ;
+
+unary_domain    = [ filter_clause ] [ exclude_clause ] [ order_by_clause ] ;
 
 filter_clause   = "filter" ":" NEWLINE INDENT
                   { filter_entry }
@@ -399,6 +400,71 @@ system PatrolSystem:
     on tick:
         pos.pos = pos.pos + vec2(ai.patrol_speed * ai.direction * tick.dt, 0.0)
 ```
+
+#### 3.8.1 Pair Relations
+
+`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the system-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern system` declarations.
+
+```ebnf
+pairs_clause    = "pairs" ":" NEWLINE INDENT
+                  pair_binding pair_binding
+                  DEDENT ;
+
+pair_binding    = IDENTIFIER ":" NEWLINE INDENT
+                  { filter_entry }
+                  DEDENT ;
+```
+
+Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings.
+
+```cactus
+system DetectContacts:
+    pairs:
+        body:
+            DynamicBody
+            Transform
+            Collider
+
+        wall:
+            Solid
+            tf.WorldTransform as transform
+            Collider
+
+    on fixed_tick:
+        if body != wall and body.Collider.mask == wall.Collider.layer:
+            emit Contact to body:
+                other = wall
+```
+
+**Bindings are entity identifiers and trait namespaces.** Each binding name has type `entity_id` and also namespaces the traits selected for that entity:
+
+- `body` — the binding itself, usable as an `entity_id` (comparison, event target, `to`/`from` argument)
+- `body.Collider.mask` — an unaliased local trait, reached as `binding.Trait.field`
+- `body.tf.WorldTransform.position` — an imported trait, reached as `binding.module_alias.Trait.field` (the authored `use ... as` qualification is preserved under the binding)
+- `wall.transform.position` — a binding-local alias declared with `as` inside that binding's block, reached as `binding.alias.field`
+
+Binding names and their aliases must be unambiguous within every handler scope on that system.
+
+**The relation is a directed Cartesian product.** For bindings A and B, the handler executes once per pair `(a, b)` where `a` satisfies every trait A requires and `b` satisfies every trait B requires. The product is directed and finite: self-pairs (`a == b`, when one entity satisfies both bindings) and reverse-role tuples are included whenever membership permits. There is no relational `where:` surface — ordinary `if` statements are the authored mechanism for rejecting tuples, as with `if body != wall:` above.
+
+**Passes snapshot membership, not values.** Before executing any tuple body, the runtime records both bindings' live membership in stable, creation-order-sorted snapshots (a monotonic per-entity creation ordinal, assigned at load time and at spawn commit, defines this order independently of backend storage layout) and lazily iterates their product left-binding-major: for `left = [a, b]` and `right = [x, y]`, tuple order is `(a,x)`, `(a,y)`, `(b,x)`, `(b,y)`. Membership is fixed for the whole pass; component values are read live from storage when each tuple executes. Projected traits and buffered structural commands issued mid-pass cannot add or remove tuples from the pass already in progress — they become visible only in a later pass or at the next activation commit.
+
+**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read.
+
+**There is no implicit current entity.** `self` and any statement form that defaults to `self` (bare `destroy`, bare `remove`, `add`/`project` with no `to`) are rejected in pair handlers. Every entity-targeting operation must name a binding explicitly:
+
+```cactus
+emit Contact to body:
+    other = wall
+project GroundContact to body
+add PendingDestroy to wall
+remove Triggered from body
+destroy wall
+```
+
+Untargeted `emit` remains valid and is a broadcast occurrence (one per tuple, not privileged to any binding). `spawn` remains valid because it creates a new entity rather than acting on an implicit one.
+
+**One pair handler is one execution-graph node.** `DetectContacts.fixed_tick` is a single node in the handler execution graph regardless of how many tuples it processes at runtime; tuples are invocations inside that node, not graph nodes. The complete tuple pass finishes before the dispatcher advances to another node or drains events the pass emitted. Handler contracts record binding-qualified reads precisely (for diagnostics and future relation-aware scheduling) while still contributing to the same conservative canonical-trait conflict analysis used by unary handlers, so pair and unary/selectionless handlers touching the same traits are still ordered safely.
 
 ### 3.9 Event Handlers
 
@@ -739,6 +805,8 @@ system Damage:
 
 Bare unqualified trait-field access is not part of the current profile.
 
+Pair handlers (§3.8.1) use a third, binding-qualified form instead of a filter alias: `binding.Trait.field`, `binding.module_alias.Trait.field`, or `binding.alias.field` for a binding-local `as` alias. Pair-bound access is read-only.
+
 ### 4.3 `entity_id` Semantics
 
 `entity_id` is an opaque handle. There is no null sentinel in the language surface. Operations using `entity_id` are total: stale handles produce safe no-ops or no-match behavior rather than forcing author-side null checks.
@@ -853,6 +921,20 @@ Scene loading does not synthesize handlers by trigger spelling. Projects that ne
 
 Events emitted during an activation are delivered in deterministic queue order. Event handlers follow their own stable graph schedule and may emit further events. Feedback cycles are allowed, but cascade depth is bounded; overflow occurrences are deferred to a later activation. Commands produced by deferred delivery belong to that later activation. Effect calls happen when their handler executes and are not rolled back; matching effect domains are serialized by graph order.
 
+### 5.4 Targeted Event Delivery
+
+`emit Event to target:` (§3.16) evaluates `target` exactly once at the emit site and stores the resulting `entity_id` with the queued occurrence. `emit Event:` without `to` queues an occurrence with no recipient (a broadcast). Recipient identity survives queueing and bounded cascade deferral unchanged — a targeted occurrence deferred past the current cascade depth is delivered with its original recipient in the later activation.
+
+Targeted delivery obeys the same total `entity_id` semantics as the rest of the language: if the recipient is no longer live when delivery begins, the occurrence is silently dropped before any consumer executes. No handler, command, or effect runs for a dropped occurrence.
+
+For a live targeted occurrence, delivery is routed per consumer domain rather than broadcast to every matching entity:
+
+- a **selectionless** consumer runs once, exactly as it would for a broadcast occurrence — targeting is routing, not privacy, and does not grant it an implicit current entity;
+- a **unary** consumer runs at most once, for the recipient only, and only if the recipient currently satisfies that consumer's `filter:`/`exclude:` selection — a live recipient that fails the filter causes the consumer not to run at all;
+- a **pair** consumer runs only the snapshotted tuples where at least one binding equals the recipient (a tuple where both bindings equal the recipient still runs once, since the tuple itself occurs once).
+
+An untargeted occurrence always uses each consumer's full ordinary domain: every unary match, every pair tuple, one selectionless run. Targeted occurrences use the same stable consumer graph order, bounded cascade rules, and activation command buffer as broadcast occurrences — a targeted delivery is routing over the ordinary schedule, never an immediate out-of-band call at the emit site.
+
 ## 6. Gameplay-Core Examples
 
 ### 6.1 Platformer Loop
@@ -925,6 +1007,46 @@ system BulletHitSystem:
 ```
 
 The shooter loop uses the same core constructs as the platformer loop: inputs, systems, templates, spawning, events, and cleanup.
+
+### 6.3 Contact Detection (Pair Relations)
+
+```cactus
+trait DynamicBody:
+    var vx: float
+
+trait Solid:
+    var active: bool = true
+
+trait Collider:
+    var mask: int
+    var layer: int
+
+event Contact:
+    other: entity_id
+
+system DetectContacts:
+    pairs:
+        body:
+            DynamicBody
+            Collider
+        wall:
+            Solid
+            Collider
+
+    on fixed_tick:
+        if body != wall and body.Collider.mask == wall.Collider.layer:
+            emit Contact to body:
+                other = wall
+
+system ResolveContact:
+    filter:
+        Health as hp
+
+    on Contact:
+        hp.health = hp.health - 1
+```
+
+`DetectContacts` iterates the directed product of every `body` (`DynamicBody` + `Collider`) against every `wall` (`Solid` + `Collider`); `if body != wall:` rejects self-pairs before the mask/layer check. Each qualifying tuple emits a targeted `Contact` to its `body` binding. `ResolveContact` is an ordinary unary consumer: because the occurrence is targeted, it runs at most once — for `body` — and only if `body` currently satisfies `filter: Health`, rather than broadcasting to every entity with `Health`.
 
 ## 7. Stdlib and Backend Surface
 

@@ -1,15 +1,23 @@
 ## Requirements
 
 ### Requirement: `self` keyword denotes the current entity in system handlers
-The language SHALL provide `self` as a reserved keyword expression. Inside a system event handler, `self` SHALL evaluate to the `entity_id` of the entity currently being processed.
+The language SHALL provide `self` as a reserved keyword expression. Inside a unary entity-selected system event handler, `self` SHALL evaluate to the `entity_id` currently being processed. `self` SHALL be unavailable in selectionless and pair handlers because neither domain has one unique current entity.
 
 #### Scenario: `self` used as destroy target
-- **WHEN** a system handler contains `destroy self`
+- **WHEN** a unary entity system handler contains `destroy self`
 - **THEN** the compiler accepts `self` as an `entity_id` expression targeting the current entity
 
 #### Scenario: `self` used in trait assignment
-- **WHEN** a system handler assigns `Parent.parent = self`
+- **WHEN** a unary entity system handler assigns `Parent.parent = self`
 - **THEN** the compiler accepts the assignment and types `self` as `entity_id`
+
+#### Scenario: `self` rejected for pair relation
+- **WHEN** a pair handler uses `self`
+- **THEN** the compiler reports that an explicit pair binding is required
+
+#### Scenario: `self` rejected without entity selection
+- **WHEN** a selectionless handler uses `self`
+- **THEN** the compiler reports that the handler has no current entity
 
 ### Requirement: `self` is restricted to world-aware handler contexts
 The language SHALL reject `self` outside system event handlers. `self` is not available in top-level declarations, unit/template initialization, or pure `func` bodies.

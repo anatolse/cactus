@@ -627,6 +627,28 @@ sort_key        = IDENTIFIER "." IDENTIFIER ["asc" | "desc"] NEWLINE ;
 - **WHEN** a system declaration has no `order by:` block
 - **THEN** `SystemNode.order_by` is an empty vector
 
+### Requirement: Pair relation grammar in regular systems
+The parser SHALL recognize contextual `pairs:` syntax in the system-clause position and SHALL construct two ordered pair-binding nodes, each containing a binding identifier and one or more filter-style trait entries.
+
+```ebnf
+pair_clause  = "pairs" ":" NEWLINE INDENT pair_binding pair_binding DEDENT ;
+pair_binding = IDENTIFIER ":" NEWLINE INDENT { filter_entry } DEDENT ;
+```
+
+The spelling `pairs` SHALL remain an ordinary identifier outside this system-clause context.
+
+#### Scenario: Pair bindings and aliases are preserved
+- **WHEN** a system declares `body:` with `tf.WorldTransform as transform` and `wall:` with `Collider`
+- **THEN** the AST preserves binding order, qualified trait spellings, aliases, and source locations
+
+#### Scenario: Pairs remains a contextual keyword
+- **WHEN** `pairs` appears as a valid local identifier outside the system-clause position
+- **THEN** it is tokenized and parsed as an identifier
+
+#### Scenario: Pair clause on external system is rejected
+- **WHEN** an `extern system` body contains `pairs:`
+- **THEN** parsing or semantic validation reports that pair domains are regular-system-only
+
 ### Requirement: Statement-level `match` parsing
 The parser SHALL recognize `match expr ":"` at statement position as a `TraitMatchStmt`. This is distinct from the existing `MatchExpr` (expression-level). The trait match arms use `IDENTIFIER ["as" IDENTIFIER] "=>"` syntax; the wildcard arm uses `"_" "=>"`.
 

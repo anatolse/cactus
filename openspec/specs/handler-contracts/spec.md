@@ -12,6 +12,24 @@ Every regular or external handler SHALL have an independent contract containing 
 - **WHEN** `Player` handles fixed_tick and Damaged with different behavior
 - **THEN** the semantic representation contains distinct contracts for `Player.fixed_tick` and `Player.Damaged`
 
+### Requirement: Handler contracts declare one execution domain
+Every handler contract SHALL contain exactly one domain: selectionless, unary relation, or pair relation. A unary relation SHALL contain positive and excluded canonical trait identities. A pair relation SHALL contain exactly two ordered named bindings and each binding's required canonical traits.
+
+#### Scenario: Unary contract remains unary
+- **WHEN** a system filters Position and Velocity
+- **THEN** each handler contract records one unary relation rather than a pair or selectionless domain
+
+#### Scenario: Pair contract preserves binding roles
+- **WHEN** a pair system binds `projectile` and `target`
+- **THEN** every handler contract preserves those names, order, and separate required trait sets
+
+### Requirement: Pair contracts record binding-qualified reads
+A pair handler contract SHALL record each trait read with its relation binding and SHALL also expose the conservative union of canonical read traits for scheduling against existing handlers. Pair selection SHALL determine membership without adding reads.
+
+#### Scenario: Bound reads distinguish roles
+- **WHEN** a pair handler reads Collider on both `body` and `wall`
+- **THEN** its precise contract contains two bound reads and its conservative read set contains Collider
+
 ### Requirement: Regular handler contracts are inferred
 The semantic analyzer SHALL infer a regular handler's contract from all reachable statements and expressions. Immutable trait field access SHALL add `reads`; mutation SHALL add `writes`; `writes` SHALL mean read/write access; event emission SHALL add `emits`; structural statements SHALL add the corresponding `commands`; and calls to effectful extern functions SHALL add their known effect domain or conservative `external` effect.
 
@@ -22,6 +40,13 @@ The semantic analyzer SHALL infer a regular handler's contract from all reachabl
 #### Scenario: Event and command use are inferred
 - **WHEN** a handler emits Contact and spawns Particle
 - **THEN** its contract contains Contact in `emits` and `spawn Particle` in `commands`
+
+### Requirement: Projected outputs are distinct contract capabilities
+Handler contracts SHALL record projected trait outputs separately from durable writes. Scheduling SHALL treat projection as production of that trait for ordered later matching and reads, while pair read-only validation SHALL continue to prohibit durable writes through pair bindings.
+
+#### Scenario: Project output creates producer conflict information
+- **WHEN** one handler projects Contacting and a later handler filters and reads Contacting
+- **THEN** contract graph construction can order the projection producer before the consumer without classifying projection as a durable component mutation
 
 ### Requirement: External handlers declare complete contracts
 An `extern system` handler SHALL declare zero or more `reads:`, `writes:`, `emits:`, `commands:`, and `effects:` blocks because its implementation is unavailable for inference. Trait entries in `reads` and `writes` SHALL resolve through that system's filter aliases or canonical trait references. Event and command entries SHALL resolve canonically.

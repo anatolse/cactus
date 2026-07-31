@@ -1713,7 +1713,7 @@ TEST_CASE("Codegen EnTT: spawn handler uses marker event parameter", "[codegen-e
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn)") !=
+            CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn,") !=
                   std::string::npos);  // spawn handlers don't get dispatcher (lifecycle event)
         }
     }
@@ -3790,10 +3790,10 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
 
     const auto first_handler = code.find(
         "void first_input(entt::registry& registry, const "
-        "cactus::runtime::entt_backend::game_scheduler__inputPhaseRuntimeState& input)");
+        "cactus::runtime::entt_backend::game_scheduler__inputPhaseRuntimeState& input,");
     const auto second_handler = code.find(
         "void second_input(entt::registry& registry, const "
-        "cactus::runtime::entt_backend::game_scheduler__inputPhaseRuntimeState& input)");
+        "cactus::runtime::entt_backend::game_scheduler__inputPhaseRuntimeState& input,");
     REQUIRE(first_handler != std::string::npos);
     REQUIRE(second_handler != std::string::npos);
     CHECK(code.find("(void)registry;", first_handler) < code.find("}\n\n", first_handler));
@@ -4022,13 +4022,13 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
     CHECK(code.find("generated_emit_event(ContactEvent{.amount = 1});") != std::string::npos);
     CHECK(code.find("generated_emit_event(ReactionEvent{.amount = Contact.amount});") != std::string::npos);
     CHECK(code.find("generated_drain_event_cascade(registry);") != std::string::npos);
-    CHECK(code.find("generated_dispatch_event(registry, occurrence)") != std::string::npos);
+    CHECK(code.find("generated_dispatch_event(registry, occurrence, queued.target)") != std::string::npos);
 
     const auto contact_dispatch =
-        code.find("void generated_dispatch_event(entt::registry& registry, const ContactEvent& occurrence)");
+        code.find("void generated_dispatch_event(entt::registry& registry, const ContactEvent& occurrence,");
     REQUIRE(contact_dispatch != std::string::npos);
-    const auto first_call  = code.find("::first_contact_Contact(registry, occurrence);", contact_dispatch);
-    const auto second_call = code.find("::second_contact_Contact(registry, occurrence);", contact_dispatch);
+    const auto first_call  = code.find("::first_contact_Contact(registry, occurrence, target);", contact_dispatch);
+    const auto second_call = code.find("::second_contact_Contact(registry, occurrence, target);", contact_dispatch);
     REQUIRE(first_call != std::string::npos);
     REQUIRE(second_call != std::string::npos);
     CHECK(first_call < second_call);
@@ -4242,12 +4242,20 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
             // Sorted by creation ordinal for deterministic tuple order.
             CHECK(code.find("registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(__lhs).value <") !=
                   std::string::npos);
-            // Left-binding-major nested iteration over the snapshots.
-            const auto body_loop = code.find("for (auto body : __body_snapshot)");
-            const auto wall_loop = code.find("for (auto wall : __wall_snapshot)");
+            // Left-binding-major nested iteration over the snapshots, in the
+            // untargeted (broadcast) branch — the recipient-targeted branch
+            // precedes it and has its own incident-tuple loop shapes.
+            const auto broadcast_branch = code.find("} else {");
+            REQUIRE(broadcast_branch != std::string::npos);
+            const auto body_loop = code.find("for (auto body : __body_snapshot)", broadcast_branch);
+            const auto wall_loop = code.find("for (auto wall : __wall_snapshot)", broadcast_branch);
             REQUIRE(body_loop != std::string::npos);
             REQUIRE(wall_loop != std::string::npos);
             CHECK(body_loop < wall_loop);
+            // Recipient-targeted delivery: incident tuples only.
+            CHECK(code.find("if (__recipient.has_value()) {") != std::string::npos);
+            CHECK(code.find("const auto __target = *__recipient;") != std::string::npos);
+            CHECK(code.find("if (body == __target) { continue; }") != std::string::npos);
             // Pair-bound trait reads are const.
             CHECK(code.find("registry.get<const Transform>(body).x") != std::string::npos);
             CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
@@ -4340,11 +4348,13 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
     // Creation ordinal scaffolding is emitted and assigned at entity creation.
     CHECK(code.find("struct CactusCreationOrdinal {") != std::string::npos);
     CHECK(code.find("generated_next_creation_ordinal()") != std::string::npos);
-    // Targeted emit still goes through the existing validity-guarded broadcast
-    // path (recipient-aware routing is a later phase) but must resolve `body`
-    // to the per-tuple loop variable, not a literal source identifier lookup.
-    CHECK(code.find("if (registry.valid(body)) {") != std::string::npos);
-    CHECK(code.find("generated_emit_event(ContactEvent{.other = wall});") != std::string::npos);
+    // Targeted emit resolves `body` to the per-tuple loop variable, evaluates
+    // it once, and carries it into the queued occurrence via the targeted
+    // emit path (targeted-event-delivery) rather than a validity guard around
+    // broadcast dispatch.
+    CHECK(code.find("const auto __target = body;") != std::string::npos);
+    CHECK(code.find("if (registry.valid(__target)) {") != std::string::npos);
+    CHECK(code.find("generated_emit_targeted_event(ContactEvent{.other = wall}, __target);") != std::string::npos);
     // Project remains an immediate (non-buffered) call, same as unary systems.
     CHECK(code.find("project_GroundContact(registry, body);") != std::string::npos);
 }
@@ -4379,6 +4389,154 @@ TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snaps
             CHECK(code.find("for (auto wall : __wall_snapshot)") != std::string::npos);
         }
     }
+}
+
+// ── Recipient-aware event runtime (targeted-event-delivery, 6.4) ────────────
+
+TEST_CASE("Codegen EnTT: drain_event_cascade drops a stale-recipient occurrence before any dispatch",
+          "[codegen-entt][targeted-event-delivery]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "system Consumer:\n"
+        "    on Contact:\n"
+        "        let x = 1\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    // The recipient is checked once, before generated_dispatch_event is
+    // called at all — a stale target drops the occurrence for every consumer,
+    // not just the ones that happen to check validity themselves.
+    // A forward declaration of this function precedes its definition, so the
+    // search must include the opening brace to skip past it.
+    const auto drain = generated_function(code, "void generated_drain_event_cascade(entt::registry& registry) {");
+    CHECK(drain.find("if (queued.target.has_value() && !registry.valid(*queued.target)) {") != std::string::npos);
+    const auto guard_pos    = drain.find("if (queued.target.has_value()");
+    const auto continue_pos = drain.find("continue;", guard_pos);
+    const auto dispatch_pos = drain.find("generated_dispatch_event(registry, occurrence, queued.target);");
+    REQUIRE(guard_pos != std::string::npos);
+    REQUIRE(continue_pos != std::string::npos);
+    REQUIRE(dispatch_pos != std::string::npos);
+    CHECK(continue_pos < dispatch_pos);
+}
+
+TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's recipient",
+          "[codegen-entt][targeted-event-delivery]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "system Producer:\n"
+        "    on tick:\n"
+        "        emit Contact to Producer:\n"
+        "            other = Producer\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    // generated_emit_targeted_event builds one `queued` envelope carrying the
+    // target and pushes that same envelope to either the immediate queue or
+    // deferred_events depending on cascade depth — there is no separate path
+    // that drops the target when deferring.
+    const auto targeted = generated_function(
+        code, "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target)");
+    CHECK(targeted.find(".target = target};") != std::string::npos);
+    CHECK(targeted.find("activation.deferred_events.push_back(std::move(queued));") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an optional recipient",
+          "[codegen-entt][targeted-event-delivery]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "system Observer:\n"
+        "    on Contact:\n"
+        "        let x = 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("std::optional<entt::entity> __recipient = std::nullopt") != std::string::npos);
+            CHECK(code.find("(void)__recipient;") != std::string::npos);
+            // No recipient-conditioned branch — a selectionless consumer runs
+            // once regardless of targeting (targeted-event-delivery,
+            // "Selectionless observer receives targeted occurrence once").
+            CHECK(code.find("__recipient.has_value()") == std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: targeted unary handler runs at most once for the recipient, gated on its selection",
+          "[codegen-entt][targeted-event-delivery]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "trait Health:\n"
+        "    var hp: int\n"
+        "system ResolveContact:\n"
+        "    filter:\n"
+        "        Health\n"
+        "    on Contact:\n"
+        "        hp = hp - 1\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("if (__recipient.has_value()) {") != std::string::npos);
+            CHECK(code.find("entt::entity entity = *__recipient;") != std::string::npos);
+            CHECK(code.find("if (registry.all_of<Health>(entity)) {") != std::string::npos);
+            // Component access for the targeted branch mirrors the broadcast
+            // branch's binding name so the same body text works unmodified.
+            CHECK(code.find("auto& Health_comp = registry.get<Health>(entity);") != std::string::npos);
+            // Broadcast fallback for an untargeted occurrence remains the
+            // ordinary full-view iteration.
+            CHECK(code.find("registry.view<Health>()") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: targeted external handler dispatch is gated on the recipient satisfying its selection",
+          "[codegen-entt][targeted-event-delivery][external-handler]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "trait Health:\n"
+        "    var hp: int\n"
+        "extern system ResolveContact:\n"
+        "    filter:\n"
+        "        Health\n"
+        "    on Contact:\n"
+        "        reads:\n"
+        "            Health\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto dispatch =
+        code.find("void generated_dispatch_event(entt::registry& registry, const ContactEvent& occurrence,");
+    REQUIRE(dispatch != std::string::npos);
+    const auto tail = code.substr(dispatch);
+    CHECK(tail.find("if (target.has_value()) {") != std::string::npos);
+    CHECK(tail.find("entt::entity entity = *target;") != std::string::npos);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

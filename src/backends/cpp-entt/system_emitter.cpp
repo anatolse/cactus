@@ -651,6 +651,30 @@ void emit_storage_filter_skip(std::ostringstream& out,
     }
 }
 
+// Equivalent of emit_view_each_header's component bindings, but fetched from a
+// single known-valid entity via registry.get<> instead of a view.each() lambda
+// parameter — used for recipient-targeted unary dispatch (targeted-event-delivery),
+// where the handler runs for exactly one entity instead of iterating a view.
+void emit_component_bindings_from_entity(std::ostringstream& out,
+                                         const std::vector<FilterBinding>& bindings,
+                                         const std::string& entity_name,
+                                         int indent,
+                                         const DecoratedProgram& program) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    std::unordered_set<std::string> seen_cpp;
+    for (const auto& binding : bindings) {
+        if (!seen_cpp.insert(binding.cpp_type_name).second) {
+            continue;
+        }
+        const auto* trait   = EnttCodegenUtils::find_trait(program, binding.lookup_name);
+        const bool is_empty = trait == nullptr || trait->fields.empty();
+        if (!is_empty) {
+            out << ind << "[[maybe_unused]] auto& " << binding.cpp_type_name << "_comp = registry.get<"
+                << binding.cpp_type_name << ">(" << entity_name << ");\n";
+        }
+    }
+}
+
 void emit_filter_alias_bindings(std::ostringstream& out,
                                 const FilterClause& filter,
                                 const DecoratedProgram& program,
@@ -1728,32 +1752,49 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return ind + lhs + " " + s.op + " " +
                        rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                std::string emit_call;
                 const bool graph_runtime = !program.execution_graph.phases.empty();
-                if (graph_runtime) {
-                    const auto event_type = event_cpp_type(s.event_name, program);
-                    emit_call             = "cactus::runtime::entt_backend::generated_emit_event(" + event_type + "{";
-                } else if (dispatcher_available) {
-                    emit_call = "dispatcher.trigger(" + event_cpp_type(s.event_name, program) + "{";
-                } else {
-                    emit_call = s.event_name + "_buffer.push_back({";
-                }
+                const auto event_type    = event_cpp_type(s.event_name, program);
+                std::string payload;
                 for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
-                        emit_call += ", ";
+                        payload += ", ";
                     }
-                    emit_call +=
+                    payload +=
                         "." + s.payload[i].name + " = " +
                         rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 }
-                emit_call += "});";
-                if (s.target.has_value()) {
-                    const std::string TARGET =
-                        rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                    return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + "\n" + ind +
-                           "}\n";
+
+                if (!s.target.has_value()) {
+                    std::string emit_call;
+                    if (graph_runtime) {
+                        emit_call = "cactus::runtime::entt_backend::generated_emit_event(" + event_type + "{";
+                    } else if (dispatcher_available) {
+                        emit_call = "dispatcher.trigger(" + event_type + "{";
+                    } else {
+                        emit_call = s.event_name + "_buffer.push_back({";
+                    }
+                    return ind + emit_call + payload + "});\n";
                 }
-                return ind + emit_call + "\n";
+
+                // Targeted emit: evaluate the target exactly once and, on the
+                // graph-runtime path, carry its identity into the queued
+                // occurrence (targeted-event-delivery) rather than lowering to
+                // a validity guard around broadcast dispatch. The legacy
+                // dispatcher/buffer paths (unused by the modern runtime) keep
+                // their existing validity-guarded shape, since they have no
+                // recipient-aware delivery mechanism to carry a target through.
+                const std::string TARGET =
+                    rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                if (graph_runtime) {
+                    return ind + "{\n" + ind + "    const auto __target = " + TARGET + ";\n" + ind +
+                           "    if (registry.valid(__target)) {\n" + ind +
+                           "        cactus::runtime::entt_backend::generated_emit_targeted_event(" + event_type + "{" +
+                           payload + "}, __target);\n" + ind + "    }\n" + ind + "}\n";
+                }
+                std::string emit_call = dispatcher_available ? "dispatcher.trigger(" + event_type + "{"
+                                                              : s.event_name + "_buffer.push_back({";
+                return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + payload + "});\n" +
+                       ind + "}\n";
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
                 const SymbolId tmpl_id =
                     s.resolved_template_id.has_value()
@@ -2029,8 +2070,14 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
         out << "void " << system_function_name(program.module_name, sys.name, handler_trigger_suffix(handler))
             << "(entt::registry& registry";
         out << ", const " << handler_trigger_cpp_type(handler, program) << "& " << trigger_binding;
+        // Recipient is meaningful only for event-triggered handlers dispatched
+        // through generated_dispatch_event; phase dispatch always calls with
+        // the default (targeted-event-delivery: routing has no meaning for a
+        // phase activation).
+        out << ", std::optional<entt::entity> __recipient = std::nullopt";
         out << ") {\n";
         out << "    (void)" << trigger_binding << ";\n";
+        out << "    (void)__recipient;\n";
 
         if (is_pair) {
             // A pair handler snapshots both bindings' live memberships up
@@ -2042,13 +2089,40 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             for (const auto& binding : pair_binding_codegens) {
                 emit_pair_binding_snapshot(out, binding, 1);
             }
-            out << "    for (auto " << pair_binding_codegens[0].binding_name << " : __"
-                << pair_binding_codegens[0].binding_name << "_snapshot) {\n";
-            out << "        for (auto " << pair_binding_codegens[1].binding_name << " : __"
-                << pair_binding_codegens[1].binding_name << "_snapshot) {\n";
+            const auto& left  = pair_binding_codegens[0];
+            const auto& right = pair_binding_codegens[1];
+            // Recipient-targeted delivery: only tuples incident to the
+            // recipient run (targeted-event-delivery, "Pair target routes to
+            // incident tuples"). A tuple where both bindings equal the
+            // recipient is covered exactly once, by the first block below.
+            out << "    if (__recipient.has_value()) {\n";
+            out << "        const auto __target = *__recipient;\n";
+            out << "        if (std::ranges::find(__" << left.binding_name << "_snapshot, __target) != __"
+                << left.binding_name << "_snapshot.end()) {\n";
+            out << "            auto " << left.binding_name << " = __target;\n";
+            out << "            for (auto " << right.binding_name << " : __" << right.binding_name << "_snapshot) {\n";
             for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 3, {}, program, {}, false, {}, &pair_codegen_scope);
+                out << rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
             }
+            out << "            }\n";
+            out << "        }\n";
+            out << "        if (std::ranges::find(__" << right.binding_name << "_snapshot, __target) != __"
+                << right.binding_name << "_snapshot.end()) {\n";
+            out << "            for (auto " << left.binding_name << " : __" << left.binding_name << "_snapshot) {\n";
+            out << "                if (" << left.binding_name << " == __target) { continue; }\n";
+            out << "                auto " << right.binding_name << " = __target;\n";
+            for (const auto& stmt : handler.body) {
+                out << rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
+            }
+            out << "            }\n";
+            out << "        }\n";
+            out << "    } else {\n";
+            out << "        for (auto " << left.binding_name << " : __" << left.binding_name << "_snapshot) {\n";
+            out << "            for (auto " << right.binding_name << " : __" << right.binding_name << "_snapshot) {\n";
+            for (const auto& stmt : handler.body) {
+                out << rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
+            }
+            out << "            }\n";
             out << "        }\n";
             out << "    }\n";
         } else if (selectionless) {
@@ -2056,25 +2130,55 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             for (const auto& stmt : handler.body) {
                 out << rewrite_stmt(*stmt, 1, filter_traits, program, {}, false, filter_cpp_overrides);
             }
-        } else {
+        } else if (!filter_traits.empty()) {
             emit_sort_call(out, sys);
-            if (!filter_traits.empty()) {
-                emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 1);
-                emit_view_each_header(out, filter_bindings_list, 1, program);
-                out << "        (void)entity;\n";
-                emit_filter_alias_bindings(out, sys.filter, program, 2);
-            } else {
-                out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
-                out << "        (void)entity;\n";
-                emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
+            // Recipient-targeted delivery: run at most once, for the
+            // recipient, and only if it satisfies this handler's selection
+            // (targeted-event-delivery, "Unary target ... only if it
+            // satisfies that consumer's selection").
+            out << "    if (__recipient.has_value()) {\n";
+            out << "        entt::entity entity = *__recipient;\n";
+            out << "        if (registry.all_of<";
+            for (std::size_t i = 0; i < filter_cpp_types.size(); ++i) {
+                out << (i == 0 ? "" : ", ") << filter_cpp_types[i];
             }
-
-            // Emit body with proper component field access
+            out << ">(entity)";
+            if (!exclude_cpp_types.empty()) {
+                out << " && !registry.any_of<";
+                for (std::size_t i = 0; i < exclude_cpp_types.size(); ++i) {
+                    out << (i == 0 ? "" : ", ") << exclude_cpp_types[i];
+                }
+                out << ">(entity)";
+            }
+            out << ") {\n";
+            out << "            (void)entity;\n";
+            emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
+            emit_filter_alias_bindings(out, sys.filter, program, 3);
+            for (const auto& stmt : handler.body) {
+                out << rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
+            }
+            out << "        }\n";
+            out << "    } else {\n";
+            emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2);
+            emit_view_each_header(out, filter_bindings_list, 2, program);
+            out << "        (void)entity;\n";
+            emit_filter_alias_bindings(out, sys.filter, program, 3);
+            for (const auto& stmt : handler.body) {
+                out << rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
+            }
+            out << "        });\n";
+            out << "    }\n";
+        } else {
+            // Defensive fallback (should not occur for a well-formed contract
+            // lookup): no filter clause, contract not classified selectionless.
+            emit_sort_call(out, sys);
+            out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
+            out << "        (void)entity;\n";
+            emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
             for (const auto& stmt : handler.body) {
                 out << rewrite_stmt(*stmt, 2, filter_traits, program, {}, false, filter_cpp_overrides);
             }
-
-            out << (filter_traits.empty() ? "    }\n" : "    });\n");
+            out << "    }\n";
         }
         out << "}\n\n";
     }

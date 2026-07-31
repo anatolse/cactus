@@ -380,10 +380,16 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
     return out.str();
 }
 
+// target_expr, when non-empty, names a `std::optional<entt::entity>` C++
+// expression in scope: a unary external handler then runs at most once, for
+// that recipient, gated on it satisfying the handler's selection, instead of
+// broadcasting across the full matching view (targeted-event-delivery). Empty
+// means no recipient concept applies at this call site (phase dispatch).
 void emit_external_handler_call(std::ostringstream& out,
                                 const HandlerNode& node,
                                 std::string_view trigger,
-                                std::string_view indent) {
+                                std::string_view indent,
+                                std::string_view target_expr = {}) {
     const auto reads                = sorted_symbols(node.contract.reads);
     const auto writes               = sorted_symbols(node.contract.writes);
     std::vector<SymbolId> selection = reads;
@@ -417,12 +423,32 @@ void emit_external_handler_call(std::ostringstream& out,
         emit_callback(indent);
         return;
     }
-    out << indent << "for (const auto entity : registry.view<";
+
+    const auto emit_view_loop = [&](std::string_view loop_indent) {
+        out << loop_indent << "for (const auto entity : registry.view<";
+        for (std::size_t index = 0; index < selection.size(); ++index) {
+            out << (index == 0 ? "" : ", ") << EnttCodegenUtils::trait_cpp_name(selection[index]);
+        }
+        out << ">()) {\n";
+        emit_callback(std::string(loop_indent) + "    ");
+        out << loop_indent << "}\n";
+    };
+
+    if (target_expr.empty()) {
+        emit_view_loop(indent);
+        return;
+    }
+    out << indent << "if (" << target_expr << ".has_value()) {\n";
+    out << indent << "    entt::entity entity = *" << target_expr << ";\n";
+    out << indent << "    if (registry.all_of<";
     for (std::size_t index = 0; index < selection.size(); ++index) {
         out << (index == 0 ? "" : ", ") << EnttCodegenUtils::trait_cpp_name(selection[index]);
     }
-    out << ">()) {\n";
-    emit_callback(std::string(indent) + "    ");
+    out << ">(entity)) {\n";
+    emit_callback(std::string(indent) + "        ");
+    out << indent << "    }\n";
+    out << indent << "} else {\n";
+    emit_view_loop(std::string(indent) + "    ");
     out << indent << "}\n";
 }
 
@@ -552,6 +578,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "struct CactusQueuedEvent {\n";
     out << "    CactusEventOccurrence occurrence;\n";
     out << "    std::size_t cascade_depth{};\n";
+    out << "    std::optional<entt::entity> target;\n";
     out << "};\n\n";
     out << "struct CactusStructuralCommand {\n";
     out << "    enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };\n";
@@ -629,6 +656,26 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     out << "    const auto next_depth = activation.current_cascade_depth + 1;\n";
     out << "    auto queued = CactusQueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = next_depth};\n";
+    out << "    if (next_depth > kCactusMaxEventCascadeDepth) {\n";
+    out << "        queued.cascade_depth = 0;\n";
+    out << "        activation.deferred_events.push_back(std::move(queued));\n";
+    out << "        return;\n";
+    out << "    }\n";
+    out << "    activation.event_queue.push_back(std::move(queued));\n";
+    out << "}\n\n";
+
+    // Targeted counterpart of generated_emit_event (targeted-event-delivery):
+    // the recipient is evaluated once at the call site (by the caller, before
+    // this is invoked) and carried in the queued envelope so it survives
+    // cascade deferral unchanged. Delivery constrains consumer cardinality by
+    // this recipient; it is never lowered to a validity guard around
+    // broadcast dispatch.
+    out << "template <typename Occurrence>\n";
+    out << "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target) {\n";
+    out << "    auto& activation = generated_scheduler_state().activation;\n";
+    out << "    const auto next_depth = activation.current_cascade_depth + 1;\n";
+    out << "    auto queued = CactusQueuedEvent{\n";
+    out << "        .occurrence = std::move(occurrence), .cascade_depth = next_depth, .target = target};\n";
     out << "    if (next_depth > kCactusMaxEventCascadeDepth) {\n";
     out << "        queued.cascade_depth = 0;\n";
     out << "        activation.deferred_events.push_back(std::move(queued));\n";
@@ -998,8 +1045,10 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                       [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
     for (const auto* event : events) {
         const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
-        out << "void generated_dispatch_event(entt::registry& registry, const " << event_type << "& occurrence) {\n";
+        out << "void generated_dispatch_event(entt::registry& registry, const " << event_type
+            << "& occurrence, std::optional<entt::entity> target = std::nullopt) {\n";
         out << "    (void)occurrence;\n";
+        out << "    (void)target;\n";
         bool emitted = false;
         for (const auto& identity : program.execution_graph.stable_topological_order) {
             if (identity.trigger.kind != HandlerTriggerKind::Event || identity.trigger.symbol != *event->symbol_id) {
@@ -1011,7 +1060,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 continue;
             }
             if (is_user_external_handler(program, *graph_node)) {
-                emit_external_handler_call(out, *graph_node, "occurrence", "    ");
+                emit_external_handler_call(out, *graph_node, "occurrence", "    ", "target");
                 emitted = true;
                 continue;
             }
@@ -1045,7 +1094,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                                             handler->event_name.find('.') == std::string::npos
                                                 ? handler->event_name
                                                 : canonical_to_cpp_name(identity.trigger.symbol))
-                    << "(registry, occurrence);\n";
+                    << "(registry, occurrence, target);\n";
                 emitted = true;
                 break;
             }
@@ -1057,14 +1106,23 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
         out << "}\n\n";
     }
 
+    // Stale-recipient dropping (targeted-event-delivery): a targeted
+    // occurrence whose recipient is no longer valid at delivery time is
+    // dropped before any consumer executes — checked once per occurrence
+    // here, not re-checked per consumer, so no handler/command/effect runs
+    // for it.
     out << "void generated_drain_event_cascade(entt::registry& registry) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     out << "    while (!activation.event_queue.empty()) {\n";
     out << "        auto queued = std::move(activation.event_queue.front());\n";
     out << "        activation.event_queue.pop_front();\n";
     out << "        activation.current_cascade_depth = queued.cascade_depth;\n";
-    out << "        std::visit([&](const auto& occurrence) { generated_dispatch_event(registry, occurrence); },\n";
-    out << "                   queued.occurrence);\n";
+    out << "        if (queued.target.has_value() && !registry.valid(*queued.target)) {\n";
+    out << "            continue;\n";
+    out << "        }\n";
+    out << "        std::visit(\n";
+    out << "            [&](const auto& occurrence) { generated_dispatch_event(registry, occurrence, queued.target); },\n";
+    out << "            queued.occurrence);\n";
     out << "    }\n";
     out << "    activation.current_cascade_depth = 0;\n";
     out << "}\n\n";

@@ -1555,6 +1555,13 @@ void SemanticAnalyzer::resolve_trait_references(
                     node.resolved_system_id = make_symbol_id(SymbolKind::System, current_module_id_, node.name);
                     resolve_filter_clause(node.filter);
                     resolve_filter_clause(node.exclude);
+                    if (node.pairs.has_value()) {
+                        for (auto& binding : node.pairs->bindings) {
+                            for (auto& entry : binding.traits) {
+                                entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.qualified_name);
+                            }
+                        }
+                    }
                     for (auto& handler : node.handlers) {
                         handler.resolved_trigger = try_resolve_handler_trigger(handler.event_name);
                         resolve_stmts(handler.body);
@@ -2067,6 +2074,100 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
     return false;
 }
 
+// ── Pair relations (dsl-pair-relations) ─────────────────────────────────────
+
+PairScope SemanticAnalyzer::build_pair_scope(const PairClause& pairs) const {
+    PairScope scope;
+    for (std::size_t index = 0; index < pairs.bindings.size(); ++index) {
+        const auto& binding = pairs.bindings[index];
+        PairBindingScope binding_scope;
+        binding_scope.index = index;
+        for (const auto& entry : binding.traits) {
+            if (!entry.resolved_trait_id.has_value()) {
+                continue;
+            }
+            binding_scope.trait_by_access_key[entry.qualified_name] = *entry.resolved_trait_id;
+            if (entry.alias.has_value()) {
+                binding_scope.trait_by_access_key[*entry.alias] = *entry.resolved_trait_id;
+            }
+        }
+        scope[binding.name] = std::move(binding_scope);
+    }
+    return scope;
+}
+
+std::optional<SemanticAnalyzer::PairMemberResolution> SemanticAnalyzer::resolve_pair_member_chain(
+    const std::string& binding_name,
+    const std::vector<std::string>& segments,
+    const PairScope& pair_scope) const {
+    auto scope_it = pair_scope.find(binding_name);
+    if (scope_it == pair_scope.end() || segments.empty()) {
+        return std::nullopt;
+    }
+    const auto& scope  = scope_it->second;
+    const auto max_len = std::min<std::size_t>(2, segments.size());
+    for (std::size_t len = max_len; len >= 1; --len) {
+        std::string key;
+        for (std::size_t i = 0; i < len; ++i) {
+            if (i != 0) {
+                key += '.';
+            }
+            key += segments[i];
+        }
+        if (auto trait_it = scope.trait_by_access_key.find(key); trait_it != scope.trait_by_access_key.end()) {
+            return PairMemberResolution{
+                .binding_index = scope.index, .trait_id = trait_it->second, .consumed_segments = len};
+        }
+    }
+    return std::nullopt;
+}
+
+void SemanticAnalyzer::validate_pair_bindings(SystemNode& system) {
+    if (!system.pairs.has_value()) {
+        return;
+    }
+    auto& pairs = *system.pairs;
+
+    const bool has_unary_clause = !system.filter.entries.empty() || !system.filter.trait_names.empty() ||
+                                  !system.exclude.entries.empty() || !system.exclude.trait_names.empty() ||
+                                  !system.order_by.empty();
+    if (has_unary_clause) {
+        errors_.error(pairs.location,
+                      "system '" + system.name +
+                          "' must choose one execution domain: `pairs:` cannot be combined with `filter:`, "
+                          "`exclude:`, or `order by:`");
+    }
+
+    if (pairs.bindings.size() != 2) {
+        return;  // cardinality already reported by the parser
+    }
+
+    if (pairs.bindings[0].name == pairs.bindings[1].name) {
+        errors_.error(pairs.bindings[1].location,
+                      "duplicate pair binding name '" + pairs.bindings[1].name + "' in system '" + system.name + "'");
+    }
+
+    for (auto& binding : pairs.bindings) {
+        std::unordered_map<std::string, SourceLocation> seen_keys;
+        for (auto& entry : binding.traits) {
+            std::string simple_name;
+            resolve_filter_entry(entry, simple_name);
+
+            auto register_key = [&](const std::string& key, const SourceLocation& loc) {
+                if (seen_keys.contains(key)) {
+                    errors_.error(loc, "'" + key + "' is ambiguous on pair binding '" + binding.name + "'");
+                } else {
+                    seen_keys[key] = loc;
+                }
+            };
+            register_key(entry.qualified_name, entry.location);
+            if (entry.alias.has_value()) {
+                register_key(*entry.alias, entry.location);
+            }
+        }
+    }
+}
+
 void SemanticAnalyzer::validateOrderByClause(
     const SystemNode& system) {  // NOLINT(readability-function-cognitive-complexity)
     if (system.order_by.empty()) {
@@ -2507,14 +2608,17 @@ void SemanticAnalyzer::validate_system_filters(
             }
 
             // task 11.12: if system has no filter traits, handler bodies cannot
-            // access trait fields (VarAssign is always a trait-field mutation)
+            // access trait fields (VarAssign is always a trait-field mutation).
+            // Pair systems get their own read-only/no-implicit-entity diagnostics
+            // instead of this generic "no filter clause" message.
             bool has_filter = !sys->filter.entries.empty() || !sys->filter.trait_names.empty();
-            if (!has_filter) {
+            if (!has_filter && !sys->pairs.has_value()) {
                 for (auto& handler : sys->handlers) {
                     check_no_field_access(handler.body, sys->name);
                 }
             }
 
+            validate_pair_bindings(*sys);
             validateOrderByClause(*sys);
         }
         if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
@@ -2731,6 +2835,20 @@ void SemanticAnalyzer::validate_event_usage(
                 filter_bound.insert(t);
             }
 
+            PairScope pair_scope;
+            if (sys->pairs.has_value()) {
+                pair_scope = build_pair_scope(*sys->pairs);
+                for (const auto& binding : sys->pairs->bindings) {
+                    filter_bound.insert(binding.name);
+                    for (const auto& entry : binding.traits) {
+                        if (entry.alias.has_value()) {
+                            filter_bound.insert(*entry.alias);
+                        }
+                    }
+                }
+            }
+            const PairScope* pair_scope_ptr = sys->pairs.has_value() ? &pair_scope : nullptr;
+
             for (auto& handler : sys->handlers) {
                 std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
                 for (const auto& entry : sys->filter.entries) {
@@ -2796,7 +2914,8 @@ void SemanticAnalyzer::validate_event_usage(
                         make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                 }
 
-                validate_event_stmts(handler.body, filter_bindings, local_bindings, handler_event, sys->name);
+                validate_event_stmts(
+                    handler.body, filter_bindings, local_bindings, handler_event, sys->name, pair_scope_ptr);
             }
         }
     }
@@ -2808,11 +2927,12 @@ void SemanticAnalyzer::validate_event_stmts(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event,
-    const std::string& system_name) {
+    const std::string& system_name,
+    const PairScope* pair_scope) {
     (void)system_name;
     auto locals = local_bindings;
 
-    auto validate_emit = [this, &filter_bindings, &locals, handler_event](const EmitStmt& emit) {
+    auto validate_emit = [this, &filter_bindings, &locals, handler_event, pair_scope](const EmitStmt& emit) {
         const auto event_symbol = emit.resolved_event_id.has_value() ? emit.resolved_event_id
                                                                      : try_resolve_event_ref_to_symbol(emit.event_name);
         if (!event_symbol.has_value()) {
@@ -2845,13 +2965,13 @@ void SemanticAnalyzer::validate_event_stmts(
             return;
         }
 
-        auto target_type = infer_expr_type(**emit.target, filter_bindings, locals, handler_event);
+        auto target_type = infer_expr_type(**emit.target, filter_bindings, locals, handler_event, pair_scope);
         if (target_type.kind != TypeKind::EntityId && target_type.kind != TypeKind::Unknown) {
             errors_.error(emit.location, "emit target must be of type entity_id, got " + target_type.name);
         }
     };
 
-    auto validate_add = [this, &filter_bindings, &locals, handler_event](const AddTraitStmt& add) {
+    auto validate_add = [this, &filter_bindings, &locals, handler_event, pair_scope](const AddTraitStmt& add) {
         const auto* trait = find_resolved_trait(add.resolved_trait_id, add.trait_name);
         if (trait == nullptr) {
             const auto prev_errors = errors_.error_count();
@@ -2862,8 +2982,12 @@ void SemanticAnalyzer::validate_event_stmts(
             return;
         }
 
+        if (pair_scope != nullptr && !add.target_expr.has_value()) {
+            errors_.error(add.location, "pair handlers require an explicit target; use `add " + add.trait_name +
+                                            " to <binding>`");
+        }
         if (add.target_expr.has_value()) {
-            auto t = infer_expr_type(**add.target_expr, filter_bindings, locals, handler_event);
+            auto t = infer_expr_type(**add.target_expr, filter_bindings, locals, handler_event, pair_scope);
             if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
                 errors_.error(add.location, "`to` target must be of type `entity_id`");
             }
@@ -2883,7 +3007,7 @@ void SemanticAnalyzer::validate_event_stmts(
                 continue;
             }
 
-            auto actual          = infer_expr_type(*arg.value, filter_bindings, locals, handler_event);
+            auto actual          = infer_expr_type(*arg.value, filter_bindings, locals, handler_event, pair_scope);
             const auto& expected = it->second->type;
             if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                 actual.kind != expected.kind) {
@@ -2901,7 +3025,7 @@ void SemanticAnalyzer::validate_event_stmts(
         }
     };
 
-    auto validate_project = [this, &filter_bindings, &locals, handler_event](const ProjectTraitStmt& project) {
+    auto validate_project = [this, &filter_bindings, &locals, handler_event, pair_scope](const ProjectTraitStmt& project) {
         const auto* trait = find_resolved_trait(project.resolved_trait_id, project.trait_name);
         if (trait == nullptr) {
             const auto prev_errors = errors_.error_count();
@@ -2925,8 +3049,12 @@ void SemanticAnalyzer::validate_event_stmts(
             }
         }
 
+        if (pair_scope != nullptr && !project.target_expr.has_value()) {
+            errors_.error(project.location, "pair handlers require an explicit target; use `project " +
+                                                project.trait_name + " to <binding>`");
+        }
         if (project.target_expr.has_value()) {
-            auto t = infer_expr_type(**project.target_expr, filter_bindings, locals, handler_event);
+            auto t = infer_expr_type(**project.target_expr, filter_bindings, locals, handler_event, pair_scope);
             if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
                 errors_.error(project.location, "`project ... to` target must be of type `entity_id`");
             }
@@ -2946,7 +3074,7 @@ void SemanticAnalyzer::validate_event_stmts(
                 continue;
             }
 
-            auto actual          = infer_expr_type(*arg.value, filter_bindings, locals, handler_event);
+            auto actual          = infer_expr_type(*arg.value, filter_bindings, locals, handler_event, pair_scope);
             const auto& expected = it->second->type;
             if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                 actual.kind != expected.kind) {
@@ -2965,7 +3093,7 @@ void SemanticAnalyzer::validate_event_stmts(
         }
     };
 
-    auto validate_remove = [this, &filter_bindings, &locals, handler_event](const RemoveTraitStmt& remove) {
+    auto validate_remove = [this, &filter_bindings, &locals, handler_event, pair_scope](const RemoveTraitStmt& remove) {
         if (find_resolved_trait(remove.resolved_trait_id, remove.trait_name) == nullptr) {
             const auto prev_errors = errors_.error_count();
             (void)resolve_trait_ref_to_canonical(remove.trait_name, remove.location);
@@ -2973,19 +3101,27 @@ void SemanticAnalyzer::validate_event_stmts(
                 errors_.error(remove.location, "undeclared trait '" + remove.trait_name + "'");
             }
         }
+        if (pair_scope != nullptr && !remove.target_expr.has_value()) {
+            errors_.error(remove.location, "pair handlers require an explicit target; use `remove " +
+                                              remove.trait_name + " from <binding>`");
+        }
         if (remove.target_expr.has_value()) {
-            auto t = infer_expr_type(**remove.target_expr, filter_bindings, locals, handler_event);
+            auto t = infer_expr_type(**remove.target_expr, filter_bindings, locals, handler_event, pair_scope);
             if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
                 errors_.error(remove.location, "`from` target must be of type `entity_id`");
             }
         }
     };
 
-    auto validate_destroy = [this, &filter_bindings, &locals, handler_event](const DestroyStmt& destroy) {
+    auto validate_destroy = [this, &filter_bindings, &locals, handler_event, pair_scope](const DestroyStmt& destroy) {
         if (!destroy.target_expr.has_value()) {
+            if (pair_scope != nullptr) {
+                errors_.error(destroy.location,
+                              "pair handlers require an explicit target; use `destroy <binding>`");
+            }
             return;
         }
-        auto t = infer_expr_type(**destroy.target_expr, filter_bindings, locals, handler_event);
+        auto t = infer_expr_type(**destroy.target_expr, filter_bindings, locals, handler_event, pair_scope);
         if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
             errors_.error(destroy.location, "`destroy` target must be of type `entity_id`");
         }
@@ -2995,24 +3131,34 @@ void SemanticAnalyzer::validate_event_stmts(
 
     for (const auto& stmt : stmts) {
         if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
-            locals[let_stmt->name] = infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event);
+            locals[let_stmt->name] =
+                infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event, pair_scope);
             if (const auto* spawn = std::get_if<SpawnExpr>(&let_stmt->value->expr)) {
                 validate_spawn_expr(*spawn, let_stmt->location);
             }
             continue;
         }
         if (const auto* assign_stmt = std::get_if<VarAssign>(&stmt->stmt)) {
-            if (auto local_it = locals.find(assign_stmt->name); local_it != locals.end() && local_it->second.is_let) {
+            if (pair_scope != nullptr) {
+                if (pair_scope->contains(assign_stmt->name)) {
+                    errors_.error(assign_stmt->location, "pair-bound durable traits are read-only");
+                } else {
+                    errors_.error(assign_stmt->location,
+                                  "pair handlers have no implicit current entity to assign into; use an explicit "
+                                  "binding");
+                }
+            } else if (auto local_it = locals.find(assign_stmt->name);
+                       local_it != locals.end() && local_it->second.is_let) {
                 errors_.error(assign_stmt->location, "foreach loop variable '" + assign_stmt->name + "' is read-only");
             }
-            (void)infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event);
+            (void)infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event, pair_scope);
             continue;
         }
         if (const auto* expr_stmt = std::get_if<ExprStmt>(&stmt->stmt)) {
             if (const auto* spawn = std::get_if<SpawnExpr>(&expr_stmt->expr->expr)) {
                 validate_spawn_expr(*spawn, expr_stmt->location);
             }
-            (void)infer_expr_type(*expr_stmt->expr, filter_bindings, locals, handler_event);
+            (void)infer_expr_type(*expr_stmt->expr, filter_bindings, locals, handler_event, pair_scope);
             continue;
         }
         if (const auto* emit_stmt = std::get_if<EmitStmt>(&stmt->stmt)) {
@@ -3037,17 +3183,18 @@ void SemanticAnalyzer::validate_event_stmts(
         }
         if (const auto* trait_match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
             validate_trait_match_stmt(
-                *trait_match, filter_bindings, locals, handler_event, system_name, in_system_handler);
+                *trait_match, filter_bindings, locals, handler_event, system_name, in_system_handler, pair_scope);
             continue;
         }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
-            (void)infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event);
-            validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, system_name);
-            validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, system_name);
+            (void)infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event, pair_scope);
+            validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, system_name, pair_scope);
+            validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, system_name, pair_scope);
             continue;
         }
         if (const auto* foreach_stmt = std::get_if<ForeachStmt>(&stmt->stmt)) {
-            auto iterable_type = infer_expr_type(*foreach_stmt->iterable, filter_bindings, locals, handler_event);
+            auto iterable_type =
+                infer_expr_type(*foreach_stmt->iterable, filter_bindings, locals, handler_event, pair_scope);
             if (iterable_type.kind != TypeKind::List && iterable_type.kind != TypeKind::Unknown) {
                 errors_.error(foreach_stmt->location, "foreach requires a `list[T]` iterable");
                 continue;
@@ -3057,7 +3204,8 @@ void SemanticAnalyzer::validate_event_stmts(
             TypeInfo element_type = iterable_type.element != nullptr ? *iterable_type.element : make_unknown_type();
             element_type.is_let   = true;
             loop_locals[foreach_stmt->var_name] = std::move(element_type);
-            validate_event_stmts(foreach_stmt->body, filter_bindings, loop_locals, handler_event, system_name);
+            validate_event_stmts(
+                foreach_stmt->body, filter_bindings, loop_locals, handler_event, system_name, pair_scope);
         }
     }
 }
@@ -3068,12 +3216,22 @@ void SemanticAnalyzer::validate_trait_match_stmt(
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event,
     const std::string& system_name,
-    bool in_system_handler) {
+    bool in_system_handler,
+    const PairScope* pair_scope) {
     if (!in_system_handler) {
         errors_.error(stmt.location, "statement-level `match entity_id` only allowed inside system event handlers");
     }
 
-    auto subject_type = infer_expr_type(*stmt.subject, filter_bindings, local_bindings, handler_event);
+    if (pair_scope != nullptr) {
+        if (const auto* ident = std::get_if<IdentExpr>(&stmt.subject->expr);
+            ident != nullptr && pair_scope->contains(ident->name)) {
+            errors_.error(stmt.location,
+                          "pair handlers cannot trait-match directly on binding '" + ident->name +
+                              "'; a data-bearing match alias would grant mutable access to a read-only trait");
+        }
+    }
+
+    auto subject_type = infer_expr_type(*stmt.subject, filter_bindings, local_bindings, handler_event, pair_scope);
     if (subject_type.kind != TypeKind::EntityId && subject_type.kind != TypeKind::Unknown) {
         errors_.error(stmt.location,
                       "statement-level `match` subject must be of type `entity_id`; use expression-level match for "
@@ -3117,11 +3275,12 @@ void SemanticAnalyzer::validate_trait_match_stmt(
             }
         }
 
-        validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, system_name);
+        validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, system_name, pair_scope);
     }
 
     if (stmt.wildcard.has_value()) {
-        validate_event_stmts(stmt.wildcard->body, filter_bindings, local_bindings, handler_event, system_name);
+        validate_event_stmts(
+            stmt.wildcard->body, filter_bindings, local_bindings, handler_event, system_name, pair_scope);
     }
 }
 
@@ -3167,7 +3326,8 @@ void SemanticAnalyzer::build_dependency_graph(
                     }
                     declared_triggers.push_back(*handler.resolved_trigger);
 
-                    auto inferred = infer_regular_handler_contract(*sys, handler);
+                    auto inferred = sys->pairs.has_value() ? infer_pair_handler_contract(*sys, handler)
+                                                            : infer_regular_handler_contract(*sys, handler);
                     result_.handler_contracts.push_back(inferred);
 
                     HandlerNode node;
@@ -3226,9 +3386,11 @@ void SemanticAnalyzer::build_dependency_graph(
                 declared_triggers.push_back(*handler.resolved_trigger);
 
                 HandlerContract contract;
-                contract.selection        = sys->filter.resolved_trait_ids;
-                contract.exclusion        = sys->exclude.resolved_trait_ids;
-                contract.is_selectionless = contract.selection.empty() && contract.exclusion.empty();
+                contract.selection   = sys->filter.resolved_trait_ids;
+                contract.exclusion   = sys->exclude.resolved_trait_ids;
+                contract.domain_kind = contract.selection.empty() && contract.exclusion.empty()
+                                          ? HandlerDomainKind::Selectionless
+                                          : HandlerDomainKind::Unary;
                 contract.reads.insert(handler.resolved_reads.begin(), handler.resolved_reads.end());
                 for (const auto& write : handler.resolved_writes) {
                     contract.reads.insert(write);
@@ -3306,9 +3468,11 @@ InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
     InferredHandlerContract contract;
     contract.system           = *system.resolved_system_id;
     contract.trigger          = *handler.resolved_trigger;
-    contract.selection        = system.filter.resolved_trait_ids;
-    contract.exclusion        = system.exclude.resolved_trait_ids;
-    contract.is_selectionless = contract.selection.empty() && contract.exclusion.empty();
+    contract.selection   = system.filter.resolved_trait_ids;
+    contract.exclusion   = system.exclude.resolved_trait_ids;
+    contract.domain_kind = contract.selection.empty() && contract.exclusion.empty()
+                              ? HandlerDomainKind::Selectionless
+                              : HandlerDomainKind::Unary;
 
     std::unordered_map<std::string, SymbolId> aliases;
     auto bind_clause = [this, &aliases](const FilterClause& clause) {
@@ -3547,6 +3711,245 @@ InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
     handler_locals.insert(handler.event_name);
     if (handler.alias.has_value()) {
         handler_locals.insert(*handler.alias);
+    }
+    visit_stmts(handler.body, std::move(handler_locals));
+    return contract;
+}
+
+InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(
+    const SystemNode& system,
+    const EventHandlerNode& handler) const {  // NOLINT(readability-function-cognitive-complexity)
+    InferredHandlerContract contract;
+    contract.system      = *system.resolved_system_id;
+    contract.trigger     = *handler.resolved_trigger;
+    contract.domain_kind = HandlerDomainKind::Pair;
+
+    const auto pair_scope = build_pair_scope(*system.pairs);
+    for (const auto& binding : system.pairs->bindings) {
+        RelationBinding relation;
+        relation.name = binding.name;
+        for (const auto& entry : binding.traits) {
+            if (entry.resolved_trait_id.has_value()) {
+                relation.required_traits.push_back(*entry.resolved_trait_id);
+            }
+        }
+        contract.pair_bindings.push_back(std::move(relation));
+    }
+
+    auto add_read       = [&contract](const SymbolId& symbol) { contract.reads.insert(symbol); };
+    auto add_bound_read = [&contract, &add_read](std::size_t binding_index, const SymbolId& symbol) {
+        BoundTraitAccess access{.binding_index = binding_index, .trait = symbol};
+        if (std::ranges::find(contract.bound_reads, access) == contract.bound_reads.end()) {
+            contract.bound_reads.push_back(access);
+        }
+        add_read(symbol);
+    };
+    auto add_project = [&contract](const SymbolId& symbol) { contract.projects.insert(symbol); };
+    auto add_command = [&contract](HandlerCommandKind kind, std::optional<SymbolId> target) {
+        InferredHandlerCommand command{.kind = kind, .target = std::move(target)};
+        if (std::ranges::find(contract.commands, command) == contract.commands.end()) {
+            contract.commands.push_back(std::move(command));
+        }
+    };
+    auto add_call_effects = [this, &contract](const std::optional<SymbolId>& callee) {
+        if (!callee.has_value()) {
+            return;
+        }
+        const auto* function = find_resolved_func(*callee);
+        if (function == nullptr || !function->is_extern) {
+            return;
+        }
+        if (function->effect_summary.has_value()) {
+            contract.effects.insert(function->effect_summary->begin(), function->effect_summary->end());
+        } else {
+            contract.effects.insert("external");
+        }
+    };
+
+    using LocalNames = std::unordered_set<std::string>;
+    std::function<void(const std::vector<ChildOverrideNode>&, const LocalNames&)> visit_child_overrides;
+    std::function<void(const ExprNode&, const LocalNames&)> visit_expr;
+    std::function<void(const std::vector<std::unique_ptr<StmtNode>>&, LocalNames)> visit_stmts;
+
+    // Attempts to resolve `expr` as a pair-bound member chain rooted at a
+    // binding identifier (e.g. `body.tf.WorldTransform.position`); records a
+    // bound read and returns true when the chain is binding-rooted (whether
+    // or not it resolved — an invalid access is already diagnosed by
+    // validate_event_stmts, so there is nothing further to record here).
+    auto try_record_pair_read = [&](const ExprNode& expr) -> bool {
+        std::vector<std::string> segments;
+        const ExprNode* cursor = &expr;
+        while (const auto* member = std::get_if<MemberExpr>(&cursor->expr)) {
+            segments.push_back(member->member);
+            cursor = member->object.get();
+        }
+        std::ranges::reverse(segments);
+        const auto* root = std::get_if<IdentExpr>(&cursor->expr);
+        if (root == nullptr || segments.empty() || !pair_scope.contains(root->name)) {
+            return false;
+        }
+        if (auto resolved = resolve_pair_member_chain(root->name, segments, pair_scope); resolved.has_value()) {
+            add_bound_read(resolved->binding_index, resolved->trait_id);
+        }
+        return true;
+    };
+
+    visit_child_overrides = [&](const std::vector<ChildOverrideNode>& overrides, const LocalNames& locals) {
+        for (const auto& child : overrides) {
+            for (const auto& trait : child.traits) {
+                for (const auto& field : trait.assignments) {
+                    visit_expr(*field.value, locals);
+                }
+            }
+            visit_child_overrides(child.children, locals);
+        }
+    };
+    visit_expr = [&](const ExprNode& expr, const LocalNames& locals) {
+        if (std::holds_alternative<MemberExpr>(expr.expr) && try_record_pair_read(expr)) {
+            return;
+        }
+        std::visit(
+            [&](const auto& node) {
+                using E = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<E, IdentExpr>) {
+                    // Bare pair-binding references and locals carry no read on their own.
+                } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                    visit_expr(*node.left, locals);
+                    visit_expr(*node.right, locals);
+                } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                    visit_expr(*node.operand, locals);
+                } else if constexpr (std::is_same_v<E, CallExpr>) {
+                    add_call_effects(node.resolved_callee_id);
+                    for (const auto& arg : node.args)
+                        visit_expr(*arg, locals);
+                } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                    // Not a pair-bound chain (try_record_pair_read already
+                    // returned false above); fall back to walking the object.
+                    visit_expr(*node.object, locals);
+                } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                    auto lambda_locals = locals;
+                    lambda_locals.insert(node.params.begin(), node.params.end());
+                    visit_expr(*node.body, lambda_locals);
+                } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                    visit_expr(*node.source, locals);
+                    for (const auto& operation : node.operations) {
+                        for (const auto& arg : operation.args)
+                            visit_expr(*arg, locals);
+                    }
+                } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                    visit_expr(*node.subject, locals);
+                    for (const auto& arm : node.arms) {
+                        visit_expr(*arm.pattern, locals);
+                        visit_expr(*arm.body, locals);
+                    }
+                } else if constexpr (std::is_same_v<E, IfExpr>) {
+                    visit_expr(*node.condition, locals);
+                    visit_expr(*node.then_expr, locals);
+                    visit_expr(*node.else_expr, locals);
+                } else if constexpr (std::is_same_v<E, ListExpr>) {
+                    for (const auto& element : node.elements)
+                        visit_expr(*element, locals);
+                } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                    add_command(HandlerCommandKind::Spawn, node.resolved_template_id);
+                    for (const auto& override_entry : node.overrides) {
+                        for (const auto& field : override_entry.assignments)
+                            visit_expr(*field.value, locals);
+                    }
+                    visit_child_overrides(node.child_overrides, locals);
+                } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                    add_call_effects(node.resolved_callee_id);
+                    for (const auto& arg : node.named_args)
+                        visit_expr(*arg.value, locals);
+                }
+            },
+            expr.expr);
+    };
+    visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts, LocalNames locals) {
+        for (const auto& stmt : stmts) {
+            std::visit(
+                [&](const auto& node) {
+                    using S = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<S, LetStmt>) {
+                        visit_expr(*node.value, locals);
+                        locals.insert(node.name);
+                    } else if constexpr (std::is_same_v<S, VarAssign>) {
+                        // Rejected by validate_event_stmts (pair traits are
+                        // read-only); still walk the value for reads.
+                        visit_expr(*node.value, locals);
+                    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+                        if (node.resolved_event_id.has_value())
+                            contract.emits.insert(*node.resolved_event_id);
+                        if (node.target.has_value())
+                            visit_expr(**node.target, locals);
+                        for (const auto& field : node.payload)
+                            visit_expr(*field.value, locals);
+                    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                        add_command(HandlerCommandKind::Spawn, node.resolved_template_id);
+                        for (const auto& override_entry : node.overrides) {
+                            for (const auto& field : override_entry.assignments)
+                                visit_expr(*field.value, locals);
+                        }
+                        visit_child_overrides(node.child_overrides, locals);
+                    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+                        add_command(HandlerCommandKind::Destroy, std::nullopt);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                        add_command(HandlerCommandKind::Add, node.resolved_trait_id);
+                        for (const auto& field : node.args)
+                            visit_expr(*field.value, locals);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+                        add_command(HandlerCommandKind::Remove, node.resolved_trait_id);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                        if (node.resolved_trait_id.has_value())
+                            add_project(*node.resolved_trait_id);
+                        for (const auto& field : node.args)
+                            visit_expr(*field.value, locals);
+                        if (node.target_expr.has_value())
+                            visit_expr(**node.target_expr, locals);
+                    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                        if (node.value.has_value())
+                            visit_expr(**node.value, locals);
+                    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                        visit_expr(*node.expr, locals);
+                    } else if constexpr (std::is_same_v<S, IfStmt>) {
+                        visit_expr(*node.condition, locals);
+                        visit_stmts(node.then_body, locals);
+                        visit_stmts(node.else_body, locals);
+                    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                        visit_expr(*node.iterable, locals);
+                        auto loop_locals = locals;
+                        loop_locals.insert(node.var_name);
+                        visit_stmts(node.body, std::move(loop_locals));
+                    } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                        visit_expr(*node.subject, locals);
+                        for (const auto& arm : node.arms) {
+                            if (arm.resolved_trait_id.has_value())
+                                add_read(*arm.resolved_trait_id);
+                            auto arm_locals = locals;
+                            if (arm.alias.has_value())
+                                arm_locals.insert(*arm.alias);
+                            visit_stmts(arm.body, std::move(arm_locals));
+                        }
+                        if (node.wildcard.has_value())
+                            visit_stmts(node.wildcard->body, locals);
+                    }
+                },
+                stmt->stmt);
+        }
+    };
+
+    LocalNames handler_locals;
+    handler_locals.insert(handler.event_name);
+    if (handler.alias.has_value()) {
+        handler_locals.insert(*handler.alias);
+    }
+    for (const auto& binding : system.pairs->bindings) {
+        handler_locals.insert(binding.name);
     }
     visit_stmts(handler.body, std::move(handler_locals));
     return contract;
@@ -4699,7 +5102,8 @@ void SemanticAnalyzer::validate_text_format_calls(ProgramNode& program) {
 TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                                            const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                            const std::unordered_map<std::string, TypeInfo>& local_bindings,
-                                           const ResolvedStruct* handler_event) const {
+                                           const ResolvedStruct* handler_event,
+                                           const PairScope* pair_scope) const {
     if (const auto* literal = std::get_if<LiteralExpr>(&expr.expr)) {
         switch (literal->kind) {
             case LiteralExpr::Kind::Int:
@@ -4718,6 +5122,9 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
     if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
         if (auto local_it = local_bindings.find(ident->name); local_it != local_bindings.end()) {
             return local_it->second;
+        }
+        if (pair_scope != nullptr && pair_scope->contains(ident->name)) {
+            return make_entity_id_type();
         }
         const ResolvedField* matching_filter_field = nullptr;
         std::unordered_set<const ResolvedTrait*> visited_traits;
@@ -4773,6 +5180,12 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             errors_.error(expr.location, "`self` only allowed inside system event handlers");
             return make_unknown_type();
         }
+        if (pair_scope != nullptr) {
+            errors_.error(expr.location,
+                          "`self` is unavailable in a pair handler; a pair tuple has no unique current entity, use "
+                          "an explicit binding instead");
+            return make_unknown_type();
+        }
         return make_entity_id_type();
     }
 
@@ -4780,6 +5193,50 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         // Resolved enum member access (`inp.Key.A`) types as its enum (D3/2.2).
         if (member->resolved_enum_member.has_value()) {
             return make_resolved_user_type(TypeKind::Enum, member->resolved_enum_member->enum_id);
+        }
+        if (pair_scope != nullptr) {
+            // Flatten a (possibly nested) member-access chain rooted at a pair
+            // binding into ordered dotted segments, e.g.
+            // `body.tf.WorldTransform.position` -> root "body",
+            // segments ["tf", "WorldTransform", "position"].
+            std::vector<std::string> segments;
+            const ExprNode* cursor = &expr;
+            while (const auto* chain_member = std::get_if<MemberExpr>(&cursor->expr)) {
+                segments.push_back(chain_member->member);
+                cursor = chain_member->object.get();
+            }
+            std::ranges::reverse(segments);
+            if (const auto* root = std::get_if<IdentExpr>(&cursor->expr); root != nullptr) {
+                if (auto scope_it = pair_scope->find(root->name); scope_it != pair_scope->end()) {
+                    auto resolved = resolve_pair_member_chain(root->name, segments, *pair_scope);
+                    if (!resolved.has_value()) {
+                        errors_.error(expr.location,
+                                      "'" + segments.front() + "' is unavailable on pair binding '" + root->name +
+                                          "'");
+                        return make_unknown_type();
+                    }
+                    const auto* trait = find_resolved_trait(make_canonical_id(resolved->trait_id));
+                    TypeInfo current;
+                    bool resolved_any = false;
+                    for (std::size_t i = resolved->consumed_segments; i < segments.size(); ++i) {
+                        const auto& seg = segments[i];
+                        if (!resolved_any) {
+                            current      = trait == nullptr ? make_unknown_type()
+                                                             : find_field_type_in(trait->fields, seg);
+                            resolved_any = true;
+                        } else if (current.kind == TypeKind::Vec2 || current.kind == TypeKind::Vec3) {
+                            if (seg == "x" || seg == "y" || (current.kind == TypeKind::Vec3 && seg == "z")) {
+                                current = make_float_type();
+                            } else {
+                                return make_unknown_type();
+                            }
+                        } else {
+                            return make_unknown_type();
+                        }
+                    }
+                    return resolved_any ? current : make_unknown_type();
+                }
+            }
         }
         const auto* owner = std::get_if<IdentExpr>(&member->object->expr);
         if (owner == nullptr) {
@@ -4928,7 +5385,8 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             if (call->args.size() != 1) {
                 return make_bool_type();
             }
-            auto arg_type = infer_expr_type(*call->args.front(), filter_bindings, local_bindings, handler_event);
+            auto arg_type =
+                infer_expr_type(*call->args.front(), filter_bindings, local_bindings, handler_event, pair_scope);
             if (arg_type.kind != TypeKind::EntityId && arg_type.kind != TypeKind::Unknown) {
                 errors_.error(expr.location, "`exists()` argument must be of type `entity_id`");
             }
@@ -4946,11 +5404,11 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return make_unknown_type();
     }
     if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
-        return infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event);
+        return infer_expr_type(*unary->operand, filter_bindings, local_bindings, handler_event, pair_scope);
     }
     if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
-        auto left  = infer_expr_type(*binary->left, filter_bindings, local_bindings, handler_event);
-        auto right = infer_expr_type(*binary->right, filter_bindings, local_bindings, handler_event);
+        auto left  = infer_expr_type(*binary->left, filter_bindings, local_bindings, handler_event, pair_scope);
+        auto right = infer_expr_type(*binary->right, filter_bindings, local_bindings, handler_event, pair_scope);
         if ((binary->op == "==" || binary->op == "!=") &&
             ((left.kind == TypeKind::EntityId && right.kind == TypeKind::Int) ||
              (right.kind == TypeKind::EntityId && left.kind == TypeKind::Int))) {
@@ -4971,13 +5429,14 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return left;
     }
     if (const auto* if_expr = std::get_if<IfExpr>(&expr.expr)) {
-        return infer_expr_type(*if_expr->then_expr, filter_bindings, local_bindings, handler_event);
+        return infer_expr_type(*if_expr->then_expr, filter_bindings, local_bindings, handler_event, pair_scope);
     }
     if (const auto* list = std::get_if<ListExpr>(&expr.expr)) {
         if (list->elements.empty()) {
             return make_list_type(make_unknown_type());
         }
-        return make_list_type(infer_expr_type(*list->elements.front(), filter_bindings, local_bindings, handler_event));
+        return make_list_type(
+            infer_expr_type(*list->elements.front(), filter_bindings, local_bindings, handler_event, pair_scope));
     }
     return make_unknown_type();
 }

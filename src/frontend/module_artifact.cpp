@@ -342,7 +342,7 @@ void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<System
 void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& contract) {
     write_symbol_vector(out, contract.selection);
     write_symbol_vector(out, contract.exclusion);
-    write_bool(out, contract.is_selectionless);
+    write_bool(out, contract.is_selectionless());
     write_symbol_set(out, contract.reads);
     write_symbol_set(out, contract.writes);
     write_symbol_set(out, contract.emits);
@@ -804,9 +804,10 @@ std::vector<SystemDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
 
 HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     HandlerContract contract;
-    contract.selection        = read_symbol_vector(in);
-    contract.exclusion        = read_symbol_vector(in);
-    contract.is_selectionless = read_bool(in);
+    contract.selection    = read_symbol_vector(in);
+    contract.exclusion    = read_symbol_vector(in);
+    const bool selectionless = read_bool(in);
+    contract.domain_kind  = selectionless ? HandlerDomainKind::Selectionless : HandlerDomainKind::Unary;
     contract.reads            = read_symbol_set(in);
     contract.writes           = read_symbol_set(in);
     contract.emits            = read_symbol_set(in);

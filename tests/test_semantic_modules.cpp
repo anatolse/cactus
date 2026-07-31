@@ -1789,9 +1789,9 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
 
     const auto& filter_only = contract_for("FilterOnly", "frame");
     CHECK_FALSE(filter_only.reads.contains(symbol(SymbolKind::Trait, "Position")));
-    CHECK_FALSE(filter_only.is_selectionless);
-    CHECK_FALSE(contract_for("ExcludeOnly", "frame").is_selectionless);
-    CHECK(contract_for("Once", "frame").is_selectionless);
+    CHECK_FALSE(filter_only.is_selectionless());
+    CHECK_FALSE(contract_for("ExcludeOnly", "frame").is_selectionless());
+    CHECK(contract_for("Once", "frame").is_selectionless());
 }
 
 TEST_CASE("regular handler contracts infer extern function effect summaries", "[semantic][handler-contract][effects]") {

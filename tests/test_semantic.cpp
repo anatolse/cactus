@@ -8,6 +8,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 using namespace cactus;
 
 // Standard lifecycle event declarations (normally from std.core imports)
@@ -1289,5 +1291,321 @@ TEST_CASE("Semantic: model asset accepted where model_id expected in add", "[sem
         "    on tick:\n"
         "        add ModelRenderer:\n"
         "            model = Robot\n"));
+}
+
+// ── Pair relations (dsl-pair-relations) ─────────────────────────────────────
+
+static const std::string PAIR_TRAITS =
+    "trait DynamicBody:\n"
+    "    var vx: float\n"
+    "trait Transform:\n"
+    "    var x: float\n"
+    "trait Collider:\n"
+    "    var mask: int\n"
+    "trait Solid:\n"
+    "    var active: bool = true\n"
+    "trait GroundContact:\n"
+    "    var active: bool = true\n"
+    "event Contact:\n"
+    "    other: entity_id\n";
+
+TEST_CASE("Semantic: basic pair system compiles with a tuple-rejecting condition", "[semantic][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "system DetectContacts:\n"
+                                   "    pairs:\n"
+                                   "        body:\n"
+                                   "            DynamicBody\n"
+                                   "            Transform\n"
+                                   "        wall:\n"
+                                   "            Solid\n"
+                                   "            Collider\n"
+                                   "    on fixed_tick:\n"
+                                   "        if body != wall:\n"
+                                   "            emit Contact to body:\n"
+                                   "                other = wall\n"));
+}
+
+TEST_CASE("Semantic: pair binding trait field read is accepted and typed", "[semantic][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "system DetectContacts:\n"
+                                   "    pairs:\n"
+                                   "        body:\n"
+                                   "            DynamicBody\n"
+                                   "            Transform\n"
+                                   "        wall:\n"
+                                   "            Solid\n"
+                                   "            Collider\n"
+                                   "    on fixed_tick:\n"
+                                   "        if body.Transform.x > 0.0 and wall.Collider.mask > 0:\n"
+                                   "            emit Contact:\n"
+                                   "                other = wall\n"));
+}
+
+TEST_CASE("Semantic: cross-binding trait access is rejected", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system DetectContacts:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        if wall.DynamicBody.vx > 0.0:\n"
+                             "            emit Contact:\n"
+                             "                other = wall\n"));
+}
+
+TEST_CASE("Semantic: binding-local trait alias resolves shortened access", "[semantic][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "system DetectContacts:\n"
+                                   "    pairs:\n"
+                                   "        body:\n"
+                                   "            DynamicBody\n"
+                                   "        wall:\n"
+                                   "            Collider as c\n"
+                                   "    on fixed_tick:\n"
+                                   "        if wall.c.mask > 0:\n"
+                                   "            emit Contact:\n"
+                                   "                other = wall\n"));
+}
+
+TEST_CASE("Semantic: self-qualified pair trait resolves via longest prefix", "[semantic][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "system DetectContacts:\n"
+                                   "    pairs:\n"
+                                   "        body:\n"
+                                   "            DynamicBody\n"
+                                   "        wall:\n"
+                                   "            test.Collider\n"
+                                   "    on fixed_tick:\n"
+                                   "        if wall.test.Collider.mask > 0:\n"
+                                   "            emit Contact:\n"
+                                   "                other = wall\n"));
+}
+
+TEST_CASE("Semantic: duplicate pair binding name is rejected", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system Bad:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "        body:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        emit Contact:\n"
+                             "            other = body\n"));
+}
+
+TEST_CASE("Semantic: duplicate trait entry in one binding is ambiguous", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system Bad:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "            DynamicBody\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        emit Contact:\n"
+                             "            other = body\n"));
+}
+
+TEST_CASE("Semantic: unknown trait in pair binding is reported", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system Bad:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            Nonexistent\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        emit Contact:\n"
+                             "            other = body\n"));
+}
+
+TEST_CASE("Semantic: self is rejected in a pair handler", "[semantic][pair-relations][self]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system DetectContacts:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        if self == body:\n"
+                             "            emit Contact:\n"
+                             "                other = wall\n"));
+}
+
+TEST_CASE("Semantic: assignment through a pair trait path is rejected as read-only", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system DetectContacts:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "            Transform\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        body.Transform.x += 1.0\n"));
+}
+
+TEST_CASE("Semantic: compound assignment through a pair trait path is rejected as read-only",
+          "[semantic][pair-relations]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + PAIR_TRAITS +
+                                       "system DetectContacts:\n"
+                                       "    pairs:\n"
+                                       "        body:\n"
+                                       "            DynamicBody\n"
+                                       "        wall:\n"
+                                       "            Solid\n"
+                                       "    on fixed_tick:\n"
+                                       "        body.DynamicBody.vx = 1.0\n");
+    CHECK(message.find("read-only") != std::string::npos);
+}
+
+TEST_CASE("Semantic: bare assignment has no implicit entity in a pair handler", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system DetectContacts:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        vx = 1.0\n"));
+}
+
+TEST_CASE("Semantic: trait match directly on a pair binding is rejected", "[semantic][pair-relations]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + PAIR_TRAITS +
+                                       "system DetectContacts:\n"
+                                       "    pairs:\n"
+                                       "        body:\n"
+                                       "            DynamicBody\n"
+                                       "        wall:\n"
+                                       "            Solid\n"
+                                       "    on fixed_tick:\n"
+                                       "        match body:\n"
+                                       "            DynamicBody as db =>\n"
+                                       "                emit Contact:\n"
+                                       "                    other = wall\n");
+    CHECK(message.find("trait-match directly on binding") != std::string::npos);
+}
+
+TEST_CASE("Semantic: bare destroy has no implicit target in a pair handler", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system DetectContacts:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        destroy\n"));
+}
+
+TEST_CASE("Semantic: bare project has no implicit target in a pair handler", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "system DetectContacts:\n"
+                             "    pairs:\n"
+                             "        body:\n"
+                             "            DynamicBody\n"
+                             "        wall:\n"
+                             "            Solid\n"
+                             "    on fixed_tick:\n"
+                             "        project GroundContact\n"));
+}
+
+TEST_CASE("Semantic: explicit-target destroy, add, remove, project, and spawn are accepted in a pair handler",
+          "[semantic][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "template Debris:\n"
+                                   "    Solid\n"
+                                   "system DetectContacts:\n"
+                                   "    pairs:\n"
+                                   "        body:\n"
+                                   "            DynamicBody\n"
+                                   "        wall:\n"
+                                   "            Solid\n"
+                                   "    on fixed_tick:\n"
+                                   "        project GroundContact to body\n"
+                                   "        add Solid to body\n"
+                                   "        remove Solid from wall\n"
+                                   "        destroy wall\n"
+                                   "        spawn Debris:\n"
+                                   "            Solid\n"));
+}
+
+TEST_CASE("Semantic: untargeted emit remains a valid broadcast in a pair handler", "[semantic][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "system DetectContacts:\n"
+                                   "    pairs:\n"
+                                   "        body:\n"
+                                   "            DynamicBody\n"
+                                   "        wall:\n"
+                                   "            Solid\n"
+                                   "    on fixed_tick:\n"
+                                   "        emit Contact:\n"
+                                   "            other = wall\n"));
+}
+
+TEST_CASE("Semantic: pair handler contract records domain, bindings, bound reads, and projects",
+          "[semantic][pair-relations][handler-contracts]") {
+    auto result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                          "system DetectContacts:\n"
+                          "    pairs:\n"
+                          "        body:\n"
+                          "            DynamicBody\n"
+                          "            Transform\n"
+                          "        wall:\n"
+                          "            Solid\n"
+                          "            Collider\n"
+                          "    on fixed_tick:\n"
+                          "        if body != wall and body.Transform.x > 0.0 and wall.Collider.mask > 0:\n"
+                          "            emit Contact to body:\n"
+                          "                other = wall\n"
+                          "            project GroundContact to body\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    CHECK(contract.domain_kind == HandlerDomainKind::Pair);
+    CHECK_FALSE(contract.is_selectionless());
+    REQUIRE(contract.pair_bindings.size() == 2);
+    CHECK(contract.pair_bindings[0].name == "body");
+    CHECK(contract.pair_bindings[1].name == "wall");
+
+    const auto transform_id = make_symbol_id(SymbolKind::Trait, "test", "Transform");
+    const auto collider_id  = make_symbol_id(SymbolKind::Trait, "test", "Collider");
+    const auto ground_id    = make_symbol_id(SymbolKind::Trait, "test", "GroundContact");
+
+    CHECK(contract.reads.contains(transform_id));
+    CHECK(contract.reads.contains(collider_id));
+    CHECK_FALSE(contract.writes.contains(transform_id));
+    CHECK_FALSE(contract.writes.contains(collider_id));
+    CHECK(contract.projects.contains(ground_id));
+    CHECK_FALSE(contract.writes.contains(ground_id));
+
+    const BoundTraitAccess body_transform_read{.binding_index = 0, .trait = transform_id};
+    const BoundTraitAccess wall_collider_read{.binding_index = 1, .trait = collider_id};
+    CHECK(std::ranges::find(contract.bound_reads, body_transform_read) != contract.bound_reads.end());
+    CHECK(std::ranges::find(contract.bound_reads, wall_collider_read) != contract.bound_reads.end());
+}
+
+TEST_CASE("Semantic: unary systems keep their existing domain and are unaffected by pair support",
+          "[semantic][pair-relations][handler-contracts]") {
+    auto result = analyze(STDLIB_EVENTS +
+                          "trait Pos:\n"
+                          "    var x: float\n"
+                          "system Move:\n"
+                          "    filter:\n"
+                          "        Pos\n"
+                          "    on tick:\n"
+                          "        x = x + tick.dt\n");
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    CHECK(contract.domain_kind == HandlerDomainKind::Unary);
+    CHECK_FALSE(contract.is_selectionless());
+    CHECK(contract.pair_bindings.empty());
+    CHECK(contract.bound_reads.empty());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

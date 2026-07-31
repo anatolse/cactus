@@ -358,7 +358,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
         }
         const auto trigger_type = handler_trigger_cpp_type(program, node.identity.trigger);
         out << "void " << external_handler_callback_name(node.identity) << "(const " << trigger_type << "& trigger";
-        if (!node.contract.is_selectionless) {
+        if (!node.contract.is_selectionless()) {
             out << ", entt::entity entity";
         }
         const auto reads  = sorted_symbols(node.contract.reads);
@@ -398,7 +398,7 @@ void emit_external_handler_call(std::ostringstream& out,
 
     const auto emit_callback = [&](std::string_view callback_indent) {
         out << callback_indent << "::" << external_handler_callback_name(node.identity) << "(" << trigger;
-        if (!node.contract.is_selectionless) {
+        if (!node.contract.is_selectionless()) {
             out << ", entity";
         }
         for (const auto& trait : reads) {
@@ -413,7 +413,7 @@ void emit_external_handler_call(std::ostringstream& out,
         out << ", " << external_handler_capability_name(node.identity) << "{registry});\n";
     };
 
-    if (node.contract.is_selectionless) {
+    if (node.contract.is_selectionless()) {
         emit_callback(indent);
         return;
     }
@@ -700,7 +700,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         const auto found = std::ranges::find_if(program.execution_graph.handlers,
                                                 [&](const auto& handler) { return handler.identity == identity; });
         out << "    {\"" << identity.canonical_id() << "\", "
-            << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless ? "true" : "false")
+            << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless() ? "true" : "false")
             << "},\n";
     }
     out << "}};\n\n";

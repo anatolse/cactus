@@ -854,13 +854,13 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
 
     const auto* input = find_handler(handler("InputSource", HandlerTriggerKind::Phase, "input"));
     REQUIRE(input != nullptr);
-    CHECK(input->contract.is_selectionless);
+    CHECK(input->contract.is_selectionless());
     CHECK(input->contract.emits.size() == 1);
     CHECK(input->contract.effects == std::unordered_set<std::string>{"input"});
 
     const auto* movement = find_handler(handler("NativeMovement", HandlerTriggerKind::Phase, "fixed_tick"));
     REQUIRE(movement != nullptr);
-    CHECK_FALSE(movement->contract.is_selectionless);
+    CHECK_FALSE(movement->contract.is_selectionless());
     CHECK(movement->contract.reads ==
           std::unordered_set<SymbolId>{make_symbol_id(SymbolKind::Trait, "runtime_phase_contracts", "Position"),
                                        make_symbol_id(SymbolKind::Trait, "runtime_phase_contracts", "Velocity")});
@@ -876,7 +876,7 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
 
     const auto* audio = find_handler(handler("AudioOutput", HandlerTriggerKind::Event, "SoundRequested"));
     REQUIRE(audio != nullptr);
-    CHECK(audio->contract.is_selectionless);
+    CHECK(audio->contract.is_selectionless());
     CHECK(audio->contract.effects == std::unordered_set<std::string>{"audio"});
 
     const auto code = CppEnttCodegen::generate(*decorated);

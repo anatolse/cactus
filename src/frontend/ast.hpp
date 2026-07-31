@@ -253,6 +253,13 @@ struct ExprNode {
 struct VarAssign {
     std::string name;
     std::string op;  // "=", "+=", "-="
+    // Extra dotted segments after `name` (e.g. ["Transform", "x"] for
+    // `body.Transform.x = ...`). Empty for ordinary bare-identifier
+    // assignment, which remains the only form unary/selectionless handlers
+    // give meaning to; pair handlers use it to name a binding-relative trait
+    // path so semantic analysis can reject the write with a precise
+    // read-only diagnostic instead of an unrelated parse error.
+    std::vector<std::string> path;
     std::unique_ptr<ExprNode> value;
     SourceLocation location;
 };

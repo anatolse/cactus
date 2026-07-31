@@ -1863,7 +1863,7 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
 
     for (const auto& handler : sys.handlers) {
         const auto* contract       = graph_handler_contract(sys, handler, program);
-        const bool selectionless   = contract != nullptr && contract->is_selectionless;
+        const bool selectionless   = contract != nullptr && contract->is_selectionless();
         const auto trigger_binding = handler_trigger_binding(handler);
         out << "void " << system_function_name(program.module_name, sys.name, handler_trigger_suffix(handler))
             << "(entt::registry& registry";

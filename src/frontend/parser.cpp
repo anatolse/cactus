@@ -2113,6 +2113,34 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(assign)}, loc);
     }
 
+    // Dotted assignment target: IDENTIFIER (DOT IDENTIFIER)+ (= | += | -=) expression
+    // (e.g. `body.Transform.x += 1.0` in a pair handler). Backtracks to
+    // expression-statement parsing below when the dotted chain isn't
+    // followed by an assignment operator.
+    if (check(TokenType::IDENTIFIER)) {
+        auto saved_pos = current_;
+        auto name      = advance().value;
+        std::vector<std::string> path;
+        while (check(TokenType::DOT) && peek_next().type == TokenType::IDENTIFIER) {
+            advance();  // '.'
+            path.push_back(advance().value);
+        }
+        if (!path.empty() &&
+            (check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN))) {
+            auto op    = advance().value;
+            auto value = parse_expression();
+            expect_newline();
+            VarAssign assign;
+            assign.name     = name;
+            assign.path     = std::move(path);
+            assign.op       = op;
+            assign.value    = std::move(value);
+            assign.location = loc;
+            return std::make_unique<StmtNode>(StmtNode::Variant{std::move(assign)}, loc);
+        }
+        current_ = saved_pos;
+    }
+
     // Expression statement
     auto expr = parse_expression();
     expect_newline();

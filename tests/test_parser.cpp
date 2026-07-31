@@ -1610,6 +1610,63 @@ TEST_CASE("Parser: pairs clause combined with order by is rejected", "[parser][p
     REQUIRE(errors.has_errors());
 }
 
+TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pair-relations]") {
+    auto prog = parse(
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on fixed_tick:\n"
+        "        body.Transform.x += 1.0\n");
+
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers[0].body.size() == 1);
+    const auto* assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(assign != nullptr);
+    CHECK(assign->name == "body");
+    REQUIRE(assign->path.size() == 2);
+    CHECK(assign->path[0] == "Transform");
+    CHECK(assign->path[1] == "x");
+    CHECK(assign->op == "+=");
+}
+
+TEST_CASE("Parser: bare assignment target still has an empty path", "[parser][pair-relations]") {
+    auto prog = parse(
+        "system Simple:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        x = 1\n");
+    auto& sys           = std::get<SystemNode>(prog.declarations[0]);
+    const auto* assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(assign != nullptr);
+    CHECK(assign->name == "x");
+    CHECK(assign->path.empty());
+}
+
+TEST_CASE("Parser: dotted member chain without assignment operator parses as expression statement",
+          "[parser][pair-relations]") {
+    auto prog = parse(
+        "system DetectContacts:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            DynamicBody\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on fixed_tick:\n"
+        "        body.DynamicBody.active\n");
+
+    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers[0].body.size() == 1);
+    const auto* expr_stmt = std::get_if<ExprStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(expr_stmt != nullptr);
+    const auto* outer = std::get_if<MemberExpr>(&expr_stmt->expr->expr);
+    REQUIRE(outer != nullptr);
+    CHECK(outer->member == "active");
+}
+
 TEST_CASE("Parser: pairs clause on extern system is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
         "extern system Bad:\n"

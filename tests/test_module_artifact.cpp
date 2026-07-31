@@ -648,7 +648,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
 
     HandlerContract contract;
     contract.selection        = {position};
-    contract.is_selectionless = false;
+    contract.domain_kind      = HandlerDomainKind::Unary;
     contract.reads            = {position};
     contract.writes           = {position};
     contract.emits            = {spawned};

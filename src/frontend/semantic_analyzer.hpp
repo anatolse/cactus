@@ -162,12 +162,43 @@ struct DeclarationOrder {
     friend bool operator==(const DeclarationOrder&, const DeclarationOrder&) = default;
 };
 
+// ── Pair relations (dsl-pair-relations) ─────────────────────────────────────
+
+enum class HandlerDomainKind : std::uint8_t { Selectionless, Unary, Pair };
+
+// One named, ordered binding within a pair handler's relation, carrying the
+// canonical identities of the traits it requires.
+struct RelationBinding {
+    std::string name;
+    std::vector<SymbolId> required_traits;
+
+    friend bool operator==(const RelationBinding&, const RelationBinding&) = default;
+};
+
+// A single trait read qualified by which pair binding it was read through
+// (e.g. `body.Collider` vs `wall.Collider` both read canonical Collider, but
+// remain distinguishable for future relation-aware scheduling).
+struct BoundTraitAccess {
+    std::size_t binding_index = 0;
+    SymbolId trait;
+
+    friend bool operator==(const BoundTraitAccess&, const BoundTraitAccess&) = default;
+};
+
 struct HandlerContract {
-    std::vector<SymbolId> selection;
-    std::vector<SymbolId> exclusion;
-    bool is_selectionless = true;
-    std::unordered_set<SymbolId> reads;
-    std::unordered_set<SymbolId> writes;
+    HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
+    std::vector<SymbolId> selection;            // Unary domain: positive traits
+    std::vector<SymbolId> exclusion;            // Unary domain: excluded traits
+    std::vector<RelationBinding> pair_bindings;  // Pair domain: exactly two, source order
+
+    [[nodiscard]] bool is_selectionless() const {
+        return domain_kind == HandlerDomainKind::Selectionless;
+    }
+
+    std::unordered_set<SymbolId> reads;         // conservative canonical read union
+    std::vector<BoundTraitAccess> bound_reads;   // precise pair binding + trait reads
+    std::unordered_set<SymbolId> writes;        // durable trait writes
+    std::unordered_set<SymbolId> projects;      // projected (transient) trait outputs
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
     std::unordered_set<std::string> effects;
@@ -366,6 +397,20 @@ struct ModuleImports {
              std::unordered_set<std::string> non_pub_templates = {});
 };
 
+// Resolved binding-relative trait namespace for one pair binding, built once
+// per system (from its `pairs:` clause) and reused across that system's
+// handlers while typing and validating handler bodies. Keys are the dotted
+// access spelling used at that binding: a bare local trait name ("Transform"),
+// an imported module-qualified name ("tf.WorldTransform"), or a binding-local
+// alias ("transform") — mirroring FilterEntry's dotted-name/alias shape.
+struct PairBindingScope {
+    std::size_t index = 0;
+    std::unordered_map<std::string, SymbolId> trait_by_access_key;
+};
+
+// binding identifier (e.g. "body") -> its resolved trait namespace.
+using PairScope = std::unordered_map<std::string, PairBindingScope>;
+
 // ── Unified name resolution (unified-name-resolution change) ────────────────
 
 /// Result of resolving a dotted reference through the unified resolver: the
@@ -413,6 +458,8 @@ private:
     void check_persist_sync(ProgramNode& program);
     void validate_phase_declarations(ProgramNode& program);
     void validate_system_filters(ProgramNode& program);
+    void validate_pair_bindings(SystemNode& system);
+    [[nodiscard]] PairScope build_pair_scope(const PairClause& pairs) const;
     void validate_external_handler_contracts(ProgramNode& program);
     void validateOrderByClause(const SystemNode& system);
     void validateOrderByClause(const ExternSystemNode& system);
@@ -421,13 +468,15 @@ private:
                               const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                               const std::unordered_map<std::string, TypeInfo>& local_bindings,
                               const ResolvedStruct* handler_event,
-                              const std::string& system_name);
+                              const std::string& system_name,
+                              const PairScope* pair_scope = nullptr);
     void validate_trait_match_stmt(const TraitMatchStmt& stmt,
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                    const ResolvedStruct* handler_event,
                                    const std::string& system_name,
-                                   bool in_system_handler);
+                                   bool in_system_handler,
+                                   const PairScope* pair_scope = nullptr);
 
     // Phase 3: Dynamic ECS validations (dynamic-ecs-language change)
     void validate_template_unit_declarations(ProgramNode& program);
@@ -477,7 +526,24 @@ private:
     TypeInfo infer_expr_type(const ExprNode& expr,
                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                              const std::unordered_map<std::string, TypeInfo>& local_bindings,
-                             const ResolvedStruct* handler_event) const;
+                             const ResolvedStruct* handler_event,
+                             const PairScope* pair_scope = nullptr) const;
+
+    // Resolved binding + canonical trait identity for a pair member-access
+    // chain (e.g. `body.tf.WorldTransform.position`), plus how many leading
+    // dotted segments (after the binding) named the trait itself — the
+    // remainder is an ordinary field/aggregate-member path on that trait.
+    struct PairMemberResolution {
+        std::size_t binding_index     = 0;
+        SymbolId trait_id;
+        std::size_t consumed_segments = 0;
+    };
+    [[nodiscard]] std::optional<PairMemberResolution> resolve_pair_member_chain(
+        const std::string& binding_name,
+        const std::vector<std::string>& segments,
+        const PairScope& pair_scope) const;
+    InferredHandlerContract infer_pair_handler_contract(const SystemNode& system,
+                                                         const EventHandlerNode& handler) const;
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);

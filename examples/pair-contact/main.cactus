@@ -1,0 +1,76 @@
+module main
+
+use std.transform.flat as tf
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+trait DynamicBody:
+    var vx: float
+    var vy: float
+
+trait Solid:
+    var active: bool = true
+
+trait Collider:
+    var mask: int
+    var layer: int
+
+trait Health:
+    var health: int
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+event Contact:
+    other: entity_id
+
+# ── Systems ───────────────────────────────────────────────────────────────────
+
+# DetectContacts: pair producer. Iterates the directed product of every
+# DynamicBody/Collider entity against every Solid/Collider/WorldTransform
+# entity, rejects self-pairs and non-overlapping mask/layer combinations, and
+# emits a targeted Contact to the body binding for each surviving tuple.
+system DetectContacts:
+    pairs:
+        body:
+            DynamicBody
+            Collider
+        wall:
+            Solid
+            Collider
+            tf.WorldTransform as transform
+
+    on fixed_tick:
+        if body != wall and body.Collider.mask == wall.Collider.layer:
+            emit Contact to body:
+                other = wall
+
+# ResolveContact: ordinary unary event consumer. Because DetectContacts emits
+# a targeted occurrence, this handler runs at most once per Contact — for the
+# body entity named by the pair producer — rather than broadcasting to every
+# entity with Health.
+system ResolveContact:
+    filter:
+        Health as hp
+
+    on Contact:
+        hp.health = hp.health - 1
+
+# ── Entities ──────────────────────────────────────────────────────────────────
+
+entity Body1:
+    DynamicBody:
+        vx = 1.0
+        vy = 0.0
+    Collider:
+        mask = 1
+        layer = 0
+    Health:
+        health = 10
+
+entity Wall1:
+    Solid
+    Collider:
+        mask = 0
+        layer = 1
+    tf.WorldTransform:
+        position = vec2(5.0, 0.0)

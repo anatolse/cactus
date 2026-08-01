@@ -229,6 +229,7 @@ function(cactus_add_example TARGET_NAME)
 endfunction()
 
 set(BLUE_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/blue-square.generated.cpp")
+set(PAIR_CONTACT_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/pair-contact.generated.cpp")
 set(STDLIB_EXTERN_ENTT_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/stdlib-extern-entt.generated.cpp")
 set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.generated.cpp")
 set(MODEL_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-renderer.generated.cpp")
@@ -281,6 +282,12 @@ cactus_add_example(example_blue_square_generated
     SOURCE "examples/blue-square/square.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${BLUE_SQUARE_GENERATED_CPP}"
+)
+
+cactus_add_example(example_pair_contact_generated
+    SOURCE "examples/pair-contact/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${PAIR_CONTACT_GENERATED_CPP}"
 )
 
 cactus_add_example(example_stdlib_extern_entt_generated

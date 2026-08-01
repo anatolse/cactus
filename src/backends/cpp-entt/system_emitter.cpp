@@ -2106,6 +2106,10 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             }
             const auto& left  = pair_binding_codegens[0];
             const auto& right = pair_binding_codegens[1];
+            std::string pair_body;
+            for (const auto& stmt : handler.body) {
+                pair_body += rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
+            }
             // Recipient-targeted delivery: only tuples incident to the
             // recipient run (targeted-event-delivery, "Pair target routes to
             // incident tuples"). A tuple where both bindings equal the
@@ -2116,9 +2120,7 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
                 << left.binding_name << "_snapshot.end()) {\n";
             out << "            auto " << left.binding_name << " = __target;\n";
             out << "            for (auto " << right.binding_name << " : __" << right.binding_name << "_snapshot) {\n";
-            for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
-            }
+            out << pair_body;
             out << "            }\n";
             out << "        }\n";
             out << "        if (std::ranges::find(__" << right.binding_name << "_snapshot, __target) != __"
@@ -2126,17 +2128,13 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             out << "            for (auto " << left.binding_name << " : __" << left.binding_name << "_snapshot) {\n";
             out << "                if (" << left.binding_name << " == __target) { continue; }\n";
             out << "                auto " << right.binding_name << " = __target;\n";
-            for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
-            }
+            out << pair_body;
             out << "            }\n";
             out << "        }\n";
             out << "    } else {\n";
             out << "        for (auto " << left.binding_name << " : __" << left.binding_name << "_snapshot) {\n";
             out << "            for (auto " << right.binding_name << " : __" << right.binding_name << "_snapshot) {\n";
-            for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
-            }
+            out << pair_body;
             out << "            }\n";
             out << "        }\n";
             out << "    }\n";
@@ -2147,6 +2145,10 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             }
         } else if (!filter_traits.empty()) {
             emit_sort_call(out, sys);
+            std::string filtered_body;
+            for (const auto& stmt : handler.body) {
+                filtered_body += rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
+            }
             // Recipient-targeted delivery: run at most once, for the
             // recipient, and only if it satisfies this handler's selection
             // (targeted-event-delivery, "Unary target ... only if it
@@ -2169,18 +2171,14 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             out << "            (void)entity;\n";
             emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
             emit_filter_alias_bindings(out, sys.filter, program, 3);
-            for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
-            }
+            out << filtered_body;
             out << "        }\n";
             out << "    } else {\n";
             emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2);
             emit_view_each_header(out, filter_bindings_list, 2, program);
             out << "        (void)entity;\n";
             emit_filter_alias_bindings(out, sys.filter, program, 3);
-            for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
-            }
+            out << filtered_body;
             out << "        });\n";
             out << "    }\n";
         } else {

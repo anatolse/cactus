@@ -251,15 +251,10 @@ bool ProgramLinker::rebuild_execution_graph(
         return false;
     };
 
-    // Conflict detection treats a projected trait as production of that trait
-    // for ordering purposes, same as a durable write, without collapsing the
-    // distinct `writes`/`projects` contract capabilities themselves (handler-contracts).
     std::vector<std::unordered_set<SymbolId>> produced_by_handler;
     produced_by_handler.reserve(graph.handlers.size());
     for (const auto& handler : graph.handlers) {
-        std::unordered_set<SymbolId> produced = handler.contract.writes;
-        produced.insert(handler.contract.projects.begin(), handler.contract.projects.end());
-        produced_by_handler.push_back(std::move(produced));
+        produced_by_handler.push_back(handler.contract.produced_traits());
     }
 
     for (std::size_t left_index = 0; left_index < graph.handlers.size(); ++left_index) {

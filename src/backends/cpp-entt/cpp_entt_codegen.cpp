@@ -25,7 +25,8 @@ namespace {
 std::string snake_case(const std::string& value);
 std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);
 const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program);
-const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name);
+const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name,
+                                          bool require_external = false);
 bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& event_symbol);
 const PhasePlan* find_render_phase(const DecoratedProgram& program);
 
@@ -2179,10 +2180,15 @@ void cactus_dispatch_stdlib_volume_collisions(entt::registry& registry, entt::di
     return code;
 }
 
-const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program) {
+// Resolves a std.core-owned event by local name, preferring the std.core
+// declaration itself and falling back to the lowest-canonical-id same-named
+// event from another linked module. `require_external` additionally
+// restricts matches to externally-implemented events (used for `frame`).
+const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name,
+                                          bool require_external) {
     const ResolvedEvent* fallback = nullptr;
     for (const auto& [_, event] : program.events) {
-        if (!event.is_external || event.name != "frame" || !event.symbol_id.has_value()) {
+        if (event.name != name || !event.symbol_id.has_value() || (require_external && !event.is_external)) {
             continue;
         }
         if (event.symbol_id->module.name == "std.core") {
@@ -2195,24 +2201,8 @@ const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program) 
     return fallback;
 }
 
-// Resolves a std.core lifecycle event (load/unload/spawn/destroy) by local
-// name, preferring the std.core declaration itself and falling back to a
-// same-named event from another linked module (mirrors
-// find_external_frame_event's resolution order for `frame`).
-const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name) {
-    const ResolvedEvent* fallback = nullptr;
-    for (const auto& [_, event] : program.events) {
-        if (event.name != name || !event.symbol_id.has_value()) {
-            continue;
-        }
-        if (event.symbol_id->module.name == "std.core") {
-            return &event;
-        }
-        if (fallback == nullptr || event.canonical_id < fallback->canonical_id) {
-            fallback = &event;
-        }
-    }
-    return fallback;
+const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program) {
+    return find_std_core_event(program, "frame", /*require_external=*/true);
 }
 
 // Whether any handler in the execution graph's stable topological order is

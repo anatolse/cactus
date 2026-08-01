@@ -3314,6 +3314,7 @@ void SemanticAnalyzer::build_dependency_graph(
             dep.system_id   = sys->resolved_system_id;
 
             std::vector<ResolvedHandlerTrigger> declared_triggers;
+            const auto pair_scope = sys->pairs.has_value() ? build_pair_scope(*sys->pairs) : PairScope{};
             for (std::size_t handler_index = 0; handler_index < sys->handlers.size(); ++handler_index) {
                 auto& handler = sys->handlers[handler_index];
                 collect_system_deps(handler.body, dep);
@@ -3326,8 +3327,9 @@ void SemanticAnalyzer::build_dependency_graph(
                     }
                     declared_triggers.push_back(*handler.resolved_trigger);
 
-                    auto inferred = sys->pairs.has_value() ? infer_pair_handler_contract(*sys, handler)
-                                                            : infer_regular_handler_contract(*sys, handler);
+                    auto inferred = sys->pairs.has_value()
+                                         ? infer_pair_handler_contract(*sys, handler, pair_scope)
+                                         : infer_regular_handler_contract(*sys, handler);
                     result_.handler_contracts.push_back(inferred);
 
                     HandlerNode node;
@@ -3718,13 +3720,13 @@ InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
 
 InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(
     const SystemNode& system,
-    const EventHandlerNode& handler) const {  // NOLINT(readability-function-cognitive-complexity)
+    const EventHandlerNode& handler,
+    const PairScope& pair_scope) const {  // NOLINT(readability-function-cognitive-complexity)
     InferredHandlerContract contract;
     contract.system      = *system.resolved_system_id;
     contract.trigger     = *handler.resolved_trigger;
     contract.domain_kind = HandlerDomainKind::Pair;
 
-    const auto pair_scope = build_pair_scope(*system.pairs);
     for (const auto& binding : system.pairs->bindings) {
         RelationBinding relation;
         relation.name = binding.name;
@@ -3777,18 +3779,16 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(
     // or not it resolved — an invalid access is already diagnosed by
     // validate_event_stmts, so there is nothing further to record here).
     auto try_record_pair_read = [&](const ExprNode& expr) -> bool {
-        std::vector<std::string> segments;
-        const ExprNode* cursor = &expr;
-        while (const auto* member = std::get_if<MemberExpr>(&cursor->expr)) {
-            segments.push_back(member->member);
-            cursor = member->object.get();
-        }
-        std::ranges::reverse(segments);
-        const auto* root = std::get_if<IdentExpr>(&cursor->expr);
-        if (root == nullptr || segments.empty() || !pair_scope.contains(root->name)) {
+        auto chain = member_chain_segments(std::get<MemberExpr>(expr.expr));
+        if (!chain.has_value()) {
             return false;
         }
-        if (auto resolved = resolve_pair_member_chain(root->name, segments, pair_scope); resolved.has_value()) {
+        const std::string& root_name = chain->front();
+        std::vector<std::string> segments(chain->begin() + 1, chain->end());
+        if (!pair_scope.contains(root_name)) {
+            return false;
+        }
+        if (auto resolved = resolve_pair_member_chain(root_name, segments, pair_scope); resolved.has_value()) {
             add_bound_read(resolved->binding_index, resolved->trait_id);
         }
         return true;
@@ -5199,19 +5199,14 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             // binding into ordered dotted segments, e.g.
             // `body.tf.WorldTransform.position` -> root "body",
             // segments ["tf", "WorldTransform", "position"].
-            std::vector<std::string> segments;
-            const ExprNode* cursor = &expr;
-            while (const auto* chain_member = std::get_if<MemberExpr>(&cursor->expr)) {
-                segments.push_back(chain_member->member);
-                cursor = chain_member->object.get();
-            }
-            std::ranges::reverse(segments);
-            if (const auto* root = std::get_if<IdentExpr>(&cursor->expr); root != nullptr) {
-                if (auto scope_it = pair_scope->find(root->name); scope_it != pair_scope->end()) {
-                    auto resolved = resolve_pair_member_chain(root->name, segments, *pair_scope);
+            if (auto chain = member_chain_segments(*member); chain.has_value()) {
+                const std::string& root_name = chain->front();
+                std::vector<std::string> segments(chain->begin() + 1, chain->end());
+                if (auto scope_it = pair_scope->find(root_name); scope_it != pair_scope->end()) {
+                    auto resolved = resolve_pair_member_chain(root_name, segments, *pair_scope);
                     if (!resolved.has_value()) {
                         errors_.error(expr.location,
-                                      "'" + segments.front() + "' is unavailable on pair binding '" + root->name +
+                                      "'" + segments.front() + "' is unavailable on pair binding '" + root_name +
                                           "'");
                         return make_unknown_type();
                     }
@@ -6922,15 +6917,10 @@ void SemanticAnalyzer::validate_after_clauses(
         }
     };
 
-    // Conflict detection treats a projected trait as production of that trait
-    // for ordering purposes, same as a durable write, without collapsing the
-    // distinct `writes`/`projects` contract capabilities themselves (handler-contracts).
     std::vector<std::unordered_set<SymbolId>> produced_by_handler;
     produced_by_handler.reserve(result_.execution_graph.handlers.size());
     for (const auto& handler : result_.execution_graph.handlers) {
-        std::unordered_set<SymbolId> produced = handler.contract.writes;
-        produced.insert(handler.contract.projects.begin(), handler.contract.projects.end());
-        produced_by_handler.push_back(std::move(produced));
+        produced_by_handler.push_back(handler.contract.produced_traits());
     }
 
     for (std::size_t left_index = 0; left_index < result_.execution_graph.handlers.size(); ++left_index) {

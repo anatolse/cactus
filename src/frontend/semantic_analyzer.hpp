@@ -202,6 +202,15 @@ struct HandlerContract {
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
     std::unordered_set<std::string> effects;
+
+    // Conflict detection treats a projected trait as production of that trait
+    // for ordering purposes, same as a durable write, without collapsing the
+    // distinct `writes`/`projects` contract capabilities themselves.
+    [[nodiscard]] std::unordered_set<SymbolId> produced_traits() const {
+        std::unordered_set<SymbolId> produced = writes;
+        produced.insert(projects.begin(), projects.end());
+        return produced;
+    }
 };
 
 /// Transitional inference result retained for focused semantic tests and old
@@ -543,7 +552,8 @@ private:
         const std::vector<std::string>& segments,
         const PairScope& pair_scope) const;
     InferredHandlerContract infer_pair_handler_contract(const SystemNode& system,
-                                                         const EventHandlerNode& handler) const;
+                                                         const EventHandlerNode& handler,
+                                                         const PairScope& pair_scope) const;
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);

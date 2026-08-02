@@ -618,21 +618,22 @@ std::string primary_sort_trait(const SortKey& key, const SystemNode& sys) {
     return key.alias;
 }
 
-void emit_sort_call(std::ostringstream& out, const SystemNode& sys) {
+void emit_sort_call(std::ostringstream& out, const SystemNode& sys, int indent = 1) {
     if (sys.order_by.empty()) {
         return;
     }
 
-    out << "    registry.sort<" << primary_sort_trait(sys.order_by.front(), sys)
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    out << ind << "registry.sort<" << primary_sort_trait(sys.order_by.front(), sys)
         << ">([&](entt::entity a, entt::entity b) {\n";
     for (const auto& key : sys.order_by) {
         auto left  = sort_key_expr(key, "a", sys);
         auto right = sort_key_expr(key, "b", sys);
-        out << "        if (" << left << " != " << right << ") return " << left << (key.descending ? " > " : " < ")
+        out << ind << "    if (" << left << " != " << right << ") return " << left << (key.descending ? " > " : " < ")
             << right << ";\n";
     }
-    out << "        return false;\n";
-    out << "    });\n";
+    out << ind << "    return false;\n";
+    out << ind << "});\n";
 }
 
 std::string foreach_temp_name(const ForeachStmt& stmt) {
@@ -2122,7 +2123,6 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
                 out << rewrite_stmt(*stmt, 1, filter_traits, program, {}, false, filter_cpp_overrides);
             }
         } else if (!filter_traits.empty()) {
-            emit_sort_call(out, sys);
             std::string filtered_body;
             for (const auto& stmt : handler.body) {
                 filtered_body += rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
@@ -2152,6 +2152,7 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             out << filtered_body;
             out << "        }\n";
             out << "    } else {\n";
+            emit_sort_call(out, sys, 2);
             emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2);
             emit_view_each_header(out, filter_bindings_list, 2, program);
             out << "        (void)entity;\n";

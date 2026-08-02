@@ -2098,27 +2098,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(project)}, loc);
     }
 
-    // Assignment or expression statement
-    // Check for: IDENTIFIER (= | += | -=) expression
-    if (check(TokenType::IDENTIFIER) &&
-        (peek_next().type == TokenType::ASSIGN || peek_next().type == TokenType::PLUS_ASSIGN ||
-         peek_next().type == TokenType::MINUS_ASSIGN)) {
-        auto name  = advance().value;
-        auto op    = advance().value;
-        auto value = parse_expression();
-        expect_newline();
-        VarAssign assign;
-        assign.name     = name;
-        assign.op       = op;
-        assign.value    = std::move(value);
-        assign.location = loc;
-        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(assign)}, loc);
-    }
-
-    // Dotted assignment target: IDENTIFIER (DOT IDENTIFIER)+ (= | += | -=) expression
-    // (e.g. `body.Transform.x += 1.0` in a pair handler). Backtracks to
-    // expression-statement parsing below when the dotted chain isn't
-    // followed by an assignment operator.
+    // Assignment target: IDENTIFIER (DOT IDENTIFIER)* (= | += | -=) expression
+    // (a dotted chain like `body.Transform.x += 1.0` appears in pair
+    // handlers). Backtracks to expression-statement parsing below when the
+    // identifier (with or without a dotted chain) isn't followed by an
+    // assignment operator.
     if (check(TokenType::IDENTIFIER)) {
         auto saved_pos = current_;
         auto name      = advance().value;
@@ -2127,8 +2111,7 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
             advance();  // '.'
             path.push_back(advance().value);
         }
-        if (!path.empty() &&
-            (check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN))) {
+        if (check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN)) {
             auto op    = advance().value;
             auto value = parse_expression();
             expect_newline();

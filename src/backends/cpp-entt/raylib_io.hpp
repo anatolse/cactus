@@ -23,319 +23,87 @@
 
 namespace cactus::runtime::raylib {
 
+// Every wrapper below has the same shape: call into cactus_raylib_fake when
+// faked, otherwise pass straight through to real raylib. These macros emit
+// that shape from just the name, parameter list, and forwarded argument
+// list, instead of repeating the #ifdef/#else/#endif per function; they're
+// #undef'd at the end of this header since they're an implementation detail,
+// not part of this header's public surface.
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+#ifdef CACTUS_RAYLIB_FAKE
+#define CACTUS_RL_IMPL(Name, Args) cactus_raylib_fake::Name Args
+#else
+#define CACTUS_RL_IMPL(Name, Args) ::Name Args
+#endif
+
+#define CACTUS_RL_WRAP(Ret, Name, Params, Args) \
+    [[nodiscard]] inline Ret Name Params noexcept { return CACTUS_RL_IMPL(Name, Args); }
+
+#define CACTUS_RL_WRAP_VOID(Name, Params, Args) \
+    inline void Name Params noexcept { CACTUS_RL_IMPL(Name, Args); }
+// NOLINTEND(cppcoreguidelines-macro-usage)
+
 // ── Input (scripted when faked; never recorded) ────────────────────────────
 
-[[nodiscard]] inline bool IsKeyDown(int key) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::IsKeyDown(key);
-#else
-    return ::IsKeyDown(key);
-#endif
-}
-
-[[nodiscard]] inline bool IsKeyPressed(int key) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::IsKeyPressed(key);
-#else
-    return ::IsKeyPressed(key);
-#endif
-}
-
-[[nodiscard]] inline bool IsKeyReleased(int key) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::IsKeyReleased(key);
-#else
-    return ::IsKeyReleased(key);
-#endif
-}
-
-[[nodiscard]] inline bool IsMouseButtonDown(int button) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::IsMouseButtonDown(button);
-#else
-    return ::IsMouseButtonDown(button);
-#endif
-}
-
-[[nodiscard]] inline bool IsMouseButtonPressed(int button) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::IsMouseButtonPressed(button);
-#else
-    return ::IsMouseButtonPressed(button);
-#endif
-}
-
-[[nodiscard]] inline bool IsMouseButtonReleased(int button) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::IsMouseButtonReleased(button);
-#else
-    return ::IsMouseButtonReleased(button);
-#endif
-}
-
-[[nodiscard]] inline Vector2 GetMousePosition() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::GetMousePosition();
-#else
-    return ::GetMousePosition();
-#endif
-}
-
-[[nodiscard]] inline Vector2 GetMouseDelta() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::GetMouseDelta();
-#else
-    return ::GetMouseDelta();
-#endif
-}
-
-[[nodiscard]] inline float GetMouseWheelMove() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::GetMouseWheelMove();
-#else
-    return ::GetMouseWheelMove();
-#endif
-}
+CACTUS_RL_WRAP(bool, IsKeyDown, (int key), (key))
+CACTUS_RL_WRAP(bool, IsKeyPressed, (int key), (key))
+CACTUS_RL_WRAP(bool, IsKeyReleased, (int key), (key))
+CACTUS_RL_WRAP(bool, IsMouseButtonDown, (int button), (button))
+CACTUS_RL_WRAP(bool, IsMouseButtonPressed, (int button), (button))
+CACTUS_RL_WRAP(bool, IsMouseButtonReleased, (int button), (button))
+CACTUS_RL_WRAP(Vector2, GetMousePosition, (), ())
+CACTUS_RL_WRAP(Vector2, GetMouseDelta, (), ())
+CACTUS_RL_WRAP(float, GetMouseWheelMove, (), ())
 
 // ── Window / environment (scripted when faked; never recorded) ────────────
 
-[[nodiscard]] inline bool IsWindowReady() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::IsWindowReady();
-#else
-    return ::IsWindowReady();
-#endif
-}
-
-[[nodiscard]] inline int GetScreenWidth() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::GetScreenWidth();
-#else
-    return ::GetScreenWidth();
-#endif
-}
-
-[[nodiscard]] inline int GetScreenHeight() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    return cactus_raylib_fake::GetScreenHeight();
-#else
-    return ::GetScreenHeight();
-#endif
-}
+CACTUS_RL_WRAP(bool, IsWindowReady, (), ())
+CACTUS_RL_WRAP(int, GetScreenWidth, (), ())
+CACTUS_RL_WRAP(int, GetScreenHeight, (), ())
 
 // ── Drawing (recorded into the call log when faked) ────────────────────────
 
-inline void ClearBackground(Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::ClearBackground(color);
-#else
-    ::ClearBackground(color);
-#endif
-}
+CACTUS_RL_WRAP_VOID(ClearBackground, (Color color), (color))
+CACTUS_RL_WRAP_VOID(BeginMode2D, (Camera2D camera), (camera))
+CACTUS_RL_WRAP_VOID(EndMode2D, (), ())
+CACTUS_RL_WRAP_VOID(BeginMode3D, (Camera3D camera), (camera))
+CACTUS_RL_WRAP_VOID(EndMode3D, (), ())
+CACTUS_RL_WRAP_VOID(BeginTextureMode, (RenderTexture2D target), (target))
+CACTUS_RL_WRAP_VOID(EndTextureMode, (), ())
+CACTUS_RL_WRAP_VOID(BeginScissorMode, (int x, int y, int width, int height), (x, y, width, height))
+CACTUS_RL_WRAP_VOID(EndScissorMode, (), ())
+CACTUS_RL_WRAP_VOID(DrawMesh, (Mesh mesh, Material material, Matrix transform), (mesh, material, transform))
+CACTUS_RL_WRAP_VOID(DrawText, (const char* text, int posX, int posY, int fontSize, Color color),
+                    (text, posX, posY, fontSize, color))
+CACTUS_RL_WRAP_VOID(DrawTextEx, (Font font, const char* text, Vector2 position, float fontSize, float spacing,
+                                 Color tint),
+                    (font, text, position, fontSize, spacing, tint))
+CACTUS_RL_WRAP_VOID(DrawTextPro, (Font font, const char* text, Vector2 position, Vector2 origin, float rotation,
+                                  float fontSize, float spacing, Color tint),
+                    (font, text, position, origin, rotation, fontSize, spacing, tint))
+CACTUS_RL_WRAP_VOID(DrawTexturePro, (Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin,
+                                     float rotation, Color tint),
+                    (texture, source, dest, origin, rotation, tint))
+CACTUS_RL_WRAP_VOID(DrawRectangleV, (Vector2 position, Vector2 size, Color color), (position, size, color))
+CACTUS_RL_WRAP_VOID(DrawCircleV, (Vector2 center, float radius, Color color), (center, radius, color))
+CACTUS_RL_WRAP_VOID(DrawRectangleLinesEx, (Rectangle rec, float lineThick, Color color), (rec, lineThick, color))
+CACTUS_RL_WRAP_VOID(DrawRectangleRec, (Rectangle rec, Color color), (rec, color))
+CACTUS_RL_WRAP_VOID(DrawLineEx, (Vector2 startPos, Vector2 endPos, float thick, Color color),
+                    (startPos, endPos, thick, color))
+CACTUS_RL_WRAP_VOID(DrawTriangle, (Vector2 v1, Vector2 v2, Vector2 v3, Color color), (v1, v2, v3, color))
+CACTUS_RL_WRAP_VOID(DrawRing, (Vector2 center, float innerRadius, float outerRadius, float startAngle,
+                               float endAngle, int segments, Color color),
+                    (center, innerRadius, outerRadius, startAngle, endAngle, segments, color))
+CACTUS_RL_WRAP_VOID(DrawCubeV, (Vector3 position, Vector3 size, Color color), (position, size, color))
+CACTUS_RL_WRAP_VOID(DrawCubeWiresV, (Vector3 position, Vector3 size, Color color), (position, size, color))
+CACTUS_RL_WRAP_VOID(DrawGrid, (int slices, float spacing), (slices, spacing))
+CACTUS_RL_WRAP_VOID(DrawCircle3D, (Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle,
+                                   Color color),
+                    (center, radius, rotationAxis, rotationAngle, color))
+CACTUS_RL_WRAP_VOID(DrawLine3D, (Vector3 startPos, Vector3 endPos, Color color), (startPos, endPos, color))
 
-inline void BeginMode2D(Camera2D camera) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::BeginMode2D(camera);
-#else
-    ::BeginMode2D(camera);
-#endif
-}
-
-inline void EndMode2D() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::EndMode2D();
-#else
-    ::EndMode2D();
-#endif
-}
-
-inline void BeginMode3D(Camera3D camera) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::BeginMode3D(camera);
-#else
-    ::BeginMode3D(camera);
-#endif
-}
-
-inline void EndMode3D() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::EndMode3D();
-#else
-    ::EndMode3D();
-#endif
-}
-
-inline void BeginTextureMode(RenderTexture2D target) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::BeginTextureMode(target);
-#else
-    ::BeginTextureMode(target);
-#endif
-}
-
-inline void EndTextureMode() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::EndTextureMode();
-#else
-    ::EndTextureMode();
-#endif
-}
-
-inline void BeginScissorMode(int x, int y, int width, int height) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::BeginScissorMode(x, y, width, height);
-#else
-    ::BeginScissorMode(x, y, width, height);
-#endif
-}
-
-inline void EndScissorMode() noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::EndScissorMode();
-#else
-    ::EndScissorMode();
-#endif
-}
-
-inline void DrawMesh(Mesh mesh, Material material, Matrix transform) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawMesh(mesh, material, transform);
-#else
-    ::DrawMesh(mesh, material, transform);
-#endif
-}
-
-inline void DrawText(const char* text, int posX, int posY, int fontSize, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawText(text, posX, posY, fontSize, color);
-#else
-    ::DrawText(text, posX, posY, fontSize, color);
-#endif
-}
-
-inline void DrawTextEx(Font font, const char* text, Vector2 position, float fontSize, float spacing,
-                       Color tint) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawTextEx(font, text, position, fontSize, spacing, tint);
-#else
-    ::DrawTextEx(font, text, position, fontSize, spacing, tint);
-#endif
-}
-
-inline void DrawTextPro(Font font, const char* text, Vector2 position, Vector2 origin, float rotation,
-                        float fontSize, float spacing, Color tint) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawTextPro(font, text, position, origin, rotation, fontSize, spacing, tint);
-#else
-    ::DrawTextPro(font, text, position, origin, rotation, fontSize, spacing, tint);
-#endif
-}
-
-inline void DrawTexturePro(Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin, float rotation,
-                           Color tint) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawTexturePro(texture, source, dest, origin, rotation, tint);
-#else
-    ::DrawTexturePro(texture, source, dest, origin, rotation, tint);
-#endif
-}
-
-inline void DrawRectangleV(Vector2 position, Vector2 size, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawRectangleV(position, size, color);
-#else
-    ::DrawRectangleV(position, size, color);
-#endif
-}
-
-inline void DrawCircleV(Vector2 center, float radius, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawCircleV(center, radius, color);
-#else
-    ::DrawCircleV(center, radius, color);
-#endif
-}
-
-inline void DrawRectangleLinesEx(Rectangle rec, float lineThick, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawRectangleLinesEx(rec, lineThick, color);
-#else
-    ::DrawRectangleLinesEx(rec, lineThick, color);
-#endif
-}
-
-inline void DrawRectangleRec(Rectangle rec, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawRectangleRec(rec, color);
-#else
-    ::DrawRectangleRec(rec, color);
-#endif
-}
-
-inline void DrawLineEx(Vector2 startPos, Vector2 endPos, float thick, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawLineEx(startPos, endPos, thick, color);
-#else
-    ::DrawLineEx(startPos, endPos, thick, color);
-#endif
-}
-
-inline void DrawTriangle(Vector2 v1, Vector2 v2, Vector2 v3, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawTriangle(v1, v2, v3, color);
-#else
-    ::DrawTriangle(v1, v2, v3, color);
-#endif
-}
-
-inline void DrawRing(Vector2 center, float innerRadius, float outerRadius, float startAngle, float endAngle,
-                     int segments, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawRing(center, innerRadius, outerRadius, startAngle, endAngle, segments, color);
-#else
-    ::DrawRing(center, innerRadius, outerRadius, startAngle, endAngle, segments, color);
-#endif
-}
-
-inline void DrawCubeV(Vector3 position, Vector3 size, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawCubeV(position, size, color);
-#else
-    ::DrawCubeV(position, size, color);
-#endif
-}
-
-inline void DrawCubeWiresV(Vector3 position, Vector3 size, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawCubeWiresV(position, size, color);
-#else
-    ::DrawCubeWiresV(position, size, color);
-#endif
-}
-
-inline void DrawGrid(int slices, float spacing) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawGrid(slices, spacing);
-#else
-    ::DrawGrid(slices, spacing);
-#endif
-}
-
-inline void DrawCircle3D(Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle,
-                         Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawCircle3D(center, radius, rotationAxis, rotationAngle, color);
-#else
-    ::DrawCircle3D(center, radius, rotationAxis, rotationAngle, color);
-#endif
-}
-
-inline void DrawLine3D(Vector3 startPos, Vector3 endPos, Color color) noexcept {
-#ifdef CACTUS_RAYLIB_FAKE
-    cactus_raylib_fake::DrawLine3D(startPos, endPos, color);
-#else
-    ::DrawLine3D(startPos, endPos, color);
-#endif
-}
+#undef CACTUS_RL_WRAP_VOID
+#undef CACTUS_RL_WRAP
+#undef CACTUS_RL_IMPL
 
 }  // namespace cactus::runtime::raylib

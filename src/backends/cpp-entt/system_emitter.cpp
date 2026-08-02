@@ -891,7 +891,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
             }
         }
         if (override_node != nullptr) {
-            out << emit_spawn_overrides(var, override_node->traits, 1, trait_names, program, pointer_aliases, pair_scope);
+            out << emit_spawn_overrides(
+                var, override_node->traits, 1, trait_names, program, pointer_aliases, pair_scope);
         }
 
         emit_spawn_child_expansion(out,
@@ -971,13 +972,13 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
     if (!spawn.child_overrides.empty()) {
         if (const auto* children = find_template_children(program, tmpl_id)) {
             return emit_hierarchical_spawn_expansion(tmpl_id,
-                                                      spawn.overrides,
-                                                      spawn.child_overrides,
-                                                      *children,
-                                                      trait_names,
-                                                      program,
-                                                      pointer_aliases,
-                                                      pair_scope);
+                                                     spawn.overrides,
+                                                     spawn.child_overrides,
+                                                     *children,
+                                                     trait_names,
+                                                     program,
+                                                     pointer_aliases,
+                                                     pair_scope);
         }
     }
     std::ostringstream out;
@@ -1057,24 +1058,25 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
                                         const DecoratedProgram& program) {
     const std::string view = "registry.view" + build_view_suffix(qcall.filters, {}, &program);
     if (func_name == "exists") {
-        return "[&]{ auto __v = " + view + "; return __v.begin() != __v.end(); }()";
+        return "[&]{ auto view = " + view + "; return view.begin() != view.end(); }()";
     }
     if (func_name == "count") {
         return "[&]{ return static_cast<int>(std::ranges::distance(" + view + ")); }()";
     }
     if (func_name == "first") {
-        return "[&]{ auto __v = " + view +
-               "; auto __it = __v.begin(); return __it != __v.end() ? "
-               "static_cast<entt::entity>(*__it) : entt::entity{entt::null}; }()";
+        return "[&]{ auto view = " + view +
+               "; auto it = view.begin(); return it != view.end() ? "
+               "static_cast<entt::entity>(*it) : entt::entity{entt::null}; }()";
     }
     if (func_name == "all") {
-        return "[&]{ std::vector<entt::entity> __r; for (auto __e : " + view + ") __r.push_back(__e); return __r; }()";
+        return "[&]{ std::vector<entt::entity> result; for (auto e : " + view +
+               ") result.push_back(e); return result; }()";
     }
     if (func_name == "parent") {
         const std::string of_expr    = find_named_arg_value(qcall.named_args, "of", emit_arg);
         const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
-        return "[&]{ if (auto* __p = registry.try_get<" + parent_cpp + ">(" + of_expr +
-               "); __p != nullptr) return __p->parent; return entt::entity{entt::null}; }()";
+        return "[&]{ if (auto* parent = registry.try_get<" + parent_cpp + ">(" + of_expr +
+               "); parent != nullptr) return parent->parent; return entt::entity{entt::null}; }()";
     }
     return "/* unsupported std.query func: " + func_name + " */";
 }
@@ -1083,79 +1085,31 @@ static std::string lower_flat_spatial_query(const QueryCallExpr& qcall,
                                             const std::string& func_name,
                                             const auto& emit_arg,
                                             const DecoratedProgram& program) {
-    const std::string wt   = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
-    const std::string view = "registry.view" + build_view_suffix(qcall.filters, wt, &program);
+    const std::string wt          = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
+    const std::string view        = "registry.view" + build_view_suffix(qcall.filters, wt, &program);
+    const std::string position_of = "[&](entt::entity e) { return registry.get<" + wt + ">(e).position; }";
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "[&]{ const auto __from = (" + from +
-               "); "
-               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __dx = __wt.position.x - __from.x, "
-               "__dy = __wt.position.y - __from.y; "
-               "float __d = __dx * __dx + __dy * __dy; "
-               "if (__d < __best_d) { __best_d = __d; __best = __e; } } return __best; }()";
+        return "cactus::runtime::entt_backend::query_nearest(" + view + ", (" + from + "), " + position_of + ")";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size +
-               "); "
-               "std::vector<entt::entity> __r; "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __hx = __sz.x * 0.5F, __hy = __sz.y * 0.5F; "
-               "if (std::abs(__wt.position.x - __ct.x) <= __hx && "
-               "std::abs(__wt.position.y - __ct.y) <= __hy) "
-               "__r.push_back(__e); } return __r; }()";
+        return "cactus::runtime::entt_backend::query_overlap_box(" + view + ", (" + center + "), (" + size + "), " +
+               position_of + ")";
     }
     if (func_name == "overlap_circle") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius +
-               "); "
-               "std::vector<entt::entity> __r; "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __dx = __wt.position.x - __ct.x, "
-               "__dy = __wt.position.y - __ct.y; "
-               "if ((__dx * __dx + __dy * __dy) <= __rad * __rad) "
-               "__r.push_back(__e); } return __r; }()";
+        return "cactus::runtime::entt_backend::query_overlap_circle(" + view + ", (" + center + "), (" + radius +
+               "), " + position_of + ")";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" +
-               max_dist +
-               "); "
-               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __dx = __wt.position.x - __org.x, "
-               "__dy = __wt.position.y - __org.y; "
-               "float __proj = __dx * __dir.x + __dy * __dir.y; "
-               "if (__proj >= 0.0F && __proj <= __md) { "
-               "float __perp = __dx * __dir.y - __dy * __dir.x; "
-               "if (std::abs(__perp) < 0.5F && __proj < __best_d) { __best_d = __proj; __best = __e; } } } "
-               "return __best; }()";
+        return "cactus::runtime::entt_backend::query_raycast(" + view + ", (" + origin + "), (" + dir + "), (" +
+               max_dist + "), " + position_of + ")";
     }
     return "/* unsupported std.physics.flat.query func: " + func_name + " */";
 }
@@ -1164,85 +1118,31 @@ static std::string lower_volume_spatial_query(const QueryCallExpr& qcall,
                                               const std::string& func_name,
                                               const auto& emit_arg,
                                               const DecoratedProgram& program) {
-    const std::string wt   = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-    const std::string view = "registry.view" + build_view_suffix(qcall.filters, wt, &program);
+    const std::string wt          = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const std::string view        = "registry.view" + build_view_suffix(qcall.filters, wt, &program);
+    const std::string position_of = "[&](entt::entity e) { return registry.get<" + wt + ">(e).position; }";
     if (func_name == "nearest") {
         const std::string from = find_named_arg_value(qcall.named_args, "from", emit_arg);
-        return "[&]{ const auto __from = (" + from +
-               "); "
-               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __dx = __wt.position.x - __from.x, "
-               "__dy = __wt.position.y - __from.y, "
-               "__dz = __wt.position.z - __from.z; "
-               "float __d = __dx * __dx + __dy * __dy + __dz * __dz; "
-               "if (__d < __best_d) { __best_d = __d; __best = __e; } } return __best; }()";
+        return "cactus::runtime::entt_backend::query_nearest(" + view + ", (" + from + "), " + position_of + ")";
     }
     if (func_name == "overlap_box") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string size   = find_named_arg_value(qcall.named_args, "size", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const auto __sz = (" + size +
-               "); "
-               "std::vector<entt::entity> __r; "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __hx = __sz.x * 0.5F, __hy = __sz.y * 0.5F, __hz = __sz.z * 0.5F; "
-               "if (std::abs(__wt.position.x - __ct.x) <= __hx && "
-               "std::abs(__wt.position.y - __ct.y) <= __hy && "
-               "std::abs(__wt.position.z - __ct.z) <= __hz) "
-               "__r.push_back(__e); } return __r; }()";
+        return "cactus::runtime::entt_backend::query_overlap_box(" + view + ", (" + center + "), (" + size + "), " +
+               position_of + ")";
     }
     if (func_name == "overlap_sphere") {
         const std::string center = find_named_arg_value(qcall.named_args, "center", emit_arg);
         const std::string radius = find_named_arg_value(qcall.named_args, "radius", emit_arg);
-        return "[&]{ const auto __ct = (" + center + "); const float __rad = (" + radius +
-               "); "
-               "std::vector<entt::entity> __r; "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __dx = __wt.position.x - __ct.x, "
-               "__dy = __wt.position.y - __ct.y, "
-               "__dz = __wt.position.z - __ct.z; "
-               "if ((__dx * __dx + __dy * __dy + __dz * __dz) <= __rad * __rad) "
-               "__r.push_back(__e); } return __r; }()";
+        return "cactus::runtime::entt_backend::query_overlap_sphere(" + view + ", (" + center + "), (" + radius +
+               "), " + position_of + ")";
     }
     if (func_name == "raycast") {
         const std::string origin   = find_named_arg_value(qcall.named_args, "origin", emit_arg);
         const std::string dir      = find_named_arg_value(qcall.named_args, "dir", emit_arg);
         const std::string max_dist = find_named_arg_value(qcall.named_args, "max_dist", emit_arg);
-        return "[&]{ const auto __org = (" + origin + "); const auto __dir = (" + dir + "); const float __md = (" +
-               max_dist +
-               "); "
-               "entt::entity __best{entt::null}; float __best_d = std::numeric_limits<float>::max(); "
-               "for (auto __e : " +
-               view +
-               ") { "
-               "const auto& __wt = registry.get<" +
-               wt +
-               ">(__e); "
-               "float __dx = __wt.position.x - __org.x, "
-               "__dy = __wt.position.y - __org.y, "
-               "__dz = __wt.position.z - __org.z; "
-               "float __proj = __dx * __dir.x + __dy * __dir.y + __dz * __dir.z; "
-               "if (__proj >= 0.0F && __proj <= __md) { "
-               "float __perp_x = __dy * __dir.z - __dz * __dir.y, "
-               "__perp_y = __dz * __dir.x - __dx * __dir.z, "
-               "__perp_z = __dx * __dir.y - __dy * __dir.x; "
-               "if ((__perp_x * __perp_x + __perp_y * __perp_y + __perp_z * __perp_z) < 0.25F "
-               "&& __proj < __best_d) { __best_d = __proj; __best = __e; } } } return __best; }()";
+        return "cactus::runtime::entt_backend::query_raycast(" + view + ", (" + origin + "), (" + dir + "), (" +
+               max_dist + "), " + position_of + ")";
     }
     return "/* unsupported std.physics.volume.query func: " + func_name + " */";
 }
@@ -1381,8 +1281,9 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 } else if (op == "or") {
                     op = "||";
                 }
-                return "(" + rewrite_expr(*e.left, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + " " + op +
-                       " " + rewrite_expr(*e.right, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
+                return "(" + rewrite_expr(*e.left, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                       " " + op + " " +
+                       rewrite_expr(*e.right, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 std::string op = e.op;
                 if (op == "not") {
@@ -1393,7 +1294,8 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
                     return "registry.valid(" +
-                           rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
+                           rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                           ")";
                 }
                 // Module-scope stdlib call: use resolved callee identity (preferred path).
                 if (e.resolved_callee_id.has_value()) {
@@ -1443,7 +1345,8 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                             if (i > 0) {
                                 result += ", ";
                             }
-                            result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                            result += rewrite_expr(
+                                *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                         }
                         return result + ")";
                     }
@@ -1461,8 +1364,12 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                                                             member_callee->member);
                                         const auto lowered =
                                             lower_resolved_stdlib_call(func_id, e.args, [&](const ExprNode& arg) {
-                                                return rewrite_expr(
-                                                    arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                                                return rewrite_expr(arg,
+                                                                    trait_names,
+                                                                    program,
+                                                                    pointer_aliases,
+                                                                    cpp_overrides,
+                                                                    pair_scope);
                                             });
                                         if (!lowered.empty()) {
                                             return lowered;
@@ -1485,8 +1392,8 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                 if (i > 0) {
                                     result += ", ";
                                 }
-                                result +=
-                                    rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                                result += rewrite_expr(
+                                    *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                             }
                             return result + ")";
                         }
@@ -1498,7 +1405,9 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         }
                         if (object->name == "input" && member->member == "consume" && e.args.size() == 1) {
                             return "cactus::runtime::entt_backend::editor_consume(" +
-                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
+                                   rewrite_expr(
+                                       *e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                                   ")";
                         }
                         // camera2d/camera3d/transform2d/transform3d are aliases declared in
                         // std.editor and are invisible from the root program's AST, so
@@ -1506,12 +1415,22 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         if (object->name == "camera2d") {
                             if (member->member == "screen_to_world" && e.args.size() == 1) {
                                 return "cactus::runtime::entt_backend::editor_screen_to_world_2d(" +
-                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                                       rewrite_expr(*e.args[0],
+                                                    trait_names,
+                                                    program,
+                                                    pointer_aliases,
+                                                    cpp_overrides,
+                                                    pair_scope) +
                                        ")";
                             }
                             if (member->member == "screen_delta_to_world" && e.args.size() == 1) {
                                 return "cactus::runtime::entt_backend::screen_delta_to_world_2d(" +
-                                       rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                                       rewrite_expr(*e.args[0],
+                                                    trait_names,
+                                                    program,
+                                                    pointer_aliases,
+                                                    cpp_overrides,
+                                                    pair_scope) +
                                        ")";
                             }
                         }
@@ -1522,8 +1441,8 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                     if (i > 0) {
                                         result += ", ";
                                     }
-                                    result +=
-                                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                                    result += rewrite_expr(
+                                        *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                                 }
                                 return result + ")";
                             }
@@ -1533,19 +1452,23 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                                     if (i > 0) {
                                         result += ", ";
                                     }
-                                    result +=
-                                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                                    result += rewrite_expr(
+                                        *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                                 }
                                 return result + ")";
                             }
                         }
                         if (object->name == "transform2d" && member->member == "world_position" && e.args.size() == 1) {
                             return "cactus::runtime::entt_backend::editor_entity_position_2d(registry, " +
-                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
+                                   rewrite_expr(
+                                       *e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                                   ")";
                         }
                         if (object->name == "transform3d" && member->member == "world_position" && e.args.size() == 1) {
                             return "cactus::runtime::entt_backend::editor_entity_position_3d(registry, " +
-                                   rewrite_expr(*e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ")";
+                                   rewrite_expr(
+                                       *e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                                   ")";
                         }
                     }
                 }
@@ -1555,7 +1478,8 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                    result +=
+                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
@@ -1615,7 +1539,8 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                         return ident->name + "->" + e.member;
                     }
                 }
-                return rewrite_expr(*e.object, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "." + e.member;
+                return rewrite_expr(*e.object, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "." +
+                       e.member;
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 return emit_spawn_expression(e, trait_names, program, pointer_aliases, pair_scope);
             } else if constexpr (std::is_same_v<E, ListExpr>) {
@@ -1624,7 +1549,8 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                     if (i > 0) {
                         result += ", ";
                     }
-                    result += rewrite_expr(*e.elements[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                    result +=
+                        rewrite_expr(*e.elements[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 }
                 result += "}";
                 return result;
@@ -1691,8 +1617,14 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     if (match_stmt.wildcard.has_value()) {
         out << ind << "        " << (first ? "if (true)" : "else") << " {\n";
         for (const auto& stmt : match_stmt.wildcard->body) {
-            out << rewrite_stmt(
-                *stmt, indent + 3, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
+            out << rewrite_stmt(*stmt,
+                                indent + 3,
+                                trait_names,
+                                program,
+                                pointer_aliases,
+                                dispatcher_available,
+                                cpp_overrides,
+                                pair_scope);
         }
         out << ind << "        }\n";
     }
@@ -1758,9 +1690,11 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         const std::string prefix = ind + lhs + " " + s.op + " vec2(";
                         const std::string continuation(prefix.size(), ' ');
                         return prefix +
-                               rewrite_expr(*call->args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                               rewrite_expr(
+                                   *call->args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
                                ",\n" + continuation +
-                               rewrite_expr(*call->args[1], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                               rewrite_expr(
+                                   *call->args[1], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
                                ");\n";
                     }
                 }
@@ -1776,7 +1710,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     }
                     payload +=
                         "." + s.payload[i].name + " = " +
-                        rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                        rewrite_expr(
+                            *s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 }
 
                 if (!s.target.has_value()) {
@@ -1807,7 +1742,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            payload + "}, __target);\n" + ind + "    }\n" + ind + "}\n";
                 }
                 std::string emit_call = dispatcher_available ? "dispatcher.trigger(" + event_type + "{"
-                                                              : s.event_name + "_buffer.push_back({";
+                                                             : s.event_name + "_buffer.push_back({";
                 return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + payload + "});\n" +
                        ind + "}\n";
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
@@ -1854,7 +1789,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
                 std::string target =
                     s.target_expr.has_value()
-                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                        ? rewrite_expr(
+                              **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                         : "entity";
                 const bool GUARDED    = s.target_expr.has_value();
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
@@ -1874,7 +1810,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         result << ind << "            auto __value = __existing ? *__existing : " << cpp << "{};\n";
                         for (const auto& arg : s.args) {
                             result << ind << "            __value." << arg.name << " = "
-                                   << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                                   << rewrite_expr(
+                                          *arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                                    << ";\n";
                         }
                         result << ind << "            registry.emplace_or_replace<" << cpp << ">(__target, __value);\n";
@@ -1906,7 +1843,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                        << "{};\n";
                 for (const auto& arg : s.args) {
                     result << ind << (GUARDED ? "        " : "    ") << "__value." << arg.name << " = "
-                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
+                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                           << ";\n";
                 }
                 result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">("
                        << target << ", __value);\n";
@@ -1918,7 +1856,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
                 std::string target =
                     s.target_expr.has_value()
-                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                        ? rewrite_expr(
+                              **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                         : "entity";
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
                 if (!program.execution_graph.phases.empty()) {
@@ -1943,7 +1882,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                 const std::string target =
                     s.target_expr.has_value()
-                        ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                        ? rewrite_expr(
+                              **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                         : "entity";
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
                 const auto simple     = s.trait_name.rfind('.') != std::string::npos
@@ -1963,7 +1903,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            << target << ");\n";
                     for (const auto& arg : s.args) {
                         result << ind << "    __projected." << arg.name << " = "
-                               << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                               << rewrite_expr(
+                                      *arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                                << ";\n";
                     }
                 }
@@ -1973,7 +1914,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 if (!program.execution_graph.phases.empty()) {
                     const std::string target =
                         s.target_expr.has_value()
-                            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                            ? rewrite_expr(
+                                  **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                             : "entity";
                     return ind + "{\n" + ind + "    const auto __target = " + target + ";\n" + ind +
                            "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
@@ -1993,14 +1935,17 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                 if (s.value) {
                     return ind + "return " +
-                           rewrite_expr(**s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
+                           rewrite_expr(**s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                           ";\n";
                 }
                 return ind + "return;\n";
             } else if constexpr (std::is_same_v<S, ExprStmt>) {
-                return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
+                return ind + rewrite_expr(*s.expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                       ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
-                const auto condition = rewrite_expr(*s.condition, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                std::string result   = ind + "if ";
+                const auto condition =
+                    rewrite_expr(*s.condition, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                std::string result = ind + "if ";
                 if (!condition.empty() && condition.front() == '(' && condition.back() == ')') {
                     result += condition;
                 } else {
@@ -2008,8 +1953,14 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 }
                 result += " {\n";
                 for (auto& inner : s.then_body) {
-                    result += rewrite_stmt(
-                        *inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
+                    result += rewrite_stmt(*inner,
+                                           indent + 1,
+                                           trait_names,
+                                           program,
+                                           pointer_aliases,
+                                           dispatcher_available,
+                                           cpp_overrides,
+                                           pair_scope);
                 }
                 result += ind + "}";
                 if (!s.else_body.empty()) {
@@ -2030,14 +1981,20 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return emit_trait_match_stmt(
                     s, indent, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                const auto temp    = foreach_temp_name(s);
-                std::string result = ind + "auto " + temp + " = " +
-                                     rewrite_expr(*s.iterable, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
-                                     ";\n";
+                const auto temp = foreach_temp_name(s);
+                std::string result =
+                    ind + "auto " + temp + " = " +
+                    rewrite_expr(*s.iterable, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
                 result += ind + "for (const auto& " + s.var_name + " : " + temp + ") {\n";
                 for (const auto& inner : s.body) {
-                    result += rewrite_stmt(
-                        *inner, indent + 1, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
+                    result += rewrite_stmt(*inner,
+                                           indent + 1,
+                                           trait_names,
+                                           program,
+                                           pointer_aliases,
+                                           dispatcher_available,
+                                           cpp_overrides,
+                                           pair_scope);
                 }
                 result += ind + "}\n";
                 return result;
@@ -2079,7 +2036,7 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
 
     for (const auto& handler : sys.handlers) {
         const auto* contract = graph_handler_contract(sys, handler, program);
-        const bool is_pair    = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
+        const bool is_pair = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
         const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();
         const auto trigger_binding = handler_trigger_binding(handler);
         out << "void " << system_function_name(program.module_name, sys.name, handler_trigger_suffix(handler))

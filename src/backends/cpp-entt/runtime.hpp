@@ -2,6 +2,8 @@
 
 #include "common/cactus_runtime.hpp"
 
+#include "backends/cpp-entt/spatial_query.hpp"
+
 #include <entt/entt.hpp>
 
 #include <cstdint>
@@ -146,11 +148,7 @@ void submit_text_2d(Vector2 position,
                     bool visible) noexcept;
 // Window-space HUD label (std.render.text ScreenLabel): window-global pixel
 // coordinates with top-left origin, drawn after all viewport/world rendering.
-void submit_screen_label(Vector2 position,
-                         int font_size,
-                         Color color,
-                         const std::string& text,
-                         bool visible) noexcept;
+void submit_screen_label(Vector2 position, int font_size, Color color, const std::string& text, bool visible) noexcept;
 void submit_text_3d(std::uint32_t entity_id,
                     Vector3 position,
                     Quat rotation,
@@ -170,14 +168,11 @@ void submit_text_3d(std::uint32_t entity_id,
                                                  Vector3 position_3d) noexcept;
 
 /// 2D hit-test: return the top-most entity under screen_pos matching mask, or entt::null.
-[[nodiscard]] entt::entity editor_hit_test_2d(entt::registry& registry,
-                                              Vector2 screen_pos,
-                                              int mask) noexcept;
+[[nodiscard]] entt::entity editor_hit_test_2d(entt::registry& registry, Vector2 screen_pos, int mask) noexcept;
 
 // ── Editor impl registration (called by generated_init_project) ───────────────
 using EditorHitTestImpl = std::function<entt::entity(entt::registry&, Vector2, int)>;
-using EditorSpawnImpl =
-    std::function<entt::entity(entt::registry&, const std::string&, Vector2, Vector3)>;
+using EditorSpawnImpl   = std::function<entt::entity(entt::registry&, const std::string&, Vector2, Vector3)>;
 using EditorRaycastImpl = std::function<entt::entity(entt::registry&, Ray, int)>;
 void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept;
 void register_editor_spawn_impl(EditorSpawnImpl fn) noexcept;
@@ -215,9 +210,7 @@ void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rot
 
 /// 3D raycast: return the nearest entity hit by the picking ray through
 /// screen_pos, or entt::null (always null when no impl is registered).
-[[nodiscard]] entt::entity editor_raycast_3d(entt::registry& registry,
-                                             Vector2 screen_pos,
-                                             int mask) noexcept;
+[[nodiscard]] entt::entity editor_raycast_3d(entt::registry& registry, Vector2 screen_pos, int mask) noexcept;
 
 /// Convert a screen position to a 2D world position.
 [[nodiscard]] Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept;

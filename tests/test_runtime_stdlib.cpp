@@ -7,6 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -525,10 +526,8 @@ TEST_CASE("Runtime stdlib: EnTT screen label submissions count visible labels on
     cactus::runtime::entt_backend::begin_render_frame();
     cactus::runtime::entt_backend::submit_screen_label(
         Vector2{.x = 16.0F, .y = 16.0F}, 32, WHITE, "Robot 1 - Idle", true);
-    cactus::runtime::entt_backend::submit_screen_label(
-        Vector2{.x = 16.0F, .y = 48.0F}, 32, WHITE, "hidden", false);
-    cactus::runtime::entt_backend::submit_screen_label(
-        Vector2{.x = 16.0F, .y = 80.0F}, 24, WHITE, "second", true);
+    cactus::runtime::entt_backend::submit_screen_label(Vector2{.x = 16.0F, .y = 48.0F}, 32, WHITE, "hidden", false);
+    cactus::runtime::entt_backend::submit_screen_label(Vector2{.x = 16.0F, .y = 80.0F}, 24, WHITE, "second", true);
     cactus::runtime::entt_backend::end_render_frame();
 
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_screen_labels == 2);
@@ -637,7 +636,7 @@ TEST_CASE("Runtime stdlib: sample is in [lo, hi)", "[runtime][stdlib][random]") 
     auto rng        = stdlib::random::seeded(7);
 
     for (int i = 0; i < 200; ++i) {
-        rng          = stdlib::random::advance(rng);
+        rng           = stdlib::random::advance(rng);
         const float v = stdlib::random::sample(rng, dist);
         CHECK(v >= 0.0F);
         CHECK(v < 10.0F);
@@ -723,29 +722,23 @@ TEST_CASE("Runtime stdlib: editor ray/plane intersection hits, rejects parallel 
     }
 }
 
-TEST_CASE("Runtime stdlib: editor_raycast_3d without a registered impl returns null",
-          "[runtime][editor][entt]") {
+TEST_CASE("Runtime stdlib: editor_raycast_3d without a registered impl returns null", "[runtime][editor][entt]") {
     entt::registry registry;
     entt_backend::register_editor_raycast_impl({});
-    CHECK(entt_backend::editor_raycast_3d(registry, Vector2{.x = 100.0F, .y = 100.0F}, 1) ==
-          entt::entity{entt::null});
+    CHECK(entt_backend::editor_raycast_3d(registry, Vector2{.x = 100.0F, .y = 100.0F}, 1) == entt::entity{entt::null});
 }
 
-TEST_CASE("Runtime stdlib: editor_hit_test_2d without a registered impl returns null",
-          "[runtime][editor][entt]") {
+TEST_CASE("Runtime stdlib: editor_hit_test_2d without a registered impl returns null", "[runtime][editor][entt]") {
     entt::registry registry;
     entt_backend::register_editor_hit_test_impl({});
-    CHECK(entt_backend::editor_hit_test_2d(registry, Vector2{.x = 50.0F, .y = 50.0F}, 1) ==
-          entt::entity{entt::null});
+    CHECK(entt_backend::editor_hit_test_2d(registry, Vector2{.x = 50.0F, .y = 50.0F}, 1) == entt::entity{entt::null});
 }
 
-TEST_CASE("Runtime stdlib: editor_spawn_template without a registered impl returns null",
-          "[runtime][editor][entt]") {
+TEST_CASE("Runtime stdlib: editor_spawn_template without a registered impl returns null", "[runtime][editor][entt]") {
     entt::registry registry;
     entt_backend::register_editor_spawn_impl({});
-    CHECK(entt_backend::editor_spawn_template(registry, "Enemy",
-                                              Vector2{.x = 0.0F, .y = 0.0F},
-                                              Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}) ==
+    CHECK(entt_backend::editor_spawn_template(
+              registry, "Enemy", Vector2{.x = 0.0F, .y = 0.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}) ==
           entt::entity{entt::null});
 }
 
@@ -791,8 +784,8 @@ TEST_CASE("Runtime stdlib: editor camera rig lifecycle functions are safe withou
 
     // apply and query with no impls don't crash and return zero values
     entt_backend::editor_apply_camera_2d(registry, Vector2{.x = 0.0F, .y = 0.0F}, 1.0F);
-    entt_backend::editor_apply_camera_3d(registry, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
-                                         Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F});
+    entt_backend::editor_apply_camera_3d(
+        registry, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F});
     const auto pos2 = entt_backend::editor_entity_position_2d(registry, entt::entity{entt::null});
     CHECK(pos2.x == Catch::Approx(0.0F));
     CHECK(pos2.y == Catch::Approx(0.0F));
@@ -804,16 +797,157 @@ TEST_CASE("Runtime stdlib: editor camera rig lifecycle functions are safe withou
     entt_backend::editor_camera_exit(registry);
 }
 
+// ── Spatial query helpers (extract-spatial-query-helpers) ──────────────────────
+// Behavioral coverage for the runtime search algorithms behind
+// std.physics.flat.query / std.physics.volume.query, exercised directly
+// against a real registry so a math regression fails here rather than only
+// showing up as a generated-code text mismatch.
+
+namespace {
+struct SpatialPos2 {
+    Vector2 position;
+};
+struct SpatialPos3 {
+    Vector3 position;
+};
+}  // namespace
+
+TEST_CASE("Runtime stdlib: query_nearest (2D) returns the closest entity and null on an empty view",
+          "[runtime][stdlib][query][spatial]") {
+    entt::registry registry;
+    const auto near_e = registry.create();
+    const auto mid_e  = registry.create();
+    const auto far_e  = registry.create();
+    registry.emplace<SpatialPos2>(near_e, Vector2{.x = 1.0F, .y = 0.0F});
+    registry.emplace<SpatialPos2>(mid_e, Vector2{.x = 5.0F, .y = 0.0F});
+    registry.emplace<SpatialPos2>(far_e, Vector2{.x = 10.0F, .y = 0.0F});
+
+    auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
+    auto view        = registry.view<SpatialPos2>();
+    CHECK(entt_backend::query_nearest(view, Vector2{.x = 0.0F, .y = 0.0F}, position_of) == near_e);
+
+    entt::registry empty_registry;
+    auto empty_view = empty_registry.view<SpatialPos2>();
+    CHECK(entt_backend::query_nearest(empty_view, Vector2{.x = 0.0F, .y = 0.0F}, position_of) ==
+          entt::entity{entt::null});
+}
+
+TEST_CASE("Runtime stdlib: query_nearest (3D) accounts for the z axis", "[runtime][stdlib][query][spatial][3d]") {
+    entt::registry registry;
+    const auto in_plane = registry.create();
+    const auto off_axis = registry.create();
+    registry.emplace<SpatialPos3>(in_plane, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F});
+    registry.emplace<SpatialPos3>(off_axis, Vector3{.x = 0.0F, .y = 0.0F, .z = 5.0F});
+
+    auto position_of = [&](entt::entity e) { return registry.get<SpatialPos3>(e).position; };
+    auto view        = registry.view<SpatialPos3>();
+    CHECK(entt_backend::query_nearest(view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, position_of) == in_plane);
+}
+
+TEST_CASE("Runtime stdlib: query_overlap_box (2D/3D) matches only entities within the half-extents",
+          "[runtime][stdlib][query][spatial]") {
+    entt::registry registry;
+    const auto inside  = registry.create();
+    const auto outside = registry.create();
+    registry.emplace<SpatialPos2>(inside, Vector2{.x = 1.0F, .y = 1.0F});
+    registry.emplace<SpatialPos2>(outside, Vector2{.x = 10.0F, .y = 10.0F});
+
+    auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
+    auto view        = registry.view<SpatialPos2>();
+    const auto hits  = entt_backend::query_overlap_box(
+        view, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}, position_of);
+    CHECK(hits.size() == 1);
+    CHECK(std::ranges::find(hits, inside) != hits.end());
+
+    entt::registry registry3d;
+    const auto inside3d  = registry3d.create();
+    const auto outside3d = registry3d.create();
+    registry3d.emplace<SpatialPos3>(inside3d, Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
+    registry3d.emplace<SpatialPos3>(outside3d, Vector3{.x = 1.0F, .y = 1.0F, .z = 10.0F});
+
+    auto position_of_3d = [&](entt::entity e) { return registry3d.get<SpatialPos3>(e).position; };
+    auto view3d         = registry3d.view<SpatialPos3>();
+    const auto hits3d   = entt_backend::query_overlap_box(
+        view3d, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 4.0F, .y = 4.0F, .z = 4.0F}, position_of_3d);
+    CHECK(hits3d.size() == 1);
+    CHECK(std::ranges::find(hits3d, inside3d) != hits3d.end());
+}
+
+TEST_CASE("Runtime stdlib: query_overlap_circle matches only entities within the radius",
+          "[runtime][stdlib][query][spatial]") {
+    entt::registry registry;
+    const auto inside  = registry.create();
+    const auto outside = registry.create();
+    registry.emplace<SpatialPos2>(inside, Vector2{.x = 1.0F, .y = 0.0F});
+    registry.emplace<SpatialPos2>(outside, Vector2{.x = 10.0F, .y = 0.0F});
+
+    auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
+    auto view        = registry.view<SpatialPos2>();
+    const auto hits  = entt_backend::query_overlap_circle(view, Vector2{.x = 0.0F, .y = 0.0F}, 2.0F, position_of);
+    CHECK(hits.size() == 1);
+    CHECK(std::ranges::find(hits, inside) != hits.end());
+}
+
+TEST_CASE("Runtime stdlib: query_overlap_sphere matches only entities within the radius",
+          "[runtime][stdlib][query][spatial][3d]") {
+    entt::registry registry;
+    const auto inside  = registry.create();
+    const auto outside = registry.create();
+    registry.emplace<SpatialPos3>(inside, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F});
+    registry.emplace<SpatialPos3>(outside, Vector3{.x = 10.0F, .y = 0.0F, .z = 0.0F});
+
+    auto position_of = [&](entt::entity e) { return registry.get<SpatialPos3>(e).position; };
+    auto view        = registry.view<SpatialPos3>();
+    const auto hits =
+        entt_backend::query_overlap_sphere(view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 2.0F, position_of);
+    CHECK(hits.size() == 1);
+    CHECK(std::ranges::find(hits, inside) != hits.end());
+}
+
+TEST_CASE("Runtime stdlib: query_raycast (2D) hits an entity within the perpendicular threshold and max_dist",
+          "[runtime][stdlib][query][spatial]") {
+    entt::registry registry;
+    const auto on_ray     = registry.create();
+    const auto off_ray    = registry.create();
+    const auto behind_ray = registry.create();
+    const auto too_far    = registry.create();
+    registry.emplace<SpatialPos2>(on_ray, Vector2{.x = 5.0F, .y = 0.0F});
+    registry.emplace<SpatialPos2>(off_ray, Vector2{.x = 5.0F, .y = 5.0F});
+    registry.emplace<SpatialPos2>(behind_ray, Vector2{.x = -5.0F, .y = 0.0F});
+    registry.emplace<SpatialPos2>(too_far, Vector2{.x = 50.0F, .y = 0.0F});
+
+    auto position_of = [&](entt::entity e) { return registry.get<SpatialPos2>(e).position; };
+    auto view        = registry.view<SpatialPos2>();
+    const auto hit   = entt_backend::query_raycast(
+        view, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 1.0F, .y = 0.0F}, 20.0F, position_of);
+    CHECK(hit == on_ray);
+}
+
+TEST_CASE("Runtime stdlib: query_raycast (3D) hits an entity within the perpendicular threshold and max_dist",
+          "[runtime][stdlib][query][spatial][3d]") {
+    entt::registry registry;
+    const auto on_ray  = registry.create();
+    const auto off_ray = registry.create();
+    registry.emplace<SpatialPos3>(on_ray, Vector3{.x = 5.0F, .y = 0.0F, .z = 0.0F});
+    registry.emplace<SpatialPos3>(off_ray, Vector3{.x = 5.0F, .y = 5.0F, .z = 5.0F});
+
+    auto position_of = [&](entt::entity e) { return registry.get<SpatialPos3>(e).position; };
+    auto view        = registry.view<SpatialPos3>();
+    const auto hit   = entt_backend::query_raycast(
+        view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 20.0F, position_of);
+    CHECK(hit == on_ray);
+}
+
 TEST_CASE("Runtime stdlib: sequence reproducibility", "[runtime][stdlib][random]") {
     auto rng_a = stdlib::random::seeded(5);
     auto rng_b = stdlib::random::seeded(5);
 
     const auto dist = stdlib::random::uniform(0.0F, 1.0F);
     for (int i = 0; i < 20; ++i) {
-        rng_a           = stdlib::random::advance(rng_a);
-        rng_b           = stdlib::random::advance(rng_b);
-        const float va  = stdlib::random::sample(rng_a, dist);
-        const float vb  = stdlib::random::sample(rng_b, dist);
+        rng_a          = stdlib::random::advance(rng_a);
+        rng_b          = stdlib::random::advance(rng_b);
+        const float va = stdlib::random::sample(rng_a, dist);
+        const float vb = stdlib::random::sample(rng_b, dist);
         CHECK(va == Catch::Approx(vb));
     }
 }

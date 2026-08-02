@@ -2904,7 +2904,7 @@ TEST_CASE("Codegen EnTT: query.exists lowers to entt view begin/end check", "[co
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Boss>()") != std::string::npos);
-    CHECK(code.find("__v.begin() != __v.end()") != std::string::npos);
+    CHECK(code.find("view.begin() != view.end()") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[codegen-entt][query]") {
@@ -2945,7 +2945,7 @@ TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[
     CHECK(code.find("registry.view<Boss>()") != std::string::npos);
     CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
     // empty result returns null sentinel (total entity_id semantics)
-    CHECK(code.find("__it != __v.end()") != std::string::npos);
+    CHECK(code.find("it != view.end()") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-entt][query]") {
@@ -2958,8 +2958,8 @@ TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<Enemy>()") != std::string::npos);
-    CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
-    CHECK(code.find("__r.push_back(__e)") != std::string::npos);
+    CHECK(code.find("std::vector<entt::entity> result") != std::string::npos);
+    CHECK(code.find("result.push_back(e)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[codegen-entt][query]") {
@@ -2979,7 +2979,7 @@ TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[cod
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.try_get<Parent>") != std::string::npos);
-    CHECK(code.find("__p->parent") != std::string::npos);
+    CHECK(code.find("parent->parent") != std::string::npos);
     CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
 }
 
@@ -3024,10 +3024,12 @@ TEST_CASE("Codegen EnTT: flat query.nearest lowers to WorldTransform distance se
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("registry.get<WorldTransform>(__e)") != std::string::npos);
-    CHECK(code.find("std::numeric_limits<float>::max()") != std::string::npos);
-    // empty result returns null sentinel (total entity_id semantics) via __best initialization
-    CHECK(code.find("__best{entt::null}") != std::string::npos);
+    // call site delegates the search to the shared runtime helper instead of an inline loop
+    CHECK(code.find("cactus::runtime::entt_backend::query_nearest(") != std::string::npos);
+    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
+    // no reserved double-leading-underscore locals at the call site
+    CHECK(code.find("__best") == std::string::npos);
+    CHECK(code.find("__from") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches", "[codegen-entt][query][spatial]") {
@@ -3041,8 +3043,10 @@ TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Pickup>(entt::exclude<Collected>)") != std::string::npos);
-    CHECK(code.find("* 0.5F") != std::string::npos);
-    CHECK(code.find("std::abs") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::query_overlap_box(") != std::string::npos);
+    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
+    CHECK(code.find("__ct") == std::string::npos);
+    CHECK(code.find("__sz") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search", "[codegen-entt][query][spatial]") {
@@ -3056,8 +3060,9 @@ TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("__dx * __dx + __dy * __dy") != std::string::npos);
-    CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::query_overlap_circle(") != std::string::npos);
+    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
+    CHECK(code.find("__rad") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search", "[codegen-entt][query][spatial]") {
@@ -3071,8 +3076,10 @@ TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search", "
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Wall>()") != std::string::npos);
-    CHECK(code.find("__proj") != std::string::npos);
-    CHECK(code.find("__best{entt::null}") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::query_raycast(") != std::string::npos);
+    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
+    CHECK(code.find("__proj") == std::string::npos);
+    CHECK(code.find("__best") == std::string::npos);
 }
 
 static const char* const kVolumeQueryPreamble =
@@ -3095,8 +3102,10 @@ TEST_CASE("Codegen EnTT: volume query.nearest lowers to 3D distance search", "[c
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("__dz = __wt.position.z") != std::string::npos);
-    CHECK(code.find("__best{entt::null}") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::query_nearest(") != std::string::npos);
+    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
+    CHECK(code.find("__dz") == std::string::npos);
+    CHECK(code.find("__best") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search",
@@ -3111,8 +3120,10 @@ TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search"
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("registry.view<WorldTransform, Enemy>()") != std::string::npos);
-    CHECK(code.find("__dz = __wt.position.z - __ct.z") != std::string::npos);
-    CHECK(code.find("std::vector<entt::entity> __r") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::query_overlap_sphere(") != std::string::npos);
+    CHECK(code.find("registry.get<WorldTransform>(e).position") != std::string::npos);
+    CHECK(code.find("__dz") == std::string::npos);
+    CHECK(code.find("__ct") == std::string::npos);
 }
 
 // ── Hierarchical entity templates (dsl-hierarchical-entity-templates) ───────

@@ -4286,27 +4286,31 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             // Two independent typed snapshots, not a materialized tuple list.
-            CHECK(code.find("std::vector<entt::entity> __body_snapshot;") != std::string::npos);
+            CHECK(code.find("std::vector<entt::entity> body_snapshot;") != std::string::npos);
             CHECK(code.find("registry.view<DynamicBody, Transform>()") != std::string::npos);
-            CHECK(code.find("std::vector<entt::entity> __wall_snapshot;") != std::string::npos);
+            CHECK(code.find("std::vector<entt::entity> wall_snapshot;") != std::string::npos);
             CHECK(code.find("registry.view<Solid, Collider>()") != std::string::npos);
-            // Sorted by creation ordinal for deterministic tuple order.
-            CHECK(code.find("registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(__lhs).value <") !=
+            // Sorted by creation ordinal for deterministic tuple order, reading
+            // each entity's ordinal exactly once rather than per comparison.
+            CHECK(code.find("registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(pair_entity).value,") !=
                   std::string::npos);
+            CHECK(code.find("std::ranges::sort(body_ordered);") != std::string::npos);
             // Left-binding-major nested iteration over the snapshots, in the
             // untargeted (broadcast) branch — the recipient-targeted branch
             // precedes it and has its own incident-tuple loop shapes.
             const auto broadcast_branch = code.find("} else {");
             REQUIRE(broadcast_branch != std::string::npos);
-            const auto body_loop = code.find("for (auto body : __body_snapshot)", broadcast_branch);
-            const auto wall_loop = code.find("for (auto wall : __wall_snapshot)", broadcast_branch);
+            const auto body_loop = code.find("for (auto body : body_snapshot)", broadcast_branch);
+            const auto wall_loop = code.find("for (auto wall : wall_snapshot)", broadcast_branch);
             REQUIRE(body_loop != std::string::npos);
             REQUIRE(wall_loop != std::string::npos);
             CHECK(body_loop < wall_loop);
-            // Recipient-targeted delivery: incident tuples only.
-            CHECK(code.find("if (__recipient.has_value()) {") != std::string::npos);
-            CHECK(code.find("const auto __target = *__recipient;") != std::string::npos);
-            CHECK(code.find("if (body == __target) { continue; }") != std::string::npos);
+            // Recipient-targeted delivery: incident tuples only, tested via an
+            // O(1) all_of<> membership check against the recipient.
+            CHECK(code.find("if (cactus_recipient.has_value()) {") != std::string::npos);
+            CHECK(code.find("const auto target = *cactus_recipient;") != std::string::npos);
+            CHECK(code.find("if (registry.all_of<DynamicBody, Transform>(target)) {") != std::string::npos);
+            CHECK(code.find("if (body == target) { continue; }") != std::string::npos);
             // Pair-bound trait reads are const.
             CHECK(code.find("registry.get<const Transform>(body).x") != std::string::npos);
             CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
@@ -4439,9 +4443,9 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
     // it once, and carries it into the queued occurrence via the targeted
     // emit path (targeted-event-delivery) rather than a validity guard around
     // broadcast dispatch.
-    CHECK(code.find("const auto __target = body;") != std::string::npos);
-    CHECK(code.find("if (registry.valid(__target)) {") != std::string::npos);
-    CHECK(code.find("generated_emit_targeted_event(ContactEvent{.other = wall}, __target);") != std::string::npos);
+    CHECK(code.find("const auto target = body;") != std::string::npos);
+    CHECK(code.find("if (registry.valid(target)) {") != std::string::npos);
+    CHECK(code.find("generated_emit_targeted_event(ContactEvent{.other = wall}, target);") != std::string::npos);
     // Project remains an immediate (non-buffered) call, same as unary systems.
     CHECK(code.find("project_GroundContact(registry, body);") != std::string::npos);
 }
@@ -4472,8 +4476,8 @@ TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snaps
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.view<Solid>()") != std::string::npos);
-            CHECK(code.find("std::vector<entt::entity> __wall_snapshot;") != std::string::npos);
-            CHECK(code.find("for (auto wall : __wall_snapshot)") != std::string::npos);
+            CHECK(code.find("std::vector<entt::entity> wall_snapshot;") != std::string::npos);
+            CHECK(code.find("for (auto wall : wall_snapshot)") != std::string::npos);
         }
     }
 }
@@ -4555,12 +4559,12 @@ TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an opti
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("std::optional<entt::entity> __recipient = std::nullopt") != std::string::npos);
-            CHECK(code.find("(void)__recipient;") != std::string::npos);
+            CHECK(code.find("std::optional<entt::entity> cactus_recipient = std::nullopt") != std::string::npos);
+            CHECK(code.find("(void)cactus_recipient;") != std::string::npos);
             // No recipient-conditioned branch — a selectionless consumer runs
             // once regardless of targeting (targeted-event-delivery,
             // "Selectionless observer receives targeted occurrence once").
-            CHECK(code.find("__recipient.has_value()") == std::string::npos);
+            CHECK(code.find("cactus_recipient.has_value()") == std::string::npos);
         }
     }
 }
@@ -4583,8 +4587,8 @@ TEST_CASE("Codegen EnTT: targeted unary handler runs at most once for the recipi
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<SystemNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (__recipient.has_value()) {") != std::string::npos);
-            CHECK(code.find("entt::entity entity = *__recipient;") != std::string::npos);
+            CHECK(code.find("if (cactus_recipient.has_value()) {") != std::string::npos);
+            CHECK(code.find("entt::entity entity = *cactus_recipient;") != std::string::npos);
             CHECK(code.find("if (registry.all_of<Health>(entity)) {") != std::string::npos);
             // Component access for the targeted branch mirrors the broadcast
             // branch's binding name so the same body text works unmodified.

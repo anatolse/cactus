@@ -251,11 +251,7 @@ bool ProgramLinker::rebuild_execution_graph(
         return false;
     };
 
-    std::vector<std::unordered_set<SymbolId>> produced_by_handler;
-    produced_by_handler.reserve(graph.handlers.size());
-    for (const auto& handler : graph.handlers) {
-        produced_by_handler.push_back(handler.contract.produced_traits());
-    }
+    const auto produced_by_handler = precompute_produced_by_handler(graph.handlers);
 
     for (std::size_t left_index = 0; left_index < graph.handlers.size(); ++left_index) {
         const auto& left = graph.handlers[left_index];

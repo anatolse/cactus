@@ -231,6 +231,19 @@ struct HandlerNode {
     SourceLocation location;
 };
 
+// Precomputes each handler's produced_traits() once, indexed the same as
+// `handlers`, so O(handlers^2) conflict-detection passes don't recompute it
+// per pair.
+[[nodiscard]] inline std::vector<std::unordered_set<SymbolId>> precompute_produced_by_handler(
+    const std::vector<HandlerNode>& handlers) {
+    std::vector<std::unordered_set<SymbolId>> produced_by_handler;
+    produced_by_handler.reserve(handlers.size());
+    for (const auto& handler : handlers) {
+        produced_by_handler.push_back(handler.contract.produced_traits());
+    }
+    return produced_by_handler;
+}
+
 struct PhasePlan {
     SymbolId phase;
     std::vector<ResolvedHandlerTrigger> source_dependencies;

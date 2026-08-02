@@ -433,9 +433,9 @@ std::vector<std::string> filter_cpp_type_names(const FilterClause& filter, const
 // ── Pair binding codegen (dsl-pair-relations) ────────────────────────────────
 
 struct PairBindingCodegen {
-    std::string binding_name;
     std::vector<std::string> cpp_types;  // dedup'd view<> template args, source order
-    PairCodegenBinding scope;            // access-key -> resolved trait, for rewrite_expr
+    PairCodegenBinding scope;            // access-key -> resolved trait, for rewrite_expr; scope.binding_name
+                                          // is also this binding's source-level name
 };
 
 // Mirrors the frontend's build_pair_scope (semantic_analyzer.cpp): consumes
@@ -444,7 +444,6 @@ struct PairBindingCodegen {
 // as the semantic analyzer's resolve_pair_member_chain expects to look up.
 PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, const DecoratedProgram& program) {
     PairBindingCodegen result;
-    result.binding_name       = binding.name;
     result.scope.binding_name = binding.name;
     std::unordered_set<std::string> seen_cpp_types;
     for (const auto& entry : binding.traits) {
@@ -468,27 +467,35 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
 
 // Emits the deterministic snapshot-and-sort prologue for one pair binding:
 // collect matching entity handles via a typed view (finite, not materialized
-// as tuples), then sort by creation ordinal so tuple/event order is stable
-// and backend-independent (spec: "cpp-entt maintains stable entity creation
+// as tuples), pairing each with its creation ordinal in the same pass so the
+// sort below reads every ordinal exactly once (registry.get<> is a sparse-set
+// lookup; re-fetching it per comparison would cost O(n log n) lookups instead
+// of O(n)). Sorting by creation ordinal keeps tuple/event order stable and
+// backend-independent (spec: "cpp-entt maintains stable entity creation
 // ordinals").
 void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodegen& binding, int indent) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
-    out << ind << "std::vector<entt::entity> __" << binding.binding_name << "_snapshot;\n";
+    const std::string& name = binding.scope.binding_name;
+    out << ind << "std::vector<entt::entity> " << name << "_snapshot;\n";
     out << ind << "{\n";
-    out << ind << "    auto __" << binding.binding_name << "_view = registry.view<";
+    out << ind << "    auto " << name << "_view = registry.view<";
     for (std::size_t i = 0; i < binding.cpp_types.size(); ++i) {
         out << (i == 0 ? "" : ", ") << binding.cpp_types[i];
     }
     out << ">();\n";
-    out << ind << "    for (auto __pair_entity : __" << binding.binding_name << "_view) {\n";
-    out << ind << "        __" << binding.binding_name << "_snapshot.push_back(__pair_entity);\n";
+    out << ind << "    std::vector<std::pair<std::uint64_t, entt::entity>> " << name << "_ordered;\n";
+    out << ind << "    for (auto pair_entity : " << name << "_view) {\n";
+    out << ind << "        " << name
+        << "_ordered.emplace_back(registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(pair_entity)"
+           ".value,\n";
+    out << ind << "                               pair_entity);\n";
+    out << ind << "    }\n";
+    out << ind << "    std::ranges::sort(" << name << "_ordered);\n";
+    out << ind << "    " << name << "_snapshot.reserve(" << name << "_ordered.size());\n";
+    out << ind << "    for (const auto& [ordinal, entity] : " << name << "_ordered) {\n";
+    out << ind << "        " << name << "_snapshot.push_back(entity);\n";
     out << ind << "    }\n";
     out << ind << "}\n";
-    out << ind << "std::ranges::sort(__" << binding.binding_name
-        << "_snapshot, [&](entt::entity __lhs, entt::entity __rhs) {\n";
-    out << ind << "    return registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(__lhs).value <\n";
-    out << ind << "           registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(__rhs).value;\n";
-    out << ind << "});\n";
 }
 
 bool is_flat_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
@@ -1736,10 +1743,10 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 const std::string TARGET =
                     rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 if (graph_runtime) {
-                    return ind + "{\n" + ind + "    const auto __target = " + TARGET + ";\n" + ind +
-                           "    if (registry.valid(__target)) {\n" + ind +
+                    return ind + "{\n" + ind + "    const auto target = " + TARGET + ";\n" + ind +
+                           "    if (registry.valid(target)) {\n" + ind +
                            "        cactus::runtime::entt_backend::generated_emit_targeted_event(" + event_type + "{" +
-                           payload + "}, __target);\n" + ind + "    }\n" + ind + "}\n";
+                           payload + "}, target);\n" + ind + "    }\n" + ind + "}\n";
                 }
                 std::string emit_call = dispatcher_available ? "dispatcher.trigger(" + event_type + "{"
                                                              : s.event_name + "_buffer.push_back({";
@@ -2046,10 +2053,10 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
         // through generated_dispatch_event; phase dispatch always calls with
         // the default (targeted-event-delivery: routing has no meaning for a
         // phase activation).
-        out << ", std::optional<entt::entity> __recipient = std::nullopt";
+        out << ", std::optional<entt::entity> cactus_recipient = std::nullopt";
         out << ") {\n";
         out << "    (void)" << trigger_binding << ";\n";
-        out << "    (void)__recipient;\n";
+        out << "    (void)cactus_recipient;\n";
 
         if (is_pair) {
             // A pair handler snapshots both bindings' live memberships up
@@ -2071,26 +2078,40 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             // recipient run (targeted-event-delivery, "Pair target routes to
             // incident tuples"). A tuple where both bindings equal the
             // recipient is covered exactly once, by the first block below.
-            out << "    if (__recipient.has_value()) {\n";
-            out << "        const auto __target = *__recipient;\n";
-            out << "        if (std::ranges::find(__" << left.binding_name << "_snapshot, __target) != __"
-                << left.binding_name << "_snapshot.end()) {\n";
-            out << "            auto " << left.binding_name << " = __target;\n";
-            out << "            for (auto " << right.binding_name << " : __" << right.binding_name << "_snapshot) {\n";
+            // Membership is tested with all_of<> against the binding's own
+            // component set (an O(1) sparse-set check) rather than scanning
+            // the snapshot vector, since the snapshot was built moments
+            // earlier from that same view and cannot have changed since.
+            out << "    if (cactus_recipient.has_value()) {\n";
+            out << "        const auto target = *cactus_recipient;\n";
+            out << "        if (registry.all_of<";
+            for (std::size_t i = 0; i < left.cpp_types.size(); ++i) {
+                out << (i == 0 ? "" : ", ") << left.cpp_types[i];
+            }
+            out << ">(target)) {\n";
+            out << "            auto " << left.scope.binding_name << " = target;\n";
+            out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
+                << "_snapshot) {\n";
             out << pair_body;
             out << "            }\n";
             out << "        }\n";
-            out << "        if (std::ranges::find(__" << right.binding_name << "_snapshot, __target) != __"
-                << right.binding_name << "_snapshot.end()) {\n";
-            out << "            for (auto " << left.binding_name << " : __" << left.binding_name << "_snapshot) {\n";
-            out << "                if (" << left.binding_name << " == __target) { continue; }\n";
-            out << "                auto " << right.binding_name << " = __target;\n";
+            out << "        if (registry.all_of<";
+            for (std::size_t i = 0; i < right.cpp_types.size(); ++i) {
+                out << (i == 0 ? "" : ", ") << right.cpp_types[i];
+            }
+            out << ">(target)) {\n";
+            out << "            for (auto " << left.scope.binding_name << " : " << left.scope.binding_name
+                << "_snapshot) {\n";
+            out << "                if (" << left.scope.binding_name << " == target) { continue; }\n";
+            out << "                auto " << right.scope.binding_name << " = target;\n";
             out << pair_body;
             out << "            }\n";
             out << "        }\n";
             out << "    } else {\n";
-            out << "        for (auto " << left.binding_name << " : __" << left.binding_name << "_snapshot) {\n";
-            out << "            for (auto " << right.binding_name << " : __" << right.binding_name << "_snapshot) {\n";
+            out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name
+                << "_snapshot) {\n";
+            out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
+                << "_snapshot) {\n";
             out << pair_body;
             out << "            }\n";
             out << "        }\n";
@@ -2110,8 +2131,8 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
             // recipient, and only if it satisfies this handler's selection
             // (targeted-event-delivery, "Unary target ... only if it
             // satisfies that consumer's selection").
-            out << "    if (__recipient.has_value()) {\n";
-            out << "        entt::entity entity = *__recipient;\n";
+            out << "    if (cactus_recipient.has_value()) {\n";
+            out << "        entt::entity entity = *cactus_recipient;\n";
             out << "        if (registry.all_of<";
             for (std::size_t i = 0; i < filter_cpp_types.size(); ++i) {
                 out << (i == 0 ? "" : ", ") << filter_cpp_types[i];

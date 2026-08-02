@@ -6917,11 +6917,7 @@ void SemanticAnalyzer::validate_after_clauses(
         }
     };
 
-    std::vector<std::unordered_set<SymbolId>> produced_by_handler;
-    produced_by_handler.reserve(result_.execution_graph.handlers.size());
-    for (const auto& handler : result_.execution_graph.handlers) {
-        produced_by_handler.push_back(handler.contract.produced_traits());
-    }
+    const auto produced_by_handler = precompute_produced_by_handler(result_.execution_graph.handlers);
 
     for (std::size_t left_index = 0; left_index < result_.execution_graph.handlers.size(); ++left_index) {
         const auto& left = result_.execution_graph.handlers[left_index];

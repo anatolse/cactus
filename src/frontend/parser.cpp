@@ -1226,6 +1226,14 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
     SourceLocation pairs_loc;
     bool saw_pairs = false;
 
+    // A pairs: system selects tuples, not a single-entity filter, so it
+    // cannot also carry a filter/exclude/order-by clause meant for that model.
+    auto reject_if_paired = [&](const SourceLocation& clause_loc, const char* clause_name) {
+        if (saw_pairs) {
+            errors_.error(clause_loc, std::string("'") + clause_name + "' cannot be combined with 'pairs:' on the same system");
+        }
+    };
+
     skip_newlines();
     if (at_pairs_clause()) {
         saw_pairs               = true;
@@ -1242,9 +1250,7 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
         auto filter_loc          = peek().location;
         auto error_count_before  = errors_.error_count();
         node.filter              = parse_filter_clause();
-        if (saw_pairs) {
-            errors_.error(filter_loc, "'filter:' cannot be combined with 'pairs:' on the same system");
-        }
+        reject_if_paired(filter_loc, "filter:");
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1256,9 +1262,7 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
         auto exclude_loc         = peek().location;
         auto error_count_before  = errors_.error_count();
         node.exclude             = parse_exclude_clause();
-        if (saw_pairs) {
-            errors_.error(exclude_loc, "'exclude:' cannot be combined with 'pairs:' on the same system");
-        }
+        reject_if_paired(exclude_loc, "exclude:");
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1270,9 +1274,7 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
         auto order_loc           = peek().location;
         auto error_count_before  = errors_.error_count();
         node.order_by            = parse_order_by_clause();
-        if (saw_pairs) {
-            errors_.error(order_loc, "'order by:' cannot be combined with 'pairs:' on the same system");
-        }
+        reject_if_paired(order_loc, "order by:");
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }

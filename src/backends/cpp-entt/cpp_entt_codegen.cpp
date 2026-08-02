@@ -1546,7 +1546,7 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     out << "    auto entity = " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
         << "(registry);\n";
     emit_child_creation_sequence(
-        out, program.module_name, archetype_name, children, "entity", "__child", role_path, program);
+        out, program.module_name, archetype_name, children, "entity", "child", role_path, program);
     out << "    return entity;\n";
     out << "}\n\n";
 
@@ -1556,7 +1556,7 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
         << archetype_node_create_at_function_name(program.module_name, archetype_name, role_path)
         << "(registry, hint);\n";
     emit_child_creation_sequence(
-        out, program.module_name, archetype_name, children, "entity", "__child", role_path, program);
+        out, program.module_name, archetype_name, children, "entity", "child", role_path, program);
     out << "    return entity;\n";
     out << "}\n\n";
     return out.str();

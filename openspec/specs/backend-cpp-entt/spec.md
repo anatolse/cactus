@@ -1048,3 +1048,15 @@ The cpp-entt backend SHALL lower each external handler to a callback or recogniz
 - **WHEN** selectionless InputSource handles input
 - **THEN** generated code calls it once rather than iterating registry entities
 
+### Requirement: cpp-entt backend avoids reserved identifiers for spawn and foreach temporaries
+The cpp-entt backend SHALL NOT use C++ reserved double-leading-underscore identifiers (e.g. `__spawned`) for locally-scoped temporaries emitted while lowering spawn expressions or `foreach` statements. Generated temporaries for these constructs SHALL use plain, non-reserved names, with `foreach` snapshot temporaries remaining unique per call site.
+
+#### Scenario: Spawn expression temporaries avoid reserved prefix
+- **WHEN** the backend lowers a `spawn` expression, a template-backed spawn with overrides, or a hierarchical spawn with child overrides
+- **THEN** the generated entity-handle, existing-component, override-accumulator, and committed-copy temporaries do not use a C++ reserved (double-leading-underscore) name
+
+#### Scenario: Foreach snapshot temporaries avoid reserved prefix
+- **WHEN** the backend lowers a `foreach` statement over a list-valued expression
+- **THEN** the generated snapshot temporary's name does not use a C++ reserved (double-leading-underscore) prefix
+- **AND** the name remains unique per call site so nested or sibling `foreach` statements in the same generated function do not collide
+

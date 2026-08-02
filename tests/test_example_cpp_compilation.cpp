@@ -369,7 +369,7 @@ TEST_CASE("integration: hierarchical entity templates example generates cpp-entt
 
     // Tree creation wires Parent on every non-root node to its immediate parent.
     CHECK(code.find("create_hierarchical_entities__tree__node__crown__gem__sparkle") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<std_core__Parent>(__child_0, std_core__Parent{.parent = entity});") !=
+    CHECK(code.find("registry.emplace_or_replace<std_core__Parent>(child_0, std_core__Parent{.parent = entity});") !=
           std::string::npos);
 }
 

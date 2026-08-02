@@ -629,7 +629,7 @@ void emit_sort_call(std::ostringstream& out, const SystemNode& sys) {
 }
 
 std::string foreach_temp_name(const ForeachStmt& stmt) {
-    return "__foreach_snapshot_" + std::to_string(std::max(stmt.location.line, 0)) + "_" +
+    return "foreach_snapshot_" + std::to_string(std::max(stmt.location.line, 0)) + "_" +
            std::to_string(std::max(stmt.location.column, 0));
 }
 
@@ -809,13 +809,13 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
 
         const std::string cpp_name = trait_cpp_from_entry(override_entry, program);
         out << ind << "{\n";
-        out << ind << "    auto __existing = registry.try_get<" << cpp_name << ">(" << entity_name << ");\n";
-        out << ind << "    auto __value = __existing ? *__existing : " << cpp_name << "{};\n";
+        out << ind << "    auto existing = registry.try_get<" << cpp_name << ">(" << entity_name << ");\n";
+        out << ind << "    auto override_value = existing ? *existing : " << cpp_name << "{};\n";
         for (const auto& assignment : override_entry.assignments) {
-            out << ind << "    __value." << assignment.name << " = "
+            out << ind << "    override_value." << assignment.name << " = "
                 << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
         }
-        out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", __value);\n";
+        out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", override_value);\n";
         out << ind << "}\n";
     }
     return out.str();
@@ -928,25 +928,25 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     out << "([&]() {\n";
     const bool graph_runtime = !program.execution_graph.phases.empty();
     if (graph_runtime) {
-        out << "    auto __spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
+        out << "    auto spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
-        out << "            auto __committed = "
-            << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, __spawned);\n";
-        out << emit_spawn_overrides("__committed", root_overrides, 3, trait_names, program, pointer_aliases, pair_scope);
+        out << "            auto committed = "
+            << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, spawned);\n";
+        out << emit_spawn_overrides("committed", root_overrides, 3, trait_names, program, pointer_aliases, pair_scope);
     } else {
-        out << "    auto __spawned = " << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path)
+        out << "    auto spawned = " << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path)
             << "(registry);\n";
-        out << emit_spawn_overrides("__spawned", root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
+        out << emit_spawn_overrides("spawned", root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
     emit_spawn_child_expansion(out,
                                tmpl_module,
                                tmpl_local,
                                children,
                                child_overrides,
-                               graph_runtime ? "__committed" : "__spawned",
-                               "__child",
+                               graph_runtime ? "committed" : "spawned",
+                               "child",
                                role_path,
                                trait_names,
                                program,
@@ -955,7 +955,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     if (graph_runtime) {
         out << "        });\n";
     }
-    out << "    return __spawned;\n";
+    out << "    return spawned;\n";
     out << "})()";
     return out.str();
 }
@@ -983,18 +983,18 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
     std::ostringstream out;
     out << "([&]() {\n";
     if (!program.execution_graph.phases.empty()) {
-        out << "    auto __spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
+        out << "    auto spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
-        out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, __spawned);\n";
-        out << emit_spawn_overrides("__spawned", spawn.overrides, 3, trait_names, program, pointer_aliases, pair_scope);
+        out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, spawned);\n";
+        out << emit_spawn_overrides("spawned", spawn.overrides, 3, trait_names, program, pointer_aliases, pair_scope);
         out << "        });\n";
     } else {
-        out << "    auto __spawned = " << archetype_create_function_name(tmpl_id, program) << "(registry);\n";
-        out << emit_spawn_overrides("__spawned", spawn.overrides, 1, trait_names, program, pointer_aliases, pair_scope);
+        out << "    auto spawned = " << archetype_create_function_name(tmpl_id, program) << "(registry);\n";
+        out << emit_spawn_overrides("spawned", spawn.overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
-    out << "    return __spawned;\n";
+    out << "    return spawned;\n";
     out << "})()";
     return out.str();
 }
@@ -1833,21 +1833,21 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 result << ind << "{\n";
                 if (!program.execution_graph.phases.empty()) {
                     result << ind
-                           << "    auto __spawned = "
+                           << "    auto spawned = "
                               "cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
                     result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
                     result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
                     result << ind << "        [=](entt::registry& registry) mutable {\n";
                     result << ind << "            " << archetype_create_at_function_name(tmpl_id, program)
-                           << "(registry, __spawned);\n";
+                           << "(registry, spawned);\n";
                     result << emit_spawn_overrides(
-                        "__spawned", s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
+                        "spawned", s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
                     result << ind << "        });\n";
                 } else {
-                    result << ind << "    auto __spawned = " << archetype_create_function_name(tmpl_id, program)
+                    result << ind << "    auto spawned = " << archetype_create_function_name(tmpl_id, program)
                            << "(registry);\n";
                     result << emit_spawn_overrides(
-                        "__spawned", s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
+                        "spawned", s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
                 }
                 result << ind << "}\n";
                 return result.str();

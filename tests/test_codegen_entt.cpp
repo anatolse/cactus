@@ -1525,11 +1525,11 @@ TEST_CASE("Codegen EnTT: spawn of composed template constructs flattened traits 
     CHECK(template_fn.find("component.speed") != std::string::npos);
     CHECK(template_fn.find("= 2.0F;") != std::string::npos);
 
-    CHECK(system_fn.find("auto __spawned = create_walker_enemy(registry);") != std::string::npos);
-    CHECK(system_fn.find("auto __existing = registry.try_get<Health>(__spawned);") != std::string::npos);
-    CHECK(system_fn.find("auto __value = __existing ? *__existing : Health{};") != std::string::npos);
-    CHECK(system_fn.find("__value.armor = 7;") != std::string::npos);
-    CHECK(system_fn.find("registry.emplace_or_replace<Health>(__spawned, __value);") != std::string::npos);
+    CHECK(system_fn.find("auto spawned = create_walker_enemy(registry);") != std::string::npos);
+    CHECK(system_fn.find("auto existing = registry.try_get<Health>(spawned);") != std::string::npos);
+    CHECK(system_fn.find("auto override_value = existing ? *existing : Health{};") != std::string::npos);
+    CHECK(system_fn.find("override_value.armor = 7;") != std::string::npos);
+    CHECK(system_fn.find("registry.emplace_or_replace<Health>(spawned, override_value);") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: spawn expression of composed template returns created entity",
@@ -1560,10 +1560,10 @@ TEST_CASE("Codegen EnTT: spawn expression of composed template returns created e
     const auto system_fn = generated_function(code, "void spawner_tick");
 
     CHECK(system_fn.find("auto spawned = ([&]()") != std::string::npos);
-    CHECK(system_fn.find("auto __spawned = create_walker_enemy(registry);") != std::string::npos);
-    CHECK(system_fn.find("auto __existing = registry.try_get<Patrol>(__spawned);") != std::string::npos);
-    CHECK(system_fn.find("__value.speed = 3.0F;") != std::string::npos);
-    CHECK(system_fn.find("return __spawned;") != std::string::npos);
+    CHECK(system_fn.find("auto spawned = create_walker_enemy(registry);") != std::string::npos);
+    CHECK(system_fn.find("auto existing = registry.try_get<Patrol>(spawned);") != std::string::npos);
+    CHECK(system_fn.find("override_value.speed = 3.0F;") != std::string::npos);
+    CHECK(system_fn.find("return spawned;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
@@ -2224,9 +2224,9 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("auto __foreach_snapshot_") != std::string::npos);
+    CHECK(code.find("auto foreach_snapshot_") != std::string::npos);
     CHECK(code.find("= Detector_comp.hits;") != std::string::npos);
-    CHECK(code.find("for (const auto& hit : __foreach_snapshot_") != std::string::npos);
+    CHECK(code.find("for (const auto& hit : foreach_snapshot_") != std::string::npos);
     CHECK(code.find("if (registry.valid(hit.victim))") != std::string::npos);
 }
 
@@ -3159,9 +3159,9 @@ TEST_CASE("Codegen EnTT: hierarchical creation assigns Parent to the immediate p
 
     const auto wrapper = generated_function(code, "entt::entity create_rig(entt::registry& registry)");
     // Direct child points at the root; grandchild points at the child, not the root.
-    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(__child_0, Parent{.parent = entity});") !=
+    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = entity});") !=
           std::string::npos);
-    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(__child_0_0, Parent{.parent = __child_0});") !=
+    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(child_0_0, Parent{.parent = child_0});") !=
           std::string::npos);
     // The root never receives a generated Parent relation.
     CHECK(wrapper.find("Parent>(entity") == std::string::npos);
@@ -3210,8 +3210,8 @@ TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls cano
                                     program);
     const auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("auto __spawned = create_rig(registry);") != std::string::npos);
-    CHECK(code.find("return __spawned;") != std::string::npos);
+    CHECK(code.find("auto spawned = create_rig(registry);") != std::string::npos);
+    CHECK(code.find("return spawned;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[codegen-entt][hierarchy]") {
@@ -3234,17 +3234,17 @@ TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Inline expansion uses the per-node helpers, not the canonical wrapper.
-    CHECK(code.find("auto __spawned = create_rig__node(registry);") != std::string::npos);
-    CHECK(code.find("auto __child_0 = create_rig__node__socket(registry);") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<Parent>(__child_0, Parent{.parent = __spawned});") !=
+    CHECK(code.find("auto spawned = create_rig__node(registry);") != std::string::npos);
+    CHECK(code.find("auto child_0 = create_rig__node__socket(registry);") != std::string::npos);
+    CHECK(code.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = spawned});") !=
           std::string::npos);
-    CHECK(code.find("auto __child_0_0 = create_rig__node__socket__gem(registry);") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<Parent>(__child_0_0, Parent{.parent = __child_0});") !=
+    CHECK(code.find("auto child_0_0 = create_rig__node__socket__gem(registry);") != std::string::npos);
+    CHECK(code.find("registry.emplace_or_replace<Parent>(child_0_0, Parent{.parent = child_0});") !=
           std::string::npos);
     // Per-node overrides applied to the matching created entity.
-    CHECK(code.find("registry.try_get<Tag>(__child_0)") != std::string::npos);
-    CHECK(code.find("registry.try_get<Growth>(__child_0_0)") != std::string::npos);
-    CHECK(code.find("return __spawned;") != std::string::npos);
+    CHECK(code.find("registry.try_get<Tag>(child_0)") != std::string::npos);
+    CHECK(code.find("registry.try_get<Growth>(child_0_0)") != std::string::npos);
+    CHECK(code.find("return spawned;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in setup", "[codegen-entt][hierarchy]") {
@@ -3264,7 +3264,7 @@ TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in se
     CHECK(code.find("create_rig1(registry);") != std::string::npos);
     const auto wrapper = generated_function(code, "entt::entity create_rig1(entt::registry& registry)");
     CHECK(wrapper.find("create_rig1__node__socket(registry)") != std::string::npos);
-    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(__child_0, Parent{.parent = entity});") !=
+    CHECK(wrapper.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = entity});") !=
           std::string::npos);
     // Child override value is baked into the per-node helper.
     const auto socket_fn = generated_function(code, "entt::entity create_rig1__node__socket(entt::registry&");
@@ -4111,9 +4111,9 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("auto __spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);") !=
+    CHECK(code.find("auto spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);") !=
           std::string::npos);
-    CHECK(code.find("create_particle_at(registry, __spawned);") != std::string::npos);
+    CHECK(code.find("create_particle_at(registry, spawned);") != std::string::npos);
     CHECK(code.find("generated_queue_structural_command(") != std::string::npos);
     CHECK(code.find("CactusStructuralCommand::Kind::Spawn") != std::string::npos);
     CHECK(code.find("CactusStructuralCommand::Kind::Add") != std::string::npos);
@@ -4158,7 +4158,7 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         "                x = 1.0\n",
         legacy_program);
     const auto legacy_code = CppEnttCodegen::generate(legacy);
-    CHECK(legacy_code.find("auto __spawned = create_particle(registry);") != std::string::npos);
+    CHECK(legacy_code.find("auto spawned = create_particle(registry);") != std::string::npos);
     CHECK(legacy_code.find("generated_reserve_entity") == std::string::npos);
     CHECK(legacy_code.find("generated_queue_structural_command") == std::string::npos);
 }

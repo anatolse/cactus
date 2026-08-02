@@ -837,6 +837,21 @@ The cpp-entt backend SHALL compile recognized `std.physics.flat.query` and `std.
 - **WHEN** authored code uses `query.raycast[Wall, not Trigger](origin = p, dir = d, max_dist = dist)`
 - **THEN** the generated code performs a raycast-style search limited by the listed trait filters
 
+### Requirement: cpp-entt backend implements spatial queries via shared runtime helpers
+The cpp-entt backend SHALL implement the search logic for `nearest`, `overlap_box`, `overlap_circle`, `overlap_sphere`, and `raycast` spatial queries as shared runtime helper functions rather than duplicating a per-dimension inline search loop at each generated call site. Generated call sites for these queries and for `std.query` expressions (`exists`, `count`, `first`, `all`, `parent`) SHALL NOT use C++ reserved double-leading-underscore identifiers.
+
+#### Scenario: Flat and volume spatial queries share search logic
+- **WHEN** the backend lowers a `std.physics.flat.query` or `std.physics.volume.query` spatial query expression
+- **THEN** the generated call site invokes a shared runtime helper for that query kind rather than emitting a fully inlined search loop
+
+#### Scenario: Spatial query call sites avoid reserved identifiers
+- **WHEN** the backend lowers `nearest`, `overlap_box`, `overlap_circle`, `overlap_sphere`, or `raycast`
+- **THEN** the generated call site does not declare or reference a C++ reserved (double-leading-underscore) local identifier
+
+#### Scenario: ECS query call sites avoid reserved identifiers
+- **WHEN** the backend lowers a `std.query` expression (`exists`, `count`, `first`, `all`, `parent`)
+- **THEN** the generated code does not declare or reference a C++ reserved (double-leading-underscore) local identifier
+
 ### Requirement: Editor glue emission is gated on canonical trait identity
 The cpp-entt backend SHALL decide whether to emit editor runtime glue — the
 `register_editor_hit_test_impl`, `register_editor_spawn_impl`, and

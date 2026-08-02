@@ -7,6 +7,8 @@ use std.transform.flat as tf
 
 pub enum ShapeType:
     Rectangle
+    # Circle reuses Shape.size.x as its diameter; size.y is ignored.
+    Circle
 
 pub trait Shape:
     var type: ShapeType

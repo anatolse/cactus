@@ -2312,6 +2312,11 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << "                               " << shape << "_comp.size,\n";
         out << "                               " << shape << "_comp.color);\n";
         out << "                break;\n";
+        out << "            case " << shape_type << "::Circle:\n";
+        out << "                DrawCircleV(" << wt << "_comp.position,\n";
+        out << "                            " << shape << "_comp.size.x / 2.0F,\n";
+        out << "                            " << shape << "_comp.color);\n";
+        out << "                break;\n";
         out << "        }\n";
         out << "    });\n";
         out << "    EndMode2D();\n";

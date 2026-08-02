@@ -755,6 +755,46 @@ TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime wi
     CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via DrawCircleV alongside Rectangle",
+          "[codegen-entt][render][shapes]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.render.shapes\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "enum ShapeType:\n"
+        "    Rectangle\n"
+        "    Circle\n"
+        "trait Shape:\n"
+        "    var type: ShapeType\n"
+        "    var size: vec2\n"
+        "    var color: color\n"
+        "    var visible: bool\n"
+        "event render\n"
+        "extern system ShapeRenderer:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "        Shape\n"
+        "    on render:\n"
+        "        reads:\n"
+        "            WorldTransform\n"
+        "            Shape\n"
+        "        effects:\n"
+        "            graphics\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    // Circle draws via DrawCircleV using size.x as diameter (radius = size.x / 2).
+    CHECK(code.find("case ShapeType::Circle:") != std::string::npos);
+    CHECK(code.find("DrawCircleV(WorldTransform_comp.position") != std::string::npos);
+    CHECK(code.find("Shape_comp.size.x / 2.0F") != std::string::npos);
+    // Rectangle emission remains unaffected.
+    CHECK(code.find("case ShapeType::Rectangle:") != std::string::npos);
+    CHECK(code.find("DrawRectangleV(WorldTransform_comp.position") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: model renderer extern system binds to backend runtime without user callback",
           "[codegen-entt][assets][dsl-model-assets]") {
     ProgramNode program;

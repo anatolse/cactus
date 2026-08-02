@@ -1,0 +1,273 @@
+module main
+
+use std.transform.flat as tf
+use std.render.shapes as shapes
+use std.math as math
+use std.math.vec2 as v2m
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+trait Bubble:
+    var velocity: vec2
+    var radius: float
+
+trait Wall:
+    var normal: vec2
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+event WallBounce:
+    normal: vec2
+
+event BubbleBounce:
+    new_velocity: vec2
+
+# ── Systems ───────────────────────────────────────────────────────────────────
+
+# MoveBubbles: integrates every bubble's position from its current velocity.
+system MoveBubbles:
+    filter:
+        Bubble
+        tf.WorldTransform
+
+    on tick:
+        position = vec2(position.x + velocity.x * tick.dt, position.y + velocity.y * tick.dt)
+
+# DetectWallContact: cross-domain pair producer (Bubble x Wall). Circle-vs-box
+# overlap against the wall's authored size, gated by a closing-speed check
+# along the wall's fixed normal so a resting/sliding bubble doesn't re-trigger
+# every tick. Emits a targeted WallBounce to the bubble side only.
+system DetectWallContact:
+    pairs:
+        bubble:
+            Bubble
+            tf.WorldTransform
+        wall:
+            Wall
+            tf.WorldTransform
+            shapes.Shape
+
+    on tick:
+        let bubble_pos = bubble.tf.WorldTransform.position
+        let wall_pos = wall.tf.WorldTransform.position
+        let wall_size = wall.shapes.Shape.size
+        let closest_x = math.clamp(bubble_pos.x, wall_pos.x - wall_size.x / 2.0, wall_pos.x + wall_size.x / 2.0)
+        let closest_y = math.clamp(bubble_pos.y, wall_pos.y - wall_size.y / 2.0, wall_pos.y + wall_size.y / 2.0)
+        let closest_point = vec2(closest_x, closest_y)
+        let overlapping = v2m.distance(bubble_pos, closest_point) < bubble.Bubble.radius
+        let closing = v2m.dot(bubble.Bubble.velocity, wall.Wall.normal) > 0.0
+        if overlapping and closing:
+            emit WallBounce to bubble:
+                normal = wall.Wall.normal
+
+# ResolveWallBounce: unary consumer. Reflects the bubble's own velocity across
+# the wall normal carried by the event (elastic reflection, speed-preserving).
+system ResolveWallBounce:
+    filter:
+        Bubble
+
+    on WallBounce as bounce:
+        let vn = velocity.x * bounce.normal.x + velocity.y * bounce.normal.y
+        let reflect_scale = 2.0 * vn
+        velocity = vec2(velocity.x - bounce.normal.x * reflect_scale, velocity.y - bounce.normal.y * reflect_scale)
+
+# DetectBubbleContact: same-domain pair producer (Bubble x Bubble). Per
+# dsl-pair-relations this iterates the full directed product, including
+# self-pairs, which the `a != b` guard rejects. For every overlapping,
+# approaching directed tuple it computes `a`'s post-collision velocity via the
+# standard mass-weighted (radius^2) 1D-along-normal elastic solve, reading
+# both sides' current velocity — legal under the pair read-only rule since
+# it's a pure read. The reverse tuple (b, a) independently computes and emits
+# b's half from the same unmutated pre-collision state.
+system DetectBubbleContact:
+    pairs:
+        a:
+            Bubble
+            tf.WorldTransform
+        b:
+            Bubble
+            tf.WorldTransform
+
+    on tick:
+        if a != b:
+            let pos_a = a.tf.WorldTransform.position
+            let pos_b = b.tf.WorldTransform.position
+            let radius_a = a.Bubble.radius
+            let radius_b = b.Bubble.radius
+            let dx = pos_b.x - pos_a.x
+            let dy = pos_b.y - pos_a.y
+            let dist = math.sqrt(dx * dx + dy * dy)
+            if dist < radius_a + radius_b:
+                let normal_x = dx / dist
+                let normal_y = dy / dist
+                let vel_a = a.Bubble.velocity
+                let vel_b = b.Bubble.velocity
+                let closing = (vel_a.x - vel_b.x) * normal_x + (vel_a.y - vel_b.y) * normal_y
+                if closing > 0.0:
+                    let mass_a = radius_a * radius_a
+                    let mass_b = radius_b * radius_b
+                    let v1n = vel_a.x * normal_x + vel_a.y * normal_y
+                    let v2n = vel_b.x * normal_x + vel_b.y * normal_y
+                    let v1n_prime = ((mass_a - mass_b) * v1n + 2.0 * mass_b * v2n) / (mass_a + mass_b)
+                    let delta = v1n_prime - v1n
+                    let new_velocity = vec2(vel_a.x + normal_x * delta, vel_a.y + normal_y * delta)
+                    emit BubbleBounce to a:
+                        new_velocity = new_velocity
+
+# ResolveBubbleBounce: unary consumer. Applies the resolved post-collision
+# velocity computed by DetectBubbleContact directly.
+system ResolveBubbleBounce:
+    filter:
+        Bubble
+
+    on BubbleBounce as bounce:
+        velocity = bounce.new_velocity
+
+# ── Entities: arena walls ────────────────────────────────────────────────────
+# A 500x500 square arena (world-unit bounds x:[150,650] y:[50,550]) centered
+# in the default 800x600 window, bounded by 4 thin static walls. Each wall's
+# `normal` points outward (away from the arena interior, through the wall) —
+# the sign only matters for the closing-speed guard; elastic reflection is
+# invariant to normal sign.
+
+entity TopWall:
+    tf.WorldTransform:
+        position = vec2(400.0, 40.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Wall:
+        normal = vec2(0.0, -1.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(540.0, 20.0)
+        color = #444444FF
+        visible = true
+
+entity BottomWall:
+    tf.WorldTransform:
+        position = vec2(400.0, 560.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Wall:
+        normal = vec2(0.0, 1.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(540.0, 20.0)
+        color = #444444FF
+        visible = true
+
+entity LeftWall:
+    tf.WorldTransform:
+        position = vec2(140.0, 300.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Wall:
+        normal = vec2(-1.0, 0.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(20.0, 540.0)
+        color = #444444FF
+        visible = true
+
+entity RightWall:
+    tf.WorldTransform:
+        position = vec2(660.0, 300.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Wall:
+        normal = vec2(1.0, 0.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Rectangle
+        size = vec2(20.0, 540.0)
+        color = #444444FF
+        visible = true
+
+# ── Entities: bubbles ────────────────────────────────────────────────────────
+# 6 bubbles with distinct radii, spread on a 3x2 grid well inside the arena
+# (spacing exceeds any pair's radius sum, so they start non-overlapping), each
+# with a different initial velocity. Speeds are kept well under the smallest
+# radius per tick at ~60fps to avoid discrete-time tunneling.
+
+entity Bubble1:
+    tf.WorldTransform:
+        position = vec2(250.0, 200.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Bubble:
+        velocity = vec2(120.0, 90.0)
+        radius = 12.0
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(24.0, 24.0)
+        color = #FF6B6BFF
+        visible = true
+
+entity Bubble2:
+    tf.WorldTransform:
+        position = vec2(400.0, 200.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Bubble:
+        velocity = vec2(-100.0, 130.0)
+        radius = 16.0
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(32.0, 32.0)
+        color = #4ECDC4FF
+        visible = true
+
+entity Bubble3:
+    tf.WorldTransform:
+        position = vec2(550.0, 200.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Bubble:
+        velocity = vec2(90.0, -110.0)
+        radius = 20.0
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(40.0, 40.0)
+        color = #FFD93DFF
+        visible = true
+
+entity Bubble4:
+    tf.WorldTransform:
+        position = vec2(250.0, 400.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Bubble:
+        velocity = vec2(-130.0, -80.0)
+        radius = 24.0
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(48.0, 48.0)
+        color = #6BCB77FF
+        visible = true
+
+entity Bubble5:
+    tf.WorldTransform:
+        position = vec2(400.0, 400.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Bubble:
+        velocity = vec2(110.0, 100.0)
+        radius = 28.0
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(56.0, 56.0)
+        color = #4D96FFFF
+        visible = true
+
+entity Bubble6:
+    tf.WorldTransform:
+        position = vec2(550.0, 400.0)
+        rotation = 0.0
+        scale = vec2(1.0, 1.0)
+    Bubble:
+        velocity = vec2(-90.0, -120.0)
+        radius = 32.0
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(64.0, 64.0)
+        color = #B388FFFF
+        visible = true

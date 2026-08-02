@@ -1,5 +1,7 @@
 #include "backends/cpp-entt/runtime.hpp"
 
+#include "backends/cpp-entt/raylib_io.hpp"
+
 #include <raylib.h>
 #include <rlgl.h>
 
@@ -560,7 +562,7 @@ void reset_lighting_shader_state(LightingShaderState& state) noexcept {
 }
 
 bool load_lighting_shader(LightingShaderState& state, const char* vertex_src, const char* fragment_src) {
-    if (!IsWindowReady()) {
+    if (!cactus::runtime::raylib::IsWindowReady()) {
         return false;
     }
 
@@ -624,7 +626,7 @@ Shader* ensure_skinned_lighting_shader() {
 
 void clear_lighting_shader() noexcept {
     for (auto* state : {&lighting_shader_state(), &skinned_lighting_shader_state()}) {
-        if (state->loaded && IsWindowReady()) {
+        if (state->loaded && cactus::runtime::raylib::IsWindowReady()) {
             UnloadShader(state->shader);
         }
         reset_lighting_shader_state(*state);
@@ -709,7 +711,7 @@ Color placeholder_material_color(const std::string_view asset_id) noexcept {
 void clear_texture_store() noexcept {
     for (auto& [runtime_id, entry] : textures()) {
         (void)runtime_id;
-        if (entry.loaded && entry.owned && IsWindowReady()) {
+        if (entry.loaded && entry.owned && cactus::runtime::raylib::IsWindowReady()) {
             UnloadTexture(entry.texture);
         }
     }
@@ -719,7 +721,7 @@ void clear_texture_store() noexcept {
 void clear_mesh_store() noexcept {
     for (auto& [runtime_id, entry] : meshes()) {
         (void)runtime_id;
-        if (entry.loaded && entry.owned && IsWindowReady()) {
+        if (entry.loaded && entry.owned && cactus::runtime::raylib::IsWindowReady()) {
             UnloadMesh(entry.mesh);
         }
     }
@@ -729,7 +731,7 @@ void clear_mesh_store() noexcept {
 void clear_material_store() noexcept {
     for (auto& [runtime_id, entry] : materials()) {
         (void)runtime_id;
-        if (entry.loaded && entry.owned && IsWindowReady()) {
+        if (entry.loaded && entry.owned && cactus::runtime::raylib::IsWindowReady()) {
             UnloadMaterial(entry.material);
         }
     }
@@ -742,7 +744,7 @@ void clear_model_store() noexcept {
         if (entry.animations != nullptr) {
             UnloadModelAnimations(entry.animations, entry.animation_count);
         }
-        if (entry.loaded && IsWindowReady()) {
+        if (entry.loaded && cactus::runtime::raylib::IsWindowReady()) {
             UnloadModel(entry.model);
         }
     }
@@ -757,7 +759,7 @@ Texture2D* ensure_texture_resource(const int runtime_id) {
     }
     auto& entry = textures()[runtime_id];
     if (!entry.loaded) {
-        if (!IsWindowReady()) {
+        if (!cactus::runtime::raylib::IsWindowReady()) {
             return nullptr;
         }
         Image image   = GenImageColor(1, 1, WHITE);
@@ -775,7 +777,7 @@ Mesh* ensure_mesh_resource(const int runtime_id) {
     }
     auto& entry = meshes()[runtime_id];
     if (!entry.loaded) {
-        if (!IsWindowReady()) {
+        if (!cactus::runtime::raylib::IsWindowReady()) {
             return nullptr;
         }
         entry.mesh = GenMeshCube(1.0F, 1.0F, 1.0F);
@@ -792,7 +794,7 @@ Material* ensure_material_resource(const int runtime_id) {
     }
     auto& entry = materials()[runtime_id];
     if (!entry.loaded) {
-        if (!IsWindowReady()) {
+        if (!cactus::runtime::raylib::IsWindowReady()) {
             return nullptr;
         }
         entry.material = LoadMaterialDefault();
@@ -835,7 +837,7 @@ Model* ensure_model_resource(const int runtime_id) {
         record_model_load_failure("model file missing: " + entry.path);
         return nullptr;
     }
-    if (!IsWindowReady()) {
+    if (!cactus::runtime::raylib::IsWindowReady()) {
         return nullptr;
     }
     entry.model = LoadModel(entry.path.c_str());
@@ -953,7 +955,7 @@ void flush_mesh_queue() noexcept {
     render_debug_state_storage().active_point_lights =
         std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
     render_debug_state_storage().used_lit_mesh_shader = render_debug_state_storage().active_point_lights > 0;
-    if (!IsWindowReady()) {
+    if (!cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
 
@@ -961,7 +963,7 @@ void flush_mesh_queue() noexcept {
 
     apply_point_lights(camera);
 
-    BeginMode3D(camera);
+    cactus::runtime::raylib::BeginMode3D(camera);
     for (const auto& submission : mesh_queue()) {
         Mesh* mesh         = ensure_mesh_resource(submission.mesh_runtime_id);
         Material* material = ensure_material_resource(submission.material_runtime_id);
@@ -969,9 +971,9 @@ void flush_mesh_queue() noexcept {
             continue;
         }
         material->maps[MATERIAL_MAP_DIFFUSE].color = submission.diffuse_color;
-        DrawMesh(*mesh, *material, mesh_transform_matrix(submission));
+        cactus::runtime::raylib::DrawMesh(*mesh, *material, mesh_transform_matrix(submission));
     }
-    EndMode3D();
+    cactus::runtime::raylib::EndMode3D();
 }
 
 void flush_model_queue() noexcept {
@@ -986,11 +988,11 @@ void flush_model_queue() noexcept {
 
     // Materialization still runs headless so failure bookkeeping stays
     // test-observable; only the draw calls require a window.
-    const bool window_ready = IsWindowReady();
+    const bool window_ready = cactus::runtime::raylib::IsWindowReady();
     if (window_ready) {
         const Camera3D camera = get_active_camera_3d();
         apply_point_lights(camera);
-        BeginMode3D(camera);
+        cactus::runtime::raylib::BeginMode3D(camera);
     }
     for (const auto& submission : model_queue()) {
         const auto it = models().find(submission.model_runtime_id);
@@ -1023,12 +1025,12 @@ void flush_model_queue() noexcept {
         // Draw every submesh with the embedded material bound to it in the file.
         for (int i = 0; i < model->meshCount; ++i) {
             const int material_index = model->meshMaterial[i];
-            DrawMesh(model->meshes[i], model->materials[material_index], xform);
+            cactus::runtime::raylib::DrawMesh(model->meshes[i], model->materials[material_index], xform);
         }
         ++render_debug_state_storage().drawn_models;
     }
     if (window_ready) {
-        EndMode3D();
+        cactus::runtime::raylib::EndMode3D();
     }
 }
 
@@ -1037,7 +1039,7 @@ void flush_model_queue() noexcept {
 Mesh& text_plane_mesh() noexcept {
     static Mesh mesh{};
     static bool ready{false};
-    if (!ready && IsWindowReady()) {
+    if (!ready && cactus::runtime::raylib::IsWindowReady()) {
         constexpr int kVerts     = 4;
         constexpr int kTriangles = 2;
 
@@ -1113,7 +1115,7 @@ Mesh& text_plane_mesh() noexcept {
 }
 
 void flush_text_2d_queue() noexcept {
-    if (text_2d_queue().empty() || !IsWindowReady()) {
+    if (text_2d_queue().empty() || !cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
     const Font font          = GetFontDefault();
@@ -1121,29 +1123,29 @@ void flush_text_2d_queue() noexcept {
 
     Camera2D camera{};
     camera.zoom = 1.0F;
-    BeginMode2D(camera);
+    cactus::runtime::raylib::BeginMode2D(camera);
     for (const auto& sub : text_2d_queue()) {
         const auto fs      = static_cast<float>(sub.font_size);
         const Vector2 size = MeasureTextEx(font, sub.text.c_str(), fs, kSpacing);
         const Vector2 origin{.x = size.x * 0.5F, .y = size.y * 0.5F};
-        DrawTextPro(font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
+        cactus::runtime::raylib::DrawTextPro(font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
     }
-    EndMode2D();
+    cactus::runtime::raylib::EndMode2D();
 }
 
 void flush_screen_label_queue() noexcept {
-    if (screen_label_queue().empty() || !IsWindowReady()) {
+    if (screen_label_queue().empty() || !cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
     const Font font          = GetFontDefault();
     constexpr float kSpacing = 1.0F;
     for (const auto& sub : screen_label_queue()) {
-        DrawTextEx(font, sub.text.c_str(), sub.position, static_cast<float>(sub.font_size), kSpacing, sub.color);
+        cactus::runtime::raylib::DrawTextEx(font, sub.text.c_str(), sub.position, static_cast<float>(sub.font_size), kSpacing, sub.color);
     }
 }
 
 void flush_text_3d_queue() noexcept {
-    if (text_3d_queue().empty() || !IsWindowReady()) {
+    if (text_3d_queue().empty() || !cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
 
@@ -1174,10 +1176,10 @@ void flush_text_3d_queue() noexcept {
         const int draw_x    = (tex_w - text_w_px) / 2;
         const int draw_y    = (tex_h - bake_fs) / 2;
 
-        BeginTextureMode(entry.rt);
-        ClearBackground(Color{.r = 0, .g = 0, .b = 0, .a = 0});
-        DrawText(sub.text.c_str(), draw_x, draw_y, bake_fs, sub.color);
-        EndTextureMode();
+        cactus::runtime::raylib::BeginTextureMode(entry.rt);
+        cactus::runtime::raylib::ClearBackground(Color{.r = 0, .g = 0, .b = 0, .a = 0});
+        cactus::runtime::raylib::DrawText(sub.text.c_str(), draw_x, draw_y, bake_fs, sub.color);
+        cactus::runtime::raylib::EndTextureMode();
 
         entry.cached_text      = sub.text;
         entry.cached_font_size = sub.font_size;
@@ -1190,7 +1192,7 @@ void flush_text_3d_queue() noexcept {
     Mesh& plane = text_plane_mesh();
 
     Material mat = LoadMaterialDefault();
-    BeginMode3D(camera);
+    cactus::runtime::raylib::BeginMode3D(camera);
     for (const auto& sub : text_3d_queue()) {
         if (sub.text.empty()) {
             continue;
@@ -1206,10 +1208,10 @@ void flush_text_3d_queue() noexcept {
             .rotation = sub.rotation,
             .scale    = sub.scale,
         });
-        DrawMesh(plane, mat, xform);
+        cactus::runtime::raylib::DrawMesh(plane, mat, xform);
         mat.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{};
     }
-    EndMode3D();
+    cactus::runtime::raylib::EndMode3D();
     UnloadMaterial(mat);
 }
 
@@ -1225,7 +1227,7 @@ void flush_sprite_queue() noexcept {
         render_debug_state_storage().drawn_sprite_layers.push_back(submission.layer);
     }
 
-    if (!IsWindowReady()) {
+    if (!cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
 
@@ -1235,7 +1237,7 @@ void flush_sprite_queue() noexcept {
     camera.rotation = 0.0F;
     camera.zoom     = 1.0F;
 
-    BeginMode2D(camera);
+    cactus::runtime::raylib::BeginMode2D(camera);
     for (const auto& submission : sprite_queue()) {
         Texture2D* texture = ensure_texture_resource(submission.runtime_id);
         if (texture == nullptr) {
@@ -1249,9 +1251,9 @@ void flush_sprite_queue() noexcept {
                             .y      = submission.position.y,
                             .width  = submission.size.x,
                             .height = submission.size.y};
-        DrawTexturePro(*texture, src, dst, Vector2{.x = 0.0F, .y = 0.0F}, 0.0F, submission.color);
+        cactus::runtime::raylib::DrawTexturePro(*texture, src, dst, Vector2{.x = 0.0F, .y = 0.0F}, 0.0F, submission.color);
     }
-    EndMode2D();
+    cactus::runtime::raylib::EndMode2D();
 }
 
 void submit_model_impl(const Vector3 position,
@@ -1309,7 +1311,7 @@ void reset_render_debug_state() noexcept {
     text_2d_queue().clear();
     text_3d_queue().clear();
     screen_label_queue().clear();
-    if (IsWindowReady()) {
+    if (cactus::runtime::raylib::IsWindowReady()) {
         for (auto& [id, entry] : text_label_3d_cache()) {
             if (entry.loaded) {
                 UnloadRenderTexture(entry.rt);
@@ -1794,7 +1796,7 @@ Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept {
 
 Vector2 editor_mouse_delta_2d() noexcept {
     const Camera2D cam  = get_active_camera_2d();
-    const Vector2 delta = GetMouseDelta();
+    const Vector2 delta = cactus::runtime::raylib::GetMouseDelta();
     return Vector2{.x = delta.x / cam.zoom, .y = delta.y / cam.zoom};
 }
 
@@ -1828,8 +1830,8 @@ Vector3 editor_mouse_delta_3d() noexcept {
     constexpr Vector3 kGroundOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     constexpr Vector3 kGroundNormal{.x = 0.0F, .y = 1.0F, .z = 0.0F};
     const Camera3D cam    = get_active_camera_3d();
-    const Vector2 cursor  = GetMousePosition();
-    const Vector2 delta   = GetMouseDelta();
+    const Vector2 cursor  = cactus::runtime::raylib::GetMousePosition();
+    const Vector2 delta   = cactus::runtime::raylib::GetMouseDelta();
     const Vector2 previous{.x = cursor.x - delta.x, .y = cursor.y - delta.y};
     const auto current_hit =
         editor_ray_plane_intersect(GetScreenToWorldRay(cursor, cam), kGroundOrigin, kGroundNormal);
@@ -1948,10 +1950,10 @@ void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rot
     }
 }
 float editor_wheel_delta() noexcept {
-    return GetMouseWheelMove();
+    return cactus::runtime::raylib::GetMouseWheelMove();
 }
 Vector2 editor_mouse_delta_screen() noexcept {
-    return GetMouseDelta();
+    return cactus::runtime::raylib::GetMouseDelta();
 }
 Vector2 editor_entity_position_2d(entt::registry& registry, entt::entity entity_id) noexcept {
     if (entity_position_2d_impl_storage()) {

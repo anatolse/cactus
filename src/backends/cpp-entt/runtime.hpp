@@ -2,6 +2,7 @@
 
 #include "common/cactus_runtime.hpp"
 
+#include "backends/cpp-entt/raylib_io.hpp"
 #include "backends/cpp-entt/spatial_query.hpp"
 
 #include <entt/entt.hpp>
@@ -271,28 +272,28 @@ inline void editor_consume(std::uint8_t button) noexcept {
 [[nodiscard]] inline bool pressed(std::uint8_t button) noexcept {
     const int mouse_button = cactus_input_button_mouse(button);
     if (mouse_button >= 0) {
-        return !is_input_mouse_consumed(mouse_button) && IsMouseButtonPressed(mouse_button);
+        return !is_input_mouse_consumed(mouse_button) && cactus::runtime::raylib::IsMouseButtonPressed(mouse_button);
     }
     const int key = cactus_input_button_key(button);
-    return key != 0 && !is_input_key_consumed(key) && IsKeyPressed(key);
+    return key != 0 && !is_input_key_consumed(key) && cactus::runtime::raylib::IsKeyPressed(key);
 }
 
 [[nodiscard]] inline bool down(std::uint8_t button) noexcept {
     const int mouse_button = cactus_input_button_mouse(button);
     if (mouse_button >= 0) {
-        return !is_input_mouse_consumed(mouse_button) && IsMouseButtonDown(mouse_button);
+        return !is_input_mouse_consumed(mouse_button) && cactus::runtime::raylib::IsMouseButtonDown(mouse_button);
     }
     const int key = cactus_input_button_key(button);
-    return key != 0 && !is_input_key_consumed(key) && IsKeyDown(key);
+    return key != 0 && !is_input_key_consumed(key) && cactus::runtime::raylib::IsKeyDown(key);
 }
 
 [[nodiscard]] inline bool released(std::uint8_t button) noexcept {
     const int mouse_button = cactus_input_button_mouse(button);
     if (mouse_button >= 0) {
-        return !is_input_mouse_consumed(mouse_button) && IsMouseButtonReleased(mouse_button);
+        return !is_input_mouse_consumed(mouse_button) && cactus::runtime::raylib::IsMouseButtonReleased(mouse_button);
     }
     const int key = cactus_input_button_key(button);
-    return key != 0 && !is_input_key_consumed(key) && IsKeyReleased(key);
+    return key != 0 && !is_input_key_consumed(key) && cactus::runtime::raylib::IsKeyReleased(key);
 }
 
 [[nodiscard]] inline float axis(std::uint8_t action) noexcept {
@@ -304,7 +305,7 @@ inline void editor_consume(std::uint8_t button) noexcept {
 }
 
 [[nodiscard]] inline Vector2 mouse_position() noexcept {
-    return GetMousePosition();
+    return cactus::runtime::raylib::GetMousePosition();
 }
 
 void generated_setup_dispatcher(entt::dispatcher& dispatcher);

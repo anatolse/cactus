@@ -770,8 +770,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
             return;
         }
         out << indent << "{\n";
-        out << indent << "    const int __sw = GetScreenWidth();\n";
-        out << indent << "    const int __sh = GetScreenHeight();\n";
+        out << indent << "    const int __sw = cactus::runtime::raylib::GetScreenWidth();\n";
+        out << indent << "    const int __sh = cactus::runtime::raylib::GetScreenHeight();\n";
         out << indent << "    static std::vector<std::pair<int,entt::entity>> __vps;\n";
         out << indent << "    __vps.clear();\n";
         out << indent << "    for (const auto& [__vp_e, __vp] : registry.view<" << render_vp_cpp
@@ -782,12 +782,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << indent << "    for (auto& [__depth, __vp_ent] : __vps) {\n";
         out << indent << "        (void)__depth;\n";
         out << indent << "        const auto& __vp = registry.get<" << render_vp_cpp << ">(__vp_ent);\n";
-        out << indent << "        BeginScissorMode(\n";
+        out << indent << "        cactus::runtime::raylib::BeginScissorMode(\n";
         out << indent << "            static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
         out << indent << "            static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
         out << indent << "            static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
         out << indent << "            static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
-        out << indent << "        if (__vp.clear) { ClearBackground(__vp.clear_color); }\n";
+        out << indent << "        if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }\n";
         if (render_emit_2d_helper) {
             out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(__vp_ent)) {\n";
             out << indent << "            const auto& __cam = registry.get<" << render_cam2d_cpp
@@ -805,7 +805,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         }
         out << indent << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
         out << indent << "        flush_viewport_3d();\n";
-        out << indent << "        EndScissorMode();\n";
+        out << indent << "        cactus::runtime::raylib::EndScissorMode();\n";
         out << indent << "    }\n";
         out << indent << "}\n";
     };
@@ -827,9 +827,9 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << indent << "        if (__es.active) { __editor_active = true; __editor_mode = __es.mode; break; }\n";
         out << indent << "    }\n";
         out << indent << "    if (__editor_active) {\n";
-        out << indent << "        DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
-        out << indent << "                              .width  = static_cast<float>(GetScreenWidth()),\n";
-        out << indent << "                              .height = static_cast<float>(GetScreenHeight())}, 3, "
+        out << indent << "        cactus::runtime::raylib::DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
+        out << indent << "                              .width  = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),\n";
+        out << indent << "                              .height = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())}, 3, "
                           "YELLOW);\n";
         out << indent << "        const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", "
                           "\"ROTATE\", \"SCALE\", \"PLACE\"};\n";
@@ -838,7 +838,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                           ": \"SELECT\";\n";
         out << indent << "        std::string __hud = std::string(\"EDIT [\") + __mode_str +\n";
         out << indent << "                            \"]  F1:toggle  W:trans  E:rot  R:scale  T:place\";\n";
-        out << indent << "        DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
+        out << indent << "        cactus::runtime::raylib::DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
         out << indent << "    }\n";
         out << indent << "}\n";
     };
@@ -2529,7 +2529,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                     // Consumed keys contribute 0.0 so editor-owned controls stay
                     // invisible to same-key gameplay axes (editor input override).
                     const auto axis_side = [](const std::string& key) {
-                        return "((!is_input_key_consumed(" + key + ") && IsKeyDown(" + key + ")) ? 1.0F : 0.0F)";
+                        return "((!is_input_key_consumed(" + key + ") && cactus::runtime::raylib::IsKeyDown(" + key + ")) ? 1.0F : 0.0F)";
                     };
                     std::string negative = "0";
                     std::string positive = "0";
@@ -3237,8 +3237,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     if (uses_viewport) {
         out << "    {\n";
-        out << "        const int __sw = GetScreenWidth();\n";
-        out << "        const int __sh = GetScreenHeight();\n";
+        out << "        const int __sw = cactus::runtime::raylib::GetScreenWidth();\n";
+        out << "        const int __sh = cactus::runtime::raylib::GetScreenHeight();\n";
         out << "        static std::vector<std::pair<int,entt::entity>> __vps;\n";
         out << "        __vps.clear();\n";
         out << "        for (const auto& [__vp_e, __vp] : registry.view<" << vp_cpp << ">().each()) {\n";
@@ -3248,12 +3248,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "        for (auto& [__depth, __vp_ent] : __vps) {\n";
         out << "            (void)__depth;\n";
         out << "            const auto& __vp = registry.get<" << vp_cpp << ">(__vp_ent);\n";
-        out << "            BeginScissorMode(\n";
+        out << "            cactus::runtime::raylib::BeginScissorMode(\n";
         out << "                static_cast<int>(__vp.x * static_cast<float>(__sw)),\n";
         out << "                static_cast<int>(__vp.y * static_cast<float>(__sh)),\n";
         out << "                static_cast<int>(__vp.width * static_cast<float>(__sw)),\n";
         out << "                static_cast<int>(__vp.height * static_cast<float>(__sh)));\n";
-        out << "            if (__vp.clear) { ClearBackground(__vp.clear_color); }\n";
+        out << "            if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }\n";
         // Camera helper selection keys on the viewport entity's resolved camera
         // component type (flat vs volume Camera), not a shared bare Camera token.
         if (emit_2d_helper) {
@@ -3277,7 +3277,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         // Draw this viewport's queued world content now (inside its scissor +
         // camera) so each split-screen region renders from its own camera.
         out << "            cactus::runtime::entt_backend::flush_viewport_3d();\n";
-        out << "            EndScissorMode();\n";
+        out << "            cactus::runtime::raylib::EndScissorMode();\n";
         out << "        }\n";
         out << "    }\n";
     }
@@ -3296,9 +3296,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            if (__es.active) { __editor_active = true; __editor_mode = __es.mode; break; }\n";
         out << "        }\n";
         out << "        if (__editor_active) {\n";
-        out << "            DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
-        out << "                                  .width  = static_cast<float>(GetScreenWidth()),\n";
-        out << "                                  .height = static_cast<float>(GetScreenHeight())}, 3, YELLOW);\n";
+        out << "            cactus::runtime::raylib::DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
+        out << "                                  .width  = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),\n";
+        out << "                                  .height = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())}, 3, YELLOW);\n";
         out << "            const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", \"ROTATE\", "
                "\"SCALE\", \"PLACE\"};\n";
         out << "            const char* __mode_str = (__editor_mode >= 0 && __editor_mode < 5)\n";
@@ -3306,7 +3306,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                "\"SELECT\";\n";
         out << "            std::string __hud = std::string(\"EDIT [\") + __mode_str +\n";
         out << "                                \"]  F1:toggle  W:trans  E:rot  R:scale  T:place\";\n";
-        out << "            DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
+        out << "            cactus::runtime::raylib::DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
         out << "        }\n";
         out << "    }\n";
     }

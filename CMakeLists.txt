@@ -228,6 +228,83 @@ function(cactus_add_example TARGET_NAME)
     set(CACTUS_EXAMPLE_${TARGET_NAME}_TARGET "${TARGET_NAME}" PARENT_SCOPE)
 endfunction()
 
+# ── Headless Behavioral Test Executables ──────────────────────────────────────
+# Parallel to cactus_add_example, but compiles a curated example's generated
+# .cpp with CACTUS_GENERATED_NO_MAIN defined, drives it directly from a
+# hand-written Catch2 test file (TEST_SOURCE), and links the CACTUS_RAYLIB_FAKE
+# variant of the C++ EnTT runtime + cactus_raylib_fake instead of a real
+# window. Test-only: excluded from ALL, registered with ctest.
+#
+# TEST_SOURCE must #include the generated file via the
+# CACTUS_HEADLESS_GENERATED_CPP macro this function defines, e.g.:
+#   #define CACTUS_GENERATED_NO_MAIN
+#   #include CACTUS_HEADLESS_GENERATED_CPP
+# (mirroring tests/example_manual_generated_main.cpp's existing pattern) so
+# the generated translation unit is compiled once, together with the test's
+# TEST_CASE bodies, rather than as a second, separately-linked object file.
+function(cactus_add_headless_behavior_test TARGET_NAME)
+    set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
+    cmake_parse_arguments(CACTUS_HEADLESS_TEST
+        ""
+        "${oneValueArgs}"
+        ""
+        ${ARGN}
+    )
+
+    if(NOT CACTUS_HEADLESS_TEST_CACTUS_SOURCE)
+        message(FATAL_ERROR "cactus_add_headless_behavior_test(${TARGET_NAME}) requires CACTUS_SOURCE")
+    endif()
+    if(NOT CACTUS_HEADLESS_TEST_BACKEND)
+        message(FATAL_ERROR "cactus_add_headless_behavior_test(${TARGET_NAME}) requires BACKEND")
+    endif()
+    if(NOT CACTUS_HEADLESS_TEST_TEST_SOURCE)
+        message(FATAL_ERROR "cactus_add_headless_behavior_test(${TARGET_NAME}) requires TEST_SOURCE")
+    endif()
+
+    set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_HEADLESS_TEST_CACTUS_SOURCE}")
+    set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.headless.generated.cpp")
+
+    add_custom_command(
+        OUTPUT "${generated_output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<SHELL_PATH:${CACTUS_GENERATED_EXAMPLES_DIR}>"
+        COMMAND $<TARGET_FILE:cactus>
+                "$<SHELL_PATH:${cactus_source}>"
+                --backend "${CACTUS_HEADLESS_TEST_BACKEND}"
+                --output "$<SHELL_PATH:${generated_output}>"
+        DEPENDS cactus "${cactus_source}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Generating headless behavioral test fixture for ${TARGET_NAME} (${CACTUS_HEADLESS_TEST_BACKEND})"
+        VERBATIM
+    )
+    set_source_files_properties("${generated_output}" PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE)
+
+    add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL
+        "${CACTUS_HEADLESS_TEST_TEST_SOURCE}"
+        "${generated_output}"
+    )
+    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
+    target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        CACTUS_HEADLESS_GENERATED_CPP="${generated_output}"
+    )
+    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_CLANG_TIDY "")
+
+    if(CACTUS_HEADLESS_TEST_BACKEND STREQUAL "cpp-entt")
+        target_link_libraries(${TARGET_NAME} PRIVATE
+            cactus_runtime_cpp_entt_headless_fake
+            cactus_raylib_fake
+            raylib
+            EnTT::EnTT
+            Catch2::Catch2WithMain
+        )
+    else()
+        message(FATAL_ERROR
+            "Unsupported Cactus headless behavior test backend '${CACTUS_HEADLESS_TEST_BACKEND}' for target ${TARGET_NAME}")
+    endif()
+
+    add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+endfunction()
+
 set(BLUE_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/blue-square.generated.cpp")
 set(PAIR_CONTACT_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/pair-contact.generated.cpp")
 set(BOUNCY_BUBBLES_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/bouncy-bubbles.generated.cpp")

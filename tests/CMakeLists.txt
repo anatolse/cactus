@@ -3,6 +3,47 @@
 # Test fixture directory available as compile definition
 add_compile_definitions(CACTUS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
+# ── Fake raylib support library (headless behavioral tests only) ───────────────
+# Test-only: provides the scripted input/window state and call-log recording
+# that cactus::runtime::raylib wrappers (src/backends/cpp-entt/raylib_io.hpp)
+# call into when built with CACTUS_RAYLIB_FAKE defined. Never linked into a
+# real example executable.
+add_library(cactus_raylib_fake STATIC EXCLUDE_FROM_ALL
+    fake_raylib/fake_raylib.cpp
+)
+target_include_directories(cactus_raylib_fake PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(cactus_raylib_fake PUBLIC raylib)
+target_compile_features(cactus_raylib_fake PRIVATE cxx_std_20)
+set_property(TARGET cactus_raylib_fake PROPERTY CXX_CLANG_TIDY "")
+
+# ── Headless-fake variant of the C++ EnTT runtime ───────────────────────────
+# runtime.cpp recompiled with CACTUS_RAYLIB_FAKE defined, since the shared
+# cactus_runtime_cpp_entt target (root CMakeLists.txt) is compiled once,
+# without the flag, and reused by every real example executable plus
+# test_runtime_stdlib. CACTUS_RAYLIB_FAKE is PUBLIC so any headless test
+# executable linking this target automatically compiles its own sources
+# (including the #include'd generated .cpp) with the flag too. Test-only;
+# never linked into a real example.
+add_library(cactus_runtime_cpp_entt_headless_fake STATIC EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/runtime.cpp
+)
+target_include_directories(cactus_runtime_cpp_entt_headless_fake PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt
+)
+target_compile_definitions(cactus_runtime_cpp_entt_headless_fake PUBLIC
+    CACTUS_RAYLIB_FAKE
+)
+target_link_libraries(cactus_runtime_cpp_entt_headless_fake PUBLIC
+    cactus_runtime_common
+    EnTT::EnTT
+    raylib
+    cactus_raylib_fake
+)
+set_property(TARGET cactus_runtime_cpp_entt_headless_fake PROPERTY CXX_CLANG_TIDY "")
+
 # Lexer tests
 add_executable(test_lexer test_lexer.cpp)
 target_link_libraries(test_lexer PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -75,6 +116,13 @@ target_compile_definitions(test_runtime_stdlib PRIVATE
     CACTUS_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 add_test(NAME RuntimeStdlibTests COMMAND test_runtime_stdlib)
+
+# Headless behavioral tests (example-behavior-tests capability)
+cactus_add_headless_behavior_test(test_blue_square_headless_behavior
+    CACTUS_SOURCE examples/blue-square/square.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_blue_square_headless_behavior.cpp
+)
 
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)

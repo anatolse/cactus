@@ -2277,7 +2277,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
         out << "    auto view = registry.view<" << wt << ", " << shape << ">();\n";
-        out << "    BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
+        out << "    cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
         out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << shape << "& "
             << shape << "_comp) {\n";
         out << "        (void)entity;\n";
@@ -2286,18 +2286,18 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         out << "        }\n";
         out << "        switch (" << shape << "_comp.type) {\n";
         out << "            case " << shape_type << "::Rectangle:\n";
-        out << "                DrawRectangleV(" << wt << "_comp.position,\n";
+        out << "                cactus::runtime::raylib::DrawRectangleV(" << wt << "_comp.position,\n";
         out << "                               " << shape << "_comp.size,\n";
         out << "                               " << shape << "_comp.color);\n";
         out << "                break;\n";
         out << "            case " << shape_type << "::Circle:\n";
-        out << "                DrawCircleV(" << wt << "_comp.position,\n";
+        out << "                cactus::runtime::raylib::DrawCircleV(" << wt << "_comp.position,\n";
         out << "                            " << shape << "_comp.size.x / 2.0F,\n";
         out << "                            " << shape << "_comp.color);\n";
         out << "                break;\n";
         out << "        }\n";
         out << "    });\n";
-        out << "    EndMode2D();\n";
+        out << "    cactus::runtime::raylib::EndMode2D();\n";
         out << "}\n\n";
         return out.str();
     }
@@ -2524,7 +2524,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "        if (__estate_view.get<" << es << ">(__e).active) { __editor_active = true; break; }\n";
             out << "    }\n";
             out << "    if (!__editor_active) { return; }\n";
-            out << "    BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
+            out << "    cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
             out << "    auto view = registry.view<" << eg2d << ", " << wt << ">();\n";
             out << "    view.each([&](entt::entity entity, const " << eg2d << "& gizmo, const " << wt << "& xform) {\n";
             out << "        (void)entity;\n";
@@ -2536,40 +2536,40 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
                 out << "                    .width = box->size.x, .height = box->size.y};\n";
                 out << "        }\n";
             }
-            out << "        DrawRectangleLinesEx(rect, 0.05F, gizmo.color);\n";
+            out << "        cactus::runtime::raylib::DrawRectangleLinesEx(rect, 0.05F, gizmo.color);\n";
             out << "        const float arrow_len   = gizmo.size;\n";
             out << "        const float arrow_thick = arrow_len * 0.05F;\n";
             out << "        const Vector2 center    = xform.position;\n";
             out << "        if (gizmo.mode == 1) {\n";
-            out << "            DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
-            out << "            DrawTriangle(\n";
+            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
+            out << "            cactus::runtime::raylib::DrawTriangle(\n";
             out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y - (arrow_len * "
                    "0.1F)},\n";
             out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y + (arrow_len * "
                    "0.1F)},\n";
             out << "                {.x = center.x + arrow_len, .y = center.y}, RED);\n";
-            out << "            DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
-            out << "            DrawTriangle(\n";
+            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
+            out << "            cactus::runtime::raylib::DrawTriangle(\n";
             out << "                {.x = center.x - (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * "
                    "0.2F)},\n";
             out << "                {.x = center.x + (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * "
                    "0.2F)},\n";
             out << "                {.x = center.x, .y = center.y + arrow_len}, GREEN);\n";
             out << "        } else if (gizmo.mode == 2) {\n";
-            out << "            DrawRing(center, gizmo.size * 0.8F, gizmo.size, 0.0F, 360.0F, 32, SKYBLUE);\n";
+            out << "            cactus::runtime::raylib::DrawRing(center, gizmo.size * 0.8F, gizmo.size, 0.0F, 360.0F, 32, SKYBLUE);\n";
             out << "        } else if (gizmo.mode == 3) {\n";
             out << "            const float sq = arrow_len * 0.15F;\n";
-            out << "            DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
-            out << "            DrawRectangleV(\n";
+            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
+            out << "            cactus::runtime::raylib::DrawRectangleV(\n";
             out << "                {.x = center.x + arrow_len - (sq * 0.5F), .y = center.y - (sq * 0.5F)},\n";
             out << "                {.x = sq, .y = sq}, RED);\n";
-            out << "            DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
-            out << "            DrawRectangleV(\n";
+            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
+            out << "            cactus::runtime::raylib::DrawRectangleV(\n";
             out << "                {.x = center.x - (sq * 0.5F), .y = center.y + arrow_len - (sq * 0.5F)},\n";
             out << "                {.x = sq, .y = sq}, GREEN);\n";
             out << "        }\n";
             out << "    });\n";
-            out << "    EndMode2D();\n";
+            out << "    cactus::runtime::raylib::EndMode2D();\n";
             out << "}\n\n";
             return out.str();
         }
@@ -2613,11 +2613,11 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "            const Rectangle __btn = {.x = 10.0F,\n";
             out << "                                     .y = 40.0F + (static_cast<float>(__idx) * 30.0F),\n";
             out << "                                     .width = 140.0F, .height = 26.0F};\n";
-            out << "            DrawRectangleRec(__btn, __tint_cache[__name]);\n";
-            out << "            DrawText(__name.c_str(), static_cast<int>(__btn.x) + 6,\n";
+            out << "            cactus::runtime::raylib::DrawRectangleRec(__btn, __tint_cache[__name]);\n";
+            out << "            cactus::runtime::raylib::DrawText(__name.c_str(), static_cast<int>(__btn.x) + 6,\n";
             out << "                     static_cast<int>(__btn.y) + 6, 14, WHITE);\n";
-            out << "            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&\n";
-            out << "                CheckCollisionPointRec(GetMousePosition(), __btn)) {\n";
+            out << "            if (cactus::runtime::raylib::IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&\n";
+            out << "                CheckCollisionPointRec(cactus::runtime::raylib::GetMousePosition(), __btn)) {\n";
             out << "                __es.active_template = __name;\n";
             out << "                __es.mode = 4;\n";
             out << "            }\n";
@@ -2643,8 +2643,8 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "        if (__estate_view.get<" << es << ">(__e).active) { __editor_active = true; break; }\n";
             out << "    }\n";
             out << "    if (!__editor_active) { return; }\n";
-            out << "    BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());\n";
-            out << "    DrawGrid(20, 1.0F);\n";
+            out << "    cactus::runtime::raylib::BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());\n";
+            out << "    cactus::runtime::raylib::DrawGrid(20, 1.0F);\n";
             out << "    auto view = registry.view<" << eg3d << ", " << wt << ">();\n";
             out << "    view.each([&](entt::entity entity, const " << eg3d << "& gizmo, const " << wt << "& xform) {\n";
             out << "        (void)entity;\n";
@@ -2671,32 +2671,32 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
                 out << "            }\n";
                 out << "        }\n";
             }
-            out << "        DrawCubeWiresV(box_center, box_size, gizmo.color);\n";
+            out << "        cactus::runtime::raylib::DrawCubeWiresV(box_center, box_size, gizmo.color);\n";
             out << "        const Vector3 origin = xform.position;\n";
             out << "        const float axis_len = gizmo.size;\n";
             out << "        if (gizmo.mode == 1 || gizmo.mode == 3) {\n";
-            out << "            DrawLine3D(origin, Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z}, "
+            out << "            cactus::runtime::raylib::DrawLine3D(origin, Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z}, "
                    "RED);\n";
-            out << "            DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z}, "
+            out << "            cactus::runtime::raylib::DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z}, "
                    "GREEN);\n";
-            out << "            DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len}, "
+            out << "            cactus::runtime::raylib::DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len}, "
                    "BLUE);\n";
             out << "        }\n";
             out << "        if (gizmo.mode == 2) {\n";
-            out << "            DrawCircle3D(origin, axis_len, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 90.0F, "
+            out << "            cactus::runtime::raylib::DrawCircle3D(origin, axis_len, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 90.0F, "
                    "SKYBLUE);\n";
             out << "        }\n";
             out << "        if (gizmo.mode == 3) {\n";
             out << "            const float tip = axis_len * 0.15F;\n";
-            out << "            DrawCubeV(Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z},\n";
+            out << "            cactus::runtime::raylib::DrawCubeV(Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z},\n";
             out << "                      Vector3{.x = tip, .y = tip, .z = tip}, RED);\n";
-            out << "            DrawCubeV(Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z},\n";
+            out << "            cactus::runtime::raylib::DrawCubeV(Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z},\n";
             out << "                      Vector3{.x = tip, .y = tip, .z = tip}, GREEN);\n";
-            out << "            DrawCubeV(Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len},\n";
+            out << "            cactus::runtime::raylib::DrawCubeV(Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len},\n";
             out << "                      Vector3{.x = tip, .y = tip, .z = tip}, BLUE);\n";
             out << "        }\n";
             out << "    });\n";
-            out << "    EndMode3D();\n";
+            out << "    cactus::runtime::raylib::EndMode3D();\n";
             out << "}\n\n";
             return out.str();
         }

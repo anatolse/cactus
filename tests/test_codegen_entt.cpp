@@ -2805,7 +2805,7 @@ TEST_CASE("Codegen EnTT: std.camera.viewport emits viewport render loop and no c
     CHECK(code.find("std::ranges::sort") != std::string::npos);
     CHECK(code.find("__vp.active") != std::string::npos);
     CHECK(code.find("__vp.depth") != std::string::npos);
-    CHECK(code.find("if (__vp.clear) { ClearBackground") != std::string::npos);
+    CHECK(code.find("if (__vp.clear) { cactus::runtime::raylib::ClearBackground") != std::string::npos);
 
     // 2D camera set per viewport via translate helper
     CHECK(code.find("__translate_camera_2d") != std::string::npos);
@@ -2838,7 +2838,7 @@ TEST_CASE("Codegen EnTT: viewport loop emits clear and no-clear paths", "[codege
     const auto code = CppEnttCodegen::generate(decorated);
 
     // clear path: conditional ClearBackground per viewport
-    CHECK(code.find("if (__vp.clear) { ClearBackground(__vp.clear_color); }") != std::string::npos);
+    CHECK(code.find("if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: viewport loop emits scissor for each viewport (split-screen)",

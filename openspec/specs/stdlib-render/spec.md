@@ -151,8 +151,20 @@ Current stdlib render coverage SHALL reflect the binding and runtime-adapter tes
 
 ---
 
+### Requirement: std.render.shapes ShapeType includes a Circle variant
+
+The `std.render.shapes` module SHALL expose `ShapeType.Circle` alongside the existing `ShapeType.Rectangle`. `Circle` SHALL NOT require a new `Shape` trait field: a `Circle`-typed `Shape` reuses the existing `size.x` field as the circle's diameter, and `size.y` is ignored for that shape.
+
+#### Scenario: ShapeType enum exposes Circle
+- **WHEN** `use std.render.shapes as shapes` is imported
+- **THEN** `shapes.ShapeType.Circle` is a valid enum value alongside `shapes.ShapeType.Rectangle`
+
+#### Scenario: Circle shape uses size.x as diameter
+- **WHEN** an entity applies `shapes.Shape` with `type = shapes.ShapeType.Circle` and `size = vec2(d, anything)`
+- **THEN** the shape's effective diameter is `d`, and `size.y` has no effect on the drawn circle
+
 ### Requirement: ShapeRenderer renders entities in world space using the active camera
-The `ShapeRenderer` extern system SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible).
+The `ShapeRenderer` extern system SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible). `ShapeRenderer` SHALL draw `ShapeType.Rectangle` shapes as axis-aligned rectangles and `ShapeType.Circle` shapes as circles centered on the entity's world position with diameter `size.x`.
 
 #### Scenario: World-unit entity rendered at correct screen position
 - **WHEN** the active camera has zoom=64 and offset={400,300} (world origin at screen center)
@@ -167,3 +179,12 @@ The `ShapeRenderer` extern system SHALL wrap its raylib draw calls in `BeginMode
 #### Scenario: Hidden shape not drawn
 - **WHEN** a Shape entity has `visible = false`
 - **THEN** no rectangle is drawn for that entity (unchanged behavior)
+
+#### Scenario: Circle shape rendered at correct screen position and size
+- **WHEN** no Camera entity exists (identity active camera, zoom=1)
+- **WHEN** an entity has `WorldTransform.position = {100.0, 200.0}`, `Shape.size = {32.0, 32.0}`, and `ShapeType.Circle`
+- **THEN** a circle of radius 16 pixels is drawn centered at screen position (100, 200)
+
+#### Scenario: Hidden circle shape not drawn
+- **WHEN** a `ShapeType.Circle` Shape entity has `visible = false`
+- **THEN** no circle is drawn for that entity

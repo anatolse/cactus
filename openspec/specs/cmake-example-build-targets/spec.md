@@ -103,3 +103,19 @@ The CMake build configuration SHALL register the editor 3D example through the r
 #### Scenario: Generated output path is stable
 - **WHEN** tests need to reference the editor 3D generated output
 - **THEN** CMake exposes a stable generated C++ path for the example under `${CACTUS_GENERATED_EXAMPLES_DIR}`
+
+### Requirement: Bouncy bubbles example target is registered
+
+The CMake build configuration SHALL register the bouncy-bubbles example through the reusable Cactus example target helper with stable generated output and target metadata.
+
+#### Scenario: CMake registers bouncy bubbles target
+- **WHEN** CMake configures generated example targets
+- **THEN** it registers `example_bouncy_bubbles_generated` for `examples/bouncy-bubbles/main.cactus` using the `cpp-entt` backend
+
+#### Scenario: Generated output path is stable
+- **WHEN** tests need to reference the bouncy bubbles generated output
+- **THEN** CMake exposes a stable generated C++ path for the example under `${CACTUS_GENERATED_EXAMPLES_DIR}`
+
+#### Scenario: Bouncy bubbles target participates in the default build
+- **WHEN** the example generates and compiles cleanly against the `cpp-entt` backend
+- **THEN** its executable target is a regular default build-tree target and is not declared with `EXCLUDE_FROM_ALL`

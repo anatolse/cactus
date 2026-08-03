@@ -33,6 +33,24 @@ static std::string generated_function(const std::string& code, const std::string
     return code.substr(start, end - start + 3);
 }
 
+// system_emitter.cpp's gen_temp_name()/foreach_temp_name() mangle compiler-generated
+// temporaries with a per-call-site line/column suffix (e.g. "cactus_gen_spawned_12_5") so they
+// can never collide with a user-authored DSL identifier spliced into the same scope. Test
+// fixtures can't predict the exact suffix in advance, so locate the full mangled identifier by
+// its stable prefix (e.g. "cactus_gen_spawned_") and reuse the returned name to check its later,
+// consistent occurrences.
+static std::string extract_temp_name(const std::string& code, const std::string& prefix) {
+    const auto start = code.find(prefix);
+    if (start == std::string::npos) {
+        return {};
+    }
+    auto end = start;
+    while (end < code.size() && (std::isalnum(static_cast<unsigned char>(code[end])) != 0 || code[end] == '_')) {
+        ++end;
+    }
+    return code.substr(start, end - start);
+}
+
 // Returns true when source already starts with a module declaration.
 static bool starts_with_module_decl(const std::string& src) {
     const auto first = src.find_first_not_of(" \t\r\n");
@@ -1525,11 +1543,21 @@ TEST_CASE("Codegen EnTT: spawn of composed template constructs flattened traits 
     CHECK(template_fn.find("component.speed") != std::string::npos);
     CHECK(template_fn.find("= 2.0F;") != std::string::npos);
 
-    CHECK(system_fn.find("auto spawned = create_walker_enemy(registry);") != std::string::npos);
-    CHECK(system_fn.find("auto existing = registry.try_get<Health>(spawned);") != std::string::npos);
-    CHECK(system_fn.find("auto override_value = existing ? *existing : Health{};") != std::string::npos);
-    CHECK(system_fn.find("override_value.armor = 7;") != std::string::npos);
-    CHECK(system_fn.find("registry.emplace_or_replace<Health>(spawned, override_value);") != std::string::npos);
+    const auto spawned_name = extract_temp_name(system_fn, "cactus_gen_spawned_");
+    REQUIRE_FALSE(spawned_name.empty());
+    const auto existing_name = extract_temp_name(system_fn, "cactus_gen_existing_");
+    REQUIRE_FALSE(existing_name.empty());
+    const auto override_name = extract_temp_name(system_fn, "cactus_gen_override_value_");
+    REQUIRE_FALSE(override_name.empty());
+
+    CHECK(system_fn.find("auto " + spawned_name + " = create_walker_enemy(registry);") != std::string::npos);
+    CHECK(system_fn.find("auto " + existing_name + " = registry.try_get<Health>(" + spawned_name + ");") !=
+          std::string::npos);
+    CHECK(system_fn.find("auto " + override_name + " = " + existing_name + " ? *" + existing_name + " : Health{};") !=
+          std::string::npos);
+    CHECK(system_fn.find(override_name + ".armor = 7;") != std::string::npos);
+    CHECK(system_fn.find("registry.emplace_or_replace<Health>(" + spawned_name + ", " + override_name + ");") !=
+          std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: spawn expression of composed template returns created entity",
@@ -1559,11 +1587,22 @@ TEST_CASE("Codegen EnTT: spawn expression of composed template returns created e
     const auto code      = CppEnttCodegen::generate(decorated);
     const auto system_fn = generated_function(code, "void spawner_tick");
 
+    // The outer `let spawned = ...` binding keeps its user-authored name unmangled; the inner
+    // spawn-expression temporary (same textual name, previously a genuine shadowing collision)
+    // is now mangled precisely so it cannot alias the user's own `spawned` variable.
+    const auto inner_spawned_name = extract_temp_name(system_fn, "cactus_gen_spawned_");
+    REQUIRE_FALSE(inner_spawned_name.empty());
+    const auto existing_name = extract_temp_name(system_fn, "cactus_gen_existing_");
+    REQUIRE_FALSE(existing_name.empty());
+    const auto override_name = extract_temp_name(system_fn, "cactus_gen_override_value_");
+    REQUIRE_FALSE(override_name.empty());
+
     CHECK(system_fn.find("auto spawned = ([&]()") != std::string::npos);
-    CHECK(system_fn.find("auto spawned = create_walker_enemy(registry);") != std::string::npos);
-    CHECK(system_fn.find("auto existing = registry.try_get<Patrol>(spawned);") != std::string::npos);
-    CHECK(system_fn.find("override_value.speed = 3.0F;") != std::string::npos);
-    CHECK(system_fn.find("return spawned;") != std::string::npos);
+    CHECK(system_fn.find("auto " + inner_spawned_name + " = create_walker_enemy(registry);") != std::string::npos);
+    CHECK(system_fn.find("auto " + existing_name + " = registry.try_get<Patrol>(" + inner_spawned_name + ");") !=
+          std::string::npos);
+    CHECK(system_fn.find(override_name + ".speed = 3.0F;") != std::string::npos);
+    CHECK(system_fn.find("return " + inner_spawned_name + ";") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
@@ -1589,8 +1628,10 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            const auto value_name = extract_temp_name(code, "cactus_gen_value_");
+            REQUIRE_FALSE(value_name.empty());
             CHECK(code.find("registry.emplace_or_replace<Frozen>(entity)") != std::string::npos);
-            CHECK(code.find("registry.emplace_or_replace<Stunned>(entity, __value)") != std::string::npos);
+            CHECK(code.find("registry.emplace_or_replace<Stunned>(entity, " + value_name + ")") != std::string::npos);
             CHECK(code.find("registry.remove<Frozen>(entity)") != std::string::npos);
         }
     }
@@ -1678,8 +1719,10 @@ TEST_CASE("Codegen EnTT: trait match is guarded by entity validity", "[codegen-e
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
-            CHECK(code.find("if (registry.valid(__match_entity))") != std::string::npos);
+            const auto match_entity_name = extract_temp_name(code, "cactus_gen_match_entity_");
+            REQUIRE_FALSE(match_entity_name.empty());
+            CHECK(code.find("auto " + match_entity_name + " = c.other") != std::string::npos);
+            CHECK(code.find("if (registry.valid(" + match_entity_name + "))") != std::string::npos);
         }
     }
 }
@@ -1706,9 +1749,11 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
-            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
-            CHECK(code.find("registry.all_of<Spike>(__match_entity)") != std::string::npos);
+            const auto match_entity_name = extract_temp_name(code, "cactus_gen_match_entity_");
+            REQUIRE_FALSE(match_entity_name.empty());
+            CHECK(code.find("auto " + match_entity_name + " = c.other") != std::string::npos);
+            CHECK(code.find("auto* b = registry.try_get<Boss>(" + match_entity_name + ")") != std::string::npos);
+            CHECK(code.find("registry.all_of<Spike>(" + match_entity_name + ")") != std::string::npos);
             CHECK(code.find("else {") != std::string::npos);
         }
     }
@@ -1776,7 +1821,9 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
+            const auto match_entity_name = extract_temp_name(code, "cactus_gen_match_entity_");
+            REQUIRE_FALSE(match_entity_name.empty());
+            CHECK(code.find("auto* b = registry.try_get<Boss>(" + match_entity_name + ")") != std::string::npos);
             CHECK(code.find("else {") == std::string::npos);
         }
     }
@@ -1963,8 +2010,10 @@ TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses rec
         "        destroy self\n",
         program);
 
-    auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("__value.parent = entity") != std::string::npos);
+    auto code              = CppEnttCodegen::generate(decorated);
+    const auto value_name  = extract_temp_name(code, "cactus_gen_value_");
+    REQUIRE_FALSE(value_name.empty());
+    CHECK(code.find(value_name + ".parent = entity") != std::string::npos);
     CHECK(code.find("cactus_destroy_entity_recursive(registry, entity)") != std::string::npos);
 }
 
@@ -2263,8 +2312,10 @@ TEST_CASE("Codegen EnTT: projected traits use registry components in filters and
     CHECK(code.find("std::vector<entt::entity> projected_DamageFlash_entities") != std::string::npos);
     CHECK(code.find("std::unordered_map<entt::entity, std::optional<DamageFlash>> projected_DamageFlash_previous") !=
           std::string::npos);
-    CHECK(code.find("auto& __projected = project_DamageFlash(registry, entity)") != std::string::npos);
-    CHECK(code.find("__projected.intensity = 1.0F") != std::string::npos);
+    const auto projected_name = extract_temp_name(code, "cactus_gen_projected_");
+    REQUIRE_FALSE(projected_name.empty());
+    CHECK(code.find("auto& " + projected_name + " = project_DamageFlash(registry, entity)") != std::string::npos);
+    CHECK(code.find(projected_name + ".intensity = 1.0F") != std::string::npos);
     CHECK(code.find("registry.view<Health, DamageFlash>(entt::exclude<Suppressed>)") != std::string::npos);
     CHECK(code.find("auto& flash = DamageFlash_comp") != std::string::npos);
     CHECK(code.find("cactus_projected_DamageFlash") == std::string::npos);
@@ -2978,8 +3029,10 @@ TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[cod
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
+    const auto parent_component_name = extract_temp_name(code, "cactus_gen_parent_component_");
+    REQUIRE_FALSE(parent_component_name.empty());
     CHECK(code.find("registry.try_get<Parent>") != std::string::npos);
-    CHECK(code.find("parent->parent") != std::string::npos);
+    CHECK(code.find(parent_component_name + "->parent") != std::string::npos);
     CHECK(code.find("entt::entity{entt::null}") != std::string::npos);
 }
 
@@ -3221,8 +3274,10 @@ TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls cano
                                     program);
     const auto code = CppEnttCodegen::generate(decorated);
 
-    CHECK(code.find("auto spawned = create_rig(registry);") != std::string::npos);
-    CHECK(code.find("return spawned;") != std::string::npos);
+    const auto spawned_name = extract_temp_name(code, "cactus_gen_spawned_");
+    REQUIRE_FALSE(spawned_name.empty());
+    CHECK(code.find("auto " + spawned_name + " = create_rig(registry);") != std::string::npos);
+    CHECK(code.find("return " + spawned_name + ";") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[codegen-entt][hierarchy]") {
@@ -3244,10 +3299,13 @@ TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[
                                     program);
     const auto code = CppEnttCodegen::generate(decorated);
 
+    const auto spawned_name = extract_temp_name(code, "cactus_gen_spawned_");
+    REQUIRE_FALSE(spawned_name.empty());
+
     // Inline expansion uses the per-node helpers, not the canonical wrapper.
-    CHECK(code.find("auto spawned = create_rig__node(registry);") != std::string::npos);
+    CHECK(code.find("auto " + spawned_name + " = create_rig__node(registry);") != std::string::npos);
     CHECK(code.find("auto child_0 = create_rig__node__socket(registry);") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = spawned});") !=
+    CHECK(code.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = " + spawned_name + "});") !=
           std::string::npos);
     CHECK(code.find("auto child_0_0 = create_rig__node__socket__gem(registry);") != std::string::npos);
     CHECK(code.find("registry.emplace_or_replace<Parent>(child_0_0, Parent{.parent = child_0});") !=
@@ -3255,7 +3313,7 @@ TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[
     // Per-node overrides applied to the matching created entity.
     CHECK(code.find("registry.try_get<Tag>(child_0)") != std::string::npos);
     CHECK(code.find("registry.try_get<Growth>(child_0_0)") != std::string::npos);
-    CHECK(code.find("return spawned;") != std::string::npos);
+    CHECK(code.find("return " + spawned_name + ";") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in setup", "[codegen-entt][hierarchy]") {
@@ -4122,9 +4180,11 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("auto spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);") !=
-          std::string::npos);
-    CHECK(code.find("create_particle_at(registry, spawned);") != std::string::npos);
+    const auto spawned_name = extract_temp_name(code, "cactus_gen_spawned_");
+    REQUIRE_FALSE(spawned_name.empty());
+    CHECK(code.find("auto " + spawned_name +
+                    " = cactus::runtime::entt_backend::generated_reserve_entity(registry);") != std::string::npos);
+    CHECK(code.find("create_particle_at(registry, " + spawned_name + ");") != std::string::npos);
     CHECK(code.find("generated_queue_structural_command(") != std::string::npos);
     CHECK(code.find("CactusStructuralCommand::Kind::Spawn") != std::string::npos);
     CHECK(code.find("CactusStructuralCommand::Kind::Add") != std::string::npos);
@@ -4168,8 +4228,10 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         "            Position:\n"
         "                x = 1.0\n",
         legacy_program);
-    const auto legacy_code = CppEnttCodegen::generate(legacy);
-    CHECK(legacy_code.find("auto spawned = create_particle(registry);") != std::string::npos);
+    const auto legacy_code           = CppEnttCodegen::generate(legacy);
+    const auto legacy_spawned_name = extract_temp_name(legacy_code, "cactus_gen_spawned_");
+    REQUIRE_FALSE(legacy_spawned_name.empty());
+    CHECK(legacy_code.find("auto " + legacy_spawned_name + " = create_particle(registry);") != std::string::npos);
     CHECK(legacy_code.find("generated_reserve_entity") == std::string::npos);
     CHECK(legacy_code.find("generated_queue_structural_command") == std::string::npos);
 }
@@ -4442,10 +4504,15 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
     // Targeted emit resolves `body` to the per-tuple loop variable, evaluates
     // it once, and carries it into the queued occurrence via the targeted
     // emit path (targeted-event-delivery) rather than a validity guard around
-    // broadcast dispatch.
-    CHECK(code.find("const auto target = body;") != std::string::npos);
-    CHECK(code.find("if (registry.valid(target)) {") != std::string::npos);
-    CHECK(code.find("generated_emit_targeted_event(ContactEvent{.other = wall}, target);") != std::string::npos);
+    // broadcast dispatch. The recipient temporary is mangled so it can never
+    // collide with a `to:` expression that is itself the bare identifier
+    // `target` (e.g. `emit X(to: target)`).
+    const auto emit_target_name = extract_temp_name(code, "cactus_gen_emit_target_");
+    REQUIRE_FALSE(emit_target_name.empty());
+    CHECK(code.find("const auto " + emit_target_name + " = body;") != std::string::npos);
+    CHECK(code.find("if (registry.valid(" + emit_target_name + ")) {") != std::string::npos);
+    CHECK(code.find("generated_emit_targeted_event(ContactEvent{.other = wall}, " + emit_target_name + ");") !=
+          std::string::npos);
     // Project remains an immediate (non-buffered) call, same as unary rules.
     CHECK(code.find("project_GroundContact(registry, body);") != std::string::npos);
 }

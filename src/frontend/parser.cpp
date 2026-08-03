@@ -1408,14 +1408,22 @@ PairClause Parser::parse_pairs_clause() {
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
-            auto entry_loc = peek().location;
-            auto qname     = parse_dotted_name();
+            auto trait_error_count_before = errors_.error_count();
+            auto entry_loc                = peek().location;
+            auto qname                    = parse_dotted_name();
             std::optional<std::string> alias;
             if (match(TokenType::AS)) {
                 alias = consume(TokenType::IDENTIFIER, "expected alias name").value;
             }
             binding.traits.push_back({.qualified_name = qname, .alias = alias, .location = entry_loc});
             expect_newline();
+            // Mirrors parse_filter_clause: a malformed entry (e.g. a stray token where a
+            // dotted trait name is expected) can raise an error without consuming any
+            // tokens, since consume()/parse_dotted_name() do not advance on failure. Without
+            // resynchronizing here, the loop would re-examine the same token forever.
+            if (errors_.error_count() > trait_error_count_before) {
+                synchronize();
+            }
         }
         expect_dedent();
 

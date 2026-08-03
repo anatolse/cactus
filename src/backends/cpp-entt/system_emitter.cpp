@@ -641,6 +641,20 @@ std::string foreach_temp_name(const ForeachStmt& stmt) {
            std::to_string(std::max(stmt.location.column, 0));
 }
 
+// Generates a compiler-internal temporary name that cannot collide with a user-visible DSL
+// identifier spliced into the same or an enclosing C++ scope. Reserved double-underscore
+// prefixes (e.g. "__target") are avoided because they are reserved for the implementation by
+// the C++ standard in any scope; a bare unprefixed name (e.g. "target", "existing") is avoided
+// because generated code frequently splices a raw, unqualified DSL identifier into the same
+// block, and a name like `target` or `existing` is a completely ordinary thing for a DSL author
+// to bind. The "cactus_gen_" namespace prefix plus the source location suffix (mirroring
+// foreach_temp_name's per-call-site uniqueness) makes an accidental collision with authored DSL
+// source effectively impossible while remaining well-formed, non-reserved C++.
+std::string gen_temp_name(const std::string& base, const SourceLocation& location) {
+    return "cactus_gen_" + base + "_" + std::to_string(std::max(location.line, 0)) + "_" +
+           std::to_string(std::max(location.column, 0));
+}
+
 void emit_storage_filter_skip(std::ostringstream& out,
                               const FilterClause& filter,
                               const FilterClause& exclude,
@@ -815,15 +829,20 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
             continue;
         }
 
-        const std::string cpp_name = trait_cpp_from_entry(override_entry, program);
+        const std::string cpp_name      = trait_cpp_from_entry(override_entry, program);
+        const std::string existing_name = gen_temp_name("existing", override_entry.location);
+        const std::string value_name    = gen_temp_name("override_value", override_entry.location);
         out << ind << "{\n";
-        out << ind << "    auto existing = registry.try_get<" << cpp_name << ">(" << entity_name << ");\n";
-        out << ind << "    auto override_value = existing ? *existing : " << cpp_name << "{};\n";
+        out << ind << "    auto " << existing_name << " = registry.try_get<" << cpp_name << ">(" << entity_name
+            << ");\n";
+        out << ind << "    auto " << value_name << " = " << existing_name << " ? *" << existing_name << " : "
+            << cpp_name << "{};\n";
         for (const auto& assignment : override_entry.assignments) {
-            out << ind << "    override_value." << assignment.name << " = "
+            out << ind << "    " << value_name << "." << assignment.name << " = "
                 << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
         }
-        out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", override_value);\n";
+        out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", " << value_name
+            << ");\n";
         out << ind << "}\n";
     }
     return out.str();
@@ -927,6 +946,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                                      const std::vector<std::string>& trait_names,
                                                      const DecoratedProgram& program,
                                                      const std::unordered_set<std::string>& pointer_aliases,
+                                                     const SourceLocation& location,
                                                      const PairCodegenScope* pair_scope = nullptr) {
     std::ostringstream out;
     std::vector<std::string> role_path;
@@ -936,25 +956,34 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     const std::string& tmpl_local = template_id.local_name;
     out << "([&]() {\n";
     const bool graph_runtime = !program.execution_graph.phases.empty();
+    // "spawned"/"committed" are arbitrary-looking, ordinary-sounding names a DSL author could
+    // plausibly bind via `let`; mangle them so an override expression referencing such a
+    // variable can't be captured by these compiler-internal declarations (same class of bug as
+    // the target/parent self-reference cases above).
+    const std::string spawned_name  = gen_temp_name("spawned", location);
+    const std::string committed_name = gen_temp_name("committed", location);
     if (graph_runtime) {
-        out << "    auto spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
+        out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
-        out << "            auto committed = "
-            << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, spawned);\n";
-        out << emit_spawn_overrides("committed", root_overrides, 3, trait_names, program, pointer_aliases, pair_scope);
+        out << "            auto " << committed_name << " = "
+            << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, "
+            << spawned_name << ");\n";
+        out << emit_spawn_overrides(
+            committed_name, root_overrides, 3, trait_names, program, pointer_aliases, pair_scope);
     } else {
-        out << "    auto spawned = " << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path)
-            << "(registry);\n";
-        out << emit_spawn_overrides("spawned", root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
+        out << "    auto " << spawned_name << " = "
+            << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path) << "(registry);\n";
+        out << emit_spawn_overrides(
+            spawned_name, root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
     emit_spawn_child_expansion(out,
                                tmpl_module,
                                tmpl_local,
                                children,
                                child_overrides,
-                               graph_runtime ? "committed" : "spawned",
+                               graph_runtime ? committed_name : spawned_name,
                                "child",
                                role_path,
                                trait_names,
@@ -964,7 +993,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     if (graph_runtime) {
         out << "        });\n";
     }
-    out << "    return spawned;\n";
+    out << "    return " << spawned_name << ";\n";
     out << "})()";
     return out.str();
 }
@@ -986,24 +1015,30 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                                      trait_names,
                                                      program,
                                                      pointer_aliases,
+                                                     spawn.location,
                                                      pair_scope);
         }
     }
     std::ostringstream out;
+    const std::string spawned_name = gen_temp_name("spawned", spawn.location);
     out << "([&]() {\n";
     if (!program.execution_graph.phases.empty()) {
-        out << "    auto spawned = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
+        out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
-        out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, spawned);\n";
-        out << emit_spawn_overrides("spawned", spawn.overrides, 3, trait_names, program, pointer_aliases, pair_scope);
+        out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, " << spawned_name
+            << ");\n";
+        out << emit_spawn_overrides(
+            spawned_name, spawn.overrides, 3, trait_names, program, pointer_aliases, pair_scope);
         out << "        });\n";
     } else {
-        out << "    auto spawned = " << archetype_create_function_name(tmpl_id, program) << "(registry);\n";
-        out << emit_spawn_overrides("spawned", spawn.overrides, 1, trait_names, program, pointer_aliases, pair_scope);
+        out << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
+            << "(registry);\n";
+        out << emit_spawn_overrides(
+            spawned_name, spawn.overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
-    out << "    return spawned;\n";
+    out << "    return " << spawned_name << ";\n";
     out << "})()";
     return out.str();
 }
@@ -1081,10 +1116,16 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
                ") result.push_back(e); return result; }()";
     }
     if (func_name == "parent") {
-        const std::string of_expr    = find_named_arg_value(qcall.named_args, "of", emit_arg);
-        const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
-        return "[&]{ if (auto* parent = registry.try_get<" + parent_cpp + ">(" + of_expr +
-               "); parent != nullptr) return parent->parent; return entt::entity{entt::null}; }()";
+        // of_expr is arbitrary rewritten DSL text (very plausibly the bare identifier `parent`,
+        // given the traversal this query performs) — the Parent-component pointer must be bound
+        // to a name that cannot collide with it, or the declaration below becomes
+        // self-referential.
+        const std::string of_expr     = find_named_arg_value(qcall.named_args, "of", emit_arg);
+        const std::string parent_cpp  = EnttCodegenUtils::trait_cpp_name("Parent", program);
+        const std::string parent_comp = gen_temp_name("parent_component", qcall.location);
+        return "[&]{ if (auto* " + parent_comp + " = registry.try_get<" + parent_cpp + ">(" + of_expr + "); " +
+               parent_comp + " != nullptr) return " + parent_comp +
+               "->parent; return entt::entity{entt::null}; }()";
     }
     return "/* unsupported std.query func: " + func_name + " */";
 }
@@ -1586,10 +1627,15 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
     std::ostringstream out;
 
+    // A user's DSL identifiers can never contain the "cactus_gen_" namespace prefix used by
+    // gen_temp_name, so the entity temporary below cannot collide with a subject expression that
+    // happens to be a bare identifier (see the target/parent self-reference class of bug).
+    const std::string match_entity = gen_temp_name("match_entity", match_stmt.location);
+
     out << ind << "{\n";
-    out << ind << "    auto __match_entity = "
+    out << ind << "    auto " << match_entity << " = "
         << rewrite_expr(*match_stmt.subject, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
-    out << ind << "    if (registry.valid(__match_entity)) {\n";
+    out << ind << "    if (registry.valid(" << match_entity << ")) {\n";
 
     bool first = true;
     for (const auto& arm : match_stmt.arms) {
@@ -1604,11 +1650,11 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
 
         out << ind << "        " << (first ? "if" : "else if") << " (";
         if (IS_MARKER) {
-            out << "registry.all_of<" << cpp_arm << ">(__match_entity)) {\n";
+            out << "registry.all_of<" << cpp_arm << ">(" << match_entity << ")) {\n";
         } else {
-            const std::string ALIAS = arm.alias.value_or("__match_" + cpp_arm);
+            const std::string ALIAS = arm.alias.value_or(gen_temp_name("match_" + cpp_arm, arm.location));
             arm_aliases.insert(ALIAS);
-            out << "auto* " << ALIAS << " = registry.try_get<" << cpp_arm << ">(__match_entity)) {\n";
+            out << "auto* " << ALIAS << " = registry.try_get<" << cpp_arm << ">(" << match_entity << ")) {\n";
         }
 
         for (const auto& stmt : arm.body) {
@@ -1744,10 +1790,14 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 const std::string TARGET =
                     rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
                 if (graph_runtime) {
-                    return ind + "{\n" + ind + "    const auto target = " + TARGET + ";\n" + ind +
-                           "    if (registry.valid(target)) {\n" + ind +
+                    // TARGET is arbitrary, rewritten DSL text (e.g. a bare identifier such as
+                    // `target`) — the recipient temporary must use a name that can never collide
+                    // with it, or the declaration below becomes self-referential.
+                    const std::string RECIPIENT = gen_temp_name("emit_target", s.location);
+                    return ind + "{\n" + ind + "    const auto " + RECIPIENT + " = " + TARGET + ";\n" + ind +
+                           "    if (registry.valid(" + RECIPIENT + ")) {\n" + ind +
                            "        cactus::runtime::entt_backend::generated_emit_targeted_event(" + event_type + "{" +
-                           payload + "}, target);\n" + ind + "    }\n" + ind + "}\n";
+                           payload + "}, " + RECIPIENT + ");\n" + ind + "    }\n" + ind + "}\n";
                 }
                 std::string emit_call = dispatcher_available ? "dispatcher.trigger(" + event_type + "{"
                                                              : s.event_name + "_buffer.push_back({";
@@ -1768,29 +1818,30 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                                                  trait_names,
                                                                  program,
                                                                  pointer_aliases,
+                                                                 s.location,
                                                                  pair_scope) +
                                ";\n";
                     }
                 }
                 std::ostringstream result;
+                const std::string spawned_name = gen_temp_name("spawned", s.location);
                 result << ind << "{\n";
                 if (!program.execution_graph.phases.empty()) {
-                    result << ind
-                           << "    auto spawned = "
-                              "cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
+                    result << ind << "    auto " << spawned_name
+                           << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
                     result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
                     result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
                     result << ind << "        [=](entt::registry& registry) mutable {\n";
                     result << ind << "            " << archetype_create_at_function_name(tmpl_id, program)
-                           << "(registry, spawned);\n";
+                           << "(registry, " << spawned_name << ");\n";
                     result << emit_spawn_overrides(
-                        "spawned", s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
+                        spawned_name, s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
                     result << ind << "        });\n";
                 } else {
-                    result << ind << "    auto spawned = " << archetype_create_function_name(tmpl_id, program)
+                    result << ind << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
                            << "(registry);\n";
                     result << emit_spawn_overrides(
-                        "spawned", s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
+                        spawned_name, s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
                 }
                 result << ind << "}\n";
                 return result.str();
@@ -1802,27 +1853,37 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         : "entity";
                 const bool GUARDED    = s.target_expr.has_value();
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
+                // `target` above is arbitrary rewritten DSL text; the generated temporaries must
+                // use names that cannot collide with it or with each other (same class of bug as
+                // the reserved-double-underscore names these replace).
+                const std::string target_name   = gen_temp_name("target", s.location);
+                const std::string existing_name = gen_temp_name("existing", s.location);
+                const std::string value_name    = gen_temp_name("value", s.location);
                 if (!program.execution_graph.phases.empty()) {
                     std::ostringstream result;
                     result << ind << "{\n";
-                    result << ind << "    const auto __target = " << target << ";\n";
+                    result << ind << "    const auto " << target_name << " = " << target << ";\n";
                     result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
                     result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Add,\n";
                     result << ind << "        [=](entt::registry& registry) mutable {\n";
-                    result << ind << "            if (!registry.valid(__target)) { return; }\n";
-                    result << ind << "            cancel_projected_" << cpp << "(__target);\n";
+                    result << ind << "            if (!registry.valid(" << target_name << ")) { return; }\n";
+                    result << ind << "            cancel_projected_" << cpp << "(" << target_name << ");\n";
                     if (s.args.empty()) {
-                        result << ind << "            registry.emplace_or_replace<" << cpp << ">(__target);\n";
+                        result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name
+                               << ");\n";
                     } else {
-                        result << ind << "            auto __existing = registry.try_get<" << cpp << ">(__target);\n";
-                        result << ind << "            auto __value = __existing ? *__existing : " << cpp << "{};\n";
+                        result << ind << "            auto " << existing_name << " = registry.try_get<" << cpp << ">("
+                               << target_name << ");\n";
+                        result << ind << "            auto " << value_name << " = " << existing_name << " ? *"
+                               << existing_name << " : " << cpp << "{};\n";
                         for (const auto& arg : s.args) {
-                            result << ind << "            __value." << arg.name << " = "
+                            result << ind << "            " << value_name << "." << arg.name << " = "
                                    << rewrite_expr(
                                           *arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                                    << ";\n";
                         }
-                        result << ind << "            registry.emplace_or_replace<" << cpp << ">(__target, __value);\n";
+                        result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name
+                               << ", " << value_name << ");\n";
                     }
                     result << ind << "        });\n";
                     result << ind << "}\n";
@@ -1845,17 +1906,17 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 result << ind << (GUARDED ? "    " : "") << "{\n";
                 result << ind << (GUARDED ? "        " : "    ") << "cancel_projected_" << cpp << "(" << target
                        << ");\n";
-                result << ind << (GUARDED ? "        " : "    ") << "auto __existing = registry.try_get<" << cpp << ">("
-                       << target << ");\n";
-                result << ind << (GUARDED ? "        " : "    ") << "auto __value = __existing ? *__existing : " << cpp
-                       << "{};\n";
+                result << ind << (GUARDED ? "        " : "    ") << "auto " << existing_name << " = registry.try_get<"
+                       << cpp << ">(" << target << ");\n";
+                result << ind << (GUARDED ? "        " : "    ") << "auto " << value_name << " = " << existing_name
+                       << " ? *" << existing_name << " : " << cpp << "{};\n";
                 for (const auto& arg : s.args) {
-                    result << ind << (GUARDED ? "        " : "    ") << "__value." << arg.name << " = "
+                    result << ind << (GUARDED ? "        " : "    ") << value_name << "." << arg.name << " = "
                            << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                            << ";\n";
                 }
                 result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">("
-                       << target << ", __value);\n";
+                       << target << ", " << value_name << ");\n";
                 result << ind << (GUARDED ? "    " : "") << "}\n";
                 if (GUARDED) {
                     result << ind << "}\n";
@@ -1869,15 +1930,15 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         : "entity";
                 const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
                 if (!program.execution_graph.phases.empty()) {
-                    return ind + "{\n" + ind + "    const auto __target = " + target + ";\n" + ind +
+                    const std::string target_name = gen_temp_name("target", s.location);
+                    return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
                            "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
                            "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Remove,\n" + ind +
-                           "        [=](entt::registry& registry) {\n" + ind +
-                           "            if (!registry.valid(__target)) { return; }\n" + ind +
-                           "            cancel_projected_" + cpp + "(__target);\n" + ind +
-                           "            if (registry.all_of<" + cpp + ">(__target)) {\n" + ind +
-                           "                registry.remove<" + cpp + ">(__target);\n" + ind + "            }\n" + ind +
-                           "        });\n" + ind + "}\n";
+                           "        [=](entt::registry& registry) {\n" + ind + "            if (!registry.valid(" +
+                           target_name + ")) { return; }\n" + ind + "            cancel_projected_" + cpp + "(" +
+                           target_name + ");\n" + ind + "            if (registry.all_of<" + cpp + ">(" + target_name +
+                           ")) {\n" + ind + "                registry.remove<" + cpp + ">(" + target_name + ");\n" +
+                           ind + "            }\n" + ind + "        });\n" + ind + "}\n";
                 }
                 if (s.target_expr.has_value()) {
                     return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" +
@@ -1907,10 +1968,11 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 if (is_marker) {
                     result << ind << "    project_" << cpp << "(registry, " << target << ");\n";
                 } else {
-                    result << ind << "    [[maybe_unused]] auto& __projected = project_" << cpp << "(registry, "
-                           << target << ");\n";
+                    const std::string projected_name = gen_temp_name("projected", s.location);
+                    result << ind << "    [[maybe_unused]] auto& " << projected_name << " = project_" << cpp
+                           << "(registry, " << target << ");\n";
                     for (const auto& arg : s.args) {
-                        result << ind << "    __projected." << arg.name << " = "
+                        result << ind << "    " << projected_name << "." << arg.name << " = "
                                << rewrite_expr(
                                       *arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                                << ";\n";
@@ -1925,13 +1987,13 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                             ? rewrite_expr(
                                   **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
                             : "entity";
-                    return ind + "{\n" + ind + "    const auto __target = " + target + ";\n" + ind +
+                    const std::string target_name = gen_temp_name("target", s.location);
+                    return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
                            "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
                            "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Destroy,\n" + ind +
-                           "        [=](entt::registry& registry) {\n" + ind +
-                           "            if (registry.valid(__target)) {\n" + ind +
-                           "                cactus_destroy_entity_recursive(registry, __target);\n" + ind +
-                           "            }\n" + ind + "        });\n" + ind + "}\n";
+                           "        [=](entt::registry& registry) {\n" + ind + "            if (registry.valid(" +
+                           target_name + ")) {\n" + ind + "                cactus_destroy_entity_recursive(registry, " +
+                           target_name + ");\n" + ind + "            }\n" + ind + "        });\n" + ind + "}\n";
                 }
                 if (s.target_expr.has_value()) {
                     std::string target =

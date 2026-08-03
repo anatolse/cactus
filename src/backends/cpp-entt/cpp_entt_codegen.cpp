@@ -1389,9 +1389,14 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
                                        const std::string& entity_name,
                                        int indent) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
-    // Every creation site (load-time archetypes, hierarchical children, and
-    // committed spawns) funnels through this helper, so assigning the
-    // creation ordinal here is the single choke point that covers all three.
+    // Every DSL-authored creation site (load-time archetypes, hierarchical
+    // children, and committed spawns) funnels through this helper, so
+    // assigning the creation ordinal here covers all three. A small number of
+    // engine-internal entities are created outside the DSL entirely (e.g. the
+    // editor camera rig in emit_camera_rig_activation/-exit below) and must
+    // independently emplace CactusCreationOrdinal at their own reg.create()
+    // site, since any pairs: rule binding on a trait such an entity also
+    // carries could otherwise match it in emit_pair_binding_snapshot's view.
     out << ind << "registry.emplace<cactus::runtime::entt_backend::CactusCreationOrdinal>(" << entity_name
         << ", cactus::runtime::entt_backend::CactusCreationOrdinal{.value = "
            "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
@@ -3068,6 +3073,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                "
                        "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
+                // The editor camera rig is created outside the archetype/spawn choke point in
+                // emit_archetype_trait_initializers, so it must independently receive a creation
+                // ordinal: any pairs: rule binding on a trait this rig also carries (e.g.
+                // Viewport) would otherwise match it in emit_pair_binding_snapshot's view and
+                // read a CactusCreationOrdinal component that was never emplaced (UB).
+                out << "                reg.emplace<cactus::runtime::entt_backend::CactusCreationOrdinal>(__rig, "
+                       "cactus::runtime::entt_backend::CactusCreationOrdinal{.value = "
+                       "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
                 out << "                reg.emplace<" << ec2d_cpp_rig << ">(__rig, " << ec2d_cpp_rig
                     << "{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, "
                        ".min_zoom = 0.05F, .max_zoom = 20.0F});\n";
@@ -3121,6 +3134,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                "
                        "cactus::runtime::entt_backend::set_editor_saved_viewports(std::move(__saved));\n";
                 out << "                auto __rig = reg.create();\n";
+                // See the matching comment in the 2D branch above: this rig is created outside
+                // the archetype/spawn choke point and must independently receive an ordinal.
+                out << "                reg.emplace<cactus::runtime::entt_backend::CactusCreationOrdinal>(__rig, "
+                       "cactus::runtime::entt_backend::CactusCreationOrdinal{.value = "
+                       "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
                 out << "                reg.emplace<" << ec3d_cpp_rig << ">(__rig, " << ec3d_cpp_rig
                     << "{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = "
                        "0.005F, .pan_speed = 0.002F, .zoom_speed = 0.1F, .min_pitch = -1.5F, .max_pitch = 1.5F, "

@@ -152,6 +152,20 @@ std::vector<ExampleCase> curated_examples() {
             .compile_target = CACTUS_EXAMPLE_MODEL_RENDERER_TARGET,
         },
         ExampleCase{
+            .name           = "pair-contact",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_PAIR_CONTACT_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_PAIR_CONTACT_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_PAIR_CONTACT_TARGET,
+        },
+        ExampleCase{
+            .name           = "bouncy-bubbles",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_BOUNCY_BUBBLES_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_BOUNCY_BUBBLES_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_BOUNCY_BUBBLES_TARGET,
+        },
+        ExampleCase{
             .name           = "platformer",
             .source_file    = repo_root() / CACTUS_EXAMPLE_PLATFORMER_SOURCE,
             .backend        = "cpp-entt",

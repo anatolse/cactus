@@ -3150,6 +3150,24 @@ void SemanticAnalyzer::validate_event_stmts(
             } else if (auto local_it = locals.find(assign_stmt->name);
                        local_it != locals.end() && local_it->second.is_let) {
                 errors_.error(assign_stmt->location, "foreach loop variable '" + assign_stmt->name + "' is read-only");
+            } else if (!assign_stmt->path.empty()) {
+                // Dotted assignment target outside a pair handler (e.g. `hp.health -= 1.0`
+                // where `hp` is a filter alias): codegen (system_emitter.cpp's VarAssign
+                // lowering) reconstructs this exact member-access chain and resolves it
+                // through rewrite_expr, so validate it here the same way — by rebuilding the
+                // identical chain and running it through the shared expression resolver — to
+                // catch an unknown alias/field with a precise DSL-level diagnostic instead of
+                // silently accepting it and surfacing a confusing error in generated C++.
+                ExprNode chain(ExprNode::Variant{IdentExpr{assign_stmt->name, assign_stmt->location}},
+                               assign_stmt->location);
+                for (const auto& segment : assign_stmt->path) {
+                    chain = ExprNode(ExprNode::Variant{MemberExpr{std::make_unique<ExprNode>(std::move(chain)),
+                                                                   segment,
+                                                                   std::nullopt,
+                                                                   assign_stmt->location}},
+                                     assign_stmt->location);
+                }
+                (void)infer_expr_type(chain, filter_bindings, locals, handler_event, pair_scope);
             }
             (void)infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event, pair_scope);
             continue;
@@ -3634,6 +3652,27 @@ InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
                         }
                         if (auto alias = aliases.find(node.name); alias != aliases.end()) {
                             add_write(alias->second);
+                        } else if (!node.path.empty()) {
+                            // Dotted assignment whose base identifier isn't itself a bound
+                            // filter alias (e.g. a binding-relative trait path, per
+                            // VarAssign::path's contract in ast.hpp). Falling through to
+                            // trait_for_field(node.name) here would search for a *field*
+                            // literally named after the binding identifier, which is the
+                            // wrong lookup for a dotted target and — since no trait plausibly
+                            // has a field coincidentally matching a binding name — silently
+                            // drops the write from the contract, which
+                            // program_linker.cpp:254-283 relies on to detect RAW/WAW
+                            // scheduling conflicts between rules. Resolve through the path
+                            // instead: try the leading segment as a trait reference first
+                            // (the binding-relative-trait-path idiom), then fall back to
+                            // treating the trailing segment as a field name on one of the
+                            // rule's aliased traits.
+                            if (auto trait = try_resolve_trait_ref_to_symbol(node.path.front()); trait.has_value()) {
+                                add_write(*trait);
+                            } else if (auto field_trait = trait_for_field(node.path.back());
+                                       field_trait.has_value()) {
+                                add_write(*field_trait);
+                            }
                         } else if (auto trait = trait_for_field(node.name); trait.has_value()) {
                             add_write(*trait);
                         }

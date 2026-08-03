@@ -104,9 +104,9 @@ pub entity YellowMarker:
         color = #FFDD00FF
         visible = true
 
-# ── Systems ───────────────────────────────────────────────────────────────────
+# ── Rules ─────────────────────────────────────────────────────────────────────
 
-system ReadInputSystem:
+rule ReadInputSystem:
     filter:
         PlayerInput
 
@@ -114,7 +114,7 @@ system ReadInputSystem:
         dx = input.axis(MoveX)
         dy = input.axis(MoveY)
 
-system MoveSystem:
+rule MoveSystem:
     filter:
         tf.WorldTransform
         PlayerInput

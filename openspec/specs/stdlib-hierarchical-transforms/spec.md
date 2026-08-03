@@ -9,7 +9,7 @@ The stdlib SHALL provide a trait for parent-child relationships with a field `pa
 
 #### Scenario: root entity omits parent trait
 - **WHEN** an entity does not apply `Parent`
-- **THEN** hierarchy systems treat it as a root entity
+- **THEN** hierarchy rules treat it as a root entity
 
 ### Requirement: flat hierarchy traits distinguish local and world transforms
 The `std.transform.flat` module SHALL provide `LocalTransform` and `WorldTransform` traits with fields `position: vec2`, `rotation: float`, and `scale: vec2`.
@@ -20,7 +20,7 @@ The `std.transform.flat` module SHALL provide `LocalTransform` and `WorldTransfo
 
 #### Scenario: flat world transform stores derived values
 - **WHEN** an entity applies `std.transform.flat.WorldTransform`
-- **THEN** systems and backends may read world-space `position`, `rotation`, and `scale` from it
+- **THEN** rules and backends may read world-space `position`, `rotation`, and `scale` from it
 
 ### Requirement: volume hierarchy traits distinguish local and world transforms
 The `std.transform.volume` module SHALL provide `LocalTransform` and `WorldTransform` traits with fields `position: vec3`, `rotation: quat`, and `scale: vec3`.
@@ -31,10 +31,10 @@ The `std.transform.volume` module SHALL provide `LocalTransform` and `WorldTrans
 
 #### Scenario: volume world transform stores derived values
 - **WHEN** an entity applies `std.transform.volume.WorldTransform`
-- **THEN** systems and backends may read world-space `position`, `rotation`, and `scale` from it
+- **THEN** rules and backends may read world-space `position`, `rotation`, and `scale` from it
 
-### Requirement: stdlib extern systems propagate transforms through parent chains
-The stdlib SHALL provide external systems that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`.
+### Requirement: stdlib extern rules propagate transforms through parent chains
+The stdlib SHALL provide external rules that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`.
 
 #### Scenario: root entity copies local to world
 - **WHEN** an entity has `LocalTransform` and `WorldTransform` but no live parent
@@ -48,22 +48,22 @@ The stdlib SHALL provide external systems that derive `WorldTransform` from `Loc
 - **WHEN** an entity has `Parent.parent` set to a stale or missing entity
 - **THEN** propagation does not fail and derives `WorldTransform` from the entity's own `LocalTransform`
 
-### Requirement: stdlib extern systems delete descendants recursively
-The stdlib SHALL provide an external system or equivalent backend-recognized hierarchy behavior that recursively destroys all descendants of an entity when that entity is destroyed.
+### Requirement: stdlib extern rules delete descendants recursively
+The stdlib SHALL provide an external rule or equivalent backend-recognized hierarchy behavior that recursively destroys all descendants of an entity when that entity is destroyed.
 
 #### Scenario: direct child is deleted with parent
 - **WHEN** a parent entity is destroyed and another entity references it through `Parent.parent`
 - **THEN** the child entity is destroyed as part of the same cascade
 
-### Requirement: recognized hierarchy extern systems bind to backend-library implementations
-Recognized stdlib hierarchy extern systems SHALL bind to concrete backend-library implementations on supported backend/runtime paths rather than emitting incomplete inline project-local behavior. This requirement applies to hierarchy propagation and recursive descendant deletion behavior described by the stdlib transform and parent contracts.
+### Requirement: recognized hierarchy extern rules bind to backend-library implementations
+Recognized stdlib hierarchy extern rules SHALL bind to concrete backend-library implementations on supported backend/runtime paths rather than emitting incomplete inline project-local behavior. This requirement applies to hierarchy propagation and recursive descendant deletion behavior described by the stdlib transform and parent contracts.
 
 #### Scenario: Flat hierarchy propagation binds to backend library
-- **WHEN** a recognized flat transform propagation extern system is compiled for a supported backend
+- **WHEN** a recognized flat transform propagation extern rule is compiled for a supported backend
 - **THEN** generated output binds to backend-library hierarchy propagation behavior for `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
 
 #### Scenario: Volume hierarchy propagation binds to backend library
-- **WHEN** a recognized volume transform propagation extern system is compiled for a supported backend
+- **WHEN** a recognized volume transform propagation extern rule is compiled for a supported backend
 - **THEN** generated output binds to backend-library hierarchy propagation behavior for `Parent`, `std.transform.volume.LocalTransform`, and `std.transform.volume.WorldTransform`
 
 #### Scenario: Cascade deletion binds to backend library

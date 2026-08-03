@@ -47,7 +47,7 @@ The alias introduced by `TraitName as alias =>` SHALL be in scope for the durati
 - **THEN** the semantic analyzer accepts it; `b.phase` resolves to the `Boss.phase` field on the matched entity
 
 #### Scenario: Alias conflicts with filter alias is an error
-- **WHEN** the system has `filter: Position as p` and a match arm uses `Boss as p =>`
+- **WHEN** the rule has `filter: Position as p` and a match arm uses `Boss as p =>`
 - **THEN** the semantic analyzer SHALL report: "match arm alias 'p' conflicts with filter alias 'p'"
 
 #### Scenario: Marker trait arm with alias is an error
@@ -65,14 +65,14 @@ The wildcard arm `_ =>` is optional. If present, it MUST be the final arm in the
 - **WHEN** `_ =>` appears before a `TraitName =>` arm
 - **THEN** the semantic analyzer SHALL report: "wildcard arm `_ =>` must be the last arm in a trait match"
 
-### Requirement: `match entity_id:` only valid inside system event handlers
-Statement-level `match` on `entity_id` SHALL only appear inside system event handler bodies. Using it inside a `func` body SHALL be a compile-time error.
+### Requirement: `match entity_id:` only valid inside rule event handlers
+Statement-level `match` on `entity_id` SHALL only appear inside rule event handler bodies. Using it inside a `func` body SHALL be a compile-time error.
 
 #### Scenario: trait match in event handler is valid
-- **WHEN** `match c.other:` appears inside `on collision as c:` in a system
+- **WHEN** `match c.other:` appears inside `on collision as c:` in a rule
 - **THEN** the semantic analyzer accepts it
 
 #### Scenario: trait match outside event handler is invalid
 - **WHEN** `match some_id:` appears inside a `func` body
-- **THEN** the semantic analyzer SHALL report: "statement-level `match entity_id` only allowed inside system event handlers"
+- **THEN** the semantic analyzer SHALL report: "statement-level `match entity_id` only allowed inside rule event handlers"
 

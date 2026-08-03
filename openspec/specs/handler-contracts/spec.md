@@ -6,9 +6,9 @@ Define per-handler selection, inferred and declared access/effect contracts, con
 ## Requirements
 
 ### Requirement: Contracts belong to individual handlers
-Every regular or external handler SHALL have an independent contract containing its trigger, selection, reads, writes, emitted events, structural commands, and external effect domains. A system-level filter/exclude/order definition SHALL be copied into each handler node but SHALL NOT merge the handlers' access contracts.
+Every regular or external handler SHALL have an independent contract containing its trigger, selection, reads, writes, emitted events, structural commands, and external effect domains. A rule-level filter/exclude/order definition SHALL be copied into each handler node but SHALL NOT merge the handlers' access contracts.
 
-#### Scenario: Multi-handler system has distinct contracts
+#### Scenario: Multi-handler rule has distinct contracts
 - **WHEN** `Player` handles fixed_tick and Damaged with different behavior
 - **THEN** the semantic representation contains distinct contracts for `Player.fixed_tick` and `Player.Damaged`
 
@@ -16,11 +16,11 @@ Every regular or external handler SHALL have an independent contract containing 
 Every handler contract SHALL contain exactly one domain: selectionless, unary relation, or pair relation. A unary relation SHALL contain positive and excluded canonical trait identities. A pair relation SHALL contain exactly two ordered named bindings and each binding's required canonical traits.
 
 #### Scenario: Unary contract remains unary
-- **WHEN** a system filters Position and Velocity
+- **WHEN** a rule filters Position and Velocity
 - **THEN** each handler contract records one unary relation rather than a pair or selectionless domain
 
 #### Scenario: Pair contract preserves binding roles
-- **WHEN** a pair system binds `projectile` and `target`
+- **WHEN** a pair rule binds `projectile` and `target`
 - **THEN** every handler contract preserves those names, order, and separate required trait sets
 
 ### Requirement: Pair contracts record binding-qualified reads
@@ -49,7 +49,7 @@ Handler contracts SHALL record projected trait outputs separately from durable w
 - **THEN** contract graph construction can order the projection producer before the consumer without classifying projection as a durable component mutation
 
 ### Requirement: External handlers declare complete contracts
-An `extern system` handler SHALL declare zero or more `reads:`, `writes:`, `emits:`, `commands:`, and `effects:` blocks because its implementation is unavailable for inference. Trait entries in `reads` and `writes` SHALL resolve through that system's filter aliases or canonical trait references. Event and command entries SHALL resolve canonically.
+An `extern rule` handler SHALL declare zero or more `reads:`, `writes:`, `emits:`, `commands:`, and `effects:` blocks because its implementation is unavailable for inference. Trait entries in `reads` and `writes` SHALL resolve through that rule's filter aliases or canonical trait references. Event and command entries SHALL resolve canonically.
 
 #### Scenario: External movement contract resolves aliases
 - **WHEN** NativeMovement filters `Motion as motion` and `Transform as transform`, reads motion, and writes transform
@@ -78,7 +78,7 @@ Generated external-handler APIs SHALL expose immutable access for `reads`, mutab
 - **THEN** Disabled is absent from the handler's reads and writes
 
 #### Scenario: Sort key adds read
-- **WHEN** a system orders by `transform.position.x`
+- **WHEN** a rule orders by `transform.position.x`
 - **THEN** each affected handler contract includes Transform in reads
 
 ### Requirement: Selectionless handler cardinality

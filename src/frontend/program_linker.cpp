@@ -146,7 +146,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         target.execution_graph.handlers.push_back(std::move(handler));
     }
     for (const auto& edge : src.execution_graph.schedule_edges) {
-        if (edge.kind != ScheduleEdgeKind::ExplicitHandler && edge.kind != ScheduleEdgeKind::ExplicitSystem) {
+        if (edge.kind != ScheduleEdgeKind::ExplicitHandler && edge.kind != ScheduleEdgeKind::ExplicitRule) {
             continue;
         }
         if (std::ranges::none_of(linked_explicit_edges_, [&](const ScheduleEdge& existing) {
@@ -170,7 +170,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
         target.string_pool.intern(name);
     }
     for (const auto& dep : src.dependency_graph) {
-        target.string_pool.intern(dep.system_name);
+        target.string_pool.intern(dep.rule_name);
     }
 
     if (ok) {

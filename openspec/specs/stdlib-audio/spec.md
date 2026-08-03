@@ -1,14 +1,14 @@
 ## Requirements
 
 ### Requirement: std.audio provides a PlaySound event for fire-and-forget sounds
-The `std.audio` module SHALL provide a `PlaySound` event for playing short, one-shot sound effects. Any system may `emit PlaySound(...)` and the backend SHALL play the sound immediately, non-positionally. The sound plays once and requires no cleanup.
+The `std.audio` module SHALL provide a `PlaySound` event for playing short, one-shot sound effects. Any rule may `emit PlaySound(...)` and the backend SHALL play the sound immediately, non-positionally. The sound plays once and requires no cleanup.
 
 #### Scenario: PlaySound event fields
 - **WHEN** `use std.audio` is imported
 - **THEN** `PlaySound` event has fields: `sound: sound_id`, `volume: float`, `pitch: float`
 
 #### Scenario: Emitting PlaySound plays the sound
-- **WHEN** a system handler executes `emit PlaySound(GemSound, 0.8, 1.0)`
+- **WHEN** a rule handler executes `emit PlaySound(GemSound, 0.8, 1.0)`
 - **THEN** the backend plays the `GemSound` sound effect once at 80% volume
 
 #### Scenario: PlaySound is non-positional
@@ -25,7 +25,7 @@ The `AudioSource` trait SHALL define a continuous sound source attached to an en
 - **THEN** the backend plays the sound (looping if `looping = true`) from the entity's position
 
 #### Scenario: AudioSource stops when playing set to false
-- **WHEN** a system sets `AudioSource.playing = false`
+- **WHEN** a rule sets `AudioSource.playing = false`
 - **THEN** the backend stops the sound on that entity
 
 #### Scenario: Spatial audio with volume Transform
@@ -46,7 +46,7 @@ The `MusicTrack` trait SHALL define a streaming music track. When `playing = tru
 - **THEN** the backend starts streaming the music track
 
 #### Scenario: Music track transition by changing music field
-- **WHEN** a system sets `MusicTrack.music = BossTheme` while the track is playing
+- **WHEN** a rule sets `MusicTrack.music = BossTheme` while the track is playing
 - **THEN** the backend transitions to the new music track
 
 #### Scenario: Music volume respects AudioSettings
@@ -63,5 +63,5 @@ The `AudioSettings` trait SHALL define global audio volume multipliers. Applied 
 - **THEN** all SFX play at 70% and music at 80% of their individual volumes
 
 #### Scenario: Pausing music via volume
-- **WHEN** a system sets `AudioSettings.music_volume = 0.0`
+- **WHEN** a rule sets `AudioSettings.music_volume = 0.0`
 - **THEN** all music tracks play silently (effectively paused without stopping the stream)

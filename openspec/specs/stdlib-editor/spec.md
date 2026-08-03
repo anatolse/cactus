@@ -2,12 +2,12 @@
 
 ## Purpose
 
-The `std.editor` module provides the standard in-game editor infrastructure for Cactus projects. It exposes traits, enums, events, extern function bridges, and built-in systems that allow scene editing (selection, translation, placement, gizmo rendering) to be wired into any game that imports the module.
+The `std.editor` module provides the standard in-game editor infrastructure for Cactus projects. It exposes traits, enums, events, extern function bridges, and built-in rules that allow scene editing (selection, translation, placement, gizmo rendering) to be wired into any game that imports the module.
 
 ## Requirements
 
 ### Requirement: std.editor module exposes EditorState trait and singleton entity
-The `std.editor` module SHALL declare a `pub trait EditorState` with fields `active: bool` (default `true`), `mode: GizmoMode` (default `GizmoMode.Select`), `selected: entity_id` (default `0`), `active_template: string` (default `""`), `focused_trait: string` (default `""`), `focused_field: string` (default `""`), and `use_3d: bool` (default `false`). The module SHALL declare a `pub entity Editor` with `EditorState` initialized to its defaults. The `use_3d` field selects which interaction dimension is active: 2D selection/placement systems run only when it is `false`, 3D selection/placement systems only when it is `true`.
+The `std.editor` module SHALL declare a `pub trait EditorState` with fields `active: bool` (default `true`), `mode: GizmoMode` (default `GizmoMode.Select`), `selected: entity_id` (default `0`), `active_template: string` (default `""`), `focused_trait: string` (default `""`), `focused_field: string` (default `""`), and `use_3d: bool` (default `false`). The module SHALL declare a `pub entity Editor` with `EditorState` initialized to its defaults. The `use_3d` field selects which interaction dimension is active: 2D selection/placement rules run only when it is `false`, 3D selection/placement rules only when it is `true`.
 
 #### Scenario: Editor entity exists in registry after module load
 - **WHEN** a module imports `use std.editor` and the scene loads
@@ -17,9 +17,9 @@ The `std.editor` module SHALL declare a `pub trait EditorState` with fields `act
 - **AND** the `EditorState.selected` field is `0`
 - **AND** the `EditorState.use_3d` field is `false`
 
-#### Scenario: EditorState fields are writable by systems
-- **WHEN** a system filters on `EditorState as state`
-- **THEN** the system can read and write `state.active`, `state.mode`, `state.selected`, `state.active_template`, `state.focused_trait`, `state.focused_field`, and `state.use_3d`
+#### Scenario: EditorState fields are writable by rules
+- **WHEN** a rule filters on `EditorState as state`
+- **THEN** the rule can read and write `state.active`, `state.mode`, `state.selected`, `state.active_template`, `state.focused_trait`, `state.focused_field`, and `state.use_3d`
 
 ### Requirement: std.editor module exposes GizmoMode enum
 The `std.editor` module SHALL declare a `pub enum GizmoMode` with variants `Select`, `Translate`, `Rotate`, `Scale`, and `Place`.
@@ -32,44 +32,44 @@ The `std.editor` module SHALL declare a `pub enum GizmoMode` with variants `Sele
 The `std.editor` module SHALL declare `pub trait EditorSelected`, `pub trait EditorLocked`, and `pub trait EditorHidden` as marker traits (no fields).
 
 #### Scenario: EditorSelected can be added and removed at runtime
-- **WHEN** a system calls `add EditorSelected to entity` on an entity
+- **WHEN** a rule calls `add EditorSelected to entity` on an entity
 - **THEN** the entity has the `EditorSelected` component
-- **WHEN** a system calls `remove EditorSelected from entity` on the same entity
+- **WHEN** a rule calls `remove EditorSelected from entity` on the same entity
 - **THEN** the entity no longer has the `EditorSelected` component
 
 #### Scenario: EditorLocked excludes entity from selection
 - **WHEN** an entity has `EditorLocked` component
-- **AND** an editor selection system uses `exclude: EditorLocked` in its filter
+- **AND** an editor selection rule uses `exclude: EditorLocked` in its filter
 - **THEN** the entity is not considered for selection
 
 ### Requirement: std.editor module exposes EditorSnap trait
 The `std.editor` module SHALL declare a `pub trait EditorSnap` with fields `position_snap: float` (default `0.0`), `rotation_snap: float` (default `0.0`), and `scale_snap: float` (default `0.0`).
 
 #### Scenario: EditorSnap fields are writable
-- **WHEN** a system filters on `EditorSnap as snap`
-- **THEN** the system can read and write `snap.position_snap`, `snap.rotation_snap`, and `snap.scale_snap`
+- **WHEN** a rule filters on `EditorSnap as snap`
+- **THEN** the rule can read and write `snap.position_snap`, `snap.rotation_snap`, and `snap.scale_snap`
 
 #### Scenario: EditorSnap with position_snap=0 means no snap
 - **WHEN** an entity has `EditorSnap` with `position_snap = 0.0`
-- **THEN** a transform system MAY skip position snapping for that entity
+- **THEN** a transform rule MAY skip position snapping for that entity
 
 ### Requirement: std.editor module exposes EditorCategory trait
 The `std.editor` module SHALL declare a `pub trait EditorCategory` with fields `category: string` (let, no default) and `visible: bool` (var, default `true`).
 
 #### Scenario: EditorCategory fields are readable after assignment
 - **WHEN** an entity is created with `EditorCategory:` block setting `category = "Vegetation"` and `visible = true`
-- **THEN** a system filtering on `EditorCategory as cat` can read `cat.category` as `"Vegetation"` and `cat.visible` as `true`
+- **THEN** a rule filtering on `EditorCategory as cat` can read `cat.category` as `"Vegetation"` and `cat.visible` as `true`
 
 ### Requirement: std.editor module exposes EditorGizmo2D and EditorGizmo3D projection traits
 The `std.editor` module SHALL declare `pub trait EditorGizmo2D` with fields `mode: GizmoMode`, `color: color`, and `size: float`. The module SHALL declare `pub trait EditorGizmo3D` with the same fields. Both traits SHALL be designed for frame-local projection via `project`.
 
 #### Scenario: EditorGizmo2D can be projected onto a flat-world entity
-- **WHEN** a system calls `project EditorGizmo2D:` with `mode = GizmoMode.Translate`, `color = #00FF00FF`, `size = 1.0` on an entity with `std.transform.flat.WorldTransform`
+- **WHEN** a rule calls `project EditorGizmo2D:` with `mode = GizmoMode.Translate`, `color = #00FF00FF`, `size = 1.0` on an entity with `std.transform.flat.WorldTransform`
 - **THEN** the entity has projected `EditorGizmo2D` component during the current frame
 - **AND** the projected component is cleared after the render pass
 
 #### Scenario: EditorGizmo3D can be projected onto a volume-world entity
-- **WHEN** a system calls `project EditorGizmo3D:` with `mode = GizmoMode.Translate`, `color = #00FF00FF`, `size = 1.0` on an entity with `std.transform.volume.WorldTransform`
+- **WHEN** a rule calls `project EditorGizmo3D:` with `mode = GizmoMode.Translate`, `color = #00FF00FF`, `size = 1.0` on an entity with `std.transform.volume.WorldTransform`
 - **THEN** the entity has projected `EditorGizmo3D` component during the current frame
 - **AND** the projected component is cleared after the render pass
 
@@ -77,12 +77,12 @@ The `std.editor` module SHALL declare `pub trait EditorGizmo2D` with fields `mod
 The `std.editor` module SHALL declare `pub event EditorSelectionChanged` with fields `previous: entity_id` and `current: entity_id`. The module SHALL declare `pub event EditorModeChanged` with fields `previous_mode: GizmoMode` and `current_mode: GizmoMode`.
 
 #### Scenario: EditorSelectionChanged event can be emitted
-- **WHEN** a system calls `emit EditorSelectionChanged:` with `previous = old_id` and `current = new_id`
-- **THEN** systems with `on EditorSelectionChanged:` handlers receive the event
+- **WHEN** a rule calls `emit EditorSelectionChanged:` with `previous = old_id` and `current = new_id`
+- **THEN** rules with `on EditorSelectionChanged:` handlers receive the event
 
 #### Scenario: EditorModeChanged event can be emitted
-- **WHEN** a system calls `emit EditorModeChanged:` with `previous_mode = GizmoMode.Select` and `current_mode = GizmoMode.Translate`
-- **THEN** systems with `on EditorModeChanged:` handlers receive the event
+- **WHEN** a rule calls `emit EditorModeChanged:` with `previous_mode = GizmoMode.Select` and `current_mode = GizmoMode.Translate`
+- **THEN** rules with `on EditorModeChanged:` handlers receive the event
 
 ### Requirement: std.editor module exposes extern func bridges
 The `std.editor` module SHALL declare the following `pub extern func` declarations:
@@ -106,27 +106,27 @@ The `std.editor` module SHALL declare the following `pub extern func` declaratio
 - **WHEN** `std.editor` is imported
 - **THEN** `editor_raycast_3d` is callable with `(vec2, int)` arguments and returns `entity_id`
 
-### Requirement: std.editor module exposes extern system declarations
-The `std.editor` module SHALL declare the following `pub extern system` declarations:
+### Requirement: std.editor module exposes extern rule declarations
+The `std.editor` module SHALL declare the following `pub extern rule` declarations:
 - `EditorTemplatePalette` with filter requiring `EditorState`
 - `EditorPropertyPanel` with filter requiring `EditorState`
 - `GizmoRenderer2D` with filter requiring `EditorGizmo2D` and `std.transform.flat.WorldTransform`
 - `GizmoRenderer3D` with filter requiring `EditorGizmo3D` and `std.transform.volume.WorldTransform`
 
-#### Scenario: EditorTemplatePalette extern system is declared with correct filter
+#### Scenario: EditorTemplatePalette extern rule is declared with correct filter
 - **WHEN** `std.editor` is imported
-- **THEN** `EditorTemplatePalette` is an available extern system that filters on entities with `EditorState`
+- **THEN** `EditorTemplatePalette` is an available extern rule that filters on entities with `EditorState`
 
-#### Scenario: GizmoRenderer2D extern system is declared with correct filter
+#### Scenario: GizmoRenderer2D extern rule is declared with correct filter
 - **WHEN** `std.editor` is imported
-- **THEN** `GizmoRenderer2D` is an available extern system that filters on entities with both `EditorGizmo2D` and `std.transform.flat.WorldTransform`
+- **THEN** `GizmoRenderer2D` is an available extern rule that filters on entities with both `EditorGizmo2D` and `std.transform.flat.WorldTransform`
 
-#### Scenario: GizmoRenderer3D extern system is declared with correct filter
+#### Scenario: GizmoRenderer3D extern rule is declared with correct filter
 - **WHEN** `std.editor` is imported
-- **THEN** `GizmoRenderer3D` is an available extern system that filters on entities with both `EditorGizmo3D` and `std.transform.volume.WorldTransform`
+- **THEN** `GizmoRenderer3D` is an available extern rule that filters on entities with both `EditorGizmo3D` and `std.transform.volume.WorldTransform`
 
-### Requirement: std.editor module provides EditorModeToggle system
-The `std.editor` module SHALL declare a `system EditorModeToggle` that filters on `EditorState as state` and handles keyboard shortcuts:
+### Requirement: std.editor module provides EditorModeToggle rule
+The `std.editor` module SHALL declare a `rule EditorModeToggle` that filters on `EditorState as state` and handles keyboard shortcuts:
 - `on input:` with `input.pressed(Key.F1)` toggles `state.active`
 - `on input:` with `input.pressed(Key.W)` sets `state.mode = GizmoMode.Translate`
 - `on input:` with `input.pressed(Key.E)` sets `state.mode = GizmoMode.Rotate`
@@ -143,12 +143,12 @@ The `std.editor` module SHALL declare a `system EditorModeToggle` that filters o
 - **WHEN** `input.pressed(Key.W)` is called
 - **THEN** `EditorState.mode` is set to `GizmoMode.Translate`
 
-### Requirement: std.editor module provides 2D selection and transform systems
+### Requirement: std.editor module provides 2D selection and transform rules
 The `std.editor` module SHALL declare:
-- `system EditorSelection2D` with filter requiring `std.transform.flat.WorldTransform` and `BoxCollider`, excluding `EditorLocked`, that on input click calls `editor_hit_test_2d` and adds `EditorSelected` to the hit entity
-- `system EditorTranslate2D` with filter requiring `std.transform.flat.WorldTransform as xform` and `EditorSelected`, that on tick while mouse is held adds `editor_mouse_delta_2d()` to `xform.position`
-- `system EditorPlace2D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the screen-to-world position, then adds `EditorSelected` to the spawned entity
-- `system EditorGizmo2D` with filter requiring `std.transform.flat.WorldTransform` and `EditorSelected`, that on tick projects `EditorGizmo2D` with the current mode, color `#00FF00FF`, and size `1.0`
+- `rule EditorSelection2D` with filter requiring `std.transform.flat.WorldTransform` and `BoxCollider`, excluding `EditorLocked`, that on input click calls `editor_hit_test_2d` and adds `EditorSelected` to the hit entity
+- `rule EditorTranslate2D` with filter requiring `std.transform.flat.WorldTransform as xform` and `EditorSelected`, that on tick while mouse is held adds `editor_mouse_delta_2d()` to `xform.position`
+- `rule EditorPlace2D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the screen-to-world position, then adds `EditorSelected` to the spawned entity
+- `rule EditorGizmo2D` with filter requiring `std.transform.flat.WorldTransform` and `EditorSelected`, that on tick projects `EditorGizmo2D` with the current mode, color `#00FF00FF`, and size `1.0`
 
 `EditorSelection2D` and `EditorPlace2D` SHALL act only when `EditorState.use_3d` is `false`; when it is `true` their input handlers SHALL perform no selection and no spawning.
 
@@ -176,12 +176,12 @@ The `std.editor` module SHALL declare:
 - **WHEN** an entity has `EditorSelected` and `std.transform.flat.WorldTransform`
 - **THEN** `EditorGizmo2D` is projected onto the entity each tick
 
-### Requirement: std.editor module provides 3D selection and transform systems
+### Requirement: std.editor module provides 3D selection and transform rules
 The `std.editor` module SHALL declare:
-- `system EditorSelection3D` with filter requiring `std.transform.volume.WorldTransform`, excluding `EditorLocked`, that on input click calls `editor_raycast_3d` and adds `EditorSelected` to the hit entity
-- `system EditorTranslate3D` with filter requiring `std.transform.volume.WorldTransform as xform` and `EditorSelected`, that on tick while mouse is held adds `editor_mouse_delta_3d()` to `xform.position`
-- `system EditorPlace3D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the position returned by `editor_plane_project_3d` against the ground plane (origin `(0,0,0)`, normal `(0,1,0)`), then adds `EditorSelected` to the spawned entity
-- `system EditorGizmo3D` with filter requiring `std.transform.volume.WorldTransform` and `EditorSelected`, that on tick projects `EditorGizmo3D` with the current mode, color `#00FF00FF`, and size `1.0`
+- `rule EditorSelection3D` with filter requiring `std.transform.volume.WorldTransform`, excluding `EditorLocked`, that on input click calls `editor_raycast_3d` and adds `EditorSelected` to the hit entity
+- `rule EditorTranslate3D` with filter requiring `std.transform.volume.WorldTransform as xform` and `EditorSelected`, that on tick while mouse is held adds `editor_mouse_delta_3d()` to `xform.position`
+- `rule EditorPlace3D` with filter requiring `EditorState as state`, that on input click in `GizmoMode.Place` mode calls `editor_spawn_template` with `state.active_template` and the position returned by `editor_plane_project_3d` against the ground plane (origin `(0,0,0)`, normal `(0,1,0)`), then adds `EditorSelected` to the spawned entity
+- `rule EditorGizmo3D` with filter requiring `std.transform.volume.WorldTransform` and `EditorSelected`, that on tick projects `EditorGizmo3D` with the current mode, color `#00FF00FF`, and size `1.0`
 
 `EditorSelection3D` and `EditorPlace3D` SHALL act only when `EditorState.use_3d` is `true`; when it is `false` their input handlers SHALL perform no selection and no spawning.
 

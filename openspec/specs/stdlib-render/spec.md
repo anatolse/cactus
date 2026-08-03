@@ -22,19 +22,19 @@ The `std.render.sprites` module SHALL expose the passive trait surface currently
 
 ---
 
-### Requirement: std.render.sprites declares the current backend-backed extern systems
-The shipped `std.render.sprites` module SHALL declare the currently implemented passive render extern systems for sprite submission and animated-sprite advancement.
+### Requirement: std.render.sprites declares the current backend-backed extern rules
+The shipped `std.render.sprites` module SHALL declare the currently implemented passive render extern rules for sprite submission and animated-sprite advancement.
 
 #### Scenario: SpriteRenderer declaration matches shipped stdlib
 - **WHEN** `std.render.sprites` is imported
-- **THEN** the module declares `extern system SpriteRenderer` with filter entries `std.transform.flat.WorldTransform` and `Renderer`
+- **THEN** the module declares `extern rule SpriteRenderer` with filter entries `std.transform.flat.WorldTransform` and `Renderer`
 
-#### Scenario: AnimatedSpriteSystem declaration matches shipped stdlib
+#### Scenario: SpriteAnimation declaration matches shipped stdlib
 - **WHEN** `std.render.sprites` is imported
-- **THEN** the module declares `extern system AnimatedSpriteSystem` with filter entry `AnimatedSprite`
+- **THEN** the module declares `extern rule SpriteAnimation` with filter entry `AnimatedSprite`
 
 #### Scenario: Flat-world sprite rendering is backend-backed
-- **WHEN** a program imports `std.render.sprites` and the recognized `SpriteRenderer` extern system is scheduled
+- **WHEN** a program imports `std.render.sprites` and the recognized `SpriteRenderer` extern rule is scheduled
 - **THEN** generated output binds to backend-library sprite rendering behavior for entities with `std.transform.flat.WorldTransform` and `Renderer`
 - **AND** that backend behavior resolves sprite texture handles through the asset/runtime infrastructure before drawing visible sprites in the backend-owned 2D render pass
 
@@ -47,7 +47,7 @@ The shipped `std.render.sprites` module SHALL declare the currently implemented 
 - **THEN** the cpp-entt backend-owned sprite path draws the lower layer before the higher layer
 
 #### Scenario: Animated sprite advancement follows current helper semantics
-- **WHEN** the recognized `AnimatedSpriteSystem` extern system is scheduled for an `AnimatedSprite`
+- **WHEN** the recognized `SpriteAnimation` extern rule is scheduled for an `AnimatedSprite`
 - **THEN** generated output binds to backend-library animation advancement behavior that first validates the texture asset handle
 - **AND** the backend advances `frame` only when `playing = true`, `frame_count > 0`, `fps > 0`, and the computed integer animation step is greater than zero
 - **AND** when advancement occurs, the backend wraps `frame` modulo `frame_count`
@@ -75,28 +75,28 @@ The `std.render.meshes` module SHALL expose the passive 3D render and light trai
 
 ---
 
-### Requirement: std.render.meshes declares the current stdlib-owned mesh and light extern systems
-The shipped `std.render.meshes` module SHALL declare the currently implemented stdlib-owned extern systems for mesh rendering and light registration.
+### Requirement: std.render.meshes declares the current stdlib-owned mesh and light extern rules
+The shipped `std.render.meshes` module SHALL declare the currently implemented stdlib-owned extern rules for mesh rendering and light registration.
 
 #### Scenario: MeshRenderer declaration matches shipped stdlib
 - **WHEN** `std.render.meshes` is imported
-- **THEN** the module declares `extern system MeshRenderer` with filter entries `std.transform.volume.WorldTransform` and `Renderer`
+- **THEN** the module declares `extern rule MeshRenderer` with filter entries `std.transform.volume.WorldTransform` and `Renderer`
 
-#### Scenario: PointLightSystem declaration matches shipped stdlib
+#### Scenario: PointLightRender declaration matches shipped stdlib
 - **WHEN** `std.render.meshes` is imported
-- **THEN** the module declares `extern system PointLightSystem` with filter entries `std.transform.volume.WorldTransform` and `PointLight`
+- **THEN** the module declares `extern rule PointLightRender` with filter entries `std.transform.volume.WorldTransform` and `PointLight`
 
-#### Scenario: DirectionalLightSystem declaration matches shipped stdlib
+#### Scenario: DirectionalLightRender declaration matches shipped stdlib
 - **WHEN** `std.render.meshes` is imported
-- **THEN** the module declares `extern system DirectionalLightSystem` with filter entry `DirectionalLight`
+- **THEN** the module declares `extern rule DirectionalLightRender` with filter entry `DirectionalLight`
 
-#### Scenario: BillboardRenderer trait is exposed without a stdlib-declared auto-included extern system
+#### Scenario: BillboardRenderer trait is exposed without a stdlib-declared auto-included extern rule
 - **WHEN** `std.render.meshes` is imported
 - **THEN** the module exposes `BillboardRenderer` as a trait
-- **AND** the shipped stdlib module does not declare an `extern system BillboardRenderer`
+- **AND** the shipped stdlib module does not declare an `extern rule BillboardRenderer`
 
 #### Scenario: Mesh rendering is backend-backed
-- **WHEN** a program imports `std.render.meshes` and the recognized `MeshRenderer` extern system is scheduled
+- **WHEN** a program imports `std.render.meshes` and the recognized `MeshRenderer` extern rule is scheduled
 - **THEN** generated output binds to backend-library 3D mesh rendering behavior for entities with `std.transform.volume.WorldTransform` and mesh `Renderer`
 - **AND** mesh/material handles resolve through the asset/runtime infrastructure before drawing visible meshes in the cpp-entt backend-owned 3D render pass
 
@@ -109,20 +109,20 @@ The shipped `std.render.meshes` module SHALL declare the currently implemented s
 - **THEN** the backend does not draw that entity in the mesh pass or record a mesh submission for it
 
 #### Scenario: Point lights are backend-backed
-- **WHEN** a program imports `std.render.meshes` and the recognized `PointLightSystem` extern system is scheduled
+- **WHEN** a program imports `std.render.meshes` and the recognized `PointLightRender` extern rule is scheduled
 - **THEN** generated output binds to backend-library point-light registration behavior for entities with `std.transform.volume.WorldTransform` and `PointLight`
 - **AND** enabled point lights contribute a registration event through the backend runtime adapter
 
 #### Scenario: Directional lights are backend-backed
-- **WHEN** a program imports `std.render.meshes` and the recognized `DirectionalLightSystem` extern system is scheduled
+- **WHEN** a program imports `std.render.meshes` and the recognized `DirectionalLightRender` extern rule is scheduled
 - **THEN** generated output binds to backend-library directional-light registration behavior for entities with `DirectionalLight`
 - **AND** enabled directional lights contribute a registration event through the backend runtime adapter
 
 ### Requirement: Backend-backed point lights contribute to backend-backed mesh shading
-For supported backend-owned 3D render paths, recognized `std.render.meshes.PointLightSystem` behavior SHALL provide per-frame point-light inputs consumed by backend-backed mesh rendering rather than only non-visual registration accounting.
+For supported backend-owned 3D render paths, recognized `std.render.meshes.PointLightRender` behavior SHALL provide per-frame point-light inputs consumed by backend-backed mesh rendering rather than only non-visual registration accounting.
 
 #### Scenario: Enabled point lights affect mesh-rendering inputs
-- **WHEN** a supported backend schedules `PointLightSystem` and `MeshRenderer` in the same frame for enabled lights and visible meshes
+- **WHEN** a supported backend schedules `PointLightRender` and `MeshRenderer` in the same frame for enabled lights and visible meshes
 - **THEN** the backend-backed mesh rendering path receives point-light data from the registered lights for that frame
 
 #### Scenario: Disabled point lights do not affect mesh-rendering inputs
@@ -143,7 +143,7 @@ Current stdlib render coverage SHALL reflect the binding and runtime-adapter tes
 
 #### Scenario: Recognized sprite and animation binding is covered in cpp-entt
 - **WHEN** the cpp-entt backend test suite runs
-- **THEN** it verifies that recognized sprite-renderer and animated-sprite extern systems bind to the EnTT backend runtime adapters
+- **THEN** it verifies that recognized sprite-renderer and animated-sprite extern rules bind to the EnTT backend runtime adapters
 
 #### Scenario: Representative render adapter behavior is covered in runtime stdlib tests
 - **WHEN** runtime stdlib tests run against the shipped backend runtime adapters
@@ -164,7 +164,7 @@ The `std.render.shapes` module SHALL expose `ShapeType.Circle` alongside the exi
 - **THEN** the shape's effective diameter is `d`, and `size.y` has no effect on the drawn circle
 
 ### Requirement: ShapeRenderer renders entities in world space using the active camera
-The `ShapeRenderer` extern system SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible). `ShapeRenderer` SHALL draw `ShapeType.Rectangle` shapes as axis-aligned rectangles and `ShapeType.Circle` shapes as circles centered on the entity's world position with diameter `size.x`.
+The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible). `ShapeRenderer` SHALL draw `ShapeType.Rectangle` shapes as axis-aligned rectangles and `ShapeType.Circle` shapes as circles centered on the entity's world position with diameter `size.x`.
 
 #### Scenario: World-unit entity rendered at correct screen position
 - **WHEN** the active camera has zoom=64 and offset={400,300} (world origin at screen center)

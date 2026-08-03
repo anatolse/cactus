@@ -23,7 +23,7 @@ The gameplay-core profile SHALL be small enough to teach as a coherent authoring
 - **THEN** it is assessed against whether it preserves a small, teachable gameplay-core model
 
 ### Requirement: Cactus is gameplay-focused, not a general-purpose engine scripting surface
-The language SHALL be described as a gameplay-focused DSL optimized for expressing entity state, events, spawning, system-driven updates, and action-game rules. It SHALL NOT be presented as a complete general-purpose solution for UI description, tool scripting, or arbitrary engine orchestration unless such features are explicitly designed and accepted.
+The language SHALL be described as a gameplay-focused DSL optimized for expressing entity state, events, spawning, rule-driven updates, and action-game rules. It SHALL NOT be presented as a complete general-purpose solution for UI description, tool scripting, or arbitrary engine orchestration unless such features are explicitly designed and accepted.
 
 #### Scenario: Gameplay-oriented feature fits the language identity
 - **WHEN** a proposal strengthens player movement, projectiles, collision reactions, combat flow, or scene/gameplay state transitions
@@ -60,11 +60,11 @@ The following timing guarantees SHALL be documented and honored by all backends:
 ### Requirement: ECS is the primary gameplay model, with explicit boundaries
 Cactus SHALL remain ECS-first for gameplay modeling, but the language philosophy SHALL explicitly distinguish gameplay concerns from presentation and engine-plumbing concerns.
 
-Gameplay-facing constructs such as traits, systems, events, templates, spawning, and filtering belong in the core language identity. Presentation, UI, and engine integration concerns SHALL default to stdlib/backend layers unless a dedicated language feature is intentionally added.
+Gameplay-facing constructs such as traits, rules, events, templates, spawning, and filtering belong in the core language identity. Presentation, UI, and engine integration concerns SHALL default to stdlib/backend layers unless a dedicated language feature is intentionally added.
 
 #### Scenario: Gameplay mechanic uses ECS constructs
 - **WHEN** a platformer or shooter mechanic is authored in Cactus
-- **THEN** it is expected to use traits, systems, events, and spawned entities as the primary modeling tools
+- **THEN** it is expected to use traits, rules, events, and spawned entities as the primary modeling tools
 
 #### Scenario: UI concern is not forced into the core language story
 - **WHEN** a maintained example needs HUD or menu behavior
@@ -80,7 +80,7 @@ All operations in Cactus that take an `entity_id` argument SHALL be total: they 
 ### Requirement: The declarative/restricted-imperative boundary
 The Cactus authoring surface SHALL be divided into two tiers:
 
-**Tier 1 — Declarative**: assets, inputs, trait declarations, unit/template declarations, system declarations, event declarations, module structure, and other structural gameplay description.
+**Tier 1 — Declarative**: assets, inputs, trait declarations, unit/template declarations, rule declarations, event declarations, module structure, and other structural gameplay description.
 
 **Tier 2 — Restricted imperative**: behavior inside handlers only, including field mutation, conditionals, event emission, spawn/destroy, trait add/remove, projected trait facts, bounded list iteration, and pure function calls.
 
@@ -98,7 +98,7 @@ Bounded `for item in list_expr:` iteration is permitted as a restricted handler 
 - **THEN** the compiler SHALL report that general loops are not supported in the authoring tier
 
 #### Scenario: Bounded foreach accepted in handler
-- **WHEN** a system event handler contains `for hit in hits:` and `hits` has type `list[T]`
+- **WHEN** a rule event handler contains `for hit in hits:` and `hits` has type `list[T]`
 - **THEN** the construct is evaluated as bounded snapshot iteration rather than as a general loop
 
 #### Scenario: Func recursion rejected
@@ -127,11 +127,11 @@ The following concerns SHALL be treated as backend or stdlib responsibilities ra
 The generated backend SHALL produce the most performant code derivable from the author's declarations. Authors SHALL NOT be required to hand-tune or annotate gameplay-core declarations for performance.
 
 #### Scenario: Filter generates typed view, not dynamic query
-- **WHEN** a system declares `filter: Position as p, Velocity as v`
+- **WHEN** a rule declares `filter: Position as p, Velocity as v`
 - **THEN** the EnTT backend SHALL generate a statically typed view rather than a runtime-reflective lookup
 
 #### Scenario: Author declarations do not require performance annotations
-- **WHEN** an author writes `filter: Health as h` in a system with many entities
+- **WHEN** an author writes `filter: Health as h` in a rule with many entities
 - **THEN** no special performance annotation is required from the author
 
 ### Requirement: Feature evaluation criteria

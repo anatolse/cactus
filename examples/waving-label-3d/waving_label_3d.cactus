@@ -28,7 +28,7 @@ pub entity WavingLabel:
     Clock:
         elapsed = 0.0
 
-system WaveSystem:
+rule WaveSystem:
     filter:
         tv.WorldTransform
         rtext.TextLabel

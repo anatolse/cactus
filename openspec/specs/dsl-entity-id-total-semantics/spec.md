@@ -38,7 +38,7 @@ The canonical semantics of `entity_id` operations on stale/dead handles are:
 - **THEN** the event is not delivered to any handler; no error occurs
 
 ### Requirement: `exists(entity_id)` built-in expression
-The DSL SHALL support `exists(expr)` as a built-in expression where `expr` has type `entity_id`. It returns `bool`: `true` if the referenced entity is currently alive (not yet destroyed), `false` if the entity has been destroyed. `exists()` MAY only appear inside system event handler bodies (it requires world access).
+The DSL SHALL support `exists(expr)` as a built-in expression where `expr` has type `entity_id`. It returns `bool`: `true` if the referenced entity is currently alive (not yet destroyed), `false` if the entity has been destroyed. `exists()` MAY only appear inside rule event handler bodies (it requires world access).
 
 ```ebnf
 exists_expr = "exists" "(" expr ")" ;
@@ -53,12 +53,12 @@ exists_expr = "exists" "(" expr ")" ;
 - **THEN** the expression returns `false`
 
 #### Scenario: exists used in if condition
-- **WHEN** `if exists(f.target):` appears in a system handler
+- **WHEN** `if exists(f.target):` appears in a rule handler
 - **THEN** the semantic analyzer accepts it; the body executes only when the target is alive
 
 #### Scenario: exists in pure func body is an error
 - **WHEN** `exists(some_id)` appears inside a `func` body
-- **THEN** the semantic analyzer SHALL report: "`exists()` requires world access; only allowed inside system event handlers"
+- **THEN** the semantic analyzer SHALL report: "`exists()` requires world access; only allowed inside rule event handlers"
 
 #### Scenario: exists argument must be entity_id
 - **WHEN** `exists(42)` appears where `42` is an integer

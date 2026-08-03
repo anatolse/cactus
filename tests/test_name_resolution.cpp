@@ -214,13 +214,13 @@ static std::vector<std::string> unresolved_references(const ProgramNode& program
         std::visit(
             [&out](const auto& node) {
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, SystemNode>) {
+                if constexpr (std::is_same_v<T, RuleNode>) {
                     check_filter_clause(node.filter, "filter", out);
                     check_filter_clause(node.exclude, "exclude", out);
                     for (const auto& handler : node.handlers) {
                         collect_unresolved_stmts(handler.body, out);
                     }
-                } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
+                } else if constexpr (std::is_same_v<T, ExternRuleNode>) {
                     check_filter_clause(node.filter, "filter", out);
                     check_filter_clause(node.exclude, "exclude", out);
                 } else if constexpr (std::is_same_v<T, TemplateNode> || std::is_same_v<T, EntityNode>) {
@@ -397,16 +397,16 @@ TEST_CASE("name resolution: local enum member resolves bare", "[resolution][enum
         "    Green\n"
         "trait Paint:\n"
         "    var c: int\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Paint\n"
         "    on tick:\n"
         "        let chosen = Color.Green\n");
     CHECK(analyzed.errors.empty());
-    // Find the let-binding's resolved member inside the system handler.
+    // Find the let-binding's resolved member inside the rule handler.
     const ResolvedEnumMember* member = nullptr;
     for (const auto& decl : analyzed.program.declarations) {
-        const auto* sys = std::get_if<SystemNode>(&decl);
+        const auto* sys = std::get_if<RuleNode>(&decl);
         if (sys == nullptr) {
             continue;
         }
@@ -437,7 +437,7 @@ TEST_CASE("name resolution: local enum member with unknown member rejected", "[r
         "    Red\n"
         "trait Paint:\n"
         "    var c: int\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Paint\n"
         "    on tick:\n"
@@ -481,11 +481,11 @@ static ModuleImports std_math_imports() {
     return imports;
 }
 
-/// Collect the value expressions of let-statements in the first system handler.
+/// Collect the value expressions of let-statements in the first rule handler.
 static std::vector<const ExprNode*> handler_let_values(const ProgramNode& program) {
     std::vector<const ExprNode*> values;
     for (const auto& decl : program.declarations) {
-        const auto* sys = std::get_if<SystemNode>(&decl);
+        const auto* sys = std::get_if<RuleNode>(&decl);
         if (sys == nullptr) {
             continue;
         }
@@ -509,7 +509,7 @@ TEST_CASE("name resolution: callee resolves identically via alias and canonical 
         "    dt: float\n"
         "trait Paint:\n"
         "    var c: float\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Paint\n"
         "    on tick:\n"
@@ -539,7 +539,7 @@ TEST_CASE("name resolution: enum member resolves in general expression positions
         "    Green\n"
         "trait Paint:\n"
         "    var c: int\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Paint\n"
         "    on tick:\n"
@@ -574,7 +574,7 @@ TEST_CASE("name resolution: enum typing flows into add-arg type checks", "[resol
         "    var c: int\n"
         "trait Tint:\n"
         "    var shade: int\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Paint\n"
         "    on tick:\n"
@@ -593,7 +593,7 @@ TEST_CASE("name resolution: enum typing flows into add-arg type checks", "[resol
         "    var c: int\n"
         "trait Tint:\n"
         "    var shade: Color\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Paint\n"
         "    on tick:\n"
@@ -613,7 +613,7 @@ TEST_CASE("name resolution: match expression over enum member subject keeps work
         "    Green\n"
         "trait Paint:\n"
         "    var c: int\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Paint\n"
         "    on tick:\n"
@@ -636,7 +636,7 @@ TEST_CASE("name resolution: match expression over enum member subject keeps work
 
 // ── M3 — canonical qualifiers across all reference forms (task 3.3) ─────────
 
-/// Module "game.stuff" (traits, struct, event, system, template) under alias
+/// Module "game.stuff" (traits, struct, event, rule, template) under alias
 /// "gs"; canonical-path spellings must resolve identically to the alias.
 static ModuleImports game_stuff_imports() {
     ImportedSymbols syms;
@@ -670,12 +670,12 @@ static ModuleImports game_stuff_imports() {
     vec.canonical_id    = make_canonical_id(*vec.symbol_id);
     syms.structs["Vec"] = std::move(vec);
 
-    ImportedSystem move;
+    ImportedRule move;
     move.name             = "Move";
     move.module_name      = "game.stuff";
-    move.symbol_id        = make_symbol_id(SymbolKind::System, "game.stuff", "Move");
+    move.symbol_id        = make_symbol_id(SymbolKind::Rule, "game.stuff", "Move");
     move.canonical_id     = make_canonical_id(*move.symbol_id);
-    syms.systems["Move"]  = std::move(move);
+    syms.rules["Move"]  = std::move(move);
 
     ImportedTemplate rock;
     rock.name               = "Rock";
@@ -700,7 +700,7 @@ static std::string all_reference_forms_source(const std::string& q) {
            "    dt: float\n"
            "trait Wearing:\n"
            "    var p: " + q + ".Vec\n"
-           "system S:\n"
+           "rule S:\n"
            "    filter:\n"
            "        " + q + ".Velocity\n"
            "    exclude:\n"
@@ -724,7 +724,7 @@ struct ReferenceFormIds {
 static ReferenceFormIds collect_reference_ids(const AnalyzedProgram& analyzed) {
     ReferenceFormIds ids;
     for (const auto& decl : analyzed.program.declarations) {
-        if (const auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (const auto* sys = std::get_if<RuleNode>(&decl)) {
             REQUIRE(sys->filter.entries.size() == 1);
             REQUIRE(sys->filter.entries[0].resolved_trait_id.has_value());
             ids.filter_trait = make_canonical_id(*sys->filter.entries[0].resolved_trait_id);
@@ -792,7 +792,7 @@ TEST_CASE("name resolution: dynamic-ECS references all carry resolved symbols af
         "template Rock:\n"
         "    Pos:\n"
         "        x = 0.0\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Pos\n"
         "    on tick:\n"
@@ -814,7 +814,7 @@ TEST_CASE("name resolution: unresolvable decl-level references are diagnostics, 
         "module test\n"
         "pub event tick:\n"
         "    dt: float\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Ghost\n"
         "    on tick:\n"
@@ -827,7 +827,7 @@ TEST_CASE("name resolution: unresolvable decl-level references are diagnostics, 
         "    dt: float\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Pos\n"
         "    on tick:\n"
@@ -842,7 +842,7 @@ TEST_CASE("name resolution: unresolvable decl-level references are diagnostics, 
         "    dt: float\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Pos\n"
         "    on tick:\n"
@@ -856,14 +856,14 @@ TEST_CASE("name resolution: unresolvable decl-level references are diagnostics, 
         "    dt: float\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Pos\n"
         "    after:\n"
         "        NoSuchSystem\n"
         "    on tick:\n"
         "        x = 1.0\n");
-    CHECK(any_error_contains(bad_after, "unknown system 'NoSuchSystem' in after clause"));
+    CHECK(any_error_contains(bad_after, "unknown rule 'NoSuchSystem' in after clause"));
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

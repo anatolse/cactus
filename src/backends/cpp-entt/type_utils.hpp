@@ -8,7 +8,7 @@
 namespace cactus {
 
 // Which stdlib WorldTransform variant(s) the root module's declarations
-// (entities, templates, system filters) resolve to. Falls back to the merged
+// (entities, templates, rule filters) resolve to. Falls back to the merged
 // program's single variant when the root references neither explicitly.
 struct WorldTransformUsage {
     bool flat   = false;

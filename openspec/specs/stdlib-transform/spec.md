@@ -13,7 +13,7 @@ The `std.transform.flat` module SHALL provide `pub trait LocalTransform` and `pu
 
 #### Scenario: Used in 2D unit
 - **WHEN** a unit imports `use std.transform.flat as tr` and applies `tr.LocalTransform` and `tr.WorldTransform`
-- **THEN** the compiler accepts the unit and systems may reference the hierarchy transform traits in filters
+- **THEN** the compiler accepts the unit and rules may reference the hierarchy transform traits in filters
 
 ### Requirement: std.transform.volume provides 3D hierarchical transform traits
 The `std.transform.volume` module SHALL provide `pub trait LocalTransform` and `pub trait WorldTransform` with `vec3` position, `quat` rotation, and `vec3` scale. All fields SHALL have sensible defaults (origin position, identity rotation, unit scale). `LocalTransform` stores authored transform state relative to the parent; `WorldTransform` stores derived world-space state.
@@ -28,7 +28,7 @@ The `std.transform.volume` module SHALL provide `pub trait LocalTransform` and `
 
 #### Scenario: Used in 3D unit
 - **WHEN** a unit imports `use std.transform.volume as tr` and applies `tr.LocalTransform` and `tr.WorldTransform`
-- **THEN** the compiler accepts the unit and systems may reference the hierarchy transform traits in filters
+- **THEN** the compiler accepts the unit and rules may reference the hierarchy transform traits in filters
 
 ### Requirement: flat and volume hierarchy transform traits are not simultaneously applicable to one entity
 The semantic analyzer SHALL reject a unit or template that mixes flat and volume hierarchy transform traits on the same entity. These traits are spatially incompatible — an entity cannot simultaneously have 2D and 3D local/world transform state.

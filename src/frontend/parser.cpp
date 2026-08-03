@@ -60,7 +60,7 @@ bool Parser::is_synchronization_point() const {
         case TokenType::DEDENT:
         case TokenType::EOF_TOKEN:
         case TokenType::TRAIT:
-        case TokenType::SYSTEM:
+        case TokenType::RULE:
         case TokenType::FUNC:
         case TokenType::STRUCT:
         case TokenType::ENUM:
@@ -182,8 +182,8 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::TRAIT) {
         return parse_trait();
     }
-    if (tok.type == TokenType::SYSTEM) {
-        return parse_system();
+    if (tok.type == TokenType::RULE) {
+        return parse_rule();
     }
     if (tok.type == TokenType::VIEW) {
         return parse_view();
@@ -223,8 +223,8 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
             return parse_func(true);
         }
         if (check(TokenType::EXTERN)) {
-            if (peek_next().type == TokenType::SYSTEM) {
-                return parse_extern_system();
+            if (peek_next().type == TokenType::RULE) {
+                return parse_extern_rule();
             }
             if (peek_next().type == TokenType::EVENT) {
                 advance();
@@ -263,8 +263,8 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         return parse_func(false);
     }
     if (tok.type == TokenType::EXTERN) {
-        if (peek_next().type == TokenType::SYSTEM) {
-            return parse_extern_system();
+        if (peek_next().type == TokenType::RULE) {
+            return parse_extern_rule();
         }
         if (peek_next().type == TokenType::EVENT) {
             advance();
@@ -274,7 +274,7 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     }
 
     errors_.error(tok.location,
-                  "expected declaration (module, use, const, struct, enum, trait, entity, system, view, event, func, "
+                  "expected declaration (module, use, const, struct, enum, trait, entity, rule, view, event, func, "
                   "extern, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{.name = "<error>", .location = tok.location};
@@ -507,7 +507,7 @@ TraitNode Parser::parse_trait() {
         }
         auto error_count_before = errors_.error_count();
         if (check(TokenType::ON)) {
-            errors_.error(peek().location, "event handlers are not allowed in trait bodies; declare a system instead");
+            errors_.error(peek().location, "event handlers are not allowed in trait bodies; declare a rule instead");
             parse_event_handler();  // consume to avoid cascading errors
         } else if (check(TokenType::FUNC)) {
             errors_.error(peek().location,
@@ -679,12 +679,12 @@ std::vector<HandlerReferenceNode> Parser::parse_handler_order_block() {
             break;
         }
         const auto reference_location = peek().location;
-        auto system                   = parse_located_name();
+        auto rule                     = parse_located_name();
         consume(TokenType::SLASH, "expected '/' before handler trigger");
         consume(TokenType::ON, "expected 'on' after '/' in handler reference");
         auto trigger = parse_located_name();
         references.push_back(HandlerReferenceNode{
-            .system = std::move(system), .trigger = std::move(trigger), .location = reference_location});
+            .rule = std::move(rule), .trigger = std::move(trigger), .location = reference_location});
         expect_newline();
     }
     expect_dedent();
@@ -870,7 +870,7 @@ FuncParam Parser::parse_param() {
     if (check(TokenType::IDENTIFIER)) {
         name = advance().value;
     } else if (check(TokenType::EXCLUDE)) {
-        // `exclude` is a system-clause keyword, but stdlib extern functions use it as a parameter name.
+        // `exclude` is a rule-clause keyword, but stdlib extern functions use it as a parameter name.
         name = advance().value;
     } else {
         name = consume(TokenType::IDENTIFIER, "expected parameter name").value;
@@ -1209,28 +1209,28 @@ TemplateNode Parser::parse_template(bool is_pub) {
     return node;
 }
 
-// ── System ──────────────────────────────────────────────────────────────────
+// ── Rule ────────────────────────────────────────────────────────────────────
 
-SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-complexity)
+RuleNode Parser::parse_rule() {  // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
-    consume(TokenType::SYSTEM, "expected 'system'");
-    auto name = consume(TokenType::IDENTIFIER, "expected system name").value;
+    consume(TokenType::RULE, "expected 'rule'");
+    auto name = consume(TokenType::IDENTIFIER, "expected rule name").value;
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
     expect_indent();
 
-    SystemNode node;
+    RuleNode node;
     node.name     = name;
     node.location = loc;
 
     SourceLocation pairs_loc;
     bool saw_pairs = false;
 
-    // A pairs: system selects tuples, not a single-entity filter, so it
+    // A pairs: rule selects tuples, not a single-entity filter, so it
     // cannot also carry a filter/exclude/order-by clause meant for that model.
     auto reject_if_paired = [&](const SourceLocation& clause_loc, const char* clause_name) {
         if (saw_pairs) {
-            errors_.error(clause_loc, std::string("'") + clause_name + "' cannot be combined with 'pairs:' on the same system");
+            errors_.error(clause_loc, std::string("'") + clause_name + "' cannot be combined with 'pairs:' on the same rule");
         }
     };
 
@@ -1295,7 +1295,7 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
-            node.after_systems.push_back(parse_dotted_name());
+            node.after_rules.push_back(parse_dotted_name());
             expect_newline();
             any = true;
             if (errors_.error_count() > error_count_before) {
@@ -1305,7 +1305,7 @@ SystemNode Parser::parse_system() {  // NOLINT(readability-function-cognitive-co
         }
         expect_dedent();
         if (!any) {
-            errors_.error(after_loc, "after: block must contain at least one system name");
+            errors_.error(after_loc, "after: block must contain at least one rule name");
         }
         if (errors_.error_count() > error_count_before) {
             synchronize();
@@ -2672,16 +2672,16 @@ FilterClause Parser::parse_exclude_clause() {
     return clause;
 }
 
-ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function-cognitive-complexity)
+ExternRuleNode Parser::parse_extern_rule() {  // NOLINT(readability-function-cognitive-complexity)
     auto loc = peek().location;
     consume(TokenType::EXTERN, "expected 'extern'");
-    consume(TokenType::SYSTEM, "expected 'system' after 'extern'");
-    auto name = consume(TokenType::IDENTIFIER, "expected system name").value;
+    consume(TokenType::RULE, "expected 'rule' after 'extern'");
+    auto name = consume(TokenType::IDENTIFIER, "expected rule name").value;
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
     expect_indent();
 
-    ExternSystemNode node;
+    ExternRuleNode node;
     node.name     = name;
     node.location = loc;
 
@@ -2689,8 +2689,8 @@ ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function
     if (at_pairs_clause()) {
         auto pairs_loc           = peek().location;
         auto error_count_before  = errors_.error_count();
-        parse_pairs_clause();  // parsed and discarded; pair domains are regular-system-only
-        errors_.error(pairs_loc, "pair domains are regular-system-only; 'extern system' cannot declare 'pairs:'");
+        parse_pairs_clause();  // parsed and discarded; pair domains are regular-rule-only
+        errors_.error(pairs_loc, "pair domains are regular-rule-only; 'extern rule' cannot declare 'pairs:'");
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -2738,7 +2738,7 @@ ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function
             if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
                 break;
             }
-            node.after_systems.push_back(parse_dotted_name());
+            node.after_rules.push_back(parse_dotted_name());
             expect_newline();
             any = true;
             if (errors_.error_count() > error_count_before) {
@@ -2748,7 +2748,7 @@ ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function
         }
         expect_dedent();
         if (!any) {
-            errors_.error(after_loc, "after: block must contain at least one system name");
+            errors_.error(after_loc, "after: block must contain at least one rule name");
         }
         if (errors_.error_count() > error_count_before) {
             synchronize();
@@ -2772,7 +2772,7 @@ ExternSystemNode Parser::parse_extern_system() {  // NOLINT(readability-function
             node.handlers.push_back(parse_extern_handler());
             continue;
         }
-        errors_.error(peek().location, "expected extern system clause or contracted handler");
+        errors_.error(peek().location, "expected extern rule clause or contracted handler");
         synchronize();
     }
 

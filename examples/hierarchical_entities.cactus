@@ -6,7 +6,7 @@ module hierarchical_entities
 # immediate parent, and returns the root entity.
 #
 # Parentage alone does not imply transform propagation — that still requires
-# `LocalTransform`/`WorldTransform` and the transform propagation system.
+# `LocalTransform`/`WorldTransform` and the transform propagation rule.
 
 use std.core
 
@@ -59,7 +59,7 @@ entity Tree1 from Tree:
                     Label:
                         text_id = 131
 
-system TreeSpawner:
+rule TreeSpawner:
     on tick:
         # Spawning returns the root of the created tree. Child overrides at the
         # spawn site follow the same nested role structure as declarations.

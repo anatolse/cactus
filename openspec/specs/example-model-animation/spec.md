@@ -7,7 +7,7 @@ Define the behavior of the model-animation example app: dynamically spawned, hei
 ## Requirements
 
 ### Requirement: Characters are spawned dynamically at load
-The model-animation example SHALL declare no per-character `entity` blocks. Instead it SHALL declare a `CharacterTemplate` and a bootstrap entity carrying a single-instance marker trait; a system's `on load()` handler filtered on that marker SHALL spawn three characters — a robot at x = −2.5, a knight at x = 0, and a robot at x = +2.5 — assigning each a sequential `index` starting at 0.
+The model-animation example SHALL declare no per-character `entity` blocks. Instead it SHALL declare a `CharacterTemplate` and a bootstrap entity carrying a single-instance marker trait; a rule's `on load()` handler filtered on that marker SHALL spawn three characters — a robot at x = −2.5, a knight at x = 0, and a robot at x = +2.5 — assigning each a sequential `index` starting at 0.
 
 #### Scenario: Three characters exist after startup
 - **WHEN** the example starts

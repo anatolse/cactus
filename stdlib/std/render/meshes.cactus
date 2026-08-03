@@ -4,7 +4,7 @@ use std.transform.volume as tv
 
 # ── 3D Mesh Rendering Traits ──────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
-# No user system is needed. An entity with WorldTransform + Renderer is drawn.
+# No user rule is needed. An entity with WorldTransform + Renderer is drawn.
 
 # Renders a 3D mesh at the entity's transform position.
 # mesh:        asset handle for the mesh geometry (immutable after spawn)
@@ -50,7 +50,7 @@ pub trait DirectionalLight:
     var intensity: float = 1.0
     var enabled: bool = true
 
-extern system MeshRenderer:
+extern rule MeshRenderer:
     filter:
         tv.WorldTransform
         Renderer
@@ -62,7 +62,7 @@ extern system MeshRenderer:
         effects:
             graphics
 
-extern system PointLightSystem:
+extern rule PointLightRender:
     filter:
         tv.WorldTransform
         PointLight
@@ -74,7 +74,7 @@ extern system PointLightSystem:
         effects:
             graphics
 
-extern system DirectionalLightSystem:
+extern rule DirectionalLightRender:
     filter:
         DirectionalLight
 

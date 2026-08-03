@@ -16,7 +16,7 @@ enum class SymbolKind : std::uint8_t {
     Event,
     Phase,
     Func,
-    System,
+    Rule,
     Template,
     Entity,
     Asset,
@@ -86,8 +86,8 @@ struct SymbolIdHash {
             return "phase";
         case SymbolKind::Func:
             return "func";
-        case SymbolKind::System:
-            return "system";
+        case SymbolKind::Rule:
+            return "rule";
         case SymbolKind::Template:
             return "template";
         case SymbolKind::Entity:

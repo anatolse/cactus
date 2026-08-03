@@ -14,8 +14,8 @@ The `std.camera.flat` module SHALL provide a `Camera` trait for 2D orthographic 
 
 ---
 
-### Requirement: std.camera.volume provides 3D camera traits and helper systems
-The `std.camera.volume` module SHALL provide a `Camera` trait for 3D perspective rendering. Additional traits define common camera behaviors: `FollowCamera` (third-person follow), `FirstPersonCamera` (FPS look), and `ThirdPersonCamera` (orbit camera). Active systems on `late_tick` update the entity's volume Transform based on these traits. Active camera selection is governed by `std.camera.viewport.Viewport` — the `active` field has been removed from `Camera`.
+### Requirement: std.camera.volume provides 3D camera traits and helper rules
+The `std.camera.volume` module SHALL provide a `Camera` trait for 3D perspective rendering. Additional traits define common camera behaviors: `FollowCamera` (third-person follow), `FirstPersonCamera` (FPS look), and `ThirdPersonCamera` (orbit camera). Active rules on `late_tick` update the entity's volume Transform based on these traits. Active camera selection is governed by `std.camera.viewport.Viewport` — the `active` field has been removed from `Camera`.
 
 #### Scenario: Camera trait fields for 3D
 - **WHEN** `use std.camera.volume as cam` is imported and an entity has `cam.Camera`
@@ -23,7 +23,7 @@ The `std.camera.volume` module SHALL provide a `Camera` trait for 3D perspective
 - **AND** the entity does NOT have an `active: bool` field
 
 #### Scenario: FirstPersonCamera responds to look input
-- **WHEN** a `FirstPersonCamera` entity's `pitch` and `yaw` fields are updated by a user input system
+- **WHEN** a `FirstPersonCamera` entity's `pitch` and `yaw` fields are updated by a user input rule
 - **THEN** `FirstPersonCameraSystem` updates the entity's volume Transform rotation on `late_tick`
 
 #### Scenario: ThirdPersonCamera orbits around target
@@ -32,9 +32,9 @@ The `std.camera.volume` module SHALL provide a `Camera` trait for 3D perspective
 
 ---
 
-### Requirement: Camera systems are stubbed pending entity query mechanism
-The active camera systems (`FollowCameraSystem`, `FirstPersonCameraSystem`, `ThirdPersonCameraSystem`) SHALL be declared in the module files but their implementation bodies SHALL be stubbed with a `# TODO: requires entity query` comment. The trait definitions SHALL be complete and usable. Users may implement camera logic manually in the interim using the camera traits directly.
+### Requirement: Camera rules are stubbed pending entity query mechanism
+The active camera rules (`FollowCameraSystem`, `FirstPersonCameraSystem`, `ThirdPersonCameraSystem`) SHALL be declared in the module files but their implementation bodies SHALL be stubbed with a `# TODO: requires entity query` comment. The trait definitions SHALL be complete and usable. Users may implement camera logic manually in the interim using the camera traits directly.
 
-#### Scenario: Camera traits usable before systems are implemented
+#### Scenario: Camera traits usable before rules are implemented
 - **WHEN** a user imports `std.camera.volume` and applies `Camera` and `FirstPersonCamera` to an entity
-- **THEN** the compiler accepts the unit and filter clauses referencing these traits, even if the active systems are stubs
+- **THEN** the compiler accepts the unit and filter clauses referencing these traits, even if the active rules are stubs

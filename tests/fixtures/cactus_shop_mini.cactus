@@ -1,4 +1,4 @@
-﻿module mini_shop
+module mini_shop
 
 const:
     SHOP_NAME = "Mini Shop"
@@ -32,7 +32,7 @@ pub entity Player:
 func can_afford(coins: int, price: int) bool:
     return coins >= price
 
-system ShopSystem:
+rule ShopSystem:
     filter:
         Wallet
         Inventory

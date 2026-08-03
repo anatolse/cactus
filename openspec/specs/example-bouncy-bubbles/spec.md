@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the bouncy-bubbles Cactus example: a self-contained module demonstrating cross-domain and same-domain pair systems for circle-vs-box and circle-vs-circle collision response, elastic reflection and mass-weighted collision resolution, and circle/rectangle shape rendering.
+Define the bouncy-bubbles Cactus example: a self-contained module demonstrating cross-domain and same-domain pair rules for circle-vs-box and circle-vs-circle collision response, elastic reflection and mass-weighted collision resolution, and circle/rectangle shape rendering.
 
 ## Requirements
 
@@ -22,9 +22,9 @@ The example SHALL provide a single `examples/bouncy-bubbles/main.cactus` file th
 - **WHEN** the module's entity declarations are inspected
 - **THEN** exactly 4 entities apply `Wall`, each with a `normal` field set to one of the 4 axial directions, together enclosing the bubbles' spawn area
 
-### Requirement: Cross-domain pair system detects bubble-wall contact
+### Requirement: Cross-domain pair rule detects bubble-wall contact
 
-The example SHALL declare a system with a `pairs:` domain binding a `Bubble`-selecting binding against a `Wall`-selecting binding (two different entity sets), detecting circle-vs-box overlap and emitting a targeted bounce event to the bubble binding only when the bubble is moving toward the wall along its normal.
+The example SHALL declare a rule with a `pairs:` domain binding a `Bubble`-selecting binding against a `Wall`-selecting binding (two different entity sets), detecting circle-vs-box overlap and emitting a targeted bounce event to the bubble binding only when the bubble is moving toward the wall along its normal.
 
 #### Scenario: Overlapping and approaching pair emits a targeted event
 - **WHEN** a bubble's circle overlaps a wall's box on `tick` and the bubble's velocity has a positive closing component along the wall's `normal`
@@ -38,21 +38,21 @@ The example SHALL declare a system with a `pairs:` domain binding a `Bubble`-sel
 - **WHEN** the wall-contact pair handler body is inspected
 - **THEN** it contains no assignment or compound assignment to `Bubble` or `Wall` fields through either pair binding
 
-### Requirement: Unary system resolves wall bounces with reflected velocity
+### Requirement: Unary rule resolves wall bounces with reflected velocity
 
-The example SHALL declare a unary system, filtered on `Bubble`, that consumes the wall-bounce event and reflects the entity's `velocity` across the event's `normal`, conserving speed (elastic reflection).
+The example SHALL declare a unary rule, filtered on `Bubble`, that consumes the wall-bounce event and reflects the entity's `velocity` across the event's `normal`, conserving speed (elastic reflection).
 
 #### Scenario: Velocity reflects across the wall normal
 - **WHEN** the wall-bounce resolver handles an event with a given `normal` for a bubble with incoming `velocity`
 - **THEN** the bubble's `velocity` is updated to the mirror of the incoming velocity about `normal`
 - **AND** the magnitude of the updated velocity equals the magnitude of the incoming velocity
 
-### Requirement: Same-domain pair system detects bubble-bubble contact
+### Requirement: Same-domain pair rule detects bubble-bubble contact
 
-The example SHALL declare a system with a `pairs:` domain binding two `Bubble`-selecting bindings drawn from the same entity set, computing a mass-weighted elastic collision response and emitting a targeted bounce event carrying the resolved post-collision velocity to each participating bubble independently.
+The example SHALL declare a rule with a `pairs:` domain binding two `Bubble`-selecting bindings drawn from the same entity set, computing a mass-weighted elastic collision response and emitting a targeted bounce event carrying the resolved post-collision velocity to each participating bubble independently.
 
 #### Scenario: Same-domain pair includes self-pairs and both directions
-- **WHEN** the bubble-bubble pair system's declared bindings are inspected
+- **WHEN** the bubble-bubble pair rule's declared bindings are inspected
 - **THEN** both bindings select the `Bubble` trait, matching the shipped `dsl-pair-relations` semantics that such a relation includes `(a,a)`, `(a,b)`, `(b,a)`, and `(b,b)` tuples for two live bubbles `a` and `b`
 
 #### Scenario: Self-pairs and non-overlapping pairs are rejected
@@ -68,9 +68,9 @@ The example SHALL declare a system with a `pairs:` domain binding two `Bubble`-s
 - **WHEN** two bubbles of different `radius` collide head-on
 - **THEN** the resolved post-collision velocities are computed using mass proportional to `radius * radius` for each bubble, so the smaller bubble's velocity changes more than the larger bubble's
 
-### Requirement: Unary system applies resolved bubble-bubble velocity
+### Requirement: Unary rule applies resolved bubble-bubble velocity
 
-The example SHALL declare a unary system, filtered on `Bubble`, that consumes the bubble-bubble bounce event and assigns the event's resolved velocity directly to the entity's `velocity`.
+The example SHALL declare a unary rule, filtered on `Bubble`, that consumes the bubble-bubble bounce event and assigns the event's resolved velocity directly to the entity's `velocity`.
 
 #### Scenario: Resolved velocity is applied
 - **WHEN** the bubble-bubble resolver handles a bounce event carrying a resolved velocity for a bubble

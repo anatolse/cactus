@@ -291,13 +291,13 @@ std::string handler_trigger_binding(const EventHandlerNode& handler) {
     return handler.alias.value_or(snake_case(handler_trigger_suffix(handler)));
 }
 
-const HandlerContract* graph_handler_contract(const SystemNode& system,
+const HandlerContract* graph_handler_contract(const RuleNode& rule,
                                               const EventHandlerNode& handler,
                                               const DecoratedProgram& program) {
-    if (!system.resolved_system_id.has_value() || !handler.resolved_trigger.has_value()) {
+    if (!rule.resolved_rule_id.has_value() || !handler.resolved_trigger.has_value()) {
         return nullptr;
     }
-    const HandlerIdentity identity{.system = *system.resolved_system_id, .trigger = *handler.resolved_trigger};
+    const HandlerIdentity identity{.rule = *rule.resolved_rule_id, .trigger = *handler.resolved_trigger};
     const auto found = std::ranges::find_if(program.execution_graph.handlers,
                                             [&](const auto& node) { return node.identity == identity; });
     return found == program.execution_graph.handlers.end() ? nullptr : &found->contract;
@@ -498,85 +498,85 @@ void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodege
     out << ind << "}\n";
 }
 
-bool is_flat_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
+bool is_flat_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
     // When std.editor is used it transitively imports both transform modules,
     // so both flat and volume TransformPropagation can appear in the merged AST.
     // Only emit the variant that matches the program's actual WorldTransform dimensionality.
-    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.flat", "TransformPropagation")) {
+    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.flat", "TransformPropagation")) {
         return !world_transform_is_volume(program);
     }
-    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.volume", "TransformPropagation")) {
+    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.volume", "TransformPropagation")) {
         return false;
     }
     return false;
 }
 
-bool is_volume_transform_propagation(const ExternSystemNode& sys, const DecoratedProgram& program) {
-    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.volume", "TransformPropagation")) {
+bool is_volume_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
+    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.volume", "TransformPropagation")) {
         return world_transform_is_volume(program);
     }
-    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.flat", "TransformPropagation")) {
+    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.flat", "TransformPropagation")) {
         return false;
     }
     return false;
 }
 
-bool is_shape_renderer(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.shapes", "ShapeRenderer");
+bool is_shape_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.shapes", "ShapeRenderer");
 }
 
-bool is_sprite_renderer(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.sprites", "SpriteRenderer");
+bool is_sprite_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.sprites", "SpriteRenderer");
 }
 
-bool is_animated_sprite_system(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.sprites", "AnimatedSpriteSystem");
+bool is_sprite_animation(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.sprites", "SpriteAnimation");
 }
 
-bool is_mesh_renderer(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "MeshRenderer");
+bool is_mesh_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.meshes", "MeshRenderer");
 }
 
-bool is_model_renderer_system(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.models", "ModelRendererSystem");
+bool is_model_render(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.models", "ModelRender");
 }
 
-bool is_model_animation_system(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.models", "ModelAnimationSystem");
+bool is_model_animation(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.models", "ModelAnimation");
 }
 
-bool is_billboard_renderer(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "BillboardRenderer");
+bool is_billboard_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.meshes", "BillboardRenderer");
 }
 
-bool is_point_light_system(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "PointLightSystem");
+bool is_point_light_render(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.meshes", "PointLightRender");
 }
 
-bool is_directional_light_system(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.meshes", "DirectionalLightSystem");
+bool is_directional_light_render(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.meshes", "DirectionalLightRender");
 }
 
-bool is_any_text_renderer_2d(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.text", "TextRenderer2D");
+bool is_any_text_renderer_2d(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.text", "TextRenderer2D");
 }
 
-bool is_any_text_renderer_3d(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.text", "TextRenderer3D");
+bool is_any_text_renderer_3d(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.text", "TextRenderer3D");
 }
 
-bool is_screen_label_system(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.render.text", "ScreenLabelSystem");
+bool is_screen_label_render(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.text", "ScreenLabelRender");
 }
 
-bool is_editor_extern_system(const ExternSystemNode& sys) {
-    return symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "EditorTemplatePalette") ||
-           symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "EditorPropertyPanel") ||
-           symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "GizmoRenderer2D") ||
-           symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "GizmoRenderer3D");
+bool is_editor_extern_system(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "EditorTemplatePalette") ||
+           symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "EditorPropertyPanel") ||
+           symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer2D") ||
+           symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer3D");
 }
 
-std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const SystemNode& sys) {
+std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const RuleNode& sys) {
     auto alias_to_trait = [&]() -> std::string {
         for (const auto& entry : sys.filter.entries) {
             auto dot    = entry.qualified_name.rfind('.');
@@ -602,7 +602,7 @@ std::string sort_key_expr(const SortKey& key, const std::string& entity_name, co
     return expr.str();
 }
 
-std::string primary_sort_trait(const SortKey& key, const SystemNode& sys) {
+std::string primary_sort_trait(const SortKey& key, const RuleNode& sys) {
     for (const auto& entry : sys.filter.entries) {
         auto dot    = entry.qualified_name.rfind('.');
         auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
@@ -618,7 +618,7 @@ std::string primary_sort_trait(const SortKey& key, const SystemNode& sys) {
     return key.alias;
 }
 
-void emit_sort_call(std::ostringstream& out, const SystemNode& sys, int indent = 1) {
+void emit_sort_call(std::ostringstream& out, const RuleNode& sys, int indent = 1) {
     if (sys.order_by.empty()) {
         return;
     }
@@ -2014,7 +2014,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
 }
 
 std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cognitive-complexity)
-    const SystemNode& sys,
+    const RuleNode& sys,
     const DecoratedProgram& program) {
     std::ostringstream out;
     const auto filter_bindings_list = filter_bindings(sys.filter, program);
@@ -2179,7 +2179,7 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, const DecoratedProgram& program) {
+std::string EnttSystemEmitter::emit_extern_system(const ExternRuleNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
 
     if (is_flat_transform_propagation(sys, program)) {
@@ -2320,7 +2320,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
-    if (is_animated_sprite_system(sys)) {
+    if (is_sprite_animation(sys)) {
         const std::string anim = EnttCodegenUtils::trait_cpp_name("AnimatedSprite", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
@@ -2336,7 +2336,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
-    if (is_model_animation_system(sys)) {
+    if (is_model_animation(sys)) {
         const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
         const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
@@ -2380,7 +2380,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
-    if (is_model_renderer_system(sys)) {
+    if (is_model_render(sys)) {
         const std::string wt    = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
         const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
         const std::string manim = EnttCodegenUtils::trait_cpp_name("ModelAnimator", program);
@@ -2422,7 +2422,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
-    if (is_point_light_system(sys)) {
+    if (is_point_light_render(sys)) {
         const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
         const std::string pl = EnttCodegenUtils::trait_cpp_name("PointLight", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
@@ -2438,7 +2438,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
-    if (is_directional_light_system(sys)) {
+    if (is_directional_light_render(sys)) {
         const std::string dl = EnttCodegenUtils::trait_cpp_name("DirectionalLight", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
@@ -2493,7 +2493,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
         return out.str();
     }
 
-    if (is_screen_label_system(sys)) {
+    if (is_screen_label_render(sys)) {
         // Window-space HUD text: no WorldTransform and no flavor gating — the
         // same emission serves flat and volume programs (dsl-model-animation D5).
         const std::string sl = EnttCodegenUtils::trait_cpp_name("ScreenLabel", program);
@@ -2510,7 +2510,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     if (is_editor_extern_system(sys)) {
-        if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "GizmoRenderer2D") &&
+        if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer2D") &&
             !world_transform_is_volume(program)) {
             const bool has_box_collider = EnttCodegenUtils::has_trait(program, "std.physics.flat.BoxCollider");
             const std::string es        = EnttCodegenUtils::trait_cpp_name("EditorState", program);
@@ -2574,7 +2574,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "}\n\n";
             return out.str();
         }
-        if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "EditorTemplatePalette")) {
+        if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "EditorTemplatePalette")) {
             const std::string es = EnttCodegenUtils::trait_cpp_name("EditorState", program);
             out << "void " << system_function_name(program.module_name, sys.name, "tick")
                 << "(entt::registry& registry) {\n";
@@ -2629,7 +2629,7 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
             out << "}\n\n";
             return out.str();
         }
-        if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.editor", "GizmoRenderer3D") &&
+        if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer3D") &&
             world_transform_is_volume(program)) {
             const bool has_model_renderer = EnttCodegenUtils::has_trait(program, "ModelRenderer");
             const std::string es          = EnttCodegenUtils::trait_cpp_name("EditorState", program);
@@ -2711,18 +2711,18 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternSystemNode& sys, c
     }
 
     // When std.editor is imported it pulls in both std.transform.flat and
-    // std.transform.volume, adding both TransformPropagation ExternSystemNodes
+    // std.transform.volume, adding both TransformPropagation ExternRuleNodes
     // to the merged AST. The dimension-matching variant is handled above (early
     // return). The non-matching variant falls here and must be dropped so that
     // the generic emit path does not produce a duplicate function definition.
-    if (symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.flat", "TransformPropagation") ||
-        symbol_is(sys.resolved_system_id, SymbolKind::System, "std.transform.volume", "TransformPropagation")) {
+    if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.flat", "TransformPropagation") ||
+        symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.transform.volume", "TransformPropagation")) {
         return "";
     }
 
     throw std::runtime_error(
-        "cpp-entt has no compiler-owned implementation for external system '" +
-        (sys.resolved_system_id.has_value() ? make_canonical_id(*sys.resolved_system_id) : sys.name) +
+        "cpp-entt has no compiler-owned implementation for external rule '" +
+        (sys.resolved_rule_id.has_value() ? make_canonical_id(*sys.resolved_rule_id) : sys.name) +
         "'; user external handlers must be lowered through their per-handler callback ABI");
 }
 

@@ -26,7 +26,7 @@ pub entity ExternSurface:
         x = 0.0
     ContactSnapshot
 
-system Demo:
+rule Demo:
     filter:
         Motion
         ContactSnapshot
@@ -36,7 +36,7 @@ system Demo:
         hits = phys.query_overlap_all(self, CONTACT_MASK, self)
         add DamageFlash
 
-system ConsumeProjectedFlash:
+rule ConsumeProjectedFlash:
     filter:
         DamageFlash as flash
     after:

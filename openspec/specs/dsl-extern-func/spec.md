@@ -65,7 +65,7 @@ When the `DecoratedProgram` contains any extern func (in the module itself or in
 - **THEN** the generated C++ file contains `#include "cactus_runtime.hpp"` near the top
 
 #### Scenario: Runtime header not emitted when no extern func present
-- **WHEN** a module contains only traits, units, and systems — no extern funcs in scope
+- **WHEN** a module contains only traits, units, and rules — no extern funcs in scope
 - **THEN** the generated C++ file does NOT contain `#include "cactus_runtime.hpp"`
 
 ### Requirement: `EXTERN` is a reserved keyword

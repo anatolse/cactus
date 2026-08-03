@@ -4,7 +4,7 @@ Define the bounded foreach statement for finite snapshot iteration in handler co
 ## Requirements
 
 ### Requirement: Bounded foreach iterates finite list snapshots
-The DSL SHALL support a bounded foreach statement inside system event handlers for iterating over finite `list[T]` values.
+The DSL SHALL support a bounded foreach statement inside rule event handlers for iterating over finite `list[T]` values.
 
 The iterable expression SHALL be evaluated exactly once before iteration begins. The resulting list value SHALL be treated as an immutable snapshot for the duration of the loop. The loop variable SHALL be a read-only binding scoped to the loop body.
 

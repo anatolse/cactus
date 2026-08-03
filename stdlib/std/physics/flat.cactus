@@ -2,7 +2,7 @@ module std.physics.flat
 
 # ── 2D Kinematic Physics Traits & Events ─────────────────────────────────────
 # Passive traits — the backend simulates these automatically.
-# No user physics system is needed. CharacterBody + Collider entities are
+# No user physics rule is needed. CharacterBody + Collider entities are
 # simulated and their fields updated each tick by the generated runtime.
 
 # Kinematic character controller for 2D entities.

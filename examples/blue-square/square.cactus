@@ -41,10 +41,10 @@ pub entity Square:
         color = #6495EDFF
         visible = true
 
-# ── Systems ───────────────────────────────────────────────────────────────────
+# ── Rules ─────────────────────────────────────────────────────────────────────
 
 # ReadInputSystem: runs every input poll, stores axis values into MoveInput fields
-system ReadInputSystem:
+rule ReadInputSystem:
     filter:
         MoveInput
 
@@ -53,7 +53,7 @@ system ReadInputSystem:
         dy = input.axis(MoveY)
 
 # MoveSystem: applies stored input deltas to position each tick
-system MoveSystem:
+rule MoveSystem:
     filter:
         tf.WorldTransform
         MoveInput

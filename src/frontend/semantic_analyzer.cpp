@@ -874,12 +874,12 @@ void ModuleImports::add(const std::string& qualifier,
         phase.canonical_id = make_canonical_id(symbol);
         phase.symbol_id    = symbol;
     }
-    for (auto& [name, sys] : pub_syms.systems) {
-        const auto symbol = sys.symbol_id.value_or(make_symbol_id(SymbolKind::System, pub_syms.module_name, name));
-        sys.name          = symbol.local_name;
-        sys.module_name   = symbol.module.name;
-        sys.canonical_id  = make_canonical_id(symbol);
-        sys.symbol_id     = symbol;
+    for (auto& [name, rule] : pub_syms.rules) {
+        const auto symbol = rule.symbol_id.value_or(make_symbol_id(SymbolKind::Rule, pub_syms.module_name, name));
+        rule.name          = symbol.local_name;
+        rule.module_name   = symbol.module.name;
+        rule.canonical_id  = make_canonical_id(symbol);
+        rule.symbol_id     = symbol;
     }
 
     const auto existing = modules.find(qualifier);
@@ -921,9 +921,9 @@ void ModuleImports::add(const std::string& qualifier,
     for (const auto& [phase_name, _] : pub_syms.phase_symbols) {
         phase_providers[phase_name].push_back(qualifier);
     }
-    // Index imported extern system names (for after: resolution)
-    for (const auto& [sys_name, _] : pub_syms.systems) {
-        system_providers[sys_name].push_back(qualifier);
+    // Index imported extern rule names (for after: resolution)
+    for (const auto& [rule_name, _] : pub_syms.rules) {
+        rule_providers[rule_name].push_back(qualifier);
     }
     // Store non-pub trait names for error diagnostics
     if (!non_pub.empty()) {
@@ -956,7 +956,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     event_names_.clear();
     phase_names_.clear();
     func_names_.clear();
-    system_names_.clear();
+    rule_names_.clear();
     const_names_.clear();
     module_scope_symbols_.clear();
     asset_decl_types_.clear();
@@ -993,7 +993,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     check_func_purity(program);
     check_no_recursion(program);
     check_persist_sync(program);
-    validate_system_filters(program);
+    validate_rule_filters(program);
     validate_phase_declarations(program);
     validate_external_handler_contracts(program);
     validate_event_usage(program);
@@ -1097,10 +1097,10 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {  // NOLINT(readabil
                     node.is_stdlib = current_module_is_stdlib_;
                     declare_module_scope_symbol(SymbolKind::Func, node.name, node.location);
                     func_names_.insert(node.name);
-                } else if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
+                } else if constexpr (std::is_same_v<T, RuleNode> || std::is_same_v<T, ExternRuleNode>) {
                     node.is_stdlib = current_module_is_stdlib_;
-                    declare_module_scope_symbol(SymbolKind::System, node.name, node.location);
-                    system_names_.insert(node.name);
+                    declare_module_scope_symbol(SymbolKind::Rule, node.name, node.location);
+                    rule_names_.insert(node.name);
                 } else if constexpr (std::is_same_v<T, ConstBlockNode>) {
                     for (auto& a : node.assignments) {
                         declare_module_scope_symbol(SymbolKind::Const, a.name, a.location);
@@ -1551,8 +1551,8 @@ void SemanticAnalyzer::resolve_trait_references(
                         phase_it->second.from_sources = node.resolved_from;
                         phase_it->second.after_phases = node.resolved_after;
                     }
-                } else if constexpr (std::is_same_v<T, SystemNode>) {
-                    node.resolved_system_id = make_symbol_id(SymbolKind::System, current_module_id_, node.name);
+                } else if constexpr (std::is_same_v<T, RuleNode>) {
+                    node.resolved_rule_id = make_symbol_id(SymbolKind::Rule, current_module_id_, node.name);
                     resolve_filter_clause(node.filter);
                     resolve_filter_clause(node.exclude);
                     if (node.pairs.has_value()) {
@@ -1566,8 +1566,8 @@ void SemanticAnalyzer::resolve_trait_references(
                         handler.resolved_trigger = try_resolve_handler_trigger(handler.event_name);
                         resolve_stmts(handler.body);
                     }
-                } else if constexpr (std::is_same_v<T, ExternSystemNode>) {
-                    node.resolved_system_id = make_symbol_id(SymbolKind::System, current_module_id_, node.name);
+                } else if constexpr (std::is_same_v<T, ExternRuleNode>) {
+                    node.resolved_rule_id = make_symbol_id(SymbolKind::Rule, current_module_id_, node.name);
                     resolve_filter_clause(node.filter);
                     resolve_filter_clause(node.exclude);
                     for (auto& handler : node.handlers) {
@@ -1845,7 +1845,7 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && ident->name == "exists") {
                     errors_.error(e.location,
-                                  "`exists()` requires world access; only allowed inside system event handlers");
+                                  "`exists()` requires world access; only allowed inside rule event handlers");
                 }
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                     // Use canonical IDs so same simple names across modules don't
@@ -1881,7 +1881,7 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
                 }
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 errors_.error(e.location,
-                              "query expressions require world access; only allowed inside system event handlers");
+                              "query expressions require world access; only allowed inside rule event handlers");
                 for (auto& arg : e.named_args) {
                     check_func_purity_expr(*arg.value, func_name);
                 }
@@ -2026,7 +2026,7 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
     }
 }
 
-// ── Phase 3e: System Filter Validation (tasks 4.2, 4.4, 4.5, 4.6) ──────────
+// ── Phase 3e: Rule Filter Validation (tasks 4.2, 4.4, 4.5, 4.6) ────────────
 
 bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::string& out_simple_name) {
     const auto& qname = entry.qualified_name;
@@ -2055,7 +2055,7 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
                               "'; did you mean to mark it as 'pub'?");
         } else {
             errors_.error(entry.location,
-                          "system filter references unknown trait '" + trait_name + "' in module '" + qualifier + "'");
+                          "rule filter references unknown trait '" + trait_name + "' in module '" + qualifier + "'");
         }
         return false;
     }
@@ -2122,18 +2122,18 @@ std::optional<SemanticAnalyzer::PairMemberResolution> SemanticAnalyzer::resolve_
     return std::nullopt;
 }
 
-void SemanticAnalyzer::validate_pair_bindings(SystemNode& system) {
-    if (!system.pairs.has_value()) {
+void SemanticAnalyzer::validate_pair_bindings(RuleNode& rule) {
+    if (!rule.pairs.has_value()) {
         return;
     }
-    auto& pairs = *system.pairs;
+    auto& pairs = *rule.pairs;
 
-    const bool has_unary_clause = !system.filter.entries.empty() || !system.filter.trait_names.empty() ||
-                                  !system.exclude.entries.empty() || !system.exclude.trait_names.empty() ||
-                                  !system.order_by.empty();
+    const bool has_unary_clause = !rule.filter.entries.empty() || !rule.filter.trait_names.empty() ||
+                                  !rule.exclude.entries.empty() || !rule.exclude.trait_names.empty() ||
+                                  !rule.order_by.empty();
     if (has_unary_clause) {
         errors_.error(pairs.location,
-                      "system '" + system.name +
+                      "rule '" + rule.name +
                           "' must choose one execution domain: `pairs:` cannot be combined with `filter:`, "
                           "`exclude:`, or `order by:`");
     }
@@ -2144,7 +2144,7 @@ void SemanticAnalyzer::validate_pair_bindings(SystemNode& system) {
 
     if (pairs.bindings[0].name == pairs.bindings[1].name) {
         errors_.error(pairs.bindings[1].location,
-                      "duplicate pair binding name '" + pairs.bindings[1].name + "' in system '" + system.name + "'");
+                      "duplicate pair binding name '" + pairs.bindings[1].name + "' in rule '" + rule.name + "'");
     }
 
     for (auto& binding : pairs.bindings) {
@@ -2169,19 +2169,19 @@ void SemanticAnalyzer::validate_pair_bindings(SystemNode& system) {
 }
 
 void SemanticAnalyzer::validateOrderByClause(
-    const SystemNode& system) {  // NOLINT(readability-function-cognitive-complexity)
-    if (system.order_by.empty()) {
+    const RuleNode& rule) {  // NOLINT(readability-function-cognitive-complexity)
+    if (rule.order_by.empty()) {
         return;
     }
 
-    if (system.filter.entries.empty() && system.filter.trait_names.empty()) {
-        errors_.error(system.location,
-                      "system '" + system.name + "' cannot use `order by:` without a `filter:` clause");
+    if (rule.filter.entries.empty() && rule.filter.trait_names.empty()) {
+        errors_.error(rule.location,
+                      "rule '" + rule.name + "' cannot use `order by:` without a `filter:` clause");
         return;
     }
 
     std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
-    for (const auto& entry : system.filter.entries) {
+    for (const auto& entry : rule.filter.entries) {
         // Use full qualified name for canonical lookup (task 3.5).
         const auto* trait = find_resolved_trait(entry.resolved_trait_id, entry.qualified_name);
         auto dot          = entry.qualified_name.rfind('.');
@@ -2193,17 +2193,17 @@ void SemanticAnalyzer::validateOrderByClause(
             }
         }
     }
-    for (const auto& name : system.filter.trait_names) {
+    for (const auto& name : rule.filter.trait_names) {
         const auto* trait = find_resolved_trait(name);
         if (trait != nullptr) {
             filter_bindings[name] = trait;
         }
     }
 
-    for (const auto& key : system.order_by) {
+    for (const auto& key : rule.order_by) {
         auto binding_it = filter_bindings.find(key.alias);
         if (binding_it == filter_bindings.end() || binding_it->second == nullptr) {
-            errors_.error(key.location, "order by alias '" + key.alias + "' is not declared in system filter");
+            errors_.error(key.location, "order by alias '" + key.alias + "' is not declared in rule filter");
             continue;
         }
 
@@ -2253,19 +2253,19 @@ void SemanticAnalyzer::validateOrderByClause(
     }
 }
 
-void SemanticAnalyzer::validateOrderByClause(const ExternSystemNode& system) {
-    if (system.order_by.empty()) {
+void SemanticAnalyzer::validateOrderByClause(const ExternRuleNode& rule) {
+    if (rule.order_by.empty()) {
         return;
     }
 
-    SystemNode proxy;
-    proxy.name          = system.name;
-    proxy.filter        = system.filter;
-    proxy.exclude       = system.exclude;
-    proxy.order_by      = system.order_by;
-    proxy.after_systems = system.after_systems;
-    proxy.target        = system.target;
-    proxy.location      = system.location;
+    RuleNode proxy;
+    proxy.name        = rule.name;
+    proxy.filter      = rule.filter;
+    proxy.exclude     = rule.exclude;
+    proxy.order_by    = rule.order_by;
+    proxy.after_rules = rule.after_rules;
+    proxy.target      = rule.target;
+    proxy.location    = rule.location;
     validateOrderByClause(proxy);
 }
 
@@ -2581,68 +2581,68 @@ void SemanticAnalyzer::validate_phase_declarations(
     }
 }
 
-void SemanticAnalyzer::validate_system_filters(
+void SemanticAnalyzer::validate_rule_filters(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            if (!sys->filter.entries.empty()) {
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
+            if (!rule->filter.entries.empty()) {
                 // Rich filter entries (multi-module parser path)
-                for (auto& entry : sys->filter.entries) {
+                for (auto& entry : rule->filter.entries) {
                     std::string simple_name;
                     resolve_filter_entry(entry, simple_name);
                 }
             } else {
                 // Backward-compat: simple trait_names list
-                for (auto& trait_name : sys->filter.trait_names) {
+                for (auto& trait_name : rule->filter.trait_names) {
                     // Local trait — always valid
                     if (trait_names_.contains(trait_name)) {
                         continue;
                     }
                     const auto prev_errors = errors_.error_count();
-                    const auto canonical   = resolve_trait_ref_to_canonical(trait_name, sys->filter.location);
+                    const auto canonical   = resolve_trait_ref_to_canonical(trait_name, rule->filter.location);
                     if (canonical.empty() && errors_.error_count() == prev_errors) {
-                        errors_.error(sys->filter.location,
-                                      "system '" + sys->name + "' filters on unknown trait '" + trait_name + "'");
+                        errors_.error(rule->filter.location,
+                                      "rule '" + rule->name + "' filters on unknown trait '" + trait_name + "'");
                     }
                 }
             }
 
-            // task 11.12: if system has no filter traits, handler bodies cannot
+            // task 11.12: if rule has no filter traits, handler bodies cannot
             // access trait fields (VarAssign is always a trait-field mutation).
-            // Pair systems get their own read-only/no-implicit-entity diagnostics
+            // Pair rules get their own read-only/no-implicit-entity diagnostics
             // instead of this generic "no filter clause" message.
-            bool has_filter = !sys->filter.entries.empty() || !sys->filter.trait_names.empty();
-            if (!has_filter && !sys->pairs.has_value()) {
-                for (auto& handler : sys->handlers) {
-                    check_no_field_access(handler.body, sys->name);
+            bool has_filter = !rule->filter.entries.empty() || !rule->filter.trait_names.empty();
+            if (!has_filter && !rule->pairs.has_value()) {
+                for (auto& handler : rule->handlers) {
+                    check_no_field_access(handler.body, rule->name);
                 }
             }
 
-            validate_pair_bindings(*sys);
-            validateOrderByClause(*sys);
+            validate_pair_bindings(*rule);
+            validateOrderByClause(*rule);
         }
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            if (!sys->filter.entries.empty()) {
-                for (auto& entry : sys->filter.entries) {
+        if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
+            if (!rule->filter.entries.empty()) {
+                for (auto& entry : rule->filter.entries) {
                     std::string simple_name;
                     resolve_filter_entry(entry, simple_name);
                 }
             } else {
-                for (auto& trait_name : sys->filter.trait_names) {
+                for (auto& trait_name : rule->filter.trait_names) {
                     if (trait_names_.contains(trait_name)) {
                         continue;
                     }
                     const auto prev_errors = errors_.error_count();
-                    const auto canonical   = resolve_trait_ref_to_canonical(trait_name, sys->filter.location);
+                    const auto canonical   = resolve_trait_ref_to_canonical(trait_name, rule->filter.location);
                     if (canonical.empty() && errors_.error_count() == prev_errors) {
                         errors_.error(
-                            sys->filter.location,
-                            "extern system '" + sys->name + "' filters on unknown trait '" + trait_name + "'");
+                            rule->filter.location,
+                            "extern rule '" + rule->name + "' filters on unknown trait '" + trait_name + "'");
                     }
                 }
             }
 
-            validateOrderByClause(*sys);
+            validateOrderByClause(*rule);
         }
     }
 }
@@ -2670,13 +2670,13 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
     };
 
     for (auto& decl : program.declarations) {
-        auto* system = std::get_if<ExternSystemNode>(&decl);
-        if (system == nullptr) {
+        auto* rule = std::get_if<ExternRuleNode>(&decl);
+        if (rule == nullptr) {
             continue;
         }
-        if (system->handlers.empty()) {
-            errors_.error(system->location,
-                          "extern system '" + system->name + "' requires at least one external handler contract");
+        if (rule->handlers.empty()) {
+            errors_.error(rule->location,
+                          "extern rule '" + rule->name + "' requires at least one external handler contract");
             continue;
         }
 
@@ -2702,16 +2702,16 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
                 }
             }
         };
-        add_filter_aliases(system->filter);
-        add_filter_aliases(system->exclude);
+        add_filter_aliases(rule->filter);
+        add_filter_aliases(rule->exclude);
 
-        for (auto& handler : system->handlers) {
+        for (auto& handler : rule->handlers) {
             handler.resolved_reads.clear();
             handler.resolved_writes.clear();
             handler.resolved_emits.clear();
             handler.resolved_effects.clear();
 
-            const auto resolve_traits = [this, &aliases, &system](const std::vector<LocatedName>& entries,
+            const auto resolve_traits = [this, &aliases, &rule](const std::vector<LocatedName>& entries,
                                                                   std::vector<SymbolId>& output,
                                                                   const char* clause) {
                 std::unordered_set<SymbolId> seen;
@@ -2725,7 +2725,7 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
                     if (!symbol.has_value()) {
                         errors_.error(entry.location,
                                       "unknown " + std::string(clause) + " contract entry '" + entry.spelling +
-                                          "' in extern system '" + system->name + "'");
+                                          "' in extern rule '" + rule->name + "'");
                         continue;
                     }
                     if (!seen.insert(*symbol).second) {
@@ -2808,8 +2808,8 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
 void SemanticAnalyzer::validate_event_usage(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            for (const auto& handler : sys->handlers) {
+        if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
+            for (const auto& handler : rule->handlers) {
                 for (const auto& emitted : handler.emits) {
                     const auto symbol = try_resolve_event_ref_to_symbol(emitted.spelling);
                     if (symbol.has_value() && is_external_event(*symbol)) {
@@ -2820,10 +2820,10 @@ void SemanticAnalyzer::validate_event_usage(
                 }
             }
         }
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
             // Build set of filter-bound names (trait names and their aliases) for alias conflict check
             std::unordered_set<std::string> filter_bound;
-            for (const auto& entry : sys->filter.entries) {
+            for (const auto& entry : rule->filter.entries) {
                 auto dot    = entry.qualified_name.rfind('.');
                 auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
                 filter_bound.insert(simple);
@@ -2831,14 +2831,14 @@ void SemanticAnalyzer::validate_event_usage(
                     filter_bound.insert(*entry.alias);
                 }
             }
-            for (const auto& t : sys->filter.trait_names) {
+            for (const auto& t : rule->filter.trait_names) {
                 filter_bound.insert(t);
             }
 
             PairScope pair_scope;
-            if (sys->pairs.has_value()) {
-                pair_scope = build_pair_scope(*sys->pairs);
-                for (const auto& binding : sys->pairs->bindings) {
+            if (rule->pairs.has_value()) {
+                pair_scope = build_pair_scope(*rule->pairs);
+                for (const auto& binding : rule->pairs->bindings) {
                     filter_bound.insert(binding.name);
                     for (const auto& entry : binding.traits) {
                         if (entry.alias.has_value()) {
@@ -2847,11 +2847,11 @@ void SemanticAnalyzer::validate_event_usage(
                     }
                 }
             }
-            const PairScope* pair_scope_ptr = sys->pairs.has_value() ? &pair_scope : nullptr;
+            const PairScope* pair_scope_ptr = rule->pairs.has_value() ? &pair_scope : nullptr;
 
-            for (auto& handler : sys->handlers) {
+            for (auto& handler : rule->handlers) {
                 std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
-                for (const auto& entry : sys->filter.entries) {
+                for (const auto& entry : rule->filter.entries) {
                     // Use the full qualified name so find_resolved_trait returns the
                     // correct trait even when multiple modules share a local name (task 3.5).
                     const auto* trait = find_resolved_trait(entry.resolved_trait_id, entry.qualified_name);
@@ -2865,7 +2865,7 @@ void SemanticAnalyzer::validate_event_usage(
                         }
                     }
                 }
-                for (const auto& name : sys->filter.trait_names) {
+                for (const auto& name : rule->filter.trait_names) {
                     const auto* trait = find_resolved_trait(name);
                     if (trait != nullptr) {
                         filter_bindings[name] = trait;
@@ -2879,7 +2879,7 @@ void SemanticAnalyzer::validate_event_usage(
                 if (!event_trigger && !phase_trigger) {
                     errors_.error(
                         handler.location,
-                        "system '" + sys->name + "' handles unknown event or phase '" + handler.event_name + "'");
+                        "rule '" + rule->name + "' handles unknown event or phase '" + handler.event_name + "'");
                 }
                 // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
                 if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
@@ -2915,7 +2915,7 @@ void SemanticAnalyzer::validate_event_usage(
                 }
 
                 validate_event_stmts(
-                    handler.body, filter_bindings, local_bindings, handler_event, sys->name, pair_scope_ptr);
+                    handler.body, filter_bindings, local_bindings, handler_event, rule->name, pair_scope_ptr);
             }
         }
     }
@@ -2927,9 +2927,9 @@ void SemanticAnalyzer::validate_event_stmts(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event,
-    const std::string& system_name,
+    const std::string& rule_name,
     const PairScope* pair_scope) {
-    (void)system_name;
+    (void)rule_name;
     auto locals = local_bindings;
 
     auto validate_emit = [this, &filter_bindings, &locals, handler_event, pair_scope](const EmitStmt& emit) {
@@ -3127,7 +3127,7 @@ void SemanticAnalyzer::validate_event_stmts(
         }
     };
 
-    auto in_system_handler = !system_name.empty();
+    auto in_rule_handler = !rule_name.empty();
 
     for (const auto& stmt : stmts) {
         if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
@@ -3183,13 +3183,13 @@ void SemanticAnalyzer::validate_event_stmts(
         }
         if (const auto* trait_match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
             validate_trait_match_stmt(
-                *trait_match, filter_bindings, locals, handler_event, system_name, in_system_handler, pair_scope);
+                *trait_match, filter_bindings, locals, handler_event, rule_name, in_rule_handler, pair_scope);
             continue;
         }
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
             (void)infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event, pair_scope);
-            validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, system_name, pair_scope);
-            validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, system_name, pair_scope);
+            validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, rule_name, pair_scope);
+            validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, rule_name, pair_scope);
             continue;
         }
         if (const auto* foreach_stmt = std::get_if<ForeachStmt>(&stmt->stmt)) {
@@ -3205,7 +3205,7 @@ void SemanticAnalyzer::validate_event_stmts(
             element_type.is_let   = true;
             loop_locals[foreach_stmt->var_name] = std::move(element_type);
             validate_event_stmts(
-                foreach_stmt->body, filter_bindings, loop_locals, handler_event, system_name, pair_scope);
+                foreach_stmt->body, filter_bindings, loop_locals, handler_event, rule_name, pair_scope);
         }
     }
 }
@@ -3215,11 +3215,11 @@ void SemanticAnalyzer::validate_trait_match_stmt(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const ResolvedStruct* handler_event,
-    const std::string& system_name,
-    bool in_system_handler,
+    const std::string& rule_name,
+    bool in_rule_handler,
     const PairScope* pair_scope) {
-    if (!in_system_handler) {
-        errors_.error(stmt.location, "statement-level `match entity_id` only allowed inside system event handlers");
+    if (!in_rule_handler) {
+        errors_.error(stmt.location, "statement-level `match entity_id` only allowed inside rule event handlers");
     }
 
     if (pair_scope != nullptr) {
@@ -3275,12 +3275,12 @@ void SemanticAnalyzer::validate_trait_match_stmt(
             }
         }
 
-        validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, system_name, pair_scope);
+        validate_event_stmts(arm.body, filter_bindings, arm_locals, handler_event, rule_name, pair_scope);
     }
 
     if (stmt.wildcard.has_value()) {
         validate_event_stmts(
-            stmt.wildcard->body, filter_bindings, local_bindings, handler_event, system_name, pair_scope);
+            stmt.wildcard->body, filter_bindings, local_bindings, handler_event, rule_name, pair_scope);
     }
 }
 
@@ -3308,33 +3308,33 @@ void SemanticAnalyzer::build_dependency_graph(
                 result_.execution_graph.phases.push_back(std::move(plan));
             }
         }
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            SystemDependency dep;
-            dep.system_name = sys->name;  // simple name (task 5.4 will migrate to canonical)
-            dep.system_id   = sys->resolved_system_id;
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
+            RuleDependency dep;
+            dep.rule_name = rule->name;  // simple name (task 5.4 will migrate to canonical)
+            dep.rule_id   = rule->resolved_rule_id;
 
             std::vector<ResolvedHandlerTrigger> declared_triggers;
-            const auto pair_scope = sys->pairs.has_value() ? build_pair_scope(*sys->pairs) : PairScope{};
-            for (std::size_t handler_index = 0; handler_index < sys->handlers.size(); ++handler_index) {
-                auto& handler = sys->handlers[handler_index];
-                collect_system_deps(handler.body, dep);
-                if (handler.resolved_trigger.has_value() && sys->resolved_system_id.has_value()) {
+            const auto pair_scope = rule->pairs.has_value() ? build_pair_scope(*rule->pairs) : PairScope{};
+            for (std::size_t handler_index = 0; handler_index < rule->handlers.size(); ++handler_index) {
+                auto& handler = rule->handlers[handler_index];
+                collect_rule_deps(handler.body, dep);
+                if (handler.resolved_trigger.has_value() && rule->resolved_rule_id.has_value()) {
                     if (std::ranges::find(declared_triggers, *handler.resolved_trigger) != declared_triggers.end()) {
                         errors_.error(handler.trigger_location,
                                       "duplicate handler trigger '" + handler.resolved_trigger->debug_string() +
-                                          "' in system '" + make_canonical_id(*sys->resolved_system_id) + "'");
+                                          "' in rule '" + make_canonical_id(*rule->resolved_rule_id) + "'");
                         continue;
                     }
                     declared_triggers.push_back(*handler.resolved_trigger);
 
-                    auto inferred = sys->pairs.has_value()
-                                         ? infer_pair_handler_contract(*sys, handler, pair_scope)
-                                         : infer_regular_handler_contract(*sys, handler);
+                    auto inferred = rule->pairs.has_value()
+                                         ? infer_pair_handler_contract(*rule, handler, pair_scope)
+                                         : infer_regular_handler_contract(*rule, handler);
                     result_.handler_contracts.push_back(inferred);
 
                     HandlerNode node;
                     node.identity =
-                        HandlerIdentity{.system = *sys->resolved_system_id, .trigger = *handler.resolved_trigger};
+                        HandlerIdentity{.rule = *rule->resolved_rule_id, .trigger = *handler.resolved_trigger};
                     node.implementation    = HandlerImplementationKind::Cactus;
                     node.contract          = static_cast<const HandlerContract&>(inferred);
                     node.declaration_order = DeclarationOrder{
@@ -3346,13 +3346,13 @@ void SemanticAnalyzer::build_dependency_graph(
 
             result_.dependency_graph.push_back(std::move(dep));
         }
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            SystemDependency dep;
-            dep.system_name = sys->name;
-            dep.system_id   = sys->resolved_system_id;
+        if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
+            RuleDependency dep;
+            dep.rule_name = rule->name;
+            dep.rule_id   = rule->resolved_rule_id;
 
             std::unordered_map<std::string, SymbolId> filter_aliases;
-            for (const auto& entry : sys->filter.entries) {
+            for (const auto& entry : rule->filter.entries) {
                 if (!entry.resolved_trait_id.has_value()) {
                     continue;
                 }
@@ -3363,18 +3363,18 @@ void SemanticAnalyzer::build_dependency_graph(
                 }
             }
             for (std::size_t index = 0;
-                 index < sys->filter.trait_names.size() && index < sys->filter.resolved_trait_ids.size();
+                 index < rule->filter.trait_names.size() && index < rule->filter.resolved_trait_ids.size();
                  ++index) {
-                filter_aliases[sys->filter.trait_names[index]] = sys->filter.resolved_trait_ids[index];
+                filter_aliases[rule->filter.trait_names[index]] = rule->filter.resolved_trait_ids[index];
             }
 
             std::vector<ResolvedHandlerTrigger> declared_triggers;
-            for (std::size_t handler_index = 0; handler_index < sys->handlers.size(); ++handler_index) {
-                const auto& handler = sys->handlers[handler_index];
-                if (!handler.resolved_trigger.has_value() || !sys->resolved_system_id.has_value()) {
+            for (std::size_t handler_index = 0; handler_index < rule->handlers.size(); ++handler_index) {
+                const auto& handler = rule->handlers[handler_index];
+                if (!handler.resolved_trigger.has_value() || !rule->resolved_rule_id.has_value()) {
                     if (!handler.resolved_trigger.has_value()) {
                         errors_.error(handler.trigger_location,
-                                      "extern system '" + sys->name + "' handles unknown event or phase '" +
+                                      "extern rule '" + rule->name + "' handles unknown event or phase '" +
                                           handler.trigger_name + "'");
                     }
                     continue;
@@ -3382,14 +3382,14 @@ void SemanticAnalyzer::build_dependency_graph(
                 if (std::ranges::find(declared_triggers, *handler.resolved_trigger) != declared_triggers.end()) {
                     errors_.error(handler.trigger_location,
                                   "duplicate handler trigger '" + handler.resolved_trigger->debug_string() +
-                                      "' in extern system '" + make_canonical_id(*sys->resolved_system_id) + "'");
+                                      "' in extern rule '" + make_canonical_id(*rule->resolved_rule_id) + "'");
                     continue;
                 }
                 declared_triggers.push_back(*handler.resolved_trigger);
 
                 HandlerContract contract;
-                contract.selection   = sys->filter.resolved_trait_ids;
-                contract.exclusion   = sys->exclude.resolved_trait_ids;
+                contract.selection   = rule->filter.resolved_trait_ids;
+                contract.exclusion   = rule->exclude.resolved_trait_ids;
                 contract.domain_kind = contract.selection.empty() && contract.exclusion.empty()
                                           ? HandlerDomainKind::Selectionless
                                           : HandlerDomainKind::Unary;
@@ -3398,7 +3398,7 @@ void SemanticAnalyzer::build_dependency_graph(
                     contract.reads.insert(write);
                     contract.writes.insert(write);
                 }
-                for (const auto& sort_key : sys->order_by) {
+                for (const auto& sort_key : rule->order_by) {
                     if (const auto found = filter_aliases.find(sort_key.alias); found != filter_aliases.end()) {
                         contract.reads.insert(found->second);
                     }
@@ -3414,7 +3414,7 @@ void SemanticAnalyzer::build_dependency_graph(
 
                 HandlerNode node;
                 node.identity =
-                    HandlerIdentity{.system = *sys->resolved_system_id, .trigger = *handler.resolved_trigger};
+                    HandlerIdentity{.rule = *rule->resolved_rule_id, .trigger = *handler.resolved_trigger};
                 node.implementation    = HandlerImplementationKind::External;
                 node.contract          = std::move(contract);
                 node.declaration_order = DeclarationOrder{
@@ -3465,13 +3465,13 @@ void SemanticAnalyzer::build_dependency_graph(
 }
 
 InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
-    const SystemNode& system,
+    const RuleNode& rule,
     const EventHandlerNode& handler) const {  // NOLINT(readability-function-cognitive-complexity)
     InferredHandlerContract contract;
-    contract.system           = *system.resolved_system_id;
+    contract.rule        = *rule.resolved_rule_id;
     contract.trigger          = *handler.resolved_trigger;
-    contract.selection   = system.filter.resolved_trait_ids;
-    contract.exclusion   = system.exclude.resolved_trait_ids;
+    contract.selection   = rule.filter.resolved_trait_ids;
+    contract.exclusion   = rule.exclude.resolved_trait_ids;
     contract.domain_kind = contract.selection.empty() && contract.exclusion.empty()
                               ? HandlerDomainKind::Selectionless
                               : HandlerDomainKind::Unary;
@@ -3496,7 +3496,7 @@ InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
             }
         }
     };
-    bind_clause(system.filter);
+    bind_clause(rule.filter);
 
     auto add_read  = [&contract](const SymbolId& symbol) { contract.reads.insert(symbol); };
     auto add_write = [&contract](const SymbolId& symbol) {
@@ -3704,7 +3704,7 @@ InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
         }
     };
 
-    for (const auto& key : system.order_by) {
+    for (const auto& key : rule.order_by) {
         if (auto alias = aliases.find(key.alias); alias != aliases.end()) {
             add_read(alias->second);
         }
@@ -3719,15 +3719,15 @@ InferredHandlerContract SemanticAnalyzer::infer_regular_handler_contract(
 }
 
 InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(
-    const SystemNode& system,
+    const RuleNode& rule,
     const EventHandlerNode& handler,
     const PairScope& pair_scope) const {  // NOLINT(readability-function-cognitive-complexity)
     InferredHandlerContract contract;
-    contract.system      = *system.resolved_system_id;
+    contract.rule         = *rule.resolved_rule_id;
     contract.trigger     = *handler.resolved_trigger;
     contract.domain_kind = HandlerDomainKind::Pair;
 
-    for (const auto& binding : system.pairs->bindings) {
+    for (const auto& binding : rule.pairs->bindings) {
         RelationBinding relation;
         relation.name = binding.name;
         for (const auto& entry : binding.traits) {
@@ -3948,14 +3948,14 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(
     if (handler.alias.has_value()) {
         handler_locals.insert(*handler.alias);
     }
-    for (const auto& binding : system.pairs->bindings) {
+    for (const auto& binding : rule.pairs->bindings) {
         handler_locals.insert(binding.name);
     }
     visit_stmts(handler.body, std::move(handler_locals));
     return contract;
 }
 
-void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep) {
+void SemanticAnalyzer::collect_rule_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, RuleDependency& dep) {
     for (const auto& stmt : stmts) {
         std::visit(
             [this, &dep](auto& s) {
@@ -3969,17 +3969,17 @@ void SemanticAnalyzer::collect_system_deps(const std::vector<std::unique_ptr<Stm
                 } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                     dep.writes.insert(s.trait_name);
                 } else if constexpr (std::is_same_v<S, ForeachStmt>) {
-                    collect_system_deps(s.body, dep);
+                    collect_rule_deps(s.body, dep);
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    collect_system_deps(s.then_body, dep);
-                    collect_system_deps(s.else_body, dep);
+                    collect_rule_deps(s.then_body, dep);
+                    collect_rule_deps(s.else_body, dep);
                 } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
                     for (const auto& arm : s.arms) {
                         dep.reads.insert(arm.trait_name);
-                        collect_system_deps(arm.body, dep);
+                        collect_rule_deps(arm.body, dep);
                     }
                     if (s.wildcard.has_value()) {
-                        collect_system_deps(s.wildcard->body, dep);
+                        collect_rule_deps(s.wildcard->body, dep);
                     }
                 }
             },
@@ -4001,7 +4001,7 @@ bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbo
 bool SemanticAnalyzer::local_non_template_symbol_exists(const std::string& name) const {
     return trait_names_.contains(name) || entity_names_.contains(name) || struct_names_.contains(name) ||
            enum_names_.contains(name) || event_names_.contains(name) || func_names_.contains(name) ||
-           system_names_.contains(name) || const_names_.contains(name) || asset_decl_types_.contains(name) ||
+           rule_names_.contains(name) || const_names_.contains(name) || asset_decl_types_.contains(name) ||
            input_decl_types_.contains(name) || use_names_.contains(name);
 }
 
@@ -4371,20 +4371,20 @@ const std::vector<ResolvedField>* SemanticAnalyzer::find_phase_fields(const Symb
     return nullptr;
 }
 
-// ── Task 3.4: Canonical system ID resolution ────────────────────────────────────
+// ── Task 3.4: Canonical rule ID resolution ──────────────────────────────────────
 
-std::optional<SymbolId> SemanticAnalyzer::try_resolve_system_ref_to_symbol(const std::string& ref) const {
-    return try_resolve_ref_of_kind(ref, {SymbolKind::System});
+std::optional<SymbolId> SemanticAnalyzer::try_resolve_rule_ref_to_symbol(const std::string& ref) const {
+    return try_resolve_ref_of_kind(ref, {SymbolKind::Rule});
 }
 
-std::optional<SymbolId> SemanticAnalyzer::resolve_system_after_ref_to_symbol(
+std::optional<SymbolId> SemanticAnalyzer::resolve_rule_after_ref_to_symbol(
     const std::string& ref,
     const SourceLocation& /*loc*/,
-    const std::unordered_set<std::string>& /*local_system_names*/) const {
-    // All locally declared systems are registered in module_scope_symbols_,
+    const std::unordered_set<std::string>& /*local_rule_names*/) const {
+    // All locally declared rules are registered in module_scope_symbols_,
     // which resolve_name consults, so the caller-collected name set is
     // redundant with the unified lookup.
-    return try_resolve_ref_of_kind(ref, {SymbolKind::System});
+    return try_resolve_ref_of_kind(ref, {SymbolKind::Rule});
 }
 
 // ── Task 3.5: Canonical template/entity ID resolution ───────────────────────────
@@ -4444,8 +4444,8 @@ std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedS
     if (auto phase_it = syms.phase_symbols.find(name); phase_it != syms.phase_symbols.end()) {
         return phase_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Phase, syms.module_name, name));
     }
-    if (auto sys_it = syms.systems.find(name); sys_it != syms.systems.end()) {
-        return sys_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::System, syms.module_name, name));
+    if (auto rule_it = syms.rules.find(name); rule_it != syms.rules.end()) {
+        return rule_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Rule, syms.module_name, name));
     }
     if (auto fs_it = syms.func_symbols.find(name); fs_it != syms.func_symbols.end()) {
         return fs_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Func, syms.module_name, name));
@@ -4702,14 +4702,14 @@ void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
     }
 }
 
-// ── Task 3.4: Canonical system ID resolution for after: clauses ─────────────────
+// ── Task 3.4: Canonical rule ID resolution for after: clauses ───────────────────
 
-std::string SemanticAnalyzer::resolve_system_after_ref(const std::string& ref,
+std::string SemanticAnalyzer::resolve_rule_after_ref(const std::string& ref,
                                                        const SourceLocation& loc,
-                                                       const std::unordered_set<std::string>& /*local_system_names*/) {
+                                                       const std::unordered_set<std::string>& /*local_rule_names*/) {
     // Unified lookup: alias- and canonical-qualified, current-module-qualified,
     // bare local, and std.core prelude spellings all resolve identically.
-    if (auto resolved = try_resolve_ref_of_kind(ref, {SymbolKind::System})) {
+    if (auto resolved = try_resolve_ref_of_kind(ref, {SymbolKind::Rule})) {
         return make_canonical_id(*resolved);
     }
 
@@ -4721,17 +4721,17 @@ std::string SemanticAnalyzer::resolve_system_after_ref(const std::string& ref,
             errors_.error(loc, "unknown module qualifier '" + qualifier + "' in 'after:' clause");
             return "";
         }
-        errors_.error(loc, "unknown system '" + local_name + "' in module '" + qualifier + "' in 'after:' clause");
+        errors_.error(loc, "unknown rule '" + local_name + "' in module '" + qualifier + "' in 'after:' clause");
         return "";
     }
 
     // Bare name provided only by ordinary (non-prelude) imports: point at the
-    // qualified spelling instead of a generic unknown-system error.
+    // qualified spelling instead of a generic unknown-rule error.
     if (!imports_.empty()) {
-        auto pit = imports_.system_providers.find(ref);
-        if (pit != imports_.system_providers.end() && !pit->second.empty() &&
+        auto pit = imports_.rule_providers.find(ref);
+        if (pit != imports_.rule_providers.end() && !pit->second.empty() &&
             !find_std_core_provider(imports_, pit->second).has_value()) {
-            errors_.error(loc, imported_reference_diagnostic(imports_, "system", ref, pit->second));
+            errors_.error(loc, imported_reference_diagnostic(imports_, "rule", ref, pit->second));
             return "";
         }
     }
@@ -5043,7 +5043,7 @@ void SemanticAnalyzer::validate_text_format_calls(ProgramNode& program) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, FuncNode>) {
                     validate_text_format_in_stmts(node.body, {}, {}, nullptr);
-                } else if constexpr (std::is_same_v<T, SystemNode>) {
+                } else if constexpr (std::is_same_v<T, RuleNode>) {
                     for (auto& handler : node.handlers) {
                         std::unordered_map<std::string, const ResolvedTrait*> filter_bindings;
                         for (const auto& entry : node.filter.entries) {
@@ -5177,7 +5177,7 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
 
     if (std::holds_alternative<SelfExpr>(expr.expr)) {
         if (handler_event == nullptr && !local_bindings.contains("__self_context")) {
-            errors_.error(expr.location, "`self` only allowed inside system event handlers");
+            errors_.error(expr.location, "`self` only allowed inside rule event handlers");
             return make_unknown_type();
         }
         if (pair_scope != nullptr) {
@@ -5332,7 +5332,7 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
     if (const auto* qcall = std::get_if<QueryCallExpr>(&expr.expr)) {
         if (handler_event == nullptr) {
             errors_.error(expr.location,
-                          "query expressions require world access; only allowed inside system event handlers");
+                          "query expressions require world access; only allowed inside rule event handlers");
         }
         for (const auto& pred : qcall->filters) {
             if (!is_trait_declared(pred.trait_name)) {
@@ -5375,7 +5375,7 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         if (auto* ident = std::get_if<IdentExpr>(&call->callee->expr); ident != nullptr && ident->name == "exists") {
             if (handler_event == nullptr) {
                 errors_.error(expr.location,
-                              "`exists()` requires world access; only allowed inside system event handlers");
+                              "`exists()` requires world access; only allowed inside rule event handlers");
             }
             if (call->args.size() != 1) {
                 return make_bool_type();
@@ -5516,7 +5516,7 @@ void SemanticAnalyzer::validate_template_unit_declarations(
                                                   "' in " + KIND + " '" + node.name + "'");
                             }
                             if (expr_contains_self(*assign.value)) {
-                                errors_.error(assign.location, "`self` only allowed inside system event handlers");
+                                errors_.error(assign.location, "`self` only allowed inside rule event handlers");
                             }
                         }
                     }
@@ -5674,7 +5674,7 @@ void SemanticAnalyzer::validate_child_archetypes(  // NOLINT(readability-functio
                                           "' in child '" + child.role + "'");
                     }
                     if (expr_contains_self(*assign.value)) {
-                        errors_.error(assign.location, "`self` only allowed inside system event handlers");
+                        errors_.error(assign.location, "`self` only allowed inside rule event handlers");
                     }
                 }
             }
@@ -5736,7 +5736,7 @@ void SemanticAnalyzer::validate_child_override_tree(  // NOLINT(readability-func
                                       "' in child override '" + override_node.role + "'");
                 }
                 if (!allow_self && expr_contains_self(*assign.value)) {
-                    errors_.error(assign.location, "`self` only allowed inside system event handlers");
+                    errors_.error(assign.location, "`self` only allowed inside rule event handlers");
                 }
             }
         }
@@ -6213,7 +6213,7 @@ void SemanticAnalyzer::validate_template_backed_entity_overrides(
                                       "' in entity '" + entity->name + "'");
                 }
                 if (expr_contains_self(*assign.value)) {
-                    errors_.error(assign.location, "`self` only allowed inside system event handlers");
+                    errors_.error(assign.location, "`self` only allowed inside rule event handlers");
                 }
             }
         }
@@ -6439,10 +6439,10 @@ void SemanticAnalyzer::validate_spawn_exprs(const std::vector<std::unique_ptr<St
 
 void SemanticAnalyzer::validate_spawn_sites(ProgramNode& program) {
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            for (auto& handler : sys->handlers) {
-                validate_spawn_stmts(handler.body, sys->name);
-                validate_spawn_exprs(handler.body, sys->name);
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
+            for (auto& handler : rule->handlers) {
+                validate_spawn_stmts(handler.body, rule->name);
+                validate_spawn_exprs(handler.body, rule->name);
             }
         }
     }
@@ -6453,26 +6453,26 @@ void SemanticAnalyzer::validate_spawn_sites(ProgramNode& program) {
 void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-cognitive-complexity)
     const std::vector<std::unique_ptr<StmtNode>>& stmts,
     const std::string& context_name,
-    bool in_system_handler) {
+    bool in_rule_handler) {
     for (const auto& stmt : stmts) {
         std::visit(
-            [this, &context_name, in_system_handler](auto& s) {  // NOLINT(readability-function-cognitive-complexity)
+            [this, &context_name, in_rule_handler](auto& s) {  // NOLINT(readability-function-cognitive-complexity)
                 using S = std::decay_t<decltype(s)>;
                 std::unordered_map<std::string, TypeInfo> self_context_locals;
-                if (in_system_handler) {
+                if (in_rule_handler) {
                     self_context_locals["__self_context"] = make_entity_id_type();
                 }
-                auto validate_self_expr = [this, in_system_handler](const ExprNode& expr,
+                auto validate_self_expr = [this, in_rule_handler](const ExprNode& expr,
                                                                     const SourceLocation& location) {
-                    if (!in_system_handler && expr_contains_self(expr)) {
-                        errors_.error(location, "`self` only allowed inside system event handlers");
+                    if (!in_rule_handler && expr_contains_self(expr)) {
+                        errors_.error(location, "`self` only allowed inside rule event handlers");
                     }
                 };
                 if constexpr (std::is_same_v<S, SpawnStmt> || std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> || std::is_same_v<S, AddTraitStmt> ||
                               std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, ProjectTraitStmt> ||
                               std::is_same_v<S, ForeachStmt> || std::is_same_v<S, TraitMatchStmt>) {
-                    if (!in_system_handler) {
+                    if (!in_rule_handler) {
                         // Determine which keyword is used
                         std::string kw;
                         if constexpr (std::is_same_v<S, SpawnStmt>) {
@@ -6492,11 +6492,11 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                         } else {
                             kw = "remove";
                         }
-                        errors_.error(s.location, "`" + kw + "` only allowed inside system event handlers");
+                        errors_.error(s.location, "`" + kw + "` only allowed inside rule event handlers");
                     }
                     // 5.6: For LoadStmt, validate module name is reachable via `use`
                     if constexpr (std::is_same_v<S, LoadStmt>) {
-                        if (in_system_handler && !use_names_.contains(s.module_name)) {
+                        if (in_rule_handler && !use_names_.contains(s.module_name)) {
                             // Check prefix match (e.g. use levels allows load levels.level1)
                             bool found = false;
                             for (const auto& use_name : use_names_) {
@@ -6564,7 +6564,7 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                     }
                     if constexpr (std::is_same_v<S, ForeachStmt>) {
                         validate_self_expr(*s.iterable, s.location);
-                        validate_context_stmts(s.body, context_name, in_system_handler);
+                        validate_context_stmts(s.body, context_name, in_rule_handler);
                     }
                     if constexpr (std::is_same_v<S, DestroyStmt>) {
                         if (s.target_expr.has_value()) {
@@ -6576,15 +6576,15 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                     }
                     if constexpr (std::is_same_v<S, TraitMatchStmt>) {
                         for (const auto& arm : s.arms) {
-                            validate_context_stmts(arm.body, context_name, in_system_handler);
+                            validate_context_stmts(arm.body, context_name, in_rule_handler);
                         }
                         if (s.wildcard.has_value()) {
-                            validate_context_stmts(s.wildcard->body, context_name, in_system_handler);
+                            validate_context_stmts(s.wildcard->body, context_name, in_rule_handler);
                         }
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    validate_context_stmts(s.then_body, context_name, in_system_handler);
-                    validate_context_stmts(s.else_body, context_name, in_system_handler);
+                    validate_context_stmts(s.then_body, context_name, in_rule_handler);
+                    validate_context_stmts(s.else_body, context_name, in_rule_handler);
                 } else if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
                     validate_self_expr(*s.value, s.location);
                 } else if constexpr (std::is_same_v<S, ReturnStmt>) {
@@ -6607,8 +6607,8 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
                 if constexpr (std::is_same_v<T, FuncNode>) {
                     // func bodies must not contain spawn/destroy/load/add/remove
                     validate_context_stmts(node.body, node.name, false);
-                } else if constexpr (std::is_same_v<T, SystemNode>) {
-                    // System handlers: these statements are valid
+                } else if constexpr (std::is_same_v<T, RuleNode>) {
+                    // Rule handlers: these statements are valid
                     for (auto& handler : node.handlers) {
                         validate_context_stmts(handler.body, node.name, true);
                     }
@@ -6619,27 +6619,27 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
 }
 
 // ── Task 5.9: Validate exclude clause trait names ────────────────────────────
-// (called as part of validate_system_filters — integrated inline above)
+// (called as part of validate_rule_filters — integrated inline above)
 // Note: exclude clause validation is done here as a separate pass for clarity.
 
-// ── Task 11.12: Check no field access in no-filter system bodies ─────────────
+// ── Task 11.12: Check no field access in no-filter rule bodies ───────────────
 
 void SemanticAnalyzer::check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts,
-                                             const std::string& sys_name) {
+                                             const std::string& rule_name) {
     for (const auto& stmt : stmts) {
         std::visit(
-            [this, &sys_name](const auto& s) {
+            [this, &rule_name](const auto& s) {
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, LetStmt>) {
                     // local binding is allowed without filter access checks
                 } else if constexpr (std::is_same_v<S, VarAssign>) {
-                    // All VarAssign statements in system handlers are trait-field accesses
+                    // All VarAssign statements in rule handlers are trait-field accesses
                     errors_.error(s.location,
-                                  "trait field '" + s.name + "' is not accessible in system '" + sys_name +
+                                  "trait field '" + s.name + "' is not accessible in rule '" + rule_name +
                                       "': no filter clause declares this trait");
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    check_no_field_access(s.then_body, sys_name);
-                    check_no_field_access(s.else_body, sys_name);
+                    check_no_field_access(s.then_body, rule_name);
+                    check_no_field_access(s.else_body, rule_name);
                 }
                 // emit, spawn, destroy, load, add, remove, return, expr: all allowed
             },
@@ -6654,7 +6654,7 @@ void SemanticAnalyzer::validate_trait_modifier_rules(
         std::visit(
             [this](auto& node) {
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, SystemNode> || std::is_same_v<T, ExternSystemNode>) {
+                if constexpr (std::is_same_v<T, RuleNode> || std::is_same_v<T, ExternRuleNode>) {
                     if (!node.exclude.entries.empty() || !node.exclude.trait_names.empty()) {
                         validate_exclude_clause(node);
                     }
@@ -6692,65 +6692,65 @@ void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
 
 void SemanticAnalyzer::validate_after_clauses(
     ProgramNode& program) {  // NOLINT(readability-function-cognitive-complexity)
-    std::unordered_set<std::string> local_system_names;
-    std::unordered_set<SymbolId> local_system_ids;
+    std::unordered_set<std::string> local_rule_names;
+    std::unordered_set<SymbolId> local_rule_ids;
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            local_system_names.insert(sys->name);
-            if (sys->resolved_system_id.has_value()) {
-                local_system_ids.insert(*sys->resolved_system_id);
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
+            local_rule_names.insert(rule->name);
+            if (rule->resolved_rule_id.has_value()) {
+                local_rule_ids.insert(*rule->resolved_rule_id);
             }
         }
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            local_system_names.insert(sys->name);
-            if (sys->resolved_system_id.has_value()) {
-                local_system_ids.insert(*sys->resolved_system_id);
+        if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
+            local_rule_names.insert(rule->name);
+            if (rule->resolved_rule_id.has_value()) {
+                local_rule_ids.insert(*rule->resolved_rule_id);
             }
         }
     }
 
     std::unordered_map<std::string, std::vector<std::string>> after_resolved;
     for (auto& decl : program.declarations) {
-        auto resolve_after = [&](auto& sys) {
-            sys.resolved_after_system_ids.clear();
-            if (!sys.resolved_system_id.has_value()) {
+        auto resolve_after = [&](auto& rule) {
+            rule.resolved_after_rule_ids.clear();
+            if (!rule.resolved_rule_id.has_value()) {
                 return;
             }
             std::unordered_set<SymbolId> seen;
-            for (const auto& after_ref : sys.after_systems) {
-                auto predecessor = resolve_system_after_ref_to_symbol(after_ref, sys.location, local_system_names);
+            for (const auto& after_ref : rule.after_rules) {
+                auto predecessor = resolve_rule_after_ref_to_symbol(after_ref, rule.location, local_rule_names);
                 if (!predecessor.has_value()) {
                     const auto previous_errors = errors_.error_count();
-                    (void)resolve_system_after_ref(after_ref, sys.location, local_system_names);
+                    (void)resolve_rule_after_ref(after_ref, rule.location, local_rule_names);
                     if (errors_.error_count() == previous_errors) {
-                        errors_.error(sys.location, "unknown system '" + after_ref + "' in after clause");
+                        errors_.error(rule.location, "unknown rule '" + after_ref + "' in after clause");
                     }
                     continue;
                 }
-                if (*predecessor == *sys.resolved_system_id) {
-                    errors_.error(sys.location, "system '" + sys.name + "' cannot list itself in after:");
+                if (*predecessor == *rule.resolved_rule_id) {
+                    errors_.error(rule.location, "rule '" + rule.name + "' cannot list itself in after:");
                     continue;
                 }
                 if (!seen.insert(*predecessor).second) {
                     continue;
                 }
-                sys.resolved_after_system_ids.push_back(*predecessor);
-                after_resolved[sys.name].push_back(make_canonical_id(*predecessor));
+                rule.resolved_after_rule_ids.push_back(*predecessor);
+                after_resolved[rule.name].push_back(make_canonical_id(*predecessor));
             }
         };
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
-            resolve_after(*sys);
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
+            resolve_after(*rule);
         }
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
-            resolve_after(*sys);
+        if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
+            resolve_after(*rule);
         }
     }
 
     // Preserve the compatibility dependency view while the handler graph is
     // the authoritative representation of executable ordering.
     for (auto& dep : result_.dependency_graph) {
-        if (const auto found = after_resolved.find(dep.system_name); found != after_resolved.end()) {
-            dep.after_systems = found->second;
+        if (const auto found = after_resolved.find(dep.rule_name); found != after_resolved.end()) {
+            dep.after_rules = found->second;
         }
     }
 
@@ -6768,7 +6768,7 @@ void SemanticAnalyzer::validate_after_clauses(
             errors_.error(location, "handler '" + dependent.identity.canonical_id() + "' cannot list itself in after:");
             return;
         }
-        if (require_local_node && local_system_ids.contains(predecessor.system) && !nodes.contains(predecessor)) {
+        if (require_local_node && local_rule_ids.contains(predecessor.rule) && !nodes.contains(predecessor)) {
             errors_.error(location, "unknown handler '" + predecessor.canonical_id() + "' in after: clause");
             return;
         }
@@ -6788,34 +6788,34 @@ void SemanticAnalyzer::validate_after_clauses(
     };
 
     for (auto& decl : program.declarations) {
-        auto expand_system = [&](auto& system) {
-            if (!system.resolved_system_id.has_value()) {
+        auto expand_rule = [&](auto& rule) {
+            if (!rule.resolved_rule_id.has_value()) {
                 return;
             }
 
             for (auto& dependent : result_.execution_graph.handlers) {
-                if (dependent.identity.system != *system.resolved_system_id) {
+                if (dependent.identity.rule != *rule.resolved_rule_id) {
                     continue;
                 }
-                for (const auto& predecessor_system : system.resolved_after_system_ids) {
-                    const HandlerIdentity predecessor{.system  = predecessor_system,
+                for (const auto& predecessor_rule : rule.resolved_after_rule_ids) {
+                    const HandlerIdentity predecessor{.rule    = predecessor_rule,
                                                       .trigger = dependent.identity.trigger};
                     // A local predecessor with no matching trigger is not an
                     // edge. Imported candidates are retained for linker
                     // validation once their handler metadata is available.
-                    if (local_system_ids.contains(predecessor_system) && !nodes.contains(predecessor)) {
+                    if (local_rule_ids.contains(predecessor_rule) && !nodes.contains(predecessor)) {
                         continue;
                     }
-                    add_edge(dependent, predecessor, ScheduleEdgeKind::ExplicitSystem, system.location, false);
+                    add_edge(dependent, predecessor, ScheduleEdgeKind::ExplicitRule, rule.location, false);
                 }
             }
 
-            for (std::size_t handler_index = 0; handler_index < system.handlers.size(); ++handler_index) {
-                const auto& handler = system.handlers[handler_index];
+            for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
+                const auto& handler = rule.handlers[handler_index];
                 if (!handler.resolved_trigger.has_value()) {
                     continue;
                 }
-                const HandlerIdentity dependent_identity{.system  = *system.resolved_system_id,
+                const HandlerIdentity dependent_identity{.rule    = *rule.resolved_rule_id,
                                                          .trigger = *handler.resolved_trigger};
                 const auto dependent_it = nodes.find(dependent_identity);
                 if (dependent_it == nodes.end() ||
@@ -6824,16 +6824,16 @@ void SemanticAnalyzer::validate_after_clauses(
                 }
                 auto& dependent = *dependent_it->second;
                 for (const auto& reference : handler.after_handlers) {
-                    auto predecessor_system = resolve_system_after_ref_to_symbol(
-                        reference.system.spelling, reference.system.location, local_system_names);
-                    if (!predecessor_system.has_value()) {
+                    auto predecessor_rule = resolve_rule_after_ref_to_symbol(
+                        reference.rule.spelling, reference.rule.location, local_rule_names);
+                    if (!predecessor_rule.has_value()) {
                         const auto previous_errors = errors_.error_count();
-                        (void)resolve_system_after_ref(
-                            reference.system.spelling, reference.system.location, local_system_names);
+                        (void)resolve_rule_after_ref(
+                            reference.rule.spelling, reference.rule.location, local_rule_names);
                         if (errors_.error_count() == previous_errors) {
                             errors_.error(
-                                reference.system.location,
-                                "unknown system '" + reference.system.spelling + "' in handler after: clause");
+                                reference.rule.location,
+                                "unknown rule '" + reference.rule.spelling + "' in handler after: clause");
                         }
                         continue;
                     }
@@ -6851,17 +6851,17 @@ void SemanticAnalyzer::validate_after_clauses(
                         continue;
                     }
                     add_edge(dependent,
-                             HandlerIdentity{.system = *predecessor_system, .trigger = *predecessor_trigger},
+                             HandlerIdentity{.rule = *predecessor_rule, .trigger = *predecessor_trigger},
                              ScheduleEdgeKind::ExplicitHandler,
                              reference.location,
                              true);
                 }
             }
         };
-        if (auto* system = std::get_if<SystemNode>(&decl)) {
-            expand_system(*system);
-        } else if (auto* system = std::get_if<ExternSystemNode>(&decl)) {
-            expand_system(*system);
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
+            expand_rule(*rule);
+        } else if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
+            expand_rule(*rule);
         }
     }
 
@@ -6871,7 +6871,7 @@ void SemanticAnalyzer::validate_after_clauses(
     // ordering rule wins.
     std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> explicit_adjacency;
     for (const auto& edge : result_.execution_graph.schedule_edges) {
-        if ((edge.kind == ScheduleEdgeKind::ExplicitHandler || edge.kind == ScheduleEdgeKind::ExplicitSystem) &&
+        if ((edge.kind == ScheduleEdgeKind::ExplicitHandler || edge.kind == ScheduleEdgeKind::ExplicitRule) &&
             nodes.contains(edge.before) && nodes.contains(edge.after)) {
             explicit_adjacency[edge.before].push_back(edge.after);
         }
@@ -6999,7 +6999,7 @@ void SemanticAnalyzer::validate_after_clauses(
     }
 
     // Preserve the old immediate cycle guarantee, but validate the expanded
-    // handler graph rather than an over-approximated system graph.
+    // handler graph rather than an over-approximated rule graph.
     enum class Color : uint8_t { White, Gray, Black };
     std::unordered_map<HandlerIdentity, Color, HandlerIdentityHash> color;
     std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> adjacency;

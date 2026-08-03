@@ -183,10 +183,10 @@ TEST_CASE("semantic_modules: one namespace includes all top-level declaration na
         node.name = "Shared";
         expect_duplicate(duplicate_against_trait_error(std::move(node)), "func");
     }
-    SECTION("system") {
-        SystemNode node;
+    SECTION("rule") {
+        RuleNode node;
         node.name = "Shared";
-        expect_duplicate(duplicate_against_trait_error(std::move(node)), "system");
+        expect_duplicate(duplicate_against_trait_error(std::move(node)), "rule");
     }
     SECTION("template") {
         TemplateNode node;
@@ -213,11 +213,11 @@ TEST_CASE("semantic_modules: one namespace includes all top-level declaration na
     }
 }
 
-/// Build a ProgramNode with a system that has filter entries.
-static ProgramNode make_program_with_system(const std::string& sys_name, const std::vector<FilterEntry>& entries) {
+/// Build a ProgramNode with a rule that has filter entries.
+static ProgramNode make_program_with_rule(const std::string& rule_name, const std::vector<FilterEntry>& entries) {
     ProgramNode prog = make_program_with_module();
-    SystemNode sys;
-    sys.name           = sys_name;
+    RuleNode sys;
+    sys.name           = rule_name;
     sys.filter.entries = entries;
     for (const auto& e : entries) {
         // Also populate backward-compat trait_names with the last component
@@ -590,7 +590,7 @@ TEST_CASE("semantic_modules: unqualified ambiguous type reports error", "[semant
 TEST_CASE("semantic_modules: filter entry with qualified trait resolved", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "player.Position";
-    auto prog            = make_program_with_system("MoveSystem", {entry});
+    auto prog            = make_program_with_rule("MoveSystem", {entry});
 
     auto syms = make_module_with_trait("player", "Position");
     ModuleImports imports;
@@ -607,7 +607,7 @@ TEST_CASE("semantic_modules: filter entry with alias resolves trait", "[semantic
     FilterEntry entry;
     entry.qualified_name = "p.Position";  // module registered as "p"
     entry.alias          = "pos";
-    auto prog            = make_program_with_system("MoveSystem", {entry});
+    auto prog            = make_program_with_rule("MoveSystem", {entry});
 
     auto syms = make_module_with_trait("player", "Position");
     ModuleImports imports;
@@ -633,7 +633,7 @@ TEST_CASE("semantic_modules: std.physics.flat collider filters resolve direct an
     collider.qualified_name = "std.physics.flat.Collider";
     FilterEntry box;
     box.qualified_name = "phys.BoxCollider";
-    auto prog          = make_program_with_system("Collide", {collider, box});
+    auto prog          = make_program_with_rule("Collide", {collider, box});
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -655,7 +655,7 @@ TEST_CASE("semantic_modules: std.physics.volume collider filters resolve direct 
     collider.qualified_name = "std.physics.volume.Collider";
     FilterEntry box;
     box.qualified_name = "phys3.BoxCollider";
-    auto prog          = make_program_with_system("Collide3D", {collider, box});
+    auto prog          = make_program_with_rule("Collide3D", {collider, box});
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -667,7 +667,7 @@ TEST_CASE("semantic_modules: std.physics.volume collider filters resolve direct 
 TEST_CASE("semantic_modules: filter entry with unqualified trait from import", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "Position";  // unqualified ordinary import is rejected
-    auto prog            = make_program_with_system("MoveSystem", {entry});
+    auto prog            = make_program_with_rule("MoveSystem", {entry});
 
     auto syms = make_module_with_trait("player", "Position");
     ModuleImports imports;
@@ -686,7 +686,7 @@ TEST_CASE("semantic_modules: filter entry with unqualified trait from import", "
 TEST_CASE("semantic_modules: ambiguous unqualified trait in filter", "[semantic][modules][4.4]") {
     FilterEntry entry;
     entry.qualified_name = "Config";
-    auto prog            = make_program_with_system("Worker", {entry});
+    auto prog            = make_program_with_rule("Worker", {entry});
 
     auto syms_a = make_module_with_trait("modA", "Config");
     auto syms_b = make_module_with_trait("modB", "Config");
@@ -730,7 +730,7 @@ TEST_CASE("semantic_modules: non-pub type reference suggests adding pub", "[sema
 TEST_CASE("semantic_modules: non-pub filter trait suggests adding pub", "[semantic][modules][4.6]") {
     FilterEntry entry;
     entry.qualified_name = "player.Secret";
-    auto prog            = make_program_with_system("Worker", {entry});
+    auto prog            = make_program_with_rule("Worker", {entry});
 
     ImportedSymbols player_syms;
     player_syms.module_name = "player";
@@ -783,30 +783,30 @@ static ProgramNode make_program_with_entity_trait(const std::string& entity_name
     return prog;
 }
 
-/// Make ImportedSymbols whose only pub export is a named system.
-static ImportedSymbols make_module_with_system(const std::string& module_name, const std::string& sys_name) {
+/// Make ImportedSymbols whose only pub export is a named rule.
+static ImportedSymbols make_module_with_rule(const std::string& module_name, const std::string& rule_name) {
     ImportedSymbols syms;
     syms.module_name = module_name;
-    ImportedSystem sys;
-    sys.name               = sys_name;
-    sys.canonical_id       = make_canonical_id(module_name, sys_name);
-    syms.systems[sys_name] = sys;
+    ImportedRule sys;
+    sys.name               = rule_name;
+    sys.canonical_id       = make_canonical_id(module_name, rule_name);
+    syms.rules[rule_name] = sys;
     return syms;
 }
 
-/// Make a program containing sys_name (with after: after_refs) plus any extra local systems.
-static ProgramNode make_program_with_system_after(const std::string& sys_name,
+/// Make a program containing rule_name (with after: after_refs) plus any extra local rules.
+static ProgramNode make_program_with_rule_after(const std::string& rule_name,
                                                   const std::vector<std::string>& after_refs,
                                                   const std::vector<std::string>& extra_locals = {}) {
     ProgramNode prog = make_program_with_module();
     for (const auto& name : extra_locals) {
-        SystemNode s;
+        RuleNode s;
         s.name = name;
         prog.declarations.emplace_back(std::move(s));
     }
-    SystemNode sys;
-    sys.name          = sys_name;
-    sys.after_systems = after_refs;
+    RuleNode sys;
+    sys.name          = rule_name;
+    sys.after_rules = after_refs;
     prog.declarations.emplace_back(std::move(sys));
     return prog;
 }
@@ -886,10 +886,10 @@ TEST_CASE("semantic_modules 3.1: non-pub trait in entity reports error", "[seman
 
 // ── 3.4: after: clause resolution ───────────────────────────────────────────
 
-TEST_CASE("semantic_modules 3.4: qualified after resolves imported system", "[semantic][modules][3.4]") {
-    auto prog = make_program_with_system_after("B", {"flat.Transform"});
+TEST_CASE("semantic_modules 3.4: qualified after resolves imported rule", "[semantic][modules][3.4]") {
+    auto prog = make_program_with_rule_after("B", {"flat.Transform"});
     ModuleImports imports;
-    imports.add("flat", make_module_with_system("std.transform.flat", "Transform"));
+    imports.add("flat", make_module_with_rule("std.transform.flat", "Transform"));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -898,14 +898,14 @@ TEST_CASE("semantic_modules 3.4: qualified after resolves imported system", "[se
     REQUIRE_FALSE(errors.has_errors());
     REQUIRE(result.dependency_graph.size() == 1);
     const auto& dep = result.dependency_graph[0];
-    REQUIRE(dep.after_systems.size() == 1);
-    CHECK(dep.after_systems[0] == "std.transform.flat.Transform");
+    REQUIRE(dep.after_rules.size() == 1);
+    CHECK(dep.after_rules[0] == "std.transform.flat.Transform");
 }
 
 TEST_CASE("semantic_modules 3.4: unique unqualified after from import succeeds", "[semantic][modules][3.4]") {
-    auto prog = make_program_with_system_after("B", {"Transform"});
+    auto prog = make_program_with_rule_after("B", {"Transform"});
     ModuleImports imports;
-    imports.add("flat", make_module_with_system("std.transform.flat", "Transform"));
+    imports.add("flat", make_module_with_rule("std.transform.flat", "Transform"));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -913,15 +913,15 @@ TEST_CASE("semantic_modules 3.4: unique unqualified after from import succeeds",
 
     REQUIRE(errors.has_errors());
     const auto& msg = errors.diagnostics()[0].message;
-    CHECK(msg.find("system 'Transform' is imported from module 'std.transform.flat'") != std::string::npos);
+    CHECK(msg.find("rule 'Transform' is imported from module 'std.transform.flat'") != std::string::npos);
     CHECK(msg.find("must be referenced as 'flat.Transform'") != std::string::npos);
 }
 
 TEST_CASE("semantic_modules 3.4: ambiguous unqualified after reports error", "[semantic][modules][3.4]") {
-    auto prog = make_program_with_system_after("B", {"Transform"});
+    auto prog = make_program_with_rule_after("B", {"Transform"});
     ModuleImports imports;
-    imports.add("flat", make_module_with_system("std.transform.flat", "Transform"));
-    imports.add("volume", make_module_with_system("std.transform.volume", "Transform"));
+    imports.add("flat", make_module_with_rule("std.transform.flat", "Transform"));
+    imports.add("volume", make_module_with_rule("std.transform.volume", "Transform"));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -933,7 +933,7 @@ TEST_CASE("semantic_modules 3.4: ambiguous unqualified after reports error", "[s
 }
 
 TEST_CASE("semantic_modules 3.4: unknown qualifier in after reports error", "[semantic][modules][3.4]") {
-    auto prog = make_program_with_system_after("B", {"bad.Transform"});
+    auto prog = make_program_with_rule_after("B", {"bad.Transform"});
     ModuleImports imports;
 
     ErrorReporter errors;
@@ -944,25 +944,25 @@ TEST_CASE("semantic_modules 3.4: unknown qualifier in after reports error", "[se
     CHECK(errors.diagnostics()[0].message.find("unknown") != std::string::npos);
 }
 
-TEST_CASE("semantic_modules 3.4: local system in after resolves without imports", "[semantic][modules][3.4]") {
-    auto prog = make_program_with_system_after("B", {"A"}, {"A"});
+TEST_CASE("semantic_modules 3.4: local rule in after resolves without imports", "[semantic][modules][3.4]") {
+    auto prog = make_program_with_rule_after("B", {"A"}, {"A"});
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
     auto result = analyzer.analyze(prog);
 
     REQUIRE_FALSE(errors.has_errors());
-    // Find system B
-    const SystemDependency* b_dep = nullptr;
+    // Find rule B
+    const RuleDependency* b_dep = nullptr;
     for (const auto& d : result.dependency_graph) {
-        if (d.system_name == "B") {
+        if (d.rule_name == "B") {
             b_dep = &d;
             break;
         }
     }
     REQUIRE(b_dep != nullptr);
-    REQUIRE(b_dep->after_systems.size() == 1);
-    CHECK(b_dep->after_systems[0] == "test.module.A");
+    REQUIRE(b_dep->after_rules.size() == 1);
+    CHECK(b_dep->after_rules[0] == "test.module.A");
 }
 
 // ── 3.7: Dependency graph canonical trait IDs ────────────────────────────────
@@ -970,7 +970,7 @@ TEST_CASE("semantic_modules 3.4: local system in after resolves without imports"
 TEST_CASE("semantic_modules 3.7: filter canonical trait ID resolved for aliased import", "[semantic][modules][3.7]") {
     FilterEntry entry;
     entry.qualified_name = "flat.Position";
-    auto prog            = make_program_with_system("ReadSystem", {entry});
+    auto prog            = make_program_with_rule("ReadSystem", {entry});
 
     ModuleImports imports;
     imports.add("flat", make_module_with_trait("std.transform.flat", "Position"));
@@ -980,7 +980,7 @@ TEST_CASE("semantic_modules 3.7: filter canonical trait ID resolved for aliased 
     analyzer.analyze(prog, imports);
 
     REQUIRE_FALSE(errors.has_errors());
-    const auto* sys = std::get_if<SystemNode>(&prog.declarations.back());
+    const auto* sys = std::get_if<RuleNode>(&prog.declarations.back());
     REQUIRE(sys != nullptr);
     REQUIRE(sys->filter.resolved_trait_ids.size() == 1);
     CHECK(make_canonical_id(sys->filter.resolved_trait_ids[0]) == "std.transform.flat.Position");
@@ -992,15 +992,15 @@ TEST_CASE("semantic_modules 3.7: filter canonical trait ID resolved for aliased 
 // `transform3d.WorldTransform`. The tests below verify that the alias-qualified
 // filter resolution and ambiguity detection work correctly for this scenario.
 
-TEST_CASE("semantic_modules 6.3: system filter resolves flat and volume traits via distinct aliases",
+TEST_CASE("semantic_modules 6.3: rule filter resolves flat and volume traits via distinct aliases",
           "[semantic][modules][6.3]") {
     // Simulates `use std.transform.flat as transform2d` + `use std.transform.volume as transform3d`
-    // A system filters on both: flat.WorldTransform and volume.WorldTransform are distinct.
+    // A rule filters on both: flat.WorldTransform and volume.WorldTransform are distinct.
     FilterEntry entry_flat;
     entry_flat.qualified_name = "transform2d.WorldTransform";
     FilterEntry entry_vol;
     entry_vol.qualified_name = "transform3d.WorldTransform";
-    auto prog                = make_program_with_system("RenderSystem", {entry_flat, entry_vol});
+    auto prog                = make_program_with_rule("RenderSystem", {entry_flat, entry_vol});
 
     ModuleImports imports;
     imports.add("transform2d", make_module_with_trait("std.transform.flat", "WorldTransform"));
@@ -1011,7 +1011,7 @@ TEST_CASE("semantic_modules 6.3: system filter resolves flat and volume traits v
     analyzer.analyze(prog, imports);
 
     REQUIRE_FALSE(errors.has_errors());
-    const auto* sys = std::get_if<SystemNode>(&prog.declarations.back());
+    const auto* sys = std::get_if<RuleNode>(&prog.declarations.back());
     REQUIRE(sys != nullptr);
     REQUIRE(sys->filter.resolved_trait_ids.size() == 2);
     CHECK(make_canonical_id(sys->filter.resolved_trait_ids[0]) == "std.transform.flat.WorldTransform");
@@ -1023,7 +1023,7 @@ TEST_CASE("semantic_modules 6.3: unqualified WorldTransform is ambiguous when bo
     // Using unqualified WorldTransform when both flat and volume are in scope must fail.
     FilterEntry entry;
     entry.qualified_name = "WorldTransform";
-    auto prog            = make_program_with_system("S", {entry});
+    auto prog            = make_program_with_rule("S", {entry});
 
     ModuleImports imports;
     imports.add("transform2d", make_module_with_trait("std.transform.flat", "WorldTransform"));
@@ -1039,13 +1039,13 @@ TEST_CASE("semantic_modules 6.3: unqualified WorldTransform is ambiguous when bo
 }
 
 TEST_CASE("semantic_modules: local filter trait still works", "[semantic][modules][4.7]") {
-    // Define a local trait, then a system filtering on it (trait_names, no entries)
+    // Define a local trait, then a rule filtering on it (trait_names, no entries)
     ProgramNode prog = make_program_with_module();
     TraitNode trait;
     trait.name = "Health";
     prog.declarations.emplace_back(std::move(trait));
 
-    SystemNode sys;
+    RuleNode sys;
     sys.name               = "HealSystem";
     sys.filter.trait_names = {"Health"};
     // entries is empty — backward-compat path
@@ -1066,7 +1066,7 @@ TEST_CASE("semantic_modules 6.3: on-tick handler resolved_event_id points to std
     // canonical SymbolId {Event, "std.core", "tick"} — not left nullopt.
     ProgramNode prog = make_program_with_module("game.counter");
 
-    SystemNode sys;
+    RuleNode sys;
     sys.name = "CountTicks";
 
     EventHandlerNode handler;
@@ -1092,7 +1092,7 @@ TEST_CASE("semantic_modules 6.3: on-tick handler resolved_event_id points to std
 
     REQUIRE_FALSE(errors.has_errors());
 
-    const auto* sys_decl = std::get_if<SystemNode>(&prog.declarations.back());
+    const auto* sys_decl = std::get_if<RuleNode>(&prog.declarations.back());
     REQUIRE(sys_decl != nullptr);
     REQUIRE_FALSE(sys_decl->handlers.empty());
     const auto& h = sys_decl->handlers[0];
@@ -1121,14 +1121,14 @@ TEST_CASE("semantic_modules: local external event and phase retain canonical ide
     selected.name = "Selected";
     prog.declarations.emplace_back(std::move(selected));
 
-    SystemNode regular;
+    RuleNode regular;
     regular.name = "Move";
     EventHandlerNode regular_handler;
     regular_handler.event_name = "tick";
     regular.handlers.push_back(std::move(regular_handler));
     prog.declarations.emplace_back(std::move(regular));
 
-    ExternSystemNode external;
+    ExternRuleNode external;
     external.name               = "NativeMove";
     external.filter.trait_names = {"Selected"};
     ExternHandlerNode external_handler;
@@ -1157,13 +1157,13 @@ TEST_CASE("semantic_modules: local external event and phase retain canonical ide
     CHECK(resolved_tick.from_sources[0].kind == HandlerTriggerKind::Event);
     CHECK(resolved_tick.from_sources[0].symbol == make_symbol_id(SymbolKind::Event, "game.runtime", "frame"));
 
-    const auto& regular_decl = std::get<SystemNode>(prog.declarations[4]);
+    const auto& regular_decl = std::get<RuleNode>(prog.declarations[4]);
     REQUIRE(regular_decl.handlers[0].resolved_trigger.has_value());
     CHECK(regular_decl.handlers[0].resolved_trigger->kind == HandlerTriggerKind::Phase);
     CHECK(regular_decl.handlers[0].resolved_trigger->symbol ==
           make_symbol_id(SymbolKind::Phase, "game.runtime", "tick"));
 
-    const auto& external_decl = std::get<ExternSystemNode>(prog.declarations[5]);
+    const auto& external_decl = std::get<ExternRuleNode>(prog.declarations[5]);
     REQUIRE(external_decl.handlers[0].resolved_trigger.has_value());
     CHECK(external_decl.handlers[0].resolved_trigger->kind == HandlerTriggerKind::Phase);
     CHECK(external_decl.handlers[0].resolved_trigger->symbol ==
@@ -1201,15 +1201,15 @@ TEST_CASE("semantic_modules: imported phase and external-event provenance normal
     render.from_sources.push_back(LocatedName{.spelling = "core.frame", .location = {}});
     prog.declarations.emplace_back(std::move(render));
 
-    SystemNode system;
-    system.name = "Animate";
+    RuleNode rule;
+    rule.name = "Animate";
     EventHandlerNode tick_handler;
     tick_handler.event_name = "core.tick";
-    system.handlers.push_back(std::move(tick_handler));
+    rule.handlers.push_back(std::move(tick_handler));
     EventHandlerNode frame_handler;
     frame_handler.event_name = "core.frame";
-    system.handlers.push_back(std::move(frame_handler));
-    prog.declarations.emplace_back(std::move(system));
+    rule.handlers.push_back(std::move(frame_handler));
+    prog.declarations.emplace_back(std::move(rule));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -1220,7 +1220,7 @@ TEST_CASE("semantic_modules: imported phase and external-event provenance normal
     CHECK(decorated.phases.at("render").from_sources[0].symbol ==
           make_symbol_id(SymbolKind::Event, "std.core", "frame"));
 
-    const auto& resolved_system = std::get<SystemNode>(prog.declarations.back());
+    const auto& resolved_system = std::get<RuleNode>(prog.declarations.back());
     REQUIRE(resolved_system.handlers[0].resolved_trigger.has_value());
     CHECK(resolved_system.handlers[0].resolved_trigger->kind == HandlerTriggerKind::Phase);
     CHECK(resolved_system.handlers[0].resolved_trigger->symbol ==
@@ -1244,8 +1244,8 @@ TEST_CASE("semantic_modules: authored emit cannot produce a local external event
     request.name = "Request";
     prog.declarations.emplace_back(std::move(request));
 
-    SystemNode system;
-    system.name = "BadProducer";
+    RuleNode rule;
+    rule.name = "BadProducer";
     EventHandlerNode handler;
     handler.event_name = "Request";
     EmitStmt emit;
@@ -1253,8 +1253,8 @@ TEST_CASE("semantic_modules: authored emit cannot produce a local external event
     emit.location            = {"runtime.cactus", 8, 9};
     const auto emit_location = emit.location;
     handler.body.push_back(std::make_unique<StmtNode>(StmtNode::Variant{std::move(emit)}, emit_location));
-    system.handlers.push_back(std::move(handler));
-    prog.declarations.emplace_back(std::move(system));
+    rule.handlers.push_back(std::move(handler));
+    prog.declarations.emplace_back(std::move(rule));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -1285,14 +1285,14 @@ TEST_CASE("semantic_modules: authored contracts cannot emit imported external ev
     selected.name = "Selected";
     prog.declarations.emplace_back(std::move(selected));
 
-    ExternSystemNode system;
-    system.name               = "BadHost";
-    system.filter.trait_names = {"Selected"};
+    ExternRuleNode rule;
+    rule.name               = "BadHost";
+    rule.filter.trait_names = {"Selected"};
     ExternHandlerNode handler;
     handler.trigger_name = "core.tick";
     handler.emits.push_back(LocatedName{.spelling = "core.frame", .location = {"host.cactus", 7, 13}});
-    system.handlers.push_back(std::move(handler));
-    prog.declarations.emplace_back(std::move(system));
+    rule.handlers.push_back(std::move(handler));
+    prog.declarations.emplace_back(std::move(rule));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -1516,8 +1516,8 @@ TEST_CASE("semantic_modules: periodic completion alpha is downstream-only", "[se
     fixed_tick.every.emplace(make_literal_expr(LiteralExpr::Kind::Float, "0.25"));
     prog.declarations.emplace_back(std::move(fixed_tick));
 
-    SystemNode system;
-    system.name = "Simulation";
+    RuleNode rule;
+    rule.name = "Simulation";
     EventHandlerNode handler;
     handler.event_name = "fixed_tick";
     handler.alias      = "step";
@@ -1525,8 +1525,8 @@ TEST_CASE("semantic_modules: periodic completion alpha is downstream-only", "[se
     handler.body.push_back(std::make_unique<StmtNode>(StmtNode::Variant{std::move(read_dt)}, SourceLocation{}));
     LetStmt read_alpha{.name = "alpha", .value = make_member_expr("step", "alpha"), .location = {}};
     handler.body.push_back(std::make_unique<StmtNode>(StmtNode::Variant{std::move(read_alpha)}, SourceLocation{}));
-    system.handlers.push_back(std::move(handler));
-    prog.declarations.emplace_back(std::move(system));
+    rule.handlers.push_back(std::move(handler));
+    prog.declarations.emplace_back(std::move(rule));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -1538,7 +1538,7 @@ TEST_CASE("semantic_modules: periodic completion alpha is downstream-only", "[se
 }
 
 TEST_CASE("semantic_modules: external handler contracts resolve canonical capabilities",
-          "[semantic][modules][extern-system][2.3]") {
+          "[semantic][modules][extern-rule][2.3]") {
     ProgramNode prog = make_program_with_module("game.render");
     EventNode pulse;
     pulse.name = "pulse";
@@ -1559,12 +1559,12 @@ TEST_CASE("semantic_modules: external handler contracts resolve canonical capabi
     ModuleImports imports;
     imports.add("phys", std::move(physics));
 
-    ExternSystemNode system;
-    system.name = "Renderer";
+    ExternRuleNode rule;
+    rule.name = "Renderer";
     FilterEntry filtered;
     filtered.qualified_name = "phys.Position";
     filtered.alias          = "pos";
-    system.filter.entries.push_back(std::move(filtered));
+    rule.filter.entries.push_back(std::move(filtered));
     ExternHandlerNode handler;
     handler.trigger_name = "pulse";
     handler.reads.push_back(LocatedName{.spelling = "pos", .location = {}});
@@ -1576,15 +1576,15 @@ TEST_CASE("semantic_modules: external handler contracts resolve canonical capabi
     handler.commands.push_back(std::move(spawn_command));
     handler.commands.push_back(HandlerCommandNode{.kind = HandlerCommandKind::Destroy, .location = {}});
     handler.effects.push_back(LocatedName{.spelling = "graphics.draw", .location = {}});
-    system.handlers.push_back(std::move(handler));
-    prog.declarations.emplace_back(std::move(system));
+    rule.handlers.push_back(std::move(handler));
+    prog.declarations.emplace_back(std::move(rule));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
     analyzer.analyze(prog, imports);
 
     REQUIRE_FALSE(errors.has_errors());
-    const auto& resolved_system  = std::get<ExternSystemNode>(prog.declarations.back());
+    const auto& resolved_system  = std::get<ExternRuleNode>(prog.declarations.back());
     const auto& resolved_handler = resolved_system.handlers.front();
     CHECK(resolved_handler.resolved_reads ==
           std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "engine.physics", "Position")});
@@ -1597,20 +1597,20 @@ TEST_CASE("semantic_modules: external handler contracts resolve canonical capabi
     CHECK(resolved_handler.resolved_effects == std::vector<std::string>{"graphics.draw"});
 }
 
-TEST_CASE("semantic_modules: selectionless external systems are valid but contracts are mandatory",
-          "[semantic][modules][extern-system][2.3]") {
+TEST_CASE("semantic_modules: selectionless external rules are valid but contracts are mandatory",
+          "[semantic][modules][extern-rule][2.3]") {
     SECTION("selectionless handler contract") {
         ProgramNode prog = make_program_with_module("game.host");
         EventNode pulse;
         pulse.name = "pulse";
         prog.declarations.emplace_back(std::move(pulse));
-        ExternSystemNode system;
-        system.name = "HostPump";
+        ExternRuleNode rule;
+        rule.name = "HostPump";
         ExternHandlerNode handler;
         handler.trigger_name = "pulse";
         handler.effects.push_back(LocatedName{.spelling = "host.poll", .location = {}});
-        system.handlers.push_back(std::move(handler));
-        prog.declarations.emplace_back(std::move(system));
+        rule.handlers.push_back(std::move(handler));
+        prog.declarations.emplace_back(std::move(rule));
 
         ErrorReporter errors;
         SemanticAnalyzer analyzer(errors);
@@ -1620,19 +1620,19 @@ TEST_CASE("semantic_modules: selectionless external systems are valid but contra
 
     SECTION("handlerless declaration") {
         ProgramNode prog = make_program_with_module("game.host");
-        ExternSystemNode system;
-        system.name = "HostPump";
-        prog.declarations.emplace_back(std::move(system));
+        ExternRuleNode rule;
+        rule.name = "HostPump";
+        prog.declarations.emplace_back(std::move(rule));
 
         ErrorReporter errors;
         SemanticAnalyzer analyzer(errors);
         analyzer.analyze(prog);
-        CHECK(has_diagnostic(errors, "extern system 'HostPump' requires at least one external handler contract"));
+        CHECK(has_diagnostic(errors, "extern rule 'HostPump' requires at least one external handler contract"));
     }
 }
 
 TEST_CASE("semantic_modules: malformed external capabilities are rejected",
-          "[semantic][modules][extern-system][2.3][errors]") {
+          "[semantic][modules][extern-rule][2.3][errors]") {
     ProgramNode prog = make_program_with_module("game.host");
     EventNode pulse;
     pulse.name = "pulse";
@@ -1644,8 +1644,8 @@ TEST_CASE("semantic_modules: malformed external capabilities are rejected",
     not_a_template.name = "Actor";
     prog.declarations.emplace_back(std::move(not_a_template));
 
-    ExternSystemNode system;
-    system.name = "BrokenHost";
+    ExternRuleNode rule;
+    rule.name = "BrokenHost";
     ExternHandlerNode handler;
     handler.trigger_name = "pulse";
     handler.reads.push_back(LocatedName{.spelling = "Position", .location = {}});
@@ -1662,8 +1662,8 @@ TEST_CASE("semantic_modules: malformed external capabilities are rejected",
     handler.effects.push_back(LocatedName{.spelling = "graphics..draw", .location = {}});
     handler.effects.push_back(LocatedName{.spelling = "audio", .location = {}});
     handler.effects.push_back(LocatedName{.spelling = "audio", .location = {}});
-    system.handlers.push_back(std::move(handler));
-    prog.declarations.emplace_back(std::move(system));
+    rule.handlers.push_back(std::move(handler));
+    prog.declarations.emplace_back(std::move(rule));
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
@@ -1699,7 +1699,7 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
         "    Position\n"
         "func twice(value: float) float:\n"
         "    return value + value\n"
-        "system Movement:\n"
+        "rule Movement:\n"
         "    filter:\n"
         "        Position as p\n"
         "        Velocity as v\n"
@@ -1726,17 +1726,17 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
         "        destroy\n"
         "    on Hit:\n"
         "        let amount = Hit.amount\n"
-        "system FilterOnly:\n"
+        "rule FilterOnly:\n"
         "    filter:\n"
         "        Position\n"
         "    on frame:\n"
         "        let local = frame.dt\n"
-        "system ExcludeOnly:\n"
+        "rule ExcludeOnly:\n"
         "    exclude:\n"
         "        Tag\n"
         "    on frame:\n"
         "        let local = frame.dt\n"
-        "system Once:\n"
+        "rule Once:\n"
         "    on frame:\n"
         "        let local = frame.dt\n");
 
@@ -1744,10 +1744,10 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
     REQUIRE(diagnostics.empty());
     REQUIRE(decorated.handler_contracts.size() == 5);
 
-    const auto contract_for = [&](const std::string& system,
+    const auto contract_for = [&](const std::string& rule,
                                   const std::string& trigger) -> const InferredHandlerContract& {
         const auto found = std::ranges::find_if(decorated.handler_contracts, [&](const auto& contract) {
-            return contract.system.local_name == system && contract.trigger.symbol.local_name == trigger;
+            return contract.rule.local_name == rule && contract.trigger.symbol.local_name == trigger;
         });
         REQUIRE(found != decorated.handler_contracts.end());
         return *found;
@@ -1831,13 +1831,13 @@ TEST_CASE("regular handler contracts infer extern function effect summaries", "[
         "extern func local_host()\n"
         "func identity(value: float) float:\n"
         "    return value\n"
-        "system Effectful:\n"
+        "rule Effectful:\n"
         "    on pulse:\n"
         "        let cursor = input.mouse_position()\n"
         "        audio.play()\n"
         "        host.poll()\n"
         "        local_host()\n"
-        "system Pure:\n"
+        "rule Pure:\n"
         "    on pure_pulse:\n"
         "        let value = identity(math.abs(1.0))\n",
         imports);
@@ -1845,9 +1845,9 @@ TEST_CASE("regular handler contracts infer extern function effect summaries", "[
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     REQUIRE(diagnostics.empty());
     REQUIRE(decorated.handler_contracts.size() == 2);
-    const auto contract_for = [&](const std::string& system) -> const InferredHandlerContract& {
+    const auto contract_for = [&](const std::string& rule) -> const InferredHandlerContract& {
         const auto found = std::ranges::find_if(
-            decorated.handler_contracts, [&](const auto& contract) { return contract.system.local_name == system; });
+            decorated.handler_contracts, [&](const auto& contract) { return contract.rule.local_name == rule; });
         REQUIRE(found != decorated.handler_contracts.end());
         return *found;
     };
@@ -1859,30 +1859,30 @@ TEST_CASE("regular handler contracts infer extern function effect summaries", "[
     CHECK_FALSE(decorated.funcs.at("local_host").effect_summary.has_value());
 }
 
-TEST_CASE("handler graph expands system shorthand only across matching canonical triggers",
+TEST_CASE("handler graph expands rule shorthand only across matching canonical triggers",
           "[semantic][handler-graph][3.2]") {
     const auto [decorated, diagnostics] = analyze_source(
         "module game.graph\n"
         "event tick\n"
         "event Damaged\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    on tick:\n"
         "        let value = 1\n"
         "    on Damaged:\n"
         "        let value = 2\n"
-        "system Consumer:\n"
+        "rule Consumer:\n"
         "    after:\n"
         "        Producer\n"
         "    on tick:\n"
         "        let value = 3\n"
         "    on Damaged:\n"
         "        let value = 4\n"
-        "system Finalizer:\n"
+        "rule Finalizer:\n"
         "    on tick:\n"
         "        after:\n"
         "            Consumer/on tick\n"
         "        let value = 5\n"
-        "extern system HostObserver:\n"
+        "extern rule HostObserver:\n"
         "    on tick:\n"
         "        effects:\n"
         "            host.observe\n");
@@ -1892,9 +1892,9 @@ TEST_CASE("handler graph expands system shorthand only across matching canonical
     REQUIRE(decorated.execution_graph.handlers.size() == 6);
     REQUIRE(decorated.execution_graph.schedule_edges.size() == 3);
 
-    const auto handler = [](const std::string& system, const std::string& trigger) {
+    const auto handler = [](const std::string& rule, const std::string& trigger) {
         return HandlerIdentity{
-            .system  = make_symbol_id(SymbolKind::System, "game.graph", system),
+            .rule  = make_symbol_id(SymbolKind::Rule, "game.graph", rule),
             .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                               .symbol = make_symbol_id(SymbolKind::Event, "game.graph", trigger)}};
     };
@@ -1911,11 +1911,11 @@ TEST_CASE("handler graph expands system shorthand only across matching canonical
                    edge.orientation == ScheduleEdgeOrientation::Explicit;
         });
     };
-    CHECK(has_edge(producer_tick, consumer_tick, ScheduleEdgeKind::ExplicitSystem));
-    CHECK(has_edge(producer_damaged, consumer_damaged, ScheduleEdgeKind::ExplicitSystem));
+    CHECK(has_edge(producer_tick, consumer_tick, ScheduleEdgeKind::ExplicitRule));
+    CHECK(has_edge(producer_damaged, consumer_damaged, ScheduleEdgeKind::ExplicitRule));
     CHECK(has_edge(consumer_tick, finalizer_tick, ScheduleEdgeKind::ExplicitHandler));
-    CHECK_FALSE(has_edge(producer_tick, consumer_damaged, ScheduleEdgeKind::ExplicitSystem));
-    CHECK_FALSE(has_edge(producer_damaged, consumer_tick, ScheduleEdgeKind::ExplicitSystem));
+    CHECK_FALSE(has_edge(producer_tick, consumer_damaged, ScheduleEdgeKind::ExplicitRule));
+    CHECK_FALSE(has_edge(producer_damaged, consumer_tick, ScheduleEdgeKind::ExplicitRule));
 
     const auto node_for = [&](const HandlerIdentity& identity) -> const HandlerNode& {
         const auto found = std::ranges::find_if(decorated.execution_graph.handlers,
@@ -1956,10 +1956,10 @@ TEST_CASE("handler graph rejects ineligible exact handler ordering", "[semantic]
         "module game.graph\n"
         "event tick\n"
         "event Damaged\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    on Damaged:\n"
         "        let value = 1\n"
-        "system Consumer:\n"
+        "rule Consumer:\n"
         "    on tick:\n"
         "        after:\n"
         "            Producer/on Damaged\n"
@@ -1976,17 +1976,17 @@ TEST_CASE("handler graph diagnoses cycles formed by explicit and contract edges"
         "event tick\n"
         "trait Forward\n"
         "trait LoopBack\n"
-        "extern system A:\n"
+        "extern rule A:\n"
         "    on tick:\n"
         "        reads:\n"
         "            LoopBack\n"
-        "extern system B:\n"
+        "extern rule B:\n"
         "    on tick:\n"
         "        after:\n"
         "            A/on tick\n"
         "        writes:\n"
         "            Forward\n"
-        "extern system C:\n"
+        "extern rule C:\n"
         "    on tick:\n"
         "        reads:\n"
         "            Forward\n"
@@ -2013,71 +2013,71 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
         "trait ExplicitTrait\n"
         "trait Mixed\n"
         "trait FilterOnly\n"
-        "extern system ReaderOne:\n"
+        "extern rule ReaderOne:\n"
         "    on tick:\n"
         "        reads:\n"
         "            OneWay\n"
-        "extern system WriterOne:\n"
+        "extern rule WriterOne:\n"
         "    on tick:\n"
         "        writes:\n"
         "            OneWay\n"
-        "extern system ReadFirst:\n"
+        "extern rule ReadFirst:\n"
         "    on tick:\n"
         "        reads:\n"
         "            ReadOnly\n"
-        "extern system ReadSecond:\n"
+        "extern rule ReadSecond:\n"
         "    on tick:\n"
         "        reads:\n"
         "            ReadOnly\n"
-        "extern system WriteFirst:\n"
+        "extern rule WriteFirst:\n"
         "    on tick:\n"
         "        writes:\n"
         "            WriteWrite\n"
-        "extern system WriteSecond:\n"
+        "extern rule WriteSecond:\n"
         "    on tick:\n"
         "        writes:\n"
         "            WriteWrite\n"
-        "extern system EffectFirst:\n"
+        "extern rule EffectFirst:\n"
         "    on tick:\n"
         "        effects:\n"
         "            graphics\n"
-        "extern system EffectSecond:\n"
+        "extern rule EffectSecond:\n"
         "    on tick:\n"
         "        effects:\n"
         "            graphics\n"
-        "extern system ExplicitReader:\n"
+        "extern rule ExplicitReader:\n"
         "    on tick:\n"
         "        reads:\n"
         "            ExplicitTrait\n"
-        "extern system ExplicitWriter:\n"
+        "extern rule ExplicitWriter:\n"
         "    on tick:\n"
         "        after:\n"
         "            ExplicitReader/on tick\n"
         "        writes:\n"
         "            ExplicitTrait\n"
-        "extern system MixedReader:\n"
+        "extern rule MixedReader:\n"
         "    on tick:\n"
         "        reads:\n"
         "            Mixed\n"
         "        effects:\n"
         "            network\n"
-        "extern system MixedWriter:\n"
+        "extern rule MixedWriter:\n"
         "    on tick:\n"
         "        writes:\n"
         "            Mixed\n"
         "        effects:\n"
         "            network\n"
-        "extern system FilterPass:\n"
+        "extern rule FilterPass:\n"
         "    filter:\n"
         "        FilterOnly\n"
         "    on tick:\n"
         "        effects:\n"
         "            unique.filter\n"
-        "extern system FilterWriter:\n"
+        "extern rule FilterWriter:\n"
         "    on tick:\n"
         "        writes:\n"
         "            FilterOnly\n"
-        "extern system OtherWriter:\n"
+        "extern rule OtherWriter:\n"
         "    on other:\n"
         "        writes:\n"
         "            OneWay\n"
@@ -2087,9 +2087,9 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     REQUIRE(diagnostics.empty());
 
-    const auto handler = [](const std::string& system, const std::string& trigger = "tick") {
+    const auto handler = [](const std::string& rule, const std::string& trigger = "tick") {
         return HandlerIdentity{
-            .system  = make_symbol_id(SymbolKind::System, "game.conflicts", system),
+            .rule  = make_symbol_id(SymbolKind::Rule, "game.conflicts", rule),
             .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                               .symbol = make_symbol_id(SymbolKind::Event, "game.conflicts", trigger)}};
     };
@@ -2163,7 +2163,7 @@ TEST_CASE("handler graph gives a pair handler exactly one node with its bindings
         "    var vx: float\n"
         "trait Solid:\n"
         "    var active: bool = true\n"
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -2200,11 +2200,11 @@ TEST_CASE("handler graph orders a pair reader after a unary writer of the same t
         "    var vx: float\n"
         "trait Solid:\n"
         "    var active: bool = true\n"
-        "extern system WriteTransform:\n"
+        "extern rule WriteTransform:\n"
         "    on tick:\n"
         "        writes:\n"
         "            Transform\n"
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -2218,12 +2218,12 @@ TEST_CASE("handler graph orders a pair reader after a unary writer of the same t
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     REQUIRE(diagnostics.empty());
 
-    const auto writer   = HandlerIdentity{.system  = make_symbol_id(SymbolKind::System, "game.pairs", "WriteTransform"),
+    const auto writer   = HandlerIdentity{.rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "WriteTransform"),
                                         .trigger = ResolvedHandlerTrigger{
                                             .kind = HandlerTriggerKind::Event,
                                             .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
     const auto detector = HandlerIdentity{
-        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"),
+        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
 
@@ -2246,7 +2246,7 @@ TEST_CASE("handler graph orders a pair projection producer before a reader witho
         "    var active: bool = true\n"
         "trait GroundContact:\n"
         "    var active: bool = true\n"
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -2254,7 +2254,7 @@ TEST_CASE("handler graph orders a pair projection producer before a reader witho
         "            Solid\n"
         "    on tick:\n"
         "        project GroundContact to body\n"
-        "extern system ReadGroundContact:\n"
+        "extern rule ReadGroundContact:\n"
         "    on tick:\n"
         "        reads:\n"
         "            GroundContact\n");
@@ -2264,11 +2264,11 @@ TEST_CASE("handler graph orders a pair projection producer before a reader witho
 
     const auto ground_contact = make_symbol_id(SymbolKind::Trait, "game.pairs", "GroundContact");
     const auto detector       = HandlerIdentity{
-        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"),
+        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
     const auto reader = HandlerIdentity{
-        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "ReadGroundContact"),
+        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "ReadGroundContact"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
 
@@ -2297,7 +2297,7 @@ TEST_CASE("handler graph connects a pair event producer to its consumer regardle
         "    var vx: float\n"
         "trait Solid:\n"
         "    var active: bool = true\n"
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -2306,7 +2306,7 @@ TEST_CASE("handler graph connects a pair event producer to its consumer regardle
         "    on tick:\n"
         "        emit Contact to body:\n"
         "            other = wall\n"
-        "system ResolveContact:\n"
+        "rule ResolveContact:\n"
         "    on Contact:\n"
         "        let x = 1\n");
 
@@ -2315,12 +2315,12 @@ TEST_CASE("handler graph connects a pair event producer to its consumer regardle
     REQUIRE(decorated.execution_graph.event_flows.size() == 1);
 
     const auto& flow = decorated.execution_graph.event_flows[0];
-    CHECK(flow.producer.system == make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"));
+    CHECK(flow.producer.rule == make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"));
     CHECK(flow.event == make_symbol_id(SymbolKind::Event, "game.pairs", "Contact"));
-    CHECK(flow.consumer.system == make_symbol_id(SymbolKind::System, "game.pairs", "ResolveContact"));
+    CHECK(flow.consumer.rule == make_symbol_id(SymbolKind::Rule, "game.pairs", "ResolveContact"));
 }
 
-TEST_CASE("handler graph honors explicit after: ordering on a pair system", "[semantic][handler-graph][pair-relations]") {
+TEST_CASE("handler graph honors explicit after: ordering on a pair rule", "[semantic][handler-graph][pair-relations]") {
     const auto [decorated, diagnostics] = analyze_source(
         "module game.pairs\n"
         "event tick\n"
@@ -2328,10 +2328,10 @@ TEST_CASE("handler graph honors explicit after: ordering on a pair system", "[se
         "    var vx: float\n"
         "trait Solid:\n"
         "    var active: bool = true\n"
-        "system First:\n"
+        "rule First:\n"
         "    on tick:\n"
         "        let a = 1\n"
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -2345,17 +2345,17 @@ TEST_CASE("handler graph honors explicit after: ordering on a pair system", "[se
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     REQUIRE(diagnostics.empty());
 
-    const auto first    = HandlerIdentity{.system  = make_symbol_id(SymbolKind::System, "game.pairs", "First"),
+    const auto first    = HandlerIdentity{.rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "First"),
                                         .trigger = ResolvedHandlerTrigger{
                                             .kind = HandlerTriggerKind::Event,
                                             .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
     const auto detector = HandlerIdentity{
-        .system  = make_symbol_id(SymbolKind::System, "game.pairs", "DetectContacts"),
+        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
 
     CHECK(std::ranges::any_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
-        return edge.kind == ScheduleEdgeKind::ExplicitSystem && edge.before == first && edge.after == detector;
+        return edge.kind == ScheduleEdgeKind::ExplicitRule && edge.before == first && edge.after == detector;
     }));
 }
 
@@ -2372,7 +2372,7 @@ TEST_CASE("handler graph diagnoses a cycle formed through a pair handler's bound
         "    var v: int\n"
         "trait LoopBack:\n"
         "    var v: int\n"
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -2382,13 +2382,13 @@ TEST_CASE("handler graph diagnoses a cycle formed through a pair handler's bound
         "    on tick:\n"
         "        if body.LoopBack.v > 0:\n"
         "            let z = 1\n"
-        "extern system B:\n"
+        "extern rule B:\n"
         "    on tick:\n"
         "        after:\n"
         "            DetectContacts/on tick\n"
         "        writes:\n"
         "            Forward\n"
-        "extern system C:\n"
+        "extern rule C:\n"
         "    on tick:\n"
         "        reads:\n"
         "            Forward\n"
@@ -2421,20 +2421,20 @@ TEST_CASE("handler graph separates phase barriers from cyclic event flow", "[sem
         "phase tick:\n"
         "    after:\n"
         "        fixed_tick\n"
-        "system FixedFirst:\n"
+        "rule FixedFirst:\n"
         "    on fixed_tick:\n"
         "        let value = fixed_tick.dt\n"
-        "system FixedSecond:\n"
+        "rule FixedSecond:\n"
         "    on fixed_tick:\n"
         "        let value = fixed_tick.dt\n"
-        "system TickConsumer:\n"
+        "rule TickConsumer:\n"
         "    on tick:\n"
         "        let value = 1\n"
-        "system FeedbackA:\n"
+        "rule FeedbackA:\n"
         "    on A:\n"
         "        emit B:\n"
         "            value = A.value\n"
-        "system FeedbackB:\n"
+        "rule FeedbackB:\n"
         "    on B:\n"
         "        emit A:\n"
         "            value = B.value\n");
@@ -2442,9 +2442,9 @@ TEST_CASE("handler graph separates phase barriers from cyclic event flow", "[sem
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     REQUIRE(diagnostics.empty());
 
-    const auto handler = [](const std::string& system, HandlerTriggerKind kind, const std::string& trigger) {
+    const auto handler = [](const std::string& rule, HandlerTriggerKind kind, const std::string& trigger) {
         return HandlerIdentity{
-            .system  = make_symbol_id(SymbolKind::System, "game.activation", system),
+            .rule  = make_symbol_id(SymbolKind::Rule, "game.activation", rule),
             .trigger = ResolvedHandlerTrigger{
                 .kind   = kind,
                 .symbol = make_symbol_id(kind == HandlerTriggerKind::Phase ? SymbolKind::Phase : SymbolKind::Event,

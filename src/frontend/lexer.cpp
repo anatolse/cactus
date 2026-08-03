@@ -16,7 +16,7 @@ const std::unordered_map<std::string, TokenType>& keyword_map() {
         {"enum", TokenType::ENUM},
         {"trait", TokenType::TRAIT},
         {"entity", TokenType::ENTITY},
-        {"system", TokenType::SYSTEM},
+        {"rule", TokenType::RULE},
         {"view", TokenType::VIEW},
         {"event", TokenType::EVENT},
         {"func", TokenType::FUNC},

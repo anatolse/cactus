@@ -1,5 +1,5 @@
 ## Purpose
-Define projected trait overlays: frame-local ECS facts created by handler code and consumed by later systems in the same frame.
+Define projected trait overlays: frame-local ECS facts created by handler code and consumed by later rules in the same frame.
 
 ## Requirements
 
@@ -18,7 +18,7 @@ If no target expression is supplied, the target SHALL be the current `self` enti
 
 #### Scenario: Project marker trait to self
 - **WHEN** a handler executes `project Grounded`
-- **THEN** the current entity has a projected `Grounded` trait visible to later systems in the current frame
+- **THEN** the current entity has a projected `Grounded` trait visible to later rules in the current frame
 
 #### Scenario: Project trait payload to another entity
 - **WHEN** a handler executes `project InExplosion to hit.entity: damage = 10`
@@ -41,27 +41,27 @@ Projected traits SHALL NOT create multiple per-entity facts. Multiple occurrence
 - **WHEN** two independent damage occurrences must both be processed
 - **THEN** authored code uses `emit Damage` for each occurrence rather than relying on accumulated projected traits
 
-### Requirement: Projected traits participate in system filtering
-System `filter:` and `exclude:` matching SHALL consider both durable trait state and projected trait state visible at the time the system handler is scheduled.
+### Requirement: Projected traits participate in rule filtering
+Rule `filter:` and `exclude:` matching SHALL consider both durable trait state and projected trait state visible at the time the rule handler is scheduled.
 
-`after:` ordering constraints SHALL be the author-facing mechanism for ensuring a consumer system runs after a producer system that projects traits.
+`after:` ordering constraints SHALL be the author-facing mechanism for ensuring a consumer rule runs after a producer rule that projects traits.
 
-#### Scenario: Later system filters projected trait
+#### Scenario: Later rule filters projected trait
 - **WHEN** `DetectGround` projects `GroundContact` and `ApplyGroundState` has `filter: GroundContact as ground` with `after: DetectGround`
 - **THEN** `ApplyGroundState` matches the entity during the same frame and may access `ground` fields
 
 #### Scenario: Exclude sees projected traits
-- **WHEN** an entity has a projected `Suppressed` trait and a later system has `exclude: Suppressed`
-- **THEN** that entity is skipped by the later system for the current frame
+- **WHEN** an entity has a projected `Suppressed` trait and a later rule has `exclude: Suppressed`
+- **THEN** that entity is skipped by the later rule for the current frame
 
 ### Requirement: Projected traits support VFX and render hints
-Projected traits SHALL be suitable for transient presentation facts consumed by later gameplay, VFX, render, or backend-owned systems in the same frame.
+Projected traits SHALL be suitable for transient presentation facts consumed by later gameplay, VFX, render, or backend-owned rules in the same frame.
 
 Examples include damage flash, tint override, outline, current-frame camera shake intent, impact markers, and highlight state. Long-lived effects SHALL continue to use events, spawned entities, or durable traits.
 
 #### Scenario: Damage flash projected for render consumption
 - **WHEN** gameplay projects `DamageFlash` during `tick`
-- **THEN** a later render/VFX system in the same frame can filter on `DamageFlash` and render the entity with a flash effect
+- **THEN** a later render/VFX rule in the same frame can filter on `DamageFlash` and render the entity with a flash effect
 
 #### Scenario: Long-lived VFX uses spawned entity instead
 - **WHEN** an effect needs to persist across multiple frames, such as a particle emitter or floating damage number

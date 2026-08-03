@@ -34,15 +34,15 @@ pub extern func raycast(origin: vec3, dir: vec3, max_dist: float) entity_id
 ```
 
 #### Scenario: Query function called through module path
-- **WHEN** authored code imports `std.query` and uses `std.query.exists[Boss]()` inside a system handler
+- **WHEN** authored code imports `std.query` and uses `std.query.exists[Boss]()` inside a rule handler
 - **THEN** the expression is accepted as a world query and returns `bool`
 
 #### Scenario: Exists query against one trait
-- **WHEN** authored code imports `std.query as query` and uses `query.exists[Boss]()` inside a system handler
+- **WHEN** authored code imports `std.query as query` and uses `query.exists[Boss]()` inside a rule handler
 - **THEN** the expression is accepted as a world query and returns `bool`
 
 #### Scenario: Count query with positive and negative traits
-- **WHEN** authored code uses `query.count[EnemyAI, not Dead]()` inside a system handler
+- **WHEN** authored code uses `query.count[EnemyAI, not Dead]()` inside a rule handler
 - **THEN** the expression returns the number of live entities that have `EnemyAI` and do not have `Dead`
 
 ### Requirement: Query filter brackets support positive and negative trait predicates

@@ -4,7 +4,7 @@ use player
 use shop
 
 # HUD and shop UI rendering is backend-driven: the backend reads trait fields
-# and renders them each frame. Systems below update the backend's display state.
+# and renders them each frame. Rules below update the backend's display state.
 
 const:
     HUD_PADDING = 10
@@ -15,7 +15,7 @@ const:
     HEALTH_BG_COLOR = #333333
     COIN_COLOR = #FFD700
 
-system HUDSystem:
+rule HUDSystem:
     filter:
         Health as h
         Wallet as w
@@ -24,7 +24,7 @@ system HUDSystem:
         # Backend reads h.health, h.max_health, w.coins to render the HUD.
         draw_hud(h.health, h.max_health, w.coins)
 
-system ShopUISystem:
+rule ShopUISystem:
     filter:
         Inventory as inv
         Wallet as w

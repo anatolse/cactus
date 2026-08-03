@@ -9,7 +9,7 @@ TBD - created by archiving change canonicalize-supported-examples. Update Purpos
 Maintained `.cactus` examples SHALL demonstrate syntax and semantics accepted by the current parser, semantic analyzer, and implemented backend path when that example is covered by backend compilation.
 
 #### Scenario: Example field access follows semantic rules
-- **WHEN** an example mutates or reads a trait field inside a system handler
+- **WHEN** an example mutates or reads a trait field inside a rule handler
 - **THEN** the access uses `alias.field` or `TraitName.field` according to the current semantic-analysis rules
 
 #### Scenario: Legacy dynamic trait syntax is not shown as current syntax

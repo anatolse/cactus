@@ -916,7 +916,7 @@ void upload_skinned_pose(Model& model, const ModelAnimation* clip_anim, const fl
         return;
     }
     if (clip_anim != nullptr && clip_anim->keyframeCount > 0) {
-        // Wrap defensively: authored time is wrapped by the animation system,
+        // Wrap defensively: authored time is wrapped by the animation rule,
         // but time is writable and negative frames would index out of bounds
         // inside UpdateModelAnimation.
         const auto frame_count = static_cast<float>(clip_anim->keyframeCount);

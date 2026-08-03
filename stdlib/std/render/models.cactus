@@ -4,7 +4,7 @@ use std.transform.volume as tv
 
 # ── 3D Model Rendering Traits ─────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
-# No user system is needed. An entity with WorldTransform + ModelRenderer is
+# No user rule is needed. An entity with WorldTransform + ModelRenderer is
 # drawn with every submesh bound to its embedded material from the model file.
 
 # Renders a model file (e.g. GLB) at the entity's transform position.
@@ -17,7 +17,7 @@ pub trait ModelRenderer:
     var visible: bool = true
     var cast_shadow: bool = true
 
-extern system ModelRendererSystem:
+extern rule ModelRender:
     filter:
         tv.WorldTransform
         ModelRenderer
@@ -47,7 +47,7 @@ pub trait ModelAnimator:
 
 # Advances `time` by dt * speed each update tick while `playing`, wrapping by
 # the active clip's duration so playback loops.
-extern system ModelAnimationSystem:
+extern rule ModelAnimation:
     filter:
         ModelRenderer
         ModelAnimator

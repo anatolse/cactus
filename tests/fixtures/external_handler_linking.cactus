@@ -21,7 +21,7 @@ entity Mover:
     Position
     Velocity
 
-extern system NativeMovement:
+extern rule NativeMovement:
     filter:
         Position
         Velocity

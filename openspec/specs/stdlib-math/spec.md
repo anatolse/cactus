@@ -1,7 +1,7 @@
 ## Requirements
 
 ### Requirement: std.math provides scalar math pure functions
-The `std.math` module SHALL provide commonly needed scalar math functions as pure funcs. All functions SHALL have no side effects, SHALL be callable from both pure `func` declarations and system handlers, and SHALL be backed by concrete runtime/backend-library implementations rather than declaration-only symbols.
+The `std.math` module SHALL provide commonly needed scalar math functions as pure funcs. All functions SHALL have no side effects, SHALL be callable from both pure `func` declarations and rule handlers, and SHALL be backed by concrete runtime/backend-library implementations rather than declaration-only symbols.
 
 Scalar helpers that do not require runtime state SHALL use allocation-free implementations and SHALL be declared `constexpr` and `noexcept` where the C++ operation semantics permit it.
 
@@ -107,7 +107,7 @@ Each math sub-module SHALL be independently importable without importing any oth
 
 #### Scenario: Independent import
 - **WHEN** only `use std.math.vec3 as v3` is imported (no other stdlib)
-- **THEN** all `v3.*` functions are available and usable in pure func declarations and system handlers
+- **THEN** all `v3.*` functions are available and usable in pure func declarations and rule handlers
 
 ### Requirement: std.input query extern functions are backend-backed and verified
 The `std.input` module SHALL provide concrete backend/runtime implementations for declared input query extern functions on supported backend/runtime paths. Input query functions SHALL be callable from authored code through the stdlib declarations, and backend tests SHALL verify button-state and axis-query behavior against backend runtime input state abstractions.

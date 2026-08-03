@@ -8,7 +8,7 @@ The C++ compilation model SHALL separate generated project-specific code from re
 
 - generated project glue emitted by the compiler,
 - a standard Cactus backend/runtime library for the selected supported backend,
-- a user project library when user-defined extern systems or host-side C++ extensions are required.
+- a user project library when user-defined extern rules or host-side C++ extensions are required.
 
 #### Scenario: EnTT project links generated glue with backend library
 - **WHEN** a project is compiled for the `cpp-entt` backend
@@ -38,7 +38,7 @@ Generated output SHALL NOT establish a third ownership path based on ad-hoc rege
 - **THEN** that implementation is resolved from the standard Cactus backend/runtime library
 
 #### Scenario: Project-specific extern implementation belongs to user library
-- **WHEN** generated code depends on a user-defined extern system
+- **WHEN** generated code depends on a user-defined extern rule
 - **THEN** that implementation is resolved from the user project library
 
 ### Requirement: Standard C++ executables use generated output as the entrypoint owner
@@ -67,7 +67,7 @@ Build configuration SHALL compile generated backend output containing the select
 Generated project output SHALL declare one canonical user-library callback ABI per user-defined external handler. The ABI SHALL encode trigger data, selected entity context when applicable, const reads, mutable writes, and capability-limited event, command, and effect interfaces from the handler contract.
 
 #### Scenario: Multiple external handlers link independently
-- **WHEN** one extern system handles fixed_tick and Reset
+- **WHEN** one extern rule handles fixed_tick and Reset
 - **THEN** generated output references two distinct user-library symbols and either may produce an independent link error
 
 #### Scenario: Contract change changes ABI

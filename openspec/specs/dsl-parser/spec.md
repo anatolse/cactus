@@ -1,13 +1,13 @@
 ## Requirements
 ### Requirement: Top-level declaration parsing
-The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. The first top-level declaration MUST be exactly one `module` declaration. Supported declarations after the module declaration are: `use`, `const`, `struct`, `enum`, `trait`, `entity`, `system`, `event`, `func`, `extern func`, `template`, `asset`, and `input`.
+The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. The first top-level declaration MUST be exactly one `module` declaration. Supported declarations after the module declaration are: `use`, `const`, `struct`, `enum`, `trait`, `entity`, `rule`, `event`, `func`, `extern func`, `template`, `asset`, and `input`.
 
-Note: `view`, `interface`, and legacy `unit` are not supported top-level declarations in this language version.
+Note: `view`, `interface`, and legacy `unit` are not supported top-level declarations in this language version. The legacy `system` spelling is not a keyword; it MAY appear as an identifier in any identifier position.
 
 ```ebnf
 program     = module_decl { declaration } EOF ;
 declaration = use_decl | const_block | struct_decl
-            | enum_decl | trait_decl | entity_decl | template_decl | system_decl
+            | enum_decl | trait_decl | entity_decl | template_decl | rule_decl
             | event_decl | func_decl | extern_func_decl | asset_decl | input_decl ;
 ```
 
@@ -42,6 +42,10 @@ declaration = use_decl | const_block | struct_decl
 #### Scenario: Unknown top-level keyword
 - **WHEN** the source contains an unrecognized keyword at the top level after the module declaration
 - **THEN** the parser reports an error with the source location and expected declaration types
+
+#### Scenario: system used as identifier
+- **WHEN** `system` appears as a field name or identifier inside a valid declaration
+- **THEN** the parser accepts it as an ordinary identifier without error
 
 ### Requirement: Marker trait grammar (body is optional)
 The parser SHALL accept `trait` declarations with no colon and no body. The trait body (colon + indented block) is optional:
@@ -149,7 +153,7 @@ When the optional `from dotted_name` clause is present, body entries SHALL be in
 - **THEN** the parser records the template reference as the dotted name `gems.BlueGem`
 
 #### Scenario: Entity declarations are top-level only
-- **WHEN** `entity Gem1 from BlueGem:` appears inside a system handler
+- **WHEN** `entity Gem1 from BlueGem:` appears inside a rule handler
 - **THEN** the parser reports that entity declarations are only valid at the top level
 
 ### Requirement: Legacy unit declarations rejected
@@ -160,13 +164,13 @@ The parser SHALL reject legacy `unit` declarations. Authors SHALL use `entity` d
 - **WHEN** source contains `unit Player:` at the top level
 - **THEN** the parser reports that `unit` has been renamed to `entity`
 
-### Requirement: `filter:` and `exclude:` both optional in system grammar
-Both `filter:` and `exclude:` are optional on system declarations. The parser SHALL accept systems with `filter:` only, `exclude:` only, both, or neither. The old bracket-list syntax `filter: [A, B, C]` is rejected.
+### Requirement: `filter:` and `exclude:` both optional in rule grammar
+Both `filter:` and `exclude:` are optional on rule declarations. The parser SHALL accept rules with `filter:` only, `exclude:` only, both, or neither. The old bracket-list syntax `filter: [A, B, C]` is rejected.
 
 Each `filter:` entry supports an optional `as IDENTIFIER` alias for field access. Updated EBNF:
 
 ```ebnf
-system_decl    = "system" IDENTIFIER ":" NEWLINE INDENT
+rule_decl      = "rule" IDENTIFIER ":" NEWLINE INDENT
                  [ filter_clause ]
                  [ exclude_clause ]
                  { event_handler }
@@ -183,32 +187,32 @@ exclude_clause = "exclude" ":" NEWLINE INDENT
                  DEDENT ;
 ```
 
-#### Scenario: System with filter only parsed correctly
-- **WHEN** a system has `filter:` but no `exclude:`
-- **THEN** the parser produces a `SystemDecl` with `filter` list and empty `exclude` list
+#### Scenario: Rule with filter only parsed correctly
+- **WHEN** a rule has `filter:` but no `exclude:`
+- **THEN** the parser produces a `RuleDecl` with `filter` list and empty `exclude` list
 
-#### Scenario: System with exclude only parsed correctly
-- **WHEN** a system has `exclude:` but no `filter:`
-- **THEN** the parser produces a `SystemDecl` with empty `filter` list and populated `exclude` list
+#### Scenario: Rule with exclude only parsed correctly
+- **WHEN** a rule has `exclude:` but no `filter:`
+- **THEN** the parser produces a `RuleDecl` with empty `filter` list and populated `exclude` list
 
-#### Scenario: System with no filter or exclude parsed correctly
-- **WHEN** a system has neither `filter:` nor `exclude:`
-- **THEN** the parser produces a `SystemDecl` with empty `filter` and `exclude` lists (match-all)
+#### Scenario: Rule with no filter or exclude parsed correctly
+- **WHEN** a rule has neither `filter:` nor `exclude:`
+- **THEN** the parser produces a `RuleDecl` with empty `filter` and `exclude` lists (match-all)
 
 #### Scenario: Old bracket syntax produces parse error
 - **WHEN** source contains `filter: [Position, EnemyAI]`
 - **THEN** the parser SHALL report an error: "unexpected '['; use indented block syntax for filter"
 
 #### Scenario: Filter entry with as alias parsed
-- **WHEN** a system has a filter entry `Position as pos`
+- **WHEN** a rule has a filter entry `Position as pos`
 - **THEN** the parser produces a `FilterEntry` with `trait_name = "Position"` and `alias = "pos"`
 
 #### Scenario: Filter entry without alias parsed
-- **WHEN** a system has a filter entry `Position` with no `as` clause
+- **WHEN** a rule has a filter entry `Position` with no `as` clause
 - **THEN** the parser produces a `FilterEntry` with `trait_name = "Position"` and `alias = nil`
 
 #### Scenario: Filter entry with qualified name and alias
-- **WHEN** a system has a filter entry `phys.Body as body`
+- **WHEN** a rule has a filter entry `phys.Body as body`
 - **THEN** the parser produces a `FilterEntry` with `trait_name = "phys.Body"` and `alias = "body"`
 
 ### Requirement: `let` and `var` local variable declaration statements
@@ -352,43 +356,43 @@ event_name = "tick" | "fixed_tick" | "late_tick"
 The handler no longer carries a parameter list node; instead, `EventHandlerNode` has an optional `alias: string` field.
 
 #### Scenario: on tick handler parsed without parameters
-- **WHEN** `on tick:` appears in a system body
+- **WHEN** `on tick:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "tick"`, no params, and `alias = nil`
 
 #### Scenario: on tick with alias parsed
-- **WHEN** `on tick as t:` appears in a system body
+- **WHEN** `on tick as t:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "tick"` and `alias = "t"`
 
 #### Scenario: on fixed_tick handler parsed without parameters
-- **WHEN** `on fixed_tick:` appears in a system body
+- **WHEN** `on fixed_tick:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "fixed_tick"` and `alias = nil`
 
 #### Scenario: on late_tick handler parsed
-- **WHEN** `on late_tick:` appears in a system body
+- **WHEN** `on late_tick:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "late_tick"` and `alias = nil`
 
 #### Scenario: on spawn handler parsed
-- **WHEN** `on spawn:` appears in a system body
+- **WHEN** `on spawn:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "spawn"` and `alias = nil`
 
 #### Scenario: on destroy handler parsed
-- **WHEN** `on destroy:` appears in a system body
+- **WHEN** `on destroy:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "destroy"` and `alias = nil`
 
 #### Scenario: on load handler parsed
-- **WHEN** `on load:` appears in a system body
+- **WHEN** `on load:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "load"` and `alias = nil`
 
 #### Scenario: on unload handler parsed
-- **WHEN** `on unload:` appears in a system body
+- **WHEN** `on unload:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "unload"` and `alias = nil`
 
 #### Scenario: on input() handler parsed (no parameters)
-- **WHEN** `on input:` appears in a system body
+- **WHEN** `on input:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "input"` and `alias = nil`
 
 #### Scenario: User event handler with alias parsed
-- **WHEN** `on PlayerDamaged as dmg:` appears in a system body
+- **WHEN** `on PlayerDamaged as dmg:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "PlayerDamaged"` and `alias = "dmg"`
 
 ### Requirement: Marker event declaration (body is optional)
@@ -557,14 +561,14 @@ trait_decl      = [ "pub" ] "trait" IDENTIFIER
 
 #### Scenario: Event handler inside trait body rejected
 - **WHEN** a trait body contains `on tick(dt: float):`
-- **THEN** the parser reports an error: "event handlers are not allowed in trait bodies; declare a system instead"
+- **THEN** the parser reports an error: "event handlers are not allowed in trait bodies; declare a rule instead"
 
 #### Scenario: Func inside trait body rejected
 - **WHEN** a trait body contains `func helper() float:`
 - **THEN** the parser reports an error: "func declarations are not allowed in trait bodies; use a top-level func instead"
 
-### Requirement: `after:` clause parsing in system declarations
-The parser SHALL parse an optional `after:` clause inside a system body using the same indented block structure as `filter:` and `exclude:`. The `after:` clause MUST appear after any `filter:` and `exclude:` blocks and before the first event handler.
+### Requirement: `after:` clause parsing in rule declarations
+The parser SHALL parse an optional `after:` clause inside a rule body using the same indented block structure as `filter:` and `exclude:`. The `after:` clause MUST appear after any `filter:` and `exclude:` blocks and before the first event handler.
 
 ```ebnf
 after_clause    = "after" ":" NEWLINE INDENT
@@ -575,16 +579,16 @@ after_clause    = "after" ":" NEWLINE INDENT
 The keyword `after` is added to the lexer keyword set with token type `AFTER`.
 
 #### Scenario: `after:` with single entry parsed correctly
-- **WHEN** a system body contains an `after:` block with one indented system name
-- **THEN** the parser populates `SystemNode.after_systems` with that one name
+- **WHEN** a rule body contains an `after:` block with one indented rule name
+- **THEN** the parser populates `RuleNode.after_rules` with that one name
 
 #### Scenario: `after:` with multiple entries parsed correctly
-- **WHEN** a system body contains an `after:` block with `SystemA` and `SystemB` on separate lines
-- **THEN** the parser populates `SystemNode.after_systems` with `["SystemA", "SystemB"]`
+- **WHEN** a rule body contains an `after:` block with `RuleA` and `RuleB` on separate lines
+- **THEN** the parser populates `RuleNode.after_rules` with `["RuleA", "RuleB"]`
 
 #### Scenario: Empty `after:` block is a parse error
-- **WHEN** a system body contains `after:` with an empty indented block
-- **THEN** the parser reports an error: "after: block must contain at least one system name"
+- **WHEN** a rule body contains `after:` with an empty indented block
+- **THEN** the parser reports an error: "after: block must contain at least one rule name"
 
 ### Requirement: Optional `as` alias in `apply:` entries of units and templates
 **Reason**: Archetype declarations no longer use `apply:` entries. Trait ownership is expressed structurally through nested trait blocks, so archetype-local aliases are unnecessary.
@@ -594,11 +598,11 @@ The keyword `after` is added to the lexer keyword set with token type `AFTER`.
 **Reason**: `config:` blocks and flat parenthesized spawn override arguments are removed. Nested trait blocks make field ownership explicit without dotted keys.
 **Migration**: Move each field assignment under its owning trait block in the unit/template or spawn body.
 
-### Requirement: `order by:` clause parsing in system declarations
-The parser SHALL recognize an optional `order by:` block in system declarations, positioned between the `filter:`/`exclude:` clauses and the event handler list. The `order by:` block contains one or more sort key lines, each consisting of a dotted alias-field expression followed by an optional direction keyword.
+### Requirement: `order by:` clause parsing in rule declarations
+The parser SHALL recognize an optional `order by:` block in rule declarations, positioned between the `filter:`/`exclude:` clauses and the event handler list. The `order by:` block contains one or more sort key lines, each consisting of a dotted alias-field expression followed by an optional direction keyword.
 
 ```ebnf
-system_decl     = "system" IDENTIFIER ":" INDENT
+rule_decl       = "rule" IDENTIFIER ":" INDENT
                   [filter_clause]
                   [exclude_clause]
                   [order_by_clause]
@@ -612,42 +616,42 @@ sort_key        = IDENTIFIER "." IDENTIFIER ["asc" | "desc"] NEWLINE ;
 `order` and `by` are contextual keywords in this production. `asc` and `desc` are contextual direction keywords.
 
 #### Scenario: order by clause with single key parsed
-- **WHEN** a system contains `order by:` with one indented `s.layer asc` line
-- **THEN** the parser produces a `SystemNode` with `order_by = [{alias="s", field="layer", descending=false}]`
+- **WHEN** a rule contains `order by:` with one indented `s.layer asc` line
+- **THEN** the parser produces a `RuleNode` with `order_by = [{alias="s", field="layer", descending=false}]`
 
 #### Scenario: order by clause with multiple keys parsed
-- **WHEN** a system contains `order by:` with `s.layer` then `p.pos.y desc`
+- **WHEN** a rule contains `order by:` with `s.layer` then `p.pos.y desc`
 - **THEN** the parser produces `order_by` with two entries: `{alias="s", field="layer", descending=false}` and `{alias="p", field="pos.y", descending=true}`
 
 #### Scenario: order by with default asc direction
 - **WHEN** a sort key line has no direction keyword
 - **THEN** the parser produces a `SortKey` with `descending = false`
 
-#### Scenario: system without order by has empty order_by
-- **WHEN** a system declaration has no `order by:` block
-- **THEN** `SystemNode.order_by` is an empty vector
+#### Scenario: rule without order by has empty order_by
+- **WHEN** a rule declaration has no `order by:` block
+- **THEN** `RuleNode.order_by` is an empty vector
 
-### Requirement: Pair relation grammar in regular systems
-The parser SHALL recognize contextual `pairs:` syntax in the system-clause position and SHALL construct two ordered pair-binding nodes, each containing a binding identifier and one or more filter-style trait entries.
+### Requirement: Pair relation grammar in regular rules
+The parser SHALL recognize contextual `pairs:` syntax in the rule-clause position and SHALL construct two ordered pair-binding nodes, each containing a binding identifier and one or more filter-style trait entries.
 
 ```ebnf
 pair_clause  = "pairs" ":" NEWLINE INDENT pair_binding pair_binding DEDENT ;
 pair_binding = IDENTIFIER ":" NEWLINE INDENT { filter_entry } DEDENT ;
 ```
 
-The spelling `pairs` SHALL remain an ordinary identifier outside this system-clause context.
+The spelling `pairs` SHALL remain an ordinary identifier outside this rule-clause context.
 
 #### Scenario: Pair bindings and aliases are preserved
-- **WHEN** a system declares `body:` with `tf.WorldTransform as transform` and `wall:` with `Collider`
+- **WHEN** a rule declares `body:` with `tf.WorldTransform as transform` and `wall:` with `Collider`
 - **THEN** the AST preserves binding order, qualified trait spellings, aliases, and source locations
 
 #### Scenario: Pairs remains a contextual keyword
-- **WHEN** `pairs` appears as a valid local identifier outside the system-clause position
+- **WHEN** `pairs` appears as a valid local identifier outside the rule-clause position
 - **THEN** it is tokenized and parsed as an identifier
 
-#### Scenario: Pair clause on external system is rejected
-- **WHEN** an `extern system` body contains `pairs:`
-- **THEN** parsing or semantic validation reports that pair domains are regular-system-only
+#### Scenario: Pair clause on external rule is rejected
+- **WHEN** an `extern rule` body contains `pairs:`
+- **THEN** parsing or semantic validation reports that pair domains are regular-rule-only
 
 ### Requirement: Statement-level `match` parsing
 The parser SHALL recognize `match expr ":"` at statement position as a `TraitMatchStmt`. This is distinct from the existing `MatchExpr` (expression-level). The trait match arms use `IDENTIFIER ["as" IDENTIFIER] "=>"` syntax; the wildcard arm uses `"_" "=>"`.
@@ -740,7 +744,7 @@ The parser MUST implement panic-mode synchronization that skips tokens until rea
 
 #### Scenario: Synchronization to declaration keyword
 - **WHEN** an error occurs in a declaration
-- **THEN** the parser SHALL skip until finding a declaration keyword (TRAIT, SYSTEM, FUNC, STRUCT, ENUM, MODULE, USE, CONST, EVENT, ENTITY, TEMPLATE, VIEW, INTERFACE, ASSET, INPUT)
+- **THEN** the parser SHALL skip until finding a declaration keyword (TRAIT, RULE, FUNC, STRUCT, ENUM, MODULE, USE, CONST, EVENT, ENTITY, TEMPLATE, VIEW, INTERFACE, ASSET, INPUT)
 
 #### Scenario: Synchronization to DEDENT boundary
 - **WHEN** an error occurs inside an indented block
@@ -814,7 +818,7 @@ The parser SHALL accept `[pub] extern event` and `phase` as module-scope declara
 - **THEN** the AST preserves event fields, phase dependencies, cadence expressions, limits, and field initializers
 
 ### Requirement: External handler contract parsing
-The parser SHALL accept `on Trigger:` blocks inside `extern system` declarations and parse their `after`, `reads`, `writes`, `emits`, `commands`, and `effects` clauses. It SHALL accept a leading handler `after:` block in a regular handler before executable statements.
+The parser SHALL accept `on Trigger:` blocks inside `extern rule` declarations and parse their `after`, `reads`, `writes`, `emits`, `commands`, and `effects` clauses. It SHALL accept a leading handler `after:` block in a regular handler before executable statements.
 
 #### Scenario: External render handler parses
 - **WHEN** SpriteRenderer declares `on render` with reads and graphics effects

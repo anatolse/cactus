@@ -8,7 +8,7 @@ trait Velocity:
     var vx: float = 0.0
     var vy: float = 0.0
 
-system MoveSystem:
+rule MoveSystem:
     filter:
         Position
         Velocity

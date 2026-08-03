@@ -119,7 +119,7 @@ The `std.input` module SHALL define the following public functions queryable fro
 - **THEN** the type system resolves the return type as `vec2`
 
 #### Scenario: Calling query functions outside std.input import
-- **WHEN** a system calls `input.pressed(Jump)` without `use std.input`
+- **WHEN** a rule calls `input.pressed(Jump)` without `use std.input`
 - **THEN** the semantic analyzer reports an undeclared identifier error for `input`
 
 ### Requirement: Input declarations participate in module visibility

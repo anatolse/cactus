@@ -14,7 +14,7 @@ trait DamageFlash:
 pub entity Probe:
     ColliderProbe
 
-system DetectContacts:
+rule DetectContacts:
     filter:
         ColliderProbe
 
@@ -24,7 +24,7 @@ system DetectContacts:
             project DamageFlash to hit.other:
                 intensity = 1.0
 
-system RenderDamageFlash:
+rule RenderDamageFlash:
     filter:
         DamageFlash as flash
     after:

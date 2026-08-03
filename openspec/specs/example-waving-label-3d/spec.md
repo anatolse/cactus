@@ -10,7 +10,7 @@ The example SHALL be a single `.cactus` file in `examples/waving-label-3d/` that
 
 #### Scenario: Example compiles without errors
 - **WHEN** the Cactus compiler processes `examples/waving-label-3d/waving_label_3d.cactus` with the cpp-entt backend
-- **THEN** compilation succeeds with no errors or unresolved extern systems
+- **THEN** compilation succeeds with no errors or unresolved extern rules
 
 #### Scenario: Example is registered as a CMake build target
 - **WHEN** the project CMake configuration is processed
@@ -32,7 +32,7 @@ The example SHALL use `std.text.format` with a `"{:02}:{:02}"` or equivalent for
 
 #### Scenario: text field is updated with formatted elapsed time each tick
 - **WHEN** a tick event fires in the example
-- **THEN** a system reads accumulated elapsed time, computes integer minutes and seconds, and assigns the formatted string to `TextLabel.text`
+- **THEN** a rule reads accumulated elapsed time, computes integer minutes and seconds, and assigns the formatted string to `TextLabel.text`
 
 ---
 
@@ -40,7 +40,7 @@ The example SHALL use `std.text.format` with a `"{:02}:{:02}"` or equivalent for
 The example SHALL use `std.math.quat.from_axis_angle` on at least two distinct axes (e.g., Y and X) and `std.math.quat.multiply` to compose them, producing a compound oscillating rotation assigned to `WorldTransform.rotation`. The result SHALL be that the text plane is rendered at orientations non-orthogonal to the view direction throughout the animation cycle.
 
 #### Scenario: Rotation uses compound quat from two axes
-- **WHEN** the wave system runs
+- **WHEN** the wave rule runs
 - **THEN** it calls `quat.from_axis_angle` at least twice with different axis vectors and combines the results with `quat.multiply` before assigning to `WorldTransform.rotation`
 
 #### Scenario: Text plane passes through non-orthogonal orientations during animation

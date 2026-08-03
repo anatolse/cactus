@@ -127,7 +127,7 @@ void submit_model(Vector3 position,
 [[nodiscard]] std::string model_animation_name(AssetHandle model, int clip) noexcept;
 
 /// Clip duration in seconds (keyframes / glTF sampling rate); 0 for a bad
-/// handle or index. The generated ModelAnimationSystem wraps time by this.
+/// handle or index. The generated ModelAnimation rule wraps time by this.
 [[nodiscard]] float model_animation_duration(AssetHandle model, int clip) noexcept;
 
 /// Bind-pose AABB extents (max − min per axis) of the model. Triggers the

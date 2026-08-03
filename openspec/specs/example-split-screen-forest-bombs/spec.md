@@ -56,7 +56,7 @@ The split-screen forest bombs example SHALL demonstrate low-polygon sphere bombs
 
 #### Scenario: Bomb uses authored projectile motion
 - **WHEN** a player throws a bomb in the example
-- **THEN** the example spawns an orange bomb entity with velocity/gravity state that advances through ordinary gameplay systems
+- **THEN** the example spawns an orange bomb entity with velocity/gravity state that advances through ordinary gameplay rules
 
 #### Scenario: Bomb initial velocity follows player facing direction
 - **WHEN** a player throws a bomb

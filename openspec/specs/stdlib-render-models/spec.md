@@ -1,15 +1,15 @@
 ## Purpose
 
-Define the stdlib `std.render.models` capability: the `ModelRenderer` trait and its backend-owned render system for drawing multi-submesh model assets with their embedded materials, including diagnostic behavior for missing/failed models and test observability.
+Define the stdlib `std.render.models` capability: the `ModelRenderer` trait and its backend-owned render rule for drawing multi-submesh model assets with their embedded materials, including diagnostic behavior for missing/failed models and test observability.
 
 ## Requirements
 
 ### Requirement: Model rendering traits are provided by std.render.models
-The stdlib SHALL provide a module `std.render.models` containing a passive `pub trait ModelRenderer` with fields `let model: model_id`, `var visible: bool = true`, and `var cast_shadow: bool = true`, and an `extern system ModelRendererSystem` filtered on `std.transform.volume.WorldTransform` and `ModelRenderer`. The trait SHALL NOT contain a material field; materials come from the model file.
+The stdlib SHALL provide a module `std.render.models` containing a passive `pub trait ModelRenderer` with fields `let model: model_id`, `var visible: bool = true`, and `var cast_shadow: bool = true`, and an `extern rule ModelRender` filtered on `std.transform.volume.WorldTransform` and `ModelRenderer`. The trait SHALL NOT contain a material field; materials come from the model file.
 
 #### Scenario: Entity with WorldTransform and ModelRenderer is drawn
 - **WHEN** an entity has `std.transform.volume.WorldTransform` and `ModelRenderer` with a valid `model` handle and `visible = true`
-- **THEN** the backend render system submits the model for drawing at the entity's world transform without any user-authored system
+- **THEN** the backend render rule submits the model for drawing at the entity's world transform without any user-authored rule
 
 #### Scenario: Invisible model is skipped
 - **WHEN** an entity's `ModelRenderer.visible` is `false`
@@ -59,8 +59,8 @@ The `std.render.models` module SHALL provide a `pub trait ModelAnimator` with fi
 - **WHEN** an entity has `ModelRenderer` for a skinned model but no `ModelAnimator`
 - **THEN** the model is drawn at its bind pose
 
-### Requirement: ModelAnimationSystem advances animation time
-The `std.render.models` module SHALL declare `extern system ModelAnimationSystem` filtered on `ModelRenderer` and `ModelAnimator`, recognized by the backend as an update-phase system. Each update tick, for entities with `playing = true`, the backend SHALL advance `time` by `dt * speed` and wrap it into `[0, duration)` of the active clip, where `duration = keyframeCount / GLTF sampling rate` of that clip. When `playing = false`, `time` SHALL not be modified, freezing the pose. Authored writes to `clip`, `speed`, and `time` SHALL take effect the same frame.
+### Requirement: ModelAnimation advances animation time
+The `std.render.models` module SHALL declare `extern rule ModelAnimation` filtered on `ModelRenderer` and `ModelAnimator`, recognized by the backend as an update-phase rule. Each update tick, for entities with `playing = true`, the backend SHALL advance `time` by `dt * speed` and wrap it into `[0, duration)` of the active clip, where `duration = keyframeCount / GLTF sampling rate` of that clip. When `playing = false`, `time` SHALL not be modified, freezing the pose. Authored writes to `clip`, `speed`, and `time` SHALL take effect the same frame.
 
 #### Scenario: Playing animator advances and loops
 - **WHEN** an entity's `ModelAnimator` has `playing = true` and `time` reaches the end of the active clip
@@ -112,7 +112,7 @@ The `std.render.models` module SHALL provide `pub extern func animation_count(m:
 - **THEN** it returns `""`
 
 #### Scenario: Introspection before first render
-- **WHEN** `animation_count` is called in a system tick before the model has ever been drawn
+- **WHEN** `animation_count` is called in a rule tick before the model has ever been drawn
 - **THEN** the model loads lazily and the correct count is returned
 
 ### Requirement: Invalid animation state degrades to bind pose with diagnostic

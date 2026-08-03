@@ -90,7 +90,7 @@ func can_afford(coins: int, price: int) bool:
 func calculate_total(items: list[ShopItem]) int:
     return items.map(i => i.price).reduce(0, acc, p => acc + p)
 
-system ShopInteraction:
+rule ShopInteraction:
     filter:
         Position as p
         ShopKeeper as shop
@@ -104,7 +104,7 @@ system ShopInteraction:
                 emit ShopOpened:
                     shop_entity = get_self_entity()
 
-system PurchaseSystem:
+rule PurchaseSystem:
     filter:
         Wallet as w
         Inventory as inv

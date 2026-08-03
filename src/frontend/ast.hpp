@@ -412,12 +412,12 @@ struct LocatedName {
 };
 
 struct HandlerReferenceNode {
-    LocatedName system;
+    LocatedName rule;
     LocatedName trigger;
     SourceLocation location;
 
     [[nodiscard]] std::string spelling() const {
-        return system.spelling + "/on " + trigger.spelling;
+        return rule.spelling + "/on " + trigger.spelling;
     }
 
     [[nodiscard]] std::string debug_string() const {
@@ -647,37 +647,37 @@ struct PairBindingNode {
     SourceLocation location;
 };
 
-// `pairs:` block on a regular system — exactly two bindings, in source order.
-// Mutually exclusive with filter/exclude/order_by on the same system.
+// `pairs:` block on a regular rule — exactly two bindings, in source order.
+// Mutually exclusive with filter/exclude/order_by on the same rule.
 struct PairClause {
     std::vector<PairBindingNode> bindings;  // exactly two; validated by the parser
     SourceLocation location;
 };
 
-struct SystemNode {
+struct RuleNode {
     std::string name;
     bool is_stdlib = false;
-    std::optional<SymbolId> resolved_system_id;       // set by semantic analysis; source spelling is preserved
-    std::vector<SymbolId> resolved_after_system_ids;  // set by semantic analysis; parallel to after_systems
-    FilterClause filter;                              // empty entries = no filter (match all)
-    FilterClause exclude;                             // empty entries = no exclude
-    std::optional<PairClause> pairs;                  // set when this system uses a binary pair domain
+    std::optional<SymbolId> resolved_rule_id;       // set by semantic analysis; source spelling is preserved
+    std::vector<SymbolId> resolved_after_rule_ids;  // set by semantic analysis; parallel to after_rules
+    FilterClause filter;                            // empty entries = no filter (match all)
+    FilterClause exclude;                           // empty entries = no exclude
+    std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
     std::vector<SortKey> order_by;
-    std::vector<std::string> after_systems;  // explicit ordering: this system runs after these
-    std::optional<std::string> target;       // "cpu" or "gpu"
+    std::vector<std::string> after_rules;  // explicit ordering: this rule runs after these
+    std::optional<std::string> target;     // "cpu" or "gpu"
     std::vector<EventHandlerNode> handlers;
     SourceLocation location;
 };
 
-struct ExternSystemNode {
+struct ExternRuleNode {
     std::string name;
     bool is_stdlib = false;
-    std::optional<SymbolId> resolved_system_id;       // set by semantic analysis; source spelling is preserved
-    std::vector<SymbolId> resolved_after_system_ids;  // set by semantic analysis; parallel to after_systems
+    std::optional<SymbolId> resolved_rule_id;       // set by semantic analysis; source spelling is preserved
+    std::vector<SymbolId> resolved_after_rule_ids;  // set by semantic analysis; parallel to after_rules
     FilterClause filter;
     FilterClause exclude;
     std::vector<SortKey> order_by;
-    std::vector<std::string> after_systems;
+    std::vector<std::string> after_rules;
     std::optional<std::string> target;
     std::vector<ExternHandlerNode> handlers;
     SourceLocation location;
@@ -794,8 +794,8 @@ using Declaration = std::variant<ModuleNode,
                                  TraitNode,
                                  EntityNode,
                                  TemplateNode,
-                                 SystemNode,
-                                 ExternSystemNode,
+                                 RuleNode,
+                                 ExternRuleNode,
                                  ViewNode,
                                  EventNode,
                                  PhaseNode,

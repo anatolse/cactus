@@ -32,7 +32,7 @@ The cpp-entt backend SHALL consume resolved typed symbol identities for all modu
 - **THEN** cpp-entt selects the volume raycast lowering from that resolved function identity
 
 #### Scenario: User declaration with stdlib-like local name does not bind stdlib behavior
-- **WHEN** module `game.custom` declares `trait WorldTransform` and uses it in a system
+- **WHEN** module `game.custom` declares `trait WorldTransform` and uses it in a rule
 - **THEN** cpp-entt treats it as `game.custom.WorldTransform` and does not apply stdlib transform behavior unless the resolved symbol identity is the stdlib symbol
 
 ### Requirement: Registry-based system generation
@@ -41,11 +41,11 @@ The backend SHALL generate system functions that iterate over the EnTT registry 
 Projected traits SHALL participate in this same registry-based filtering by being materialized as registry components during the current frame.
 
 #### Scenario: System with filter
-- **WHEN** a system has `filter:` listing `Position` and `Velocity`, and an `on tick:` handler
-- **THEN** the backend generates a function `void SystemName_tick(entt::registry& registry, const TickEvent& tick)` that iterates matching entities through an EnTT view and binds `Position` and `Velocity` component references for the handler body
+- **WHEN** a rule has `filter:` listing `Position` and `Velocity`, and an `on tick:` handler
+- **THEN** the backend generates a function `void RuleName_tick(entt::registry& registry, const TickEvent& tick)` that iterates matching entities through an EnTT view and binds `Position` and `Velocity` component references for the handler body
 
 #### Scenario: Non-matching entity does not terminate handler
-- **WHEN** multiple live entities exist and the first live entity does not satisfy a system filter
+- **WHEN** multiple live entities exist and the first live entity does not satisfy a rule filter
 - **THEN** generated system filtering continues considering later entities rather than returning from the entire handler
 
 #### Scenario: on tick handler body accesses tick.dt
@@ -61,14 +61,14 @@ Projected traits SHALL participate in this same registry-based filtering by bein
 - **THEN** the generated handler function receives `const PlayerDamagedEvent& PlayerDamaged` and the expression accesses `.amount`
 
 #### Scenario: Marker lifecycle event handler receives empty-struct parameter
-- **WHEN** a system has `on spawn:` handler (no fields)
-- **THEN** the generated handler function signature is `void SystemName_spawn(entt::registry& registry, const SpawnEvent& spawn)` with an empty `SpawnEvent` struct
+- **WHEN** a rule has `on spawn:` handler (no fields)
+- **THEN** the generated handler function signature is `void RuleName_spawn(entt::registry& registry, const SpawnEvent& spawn)` with an empty `SpawnEvent` struct
 
 ### Requirement: EnTT dispatcher event generation
 The backend SHALL generate event structs and configure `entt::dispatcher` for event routing. `emit` statements SHALL map to `dispatcher.trigger<EventType>(...)`.
 
 #### Scenario: Event emit
-- **WHEN** a system handler contains `emit Damage(amount: 10)`
+- **WHEN** a rule handler contains `emit Damage(amount: 10)`
 - **THEN** the backend generates `dispatcher.trigger<DamageEvent>(DamageEvent{10});`
 
 #### Scenario: Event handler registration
@@ -203,49 +203,49 @@ The cpp-entt backend SHALL NOT emit a C++ function definition for any `FuncNode`
 - **WHEN** the program declares `pub extern func lerp(a, b, t: float) float`
 - **THEN** the generated C++ does NOT contain a definition `float lerp(float a, float b, float t) { ... }`
 
-### Requirement: Stdlib extern system codegen — known patterns
-The EnTT backend SHALL treat recognized stdlib `extern system` declarations as backend-library-provided behavior. When an `extern system`'s filter contains a recognized stdlib trait pattern, generated project output SHALL bind to the corresponding implementation in the standard Cactus EnTT backend/runtime library rather than emitting a project-local inline implementation body.
+### Requirement: Stdlib extern rule codegen — known patterns
+The EnTT backend SHALL treat recognized stdlib `extern rule` declarations as backend-library-provided behavior. When an `extern rule`'s filter contains a recognized stdlib trait pattern, generated project output SHALL bind to the corresponding implementation in the standard Cactus EnTT backend/runtime library rather than emitting a project-local inline implementation body.
 
 The recognized stdlib patterns and their generated implementations remain:
 
-| Extern system filter includes | Generated implementation |
+| Extern rule filter includes | Generated implementation |
 |---|---|
 | `std.render.sprites.Renderer` + `std.transform.flat.WorldTransform` | Batched 2D sprite renderer using world-space transform data |
 | `std.render.sprites.AnimatedSprite` | Sprite animation frame advancer (increments `frame` based on `fps` and dt) |
 | `std.render.meshes.Renderer` + `std.transform.volume.WorldTransform` | 3D mesh render submission |
 | `std.render.meshes.PointLight` + `std.transform.volume.WorldTransform` | Point light registration |
 | `std.render.meshes.DirectionalLight` | Directional light registration |
-| hierarchy propagation extern systems over `Parent` + `LocalTransform` + `WorldTransform` | Hierarchy-aware transform propagation |
-| hierarchy cascade-delete extern systems over `Parent` | Recursive descendant deletion |
+| hierarchy propagation extern rules over `Parent` + `LocalTransform` + `WorldTransform` | Hierarchy-aware transform propagation |
+| hierarchy cascade-delete extern rules over `Parent` | Recursive descendant deletion |
 
 The backend recognizes these patterns by the **fully qualified trait names** (module path + trait name) from the filter clause.
 
 #### Scenario: Stdlib SpriteRenderer binds to backend library implementation
-- **WHEN** `extern system SpriteRenderer: filter: Position as pos, Renderer as r` is compiled and the filter matches a recognized stdlib pattern
+- **WHEN** `extern rule SpriteRenderer: filter: Position as pos, Renderer as r` is compiled and the filter matches a recognized stdlib pattern
 - **THEN** the generated EnTT project output binds to the standard Cactus EnTT backend/runtime library implementation for sprite rendering rather than emitting a project-local renderer body
 
 #### Scenario: Stdlib MeshRenderer binds to backend library implementation
-- **WHEN** a program importing `std.render.meshes` is compiled with `cpp-entt` and the recognized `MeshRenderer` extern system filter matches fully qualified `std.transform.volume.WorldTransform` plus `std.render.meshes.Renderer`
+- **WHEN** a program importing `std.render.meshes` is compiled with `cpp-entt` and the recognized `MeshRenderer` extern rule filter matches fully qualified `std.transform.volume.WorldTransform` plus `std.render.meshes.Renderer`
 - **THEN** the generated EnTT project output binds to the standard cpp-entt mesh-submission implementation rather than generic user-extern callback scaffolding
 - **AND** it does not declare or require a user-provided `MeshRenderer_update(...)` implementation
 
 #### Scenario: hierarchy propagation binds to backend library implementation
-- **WHEN** the stdlib propagation extern system references `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
+- **WHEN** the stdlib propagation extern rule references `Parent`, `std.transform.flat.LocalTransform`, and `std.transform.flat.WorldTransform`
 - **THEN** the generated EnTT project output binds to the standard Cactus EnTT backend/runtime library implementation for hierarchy propagation
 
 #### Scenario: Non-stdlib traits do not use backend-library stdlib binding
-- **WHEN** `extern system MySystem: filter: Position as pos, MyCustomTrait as c` is compiled and `MyCustomTrait` is user-defined
-- **THEN** the backend does not treat the system as a stdlib backend-library implementation
+- **WHEN** `extern rule MyRule: filter: Position as pos, MyCustomTrait as c` is compiled and `MyCustomTrait` is user-defined
+- **THEN** the backend does not treat the rule as a stdlib backend-library implementation
 
 ### Requirement: EnTT backend runtime adapters realize sprite and mesh rendering through Raylib-backed frame passes
-The cpp-entt backend SHALL upgrade recognized stdlib sprite and mesh render-system bindings from submission-only/debug-accounting behavior to real Raylib-backed runtime rendering behavior. Recognized `SpriteRenderer` and `MeshRenderer` output SHALL flow through backend-owned render-frame passes rather than stopping at asset validation and debug counters.
+The cpp-entt backend SHALL upgrade recognized stdlib sprite and mesh render-rule bindings from submission-only/debug-accounting behavior to real Raylib-backed runtime rendering behavior. Recognized `SpriteRenderer` and `MeshRenderer` output SHALL flow through backend-owned render-frame passes rather than stopping at asset validation and debug counters.
 
 #### Scenario: Sprite renderer participates in backend-owned 2D Raylib rendering
-- **WHEN** a program importing `std.render.sprites` is compiled with `cpp-entt` and the recognized `SpriteRenderer` extern system runs for a visible entity with a resolvable texture asset
+- **WHEN** a program importing `std.render.sprites` is compiled with `cpp-entt` and the recognized `SpriteRenderer` extern rule runs for a visible entity with a resolvable texture asset
 - **THEN** the generated/runtime path queues or submits sprite draw work into the standard cpp-entt Raylib-backed 2D render pass
 
 #### Scenario: Mesh renderer participates in backend-owned 3D Raylib rendering
-- **WHEN** a program importing `std.render.meshes` is compiled with `cpp-entt` and the recognized `MeshRenderer` extern system runs for a visible entity with resolvable mesh/material assets
+- **WHEN** a program importing `std.render.meshes` is compiled with `cpp-entt` and the recognized `MeshRenderer` extern rule runs for a visible entity with resolvable mesh/material assets
 - **THEN** the generated/runtime path queues or submits mesh draw work into the standard cpp-entt Raylib-backed 3D render pass
 
 ### Requirement: EnTT render runtime provides deterministic default cameras for backend-owned render passes
@@ -259,21 +259,21 @@ The cpp-entt backend SHALL provide deterministic default camera behavior for its
 - **WHEN** mesh rendering occurs in a cpp-entt program
 - **THEN** the backend still renders using its default 3D camera configuration
 
-### Requirement: User-defined extern system codegen — C++ scaffold
-For `extern system` declarations with user-defined (non-stdlib) traits, the EnTT backend SHALL generate typed declarations and scheduling glue that call user-provided callback implementations from the project’s user library. The backend SHALL generate the iteration infrastructure (including `order by:` support when present), and the final linked project SHALL obtain the callback implementation from the user library rather than from a generated implementation body.
+### Requirement: User-defined extern rule codegen — C++ scaffold
+For `extern rule` declarations with user-defined (non-stdlib) traits, the EnTT backend SHALL generate typed declarations and scheduling glue that call user-provided callback implementations from the project’s user library. The backend SHALL generate the iteration infrastructure (including `order by:` support when present), and the final linked project SHALL obtain the callback implementation from the user library rather than from a generated implementation body.
 
-The callback name convention remains `<SystemName>_update`. The signature includes typed references to all filter components.
+The callback name convention remains `<RuleName>_update`. The signature includes typed references to all filter components.
 
-#### Scenario: User extern system generates library-facing declaration
-- **WHEN** `extern system MyParticleSystem: filter: Position as pos, ParticleEmitter as pe` is compiled
-- **THEN** the generated EnTT project output declares a typed `MyParticleSystem_update(...)` callback contract and emits scheduling glue that expects the implementation to be supplied by the user library
+#### Scenario: User extern rule generates library-facing declaration
+- **WHEN** `extern rule MyParticleRule: filter: Position as pos, ParticleEmitter as pe` is compiled
+- **THEN** the generated EnTT project output declares a typed `MyParticleRule_update(...)` callback contract and emits scheduling glue that expects the implementation to be supplied by the user library
 
-#### Scenario: order by in user extern system still generates sort call
-- **WHEN** a user `extern system` has `order by: pos.pos.y asc`
+#### Scenario: order by in user extern rule still generates sort call
+- **WHEN** a user `extern rule` has `order by: pos.pos.y asc`
 - **THEN** the generated EnTT scheduling glue includes a `registry.sort<Position>(...)` call before invoking the user-library callback for each matched entity
 
-### Requirement: Stdlib extern systems are auto-included in the program output
-When a program imports a stdlib module containing `extern system` declarations (e.g., `use std.render.sprites`), the backend SHALL include those extern systems in the generated output automatically. The author does not need to explicitly include them.
+### Requirement: Stdlib extern rules are auto-included in the program output
+When a program imports a stdlib module containing `extern rule` declarations (e.g., `use std.render.sprites`), the backend SHALL include those extern rules in the generated output automatically. The author does not need to explicitly include them.
 
 #### Scenario: SpriteRenderer included from module import
 - **WHEN** a program uses `use std.render.sprites` and applies `Renderer` to any entity
@@ -281,10 +281,10 @@ When a program imports a stdlib module containing `extern system` declarations (
 
 #### Scenario: MeshRenderer included from module import
 - **WHEN** a program uses `use std.render.meshes` and applies `std.render.meshes.Renderer` together with `std.transform.volume.WorldTransform`
-- **THEN** the backend includes the recognized `MeshRenderer` system in the generated system schedule automatically without requiring the author to redeclare it locally
+- **THEN** the backend includes the recognized `MeshRenderer` rule in the generated system schedule automatically without requiring the author to redeclare it locally
 
 ### Requirement: Code generation for `order by:` clause
-When a `SystemNode` has a non-empty `order_by` field, the EnTT backend SHALL emit a `registry.sort<T>(comparator)` call before the view iteration loop for each handler. `T` is the component type corresponding to the first sort key's alias. The comparator lambda implements the full multi-key lexicographic comparison.
+When a `RuleNode` has a non-empty `order_by` field, the EnTT backend SHALL emit a `registry.sort<T>(comparator)` call before the view iteration loop for each handler. `T` is the component type corresponding to the first sort key's alias. The comparator lambda implements the full multi-key lexicographic comparison.
 
 Generated pattern for `order by: s.layer asc, p.pos.y desc`:
 
@@ -319,7 +319,7 @@ The comparator is placed immediately before the `auto view = registry.view<...>(
 - **THEN** the comparator uses `<` for that key's comparison
 
 #### Scenario: No order by generates no sort call
-- **WHEN** a system has no `order by:` clause
+- **WHEN** a rule has no `order by:` clause
 - **THEN** no `registry.sort()` call is generated; the view iterates in default order
 
 ### Requirement: Code generation for `TraitMatchStmt`
@@ -415,15 +415,15 @@ The EnTT backend SHALL compile `self` to the `entt::entity` currently being proc
 - **WHEN** `Parent.parent = self` is compiled in a handler
 - **THEN** the generated code writes the current `entity` handle into the `parent` field
 
-### Requirement: EnTT backend recognizes hierarchy extern systems
-The EnTT backend SHALL recognize stdlib hierarchy extern systems for transform propagation and cascade deletion and generate complete registry-aware implementations for them.
+### Requirement: EnTT backend recognizes hierarchy extern rules
+The EnTT backend SHALL recognize stdlib hierarchy extern rules for transform propagation and cascade deletion and generate complete registry-aware implementations for them.
 
-#### Scenario: hierarchy propagation extern system generates registry traversal
-- **WHEN** the stdlib hierarchy propagation extern system is compiled
+#### Scenario: hierarchy propagation extern rule generates registry traversal
+- **WHEN** the stdlib hierarchy propagation extern rule is compiled
 - **THEN** the backend emits registry-aware code that reads parent relationships and writes `WorldTransform` values
 
-#### Scenario: hierarchy cascade extern system generates descendant destruction
-- **WHEN** the stdlib hierarchy cascade-delete extern system is compiled
+#### Scenario: hierarchy cascade extern rule generates descendant destruction
+- **WHEN** the stdlib hierarchy cascade-delete extern rule is compiled
 - **THEN** the backend emits registry-aware code that recursively destroys descendants of the removed entity
 
 ### Requirement: cpp-entt lowers pair domains to deterministic snapshot products
@@ -499,17 +499,17 @@ if (registry.valid(c_other)) {
 - **WHEN** `match c_other:` is compiled and `c_other` is stale at runtime
 - **THEN** neither trait arms nor the wildcard arm execute
 
-### Requirement: EnTT backend recognizes the full supported stdlib extern system set
-The cpp-entt backend SHALL recognize supported stdlib extern system patterns and bind them to backend-library implementations rather than treating them as generic user extern systems.
+### Requirement: EnTT backend recognizes the full supported stdlib extern rule set
+The cpp-entt backend SHALL recognize supported stdlib extern rule patterns and bind them to backend-library implementations rather than treating them as generic user extern rules.
 
-The supported recognized set SHALL include, at minimum, the stdlib extern system patterns whose required language/runtime features are already implemented, such as hierarchy propagation, cascade deletion, sprite rendering, animated sprite advancement, mesh rendering, point-light registration, and directional-light registration where applicable.
+The supported recognized set SHALL include, at minimum, the stdlib extern rule patterns whose required language/runtime features are already implemented, such as hierarchy propagation, cascade deletion, sprite rendering, animated sprite advancement, mesh rendering, point-light registration, and directional-light registration where applicable.
 
 #### Scenario: Supported stdlib renderer binds to backend library
-- **WHEN** a recognized stdlib render extern system is compiled with cpp-entt
+- **WHEN** a recognized stdlib render extern rule is compiled with cpp-entt
 - **THEN** generated output binds to the corresponding cpp-entt backend-library implementation rather than user-library callback scaffolding
 
 #### Scenario: Supported hierarchy behavior binds to backend library
-- **WHEN** a recognized stdlib hierarchy extern system is compiled with cpp-entt
+- **WHEN** a recognized stdlib hierarchy extern rule is compiled with cpp-entt
 - **THEN** generated output binds to the corresponding cpp-entt backend-library implementation rather than project-local traversal logic
 
 ### Requirement: EnTT backend runtime-owned dynamic storage uses pmr containers
@@ -520,15 +520,15 @@ When the cpp-entt backend/runtime requires dynamic storage for performance-criti
 - **THEN** those collections use `std::pmr` storage or an allocation-free equivalent
 
 ### Requirement: EnTT backend stdlib coverage is tested behaviorally
-The cpp-entt backend SHALL include tests that verify stdlib extern function correctness, recognized extern system binding, and representative runtime behavior for supported stdlib backend features.
+The cpp-entt backend SHALL include tests that verify stdlib extern function correctness, recognized extern rule binding, and representative runtime behavior for supported stdlib backend features.
 
 #### Scenario: Extern function behavior is tested
 - **WHEN** the cpp-entt backend test suite runs
 - **THEN** it includes behavioral tests for supported stdlib math/vector/quaternion/input extern functions
 
-#### Scenario: Recognized extern system behavior is tested
+#### Scenario: Recognized extern rule behavior is tested
 - **WHEN** the cpp-entt backend test suite runs
-- **THEN** it includes tests covering recognized hierarchy and render extern system behavior or binding outcomes
+- **THEN** it includes tests covering recognized hierarchy and render extern rule behavior or binding outcomes
 
 ### Requirement: EnTT backend supports std.physics collider traits
 The cpp-entt backend SHALL support the `std.physics.flat` and `std.physics.volume` collider traits used by authored programs and curated examples. This support SHALL be limited to the cpp-entt backend/runtime path and SHALL NOT require other backends to implement physics simulation.
@@ -566,7 +566,7 @@ The cpp-entt backend SHALL support the `std.physics.flat` and `std.physics.volum
 - **THEN** the generated output compiles and links with the standard cpp-entt backend/runtime library without requiring user-provided collider callbacks
 
 ### Requirement: EnTT mesh render pass applies registered point lights to mesh shading
-The cpp-entt backend SHALL treat recognized stdlib point-light registration as render-pass input for backend-owned mesh shading rather than debug-only accounting. During a render frame, enabled point lights registered through the recognized `std.render.meshes.PointLightSystem` binding SHALL contribute lighting data consumed by the backend-owned mesh pass.
+The cpp-entt backend SHALL treat recognized stdlib point-light registration as render-pass input for backend-owned mesh shading rather than debug-only accounting. During a render frame, enabled point lights registered through the recognized `std.render.meshes.PointLightRender` binding SHALL contribute lighting data consumed by the backend-owned mesh pass.
 
 #### Scenario: Enabled point light participates in the mesh pass
 - **WHEN** a cpp-entt program registers an enabled `std.render.meshes.PointLight` and also submits a visible mesh in the same render frame
@@ -611,12 +611,12 @@ The cpp-entt backend SHALL materialize projected traits as normal EnTT registry 
 
 #### Scenario: Project over durable component restores durable value
 - **WHEN** an entity has durable `DamageFlash` before the frame and generated code projects `DamageFlash` to that entity during the frame
-- **THEN** systems during the frame observe the projected value
+- **THEN** rules during the frame observe the projected value
 - **AND** frame cleanup restores the pre-existing durable `DamageFlash` value
 
 #### Scenario: Project-only component is removed at cleanup
 - **WHEN** an entity did not have durable `DamageFlash` before the frame and generated code projects `DamageFlash` to that entity
-- **THEN** systems during the frame observe `DamageFlash`
+- **THEN** rules during the frame observe `DamageFlash`
 - **AND** frame cleanup removes `DamageFlash` from that entity
 
 ### Requirement: cpp-entt backend coalesces projected registry components
@@ -655,17 +655,17 @@ The cpp-entt backend SHALL preserve C++20 replacement-field syntax in generated 
 - **WHEN** authored code calls `text.format("{1} / {0}", first, second)`
 - **THEN** the generated C++ format string remains `"{1} / {0}"`
 
-### Requirement: cpp-entt system filters include projected registry components
-For generated system handlers, the cpp-entt backend SHALL match entities that satisfy filter traits through registry components, including components materialized by projection earlier in the frame. Exclude traits SHALL also consider projected registry components.
+### Requirement: cpp-entt rule filters include projected registry components
+For generated rule handlers, the cpp-entt backend SHALL match entities that satisfy filter traits through registry components, including components materialized by projection earlier in the frame. Exclude traits SHALL also consider projected registry components.
 
 #### Scenario: Filter matches projected trait through registry view
 - **WHEN** an entity has durable `Health` and projected `DamageFlash`
-- **AND** a later system filters `Health as hp` and `DamageFlash as flash`
+- **AND** a later rule filters `Health as hp` and `DamageFlash as flash`
 - **THEN** the generated handler processes that entity through normal registry-based filtering and binds `flash` to the current projected component value
 
 #### Scenario: Exclude skips projected trait through registry exclusion
 - **WHEN** an entity has projected `Suppressed`
-- **AND** a later system excludes `Suppressed`
+- **AND** a later rule excludes `Suppressed`
 - **THEN** the generated handler skips that entity for the current frame
 
 ### Requirement: cpp-entt backend clears projected registry components at frame boundary
@@ -680,10 +680,10 @@ The cpp-entt backend SHALL clear projected-trait state at the deterministic fram
 - **THEN** the next frame observes the original durable `Highlighted` value unless authored code changed or removed it durably
 
 ### Requirement: Backend recognizes TextRenderer2D and emits DrawTextPro-based 2D text rendering
-The cpp-entt backend SHALL recognize the `extern system TextRenderer2D` from `std.render.text` (identified by its filter containing `std.transform.flat.WorldTransform` and `TextLabel`) and emit a system body that submits text draw calls for the backend-owned 2D render pass. The generated code SHALL use `DrawTextPro` (or equivalent rotation-capable raylib function) so that `WorldTransform.rotation` (radians) is applied to the rendered text.
+The cpp-entt backend SHALL recognize the `extern rule TextRenderer2D` from `std.render.text` (identified by its filter containing `std.transform.flat.WorldTransform` and `TextLabel`) and emit a rule body that submits text draw calls for the backend-owned 2D render pass. The generated code SHALL use `DrawTextPro` (or equivalent rotation-capable raylib function) so that `WorldTransform.rotation` (radians) is applied to the rendered text.
 
 #### Scenario: TextRenderer2D generates a draw-text submission
-- **WHEN** the backend encounters a recognized `TextRenderer2D` extern system
+- **WHEN** the backend encounters a recognized `TextRenderer2D` extern rule
 - **THEN** it emits a tick function that iterates entities with `std.transform.flat.WorldTransform` and `TextLabel`, and for each visible entity submits a text draw call carrying position, rotation (converted from radians to degrees), font_size, color, and text string to the 2D render pass
 
 #### Scenario: Invisible 2D label is excluded from submission
@@ -695,10 +695,10 @@ The cpp-entt backend SHALL recognize the `extern system TextRenderer2D` from `st
 - **THEN** the emitted raylib call receives `r * (180.0f / PI)` as the rotation argument
 
 ### Requirement: Backend recognizes TextRenderer3D and emits render-to-texture plane rendering
-The cpp-entt backend SHALL recognize the `extern system TextRenderer3D` from `std.render.text` (identified by its filter containing `std.transform.volume.WorldTransform` and `TextLabel`) and emit a system body that participates in the backend-owned 3D render pass. The implementation SHALL use a per-entity `RenderTexture2D` as the text surface and SHALL draw it as a plane mesh with the entity's full world transform applied via `DrawMesh`.
+The cpp-entt backend SHALL recognize the `extern rule TextRenderer3D` from `std.render.text` (identified by its filter containing `std.transform.volume.WorldTransform` and `TextLabel`) and emit a rule body that participates in the backend-owned 3D render pass. The implementation SHALL use a per-entity `RenderTexture2D` as the text surface and SHALL draw it as a plane mesh with the entity's full world transform applied via `DrawMesh`.
 
 #### Scenario: TextRenderer3D generates a render-texture-backed draw call
-- **WHEN** the backend encounters a recognized `TextRenderer3D` extern system
+- **WHEN** the backend encounters a recognized `TextRenderer3D` extern rule
 - **THEN** it emits a tick function that for each visible entity with `std.transform.volume.WorldTransform` and `TextLabel`: ensures a per-entity `RenderTexture2D` exists, conditionally rebakes the texture if content is dirty, and submits a plane mesh draw to the 3D render pass using the entity's world position, rotation quaternion, and scale
 
 #### Scenario: Render texture is rebaked only when content changes
@@ -958,11 +958,11 @@ The cpp-entt backend SHALL emit keyboard and mouse binding constants for `input`
 - **THEN** generation fails with an internal error identifying the input declaration, instead of emitting a dead binding such as `0` or `-1`
 
 ### Requirement: Generated phase scheduler
-The cpp-entt backend SHALL generate execution from the DecoratedProgram phase and handler graph rather than hard-coded lifecycle names or extern-system name/filter heuristics. It SHALL implement the declared accumulator, max catch-up, phase barriers, stable topological order, and synthesized periodic `dt` and `alpha` fields.
+The cpp-entt backend SHALL generate execution from the DecoratedProgram phase and handler graph rather than hard-coded lifecycle names or extern-rule name/filter heuristics. It SHALL implement the declared accumulator, max catch-up, phase barriers, stable topological order, and synthesized periodic `dt` and `alpha` fields.
 
 #### Scenario: Standard frame schedule follows declarations
 - **WHEN** the standard frame, input, fixed_tick, tick, late_tick, and render declarations are linked
-- **THEN** generated code executes their declared activation graph without special-casing system names
+- **THEN** generated code executes their declared activation graph without special-casing rule names
 
 #### Scenario: Fixed catch-up and alpha are generated
 - **WHEN** fixed_tick declares `every: 1.0 / 60.0` and `max: 8`
@@ -997,11 +997,11 @@ The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands durin
 - **THEN** the Contact cascade completes and its commands join the same activation commit
 
 #### Scenario: Commit emits spawn notification when consumed
-- **WHEN** the linked program declares a system with an `on spawn` handler and some other handler issues `spawn Enemy`
+- **WHEN** the linked program declares a rule with an `on spawn` handler and some other handler issues `spawn Enemy`
 - **THEN** after the `Spawn` command is applied at commit, a `std.core.spawn` occurrence re-enters the same activation's cascade and the `on spawn` handler runs against the newly created entity
 
 #### Scenario: Commit emits destroy notification when consumed
-- **WHEN** the linked program declares a system with an `on destroy` handler and some other handler issues `destroy` on an entity
+- **WHEN** the linked program declares a rule with an `on destroy` handler and some other handler issues `destroy` on an entity
 - **THEN** after the `Destroy` command is applied at commit, a `std.core.destroy` occurrence re-enters the same activation's cascade and the `on destroy` handler runs
 
 #### Scenario: No spawn/destroy handler means no notification codegen
@@ -1012,7 +1012,7 @@ The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands durin
 When the cpp-entt backend generates the graph-driven main loop, and the linked program declares at least one handler triggered by `std.core.load`, the generated `main()` SHALL run one activation — inject a `std.core.load` root occurrence, execute its handler cascade, then commit — exactly once, after `generated_init_project` completes and before the first frame occurrence is injected. Symmetrically, when the linked program declares at least one handler triggered by `std.core.unload`, generated `main()` SHALL run one `std.core.unload` activation (inject, cascade, commit) exactly once, after the frame loop exits and before `CloseWindow()`. Neither activation SHALL execute when the corresponding trigger has no handler in the linked program.
 
 #### Scenario: Load activation runs once before the first frame
-- **WHEN** a linked program declares `system SpawnCharacters: filter: SpawnerMarker` `on load:` that queues three `spawn` commands
+- **WHEN** a linked program declares `rule SpawnCharacters: filter: SpawnerMarker` `on load:` that queues three `spawn` commands
 - **THEN** generated `main()` runs the load activation (including its commit) after `generated_init_project` and before the loop's first `frame` injection, so all three entities exist for the first frame's phases
 
 #### Scenario: Unload activation runs once at teardown
@@ -1031,17 +1031,17 @@ When the cpp-entt backend generates the graph-driven main loop, and the linked p
 When the cpp-entt backend generates the graph-driven main loop (`graph_driven_frame` true — the program has a non-empty execution graph and a resolved external frame event), the generated code SHALL still execute, once per real display frame, the same housekeeping the legacy main loop performs via `generated_update_project`/`generated_render_project`:
 
 - Input-consumption reset (`reset_consumed_input()`) SHALL execute before the input phase activates for that frame occurrence.
-- The render-frame flush boundary (`begin_render_frame()` / `end_render_frame()`) SHALL wrap the render phase activation's system dispatch, so render-phase extern systems (mesh/sprite/light/text renderers, the viewport loop, and the editor HUD overlay) submit draw work that reaches the screen.
+- The render-frame flush boundary (`begin_render_frame()` / `end_render_frame()`) SHALL wrap the render phase activation's system dispatch, so render-phase extern rules (mesh/sprite/light/text renderers, the viewport loop, and the editor HUD overlay) submit draw work that reaches the screen.
 - Projected-trait cleanup (`clear_projected_traits(registry)`) SHALL execute once per frame after the render phase activation completes.
 
-This SHALL hold regardless of custom phase names — the program's identified render phase (the phase already used to decide which extern systems are render-phase systems) is the one wrapped by the render-frame flush boundary, not necessarily a phase literally named `render`.
+This SHALL hold regardless of custom phase names — the program's identified render phase (the phase already used to decide which extern rules are render-phase systems) is the one wrapped by the render-frame flush boundary, not necessarily a phase literally named `render`.
 
 #### Scenario: Input reset runs once per frame under the graph-driven loop
 - **WHEN** a graph-driven program's main loop injects one frame occurrence
 - **THEN** `reset_consumed_input()` executes exactly once before that frame's input phase activation runs
 
 #### Scenario: Render-phase systems draw between begin and end render frame
-- **WHEN** a graph-driven program declares a `MeshRenderer`-recognized render-phase extern system
+- **WHEN** a graph-driven program declares a `MeshRenderer`-recognized render-phase extern rule
 - **THEN** the generated render phase activation calls `begin_render_frame()`, then the render-phase system dispatch, then `end_render_frame()`, in that order, every frame
 
 #### Scenario: Projected traits are cleared after the render phase completes

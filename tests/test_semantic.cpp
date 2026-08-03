@@ -191,18 +191,18 @@ TEST_CASE("Semantic: persist sync on var — allowed", "[semantic]") {
                            "    persist sync var pos: float\n"));
 }
 
-TEST_CASE("Semantic: system filter — valid trait", "[semantic]") {
+TEST_CASE("Semantic: rule filter — valid trait", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Pos:\n"
                                                    "    var x: float\n"
-                                                   "system Move:\n"
+                                                   "rule Move:\n"
                                                    "    filter: \n"
                                                    "        Pos\n"
                                                    "    on tick:\n"
                                                    "        x = x + tick.dt\n"));
 }
 
-TEST_CASE("Semantic: system filter — unknown trait", "[semantic]") {
-    CHECK(analyze_has_errors(STDLIB_EVENTS + "system Bad:\n"
+TEST_CASE("Semantic: rule filter — unknown trait", "[semantic]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "rule Bad:\n"
                                              "    filter: \n"
                                              "        NonExistent\n"
                                              "    on tick:\n"
@@ -215,7 +215,7 @@ TEST_CASE("Semantic: event handler — valid event", "[semantic]") {
                            "    var x: float\n"
                            "event Hit:\n"
                            "    dmg: int\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    filter: \n"
                            "        Pos\n"
                            "    on Hit:\n"
@@ -226,7 +226,7 @@ TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
     CHECK(
         analyze_has_errors("trait Pos:\n"
                            "    var x: float\n"
-                           "system Bad:\n"
+                           "rule Bad:\n"
                            "    filter: \n"
                            "        Pos\n"
                            "    on FakeEvent:\n"
@@ -236,7 +236,7 @@ TEST_CASE("Semantic: event handler — unknown event", "[semantic]") {
 TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "event Damage:\n"
                                              "    amount: int\n"
-                                             "system Combat:\n"
+                                             "rule Combat:\n"
                                              "    on tick:\n"
                                              "        emit Damage:\n"
                                              "            badfield = 1\n"));
@@ -245,7 +245,7 @@ TEST_CASE("Semantic: emit payload with unknown field — error", "[semantic]") {
 TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "event Damage:\n"
                                                    "    amount: int\n"
-                                                   "system Combat:\n"
+                                                   "rule Combat:\n"
                                                    "    on tick:\n"
                                                    "        emit Damage:\n"
                                                    "            amount = 1\n"));
@@ -254,7 +254,7 @@ TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
 TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Pos:\n"
                                                    "    var x: float\n"
-                                                   "system Move:\n"
+                                                   "rule Move:\n"
                                                    "    filter: \n"
                                                    "        Pos\n"
                                                    "    on tick:\n"
@@ -265,14 +265,14 @@ TEST_CASE("Semantic: dependency graph built", "[semantic]") {
     auto result = analyze(STDLIB_EVENTS +
                           "trait Pos:\n"
                           "    var x: float\n"
-                          "system Move:\n"
+                          "rule Move:\n"
                           "    filter: \n"
                           "        Pos\n"
                           "    on tick as t:\n"
                           "        x = x + t.dt\n");
     REQUIRE(result.handler_contracts.size() == 1);
     const auto& contract = result.handler_contracts[0];
-    CHECK(contract.system.local_name == "Move");
+    CHECK(contract.rule.local_name == "Move");
     const auto pos_symbol = make_symbol_id(SymbolKind::Trait, "test", "Pos");
     CHECK(contract.reads.contains(pos_symbol));
     CHECK(contract.writes.contains(pos_symbol));
@@ -419,12 +419,12 @@ TEST_CASE("Semantic: std.physics.flat query types and extern funcs resolve",
     CHECK(overlap_all.return_type->element->name == "QueryContact2D");
 }
 
-TEST_CASE("Semantic: extern system with filter is valid", "[semantic][extern-system]") {
+TEST_CASE("Semantic: extern rule with filter is valid", "[semantic][extern-rule]") {
     CHECK_FALSE(
         analyze_has_errors(STDLIB_EVENTS +
                            "trait Position:\n"
                            "    var x: float\n"
-                           "extern system SpriteRenderer:\n"
+                           "extern rule SpriteRenderer:\n"
                            "    filter:\n"
                            "        Position\n"
                            "    on tick:\n"
@@ -434,22 +434,22 @@ TEST_CASE("Semantic: extern system with filter is valid", "[semantic][extern-sys
                            "            graphics\n"));
 }
 
-TEST_CASE("Semantic: extern system requires filter", "[semantic][extern-system]") {
+TEST_CASE("Semantic: extern rule requires filter", "[semantic][extern-rule]") {
     CHECK(
-        analyze_has_errors("extern system SpriteRenderer:\n"
+        analyze_has_errors("extern rule SpriteRenderer:\n"
                            "    after:\n"
                            "        Move\n"));
 }
 
-TEST_CASE("Semantic: after cycle with extern system reports error", "[semantic][extern-system]") {
+TEST_CASE("Semantic: after cycle with extern rule reports error", "[semantic][extern-rule]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "trait T:\n"
                                              "    var x: float\n"
-                                             "extern system A:\n"
+                                             "extern rule A:\n"
                                              "    filter:\n"
                                              "        T\n"
                                              "    after:\n"
                                              "        B\n"
-                                             "system B:\n"
+                                             "rule B:\n"
                                              "    filter:\n"
                                              "        T\n"
                                              "    after:\n"
@@ -458,13 +458,13 @@ TEST_CASE("Semantic: after cycle with extern system reports error", "[semantic][
                                              "        x = 1.0\n"));
 }
 
-// ── system-ordering-and-trait-cleanup semantic tests ────────────────────────
+// ── rule-ordering-and-trait-cleanup semantic tests ────────────────────────
 
-// Task 12.5: after: referencing unknown system reports error
-TEST_CASE("Semantic: after: unknown system reports error", "[semantic][system-ordering]") {
+// Task 12.5: after: referencing unknown rule reports error
+TEST_CASE("Semantic: after: unknown rule reports error", "[semantic][rule-ordering]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "trait T:\n"
                                              "    var x: float\n"
-                                             "system A:\n"
+                                             "rule A:\n"
                                              "    after:\n"
                                              "        NonExistentSystem\n"
                                              "    on tick:\n"
@@ -472,39 +472,39 @@ TEST_CASE("Semantic: after: unknown system reports error", "[semantic][system-or
 }
 
 // Task 12.6: direct after: cycle reports error
-TEST_CASE("Semantic: after: direct cycle reports error", "[semantic][system-ordering]") {
+TEST_CASE("Semantic: after: direct cycle reports error", "[semantic][rule-ordering]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "trait T:\n"
                                              "    var x: float\n"
-                                             "system A:\n"
+                                             "rule A:\n"
                                              "    after:\n"
                                              "        B\n"
                                              "    on tick:\n"
                                              "        x = 1.0\n"
-                                             "system B:\n"
+                                             "rule B:\n"
                                              "    after:\n"
                                              "        A\n"
                                              "    on tick:\n"
                                              "        x = 2.0\n"));
 }
 
-// Task 12.7: valid after: chain passes and after_systems populated
-TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[semantic][system-ordering]") {
+// Task 12.7: valid after: chain passes and after_rules populated
+TEST_CASE("Semantic: after: linear chain passes and populates after_rules", "[semantic][rule-ordering]") {
     auto result = analyze(STDLIB_EVENTS +
                           "trait T:\n"
                           "    var x: float\n"
-                          "system A:\n"
+                          "rule A:\n"
                           "    filter: \n"
                           "       T\n"
                           "    on tick:\n"
                           "        x = 1.0\n"
-                          "system B:\n"
+                          "rule B:\n"
                           "    filter:\n"
                           "       T\n"
                           "    after:\n"
                           "        A\n"
                           "    on tick:\n"
                           "        x = 2.0\n"
-                          "system C:\n"
+                          "rule C:\n"
                           "    filter:\n"
                           "       T\n"
                           "    after:\n"
@@ -516,14 +516,14 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
     bool found_b = false;
     bool found_c = false;
     for (auto& dep : result.dependency_graph) {
-        if (dep.system_name == "B") {
-            REQUIRE(dep.after_systems.size() == 1);
-            CHECK(dep.after_systems[0] == "test.A");
+        if (dep.rule_name == "B") {
+            REQUIRE(dep.after_rules.size() == 1);
+            CHECK(dep.after_rules[0] == "test.A");
             found_b = true;
         }
-        if (dep.system_name == "C") {
-            REQUIRE(dep.after_systems.size() == 1);
-            CHECK(dep.after_systems[0] == "test.B");
+        if (dep.rule_name == "C") {
+            REQUIRE(dep.after_rules.size() == 1);
+            CHECK(dep.after_rules[0] == "test.B");
             found_c = true;
         }
     }
@@ -531,12 +531,12 @@ TEST_CASE("Semantic: after: linear chain passes and populates after_systems", "[
     CHECK(found_c);
 }
 
-TEST_CASE("Semantic: order by valid alias and scalar fields", "[semantic][system-order-by]") {
+TEST_CASE("Semantic: order by valid alias and scalar fields", "[semantic][rule-order-by]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
                                                    "    var pos: vec2\n"
                                                    "trait Sprite:\n"
                                                    "    var layer: int\n"
-                                                   "system Render:\n"
+                                                   "rule Render:\n"
                                                    "    filter:\n"
                                                    "        Position as p\n"
                                                    "        Sprite as s\n"
@@ -547,10 +547,10 @@ TEST_CASE("Semantic: order by valid alias and scalar fields", "[semantic][system
                                                    "        let x = 1\n"));
 }
 
-TEST_CASE("Semantic: order by alias not in filter errors", "[semantic][system-order-by]") {
+TEST_CASE("Semantic: order by alias not in filter errors", "[semantic][rule-order-by]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
                                              "    var pos: vec2\n"
-                                             "system Render:\n"
+                                             "rule Render:\n"
                                              "    filter:\n"
                                              "        Position as p\n"
                                              "    order by:\n"
@@ -559,10 +559,10 @@ TEST_CASE("Semantic: order by alias not in filter errors", "[semantic][system-or
                                              "        let x = 1\n"));
 }
 
-TEST_CASE("Semantic: order by non-orderable type errors", "[semantic][system-order-by]") {
+TEST_CASE("Semantic: order by non-orderable type errors", "[semantic][rule-order-by]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
                                              "    var pos: vec2\n"
-                                             "system Render:\n"
+                                             "rule Render:\n"
                                              "    filter:\n"
                                              "        Position as p\n"
                                              "    order by:\n"
@@ -571,10 +571,10 @@ TEST_CASE("Semantic: order by non-orderable type errors", "[semantic][system-ord
                                              "        let x = 1\n"));
 }
 
-TEST_CASE("Semantic: order by invalid vec2 member errors", "[semantic][system-order-by]") {
+TEST_CASE("Semantic: order by invalid vec2 member errors", "[semantic][rule-order-by]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
                                              "    var pos: vec2\n"
-                                             "system Render:\n"
+                                             "rule Render:\n"
                                              "    filter:\n"
                                              "        Position as p\n"
                                              "    order by:\n"
@@ -631,7 +631,7 @@ TEST_CASE("Semantic: trait match valid", "[semantic][trait-match]") {
                            "trait Boss:\n"
                            "    var stage: int\n"
                            "trait Spike\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    on Collision as c:\n"
                            "        match c.other:\n"
                            "            Boss as b =>\n"
@@ -646,7 +646,7 @@ TEST_CASE("Semantic: trait match non-entity subject error", "[semantic][trait-ma
                            "    other: int\n"
                            "trait Boss:\n"
                            "    var phase: int\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    on Collision as c:\n"
                            "        match c.other:\n"
                            "            Boss as b =>\n"
@@ -657,7 +657,7 @@ TEST_CASE("Semantic: trait match unknown trait error", "[semantic][trait-match]"
     CHECK(
         analyze_has_errors("event Collision:\n"
                            "    other: entity_id\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    on Collision as c:\n"
                            "        match c.other:\n"
                            "            Phantom as p =>\n"
@@ -672,7 +672,7 @@ TEST_CASE("Semantic: trait match alias conflict error", "[semantic][trait-match]
                            "    var x: float\n"
                            "trait Boss:\n"
                            "    var phase: int\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    filter:\n"
                            "        Position as p\n"
                            "    on Collision as c:\n"
@@ -686,7 +686,7 @@ TEST_CASE("Semantic: marker trait alias error", "[semantic][trait-match]") {
         analyze_has_errors("event Collision:\n"
                            "    other: entity_id\n"
                            "trait Spike\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    on Collision as c:\n"
                            "        match c.other:\n"
                            "            Spike as s =>\n"
@@ -699,7 +699,7 @@ TEST_CASE("Semantic: wildcard not last error", "[semantic][trait-match]") {
                            "    other: entity_id\n"
                            "trait Boss:\n"
                            "    var phase: int\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    on Collision as c:\n"
                            "        match c.other:\n"
                            "            _ =>\n"
@@ -721,18 +721,18 @@ TEST_CASE("Semantic: trait match outside handler error", "[semantic][trait-match
 TEST_CASE("Semantic: entity_id compared to zero uses total-semantics error", "[semantic][entity-id]") {
     CHECK(analyze_first_error("event Collision:\n"
                               "    other: entity_id\n"
-                              "system Combat:\n"
+                              "rule Combat:\n"
                               "    on Collision as c:\n"
                               "        let dead = c.other == 0\n") ==
           "entity_id has no null literal; use `exists(id)` to test handle validity or `add`/`remove` to model absent "
           "relationships via trait presence");
 }
 
-TEST_CASE("Semantic: exists(entity_id) valid in system handler", "[semantic][entity-id]") {
+TEST_CASE("Semantic: exists(entity_id) valid in rule handler", "[semantic][entity-id]") {
     CHECK_FALSE(
         analyze_has_errors("event Collision:\n"
                            "    other: entity_id\n"
-                           "system Combat:\n"
+                           "rule Combat:\n"
                            "    on Collision as c:\n"
                            "        if exists(c.other):\n"
                            "            let x = 1\n"));
@@ -748,7 +748,7 @@ TEST_CASE("Semantic: event field modifiers rejected", "[semantic]") {
 }
 
 TEST_CASE("Semantic: exists requires entity_id argument", "[semantic][entity-id]") {
-    CHECK(analyze_first_error(STDLIB_EVENTS + "system Combat:\n"
+    CHECK(analyze_first_error(STDLIB_EVENTS + "rule Combat:\n"
                                               "    on tick:\n"
                                               "        if exists(42):\n"
                                               "            let x = 1\n") ==
@@ -758,13 +758,13 @@ TEST_CASE("Semantic: exists requires entity_id argument", "[semantic][entity-id]
 TEST_CASE("Semantic: exists forbidden in func body", "[semantic][entity-id]") {
     CHECK(analyze_first_error("func test(id: entity_id) bool:\n"
                               "    return exists(id)\n") ==
-          "`exists()` requires world access; only allowed inside system event handlers");
+          "`exists()` requires world access; only allowed inside rule event handlers");
 }
 
-TEST_CASE("Semantic: self is entity_id in system handler", "[semantic][hierarchy]") {
+TEST_CASE("Semantic: self is entity_id in rule handler", "[semantic][hierarchy]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Parent:\n"
                                                    "    var parent: entity_id\n"
-                                                   "system Parenting:\n"
+                                                   "rule Parenting:\n"
                                                    "    on tick:\n"
                                                    "        add Parent:\n"
                                                    "            parent = self\n"
@@ -773,13 +773,13 @@ TEST_CASE("Semantic: self is entity_id in system handler", "[semantic][hierarchy
 
 TEST_CASE("Semantic: self rejected in func body", "[semantic][hierarchy]") {
     CHECK(analyze_first_error("func current() entity_id:\n"
-                              "    return self\n") == "`self` only allowed inside system event handlers");
+                              "    return self\n") == "`self` only allowed inside rule event handlers");
 }
 
 TEST_CASE("Semantic: self rejected in trait default", "[semantic][hierarchy]") {
     CHECK(analyze_first_error("trait Parent:\n"
                               "    var parent: entity_id = self\n") ==
-          "`self` only allowed inside system event handlers");
+          "`self` only allowed inside rule event handlers");
 }
 
 TEST_CASE("Semantic: self rejected in entity initializer", "[semantic][hierarchy]") {
@@ -787,7 +787,7 @@ TEST_CASE("Semantic: self rejected in entity initializer", "[semantic][hierarchy
                               "    var parent: entity_id\n"
                               "entity Child:\n"
                               "    Parent:\n"
-                              "        parent = self\n") == "`self` only allowed inside system event handlers");
+                              "        parent = self\n") == "`self` only allowed inside rule event handlers");
 }
 
 TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[semantic][foreach][project]") {
@@ -797,7 +797,7 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
                                                    "    var hits: list[Hit]\n"
                                                    "event Damage:\n"
                                                    "    amount: int\n"
-                                                   "system ApplyHits:\n"
+                                                   "rule ApplyHits:\n"
                                                    "    filter:\n"
                                                    "        Source\n"
                                                    "    on tick:\n"
@@ -807,7 +807,7 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
 
     CHECK(analyze_first_error(STDLIB_EVENTS + "trait Source:\n"
                                               "    var count: int\n"
-                                              "system BadLoop:\n"
+                                              "rule BadLoop:\n"
                                               "    filter:\n"
                                               "        Source\n"
                                               "    on tick:\n"
@@ -816,7 +816,7 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
 
     CHECK(analyze_first_error(STDLIB_EVENTS + "trait Source:\n"
                                               "    var values: list[int]\n"
-                                              "system BadAssign:\n"
+                                              "rule BadAssign:\n"
                                               "    filter:\n"
                                               "        Source\n"
                                               "    on tick:\n"
@@ -831,7 +831,7 @@ TEST_CASE("Semantic: project validates trait fields target and transient restric
                                                    "    var intensity: float\n"
                                                    "trait Target:\n"
                                                    "    var victim: entity_id\n"
-                                                   "system Flash:\n"
+                                                   "rule Flash:\n"
                                                    "    filter:\n"
                                                    "        Target\n"
                                                    "    on tick:\n"
@@ -840,7 +840,7 @@ TEST_CASE("Semantic: project validates trait fields target and transient restric
 
     CHECK(analyze_first_error(STDLIB_EVENTS + "trait DamageFlash:\n"
                                               "    var intensity: float\n"
-                                              "system BadTarget:\n"
+                                              "rule BadTarget:\n"
                                               "    on tick:\n"
                                               "        project DamageFlash to 123:\n"
                                               "            intensity = 1.0\n") ==
@@ -848,7 +848,7 @@ TEST_CASE("Semantic: project validates trait fields target and transient restric
 
     CHECK(analyze_first_error(STDLIB_EVENTS + "trait DamageFlash:\n"
                                               "    var intensity: float\n"
-                                              "system BadField:\n"
+                                              "rule BadField:\n"
                                               "    on tick:\n"
                                               "        project DamageFlash:\n"
                                               "            missing = 1.0\n") ==
@@ -856,7 +856,7 @@ TEST_CASE("Semantic: project validates trait fields target and transient restric
 
     CHECK(analyze_first_error(STDLIB_EVENTS + "trait SavedFact:\n"
                                               "    persist var value: int\n"
-                                              "system BadPersist:\n"
+                                              "rule BadPersist:\n"
                                               "    on tick:\n"
                                               "        project SavedFact:\n"
                                               "            value = 1\n") ==
@@ -868,7 +868,7 @@ TEST_CASE("Semantic: project participates in dependency writes", "[semantic][pro
                           "trait DamageFlash\n"
                           "trait Health:\n"
                           "    var hp: int\n"
-                          "system Producer:\n"
+                          "rule Producer:\n"
                           "    filter:\n"
                           "        Health\n"
                           "    on tick:\n"
@@ -960,7 +960,7 @@ TEST_CASE("Semantic: std.text.format — unsupported vec2 arg type rejected", "[
                                    "use std.text as text\n"
                                    "trait Pos:\n"
                                    "    var pos: vec2\n"
-                                   "system S:\n"
+                                   "rule S:\n"
                                    "    filter:\n"
                                    "        Pos\n"
                                    "    on tick:\n"
@@ -1077,7 +1077,7 @@ TEST_CASE("Semantic: entity name is not an entity_id expression", "[semantic][en
                                    "    Shape\n"
                                    "entity Gem1 from BlueGem:\n"
                                    "    Shape\n"
-                                   "system S:\n"
+                                   "rule S:\n"
                                    "    on tick:\n"
                                    "        let x = Gem1\n");
     CHECK(err.find("Gem1") != std::string::npos);
@@ -1105,7 +1105,7 @@ TEST_CASE("Semantic: spawn of entity rejected", "[semantic][entity]") {
                                    "trait Tag\n"
                                    "entity Player:\n"
                                    "    Tag\n"
-                                   "system S:\n"
+                                   "rule S:\n"
                                    "    on tick:\n"
                                    "        spawn Player:\n"
                                    "            Tag\n");
@@ -1114,48 +1114,48 @@ TEST_CASE("Semantic: spawn of entity rejected", "[semantic][entity]") {
 }
 // ── Query expression semantic tests ────────────────────────────────────────
 
-TEST_CASE("Semantic: query exists in system handler returns bool — no errors", "[semantic][query]") {
+TEST_CASE("Semantic: query exists in rule handler returns bool — no errors", "[semantic][query]") {
     CHECK_FALSE(analyze_has_errors(
         "use std.query as query\n"
         "trait Boss:\n"
         "    var hp: int\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        if query.exists[Boss]():\n"
         "            let x = 1\n"));
 }
 
-TEST_CASE("Semantic: query count in system handler returns int — no errors", "[semantic][query]") {
+TEST_CASE("Semantic: query count in rule handler returns int — no errors", "[semantic][query]") {
     CHECK_FALSE(analyze_has_errors(
         "use std.query as query\n"
         "trait Enemy:\n"
         "    var hp: int\n"
         "trait Dead\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        let n = query.count[Enemy, not Dead]()\n"));
 }
 
-TEST_CASE("Semantic: query first in system handler returns entity_id — no errors", "[semantic][query]") {
+TEST_CASE("Semantic: query first in rule handler returns entity_id — no errors", "[semantic][query]") {
     CHECK_FALSE(analyze_has_errors(
         "use std.query as query\n"
         "trait Boss:\n"
         "    var hp: int\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        let t = query.first[Boss]()\n"));
 }
 
-TEST_CASE("Semantic: query all in system handler returns list of entity_id — no errors", "[semantic][query]") {
+TEST_CASE("Semantic: query all in rule handler returns list of entity_id — no errors", "[semantic][query]") {
     CHECK_FALSE(analyze_has_errors(
         "use std.query as query\n"
         "trait Enemy:\n"
         "    var hp: int\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        let all = query.all[Enemy]()\n"));
 }
@@ -1182,7 +1182,7 @@ TEST_CASE("Semantic: undeclared trait in query filter is rejected", "[semantic][
     CHECK(analyze_first_error(
               "use std.query as query\n" +
               STDLIB_EVENTS +
-              "system S:\n"
+              "rule S:\n"
               "    on tick:\n"
               "        let x = query.first[GhostBoss]()\n") ==
           "undeclared trait 'GhostBoss' in query filter");
@@ -1195,7 +1195,7 @@ TEST_CASE("Semantic: valid traits in query filter are accepted", "[semantic][que
         "    var active: bool\n"
         "trait Dead\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        let n = query.count[EnemyAI, not Dead]()\n"));
 }
@@ -1206,7 +1206,7 @@ TEST_CASE("Semantic: query parent with entity_id of argument accepted", "[semant
         "trait Child:\n"
         "    var child_id: entity_id\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Child\n"
         "    on tick:\n"
@@ -1217,7 +1217,7 @@ TEST_CASE("Semantic: query parent of argument must be entity_id", "[semantic][qu
     CHECK(analyze_first_error(
               "use std.query as query\n" +
               STDLIB_EVENTS +
-              "system S:\n"
+              "rule S:\n"
               "    on tick:\n"
               "        let p = query.parent(of = 42)\n") ==
           "`parent` `of` argument must be of type `entity_id`");
@@ -1229,7 +1229,7 @@ TEST_CASE("Semantic: query nearest requires from argument", "[semantic][query]")
               STDLIB_EVENTS +
               "trait Transform:\n"
               "    var pos: vec2\n"
-              "system S:\n"
+              "rule S:\n"
               "    on tick:\n"
               "        let t = query.nearest[Transform]()\n")
               .find("`nearest` requires") != std::string::npos);
@@ -1241,7 +1241,7 @@ TEST_CASE("Semantic: module-qualified query path accepted", "[semantic][query]")
         "trait Boss:\n"
         "    var hp: int\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        let t = std.query.first[Boss]()\n"));
 }
@@ -1263,7 +1263,7 @@ TEST_CASE("Semantic: mesh asset rejected where model_id expected", "[semantic][d
         "trait ModelRenderer:\n"
         "    var model: model_id\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        add ModelRenderer:\n"
         "            model = Rock\n"));
@@ -1275,7 +1275,7 @@ TEST_CASE("Semantic: model asset rejected where mesh_id expected", "[semantic][d
         "trait Renderer:\n"
         "    var mesh: mesh_id\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        add Renderer:\n"
         "            mesh = Robot\n"));
@@ -1287,7 +1287,7 @@ TEST_CASE("Semantic: model asset accepted where model_id expected in add", "[sem
         "trait ModelRenderer:\n"
         "    var model: model_id\n" +
         STDLIB_EVENTS +
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        add ModelRenderer:\n"
         "            model = Robot\n"));
@@ -1309,9 +1309,9 @@ static const std::string PAIR_TRAITS =
     "event Contact:\n"
     "    other: entity_id\n";
 
-TEST_CASE("Semantic: basic pair system compiles with a tuple-rejecting condition", "[semantic][pair-relations]") {
+TEST_CASE("Semantic: basic pair rule compiles with a tuple-rejecting condition", "[semantic][pair-relations]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                                   "system DetectContacts:\n"
+                                   "rule DetectContacts:\n"
                                    "    pairs:\n"
                                    "        body:\n"
                                    "            DynamicBody\n"
@@ -1327,7 +1327,7 @@ TEST_CASE("Semantic: basic pair system compiles with a tuple-rejecting condition
 
 TEST_CASE("Semantic: pair binding trait field read is accepted and typed", "[semantic][pair-relations]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                                   "system DetectContacts:\n"
+                                   "rule DetectContacts:\n"
                                    "    pairs:\n"
                                    "        body:\n"
                                    "            DynamicBody\n"
@@ -1343,7 +1343,7 @@ TEST_CASE("Semantic: pair binding trait field read is accepted and typed", "[sem
 
 TEST_CASE("Semantic: cross-binding trait access is rejected", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system DetectContacts:\n"
+                             "rule DetectContacts:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1357,7 +1357,7 @@ TEST_CASE("Semantic: cross-binding trait access is rejected", "[semantic][pair-r
 
 TEST_CASE("Semantic: binding-local trait alias resolves shortened access", "[semantic][pair-relations]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                                   "system DetectContacts:\n"
+                                   "rule DetectContacts:\n"
                                    "    pairs:\n"
                                    "        body:\n"
                                    "            DynamicBody\n"
@@ -1371,7 +1371,7 @@ TEST_CASE("Semantic: binding-local trait alias resolves shortened access", "[sem
 
 TEST_CASE("Semantic: self-qualified pair trait resolves via longest prefix", "[semantic][pair-relations]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                                   "system DetectContacts:\n"
+                                   "rule DetectContacts:\n"
                                    "    pairs:\n"
                                    "        body:\n"
                                    "            DynamicBody\n"
@@ -1385,7 +1385,7 @@ TEST_CASE("Semantic: self-qualified pair trait resolves via longest prefix", "[s
 
 TEST_CASE("Semantic: duplicate pair binding name is rejected", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system Bad:\n"
+                             "rule Bad:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1398,7 +1398,7 @@ TEST_CASE("Semantic: duplicate pair binding name is rejected", "[semantic][pair-
 
 TEST_CASE("Semantic: duplicate trait entry in one binding is ambiguous", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system Bad:\n"
+                             "rule Bad:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1412,7 +1412,7 @@ TEST_CASE("Semantic: duplicate trait entry in one binding is ambiguous", "[seman
 
 TEST_CASE("Semantic: unknown trait in pair binding is reported", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system Bad:\n"
+                             "rule Bad:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            Nonexistent\n"
@@ -1425,7 +1425,7 @@ TEST_CASE("Semantic: unknown trait in pair binding is reported", "[semantic][pai
 
 TEST_CASE("Semantic: self is rejected in a pair handler", "[semantic][pair-relations][self]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system DetectContacts:\n"
+                             "rule DetectContacts:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1439,7 +1439,7 @@ TEST_CASE("Semantic: self is rejected in a pair handler", "[semantic][pair-relat
 
 TEST_CASE("Semantic: assignment through a pair trait path is rejected as read-only", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system DetectContacts:\n"
+                             "rule DetectContacts:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1453,7 +1453,7 @@ TEST_CASE("Semantic: assignment through a pair trait path is rejected as read-on
 TEST_CASE("Semantic: compound assignment through a pair trait path is rejected as read-only",
           "[semantic][pair-relations]") {
     auto message = analyze_first_error(STDLIB_EVENTS + PAIR_TRAITS +
-                                       "system DetectContacts:\n"
+                                       "rule DetectContacts:\n"
                                        "    pairs:\n"
                                        "        body:\n"
                                        "            DynamicBody\n"
@@ -1466,7 +1466,7 @@ TEST_CASE("Semantic: compound assignment through a pair trait path is rejected a
 
 TEST_CASE("Semantic: bare assignment has no implicit entity in a pair handler", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system DetectContacts:\n"
+                             "rule DetectContacts:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1478,7 +1478,7 @@ TEST_CASE("Semantic: bare assignment has no implicit entity in a pair handler", 
 
 TEST_CASE("Semantic: trait match directly on a pair binding is rejected", "[semantic][pair-relations]") {
     auto message = analyze_first_error(STDLIB_EVENTS + PAIR_TRAITS +
-                                       "system DetectContacts:\n"
+                                       "rule DetectContacts:\n"
                                        "    pairs:\n"
                                        "        body:\n"
                                        "            DynamicBody\n"
@@ -1494,7 +1494,7 @@ TEST_CASE("Semantic: trait match directly on a pair binding is rejected", "[sema
 
 TEST_CASE("Semantic: bare destroy has no implicit target in a pair handler", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system DetectContacts:\n"
+                             "rule DetectContacts:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1506,7 +1506,7 @@ TEST_CASE("Semantic: bare destroy has no implicit target in a pair handler", "[s
 
 TEST_CASE("Semantic: bare project has no implicit target in a pair handler", "[semantic][pair-relations]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                             "system DetectContacts:\n"
+                             "rule DetectContacts:\n"
                              "    pairs:\n"
                              "        body:\n"
                              "            DynamicBody\n"
@@ -1521,7 +1521,7 @@ TEST_CASE("Semantic: explicit-target destroy, add, remove, project, and spawn ar
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
                                    "template Debris:\n"
                                    "    Solid\n"
-                                   "system DetectContacts:\n"
+                                   "rule DetectContacts:\n"
                                    "    pairs:\n"
                                    "        body:\n"
                                    "            DynamicBody\n"
@@ -1538,7 +1538,7 @@ TEST_CASE("Semantic: explicit-target destroy, add, remove, project, and spawn ar
 
 TEST_CASE("Semantic: untargeted emit remains a valid broadcast in a pair handler", "[semantic][pair-relations]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
-                                   "system DetectContacts:\n"
+                                   "rule DetectContacts:\n"
                                    "    pairs:\n"
                                    "        body:\n"
                                    "            DynamicBody\n"
@@ -1552,7 +1552,7 @@ TEST_CASE("Semantic: untargeted emit remains a valid broadcast in a pair handler
 TEST_CASE("Semantic: pair handler contract records domain, bindings, bound reads, and projects",
           "[semantic][pair-relations][handler-contracts]") {
     auto result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
-                          "system DetectContacts:\n"
+                          "rule DetectContacts:\n"
                           "    pairs:\n"
                           "        body:\n"
                           "            DynamicBody\n"
@@ -1591,12 +1591,12 @@ TEST_CASE("Semantic: pair handler contract records domain, bindings, bound reads
     CHECK(std::ranges::find(contract.bound_reads, wall_collider_read) != contract.bound_reads.end());
 }
 
-TEST_CASE("Semantic: unary systems keep their existing domain and are unaffected by pair support",
+TEST_CASE("Semantic: unary rules keep their existing domain and are unaffected by pair support",
           "[semantic][pair-relations][handler-contracts]") {
     auto result = analyze(STDLIB_EVENTS +
                           "trait Pos:\n"
                           "    var x: float\n"
-                          "system Move:\n"
+                          "rule Move:\n"
                           "    filter:\n"
                           "        Pos\n"
                           "    on tick:\n"

@@ -112,14 +112,14 @@ struct ResolvedSourceModule {
     ProgramNode* ast = nullptr;  // non-owning; owned by the CLI/test pipeline
 };
 
-struct SystemDependency {
-    std::string system_name;
-    std::optional<SymbolId> system_id;  // resolved system identity
+struct RuleDependency {
+    std::string rule_name;
+    std::optional<SymbolId> rule_id;  // resolved rule identity
     std::unordered_set<std::string> reads;
     std::unordered_set<std::string> writes;
     std::unordered_set<std::string> emits;
-    std::vector<std::string> after_systems;           // explicit ordering: this system runs after these (source)
-    std::vector<SymbolId> resolved_after_system_ids;  // resolved after: system identities
+    std::vector<std::string> after_rules;           // explicit ordering: this rule runs after these (source)
+    std::vector<SymbolId> resolved_after_rule_ids;  // resolved after: rule identities
 };
 
 struct InferredHandlerCommand {
@@ -130,13 +130,13 @@ struct InferredHandlerCommand {
 };
 
 /// Canonical identity of one executable handler. A handler is identified by
-/// its owning system and resolved trigger rather than by source spelling.
+/// its owning rule and resolved trigger rather than by source spelling.
 struct HandlerIdentity {
-    SymbolId system;
+    SymbolId rule;
     ResolvedHandlerTrigger trigger;
 
     [[nodiscard]] std::string canonical_id() const {
-        return make_canonical_id(system) + "/on " + make_canonical_id(trigger.symbol);
+        return make_canonical_id(rule) + "/on " + make_canonical_id(trigger.symbol);
     }
 
     friend bool operator==(const HandlerIdentity&, const HandlerIdentity&) = default;
@@ -144,7 +144,7 @@ struct HandlerIdentity {
 
 struct HandlerIdentityHash {
     [[nodiscard]] std::size_t operator()(const HandlerIdentity& handler) const noexcept {
-        std::size_t seed = SymbolIdHash{}(handler.system);
+        std::size_t seed = SymbolIdHash{}(handler.rule);
         seed ^= SymbolIdHash{}(handler.trigger.symbol) + 0x9E3779B9U + (seed << 6U) + (seed >> 2U);
         seed ^= std::hash<std::uint8_t>{}(static_cast<std::uint8_t>(handler.trigger.kind)) + 0x9E3779B9U +
                 (seed << 6U) + (seed >> 2U);
@@ -216,7 +216,7 @@ struct HandlerContract {
 /// Transitional inference result retained for focused semantic tests and old
 /// consumers while HandlerNode becomes the authoritative execution record.
 struct InferredHandlerContract : HandlerContract {
-    SymbolId system;
+    SymbolId rule;
     ResolvedHandlerTrigger trigger;
 };
 
@@ -255,7 +255,7 @@ struct PhasePlan {
     DeclarationOrder declaration_order;
 };
 
-enum class ScheduleEdgeKind : std::uint8_t { ExplicitHandler, ExplicitSystem, DataConflict, EffectConflict };
+enum class ScheduleEdgeKind : std::uint8_t { ExplicitHandler, ExplicitRule, DataConflict, EffectConflict };
 enum class ScheduleEdgeOrientation : std::uint8_t { Explicit, WriterBeforeReader, DeclarationOrder };
 
 struct ScheduleEdge {
@@ -308,7 +308,7 @@ struct DecoratedProgram {
     std::unordered_set<std::string> pub_templates;
     std::unordered_set<std::string> non_pub_templates;
     std::unordered_set<std::string> pub_events;  // pub event names (for ImportedSymbols export)
-    std::vector<SystemDependency> dependency_graph;
+    std::vector<RuleDependency> dependency_graph;
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
     std::vector<ResolvedSourceModule> source_modules;
@@ -318,14 +318,14 @@ struct DecoratedProgram {
 
 // ── Imported Symbols (pub exports from a single module) ────────────────────
 
-/// Canonical identity for an imported system — carries name, canonical_id, and
+/// Canonical identity for an imported rule — carries name, canonical_id, and
 /// scheduling dependencies needed for `after:` resolution across modules.
-struct ImportedSystem {
+struct ImportedRule {
     std::string name;
     std::string module_name;
     std::string canonical_id;
     std::optional<SymbolId> symbol_id;
-    std::vector<std::string> after_systems;  // canonical system IDs this runs after
+    std::vector<std::string> after_rules;  // canonical rule IDs this runs after
 };
 
 /// Canonical identity for an imported template.
@@ -380,7 +380,7 @@ struct ImportedSymbols {
     std::unordered_set<std::string> events;                              // legacy pub event names
     std::unordered_map<std::string, ImportedEvent> event_symbols;        // pub events with canonical identity
     std::unordered_map<std::string, ImportedPhase> phase_symbols;        // pub phases with canonical identity
-    std::unordered_map<std::string, ImportedSystem> systems;             // systems with canonical identity
+    std::unordered_map<std::string, ImportedRule> rules;                 // rules with canonical identity
     std::unordered_map<std::string, ImportedFunc> func_symbols;          // pub funcs with canonical identity
     std::unordered_map<std::string, ImportedTemplate> template_symbols;  // pub templates with canonical identity
 };
@@ -405,7 +405,7 @@ struct ModuleImports {
     std::unordered_map<std::string, std::vector<std::string>> template_providers;
     std::unordered_map<std::string, std::vector<std::string>> event_providers;
     std::unordered_map<std::string, std::vector<std::string>> phase_providers;
-    std::unordered_map<std::string, std::vector<std::string>> system_providers;
+    std::unordered_map<std::string, std::vector<std::string>> rule_providers;
 
     [[nodiscard]] bool empty() const {
         return modules.empty();
@@ -420,7 +420,7 @@ struct ModuleImports {
 };
 
 // Resolved binding-relative trait namespace for one pair binding, built once
-// per system (from its `pairs:` clause) and reused across that system's
+// per rule (from its `pairs:` clause) and reused across that rule's
 // handlers while typing and validating handler bodies. Keys are the dotted
 // access spelling used at that binding: a bare local trait name ("Transform"),
 // an imported module-qualified name ("tf.WorldTransform"), or a binding-local
@@ -479,25 +479,25 @@ private:
     void check_no_recursion(ProgramNode& program);
     void check_persist_sync(ProgramNode& program);
     void validate_phase_declarations(ProgramNode& program);
-    void validate_system_filters(ProgramNode& program);
-    void validate_pair_bindings(SystemNode& system);
+    void validate_rule_filters(ProgramNode& program);
+    void validate_pair_bindings(RuleNode& rule);
     [[nodiscard]] PairScope build_pair_scope(const PairClause& pairs) const;
     void validate_external_handler_contracts(ProgramNode& program);
-    void validateOrderByClause(const SystemNode& system);
-    void validateOrderByClause(const ExternSystemNode& system);
+    void validateOrderByClause(const RuleNode& rule);
+    void validateOrderByClause(const ExternRuleNode& rule);
     void validate_event_usage(ProgramNode& program);
     void validate_event_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts,
                               const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                               const std::unordered_map<std::string, TypeInfo>& local_bindings,
                               const ResolvedStruct* handler_event,
-                              const std::string& system_name,
+                              const std::string& rule_name,
                               const PairScope* pair_scope = nullptr);
     void validate_trait_match_stmt(const TraitMatchStmt& stmt,
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                    const ResolvedStruct* handler_event,
-                                   const std::string& system_name,
-                                   bool in_system_handler,
+                                   const std::string& rule_name,
+                                   bool in_rule_handler,
                                    const PairScope* pair_scope = nullptr);
 
     // Phase 3: Dynamic ECS validations (dynamic-ecs-language change)
@@ -527,8 +527,8 @@ private:
     void validate_trait_modifier_rules(ProgramNode& program);
     void validate_exclude_clause(const auto& node);
 
-    // task 11.12: field access not allowed in systems with no filter clause
-    void check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& sys_name);
+    // task 11.12: field access not allowed in rules with no filter clause
+    void check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& rule_name);
 
     // Dynamic ECS helpers
     bool is_trait_declared(const std::string& name) const;
@@ -564,7 +564,7 @@ private:
         const std::string& binding_name,
         const std::vector<std::string>& segments,
         const PairScope& pair_scope) const;
-    InferredHandlerContract infer_pair_handler_contract(const SystemNode& system,
+    InferredHandlerContract infer_pair_handler_contract(const RuleNode& rule,
                                                          const EventHandlerNode& handler,
                                                          const PairScope& pair_scope) const;
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
@@ -572,13 +572,13 @@ private:
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);
     void validate_context_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts,
                                 const std::string& context_name,
-                                bool in_system_handler);
+                                bool in_rule_handler);
     void validate_trait_default_values(ProgramNode& program);
 
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);
-    void collect_system_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, SystemDependency& dep);
-    InferredHandlerContract infer_regular_handler_contract(const SystemNode& system,
+    void collect_rule_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, RuleDependency& dep);
+    InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule,
                                                            const EventHandlerNode& handler) const;
 
     // Phase 3: std.text.format validation
@@ -641,17 +641,17 @@ private:
     [[nodiscard]] const ImportedPhase* find_imported_phase(const SymbolId& symbol) const;
     [[nodiscard]] const std::vector<ResolvedField>* find_phase_fields(const SymbolId& symbol) const;
 
-    /// Resolve a system name to its canonical SymbolId.
-    std::optional<SymbolId> try_resolve_system_ref_to_symbol(const std::string& ref) const;
+    /// Resolve a rule name to its canonical SymbolId.
+    std::optional<SymbolId> try_resolve_rule_ref_to_symbol(const std::string& ref) const;
 
-    /// Resolve a system name in an after: clause to its canonical SymbolId.
-    std::optional<SymbolId> resolve_system_after_ref_to_symbol(
+    /// Resolve a rule name in an after: clause to its canonical SymbolId.
+    std::optional<SymbolId> resolve_rule_after_ref_to_symbol(
         const std::string& ref,
         const SourceLocation& loc,
-        const std::unordered_set<std::string>& local_system_names) const;
-    std::string resolve_system_after_ref(const std::string& ref,
+        const std::unordered_set<std::string>& local_rule_names) const;
+    std::string resolve_rule_after_ref(const std::string& ref,
                                          const SourceLocation& loc,
-                                         const std::unordered_set<std::string>& local_system_names);
+                                         const std::unordered_set<std::string>& local_rule_names);
 
     /// Resolve a template/entity reference to its canonical SymbolId.
     std::optional<SymbolId> try_resolve_template_ref_to_symbol(const std::string& ref) const;
@@ -705,7 +705,7 @@ private:
     std::unordered_set<std::string> event_names_;
     std::unordered_set<std::string> phase_names_;
     std::unordered_set<std::string> func_names_;
-    std::unordered_set<std::string> system_names_;
+    std::unordered_set<std::string> rule_names_;
     std::unordered_set<std::string> const_names_;
     std::unordered_map<std::string, SymbolId> module_scope_symbols_;
 

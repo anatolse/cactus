@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 9;
+    static constexpr uint8_t CURRENT_VERSION = 10;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -87,7 +87,7 @@ private:
     static void write_string_set(std::ostream& out, const std::unordered_set<std::string>& values);
     static void write_symbol_set(std::ostream& out, const std::unordered_set<SymbolId>& values);
     static void write_symbol_vector(std::ostream& out, const std::vector<SymbolId>& values);
-    static void write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph);
+    static void write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph);
     static void write_contract(std::ostream& out, const HandlerContract& contract);
     static void write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts);
     void write_execution_graph(std::ostream& out, const ExecutionGraph& graph);
@@ -119,7 +119,7 @@ private:
     static std::unordered_set<std::string> read_string_set(std::istream& in);
     static std::unordered_set<SymbolId> read_symbol_set(std::istream& in);
     static std::vector<SymbolId> read_symbol_vector(std::istream& in);
-    static std::vector<SystemDependency> read_dep_graph(std::istream& in);
+    static std::vector<RuleDependency> read_dep_graph(std::istream& in);
     static HandlerContract read_contract(std::istream& in);
     static std::vector<InferredHandlerContract> read_handler_contracts(std::istream& in);
     ExecutionGraph read_execution_graph(std::istream& in);

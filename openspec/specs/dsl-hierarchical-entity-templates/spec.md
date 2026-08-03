@@ -109,10 +109,10 @@ Hierarchical archetype creation SHALL create and initialize the parent before it
 
 ### Requirement: Hierarchical syntax relies on existing hierarchy runtime behavior
 
-The hierarchical entity/template syntax SHALL create parent-child relationships but SHALL NOT by itself imply transform propagation, rendering, physics, or child lookup behavior. Transform following SHALL remain controlled by existing `LocalTransform`, `WorldTransform`, `Parent`, and transform propagation systems. Destroying a parent SHALL use the existing recursive descendant deletion behavior where supported.
+The hierarchical entity/template syntax SHALL create parent-child relationships but SHALL NOT by itself imply transform propagation, rendering, physics, or child lookup behavior. Transform following SHALL remain controlled by existing `LocalTransform`, `WorldTransform`, `Parent`, and transform propagation rules. Destroying a parent SHALL use the existing recursive descendant deletion behavior where supported.
 
 #### Scenario: Parentage without transform traits does not imply transform following
-- **WHEN** a child is created with `Parent` but without the transform traits required by the active transform propagation system
+- **WHEN** a child is created with `Parent` but without the transform traits required by the active transform propagation rule
 - **THEN** the hierarchy syntax alone does not derive or update that child's transform
 
 #### Scenario: Destroy root destroys descendants through existing hierarchy behavior

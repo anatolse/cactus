@@ -45,10 +45,10 @@ static SymbolId linked_symbol(SymbolKind kind, const std::string& module, const 
     return make_symbol_id(kind, module, name);
 }
 
-static HandlerNode linked_handler(const SymbolId& system,
+static HandlerNode linked_handler(const SymbolId& rule,
                                   const ResolvedHandlerTrigger& trigger,
                                   std::uint64_t declaration_index) {
-    return HandlerNode{.identity          = {.system = system, .trigger = trigger},
+    return HandlerNode{.identity          = {.rule = rule, .trigger = trigger},
                        .declaration_order = {.declaration_index = declaration_index}};
 }
 
@@ -88,14 +88,14 @@ TEST_CASE("program_linker: merge includes enums from all modules", "[linker][5.2
 
 TEST_CASE("program_linker: dependency graphs are concatenated", "[linker][5.2]") {
     DecoratedProgram prog_a;
-    SystemDependency dep_a;
-    dep_a.system_name = "MoveSystem";
+    RuleDependency dep_a;
+    dep_a.rule_name = "MoveSystem";
     dep_a.reads.insert("Position");
     prog_a.dependency_graph.push_back(dep_a);
 
     DecoratedProgram prog_b;
-    SystemDependency dep_b;
-    dep_b.system_name = "RenderSystem";
+    RuleDependency dep_b;
+    dep_b.rule_name = "RenderSystem";
     dep_b.reads.insert("Sprite");
     prog_b.dependency_graph.push_back(dep_b);
 
@@ -108,8 +108,8 @@ TEST_CASE("program_linker: dependency graphs are concatenated", "[linker][5.2]")
 
     CHECK_FALSE(errors.has_errors());
     CHECK(merged.dependency_graph.size() == 2);
-    CHECK(merged.dependency_graph[0].system_name == "MoveSystem");
-    CHECK(merged.dependency_graph[1].system_name == "RenderSystem");
+    CHECK(merged.dependency_graph[0].rule_name == "MoveSystem");
+    CHECK(merged.dependency_graph[1].rule_name == "RenderSystem");
 }
 
 // ── Task 4.4: Same simple pub name from different modules is accepted ──────────
@@ -350,17 +350,17 @@ TEST_CASE("program_linker: rebuilds cross-module conflicts and event flow", "[li
     const ResolvedHandlerTrigger spawned_trigger{.kind = HandlerTriggerKind::Event, .symbol = spawned};
 
     DecoratedProgram producer_program;
-    auto producer = linked_handler(linked_symbol(SymbolKind::System, "producer", "Move"), tick_trigger, 4);
+    auto producer = linked_handler(linked_symbol(SymbolKind::Rule, "producer", "Move"), tick_trigger, 4);
     producer.contract.reads.insert(position);
     producer.contract.writes.insert(position);
     producer.contract.emits.insert(spawned);
     producer_program.execution_graph.handlers.push_back(producer);
 
     DecoratedProgram consumer_program;
-    auto reader = linked_handler(linked_symbol(SymbolKind::System, "consumer", "Observe"), tick_trigger, 1);
+    auto reader = linked_handler(linked_symbol(SymbolKind::Rule, "consumer", "Observe"), tick_trigger, 1);
     reader.contract.reads.insert(position);
     consumer_program.execution_graph.handlers.push_back(reader);
-    auto consumer = linked_handler(linked_symbol(SymbolKind::System, "consumer", "Consume"), spawned_trigger, 2);
+    auto consumer = linked_handler(linked_symbol(SymbolKind::Rule, "consumer", "Consume"), spawned_trigger, 2);
     consumer_program.execution_graph.handlers.push_back(consumer);
 
     ErrorReporter errors;
@@ -398,7 +398,7 @@ TEST_CASE("program_linker: preserves pair contract domain, bindings, bound reads
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
 
     DecoratedProgram producer_program;
-    auto detector                   = linked_handler(linked_symbol(SymbolKind::System, "producer", "DetectContacts"),
+    auto detector                   = linked_handler(linked_symbol(SymbolKind::Rule, "producer", "DetectContacts"),
                                     tick_trigger,
                                     0);
     detector.contract.domain_kind   = HandlerDomainKind::Pair;
@@ -441,13 +441,13 @@ TEST_CASE("program_linker: rebuilds a cross-module conflict from a pair handler'
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
 
     DecoratedProgram producer_program;
-    auto detector = linked_handler(linked_symbol(SymbolKind::System, "producer", "DetectContacts"), tick_trigger, 0);
+    auto detector = linked_handler(linked_symbol(SymbolKind::Rule, "producer", "DetectContacts"), tick_trigger, 0);
     detector.contract.domain_kind = HandlerDomainKind::Pair;
     detector.contract.projects    = {ground_contact};
     producer_program.execution_graph.handlers.push_back(detector);
 
     DecoratedProgram consumer_program;
-    auto reader = linked_handler(linked_symbol(SymbolKind::System, "consumer", "ReadGroundContact"), tick_trigger, 1);
+    auto reader = linked_handler(linked_symbol(SymbolKind::Rule, "consumer", "ReadGroundContact"), tick_trigger, 1);
     reader.contract.reads.insert(ground_contact);
     consumer_program.execution_graph.handlers.push_back(reader);
 
@@ -487,7 +487,7 @@ TEST_CASE("program_linker: artifact link preserves an imported pair trait identi
     phys_program.traits["Solid"] = solid_trait;
 
     DecoratedProgram game_program;
-    auto detector                   = linked_handler(linked_symbol(SymbolKind::System, "game", "DetectContacts"),
+    auto detector                   = linked_handler(linked_symbol(SymbolKind::Rule, "game", "DetectContacts"),
                                     tick_trigger,
                                     0);
     detector.contract.domain_kind   = HandlerDomainKind::Pair;
@@ -534,8 +534,8 @@ TEST_CASE("program_linker: artifact link preserves explicit cross-module edge an
     const auto frame = linked_symbol(SymbolKind::Event, "runtime", "frame");
     const auto tick  = linked_symbol(SymbolKind::Phase, "runtime", "tick");
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
-    const auto first = linked_handler(linked_symbol(SymbolKind::System, "base", "First"), tick_trigger, 3);
-    auto second      = linked_handler(linked_symbol(SymbolKind::System, "app", "Second"), tick_trigger, 1);
+    const auto first = linked_handler(linked_symbol(SymbolKind::Rule, "base", "First"), tick_trigger, 3);
+    auto second      = linked_handler(linked_symbol(SymbolKind::Rule, "app", "Second"), tick_trigger, 1);
     second.explicit_after.push_back(first.identity);
 
     DecoratedProgram base;
@@ -580,8 +580,8 @@ TEST_CASE("program_linker: artifact link preserves explicit cross-module edge an
 TEST_CASE("program_linker: linked handler cycles are rejected canonically", "[linker][runtime-graph][4.4]") {
     const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
     const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
-    auto first  = linked_handler(linked_symbol(SymbolKind::System, "left", "First"), trigger, 0);
-    auto second = linked_handler(linked_symbol(SymbolKind::System, "right", "Second"), trigger, 0);
+    auto first  = linked_handler(linked_symbol(SymbolKind::Rule, "left", "First"), trigger, 0);
+    auto second = linked_handler(linked_symbol(SymbolKind::Rule, "right", "Second"), trigger, 0);
     first.explicit_after.push_back(second.identity);
     second.explicit_after.push_back(first.identity);
 

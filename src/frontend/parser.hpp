@@ -48,8 +48,8 @@ private:
     TraitNode parse_trait();
     EntityNode parse_entity(bool is_pub);
     TemplateNode parse_template(bool is_pub);
-    SystemNode parse_system();
-    ExternSystemNode parse_extern_system();
+    RuleNode parse_rule();
+    ExternRuleNode parse_extern_rule();
     ViewNode parse_view();
     EventNode parse_event(bool is_pub = false, bool is_external = false);
     PhaseNode parse_phase(bool is_pub = false);

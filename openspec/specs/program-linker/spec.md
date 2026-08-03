@@ -1,7 +1,7 @@
 ## Requirements
 
 ### Requirement: Merge multiple DecoratedPrograms from .cmod artifacts
-The program linker SHALL load per-module `.cmod` artifacts from the `build/` folder and merge all `DecoratedProgram` instances into a single combined semantic program suitable for code generation. Traits, structs, enums, funcs, events, templates, systems, dependency graphs, and string pools SHALL be merged using typed canonical symbol identities. Each artifact is loaded one at a time to avoid holding all module artifacts in memory simultaneously during the merge.
+The program linker SHALL load per-module `.cmod` artifacts from the `build/` folder and merge all `DecoratedProgram` instances into a single combined semantic program suitable for code generation. Traits, structs, enums, funcs, events, templates, rules, dependency graphs, and string pools SHALL be merged using typed canonical symbol identities. Each artifact is loaded one at a time to avoid holding all module artifacts in memory simultaneously during the merge.
 
 #### Scenario: Two modules with distinct types
 - **WHEN** `build/player.cmod` defines trait `player.Position` and `build/enemies.cmod` defines trait `enemies.EnemyAI`
@@ -42,18 +42,18 @@ The program linker SHALL verify that all cross-module symbol references target s
 - **THEN** the linker reports an error "trait 'PlayerPhysics' is not public in module 'player'; did you mean to mark it as 'pub'?"
 
 ### Requirement: Declaration ordering in merged output
-The program linker SHALL order declarations in the merged program such that all dependencies come before their dependents: enums and structs first, then traits, then events, then units, then systems and funcs. Within each category, declarations from dependency modules SHALL precede those from dependent modules.
+The program linker SHALL order declarations in the merged program such that all dependencies come before their dependents: enums and structs first, then traits, then events, then units, then rules and funcs. Within each category, declarations from dependency modules SHALL precede those from dependent modules.
 
 #### Scenario: Cross-module trait dependency
-- **WHEN** module `enemies` has a system with `filter:` including `Position` and `EnemyAI` where `Position` is from module `player`
-- **THEN** the merged program lists `Position` before `EnemyAI` and both before the enemy system
+- **WHEN** module `enemies` has a rule with `filter:` including `Position` and `EnemyAI` where `Position` is from module `player`
+- **THEN** the merged program lists `Position` before `EnemyAI` and both before the enemy rule
 
 ### Requirement: Resolved program for code generation
 The program linker SHALL provide code generation with a merged resolved semantic representation whose module-scope references, handler domains, pair binding trait requirements, binding-qualified reads, and projected outputs are already resolved to typed canonical symbol identities. Code generation MUST NOT require a combined raw AST or imported `use` declarations to resolve pair traits, aliases, or module qualifiers.
 
-#### Scenario: Merged resolved systems retain declaring module identity
-- **WHEN** modules `A` and `B` both declare a system named `Update`
-- **THEN** the merged program provides distinct system identities `A.Update` and `B.Update` to code generation
+#### Scenario: Merged resolved rules retain declaring module identity
+- **WHEN** modules `A` and `B` both declare a rule named `Update`
+- **THEN** the merged program provides distinct rule identities `A.Update` and `B.Update` to code generation
 
 #### Scenario: Codegen does not need UseNode lookup
 - **WHEN** a unary filter or pair binding references an imported trait through alias `phys.Body`

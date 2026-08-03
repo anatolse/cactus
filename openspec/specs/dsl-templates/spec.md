@@ -31,7 +31,7 @@ Archetype-body `use TemplateName` SHALL be compile-time blueprint composition. I
 - **THEN** the spawned entity is created from the flattened `WalkerEnemy` archetype and receives trait initializers from both `WalkerEnemy` and `EnemyBase`
 
 ### Requirement: `spawn` statement creates entity from template
-The language SHALL support a block-structured `spawn` statement inside system event handlers. `spawn TemplateName:` creates a new entity using the named template's already-composed archetype. Nested trait override blocks are merged with the template's flattened trait initializers; provided values take precedence over template values.
+The language SHALL support a block-structured `spawn` statement inside rule event handlers. `spawn TemplateName:` creates a new entity using the named template's already-composed archetype. Nested trait override blocks are merged with the template's flattened trait initializers; provided values take precedence over template values.
 
 #### Scenario: Spawn can override defaulted field
 - **WHEN** `spawn Foo:` overrides a field that `Foo` already initializes in its template body
@@ -51,40 +51,40 @@ The language SHALL support a block-structured `spawn` statement inside system ev
 
 #### Scenario: Spawn outside event handler (invalid)
 - **WHEN** `spawn` appears at module top-level or inside a `func` body
-- **THEN** the compiler SHALL report an error: "`spawn` only allowed inside system event handlers"
+- **THEN** the compiler SHALL report an error: "`spawn` only allowed inside rule event handlers"
 
 ### Requirement: `destroy` statement removes current entity
-The language SHALL support a `destroy` statement inside system event handlers. `destroy` removes the entity currently being processed by the enclosing handler. Before removal, `on destroy()` lifecycle handlers fire on all systems whose filter matches the entity.
+The language SHALL support a `destroy` statement inside rule event handlers. `destroy` removes the entity currently being processed by the enclosing handler. Before removal, `on destroy()` lifecycle handlers fire on all rules whose filter matches the entity.
 
 #### Scenario: Destroy removes entity from world
-- **WHEN** `destroy` executes inside a system handler
-- **THEN** the current entity SHALL be queued for removal and SHALL no longer appear in any system's filter after that frame
+- **WHEN** `destroy` executes inside a rule handler
+- **THEN** the current entity SHALL be queued for removal and SHALL no longer appear in any rule's filter after that frame
 
 #### Scenario: Destroy outside event handler (invalid)
-- **WHEN** `destroy` appears outside a system event handler
-- **THEN** the compiler SHALL report an error: "`destroy` only allowed inside system event handlers"
+- **WHEN** `destroy` appears outside a rule event handler
+- **THEN** the compiler SHALL report an error: "`destroy` only allowed inside rule event handlers"
 
 #### Scenario: Destroy on persistent entity
 - **WHEN** `destroy` is called on an entity that has the `Persistent` trait active
 - **THEN** the entity SHALL still be destroyed — `Persistent` only protects against `load`-triggered cleanup
 
-### Requirement: `on spawn()` lifecycle handler on systems
-Systems MAY declare an `on spawn():` handler. This handler fires once for each new entity that matches the system's `filter:` (and does not match `exclude:`), after all of the entity's fields have been initialized.
+### Requirement: `on spawn()` lifecycle handler on rules
+Rules MAY declare an `on spawn():` handler. This handler fires once for each new entity that matches the rule's `filter:` (and does not match `exclude:`), after all of the entity's fields have been initialized.
 
 #### Scenario: On spawn fires after fields are initialized
 - **WHEN** an entity is created via `spawn` or module `load`
 - **THEN** `on spawn()` handlers fire with all trait fields already set to their initial values
 
 #### Scenario: On spawn only for matching entities
-- **WHEN** a new entity is created that does NOT match a system's `filter:`
-- **THEN** that system's `on spawn()` SHALL NOT fire for that entity
+- **WHEN** a new entity is created that does NOT match a rule's `filter:`
+- **THEN** that rule's `on spawn()` SHALL NOT fire for that entity
 
-#### Scenario: Multiple systems each receive on spawn
-- **WHEN** two systems both have `on spawn()` handlers and a new entity matches both filters
-- **THEN** both handlers fire, in the order the systems are declared in source
+#### Scenario: Multiple rules each receive on spawn
+- **WHEN** two rules both have `on spawn()` handlers and a new entity matches both filters
+- **THEN** both handlers fire, in the order the rules are declared in source
 
-### Requirement: `on destroy()` lifecycle handler on systems
-Systems MAY declare an `on destroy():` handler. This handler fires once for each entity that matches the system's filter and is about to be removed. The handler fires before the entity is actually removed, so trait fields are still accessible.
+### Requirement: `on destroy()` lifecycle handler on rules
+Rules MAY declare an `on destroy():` handler. This handler fires once for each entity that matches the rule's filter and is about to be removed. The handler fires before the entity is actually removed, so trait fields are still accessible.
 
 #### Scenario: On destroy fires before entity removal
 - **WHEN** `destroy` is called or a `load` cleans up non-persistent entities

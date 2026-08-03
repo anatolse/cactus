@@ -16,7 +16,7 @@ enum class TokenType {
     TRAIT,
     ENTITY,
     TEMPLATE,
-    SYSTEM,
+    RULE,
     VIEW,
     EVENT,
     FUNC,
@@ -165,8 +165,8 @@ inline const char* token_type_to_string(TokenType t) {
             return "ENTITY";
         case TokenType::TEMPLATE:
             return "TEMPLATE";
-        case TokenType::SYSTEM:
-            return "SYSTEM";
+        case TokenType::RULE:
+            return "RULE";
         case TokenType::VIEW:
             return "VIEW";
         case TokenType::EVENT:

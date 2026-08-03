@@ -1,6 +1,6 @@
 module malformed_nested
 
-system Nested:
+rule Nested:
     on tick:
         if value > 0:
             emit Damage:

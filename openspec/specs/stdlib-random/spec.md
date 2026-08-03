@@ -58,7 +58,7 @@ The `std.random` module SHALL declare `pub extern func advance(rng: Rng) Rng`. T
 - **THEN** both calls return `Rng` values with identical `state`
 
 #### Scenario: Advance used via explicit assignment in handler
-- **WHEN** a system handler contains `rng = rand.advance(rng)`
+- **WHEN** a rule handler contains `rng = rand.advance(rng)`
 - **THEN** the compiler accepts this as a valid field assignment expression
 
 ---

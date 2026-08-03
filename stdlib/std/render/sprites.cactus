@@ -2,7 +2,7 @@ module std.render.sprites
 
 # ── 2D Sprite Rendering Traits ────────────────────────────────────────────────
 # Passive traits — the backend reads these and renders automatically.
-# No user system is needed. An entity with WorldTransform + Renderer is drawn.
+# No user rule is needed. An entity with WorldTransform + Renderer is drawn.
 
 # Renders a static texture at the entity's transform position.
 # texture:  asset handle for the texture to draw (immutable after spawn)
@@ -37,7 +37,7 @@ pub trait Canvas2D:
     var color: color = #FFFFFFFF
     var visible: bool = true
 
-extern system SpriteRenderer:
+extern rule SpriteRenderer:
     filter:
         std.transform.flat.WorldTransform
         Renderer
@@ -49,7 +49,7 @@ extern system SpriteRenderer:
         effects:
             graphics
 
-extern system AnimatedSpriteSystem:
+extern rule SpriteAnimation:
     filter:
         AnimatedSprite
 

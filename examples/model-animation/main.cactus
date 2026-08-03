@@ -139,7 +139,7 @@ pub entity MainCamera:
 # Spawns the cast once at startup: robot / knight / robot, left to right, each
 # normalized to TARGET_HEIGHT from its model's bind-pose bounds. A zero height
 # (unloadable model) falls back to unscaled.
-system SpawnCharacters:
+rule SpawnCharacters:
     filter:
         SpawnerMarker
 
@@ -187,7 +187,7 @@ system SpawnCharacters:
                 index = 2
                 base_scale = robot_scale
 
-system ReadControls:
+rule ReadControls:
     filter:
         ControlInput
 
@@ -197,7 +197,7 @@ system ReadControls:
         cycle_pressed = input.pressed(CycleSelected)
         clip_pressed = input.pressed(NextClip)
 
-system CycleSelection:
+rule CycleSelection:
     filter:
         CharacterState
         ControlInput
@@ -209,7 +209,7 @@ system CycleSelection:
 # Selection emphasis: ease each character's scale multiplier toward
 # SELECTED_SCALE while selected and back toward 1.0 otherwise, then write the
 # combined normalization * emphasis scale to the transform.
-system AnimateSelection:
+rule AnimateSelection:
     filter:
         tv.WorldTransform
         CharacterState
@@ -227,7 +227,7 @@ system AnimateSelection:
                 scale_mult = 1.0
         scale = vec3(base_scale * scale_mult, base_scale * scale_mult, base_scale * scale_mult)
 
-system RotateSelected:
+rule RotateSelected:
     filter:
         tv.WorldTransform
         CharacterState
@@ -244,7 +244,7 @@ system RotateSelected:
             rotation = quat.multiply(yaw_delta, rotation)
             # rotation = quat.multiply(pitch_delta, quat.multiply(yaw_delta, rotation))
 
-system CycleClip:
+rule CycleClip:
     filter:
         CharacterState
         ControlInput
@@ -260,7 +260,7 @@ system CycleClip:
                 clip = (clip + 1) % count
                 time = 0.0
 
-system UpdateHud:
+rule UpdateHud:
     filter:
         CharacterState
         models.ModelRenderer

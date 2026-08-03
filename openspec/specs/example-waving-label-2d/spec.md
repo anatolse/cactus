@@ -10,7 +10,7 @@ The example SHALL be a single `.cactus` file in `examples/waving-label-2d/` that
 
 #### Scenario: Example compiles without errors
 - **WHEN** the Cactus compiler processes `examples/waving-label-2d/waving_label_2d.cactus` with the cpp-entt backend
-- **THEN** compilation succeeds with no errors or unresolved extern systems
+- **THEN** compilation succeeds with no errors or unresolved extern rules
 
 #### Scenario: Example is registered as a CMake build target
 - **WHEN** the project CMake configuration is processed
@@ -32,17 +32,17 @@ The example SHALL use `std.text.format` with a `"{:02}:{:02}"` or equivalent for
 
 #### Scenario: text field is updated with formatted elapsed time each tick
 - **WHEN** a tick event fires in the example
-- **THEN** a system reads accumulated elapsed time, computes integer minutes and seconds via integer division and modulo, and assigns `format("{:02}:{:02}", mm, ss)` to `TextLabel.text`
+- **THEN** a rule reads accumulated elapsed time, computes integer minutes and seconds via integer division and modulo, and assigns `format("{:02}:{:02}", mm, ss)` to `TextLabel.text`
 
 ---
 
 ### Requirement: example-waving-label-2d demonstrates position and rotation waving over time
-The example SHALL include a system that accumulates `tick.dt` into an elapsed float and uses `std.math.sin` to drive both `WorldTransform.position` (left-right oscillation) and `WorldTransform.rotation` (angular oscillation) of the entity. The waving SHALL result in the text label being rendered at varying screen positions and non-zero rotation angles each frame.
+The example SHALL include a rule that accumulates `tick.dt` into an elapsed float and uses `std.math.sin` to drive both `WorldTransform.position` (left-right oscillation) and `WorldTransform.rotation` (angular oscillation) of the entity. The waving SHALL result in the text label being rendered at varying screen positions and non-zero rotation angles each frame.
 
 #### Scenario: Position oscillates with sin of elapsed time
-- **WHEN** the wave system runs with accumulated elapsed time `t`
+- **WHEN** the wave rule runs with accumulated elapsed time `t`
 - **THEN** `WorldTransform.position.x` is set to `CENTER_X + sin(t * WAVE_SPEED) * AMPLITUDE` (or equivalent)
 
 #### Scenario: Rotation oscillates with sin of elapsed time
-- **WHEN** the wave system runs with accumulated elapsed time `t`
+- **WHEN** the wave rule runs with accumulated elapsed time `t`
 - **THEN** `WorldTransform.rotation` is set to a non-zero value driven by `sin` so the text label visibly rotates

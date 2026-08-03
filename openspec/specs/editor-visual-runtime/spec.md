@@ -1,18 +1,18 @@
 ## Purpose
-Define the visual rendering behavior of the in-game editor, including render-phase placement of editor extern systems, gizmo drawing, template palette UI, edit-mode overlay, and world-space input helpers.
+Define the visual rendering behavior of the in-game editor, including render-phase placement of editor extern rules, gizmo drawing, template palette UI, edit-mode overlay, and world-space input helpers.
 
 ## Requirements
 
-### Requirement: Editor extern render systems run in the render phase
-`GizmoRenderer2D`, `GizmoRenderer3D`, `EditorTemplatePalette`, and `EditorPropertyPanel` SHALL be recognized as render-phase extern systems by `is_render_phase_extern` in the codegen. They SHALL be emitted as calls within the render-frame flush boundary (the code path between `begin_render_frame` and `end_render_frame`) — inside `generated_render_project` for the legacy main loop, or inside the render phase activation's dispatch for the graph-driven main loop — not in `generated_update_project` or any non-render phase activation.
+### Requirement: Editor extern render rules run in the render phase
+`GizmoRenderer2D`, `GizmoRenderer3D`, `EditorTemplatePalette`, and `EditorPropertyPanel` SHALL be recognized as render-phase extern rules by `is_render_phase_extern` in the codegen. They SHALL be emitted as calls within the render-frame flush boundary (the code path between `begin_render_frame` and `end_render_frame`) — inside `generated_render_project` for the legacy main loop, or inside the render phase activation's dispatch for the graph-driven main loop — not in `generated_update_project` or any non-render phase activation.
 
-#### Scenario: Editor systems placed in render phase (legacy main loop)
-- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern systems, and is generated with the legacy main loop
+#### Scenario: Editor rules placed in render phase (legacy main loop)
+- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern rules, and is generated with the legacy main loop
 - **THEN** the generated `generated_render_project` contains calls to `gizmo_renderer2_d_tick` and `editor_template_palette_tick`
 - **THEN** the generated `generated_update_project` does NOT contain calls to `gizmo_renderer2_d_tick` or `editor_template_palette_tick`
 
-#### Scenario: Editor systems placed in render phase (graph-driven main loop)
-- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern systems, and is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
+#### Scenario: Editor rules placed in render phase (graph-driven main loop)
+- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern rules, and is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
 - **THEN** the render phase activation's dispatch contains calls to `gizmo_renderer2_d_tick` and `editor_template_palette_tick`, wrapped by that frame's `begin_render_frame`/`end_render_frame` calls
 - **THEN** no other phase activation contains calls to `gizmo_renderer2_d_tick` or `editor_template_palette_tick`
 
@@ -41,7 +41,7 @@ All coordinates are in world space. The `BeginMode2D` camera transform maps them
 ### Requirement: EditorTemplatePalette draws screen-space template buttons and handles clicks
 `EditorTemplatePalette` SHALL iterate `cactus_template_registry` in the render phase and draw one button per `pub template` along the left screen edge (starting at screen position (10, 40), each button 140×26px with 4px gap). Each button SHALL have a deterministic tint color derived from `std::hash<std::string>` of the template name, mapped to a hue in HSL space with fixed saturation=70% and lightness=55%. The template name SHALL be drawn as white text on the tinted button.
 
-When `EditorState.active` is true and the left mouse button is pressed, if the cursor is within a button's rectangle, the system SHALL:
+When `EditorState.active` is true and the left mouse button is pressed, if the cursor is within a button's rectangle, the rule SHALL:
 1. Set `EditorState.active_template` to that template's name
 2. Set `EditorState.mode` to 4 (Place)
 
@@ -60,7 +60,7 @@ The palette SHALL only be rendered (and handle input) when `EditorState.active` 
 - **THEN** `EditorState.active_template` is set to "Box" and `EditorState.mode` is set to 4
 
 ### Requirement: Edit-mode overlay drawn in render phase
-After all other render-phase extern systems run, the codegen SHALL draw an edit-mode overlay when any EditorState entity has `active=true`, within the same render-frame flush boundary described above (`generated_render_project` under the legacy main loop, or the render phase activation's dispatch under the graph-driven main loop). The overlay consists of:
+After all other render-phase extern rules run, the codegen SHALL draw an edit-mode overlay when any EditorState entity has `active=true`, within the same render-frame flush boundary described above (`generated_render_project` under the legacy main loop, or the render phase activation's dispatch under the graph-driven main loop). The overlay consists of:
 - A yellow rectangle outline 3px thick along the full screen boundary (`DrawRectangleLinesEx({0,0,screenW,screenH}, 3, YELLOW)`)
 - A HUD text line at position (10, 10) in yellow showing the current mode: `"EDIT [<MODE>]  F1:toggle  W:trans  E:rot  R:scale  T:place"` where `<MODE>` is one of SELECT / TRANSLATE / ROTATE / SCALE / PLACE based on `EditorState.mode`
 

@@ -98,12 +98,12 @@ TEST_CASE("AST: runtime phase and handler reference values support equality and 
     CHECK(phase_debug.str() == phase_name.debug_string());
 
     const HandlerReferenceNode reference{
-        .system   = LocatedName{.spelling = "game.Animation", .location = location},
+        .rule   = LocatedName{.spelling = "game.Animation", .location = location},
         .trigger  = phase_name,
         .location = location,
     };
     const HandlerReferenceNode reference_copy{
-        .system   = LocatedName{.spelling = "game.Animation", .location = same_location},
+        .rule   = LocatedName{.spelling = "game.Animation", .location = same_location},
         .trigger  = phase_name_copy,
         .location = same_location,
     };
@@ -302,16 +302,16 @@ TEST_CASE("Parser: pub entity with nested trait blocks", "[parser]") {
     CHECK(decl.traits[1].assignments[0].name == "x");
 }
 
-TEST_CASE("Parser: system with filter and handler", "[parser]") {
+TEST_CASE("Parser: rule with filter and handler", "[parser]") {
     auto prog = parse(
-        "system MoveSystem:\n"
+        "rule MoveSystem:\n"
         "    filter:\n"
         "       Position\n"
         "       Velocity\n"
         "    on tick:\n"
         "        x = x + vx * tick.dt\n");
     REQUIRE(prog.declarations.size() == 1);
-    auto& decl = std::get<SystemNode>(prog.declarations[0]);
+    auto& decl = std::get<RuleNode>(prog.declarations[0]);
     CHECK(decl.name == "MoveSystem");
     REQUIRE(decl.filter.trait_names.size() == 2);
     CHECK(decl.filter.trait_names[0] == "Position");
@@ -323,12 +323,12 @@ TEST_CASE("Parser: system with filter and handler", "[parser]") {
 
 TEST_CASE("Parser: bounded foreach statement", "[parser]") {
     auto prog = parse(
-        "system ContactSystem:\n"
+        "rule ContactSystem:\n"
         "    on tick:\n"
         "        for hit in hits:\n"
         "            emit Damage to hit.entity:\n"
         "                amount = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     REQUIRE(sys.handlers[0].body.size() == 1);
     auto* foreach_stmt = std::get_if<ForeachStmt>(&sys.handlers[0].body[0]->stmt);
@@ -341,14 +341,14 @@ TEST_CASE("Parser: bounded foreach statement", "[parser]") {
 
 TEST_CASE("Parser: project statements", "[parser]") {
     auto prog = parse(
-        "system ProjectionSystem:\n"
+        "rule ProjectionSystem:\n"
         "    on tick:\n"
         "        project Grounded\n"
         "        project GroundContact:\n"
         "            normal = n\n"
         "        project InExplosion to hit.entity:\n"
         "            damage = 10\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     REQUIRE(sys.handlers[0].body.size() == 3);
 
@@ -374,7 +374,7 @@ TEST_CASE("Parser: project statements", "[parser]") {
 
 TEST_CASE("Parser: malformed foreach block reports errors", "[parser]") {
     auto errors = parse_expect_errors(
-        "system BadSystem:\n"
+        "rule BadSystem:\n"
         "    on tick:\n"
         "        for hit in hits\n"
         "            project Grounded\n");
@@ -527,7 +527,7 @@ TEST_CASE("Parser: multiple declarations", "[parser]") {
     CHECK(prog.declarations.size() == 4);
 }
 
-// ── Module System Tests ─────────────────────────────────────────────────────
+// ── Module Rule Tests ─────────────────────────────────────────────────────
 
 TEST_CASE("Parser: dotted module declaration", "[parser][modules]") {
     auto prog = parse("module enemies.walker\n");
@@ -559,13 +559,13 @@ TEST_CASE("Parser: use with dotted path and alias", "[parser][modules]") {
 
 TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
     auto prog = parse(
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:  \n"
         "        phys.Body\n"
         "        render.Sprite\n"
         "    on tick:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);
     CHECK(sys.filter.entries[0].qualified_name == "phys.Body");
     CHECK_FALSE(sys.filter.entries[0].alias.has_value());
@@ -578,13 +578,13 @@ TEST_CASE("Parser: filter with qualified trait names", "[parser][modules]") {
 
 TEST_CASE("Parser: filter with aliases", "[parser][modules]") {
     auto prog = parse(
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:\n"
         "        phys.Body as b\n"
         "        render.Sprite as s\n"
         "    on tick:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);
     CHECK(sys.filter.entries[0].qualified_name == "phys.Body");
     REQUIRE(sys.filter.entries[0].alias.has_value());
@@ -596,13 +596,13 @@ TEST_CASE("Parser: filter with aliases", "[parser][modules]") {
 
 TEST_CASE("Parser: filter mixed qualified and unqualified", "[parser][modules]") {
     auto prog = parse(
-        "system Mixed:\n"
+        "rule Mixed:\n"
         "    filter:\n"
         "        Position\n"
         "        phys.Body as b\n"
         "    on tick:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);
     CHECK(sys.filter.entries[0].qualified_name == "Position");
     CHECK_FALSE(sys.filter.entries[0].alias.has_value());
@@ -616,13 +616,13 @@ TEST_CASE("Parser: filter mixed qualified and unqualified", "[parser][modules]")
 
 TEST_CASE("Parser: filter with unqualified aliases", "[parser][modules]") {
     auto prog = parse(
-        "system Simple:\n"
+        "rule Simple:\n"
         "    filter:\n"
         "        Position as pos\n"
         "        Velocity as vel\n"
         "    on tick:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.filter.entries.size() == 2);
     CHECK(sys.filter.entries[0].qualified_name == "Position");
     CHECK(*sys.filter.entries[0].alias == "pos");
@@ -741,51 +741,51 @@ TEST_CASE("Parser: pub template declaration", "[parser][dynamic-ecs]") {
 // Task 4.10: on spawn/destroy/load/unload lifecycle handlers
 TEST_CASE("Parser: on spawn lifecycle handler", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system Init:\n"
+        "rule Init:\n"
         "    filter:\n"
         "        Position\n"
         "    on spawn:\n"
         "        x = 0.0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "spawn");
 }
 
 TEST_CASE("Parser: on destroy lifecycle handler", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system Cleanup:\n"
+        "rule Cleanup:\n"
         "    filter:\n"
         "        Position\n"
         "    on destroy:\n"
         "        x = 0.0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     CHECK(sys.handlers[0].event_name == "destroy");
 }
 
 TEST_CASE("Parser: on load and on unload lifecycle handlers", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system LevelMgr:\n"
+        "rule LevelMgr:\n"
         "    filter: \n"
         "        GameState\n"
         "    on load:\n"
         "        x = 1\n"
         "    on unload:\n"
         "        x = 0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 2);
     CHECK(sys.handlers[0].event_name == "load");
     CHECK(sys.handlers[1].event_name == "unload");
 }
 
-// Task 4.4: system with exclude block
-TEST_CASE("Parser: system with exclude clause", "[parser][dynamic-ecs]") {
+// Task 4.4: rule with exclude block
+TEST_CASE("Parser: rule with exclude clause", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system SceneCleanup:\n"
+        "rule SceneCleanup:\n"
         "    exclude:\n"
         "        Persistent\n"
         "    on unload:\n"
         "        x = 0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     CHECK(sys.filter.entries.empty());  // no filter
     REQUIRE(sys.exclude.trait_names.size() == 1);
     CHECK(sys.exclude.trait_names[0] == "Persistent");
@@ -796,7 +796,7 @@ TEST_CASE("Parser: system with exclude clause", "[parser][dynamic-ecs]") {
 // Task 4.5-4.6: spawn statement
 TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system LevelSetup:\n"
+        "rule LevelSetup:\n"
         "    filter: \n"
         "        GameState\n"
         "    on load:\n"
@@ -805,7 +805,7 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
         "                pos = 0.0\n"
         "            EnemyAI:\n"
         "                patrol_speed = 2.0\n");
-    auto& sys     = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys     = std::get<RuleNode>(prog.declarations[0]);
     auto& handler = sys.handlers[0];
     REQUIRE(handler.body.size() == 1);
     auto* spawn = std::get_if<SpawnStmt>(&handler.body[0]->stmt);
@@ -823,12 +823,12 @@ TEST_CASE("Parser: spawn statement", "[parser][dynamic-ecs]") {
 // Task 4.7: destroy statement
 TEST_CASE("Parser: destroy statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system DeathSys:\n"
+        "rule DeathSys:\n"
         "    filter: \n"
         "        Health\n"
         "    on tick:\n"
         "        destroy\n");
-    auto& sys     = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys     = std::get<RuleNode>(prog.declarations[0]);
     auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(destroy != nullptr);
 }
@@ -837,10 +837,10 @@ TEST_CASE("Parser: destroy targeted entity statement", "[parser][dynamic-ecs]") 
     auto prog = parse(
         "event Collision:\n"
         "    other: entity_id\n"
-        "system Cleanup:\n"
+        "rule Cleanup:\n"
         "    on Collision as c:\n"
         "        destroy c.other\n");
-    auto& sys     = std::get<SystemNode>(prog.declarations[1]);
+    auto& sys     = std::get<RuleNode>(prog.declarations[1]);
     auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(destroy != nullptr);
     REQUIRE(destroy->target_expr.has_value());
@@ -848,10 +848,10 @@ TEST_CASE("Parser: destroy targeted entity statement", "[parser][dynamic-ecs]") 
 
 TEST_CASE("Parser: self parsed as destroy target", "[parser][hierarchy]") {
     auto prog = parse(
-        "system Cleanup:\n"
+        "rule Cleanup:\n"
         "    on tick:\n"
         "        destroy self\n");
-    auto& sys     = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys     = std::get<RuleNode>(prog.declarations[0]);
     auto* destroy = std::get_if<DestroyStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(destroy != nullptr);
     REQUIRE(destroy->target_expr.has_value());
@@ -860,10 +860,10 @@ TEST_CASE("Parser: self parsed as destroy target", "[parser][hierarchy]") {
 
 TEST_CASE("Parser: self parsed in assignment expression", "[parser][hierarchy]") {
     auto prog = parse(
-        "system Parenting:\n"
+        "rule Parenting:\n"
         "    on tick:\n"
         "        add Parent to self\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(add != nullptr);
     REQUIRE(add->target_expr.has_value());
@@ -881,12 +881,12 @@ TEST_CASE("Parser: child is no longer reserved", "[parser][hierarchy]") {
 // Task 4.8: load statement
 TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system GameMgr:\n"
+        "rule GameMgr:\n"
         "    filter: \n"
         "        GameState\n"
         "    on tick:\n"
         "        load levels.level1\n");
-    auto& sys  = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys  = std::get<RuleNode>(prog.declarations[0]);
     auto* load = std::get_if<LoadStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(load != nullptr);
     CHECK(load->module_name == "levels.level1");
@@ -894,13 +894,13 @@ TEST_CASE("Parser: load statement", "[parser][dynamic-ecs]") {
 
 TEST_CASE("Parser: add and remove statements", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system FreezeSystem:\n"
+        "rule FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
         "        add Frozen\n"
         "        remove EnemyAI\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 2);
     auto* add    = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[1]->stmt);
@@ -912,13 +912,13 @@ TEST_CASE("Parser: add and remove statements", "[parser][dynamic-ecs]") {
 
 TEST_CASE("Parser: add statement with field block and target", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system FreezeSystem:\n"
+        "rule FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
         "        add Frozen to target_id:\n"
         "            duration = 2.0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(add != nullptr);
     CHECK(add->trait_name == "Frozen");
@@ -929,12 +929,12 @@ TEST_CASE("Parser: add statement with field block and target", "[parser][dynamic
 
 TEST_CASE("Parser: remove statement with target", "[parser][dynamic-ecs]") {
     auto prog = parse(
-        "system FreezeSystem:\n"
+        "rule FreezeSystem:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
         "        remove Frozen from target_id\n");
-    auto& sys    = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys    = std::get<RuleNode>(prog.declarations[0]);
     auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(remove != nullptr);
     CHECK(remove->trait_name == "Frozen");
@@ -1064,44 +1064,44 @@ TEST_CASE("Parser: input declaration axis with invert property", "[parser][dsl-s
 // Task 4.10: on fixed_tick, on late_tick, on input lifecycle handlers
 TEST_CASE("Parser: on input handler with no parameters", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
-        "system InputSys:\n"
+        "rule InputSys:\n"
         "    on input:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "input");
 }
 
 TEST_CASE("Parser: on fixed_tick handler with dt parameter", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
-        "system PhysSys:\n"
+        "rule PhysSys:\n"
         "    on fixed_tick:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "fixed_tick");
 }
 
 TEST_CASE("Parser: on late_tick handler with dt parameter", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
-        "system CamSys:\n"
+        "rule CamSys:\n"
         "    on late_tick:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "late_tick");
 }
 
-TEST_CASE("Parser: system with multiple lifecycle handlers", "[parser][dsl-spec-new-features]") {
+TEST_CASE("Parser: rule with multiple lifecycle handlers", "[parser][dsl-spec-new-features]") {
     auto prog = parse(
-        "system MultiPhase:\n"
+        "rule MultiPhase:\n"
         "    on input:\n"
         "        x = 1\n"
         "    on fixed_tick:\n"
         "        y = 2\n"
         "    on late_tick:\n"
         "        z = 3\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 3);
     CHECK(sys.handlers[0].event_name == "input");
     CHECK(sys.handlers[1].event_name == "fixed_tick");
@@ -1257,7 +1257,7 @@ TEST_CASE("Parser: func with arrow return type produces error", "[parser][extern
     CHECK(errors.has_errors());  // parser should error: unexpected '->'
 }
 
-// ── system-ordering-and-trait-cleanup tests ─────────────────────────────────
+// ── rule-ordering-and-trait-cleanup tests ─────────────────────────────────
 
 // Task 12.1: Trait body with 'on' produces error
 TEST_CASE("Parser: trait body with on handler produces error", "[parser][trait-cleanup]") {
@@ -1275,26 +1275,26 @@ TEST_CASE("Parser: trait body with on handler produces error", "[parser][trait-c
     CHECK(errors.has_errors());
 }
 
-// Task 12.2: after: block parses correctly into SystemNode.after_systems
-TEST_CASE("Parser: system after: block parsed correctly", "[parser][system-ordering]") {
+// Task 12.2: after: block parses correctly into RuleNode.after_rules
+TEST_CASE("Parser: rule after: block parsed correctly", "[parser][rule-ordering]") {
     auto prog = parse(
-        "system SceneRender:\n"
+        "rule SceneRender:\n"
         "    on tick:\n"
         "        x = 1\n"
         "\n"
-        "system UIRender:\n"
+        "rule UIRender:\n"
         "    after:\n"
         "        SceneRender\n"
         "    on tick:\n"
         "        y = 2\n");
     REQUIRE(prog.declarations.size() == 2);
-    auto& ui = std::get<SystemNode>(prog.declarations[1]);
+    auto& ui = std::get<RuleNode>(prog.declarations[1]);
     CHECK(ui.name == "UIRender");
-    REQUIRE(ui.after_systems.size() == 1);
-    CHECK(ui.after_systems[0] == "SceneRender");
-    // SceneRender has empty after_systems
-    auto& scene = std::get<SystemNode>(prog.declarations[0]);
-    CHECK(scene.after_systems.empty());
+    REQUIRE(ui.after_rules.size() == 1);
+    CHECK(ui.after_rules[0] == "SceneRender");
+    // SceneRender has empty after_rules
+    auto& scene = std::get<RuleNode>(prog.declarations[0]);
+    CHECK(scene.after_rules.empty());
 }
 
 TEST_CASE("Parser: marker trait entry in entity", "[parser][config-qualification]") {
@@ -1334,10 +1334,10 @@ TEST_CASE("Parser: trait field default values are parsed", "[parser][dynamic-tra
 
 TEST_CASE("Parser: bare add statement parsed", "[parser][dynamic-traits]") {
     auto prog = parse(
-        "system FreezeSystem:\n"
+        "rule FreezeSystem:\n"
         "    on tick:\n"
         "        add Frozen\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     REQUIRE(sys.handlers[0].body.size() == 1);
     auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
@@ -1347,9 +1347,9 @@ TEST_CASE("Parser: bare add statement parsed", "[parser][dynamic-traits]") {
     CHECK_FALSE(add->target_expr.has_value());
 }
 
-TEST_CASE("Parser: extern system declaration with filter and order by", "[parser][extern-system]") {
+TEST_CASE("Parser: extern rule declaration with filter and order by", "[parser][extern-rule]") {
     auto prog = parse(
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        std.transform.flat.Position as pos\n"
         "        std.render.sprites.Renderer as r\n"
@@ -1363,7 +1363,7 @@ TEST_CASE("Parser: extern system declaration with filter and order by", "[parser
         "    target: cpu\n");
 
     REQUIRE(prog.declarations.size() == 1);
-    auto& decl = std::get<ExternSystemNode>(prog.declarations[0]);
+    auto& decl = std::get<ExternRuleNode>(prog.declarations[0]);
     CHECK(decl.name == "SpriteRenderer");
     REQUIRE(decl.filter.entries.size() == 2);
     CHECK(decl.filter.entries[0].qualified_name == "std.transform.flat.Position");
@@ -1378,15 +1378,15 @@ TEST_CASE("Parser: extern system declaration with filter and order by", "[parser
     CHECK(decl.order_by[1].alias == "pos");
     CHECK(decl.order_by[1].field == "pos.y");
     CHECK(decl.order_by[1].descending);
-    REQUIRE(decl.after_systems.size() == 1);
-    CHECK(decl.after_systems[0] == "TransformUpdate");
+    REQUIRE(decl.after_rules.size() == 1);
+    CHECK(decl.after_rules[0] == "TransformUpdate");
     REQUIRE(decl.target.has_value());
     CHECK(*decl.target == "cpu");
 }
 
-TEST_CASE("Parser: system order by single and default asc", "[parser][system-order-by]") {
+TEST_CASE("Parser: rule order by single and default asc", "[parser][rule-order-by]") {
     auto prog = parse(
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:\n"
         "        Sprite as s\n"
         "    order by:\n"
@@ -1394,16 +1394,16 @@ TEST_CASE("Parser: system order by single and default asc", "[parser][system-ord
         "    on tick:\n"
         "        x = 1\n");
 
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.order_by.size() == 1);
     CHECK(sys.order_by[0].alias == "s");
     CHECK(sys.order_by[0].field == "layer");
     CHECK_FALSE(sys.order_by[0].descending);
 }
 
-TEST_CASE("Parser: system order by multi key", "[parser][system-order-by]") {
+TEST_CASE("Parser: rule order by multi key", "[parser][rule-order-by]") {
     auto prog = parse(
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:\n"
         "        Position as p\n"
         "        Sprite as s\n"
@@ -1413,7 +1413,7 @@ TEST_CASE("Parser: system order by multi key", "[parser][system-order-by]") {
         "    on tick:\n"
         "        x = 1\n");
 
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.order_by.size() == 2);
     CHECK(sys.order_by[0].alias == "s");
     CHECK(sys.order_by[0].field == "layer");
@@ -1423,15 +1423,15 @@ TEST_CASE("Parser: system order by multi key", "[parser][system-order-by]") {
     CHECK(sys.order_by[1].descending);
 }
 
-TEST_CASE("Parser: system without order by leaves clause empty", "[parser][system-order-by]") {
+TEST_CASE("Parser: rule without order by leaves clause empty", "[parser][rule-order-by]") {
     auto prog = parse(
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:\n"
         "        Sprite\n"
         "    on tick:\n"
         "        x = 1\n");
 
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     CHECK(sys.order_by.empty());
 }
 
@@ -1439,7 +1439,7 @@ TEST_CASE("Parser: system without order by leaves clause empty", "[parser][syste
 
 TEST_CASE("Parser: pairs clause with two local-trait bindings", "[parser][pair-relations]") {
     auto prog = parse(
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1451,7 +1451,7 @@ TEST_CASE("Parser: pairs clause with two local-trait bindings", "[parser][pair-r
         "    on fixed_tick:\n"
         "        x = 1\n");
 
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.pairs.has_value());
     REQUIRE(sys.pairs->bindings.size() == 2);
 
@@ -1475,7 +1475,7 @@ TEST_CASE("Parser: pairs clause with two local-trait bindings", "[parser][pair-r
 TEST_CASE("Parser: pairs clause preserves imported trait qualification and binding-local alias",
           "[parser][pair-relations]") {
     auto prog = parse(
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1485,7 +1485,7 @@ TEST_CASE("Parser: pairs clause preserves imported trait qualification and bindi
         "    on fixed_tick:\n"
         "        x = 1\n");
 
-    auto& sys  = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys  = std::get<RuleNode>(prog.declarations[0]);
     auto& wall = sys.pairs->bindings[1];
     REQUIRE(wall.traits.size() == 2);
     CHECK(wall.traits[1].qualified_name == "tf.WorldTransform");
@@ -1495,7 +1495,7 @@ TEST_CASE("Parser: pairs clause preserves imported trait qualification and bindi
 
 TEST_CASE("Parser: pairs clause preserves source order and locations", "[parser][pair-relations]") {
     auto prog = parse(
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1504,7 +1504,7 @@ TEST_CASE("Parser: pairs clause preserves source order and locations", "[parser]
         "    on fixed_tick:\n"
         "        x = 1\n");
 
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.pairs.has_value());
     CHECK(sys.pairs->bindings[0].name == "body");
     CHECK(sys.pairs->bindings[1].name == "wall");
@@ -1512,16 +1512,16 @@ TEST_CASE("Parser: pairs clause preserves source order and locations", "[parser]
     CHECK(sys.pairs->bindings[0].traits[0].location.line > sys.pairs->bindings[0].location.line);
 }
 
-TEST_CASE("Parser: pairs remains a contextual identifier outside system-clause position",
+TEST_CASE("Parser: pairs remains a contextual identifier outside rule-clause position",
           "[parser][pair-relations]") {
     auto prog = parse(
-        "system UsesPairsLocal:\n"
+        "rule UsesPairsLocal:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
         "        let pairs = 1\n"
         "        x = pairs\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     CHECK_FALSE(sys.pairs.has_value());
     REQUIRE(sys.handlers.size() == 1);
     REQUIRE(sys.handlers[0].body.size() == 2);
@@ -1529,7 +1529,7 @@ TEST_CASE("Parser: pairs remains a contextual identifier outside system-clause p
 
 TEST_CASE("Parser: pairs clause with one binding is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
-        "system Bad:\n"
+        "rule Bad:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1540,7 +1540,7 @@ TEST_CASE("Parser: pairs clause with one binding is rejected", "[parser][pair-re
 
 TEST_CASE("Parser: pairs clause with three bindings is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
-        "system Bad:\n"
+        "rule Bad:\n"
         "    pairs:\n"
         "        a:\n"
         "            A\n"
@@ -1555,7 +1555,7 @@ TEST_CASE("Parser: pairs clause with three bindings is rejected", "[parser][pair
 
 TEST_CASE("Parser: pairs clause with an empty binding is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
-        "system Bad:\n"
+        "rule Bad:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1567,7 +1567,7 @@ TEST_CASE("Parser: pairs clause with an empty binding is rejected", "[parser][pa
 
 TEST_CASE("Parser: pairs clause combined with filter is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
-        "system Bad:\n"
+        "rule Bad:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1582,7 +1582,7 @@ TEST_CASE("Parser: pairs clause combined with filter is rejected", "[parser][pai
 
 TEST_CASE("Parser: pairs clause combined with exclude is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
-        "system Bad:\n"
+        "rule Bad:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1597,7 +1597,7 @@ TEST_CASE("Parser: pairs clause combined with exclude is rejected", "[parser][pa
 
 TEST_CASE("Parser: pairs clause combined with order by is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
-        "system Bad:\n"
+        "rule Bad:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1612,7 +1612,7 @@ TEST_CASE("Parser: pairs clause combined with order by is rejected", "[parser][p
 
 TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pair-relations]") {
     auto prog = parse(
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1621,7 +1621,7 @@ TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pai
         "    on fixed_tick:\n"
         "        body.Transform.x += 1.0\n");
 
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 1);
     const auto* assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(assign != nullptr);
@@ -1634,12 +1634,12 @@ TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pai
 
 TEST_CASE("Parser: bare assignment target still has an empty path", "[parser][pair-relations]") {
     auto prog = parse(
-        "system Simple:\n"
+        "rule Simple:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
         "        x = 1\n");
-    auto& sys           = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys           = std::get<RuleNode>(prog.declarations[0]);
     const auto* assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(assign != nullptr);
     CHECK(assign->name == "x");
@@ -1649,7 +1649,7 @@ TEST_CASE("Parser: bare assignment target still has an empty path", "[parser][pa
 TEST_CASE("Parser: dotted member chain without assignment operator parses as expression statement",
           "[parser][pair-relations]") {
     auto prog = parse(
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1658,7 +1658,7 @@ TEST_CASE("Parser: dotted member chain without assignment operator parses as exp
         "    on fixed_tick:\n"
         "        body.DynamicBody.active\n");
 
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 1);
     const auto* expr_stmt = std::get_if<ExprStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(expr_stmt != nullptr);
@@ -1667,9 +1667,9 @@ TEST_CASE("Parser: dotted member chain without assignment operator parses as exp
     CHECK(outer->member == "active");
 }
 
-TEST_CASE("Parser: pairs clause on extern system is rejected", "[parser][pair-relations]") {
+TEST_CASE("Parser: pairs clause on extern rule is rejected", "[parser][pair-relations]") {
     auto errors = parse_expect_errors(
-        "extern system Bad:\n"
+        "extern rule Bad:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1679,9 +1679,9 @@ TEST_CASE("Parser: pairs clause on extern system is rejected", "[parser][pair-re
     REQUIRE(errors.has_errors());
 }
 
-TEST_CASE("Parser: extern system rejects executable handler statements", "[parser][extern-system]") {
+TEST_CASE("Parser: extern rule rejects executable handler statements", "[parser][extern-rule]") {
     auto errors = parse_expect_errors(
-        "extern system Bad:\n"
+        "extern rule Bad:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
@@ -1762,13 +1762,13 @@ TEST_CASE("Parser: canonical frame phase graph preserves dependencies and initia
 }
 
 TEST_CASE("Parser: selectionless producer and selected renderer contracts preserve qualified entries",
-          "[parser][extern-system][handler-contract]") {
+          "[parser][extern-rule][handler-contract]") {
     auto prog = parse(
-        "extern system InputSource:\n"
+        "extern rule InputSource:\n"
         "    on std.core.input as input_phase:\n"
         "        emits:\n"
         "            game.input.InputSample\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        render.Sprite as sprite\n"
         "        transform.WorldTransform as world\n"
@@ -1782,7 +1782,7 @@ TEST_CASE("Parser: selectionless producer and selected renderer contracts preser
         "            graphics\n");
 
     REQUIRE(prog.declarations.size() == 2);
-    const auto& producer = std::get<ExternSystemNode>(prog.declarations[0]);
+    const auto& producer = std::get<ExternRuleNode>(prog.declarations[0]);
     CHECK(producer.filter.entries.empty());
     CHECK(producer.exclude.entries.empty());
     REQUIRE(producer.handlers.size() == 1);
@@ -1794,7 +1794,7 @@ TEST_CASE("Parser: selectionless producer and selected renderer contracts preser
     CHECK(producer.handlers[0].emits[0].spelling == "game.input.InputSample");
     CHECK(producer.handlers[0].emits[0].location == SourceLocation{"test.cactus", 5, 13});
 
-    const auto& renderer = std::get<ExternSystemNode>(prog.declarations[1]);
+    const auto& renderer = std::get<ExternRuleNode>(prog.declarations[1]);
     REQUIRE(renderer.filter.entries.size() == 2);
     REQUIRE(renderer.handlers.size() == 1);
     const auto& render_handler = renderer.handlers[0];
@@ -1816,7 +1816,7 @@ TEST_CASE("Parser: selectionless producer and selected renderer contracts preser
 
 TEST_CASE("Parser: handler after clause must precede executable statements", "[parser][handler-contract][errors]") {
     auto errors = parse_expect_errors(
-        "system Move:\n"
+        "rule Move:\n"
         "    on tick:\n"
         "        let elapsed = 1\n"
         "        after:\n"
@@ -1840,7 +1840,7 @@ TEST_CASE("Parser: phase and contract clauses require indented blocks", "[parser
     CHECK(phase_errors.has_errors());
 
     auto contract_errors = parse_expect_errors(
-        "extern system InputSource:\n"
+        "extern rule InputSource:\n"
         "    on input:\n"
         "        emits:\n"
         "        InputSample\n");
@@ -1850,7 +1850,7 @@ TEST_CASE("Parser: phase and contract clauses require indented blocks", "[parser
 TEST_CASE("Parser: malformed external handler aliases recover without looping",
           "[parser][handler-contract][errors][recovery]") {
     auto errors = parse_expect_errors(
-        "extern system InputSource:\n"
+        "extern rule InputSource:\n"
         "    on input as phase:\n"
         "        emits:\n"
         "            InputSample\n");
@@ -1859,7 +1859,7 @@ TEST_CASE("Parser: malformed external handler aliases recover without looping",
 }
 
 TEST_CASE("Parser: phases, external events, handler order, and external contracts",
-          "[parser][phase][extern-system][handler-contract]") {
+          "[parser][phase][extern-rule][handler-contract]") {
     auto prog = parse(
         "extern event HostTick:\n"
         "    dt: float\n"
@@ -1869,12 +1869,12 @@ TEST_CASE("Parser: phases, external events, handler order, and external contract
         "    every: 0.016\n"
         "    max: 4\n"
         "    dt: float = 0.0\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    on Update:\n"
         "        after:\n"
         "            game.Input/on Update\n"
         "        let elapsed = 1\n"
-        "extern system Physics:\n"
+        "extern rule Physics:\n"
         "    on Update:\n"
         "        reads:\n"
         "            Position\n"
@@ -1905,13 +1905,13 @@ TEST_CASE("Parser: phases, external events, handler order, and external contract
     REQUIRE(phase.fields.size() == 1);
     CHECK(phase.fields[0].name == "dt");
 
-    const auto& system = std::get<SystemNode>(prog.declarations[2]);
-    REQUIRE(system.handlers.size() == 1);
-    REQUIRE(system.handlers[0].after_handlers.size() == 1);
-    CHECK(system.handlers[0].after_handlers[0].spelling() == "game.Input/on Update");
-    REQUIRE(system.handlers[0].body.size() == 1);
+    const auto& rule = std::get<RuleNode>(prog.declarations[2]);
+    REQUIRE(rule.handlers.size() == 1);
+    REQUIRE(rule.handlers[0].after_handlers.size() == 1);
+    CHECK(rule.handlers[0].after_handlers[0].spelling() == "game.Input/on Update");
+    REQUIRE(rule.handlers[0].body.size() == 1);
 
-    const auto& external = std::get<ExternSystemNode>(prog.declarations[3]);
+    const auto& external = std::get<ExternRuleNode>(prog.declarations[3]);
     REQUIRE(external.handlers.size() == 1);
     const auto& contract = external.handlers[0];
     CHECK(contract.trigger_name == "Update");
@@ -1934,12 +1934,12 @@ TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait
     auto prog = parse(
         "event Collision:\n"
         "    other: entity_id\n"
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"
         "            Boss as b =>\n"
         "                let x = b.phase\n");
-    auto& sys        = std::get<SystemNode>(prog.declarations[1]);
+    auto& sys        = std::get<RuleNode>(prog.declarations[1]);
     auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match_stmt != nullptr);
     REQUIRE(match_stmt->arms.size() == 1);
@@ -1952,7 +1952,7 @@ TEST_CASE("Parser: trait match statement multiple arms and wildcard", "[parser][
     auto prog = parse(
         "event Collision:\n"
         "    other: entity_id\n"
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"
         "            Boss as b =>\n"
@@ -1961,7 +1961,7 @@ TEST_CASE("Parser: trait match statement multiple arms and wildcard", "[parser][
         "                pass\n"
         "            _ =>\n"
         "                pass\n");
-    auto& sys        = std::get<SystemNode>(prog.declarations[1]);
+    auto& sys        = std::get<RuleNode>(prog.declarations[1]);
     auto* match_stmt = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match_stmt != nullptr);
     REQUIRE(match_stmt->arms.size() == 2);
@@ -1972,12 +1972,12 @@ TEST_CASE("Parser: trait match statement multiple arms and wildcard", "[parser][
 
 TEST_CASE("Parser: add statement with block parsed", "[parser][dynamic-traits]") {
     auto prog = parse(
-        "system FreezeSystem:\n"
+        "rule FreezeSystem:\n"
         "    on tick:\n"
         "        add Health:\n"
         "            current = 100\n"
         "            max = 100\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     auto* add = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(add != nullptr);
     CHECK(add->trait_name == "Health");
@@ -1988,12 +1988,12 @@ TEST_CASE("Parser: add statement with block parsed", "[parser][dynamic-traits]")
 
 TEST_CASE("Parser: add and remove statements with cross-entity targets parsed", "[parser][dynamic-traits]") {
     auto prog = parse(
-        "system FreezeSystem:\n"
+        "rule FreezeSystem:\n"
         "    on tick:\n"
         "        add Frozen to target_id:\n"
         "            duration = 2.0\n"
         "        remove Frozen from target_id\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 2);
     auto* add    = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     auto* remove = std::get_if<RemoveTraitStmt>(&sys.handlers[0].body[1]->stmt);
@@ -2003,30 +2003,30 @@ TEST_CASE("Parser: add and remove statements with cross-entity targets parsed", 
     REQUIRE(remove->target_expr.has_value());
 }
 
-TEST_CASE("Parser: system with multiple after: entries", "[parser][system-ordering]") {
+TEST_CASE("Parser: rule with multiple after: entries", "[parser][rule-ordering]") {
     auto prog = parse(
-        "system Debug:\n"
+        "rule Debug:\n"
         "    after:\n"
         "        SceneRender\n"
         "        UIRender\n"
         "    on tick:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
-    REQUIRE(sys.after_systems.size() == 2);
-    CHECK(sys.after_systems[0] == "SceneRender");
-    CHECK(sys.after_systems[1] == "UIRender");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.after_rules.size() == 2);
+    CHECK(sys.after_rules[0] == "SceneRender");
+    CHECK(sys.after_rules[1] == "UIRender");
 }
 
 // ── dsl-event-handler-syntax parser tests ───────────────────────────────────
 
 TEST_CASE("Parser: on tick with alias parsed", "[parser][dsl-event-handler-syntax]") {
     auto prog = parse(
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick as t:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "tick");
     REQUIRE(sys.handlers[0].alias.has_value());
@@ -2035,10 +2035,10 @@ TEST_CASE("Parser: on tick with alias parsed", "[parser][dsl-event-handler-synta
 
 TEST_CASE("Parser: on user event with alias parsed", "[parser][dsl-event-handler-syntax]") {
     auto prog = parse(
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on PlayerDamaged as dmg:\n"
         "        x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers.size() == 1);
     CHECK(sys.handlers[0].event_name == "PlayerDamaged");
     REQUIRE(sys.handlers[0].alias.has_value());
@@ -2073,7 +2073,7 @@ TEST_CASE("Parser: malformed trait fixture completes without hanging", "[parser]
     CHECK(errors.error_count() >= 2);
 }
 
-TEST_CASE("Parser: malformed system fixture completes without hanging", "[parser][recovery]") {
+TEST_CASE("Parser: malformed rule fixture completes without hanging", "[parser][recovery]") {
     auto errors = parse_fixture_expect_errors_with_timeout("malformed_system.cactus");
     CHECK(errors.error_count() >= 2);
 }
@@ -2200,7 +2200,7 @@ TEST_CASE("Parser: trait field named 'entity' produces reserved-keyword error", 
 
 // ── std.editor module parser tests (add-std-editor) ─────────────────────────
 
-TEST_CASE("Parser: std.editor module parses enum, traits, events, extern funcs, extern systems without errors",
+TEST_CASE("Parser: std.editor module parses enum, traits, events, extern funcs, extern rules without errors",
           "[parser][stdlib][editor]") {
     auto prog = parse(
         "module std.editor\n"
@@ -2250,16 +2250,16 @@ TEST_CASE("Parser: std.editor module parses enum, traits, events, extern funcs, 
         "pub extern func camera_exit()\n"
         "pub extern func apply_camera_2d(view_center: vec2, zoom: float)\n"
         "pub extern func apply_camera_3d(position: vec3, rotation: quat)\n"
-        "pub extern system EditorTemplatePalette:\n"
+        "pub extern rule EditorTemplatePalette:\n"
         "    filter:\n"
         "        EditorState\n"
-        "pub extern system EditorPropertyPanel:\n"
+        "pub extern rule EditorPropertyPanel:\n"
         "    filter:\n"
         "        EditorState\n"
-        "pub extern system GizmoRenderer2D:\n"
+        "pub extern rule GizmoRenderer2D:\n"
         "    filter:\n"
         "        EditorGizmo2D\n"
-        "pub extern system GizmoRenderer3D:\n"
+        "pub extern rule GizmoRenderer3D:\n"
         "    filter:\n"
         "        EditorGizmo3D\n");
     CHECK(prog.declarations.size() >= 20);
@@ -2480,7 +2480,7 @@ TEST_CASE("Parser: template-backed entity with nested child overrides", "[parser
 
 TEST_CASE("Parser: spawn statement with child overrides", "[parser][hierarchy]") {
     auto prog = parse(
-        "system Spawner:\n"
+        "rule Spawner:\n"
         "    on tick:\n"
         "        spawn PlayerRig:\n"
         "            LocalTransform:\n"
@@ -2489,7 +2489,7 @@ TEST_CASE("Parser: spawn statement with child overrides", "[parser][hierarchy]")
         "                WeaponSocket:\n"
         "                    LocalTransform:\n"
         "                        position = vec3(0.5, 1.1, 0.0)\n");
-    auto& sys   = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys   = std::get<RuleNode>(prog.declarations[0]);
     auto* spawn = std::get_if<SpawnStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(spawn != nullptr);
     REQUIRE(spawn->overrides.size() == 1);
@@ -2502,7 +2502,7 @@ TEST_CASE("Parser: spawn statement with child overrides", "[parser][hierarchy]")
 
 TEST_CASE("Parser: spawn expression with child overrides", "[parser][hierarchy]") {
     auto prog = parse(
-        "system Spawner:\n"
+        "rule Spawner:\n"
         "    on tick:\n"
         "        let root = spawn PlayerRig:\n"
         "            Tag\n"
@@ -2512,7 +2512,7 @@ TEST_CASE("Parser: spawn expression with child overrides", "[parser][hierarchy]"
         "                        Sword:\n"
         "                            Renderer:\n"
         "                                tint = 1.0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     auto* let = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* spawn = std::get_if<SpawnExpr>(&let->value->expr);
@@ -2591,12 +2591,12 @@ TEST_CASE("Parser: qualified trait entry in template body", "[parser][module-qua
 
 TEST_CASE("Parser: qualified add remove project statements", "[parser][module-qualified]") {
     auto prog = parse(
-        "system TagSystem:\n"
+        "rule TagSystem:\n"
         "    on tick:\n"
         "        add editor.EditorSelected to self\n"
         "        project debug.Highlight to self\n"
         "        remove editor.EditorSelected from self\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.handlers[0].body.size() == 3);
     auto* add     = std::get_if<AddTraitStmt>(&sys.handlers[0].body[0]->stmt);
     auto* project = std::get_if<ProjectTraitStmt>(&sys.handlers[0].body[1]->stmt);
@@ -2611,12 +2611,12 @@ TEST_CASE("Parser: qualified add remove project statements", "[parser][module-qu
 
 TEST_CASE("Parser: qualified spawn template name and override traits", "[parser][module-qualified]") {
     auto prog = parse(
-        "system Spawner:\n"
+        "rule Spawner:\n"
         "    on tick:\n"
         "        spawn enemies.Walker:\n"
         "            flat.WorldTransform:\n"
         "                x = 1.0\n");
-    auto& sys   = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys   = std::get<RuleNode>(prog.declarations[0]);
     auto* spawn = std::get_if<SpawnStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(spawn != nullptr);
     CHECK(spawn->template_name == "enemies.Walker");
@@ -2626,12 +2626,12 @@ TEST_CASE("Parser: qualified spawn template name and override traits", "[parser]
 
 TEST_CASE("Parser: qualified spawn expression template and override traits", "[parser][module-qualified]") {
     auto prog = parse(
-        "system Spawner:\n"
+        "rule Spawner:\n"
         "    on tick:\n"
         "        let e = spawn enemies.Walker:\n"
         "            flat.WorldTransform:\n"
         "                x = 0.0\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     auto* let = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* spawn = std::get_if<SpawnExpr>(&let->value->expr);
@@ -2643,7 +2643,7 @@ TEST_CASE("Parser: qualified spawn expression template and override traits", "[p
 
 TEST_CASE("Parser: qualified trait match arm", "[parser][module-qualified]") {
     auto prog = parse(
-        "system MatchSys:\n"
+        "rule MatchSys:\n"
         "    filter:\n"
         "        Marker\n"
         "    on tick:\n"
@@ -2652,7 +2652,7 @@ TEST_CASE("Parser: qualified trait match arm", "[parser][module-qualified]") {
         "                add enemy.Activated\n"
         "            _ =>\n"
         "                add enemy.Idle\n");
-    auto& sys   = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys   = std::get<RuleNode>(prog.declarations[0]);
     auto* match = std::get_if<TraitMatchStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(match != nullptr);
     REQUIRE(match->arms.size() == 1);
@@ -2664,10 +2664,10 @@ TEST_CASE("Parser: qualified trait match arm", "[parser][module-qualified]") {
 
 TEST_CASE("Parser: qualified query filter predicate", "[parser][module-qualified]") {
     auto prog = parse(
-        "system QuerySys:\n"
+        "rule QuerySys:\n"
         "    on tick:\n"
         "        let n = query.count[enemy.Boss, not enemy.Idle]()\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
     auto* let = std::get_if<LetStmt>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(let != nullptr);
     auto* qcall = std::get_if<QueryCallExpr>(&let->value->expr);
@@ -2679,29 +2679,29 @@ TEST_CASE("Parser: qualified query filter predicate", "[parser][module-qualified
     CHECK(qcall->filters[1].negated);
 }
 
-TEST_CASE("Parser: qualified system name in after clause", "[parser][module-qualified]") {
+TEST_CASE("Parser: qualified rule name in after clause", "[parser][module-qualified]") {
     auto prog = parse(
-        "system Follow2D:\n"
+        "rule Follow2D:\n"
         "    after:\n"
         "        flat.TransformPropagation\n"
         "    on tick:\n"
         "        let x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
-    REQUIRE(sys.after_systems.size() == 1);
-    CHECK(sys.after_systems[0] == "flat.TransformPropagation");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.after_rules.size() == 1);
+    CHECK(sys.after_rules[0] == "flat.TransformPropagation");
 }
 
-TEST_CASE("Parser: qualified after clause with multiple systems", "[parser][module-qualified]") {
+TEST_CASE("Parser: qualified after clause with multiple rules", "[parser][module-qualified]") {
     auto prog = parse(
-        "system Renderer:\n"
+        "rule Renderer:\n"
         "    after:\n"
         "        flat.TransformPropagation\n"
         "        volume.TransformPropagation\n"
         "    on tick:\n"
         "        let x = 1\n");
-    auto& sys = std::get<SystemNode>(prog.declarations[0]);
-    REQUIRE(sys.after_systems.size() == 2);
-    CHECK(sys.after_systems[0] == "flat.TransformPropagation");
-    CHECK(sys.after_systems[1] == "volume.TransformPropagation");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.after_rules.size() == 2);
+    CHECK(sys.after_rules[0] == "flat.TransformPropagation");
+    CHECK(sys.after_rules[1] == "volume.TransformPropagation");
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

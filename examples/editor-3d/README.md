@@ -9,12 +9,12 @@ and outlines the selection with a wire box.
 
 The editor starts in 2D interaction mode by default; this example flips
 `EditorState.use_3d` to `true` in a load handler. The flag makes the 2D and 3D
-selection/placement systems mutually exclusive — a 3D project that leaves it
+selection/placement rules mutually exclusive — a 3D project that leaves it
 `false` gets silently dead editor clicks, so set it whenever you combine
 `std.editor` with `std.transform.volume`.
 
 Spawned characters are height-normalized on tick: a marker trait
-(`CharacterScale.normalized`) starts `false`, and a system scales the
+(`CharacterScale.normalized`) starts `false`, and a rule scales the
 transform so the model's bind-pose height equals `TARGET_HEIGHT`, then sets
 the flag. This runs for palette spawns and scene-authored entities alike.
 

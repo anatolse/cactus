@@ -35,7 +35,7 @@ static std::vector<TokenType> token_types(const std::vector<Token>& tokens) {
 }
 
 TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
-    auto tokens = lex("module use const struct enum trait unit system view event func interface for in project");
+    auto tokens = lex("module use const struct enum trait unit rule view event func interface for in project");
     auto types  = token_types(tokens);
     REQUIRE(types.size() == 15);
     CHECK(types[0] == TokenType::MODULE);
@@ -45,7 +45,7 @@ TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
     CHECK(types[4] == TokenType::ENUM);
     CHECK(types[5] == TokenType::TRAIT);
     CHECK(types[6] == TokenType::IDENTIFIER);
-    CHECK(types[7] == TokenType::SYSTEM);
+    CHECK(types[7] == TokenType::RULE);
     CHECK(types[8] == TokenType::VIEW);
     CHECK(types[9] == TokenType::EVENT);
     CHECK(types[10] == TokenType::FUNC);
@@ -67,12 +67,12 @@ TEST_CASE("Lexer: modifier keywords", "[lexer]") {
 }
 
 TEST_CASE("Lexer: keyword vs identifier", "[lexer]") {
-    auto tokens = lex("system system_name");
+    auto tokens = lex("rule rule_name");
     auto types  = token_types(tokens);
     REQUIRE(types.size() == 2);
-    CHECK(types[0] == TokenType::SYSTEM);
+    CHECK(types[0] == TokenType::RULE);
     CHECK(types[1] == TokenType::IDENTIFIER);
-    CHECK(tokens[1].value == "system_name");
+    CHECK(tokens[1].value == "rule_name");
 }
 
 TEST_CASE("Lexer: apply and config are identifiers", "[lexer]") {

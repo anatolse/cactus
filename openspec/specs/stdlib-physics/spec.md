@@ -145,11 +145,11 @@ The `std.physics.volume` module SHALL provide traits and events for 3D kinematic
 
 ---
 
-### Requirement: Physics traits are passive — no user systems required for simulation
-The physics backend SHALL run the physics simulation step automatically during `fixed_tick` without requiring user-written systems. User systems MAY read and write `CharacterBody.velocity` to apply forces and movement intent.
+### Requirement: Physics traits are passive — no user rules required for simulation
+The physics backend SHALL run the physics simulation step automatically during `fixed_tick` without requiring user-written rules. User rules MAY read and write `CharacterBody.velocity` to apply forces and movement intent.
 
 #### Scenario: Setting velocity drives movement
-- **WHEN** a user system writes `CharacterBody.velocity = vec3(5.0, 0.0, 0.0)` in `on fixed_tick`
+- **WHEN** a user rule writes `CharacterBody.velocity = vec3(5.0, 0.0, 0.0)` in `on fixed_tick`
 - **THEN** the physics backend moves the entity by that velocity × dt, resolving collisions
 
 ### Requirement: std.physics.flat exposes trait-filtered query namespace

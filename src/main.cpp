@@ -152,14 +152,14 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
         syms.templates[name] = tmpl;
     }
     for (const auto& dep : prog.dependency_graph) {
-        const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::System, module_name, dep.system_name);
-        cactus::ImportedSystem sys;
-        sys.name                      = symbol.local_name;
-        sys.module_name               = symbol.module.name;
-        sys.canonical_id              = cactus::make_canonical_id(symbol);
-        sys.symbol_id                 = symbol;
-        sys.after_systems             = dep.after_systems;
-        syms.systems[dep.system_name] = sys;
+        const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::Rule, module_name, dep.rule_name);
+        cactus::ImportedRule rule;
+        rule.name                   = symbol.local_name;
+        rule.module_name            = symbol.module.name;
+        rule.canonical_id           = cactus::make_canonical_id(symbol);
+        rule.symbol_id              = symbol;
+        rule.after_rules            = dep.after_rules;
+        syms.rules[dep.rule_name]   = rule;
     }
     // Export public runtime declarations with their typed canonical identity
     // and external-event provenance intact.
@@ -231,7 +231,7 @@ static bool compile_implicit_std_core(const fs::path& build_dir,
     compiled["std.core"] = std::move(dec);
 
     // Preserve std.core's declaration ASTs for final codegen so its runtime
-    // events, phases, traits, and systems (frame, phase graph, SceneCleanup,
+    // events, phases, traits, and rules (frame, phase graph, SceneCleanup,
     // etc.) are emitted even though it is precompiled and skipped in the
     // per-module merge loop below. Tag events with their source module so
     // emit_event uses the canonical module prefix.
@@ -426,7 +426,7 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
             artifact_paths.push_back(build_dir / (mod.qualified_name + ".cmod"));
 
             // Preserve full declaration ASTs for final codegen so imported
-            // units/systems/extern systems from stdlib modules are also emitted.
+            // units/rules/extern rules from stdlib modules are also emitted.
             // Tag events with their source module so emit_event can use the canonical module prefix.
             for (auto& decl : mod_prog->declarations) {
                 if (auto* ev = std::get_if<cactus::EventNode>(&decl)) {
@@ -450,7 +450,7 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
         }
         decorated = std::move(*merged);
         // Preserve a merged AST for code generation so imported stdlib/app
-        // declarations (units, systems, extern systems, consts, etc.) are
+        // declarations (units, rules, extern rules, consts, etc.) are
         // still emitted after multi-module linking. Artifacts intentionally do
         // not serialize AST structure.
         decorated.ast = merged_codegen_prog.get();

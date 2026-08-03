@@ -114,7 +114,7 @@ pub enum GamepadAxis:
     TriggerR
 
 # ── Query Functions ───────────────────────────────────────────────────────────
-# These are called from on input() and any system handler.
+# These are called from on input() and any rule handler.
 # InputButton and InputAxis values come from `input` declarations (see spec §3.17).
 
 pub extern func pressed(b: InputButton) bool

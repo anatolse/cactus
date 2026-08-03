@@ -16,7 +16,7 @@ pub trait Shape:
     var color: color = #FFFFFFFF
     var visible: bool = true
 
-extern system ShapeRenderer:
+extern rule ShapeRenderer:
     filter:
         tf.WorldTransform
         Shape

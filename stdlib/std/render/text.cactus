@@ -19,7 +19,7 @@ pub trait TextLabel:
 
 # Fires for entities with a 2D (flat) WorldTransform.
 # font_size is interpreted as screen pixels.
-extern system TextRenderer2D:
+extern rule TextRenderer2D:
     filter:
         tf.WorldTransform
         TextLabel
@@ -34,7 +34,7 @@ extern system TextRenderer2D:
 # Fires for entities with a 3D (volume) WorldTransform.
 # font_size is interpreted as world units; text is baked to a RenderTexture2D
 # cached by content and drawn as a plane mesh following the entity's orientation.
-extern system TextRenderer3D:
+extern rule TextRenderer3D:
     filter:
         tv.WorldTransform
         TextLabel
@@ -61,7 +61,7 @@ pub trait ScreenLabel:
     var visible:   bool   = true
 
 # Draws visible labels at their window position, overlaying 2D and 3D content.
-extern system ScreenLabelSystem:
+extern rule ScreenLabelRender:
     filter:
         ScreenLabel
 

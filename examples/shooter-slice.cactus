@@ -73,7 +73,7 @@ template PlayerBullet:
         damage = 1
         lifetime = BULLET_LIFETIME
 
-system ReadPlayerInput:
+rule ReadPlayerInput:
     filter:
         PlayerInput as input_state
 
@@ -81,7 +81,7 @@ system ReadPlayerInput:
         input_state.move = input.axis2(MoveX, MoveY)
         input_state.fire_pressed = input.pressed(Fire)
 
-system PlayerMoveSystem:
+rule PlayerMoveSystem:
     filter:
         Position as pos
         PlayerInput as input_state
@@ -91,7 +91,7 @@ system PlayerMoveSystem:
         pos.velocity = input_state.move * PLAYER_SPEED
         pos.pos = pos.pos + pos.velocity * tick.dt
 
-system FireSystem:
+rule FireSystem:
     filter:
         Position as pos
         PlayerInput as input_state
@@ -111,7 +111,7 @@ system FireSystem:
             emit ShotFired:
                 origin = pos.pos
 
-system BulletMoveSystem:
+rule BulletMoveSystem:
     filter:
         Position as pos
         Bullet as bullet
@@ -122,7 +122,7 @@ system BulletMoveSystem:
         if bullet.lifetime <= 0.0:
             destroy
 
-system BulletHitSystem:
+rule BulletHitSystem:
     filter:
         Position as pos
         Bullet as bullet
@@ -134,7 +134,7 @@ system BulletHitSystem:
                 amount = bullet.damage
             destroy
 
-system EnemyHealthSystem:
+rule EnemyHealthSystem:
     filter:
         Enemy as enemy
 

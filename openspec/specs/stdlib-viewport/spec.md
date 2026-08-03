@@ -42,11 +42,11 @@ When a module imports `std.camera.viewport`, the cpp-entt codegen SHALL emit a v
 
 #### Scenario: 2D camera set per viewport
 - **WHEN** a Viewport entity also has `std.camera.flat.Camera` with `zoom=32`
-- **THEN** the render loop calls `set_active_camera_2d` with a Camera2D derived from that entity's Camera before calling render systems for that viewport
+- **THEN** the render loop calls `set_active_camera_2d` with a Camera2D derived from that entity's Camera before calling render rules for that viewport
 
 #### Scenario: 3D camera set per viewport
 - **WHEN** a Viewport entity also has `std.camera.volume.Camera` and `std.transform.volume.Transform`
-- **THEN** the render loop calls `set_active_camera_3d` with a Camera3D derived from that entity's Camera and Transform before calling render systems for that viewport
+- **THEN** the render loop calls `set_active_camera_3d` with a Camera3D derived from that entity's Camera and Transform before calling render rules for that viewport
 
 #### Scenario: Viewport without Camera trait has no view transform set
 - **WHEN** a Viewport entity has neither `std.camera.flat.Camera` nor `std.camera.volume.Camera`

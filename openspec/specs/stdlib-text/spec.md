@@ -6,7 +6,7 @@ Define the required behavior of the `std.text` standard library module, which pr
 ### Requirement: `std.text` provides C++20-style text formatting
 The stdlib SHALL provide a `std.text` module containing a compiler-recognized `format` operation. `format` SHALL accept a string-literal format string followed by zero or more formatting values and SHALL return `string`.
 
-`format` SHALL be pure from the Cactus language perspective and SHALL be callable from both pure `func` declarations and system event handlers. The operation SHALL be recognized through normal `std.text` import usage, including unaliased import calls such as `format(...)` and aliased member calls such as `text.format(...)` after `use std.text as text`.
+`format` SHALL be pure from the Cactus language perspective and SHALL be callable from both pure `func` declarations and rule event handlers. The operation SHALL be recognized through normal `std.text` import usage, including unaliased import calls such as `format(...)` and aliased member calls such as `text.format(...)` after `use std.text as text`.
 
 `format` is a stdlib intrinsic rather than a normal fixed-arity `extern func`; the first version does not require or introduce general variadic function declarations.
 

@@ -7,7 +7,7 @@ Define the editor-3d example: scene composition, template palette entries, the 3
 ## Requirements
 
 ### Requirement: Editor 3D example composes an editable animated 3D scene
-The repository SHALL provide `examples/editor-3d/main.cactus` (module `editor_3d`) importing `std.editor`, `std.input`, `std.transform.volume`, `std.render.models`, `std.render.meshes`, `std.camera.volume`, and `std.camera.viewport`. The scene SHALL declare a fixed angled 3D camera with a viewport and at least one point light, and SHALL set `EditorState.use_3d = true` at startup (e.g. via a load handler, since `std.editor` auto-creates the `Editor` entity). The `EditorTemplatePalette` and `GizmoRenderer3D` extern systems are provided by the `std.editor` import. Model assets SHALL be reused from `examples/model-renderer/art/` (robot and knight GLBs); the example SHALL add no new binary assets.
+The repository SHALL provide `examples/editor-3d/main.cactus` (module `editor_3d`) importing `std.editor`, `std.input`, `std.transform.volume`, `std.render.models`, `std.render.meshes`, `std.camera.volume`, and `std.camera.viewport`. The scene SHALL declare a fixed angled 3D camera with a viewport and at least one point light, and SHALL set `EditorState.use_3d = true` at startup (e.g. via a load handler, since `std.editor` auto-creates the `Editor` entity). The `EditorTemplatePalette` and `GizmoRenderer3D` extern rules are provided by the `std.editor` import. Model assets SHALL be reused from `examples/model-renderer/art/` (robot and knight GLBs); the example SHALL add no new binary assets.
 
 #### Scenario: Example compiles through the cpp-entt backend
 - **WHEN** the `example_editor_3d_generated` target builds
@@ -30,7 +30,7 @@ The example SHALL declare at least two `pub template` character templates (robot
 - **AND** the new entity's `ModelAnimator` is playing
 
 ### Requirement: Spawned characters are normalized to a target height
-The example SHALL normalize each character's scale at spawn time: a system SHALL detect characters whose scale-normalization flag is unset, compute `TARGET_HEIGHT / models.bounds_size(model).y` (skipping models reporting zero height), write the uniform scale to the transform, and set the flag. Scene-authored and palette-spawned characters SHALL go through the same normalization path.
+The example SHALL normalize each character's scale at spawn time: a rule SHALL detect characters whose scale-normalization flag is unset, compute `TARGET_HEIGHT / models.bounds_size(model).y` (skipping models reporting zero height), write the uniform scale to the transform, and set the flag. Scene-authored and palette-spawned characters SHALL go through the same normalization path.
 
 #### Scenario: Palette-spawned knight matches the target height
 - **WHEN** a knight is placed via the palette
@@ -38,7 +38,7 @@ The example SHALL normalize each character's scale at spawn time: a system SHALL
 
 #### Scenario: Unloadable model keeps default scale
 - **WHEN** a placed character's model reports zero bounds height
-- **THEN** the normalization system leaves its scale unchanged and does not divide by zero
+- **THEN** the normalization rule leaves its scale unchanged and does not divide by zero
 
 ### Requirement: Ground grid is visible while editing
 Because the example declares `GizmoRenderer3D` and its `EditorState` starts active, the y=0 ground grid SHALL be visible on startup, and toggling edit mode with F1 SHALL hide and show the grid together with the palette and edit-mode overlay.

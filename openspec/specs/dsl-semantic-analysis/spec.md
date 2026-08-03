@@ -11,7 +11,7 @@ The semantic analyzer SHALL resolve all type references in the AST to concrete T
 - **THEN** the analyzer reports an error "unknown type 'Foo'" with the source location
 
 ### Requirement: Const-string enforcement
-The semantic analyzer SHALL reject string literals (`"..."`) that appear outside of `const` blocks, `asset` declarations, or the first argument position of a recognized `std.text.format` call. String literals in other `trait`, `unit`, `system`, `func`, and `event` expression positions SHALL produce a compile error.
+The semantic analyzer SHALL reject string literals (`"..."`) that appear outside of `const` blocks, `asset` declarations, or the first argument position of a recognized `std.text.format` call. String literals in other `trait`, `unit`, `rule`, `func`, and `event` expression positions SHALL produce a compile error.
 
 #### Scenario: String literal in trait body rejected
 - **WHEN** a trait field has a default value of `"hello"`
@@ -26,7 +26,7 @@ The semantic analyzer SHALL reject string literals (`"..."`) that appear outside
 - **THEN** the analyzer accepts the string literal as an asset path without error
 
 #### Scenario: Format string literal accepted in recognized format call
-- **WHEN** a system handler or pure function contains `text.format("HP: {}", hp)` and `text` resolves to `std.text`
+- **WHEN** a rule handler or pure function contains `text.format("HP: {}", hp)` and `text` resolves to `std.text`
 - **THEN** the analyzer accepts the first string literal as a format string without reporting the const-string error
 
 #### Scenario: Non-format string argument remains rejected
@@ -105,26 +105,26 @@ The semantic analyzer SHALL validate that `persist` and `sync` modifiers are onl
 - **WHEN** a trait field is declared as `sync var position: vec3`
 - **THEN** the analyzer accepts it and sets is_sync=true on the TypeInfo
 
-### Requirement: System filter validation
-The semantic analyzer SHALL verify that all trait names referenced in system `filter:` clauses correspond to declared traits (local or imported).
+### Requirement: Rule filter validation
+The semantic analyzer SHALL verify that all trait names referenced in rule `filter:` clauses correspond to declared traits (local or imported).
 
 #### Scenario: Valid filter traits
-- **WHEN** a system has `filter:` listing `Position` and `Velocity`, and both traits are declared
+- **WHEN** a rule has `filter:` listing `Position` and `Velocity`, and both traits are declared
 - **THEN** the analyzer accepts the filter clause
 
 #### Scenario: Unknown trait in filter
-- **WHEN** a system has `filter:` listing `NonExistent` and that trait is not declared
-- **THEN** the analyzer reports an error "unknown trait 'NonExistent' in system filter"
+- **WHEN** a rule has `filter:` listing `NonExistent` and that trait is not declared
+- **THEN** the analyzer reports an error "unknown trait 'NonExistent' in rule filter"
 
 ### Requirement: Event validation
 The semantic analyzer SHALL verify that all `emit` statements reference declared events. All event handlers SHALL have no parameter list (the new syntax has none). The analyzer SHALL NOT enforce separate rules for lifecycle vs. user event handlers — both are validated by resolving the event name against declared event types (including std.core lifecycle events). Event payload fields are declared without trait-style modifiers and are implicitly immutable members of the event type.
 
 #### Scenario: Emit of declared event accepted
-- **WHEN** a system handler contains `emit Damage(amount = 10)` and `event Damage:` is declared with field `amount: int`
+- **WHEN** a rule handler contains `emit Damage(amount = 10)` and `event Damage:` is declared with field `amount: int`
 - **THEN** the analyzer accepts the emit statement
 
 #### Scenario: Emit of undeclared event rejected
-- **WHEN** a system handler contains `emit Foo()` and no `event Foo:` is declared
+- **WHEN** a rule handler contains `emit Foo()` and no `event Foo:` is declared
 - **THEN** the analyzer reports an error "undeclared event 'Foo'"
 
 #### Scenario: Handler for undeclared event rejected
@@ -132,7 +132,7 @@ The semantic analyzer SHALL verify that all `emit` statements reference declared
 - **THEN** the analyzer reports an error "undeclared event 'GhostSignal'"
 
 #### Scenario: Handler for stdlib lifecycle event accepted
-- **WHEN** `on tick:` appears in a system body
+- **WHEN** `on tick:` appears in a rule body
 - **THEN** the analyzer resolves `tick` from std.core and accepts the handler
 
 #### Scenario: Event field is implicitly immutable
@@ -142,8 +142,8 @@ The semantic analyzer SHALL verify that all `emit` statements reference declared
 ### Requirement: Dependency graph construction
 The semantic analyzer SHALL build a canonical handler execution graph from phase dependencies, per-handler inferred or declared contracts, explicit handler ordering, data/effect conflicts, event production and consumption, and activation commits. The graph SHALL be included in the DecoratedProgram and SHALL preserve independent nodes as parallelizable dependency levels.
 
-#### Scenario: Handler contracts are not merged by system
-- **WHEN** one system has a tick handler that writes Position and a Damaged handler that writes Health
+#### Scenario: Handler contracts are not merged by rule
+- **WHEN** one rule has a tick handler that writes Position and a Damaged handler that writes Health
 - **THEN** the graph records those accesses on separate handler nodes
 
 #### Scenario: Filter selection adds no read
@@ -206,47 +206,47 @@ The semantic analyzer SHALL report an error when an unqualified module-scope ref
 - **THEN** the analyzer reports that `Config` is imported from module `A` and must be referenced as `A.Config` or through an alias
 
 ### Requirement: Semantic analyzer produces resolved module-scope references
-The semantic analyzer SHALL produce a resolved representation in which every module-scope reference used by later phases carries a typed symbol identity. This includes type references, trait applications, filters, excludes, query filters, trait-match arms, event handlers, emit statements, system `after:` references, template uses, spawn sites, module-scope function calls, assets, inputs, and constants.
+The semantic analyzer SHALL produce a resolved representation in which every module-scope reference used by later phases carries a typed symbol identity. This includes type references, trait applications, filters, excludes, query filters, trait-match arms, event handlers, emit statements, rule `after:` references, template uses, spawn sites, module-scope function calls, assets, inputs, and constants.
 
 #### Scenario: Filter entry stores resolved trait identity
-- **WHEN** a system filter references `phys.Body as body` through `use std.physics.flat as phys`
+- **WHEN** a rule filter references `phys.Body as body` through `use std.physics.flat as phys`
 - **THEN** the semantic representation stores the trait symbol identity `std.physics.flat.Body` on that filter entry
 
 #### Scenario: Add statement stores resolved trait identity
 - **WHEN** a handler contains `add phys.Body to target`
 - **THEN** the semantic representation stores the trait symbol identity `std.physics.flat.Body` on the add statement
 
-#### Scenario: after clause stores resolved system identity
-- **WHEN** a system has `after:` containing `render.SpriteRenderer`
-- **THEN** the semantic representation stores the referenced system's canonical symbol identity rather than the authored string
+#### Scenario: after clause stores resolved rule identity
+- **WHEN** a rule has `after:` containing `render.SpriteRenderer`
+- **THEN** the semantic representation stores the referenced rule's canonical symbol identity rather than the authored string
 
 ### Requirement: Filter clause aliases for trait fields
-The semantic analyzer SHALL support `as` aliases in system `filter:` clauses. Both the alias and the trait name are valid access paths. Unqualified field access (without any prefix) is not permitted.
+The semantic analyzer SHALL support `as` aliases in rule `filter:` clauses. Both the alias and the trait name are valid access paths. Unqualified field access (without any prefix) is not permitted.
 
 #### Scenario: Filter alias used for field access
-- **WHEN** a system has a filter entry `phys.Body as b`
+- **WHEN** a rule has a filter entry `phys.Body as b`
 - **THEN** `b.x` resolves to the `x` field of `Body`
 
 #### Scenario: Filter with no alias uses trait name as access path
-- **WHEN** a system has a filter entry `Position` with no alias
+- **WHEN** a rule has a filter entry `Position` with no alias
 - **THEN** `Position.x` resolves to the `x` field of `Position`
 
-### Requirement: Field access validation — mandatory alias.field in system handlers
-The semantic analyzer SHALL enforce that all trait field accesses within system handler bodies use the `alias.field` or `TraitName.field` form. Bare unqualified identifiers that resolve to trait fields SHALL be rejected.
+### Requirement: Field access validation — mandatory alias.field in rule handlers
+The semantic analyzer SHALL enforce that all trait field accesses within rule handler bodies use the `alias.field` or `TraitName.field` form. Bare unqualified identifiers that resolve to trait fields SHALL be rejected.
 
 #### Scenario: Alias.field access accepted
-- **WHEN** a system has `filter: Position as pos` and the handler body contains `pos.x += 1.0`
+- **WHEN** a rule has `filter: Position as pos` and the handler body contains `pos.x += 1.0`
 - **THEN** the analyzer accepts the access
 
 #### Scenario: Trait name as implicit alias accepted
-- **WHEN** a system has `filter: Position` (no alias) and the handler body contains `Position.x += 1.0`
+- **WHEN** a rule has `filter: Position` (no alias) and the handler body contains `Position.x += 1.0`
 - **THEN** the analyzer accepts `Position.x`
 
 #### Scenario: Bare field name rejected
-- **WHEN** a system filters on `Position` and the handler body contains bare `x += 1.0`
+- **WHEN** a rule filters on `Position` and the handler body contains bare `x += 1.0`
 - **THEN** the analyzer reports an error: "unqualified field access 'x' not allowed; use 'Position.x' or declare an alias"
 
-### Requirement: Local variable scope in system handlers
+### Requirement: Local variable scope in rule handlers
 The semantic analyzer SHALL maintain a per-handler local variable scope. `let` declarations introduce immutable bindings; `var` declarations introduce mutable bindings. Re-declaration of an existing local in the same scope SHALL produce an error.
 
 #### Scenario: Let binding immutable after declaration
@@ -267,7 +267,7 @@ The semantic analyzer SHALL introduce one implicit read-only local variable in e
 - The variable's type is the resolved event struct type.
 - The variable is read-only: assigning to any field via this variable SHALL be rejected.
 - The variable is scoped to the handler body only.
-- A handler alias that conflicts with a name already bound in the enclosing system scope (e.g., a filter alias) SHALL produce an error.
+- A handler alias that conflicts with a name already bound in the enclosing rule scope (e.g., a filter alias) SHALL produce an error.
 
 This replaces the previous `event` implicit object (for user events) and the previous injected `dt` parameter (for lifecycle events).
 
@@ -292,7 +292,7 @@ This replaces the previous `event` implicit object (for user events) and the pre
 - **THEN** the analyzer reports an error: "event fields are read-only; cannot assign to 'tick.dt'"
 
 #### Scenario: Handler alias conflicts with filter alias rejected
-- **WHEN** a system has filter `Position as t` and a handler `on tick as t:`
+- **WHEN** a rule has filter `Position as t` and a handler `on tick as t:`
 - **THEN** the analyzer reports an error: "handler alias 't' conflicts with filter alias 't' already in scope"
 
 #### Scenario: Spawn handler body has no accessible event fields
@@ -322,7 +322,7 @@ The semantic analyzer SHALL verify that the expression in an `emit ... to expres
 - **THEN** the analyzer reports an error: "emit target must be of type entity_id, got float"
 
 ### Requirement: `destroy entity_id` validation
-The semantic analyzer SHALL verify that when `destroy` is given an expression argument, the expression evaluates to type `entity_id`. Without argument, it removes the current entity (always valid inside a system handler). The `self` keyword SHALL satisfy this requirement because it has type `entity_id` in handler context.
+The semantic analyzer SHALL verify that when `destroy` is given an expression argument, the expression evaluates to type `entity_id`. Without argument, it removes the current entity (always valid inside a rule handler). The `self` keyword SHALL satisfy this requirement because it has type `entity_id` in handler context.
 
 #### Scenario: Destroy with entity_id expression accepted
 - **WHEN** `destroy PlayerComposition.gun` and `PlayerComposition.gun` is of type `entity_id`
@@ -333,7 +333,7 @@ The semantic analyzer SHALL verify that when `destroy` is given an expression ar
 - **THEN** the analyzer reports an error: "destroy argument must be of type entity_id, got float"
 
 #### Scenario: Destroy self accepted
-- **WHEN** `destroy self` appears inside a system handler
+- **WHEN** `destroy self` appears inside a rule handler
 - **THEN** the analyzer accepts the destroy statement because `self` has type `entity_id`
 
 ### Requirement: Pair domains resolve to canonical binding metadata
@@ -380,8 +380,8 @@ For a pair handler, semantic analysis SHALL infer the pair domain, binding-quali
 - **WHEN** a pair handler projects GroundContact to `body`
 - **THEN** GroundContact is recorded as a projected output and not as a durable pair-bound write
 
-### Requirement: `self` type-checks as `entity_id` in system handlers
-The semantic analyzer SHALL type `self` as `entity_id` only inside unary entity-selected system handler bodies. It SHALL reject `self` in selectionless and pair handler bodies because those domains have no unique current entity.
+### Requirement: `self` type-checks as `entity_id` in rule handlers
+The semantic analyzer SHALL type `self` as `entity_id` only inside unary entity-selected rule handler bodies. It SHALL reject `self` in selectionless and pair handler bodies because those domains have no unique current entity.
 
 #### Scenario: `self` accepted as add target
 - **WHEN** a unary entity handler contains `add Parent to self`
@@ -400,11 +400,11 @@ The semantic analyzer SHALL type `self` as `entity_id` only inside unary entity-
 - **THEN** the analyzer reports that the handler has no current entity
 
 ### Requirement: `self` is rejected outside handler world context
-The semantic analyzer SHALL report an error when `self` appears outside a system event handler body.
+The semantic analyzer SHALL report an error when `self` appears outside a rule event handler body.
 
 #### Scenario: `self` in func rejected
 - **WHEN** a `func` returns `self`
-- **THEN** the analyzer reports that `self` requires a system event handler context
+- **THEN** the analyzer reports that `self` requires a rule event handler context
 
 #### Scenario: `self` in unit initializer rejected
 - **WHEN** a unit trait assignment sets `parent = self`
@@ -489,11 +489,11 @@ At each block-structured `spawn TemplateName:` call site, the semantic analyzer 
 - **THEN** the analyzer SHALL report an error: "required field '<name>' not set for template '<T>'"
 
 ### Requirement: `destroy` statement context validation
-The semantic analyzer SHALL verify that `destroy` only appears inside a system event handler body.
+The semantic analyzer SHALL verify that `destroy` only appears inside a rule event handler body.
 
 #### Scenario: Destroy in func body rejected
 - **WHEN** `destroy` appears inside a `func` declaration
-- **THEN** the analyzer SHALL report an error: "`destroy` only allowed inside system event handlers"
+- **THEN** the analyzer SHALL report an error: "`destroy` only allowed inside rule event handlers"
 
 ### Requirement: `load` statement module reference validation
 The semantic analyzer SHALL verify that the module name in a `load` statement is reachable via the module's `use` declarations.
@@ -514,25 +514,25 @@ The semantic analyzer SHALL verify that all trait names listed in an `exclude:` 
 - **THEN** the exclude clause is valid
 
 ### Requirement: Filter and exclude validation — both optional; no filter matches all
-The semantic analyzer SHALL validate that all trait names in `filter:` and `exclude:` blocks are declared traits. Both are optional. A system with no `filter:` matches all entities and cannot access trait fields.
+The semantic analyzer SHALL validate that all trait names in `filter:` and `exclude:` blocks are declared traits. Both are optional. A rule with no `filter:` matches all entities and cannot access trait fields.
 
 #### Scenario: No filter block is valid (match-all)
-- **WHEN** a system has no `filter:` block
-- **THEN** the analyzer accepts the system as valid; it processes all entities
+- **WHEN** a rule has no `filter:` block
+- **THEN** the analyzer accepts the rule as valid; it processes all entities
 
 #### Scenario: Field access without filter rejected
-- **WHEN** a system has no `filter:` block but its handler body reads or writes a trait field
+- **WHEN** a rule has no `filter:` block but its handler body reads or writes a trait field
 - **THEN** the analyzer SHALL report an error: "trait field '<name>' not accessible — no filter clause declares this trait"
 
 ### Requirement: `add` statement semantic validation
-The semantic analyzer SHALL validate `add` statements as follows: the trait name resolves to a declared trait, supplied field names and values match the trait definition, any `to expr` target has type `entity_id`, and `add` appears only inside system event handler bodies.
+The semantic analyzer SHALL validate `add` statements as follows: the trait name resolves to a declared trait, supplied field names and values match the trait definition, any `to expr` target has type `entity_id`, and `add` appears only inside rule event handler bodies.
 
 #### Scenario: Cross-entity target type check
 - **WHEN** `add Frozen to some_float` appears where `some_float` is of type `float`
 - **THEN** the semantic analyzer SHALL report: "`to` target must be of type `entity_id`"
 
 ### Requirement: `remove` statement semantic validation
-The semantic analyzer SHALL validate `remove` statements as follows: the trait name resolves to a declared trait, any `from expr` target has type `entity_id`, and `remove` appears only inside system event handler bodies.
+The semantic analyzer SHALL validate `remove` statements as follows: the trait name resolves to a declared trait, any `from expr` target has type `entity_id`, and `remove` appears only inside rule event handler bodies.
 
 #### Scenario: Remove unknown trait
 - **WHEN** `remove Phantom` appears and `Phantom` is not declared
@@ -567,46 +567,46 @@ The semantic analyzer SHALL register `input` declarations in the module symbol t
 - **WHEN** `input MoveX: axis` is declared and `MoveX` is referenced in a query call
 - **THEN** the analyzer resolves `MoveX` to type `InputAxis`
 
-### Requirement: `after:` system name resolution
-The semantic analyzer SHALL resolve each system name in an `after:` clause against the set of all declared systems in the current `DecoratedProgram`. If a name does not resolve to a system declaration, the analyzer SHALL report an error.
+### Requirement: `after:` rule name resolution
+The semantic analyzer SHALL resolve each rule name in an `after:` clause against the set of all declared rules in the current `DecoratedProgram`. If a name does not resolve to a rule declaration, the analyzer SHALL report an error.
 
-#### Scenario: Known system name resolves
-- **WHEN** `after: MovementSystem` is declared and `system MovementSystem:` is present in the linked program
+#### Scenario: Known rule name resolves
+- **WHEN** `after: MovementRule` is declared and `rule MovementRule:` is present in the linked program
 - **THEN** the semantic analyzer records the ordering edge without error
 
-#### Scenario: Unknown system name rejected
-- **WHEN** `after: GhostSystem` is declared and no system named `GhostSystem` exists
-- **THEN** the analyzer reports: "unknown system 'GhostSystem' in after clause"
+#### Scenario: Unknown rule name rejected
+- **WHEN** `after: GhostRule` is declared and no rule named `GhostRule` exists
+- **THEN** the analyzer reports: "unknown rule 'GhostRule' in after clause"
 
 #### Scenario: Trait name used in `after:` is rejected
-- **WHEN** `after: Position` is declared and `Position` is a trait, not a system
-- **THEN** the analyzer reports: "'Position' is not a system"
+- **WHEN** `after: Position` is declared and `Position` is a trait, not a rule
+- **THEN** the analyzer reports: "'Position' is not a rule"
 
 ### Requirement: `after:` cycle detection
-The semantic analyzer SHALL run a depth-first cycle detection algorithm over the combined system ordering graph. Any cycle SHALL be reported as a compile error that includes the cycle path.
+The semantic analyzer SHALL run a depth-first cycle detection algorithm over the combined rule ordering graph. Any cycle SHALL be reported as a compile error that includes the cycle path.
 
 #### Scenario: Direct cycle rejected
-- **WHEN** `system A: after: B` and `system B: after: A`
-- **THEN** the analyzer reports an error including the cycle: "cycle in system ordering: A → B → A"
+- **WHEN** `rule A: after: B` and `rule B: after: A`
+- **THEN** the analyzer reports an error including the cycle: "cycle in rule ordering: A → B → A"
 
 #### Scenario: Indirect cycle rejected
 - **WHEN** A → B → C → A transitively via `after:` declarations
-- **THEN** the analyzer reports the cycle path: "cycle in system ordering: A → B → C → A"
+- **THEN** the analyzer reports the cycle path: "cycle in rule ordering: A → B → C → A"
 
 #### Scenario: No cycle in linear chain
-- **WHEN** `system C: after: B`, `system B: after: A`, and A has no `after:`
-- **THEN** the analyzer accepts all three systems
+- **WHEN** `rule C: after: B`, `rule B: after: A`, and A has no `after:`
+- **THEN** the analyzer accepts all three rules
 
-### Requirement: `after:` edges stored in SystemInfo within DecoratedProgram
-The semantic analyzer SHALL populate the `after_systems` field of each `SystemInfo` in `DecoratedProgram.systems` with the list of system names from validated `after:` clauses.
+### Requirement: `after:` edges stored in RuleInfo within DecoratedProgram
+The semantic analyzer SHALL populate the `after_rules` field of each `RuleInfo` in `DecoratedProgram.rules` with the list of rule names from validated `after:` clauses.
 
-#### Scenario: `after_systems` populated for systems with `after:` clause
-- **WHEN** `system UI: after: Scene` is analyzed
-- **THEN** `DecoratedProgram` contains `SystemInfo` for `UI` with `after_systems = ["Scene"]`
+#### Scenario: `after_rules` populated for rules with `after:` clause
+- **WHEN** `rule UI: after: Scene` is analyzed
+- **THEN** `DecoratedProgram` contains `RuleInfo` for `UI` with `after_rules = ["Scene"]`
 
-#### Scenario: `after_systems` is empty for systems without `after:` clause
-- **WHEN** a system has no `after:` clause
-- **THEN** `SystemInfo.after_systems` is an empty vector
+#### Scenario: `after_rules` is empty for rules without `after:` clause
+- **WHEN** a rule has no `after:` clause
+- **THEN** `RuleInfo.after_rules` is an empty vector
 
 ### Requirement: `apply:` alias uniqueness validation
 **Reason**: Archetype declarations no longer support `apply:` aliases.
@@ -658,12 +658,12 @@ The semantic analyzer SHALL include `pub extern func` declarations in the `Impor
 - **THEN** `ImportedSymbols.funcs` does NOT contain `"internal"`
 
 ### Requirement: `order by:` semantic validation
-The semantic analyzer SHALL validate `order by:` clauses in system declarations with the following rules:
-1. Each sort key alias MUST be declared in the system's `filter:` block
+The semantic analyzer SHALL validate `order by:` clauses in rule declarations with the following rules:
+1. Each sort key alias MUST be declared in the rule's `filter:` block
 2. Each sort key field MUST exist on the trait bound to that alias
 3. The resolved field type MUST be a scalar-comparable type: `int`, `float`, or `bool`
 4. For `vec2`/`vec3` field members (e.g., `p.pos.y`): the member name must be a valid component (`x`, `y`, `z`) and resolves to `float`
-5. A system with `order by:` MUST have a `filter:` clause
+5. A rule with `order by:` MUST have a `filter:` clause
 
 #### Scenario: Valid single-key order by
 - **WHEN** `order by: s.layer asc` and `Sprite as s` in filter and `Sprite.layer` is `int`
@@ -685,8 +685,8 @@ The semantic analyzer SHALL validate `order by:` clauses in system declarations 
 - **WHEN** `order by: p.pos.y desc` and `Position.pos` is type `vec2`
 - **THEN** the semantic analyzer accepts it, resolving the type as `float`
 
-#### Scenario: order by on filterless system rejected
-- **WHEN** a system has `order by:` but no `filter:` block
+#### Scenario: order by on filterless rule rejected
+- **WHEN** a rule has `order by:` but no `filter:` block
 - **THEN** the semantic analyzer SHALL report: "`order by:` requires a `filter:` clause"
 
 ### Requirement: Semantic validation of `TraitMatchStmt`
@@ -696,7 +696,7 @@ The semantic analyzer SHALL validate `TraitMatchStmt` nodes as follows:
 3. If the trait has fields, an alias is optional; if declared, it MUST not conflict with any in-scope name
 4. If the trait is a marker (no fields), an alias MUST NOT be declared
 5. The wildcard arm `_ =>` is optional and, if present, MUST be the last arm
-6. `TraitMatchStmt` MUST only appear inside system event handler bodies
+6. `TraitMatchStmt` MUST only appear inside rule event handler bodies
 7. Aliases introduced in one arm are NOT in scope in other arms
 
 #### Scenario: Valid entity_id subject accepted
@@ -712,7 +712,7 @@ The semantic analyzer SHALL validate `TraitMatchStmt` nodes as follows:
 - **THEN** the semantic analyzer SHALL report: "undeclared trait 'Phantom'"
 
 #### Scenario: Alias conflicts with filter binding rejected
-- **WHEN** system has `filter: Position as p` and arm is `Boss as p =>`
+- **WHEN** rule has `filter: Position as p` and arm is `Boss as p =>`
 - **THEN** the semantic analyzer SHALL report: "match arm alias 'p' conflicts with filter alias 'p'"
 
 #### Scenario: Marker trait with alias rejected
@@ -743,10 +743,10 @@ The semantic analyzer SHALL validate foreach statements by requiring the iterabl
 - **THEN** the semantic analyzer reports that foreach loop variables are read-only
 
 ### Requirement: Semantic analyzer restricts foreach context
-Bounded foreach statements SHALL be valid in system event handlers and rejected in pure `func` bodies for v1.
+Bounded foreach statements SHALL be valid in rule event handlers and rejected in pure `func` bodies for v1.
 
 #### Scenario: Foreach in handler accepted
-- **WHEN** a system event handler iterates a list value with `for item in items:`
+- **WHEN** a rule event handler iterates a list value with `for item in items:`
 - **THEN** the semantic analyzer accepts the statement subject to ordinary type checks
 
 #### Scenario: Foreach in pure func rejected
@@ -757,7 +757,7 @@ Bounded foreach statements SHALL be valid in system event handlers and rejected 
 The semantic analyzer SHALL validate `project` statements similarly to `add` statements: the trait name must resolve to a declared trait, field assignments must refer to fields on that trait, field values must type-check, and any `to` target expression must have type `entity_id`. If no target is supplied, the statement targets `self` and therefore requires a current entity context.
 
 #### Scenario: Project declared trait to self accepted
-- **WHEN** a handler on an entity-filtered system contains `project GroundContact: normal = n`
+- **WHEN** a handler on an entity-filtered rule contains `project GroundContact: normal = n`
 - **THEN** the semantic analyzer accepts it if `GroundContact.normal` exists and `n` has the correct type
 
 #### Scenario: Project target must be entity_id
@@ -784,10 +784,10 @@ Projecting a trait with `persist` or `sync` fields SHALL be rejected in v1 becau
 - **THEN** the semantic analyzer reports that synced traits cannot be projected
 
 ### Requirement: Semantic analyzer models projected trait filter access
-When a system filters on a trait, semantic analysis SHALL treat the alias type the same whether the trait is supplied by durable storage or projected overlay storage at runtime. Projected overlays do not change the static field type of the alias.
+When a rule filters on a trait, semantic analysis SHALL treat the alias type the same whether the trait is supplied by durable storage or projected overlay storage at runtime. Projected overlays do not change the static field type of the alias.
 
 #### Scenario: Projected trait alias has trait field types
-- **WHEN** a system filters `DamageFlash as flash`
+- **WHEN** a rule filters `DamageFlash as flash`
 - **THEN** `flash.color` type-checks according to the declared `DamageFlash` trait fields
 
 ### Requirement: Semantic analyzer validates query trait filters
@@ -831,9 +831,9 @@ The semantic analyzer SHALL assign fixed return types to recognized query expres
 - **THEN** the semantic analyzer infers `owner` as type `entity_id`
 
 ### Requirement: Query expressions require world-aware context
-Query expressions SHALL be treated as world-access operations. They MUST be accepted inside system event handlers and rejected inside pure `func` bodies.
+Query expressions SHALL be treated as world-access operations. They MUST be accepted inside rule event handlers and rejected inside pure `func` bodies.
 
-#### Scenario: Query inside system handler accepted
+#### Scenario: Query inside rule handler accepted
 - **WHEN** authored code evaluates `query.exists[Boss]()` inside `on tick:`
 - **THEN** the semantic analyzer accepts the expression
 

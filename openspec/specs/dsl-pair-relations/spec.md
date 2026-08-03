@@ -1,20 +1,20 @@
 # dsl-pair-relations Specification
 
 ## Purpose
-Define the DSL surface, semantics, and validation rules for binary pair-relation domains in regular systems: the `pairs:` clause, pair bindings as entity identifiers and trait namespaces, directed and finite pair relation semantics, deterministic membership snapshots, read-only durable trait access through pair bindings, explicit-target-only handler behavior, and the one-node execution-graph shape of a pair handler.
+Define the DSL surface, semantics, and validation rules for binary pair-relation domains in regular rules: the `pairs:` clause, pair bindings as entity identifiers and trait namespaces, directed and finite pair relation semantics, deterministic membership snapshots, read-only durable trait access through pair bindings, explicit-target-only handler behavior, and the one-node execution-graph shape of a pair handler.
 
 ## Requirements
 
-### Requirement: Regular systems support a binary pair domain
-A regular `system` SHALL accept a `pairs:` block containing exactly two ordered, uniquely named entity bindings. Each binding SHALL contain one or more positive trait entries using the same dotted trait-name and optional `as` alias form as unary filters. `pairs:` SHALL be mutually exclusive with `filter:`, `exclude:`, and `order by:` and SHALL NOT be accepted on `extern system` declarations.
+### Requirement: Regular rules support a binary pair domain
+A regular `rule` SHALL accept a `pairs:` block containing exactly two ordered, uniquely named entity bindings. Each binding SHALL contain one or more positive trait entries using the same dotted trait-name and optional `as` alias form as unary filters. `pairs:` SHALL be mutually exclusive with `filter:`, `exclude:`, and `order by:` and SHALL NOT be accepted on `extern rule` declarations.
 
-#### Scenario: Two-binding pair system is accepted
+#### Scenario: Two-binding pair rule is accepted
 - **WHEN** `DetectContacts` declares `pairs:` bindings `body` and `wall`, each with at least one declared trait
-- **THEN** the system has a binary pair domain in source binding order
+- **THEN** the rule has a binary pair domain in source binding order
 
 #### Scenario: Pair and unary domains cannot be mixed
-- **WHEN** one system declares both `pairs:` and `filter:`
-- **THEN** semantic analysis reports that a system must choose one execution domain
+- **WHEN** one rule declares both `pairs:` and `filter:`
+- **THEN** semantic analysis reports that a rule must choose one execution domain
 
 #### Scenario: Pair domain requires exactly two non-empty bindings
 - **WHEN** a `pairs:` block has one or three bindings, or a binding has no trait entries
@@ -92,7 +92,7 @@ A pair handler SHALL have no implicit current entity. `self` and statement forms
 - **THEN** one broadcast occurrence is emitted for that tuple
 
 ### Requirement: One pair handler is one execution-graph node
-A pair handler SHALL produce one static handler execution-graph node identified by its system and trigger. Runtime tuples SHALL be invocations within that node and MUST NOT become graph nodes. The complete tuple pass SHALL finish before the dispatcher advances to another handler node or drains events emitted by the activation.
+A pair handler SHALL produce one static handler execution-graph node identified by its rule and trigger. Runtime tuples SHALL be invocations within that node and MUST NOT become graph nodes. The complete tuple pass SHALL finish before the dispatcher advances to another handler node or drains events emitted by the activation.
 
 #### Scenario: Many tuples retain one node
 - **WHEN** `DetectContacts.fixed_tick` executes for three body-wall tuples

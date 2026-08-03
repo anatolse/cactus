@@ -67,25 +67,25 @@ The integration coverage SHALL be structured so additional examples under `examp
 - **THEN** the existing integration harness can validate it using the same generation-and-compilation workflow
 
 ### Requirement: compilation coverage includes stdlib extern backend surface cases
-Automated compilation/integration coverage SHALL include curated cases that exercise stdlib extern functions and recognized stdlib extern systems across the supported backend paths.
+Automated compilation/integration coverage SHALL include curated cases that exercise stdlib extern functions and recognized stdlib extern rules across the supported backend paths.
 
 #### Scenario: Extern function coverage example is compiled
 - **WHEN** example-compilation integration coverage runs
 - **THEN** it includes at least one curated case that imports stdlib math/input extern declarations and compiles generated output that links against a supported backend runtime library
 
-#### Scenario: Recognized extern system coverage example is compiled
+#### Scenario: Recognized extern rule coverage example is compiled
 - **WHEN** example-compilation integration coverage runs
-- **THEN** it includes at least one curated case that exercises recognized stdlib extern systems such as hierarchy propagation or rendering-backed behavior for a supported backend
+- **THEN** it includes at least one curated case that exercises recognized stdlib extern rules such as hierarchy propagation or rendering-backed behavior for a supported backend
 
 #### Scenario: Mesh renderer coverage example is compiled
 - **WHEN** example-compilation integration coverage runs
-- **THEN** it includes a curated cpp-entt case that imports `std.render.meshes` and exercises the recognized `MeshRenderer` extern system
+- **THEN** it includes a curated cpp-entt case that imports `std.render.meshes` and exercises the recognized `MeshRenderer` extern rule
 
 ### Requirement: compilation coverage catches unresolved stdlib backend symbols
 The example-compilation integration workflow SHALL fail if generated output for a curated stdlib extern coverage case does not link because a required stdlib backend symbol or binding path is missing.
 
 #### Scenario: Missing stdlib backend symbol fails integration
-- **WHEN** a curated example references a stdlib extern function or recognized stdlib extern system whose backend binding is absent
+- **WHEN** a curated example references a stdlib extern function or recognized stdlib extern rule whose backend binding is absent
 - **THEN** the compilation/integration workflow fails and identifies the affected example case
 
 ### Requirement: Mesh renderer example remains a named curated compilation case

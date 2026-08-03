@@ -316,7 +316,7 @@ TEST_CASE("integration: explicit std.core import with lifecycle handler generate
             << "    Counter:\n"
             << "        value = 0\n"
             << "    Persistent\n\n"
-            << "system CountTicks:\n"
+            << "rule CountTicks:\n"
             << "    filter:\n"
             << "        Counter\n\n"
             << "    on tick:\n"

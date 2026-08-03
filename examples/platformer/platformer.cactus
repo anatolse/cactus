@@ -291,9 +291,9 @@ pub entity GoldGem1 from GoldGemBase:
     tf.WorldTransform:
         position = vec2(1000.0, 240.0)
 
-# ── Systems ──────────────────────────────────────────────────────────────────────
+# ── Rules ────────────────────────────────────────────────────────────────────────
 
-system ReadPlayerInput:
+rule ReadPlayerInput:
     filter:
         PlayerMotion
 
@@ -301,7 +301,7 @@ system ReadPlayerInput:
         move_axis = input.axis(MoveX)
         jump_requested = input.pressed(Jump)
 
-system MovementSystem:
+rule MovementSystem:
     filter:
         tf.WorldTransform
         PlayerMotion
@@ -365,7 +365,7 @@ system MovementSystem:
                         jumps_remaining = max_jumps
                         jump_state = JumpState.Grounded
 
-system InvincibilitySystem:
+rule InvincibilitySystem:
     filter:
         Health
 
@@ -373,7 +373,7 @@ system InvincibilitySystem:
         if invincible_timer > 0.0:
             invincible_timer = invincible_timer - tick.dt
 
-system PatrolSystem:
+rule PatrolSystem:
     filter:
         tf.WorldTransform
         PatrolMotion
@@ -389,7 +389,7 @@ system PatrolSystem:
             direction = 1.0
             position = vec2(patrol_min_x, position.y)
 
-system CollectionSystem:
+rule CollectionSystem:
     filter:
         Collectible
         shapes.Shape

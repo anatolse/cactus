@@ -23,13 +23,13 @@ trait Health:
 event Contact:
     other: entity_id
 
-# ── Systems ───────────────────────────────────────────────────────────────────
+# ── Rules ─────────────────────────────────────────────────────────────────────
 
 # DetectContacts: pair producer. Iterates the directed product of every
 # DynamicBody/Collider entity against every Solid/Collider/WorldTransform
 # entity, rejects self-pairs and non-overlapping mask/layer combinations, and
 # emits a targeted Contact to the body binding for each surviving tuple.
-system DetectContacts:
+rule DetectContacts:
     pairs:
         body:
             DynamicBody
@@ -48,7 +48,7 @@ system DetectContacts:
 # a targeted occurrence, this handler runs at most once per Contact — for the
 # body entity named by the pair producer — rather than broadcasting to every
 # entity with Health.
-system ResolveContact:
+rule ResolveContact:
     filter:
         Health as hp
 

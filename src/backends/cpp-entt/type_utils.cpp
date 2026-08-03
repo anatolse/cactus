@@ -553,7 +553,7 @@ void scan_filter(const FilterClause& filter, WorldTransformUsage& usage) {
     }
 }
 
-// NOLINTNEXTLINE(bugprone-branch-clone) -- system/extern-system arms differ by node type
+// NOLINTNEXTLINE(bugprone-branch-clone) -- rule/extern-rule arms differ by node type
 void scan_root_declaration(const Declaration& decl, const std::string& root_module, WorldTransformUsage& usage) {
     if (const auto* entity = std::get_if<EntityNode>(&decl)) {
         if (is_root_decl(entity->resolved_entity_id, root_module)) {
@@ -566,13 +566,13 @@ void scan_root_declaration(const Declaration& decl, const std::string& root_modu
             scan_trait_entries(tmpl->traits, usage);
             scan_children(tmpl->children, usage);
         }
-    } else if (const auto* sys = std::get_if<SystemNode>(&decl)) {
-        if (is_root_decl(sys->resolved_system_id, root_module)) {
-            scan_filter(sys->filter, usage);
-            scan_filter(sys->exclude, usage);
+    } else if (const auto* rule = std::get_if<RuleNode>(&decl)) {
+        if (is_root_decl(rule->resolved_rule_id, root_module)) {
+            scan_filter(rule->filter, usage);
+            scan_filter(rule->exclude, usage);
         }
-    } else if (const auto* ext = std::get_if<ExternSystemNode>(&decl)) {
-        if (is_root_decl(ext->resolved_system_id, root_module)) {
+    } else if (const auto* ext = std::get_if<ExternRuleNode>(&decl)) {
+        if (is_root_decl(ext->resolved_rule_id, root_module)) {
             scan_filter(ext->filter, usage);
             scan_filter(ext->exclude, usage);
         }

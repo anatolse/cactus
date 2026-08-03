@@ -20,7 +20,7 @@ pub trait WorldTransform:
     var rotation: quat = quat(0.0, 0.0, 0.0, 1.0)
     var scale: vec3 = vec3(1.0, 1.0, 1.0)
 
-extern system TransformPropagation:
+extern rule TransformPropagation:
     filter:
         LocalTransform
         WorldTransform

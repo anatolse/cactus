@@ -111,7 +111,7 @@ pub entity MainCamera:
 # EditorModeToggle (in std.editor) reads use_3d on the first input frame and
 # spawns an EditorCamera3D rig at MainCamera's captured pose.
 
-system Enable3DEditor:
+rule Enable3DEditor:
     filter:
         editor.EditorState
 
@@ -124,7 +124,7 @@ system Enable3DEditor:
 # TARGET_HEIGHT. Zero-height bounds (model not loadable yet) are skipped and
 # retried next tick; the flag is only set once the scale is written.
 
-system NormalizeSpawnedScale:
+rule NormalizeSpawnedScale:
     filter:
         tv.WorldTransform
         models.ModelRenderer

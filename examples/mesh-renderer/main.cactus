@@ -77,7 +77,7 @@ pub entity RightPointLight:
         range = 8.0
         enabled = true
 
-system ReadRotationInput:
+rule ReadRotationInput:
     filter:
         RotationInput
 
@@ -85,7 +85,7 @@ system ReadRotationInput:
         horizontal = input.axis(RotateHorizontal)
         vertical = input.axis(RotateVertical)
 
-system ApplyScreenSpaceRotation:
+rule ApplyScreenSpaceRotation:
     filter:
         tv.WorldTransform
         RotationInput

@@ -333,7 +333,7 @@ TEST_CASE("Semantic: spawn valid template — ok", "[semantic][dynamic-ecs]") {
                        "    var x: float = 0.0\n"
                        "template Enemy:\n"
                        "    Position\n"
-                       "system Spawner:\n"
+                       "rule Spawner:\n"
                        "    on load:\n"
                        "        spawn Enemy:\n"
                        "            Position:\n"
@@ -342,7 +342,7 @@ TEST_CASE("Semantic: spawn valid template — ok", "[semantic][dynamic-ecs]") {
 
 TEST_CASE("Semantic: spawn undefined template — error", "[semantic][dynamic-ecs]") {
     CHECK(
-        analyze_errors("system Spawner:\n"
+        analyze_errors("rule Spawner:\n"
                        "    on load:\n"
                        "        spawn Ghost:\n"
                        "            Position:\n"
@@ -355,7 +355,7 @@ TEST_CASE("Semantic: spawn with unknown override field — error", "[semantic][d
                        "    var x: float = 0.0\n"
                        "template Enemy:\n"
                        "    Position\n"
-                       "system Spawner:\n"
+                       "rule Spawner:\n"
                        "    on load:\n"
                        "        spawn Enemy:\n"
                        "            Position:\n"
@@ -371,7 +371,7 @@ TEST_CASE("Semantic: spawn with required field provided — ok", "[semantic][dyn
                        "    var speed: float\n"
                        "template Bullet:\n"
                        "    Movement\n"
-                       "system Spawner:\n"
+                       "rule Spawner:\n"
                        "    on load:\n"
                        "        spawn Bullet:\n"
                        "            Movement:\n"
@@ -384,7 +384,7 @@ TEST_CASE("Semantic: spawn with required field missing — error", "[semantic][d
                        "    var speed: float\n"
                        "template Bullet:\n"
                        "    Movement\n"
-                       "system Spawner:\n"
+                       "rule Spawner:\n"
                        "    on load:\n"
                        "        spawn Bullet:\n"
                        "            Movement\n"));
@@ -398,7 +398,7 @@ TEST_CASE("Semantic: spawn with required field provided by template config — o
                        "template Bullet:\n"
                        "    Movement:\n"
                        "        speed = 10.0\n"
-                       "system Spawner:\n"
+                       "rule Spawner:\n"
                        "    on load:\n"
                        "        spawn Bullet:\n"
                        "            Movement\n"));
@@ -412,7 +412,7 @@ TEST_CASE("Semantic: spawn of entity — error", "[semantic][dynamic-ecs]") {
         "    var x: float = 0.0\n"
         "entity Player:\n"
         "    Position\n"
-        "system Spawner:\n"
+        "rule Spawner:\n"
         "    on load:\n"
         "        spawn Player:\n"
         "            Position:\n"
@@ -420,7 +420,7 @@ TEST_CASE("Semantic: spawn of entity — error", "[semantic][dynamic-ecs]") {
     CHECK(err.find("is an entity, not a template") != std::string::npos);
 }
 
-// ── Task 5.5: spawn/destroy/load/add/remove only in system handlers ──────
+// ── Task 5.5: spawn/destroy/load/add/remove only in rule handlers ──────
 
 TEST_CASE("Semantic: spawn in func body — error", "[semantic][dynamic-ecs]") {
     CHECK(
@@ -468,7 +468,7 @@ TEST_CASE("Semantic: load reachable via use — ok", "[semantic][dynamic-ecs]") 
         analyze_errors("use levels\n"
                        "trait GameState:\n"
                        "    var active: bool = true\n"
-                       "system GameMgr:\n"
+                       "rule GameMgr:\n"
                        "    filter:\n"
                        "        GameState\n"
                        "    on tick:\n"
@@ -479,7 +479,7 @@ TEST_CASE("Semantic: load unreachable module — error", "[semantic][dynamic-ecs
     CHECK(
         analyze_errors("trait GameState:\n"
                        "    var active: bool = true\n"
-                       "system GameMgr:\n"
+                       "rule GameMgr:\n"
                        "    filter:\n"
                        "        GameState\n"
                        "    on tick:\n"
@@ -493,7 +493,7 @@ TEST_CASE("Semantic: add declared trait — ok", "[semantic][dynamic-ecs]") {
         analyze_errors("trait Frozen\n"
                        "trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on tick:\n"
@@ -504,7 +504,7 @@ TEST_CASE("Semantic: add undeclared trait — error", "[semantic][dynamic-ecs]")
     CHECK(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on tick:\n"
@@ -516,7 +516,7 @@ TEST_CASE("Semantic: remove declared trait — ok", "[semantic][dynamic-ecs]") {
         analyze_errors("trait Frozen\n"
                        "trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on tick:\n"
@@ -527,7 +527,7 @@ TEST_CASE("Semantic: remove undeclared trait — error", "[semantic][dynamic-ecs
     CHECK(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on tick:\n"
@@ -540,7 +540,7 @@ TEST_CASE("Semantic: on spawn no params — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system Init:\n"
+                       "rule Init:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on spawn:\n"
@@ -551,7 +551,7 @@ TEST_CASE("Semantic: on spawn with params — error", "[semantic][dynamic-ecs]")
     CHECK(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system Init:\n"
+                       "rule Init:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on spawn(v: float):\n"
@@ -562,7 +562,7 @@ TEST_CASE("Semantic: on destroy no params — valid", "[semantic][dynamic-ecs]")
     CHECK_FALSE(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system Cleanup:\n"
+                       "rule Cleanup:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on destroy:\n"
@@ -573,7 +573,7 @@ TEST_CASE("Semantic: on load with params — error", "[semantic][dynamic-ecs]") 
     CHECK(
         analyze_errors("trait GameState:\n"
                        "    var active: bool = true\n"
-                       "system GameMgr:\n"
+                       "rule GameMgr:\n"
                        "    filter:\n"
                        "        GameState\n"
                        "    on load(name: float):\n"
@@ -584,7 +584,7 @@ TEST_CASE("Semantic: on unload with params — error", "[semantic][dynamic-ecs]"
     CHECK(
         analyze_errors("trait GameState:\n"
                        "    var active: bool = true\n"
-                       "system GameMgr:\n"
+                       "rule GameMgr:\n"
                        "    filter:\n"
                        "        GameState\n"
                        "    on unload(dt: float):\n"
@@ -596,7 +596,7 @@ TEST_CASE("Semantic: on unload with params — error", "[semantic][dynamic-ecs]"
 TEST_CASE("Semantic: exclude declared trait — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
-                       "system Cleanup:\n"
+                       "rule Cleanup:\n"
                        "    exclude:\n"
                        "        Persistent\n"
                        "    on unload:\n"
@@ -605,7 +605,7 @@ TEST_CASE("Semantic: exclude declared trait — valid", "[semantic][dynamic-ecs]
 
 TEST_CASE("Semantic: exclude undeclared trait — error", "[semantic][dynamic-ecs]") {
     CHECK(
-        analyze_errors("system Cleanup:\n"
+        analyze_errors("rule Cleanup:\n"
                        "    exclude:\n"
                        "        NonExistentTrait\n"
                        "    on unload:\n"
@@ -614,17 +614,17 @@ TEST_CASE("Semantic: exclude undeclared trait — error", "[semantic][dynamic-ec
 
 // ── Task 5.10: Optional filter — no filter matches all ──────────────────────
 
-TEST_CASE("Semantic: system with no filter — valid match-all", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: rule with no filter — valid match-all", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
-        analyze_errors("system Cleanup:\n"
+        analyze_errors("rule Cleanup:\n"
                        "    on tick:\n"
                        "        destroy\n"));
 }
 
-TEST_CASE("Semantic: system with exclude only (no filter) — valid", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: rule with exclude only (no filter) — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
-                       "system Cleanup:\n"
+                       "rule Cleanup:\n"
                        "    exclude:\n"
                        "        Persistent\n"
                        "    on unload:\n"
@@ -636,7 +636,7 @@ TEST_CASE("Semantic: add trait with required fields — valid", "[semantic][dyna
         analyze_errors("trait Health:\n"
                        "    var current: int\n"
                        "    var max: int\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    on tick:\n"
                        "        add Health:\n"
                        "            current = 10\n"
@@ -648,7 +648,7 @@ TEST_CASE("Semantic: add trait with missing required field — error", "[semanti
         analyze_errors("trait Health:\n"
                        "    var current: int\n"
                        "    var max: int\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    on tick:\n"
                        "        add Health:\n"
                        "            current = 10\n"));
@@ -657,12 +657,12 @@ TEST_CASE("Semantic: add trait with missing required field — error", "[semanti
 TEST_CASE("Semantic: add/remove cross-entity target must be entity_id", "[semantic][dynamic-ecs]") {
     CHECK(
         analyze_errors("trait Frozen\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    on tick:\n"
                        "        add Frozen to 42\n"));
     CHECK(
         analyze_errors("trait Frozen\n"
-                       "system FreezeSystem:\n"
+                       "rule FreezeSystem:\n"
                        "    on tick:\n"
                        "        remove Frozen from 42\n"));
 }
@@ -686,7 +686,7 @@ TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic
     CHECK_FALSE(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system Sys:\n"
+                       "rule Sys:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on spawn:\n"
@@ -715,27 +715,27 @@ TEST_CASE("Semantic: pub marker trait", "[semantic][dynamic-ecs]") {
 TEST_CASE("Semantic: marker trait in exclude is valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
-                       "system Cleanup:\n"
+                       "rule Cleanup:\n"
                        "    exclude:\n"
                        "        Persistent\n"
                        "    on tick:\n"
                        "        destroy\n"));
 }
 
-// ── destroy in system handler is valid ─────────────────────────────────────
+// ── destroy in rule handler is valid ─────────────────────────────────────
 
-TEST_CASE("Semantic: destroy in system handler — valid", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: destroy in rule handler — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Health:\n"
                        "    var hp: int = 100\n"
-                       "system DeathSystem:\n"
+                       "rule DeathSystem:\n"
                        "    filter:\n"
                        "        Health\n"
                        "    on tick:\n"
                        "        destroy\n"));
 }
 
-// ── spawn in system handler is valid ────────────────────────────────────────
+// ── spawn in rule handler is valid ────────────────────────────────────────
 
 TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
@@ -743,7 +743,7 @@ TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ec
                        "    var x: float = 0.0\n"
                        "template Enemy:\n"
                        "    Position\n"
-                       "system Spawner:\n"
+                       "rule Spawner:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on tick:\n"
@@ -757,7 +757,7 @@ TEST_CASE("Semantic: spawn in on tick handler — valid", "[semantic][dynamic-ec
 TEST_CASE("Semantic: marker trait in filter is valid (task 11.10)", "[semantic][dynamic-ecs]") {
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
-                       "system Sys:\n"
+                       "rule Sys:\n"
                        "    filter:\n"
                        "        Persistent\n"
                        "    on tick:\n"
@@ -768,7 +768,7 @@ TEST_CASE("Semantic: marker trait filter + exclude combination (task 11.10)", "[
     CHECK_FALSE(
         analyze_errors("trait Persistent\n"
                        "trait Active\n"
-                       "system Sys:\n"
+                       "rule Sys:\n"
                        "    filter:\n"
                        "        Active\n"
                        "    exclude:\n"
@@ -777,32 +777,32 @@ TEST_CASE("Semantic: marker trait filter + exclude combination (task 11.10)", "[
                        "        destroy\n"));
 }
 
-// ── Task 11.12: Field access in no-filter system body is an error ────────────
+// ── Task 11.12: Field access in no-filter rule body is an error ────────────
 
-TEST_CASE("Semantic: field access in no-filter system body — error (task 11.12)", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: field access in no-filter rule body — error (task 11.12)", "[semantic][dynamic-ecs]") {
     auto err = first_error(
         "trait Position:\n"
         "    var x: float = 0.0\n"
-        "system GlobalSystem:\n"
+        "rule GlobalSystem:\n"
         "    on tick:\n"
-        "        x = x + tick.dt\n");  // 'x' is a trait field, system has no filter
+        "        x = x + tick.dt\n");  // 'x' is a trait field, rule has no filter
     CHECK(err.find("not accessible") != std::string::npos);
 }
 
-TEST_CASE("Semantic: non-field stmts allowed in no-filter system — ok (task 11.12)", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: non-field stmts allowed in no-filter rule — ok (task 11.12)", "[semantic][dynamic-ecs]") {
     // destroy, emit, spawn etc. are allowed even without filter
     CHECK_FALSE(
-        analyze_errors("system GlobalCleanup:\n"
+        analyze_errors("rule GlobalCleanup:\n"
                        "    on unload:\n"
                        "        destroy\n"));
 }
 
-TEST_CASE("Semantic: field access in filter system body — ok (task 11.12)", "[semantic][dynamic-ecs]") {
+TEST_CASE("Semantic: field access in filter rule body — ok (task 11.12)", "[semantic][dynamic-ecs]") {
     // With filter, field access is fine
     CHECK_FALSE(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
-                       "system Move:\n"
+                       "rule Move:\n"
                        "    filter:\n"
                        "        Position\n"
                        "    on tick:\n"
@@ -813,7 +813,7 @@ TEST_CASE("Semantic: field access in no-filter if-branch — error (task 11.12)"
     CHECK(
         analyze_errors("trait Health:\n"
                        "       var hp: int = 100\n"
-                       "system GlobalSys:\n"
+                       "rule GlobalSys:\n"
                        "    on tick:\n"
                        "        if hp <= 0:\n"
                        "            hp = 100\n"));
@@ -878,7 +878,7 @@ TEST_CASE("Semantic: EditorGizmo2D and EditorGizmo3D traits are valid for projec
         "    var mode: int = 1\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
-        "system Gizmo2D:\n"
+        "rule Gizmo2D:\n"
         "    filter:\n"
         "        EditorGizmo2D\n"
         "    on tick:\n"
@@ -909,7 +909,7 @@ TEST_CASE("Semantic: EditorSelectionChanged and EditorModeChanged events are val
         "pub event EditorModeChanged:\n"
         "    previous_mode: int\n"
         "    current_mode: int\n"
-        "system EventHandler:\n"
+        "rule EventHandler:\n"
         "    on EditorSelectionChanged as e:\n"
         "        pass\n"
         "    on EditorModeChanged as e:\n"
@@ -955,15 +955,15 @@ TEST_CASE("Semantic: all seven clean-named editor extern funcs with string/int/v
                        "pub extern func apply_camera_3d(position: vec3, rotation: quat)\n"));
 }
 
-TEST_CASE("Semantic: extern system EditorTemplatePalette filter on EditorState is valid",
-          "[semantic][stdlib][editor][extern-system]") {
+TEST_CASE("Semantic: extern rule EditorTemplatePalette filter on EditorState is valid",
+          "[semantic][stdlib][editor][extern-rule]") {
     CHECK_FALSE(
         analyze_errors("pub event render\n"
                        "pub trait EditorState:\n"
                        "    var active: bool = true\n"
                        "    var mode: int = 0\n"
                        "    var selected: entity_id\n"
-                       "pub extern system EditorTemplatePalette:\n"
+                       "pub extern rule EditorTemplatePalette:\n"
                        "    filter:\n"
                        "        EditorState\n"
                        "    on render:\n"
@@ -973,14 +973,14 @@ TEST_CASE("Semantic: extern system EditorTemplatePalette filter on EditorState i
                        "            graphics\n"));
 }
 
-TEST_CASE("Semantic: extern system EditorPropertyPanel filter on EditorState is valid",
-          "[semantic][stdlib][editor][extern-system]") {
+TEST_CASE("Semantic: extern rule EditorPropertyPanel filter on EditorState is valid",
+          "[semantic][stdlib][editor][extern-rule]") {
     CHECK_FALSE(
         analyze_errors("pub event render\n"
                        "pub trait EditorState:\n"
                        "    var active: bool = true\n"
                        "    var mode: int = 0\n"
-                       "pub extern system EditorPropertyPanel:\n"
+                       "pub extern rule EditorPropertyPanel:\n"
                        "    filter:\n"
                        "        EditorState\n"
                        "    on render:\n"
@@ -990,15 +990,15 @@ TEST_CASE("Semantic: extern system EditorPropertyPanel filter on EditorState is 
                        "            graphics\n"));
 }
 
-TEST_CASE("Semantic: extern system GizmoRenderer2D filter on EditorGizmo2D is valid",
-          "[semantic][stdlib][editor][extern-system]") {
+TEST_CASE("Semantic: extern rule GizmoRenderer2D filter on EditorGizmo2D is valid",
+          "[semantic][stdlib][editor][extern-rule]") {
     CHECK_FALSE(
         analyze_errors("pub event render\n"
                        "pub trait EditorGizmo2D:\n"
                        "    var mode: int = 1\n"
                        "    var color: color = #00FF00FF\n"
                        "    var size: float = 1.0\n"
-                       "pub extern system GizmoRenderer2D:\n"
+                       "pub extern rule GizmoRenderer2D:\n"
                        "    filter:\n"
                        "        EditorGizmo2D\n"
                        "    on render:\n"
@@ -1008,15 +1008,15 @@ TEST_CASE("Semantic: extern system GizmoRenderer2D filter on EditorGizmo2D is va
                        "            graphics\n"));
 }
 
-TEST_CASE("Semantic: extern system GizmoRenderer3D filter on EditorGizmo3D is valid",
-          "[semantic][stdlib][editor][extern-system]") {
+TEST_CASE("Semantic: extern rule GizmoRenderer3D filter on EditorGizmo3D is valid",
+          "[semantic][stdlib][editor][extern-rule]") {
     CHECK_FALSE(
         analyze_errors("pub event render\n"
                        "pub trait EditorGizmo3D:\n"
                        "    var mode: int = 1\n"
                        "    var color: color = #00FF00FF\n"
                        "    var size: float = 1.0\n"
-                       "pub extern system GizmoRenderer3D:\n"
+                       "pub extern rule GizmoRenderer3D:\n"
                        "    filter:\n"
                        "        EditorGizmo3D\n"
                        "    on render:\n"
@@ -1126,7 +1126,7 @@ TEST_CASE("Semantic: child role is not a spawnable or entity_id symbol", "[seman
                            "    children:\n"
                            "        entity Crown:\n"
                            "            Tag\n"
-                           "system S:\n"
+                           "rule S:\n"
                            "    on tick:\n"
                            "        spawn Crown:\n"
                            "            Tag:\n"
@@ -1249,7 +1249,7 @@ TEST_CASE("Semantic: spawn missing required child field rejected, override satis
                                      "        entity Crown:\n"
                                      "            Health\n";
     auto err = first_error(TEMPLATE_SRC +
-                           "system S:\n"
+                           "rule S:\n"
                            "    on tick:\n"
                            "        spawn Rig:\n"
                            "            Tag:\n"
@@ -1257,7 +1257,7 @@ TEST_CASE("Semantic: spawn missing required child field rejected, override satis
     CHECK(err.find("required field 'hp' not set for child 'Crown'") != std::string::npos);
 
     CHECK_FALSE(analyze_errors(TEMPLATE_SRC +
-                               "system S:\n"
+                               "rule S:\n"
                                "    on tick:\n"
                                "        spawn Rig:\n"
                                "            children:\n"
@@ -1273,7 +1273,7 @@ TEST_CASE("Semantic: spawn child override of unknown role rejected", "[semantic]
                            "    children:\n"
                            "        entity Crown:\n"
                            "            Growth\n"
-                           "system S:\n"
+                           "rule S:\n"
                            "    on tick:\n"
                            "        spawn Rig:\n"
                            "            children:\n"
@@ -1296,7 +1296,7 @@ TEST_CASE("Semantic: nested spawn override reaches roles spliced from child temp
                                "        entity Sword from SwordTemplate:\n"
                                "            Tag:\n"
                                "                value = 1\n"
-                               "system S:\n"
+                               "rule S:\n"
                                "    on tick:\n"
                                "        spawn PlayerRig:\n"
                                "            children:\n"

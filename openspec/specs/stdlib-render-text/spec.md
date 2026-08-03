@@ -19,11 +19,11 @@ The `std.render.text` module SHALL expose a `TextLabel` trait with the following
 ---
 
 ### Requirement: std.render.text declares TextRenderer2D for flat-world entities
-The `std.render.text` module SHALL declare `extern system TextRenderer2D` with a filter requiring both `std.transform.flat.WorldTransform` and `TextLabel`. This system SHALL be recognized by the backend as the 2D text rendering path.
+The `std.render.text` module SHALL declare `extern rule TextRenderer2D` with a filter requiring both `std.transform.flat.WorldTransform` and `TextLabel`. This rule SHALL be recognized by the backend as the 2D text rendering path.
 
 #### Scenario: TextRenderer2D declaration matches shipped stdlib
 - **WHEN** `std.render.text` is imported
-- **THEN** the module declares `extern system TextRenderer2D` with filter entries `std.transform.flat.WorldTransform` and `TextLabel`
+- **THEN** the module declares `extern rule TextRenderer2D` with filter entries `std.transform.flat.WorldTransform` and `TextLabel`
 
 #### Scenario: TextRenderer2D fires only for flat-world entities
 - **WHEN** an entity carries `std.transform.flat.WorldTransform` and `TextLabel`
@@ -36,11 +36,11 @@ The `std.render.text` module SHALL declare `extern system TextRenderer2D` with a
 ---
 
 ### Requirement: std.render.text declares TextRenderer3D for volume-world entities
-The `std.render.text` module SHALL declare `extern system TextRenderer3D` with a filter requiring both `std.transform.volume.WorldTransform` and `TextLabel`. This system SHALL be recognized by the backend as the 3D surface text rendering path.
+The `std.render.text` module SHALL declare `extern rule TextRenderer3D` with a filter requiring both `std.transform.volume.WorldTransform` and `TextLabel`. This rule SHALL be recognized by the backend as the 3D surface text rendering path.
 
 #### Scenario: TextRenderer3D declaration matches shipped stdlib
 - **WHEN** `std.render.text` is imported
-- **THEN** the module declares `extern system TextRenderer3D` with filter entries `std.transform.volume.WorldTransform` and `TextLabel`
+- **THEN** the module declares `extern rule TextRenderer3D` with filter entries `std.transform.volume.WorldTransform` and `TextLabel`
 
 #### Scenario: TextRenderer3D fires only for volume-world entities
 - **WHEN** an entity carries `std.transform.volume.WorldTransform` and `TextLabel`
@@ -113,8 +113,8 @@ The `std.render.text` module SHALL expose a `pub trait ScreenLabel` with fields 
 
 ---
 
-### Requirement: ScreenLabelSystem renders window-space text in any transform flavor
-The `std.render.text` module SHALL declare `extern system ScreenLabelSystem` filtered on `ScreenLabel` alone, recognized by the backend as a render-phase system. The backend SHALL draw visible labels at `position` in window pixel coordinates (top-left origin), after all viewport/world rendering so labels overlay 2D and 3D content. The system SHALL be functional in programs using either `std.transform.flat` or `std.transform.volume` — unlike `TextRenderer2D`, it SHALL NOT be disabled by the program's `WorldTransform` flavor.
+### Requirement: ScreenLabelRender renders window-space text in any transform flavor
+The `std.render.text` module SHALL declare `extern rule ScreenLabelRender` filtered on `ScreenLabel` alone, recognized by the backend as a render-phase rule. The backend SHALL draw visible labels at `position` in window pixel coordinates (top-left origin), after all viewport/world rendering so labels overlay 2D and 3D content. The rule SHALL be functional in programs using either `std.transform.flat` or `std.transform.volume` — unlike `TextRenderer2D`, it SHALL NOT be disabled by the program's `WorldTransform` flavor.
 
 #### Scenario: HUD label over a 3D scene
 - **WHEN** a `volume`-flavor program has an entity with `ScreenLabel { text = "hello", position = vec2(16.0, 16.0) }`
@@ -129,5 +129,5 @@ The `std.render.text` module SHALL declare `extern system ScreenLabelSystem` fil
 - **THEN** no text is drawn for that entity
 
 #### Scenario: Label text updates take effect same frame
-- **WHEN** a system writes `ScreenLabel.text` during the update phase
+- **WHEN** a rule writes `ScreenLabel.text` during the update phase
 - **THEN** the label rendered that frame shows the new text

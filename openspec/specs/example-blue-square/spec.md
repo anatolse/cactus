@@ -27,7 +27,7 @@ The example SHALL provide a single `examples/blue-square/square.cactus` file tha
 - **THEN** the entity's `x` field increases by `SPEED * dt` (moves right)
 
 ### Requirement: C++ host application
-The example SHALL provide `examples/blue-square/game/main.cpp` that initialises a Raylib window (800×600, titled "Blue Square"), runs a standard game loop at 60 FPS, clears the background white each frame, and draws a 50×50 cornflower-blue rectangle at the entity's current position. It SHALL use the EnTT registry pattern. It SHALL include `#if __has_include("square.generated.h")` guards and fall back to a stub entity and stub movement system when the generated header is absent.
+The example SHALL provide `examples/blue-square/game/main.cpp` that initialises a Raylib window (800×600, titled "Blue Square"), runs a standard game loop at 60 FPS, clears the background white each frame, and draws a 50×50 cornflower-blue rectangle at the entity's current position. It SHALL use the EnTT registry pattern. It SHALL include `#if __has_include("square.generated.h")` guards and fall back to a stub entity and stub movement rule when the generated header is absent.
 
 #### Scenario: Window opens with white background
 - **WHEN** the executable is launched

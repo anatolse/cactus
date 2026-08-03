@@ -1,6 +1,6 @@
 module malformed_system
 
-system BrokenSystem:
+rule BrokenSystem:
     filter:
         Position
         ???
@@ -10,6 +10,6 @@ system BrokenSystem:
         let x =
         y = 2
 
-system Followup:
+rule Followup:
     on tick:
         z = 3

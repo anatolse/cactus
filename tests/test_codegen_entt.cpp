@@ -188,7 +188,7 @@ phase simulate:
     from:
         frame
 
-extern system Integrate:
+extern rule Integrate:
     filter:
         Position
         Velocity
@@ -207,7 +207,7 @@ extern system Integrate:
         effects:
             physics
 
-extern system Monitor:
+extern rule Monitor:
     on simulate:
         effects:
             host.observe
@@ -286,7 +286,7 @@ TEST_CASE("Codegen EnTT: stdlib collider components keep authored defaults", "[c
     CHECK(box_code.find("Vector2 size{.x = 1.0F, .y = 1.0F};") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
+TEST_CASE("Codegen EnTT: registry view rule", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event step:\n"
@@ -294,7 +294,7 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
         "trait Pos:\n"
         "    var x: float\n"
         "    var y: float\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Pos\n"
         "    on step:\n"
@@ -302,7 +302,7 @@ TEST_CASE("Codegen EnTT: registry view system", "[codegen-entt]") {
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("void move_step") != std::string::npos);
             CHECK(code.find("entt::registry& registry") != std::string::npos);
@@ -355,7 +355,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
         "event tick: \n"
         "    dt: float\n"
         "trait Pos:\n    persist sync var x: float\n    persist sync var y: float\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Pos\n"
         "    on tick:\n"
@@ -407,7 +407,7 @@ TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower
         "    mouse = inp.MouseButton.Left\n"
         "trait MouseState:\n"
         "    var pos: vec2\n"
-        "system ReadMouse:\n"
+        "rule ReadMouse:\n"
         "    filter:\n"
         "        MouseState\n"
         "    on input:\n"
@@ -533,7 +533,7 @@ TEST_CASE("Codegen EnTT: imported stdlib math alias lowers to runtime namespace"
         "    dt: float\n"
         "trait Value:\n"
         "    var x: float\n"
-        "system Demo:\n"
+        "rule Demo:\n"
         "    filter:\n"
         "        Value\n"
         "    on tick:\n"
@@ -553,7 +553,7 @@ TEST_CASE("Codegen EnTT: unqualified imported stdlib func lowers to runtime name
         "    dt: float\n"
         "trait Value:\n"
         "    var x: float\n"
-        "system Demo:\n"
+        "rule Demo:\n"
         "    filter:\n"
         "        Value\n"
         "    on tick:\n"
@@ -575,7 +575,7 @@ TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespa
         "    key = std.input.Key.Space\n"
         "trait Controller:\n"
         "    var active: bool = false\n"
-        "system Demo:\n"
+        "rule Demo:\n"
         "    filter:\n"
         "        Controller\n"
         "    on tick:\n"
@@ -615,7 +615,7 @@ TEST_CASE("Codegen EnTT: std.physics.flat query calls lower with registry access
         "    var scale: vec2\n"
         "trait BoxCollider:\n"
         "    var size: vec2\n"
-        "system QueryProbe:\n"
+        "rule QueryProbe:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        BoxCollider\n"
@@ -639,7 +639,7 @@ TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library",
         "    var parent: entity_id\n"
         "pub event tick:\n"
         "    dt: float\n"
-        "system Cleanup:\n"
+        "rule Cleanup:\n"
         "    on tick:\n"
         "        destroy self\n",
         program);
@@ -648,7 +648,7 @@ TEST_CASE("Codegen EnTT: hierarchy destroy helper delegates to runtime library",
     CHECK(code.find("cactus::runtime::entt_backend::destroy_entity_recursive(") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runtime adapters",
+TEST_CASE("Codegen EnTT: sprite and animation extern rules bind to asset runtime adapters",
           "[codegen-entt][assets]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -670,7 +670,7 @@ TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runti
         "    var fps: float\n"
         "    var playing: bool\n"
         "event run\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        Renderer\n"
@@ -678,7 +678,7 @@ TEST_CASE("Codegen EnTT: sprite and animation extern systems bind to asset runti
         "        reads:\n"
         "            WorldTransform\n"
         "            Renderer\n"
-        "extern system AnimatedSpriteSystem:\n"
+        "extern rule SpriteAnimation:\n"
         "    filter:\n"
         "        AnimatedSprite\n"
         "    on run:\n"
@@ -708,7 +708,7 @@ TEST_CASE("Codegen EnTT: render glue brackets frames without inferring generic e
         "    var visible: bool\n"
         "    var layer: int\n"
         "event run\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        Renderer\n"
@@ -725,7 +725,7 @@ TEST_CASE("Codegen EnTT: render glue brackets frames without inferring generic e
     CHECK(render.find("sprite_renderer_tick(registry);") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime without user callback",
+TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime without user callback",
           "[codegen-entt][assets]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -740,7 +740,7 @@ TEST_CASE("Codegen EnTT: mesh renderer extern system binds to backend runtime wi
         "    var visible: bool\n"
         "    var cast_shadow: bool\n"
         "event run\n"
-        "extern system MeshRenderer:\n"
+        "extern rule MeshRenderer:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        Renderer\n"
@@ -773,7 +773,7 @@ TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via DrawCircleV alon
         "    var color: color\n"
         "    var visible: bool\n"
         "event render\n"
-        "extern system ShapeRenderer:\n"
+        "extern rule ShapeRenderer:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        Shape\n"
@@ -795,7 +795,7 @@ TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via DrawCircleV alon
     CHECK(code.find("DrawRectangleV(WorldTransform_comp.position") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: model renderer extern system binds to backend runtime without user callback",
+TEST_CASE("Codegen EnTT: model renderer extern rule binds to backend runtime without user callback",
           "[codegen-entt][assets][dsl-model-assets]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -809,7 +809,7 @@ TEST_CASE("Codegen EnTT: model renderer extern system binds to backend runtime w
         "    var visible: bool\n"
         "    var cast_shadow: bool\n"
         "event run\n"
-        "extern system ModelRendererSystem:\n"
+        "extern rule ModelRender:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        ModelRenderer\n"
@@ -821,7 +821,7 @@ TEST_CASE("Codegen EnTT: model renderer extern system binds to backend runtime w
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("cactus::runtime::entt_backend::submit_model(") != std::string::npos);
-    CHECK(code.find("void model_renderer_system_update(") == std::string::npos);
+    CHECK(code.find("void model_render_update(") == std::string::npos);
     // No ModelAnimator trait in the program: the plain submission path only.
     CHECK(code.find("try_get<ModelAnimator>") == std::string::npos);
 }
@@ -841,7 +841,7 @@ TEST_CASE("Codegen EnTT: model animation extern adapter advances time without in
         "    var speed: float\n"
         "    var time: float\n"
         "event run\n"
-        "extern system ModelAnimationSystem:\n"
+        "extern rule ModelAnimation:\n"
         "    filter:\n"
         "        ModelRenderer\n"
         "        ModelAnimator\n"
@@ -853,7 +853,7 @@ TEST_CASE("Codegen EnTT: model animation extern adapter advances time without in
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    const auto tick = generated_function(code, "void model_animation_system_tick");
+    const auto tick = generated_function(code, "void model_animation_tick");
     CHECK(tick.find("registry.view<ModelRenderer, ModelAnimator>()") != std::string::npos);
     CHECK(tick.find("if (!ModelAnimator_comp.playing)") != std::string::npos);
     CHECK(tick.find("ModelAnimator_comp.time += kFixedDt * ModelAnimator_comp.speed;") != std::string::npos);
@@ -863,9 +863,9 @@ TEST_CASE("Codegen EnTT: model animation extern adapter advances time without in
     // The adapter owns time advancement, but a generic event name no longer
     // causes the backend to infer update or render scheduling.
     const auto update = generated_function(code, "void generated_update_project");
-    CHECK(update.find("model_animation_system_tick(registry);") == std::string::npos);
+    CHECK(update.find("model_animation_tick(registry);") == std::string::npos);
     const auto render = generated_function(code, "void generated_render_project");
-    CHECK(render.find("model_animation_system_tick") == std::string::npos);
+    CHECK(render.find("model_animation_tick") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the entity carries one",
@@ -887,7 +887,7 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
         "    var speed: float\n"
         "    var time: float\n"
         "event run\n"
-        "extern system ModelRendererSystem:\n"
+        "extern rule ModelRender:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        ModelRenderer\n"
@@ -898,7 +898,7 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    const auto tick = generated_function(code, "void model_renderer_system_tick");
+    const auto tick = generated_function(code, "void model_render_tick");
     // Animated entities go through the extended submit_model signature...
     CHECK(tick.find("registry.try_get<ModelAnimator>(entity)") != std::string::npos);
     CHECK(tick.find("animator->clip, animator->time);") != std::string::npos);
@@ -906,7 +906,7 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
     CHECK(tick.find("ModelRenderer_comp.cast_shadow);") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: screen label extern system renders window-space text in flat and volume programs",
+TEST_CASE("Codegen EnTT: screen label extern rule renders window-space text in flat and volume programs",
           "[codegen-entt][assets][dsl-model-animation]") {
     const std::string screen_label_decls =
         "trait ScreenLabel:\n"
@@ -916,7 +916,7 @@ TEST_CASE("Codegen EnTT: screen label extern system renders window-space text in
         "    var color: color\n"
         "    var visible: bool\n"
         "event run\n"
-        "extern system ScreenLabelSystem:\n"
+        "extern rule ScreenLabelRender:\n"
         "    filter:\n"
         "        ScreenLabel\n"
         "    on run:\n"
@@ -941,7 +941,7 @@ TEST_CASE("Codegen EnTT: screen label extern system renders window-space text in
         auto decorated = full_pipeline(transform + screen_label_decls, program);
 
         const auto code = CppEnttCodegen::generate(decorated);
-        const auto tick = generated_function(code, "void screen_label_system_tick");
+        const auto tick = generated_function(code, "void screen_label_render_tick");
         // No WorldTransform in the view and no flavor gating: the same
         // emission serves flat and volume programs (dsl-model-animation D5).
         CHECK(tick.find("registry.view<ScreenLabel>()") != std::string::npos);
@@ -953,9 +953,9 @@ TEST_CASE("Codegen EnTT: screen label extern system renders window-space text in
         // Generic event names do not imply update or render scheduling. A
         // linked phase graph is the sole source of runtime dispatch order.
         const auto render = generated_function(code, "void generated_render_project");
-        CHECK(render.find("screen_label_system_tick(registry);") == std::string::npos);
+        CHECK(render.find("screen_label_render_tick(registry);") == std::string::npos);
         const auto update = generated_function(code, "void generated_update_project");
-        CHECK(update.find("screen_label_system_tick") == std::string::npos);
+        CHECK(update.find("screen_label_render_tick") == std::string::npos);
     }
 }
 
@@ -970,7 +970,7 @@ TEST_CASE("Codegen EnTT: std.render.models introspection funcs bind to model-pre
         "trait ClipState:\n"
         "    var clips: int\n"
         "    var label: string\n"
-        "system Probe:\n"
+        "rule Probe:\n"
         "    filter:\n"
         "        ClipState\n"
         "    on tick:\n"
@@ -993,7 +993,7 @@ TEST_CASE("Codegen EnTT: models.bounds_size binds to the model-prefixed runtime 
         "    dt: float\n"
         "trait SizeState:\n"
         "    var height: float\n"
-        "system Probe:\n"
+        "rule Probe:\n"
         "    filter:\n"
         "        SizeState\n"
         "    on tick:\n"
@@ -1025,7 +1025,7 @@ TEST_CASE("Codegen EnTT: on load handler runs via a one-shot boot activation bef
         "    Position\n"
         "entity Bootstrap:\n"
         "    Marker\n"
-        "system SpawnEnemies:\n"
+        "rule SpawnEnemies:\n"
         "    filter:\n"
         "        Marker\n"
         "    on load:\n"
@@ -1075,7 +1075,7 @@ TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation
           "[codegen-entt][dsl-scene-loading][dynamic-model-spawning][graph-driven-lifecycle-events]") {
     ProgramNode program;
     // `load` is declared (as it would be via a real `use std.core`) but no
-    // system handles it — the boot activation must not be emitted even though
+    // rule handles it — the boot activation must not be emitted even though
     // the program is otherwise graph-driven.
     auto decorated = full_pipeline(
         "pub extern event frame:\n"
@@ -1086,7 +1086,7 @@ TEST_CASE("Codegen EnTT: programs without a load handler emit no boot activation
         "pub event load\n"
         "trait Pos:\n"
         "    var x: float = 0.0\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Pos\n"
         "    on tick:\n"
@@ -1135,7 +1135,7 @@ TEST_CASE("Codegen EnTT: on unload handler runs via a one-shot teardown activati
         "trait Marker\n"
         "entity Bootstrap:\n"
         "    Marker\n"
-        "system SceneCleanup:\n"
+        "rule SceneCleanup:\n"
         "    filter:\n"
         "        Marker\n"
         "    on unload:\n"
@@ -1185,7 +1185,7 @@ TEST_CASE("Codegen EnTT: programs without an unload handler emit no teardown act
         "pub event unload\n"
         "trait Pos:\n"
         "    var x: float = 0.0\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Pos\n"
         "    on tick:\n"
@@ -1224,7 +1224,7 @@ TEST_CASE("Codegen EnTT: commit emits a spawn notification only when an on spawn
         "event destroy\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system OnSpawn:\n"
+        "rule OnSpawn:\n"
         "    filter:\n"
         "        Pos\n"
         "    on spawn:\n"
@@ -1256,7 +1256,7 @@ TEST_CASE("Codegen EnTT: commit emits a destroy notification only when an on des
         "event destroy\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system OnDestroy:\n"
+        "rule OnDestroy:\n"
         "    filter:\n"
         "        Pos\n"
         "    on destroy:\n"
@@ -1286,7 +1286,7 @@ TEST_CASE("Codegen EnTT: programs without spawn/destroy handlers emit no commit 
         "event destroy\n"
         "trait Pos:\n"
         "    var x: float = 0.0\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Pos\n"
         "    on tick:\n"
@@ -1320,7 +1320,7 @@ TEST_CASE("Codegen EnTT: spawn notification emission reuses the existing cascade
         "event spawn\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system OnSpawn:\n"
+        "rule OnSpawn:\n"
         "    filter:\n"
         "        Pos\n"
         "    on spawn:\n"
@@ -1507,7 +1507,7 @@ TEST_CASE("Codegen EnTT: spawn of composed template constructs flattened traits 
         "    use EnemyBase\n"
         "    Patrol:\n"
         "        speed = 2.0\n"
-        "system Spawner:\n"
+        "rule Spawner:\n"
         "    on tick:\n"
         "        spawn WalkerEnemy:\n"
         "            Health:\n"
@@ -1549,7 +1549,7 @@ TEST_CASE("Codegen EnTT: spawn expression of composed template returns created e
         "    use EnemyBase\n"
         "    Patrol:\n"
         "        speed = 2.0\n"
-        "system Spawner:\n"
+        "rule Spawner:\n"
         "    on tick:\n"
         "        let spawned = spawn WalkerEnemy:\n"
         "            Patrol:\n"
@@ -1576,7 +1576,7 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
         "    var duration: float = 0.0\n"
         "trait Position:\n"
         "    var x: float = 0.0\n"
-        "system Freeze:\n"
+        "rule Freeze:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
@@ -1587,7 +1587,7 @@ TEST_CASE("Codegen EnTT: add/remove trait statements", "[codegen-entt]") {
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.emplace_or_replace<Frozen>(entity)") != std::string::npos);
             CHECK(code.find("registry.emplace_or_replace<Stunned>(entity, __value)") != std::string::npos);
@@ -1602,7 +1602,7 @@ TEST_CASE("Codegen EnTT: cross-entity add/remove/destroy use validity guards", "
         "event Collision:\n"
         "    other: entity_id\n"
         "trait Frozen\n"
-        "system Cleanup:\n"
+        "rule Cleanup:\n"
         "    on Collision as c:\n"
         "        add Frozen to c.other\n"
         "        remove Frozen from c.other\n"
@@ -1610,7 +1610,7 @@ TEST_CASE("Codegen EnTT: cross-entity add/remove/destroy use validity guards", "
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
             CHECK(code.find("registry.emplace_or_replace<Frozen>(c.other)") != std::string::npos);
@@ -1627,14 +1627,14 @@ TEST_CASE("Codegen EnTT: targeted emit uses validity guard", "[codegen-entt][ent
         "    amount: int\n"
         "event Collision:\n"
         "    other: entity_id\n"
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on Collision as c:\n"
         "        emit Hit to c.other:\n"
         "            amount = 1\n",
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
             CHECK(code.find("Hit_buffer.push_back({.amount = 1})") != std::string::npos);
@@ -1647,14 +1647,14 @@ TEST_CASE("Codegen EnTT: exists compiles to registry.valid", "[codegen-entt][ent
     auto decorated = full_pipeline(
         "event Collision:\n"
         "    other: entity_id\n"
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on Collision as c:\n"
         "        if exists(c.other):\n"
         "            let x = 1\n",
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
         }
@@ -1668,7 +1668,7 @@ TEST_CASE("Codegen EnTT: trait match is guarded by entity validity", "[codegen-e
         "    other: entity_id\n"
         "trait Boss:\n"
         "    var stage: int\n"
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"
         "            Boss as b =>\n"
@@ -1676,7 +1676,7 @@ TEST_CASE("Codegen EnTT: trait match is guarded by entity validity", "[codegen-e
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
             CHECK(code.find("if (registry.valid(__match_entity))") != std::string::npos);
@@ -1692,7 +1692,7 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
         "trait Boss:\n"
         "    var stage: int\n"
         "trait Spike\n"
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"
         "            Boss as b =>\n"
@@ -1704,7 +1704,7 @@ TEST_CASE("Codegen EnTT: trait match emits try_get, all_of, and else", "[codegen
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("auto __match_entity = c.other") != std::string::npos);
             CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
@@ -1721,7 +1721,7 @@ TEST_CASE("Codegen EnTT: aliased event handler uses alias in signature and body"
         "    dt: float\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Pos\n"
         "    on step as s:\n"
@@ -1729,7 +1729,7 @@ TEST_CASE("Codegen EnTT: aliased event handler uses alias in signature and body"
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("const stepEvent& s") != std::string::npos);
             CHECK(code.find("Pos_comp.x = (Pos_comp.x + s.dt)") != std::string::npos);
@@ -1743,7 +1743,7 @@ TEST_CASE("Codegen EnTT: spawn handler uses marker event parameter", "[codegen-e
         "event spawn\n"
         "trait Pos:\n"
         "    var x: float\n"
-        "system Init:\n"
+        "rule Init:\n"
         "    filter:\n"
         "        Pos\n"
         "    on spawn:\n"
@@ -1751,7 +1751,7 @@ TEST_CASE("Codegen EnTT: spawn handler uses marker event parameter", "[codegen-e
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn,") !=
                   std::string::npos);  // spawn handlers don't get dispatcher (lifecycle event)
@@ -1766,7 +1766,7 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
         "    other: entity_id\n"
         "trait Boss:\n"
         "    var stage: int\n"
-        "system Combat:\n"
+        "rule Combat:\n"
         "    on Collision as c:\n"
         "        match c.other:\n"
         "            Boss as b =>\n"
@@ -1774,7 +1774,7 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("auto* b = registry.try_get<Boss>(__match_entity)") != std::string::npos);
             CHECK(code.find("else {") == std::string::npos);
@@ -1782,7 +1782,7 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
     }
 }
 
-TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[codegen-entt][extern-system]") {
+TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[codegen-entt][extern-rule]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait Position:\n"
@@ -1790,7 +1790,7 @@ TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[cod
         "trait Velocity:\n"
         "    var dx: float\n"
         "event run\n"
-        "extern system ParticleSystem:\n"
+        "extern rule ParticleSystem:\n"
         "    filter:\n"
         "        Position\n"
         "        Velocity\n"
@@ -1801,19 +1801,19 @@ TEST_CASE("Codegen EnTT: unsupported generic extern scaffold is rejected", "[cod
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+        if (auto* sys = std::get_if<ExternRuleNode>(&decl)) {
             CHECK_THROWS_AS(EnttSystemEmitter::emit_extern_system(*sys, decorated), std::runtime_error);
         }
     }
 }
 
-TEST_CASE("Codegen EnTT: unsupported ordered extern scaffold is rejected", "[codegen-entt][extern-system]") {
+TEST_CASE("Codegen EnTT: unsupported ordered extern scaffold is rejected", "[codegen-entt][extern-rule]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait Position:\n"
         "    var y: float\n"
         "event run\n"
-        "extern system SortedRenderer:\n"
+        "extern rule SortedRenderer:\n"
         "    filter:\n"
         "        Position\n"
         "    order by:\n"
@@ -1824,20 +1824,20 @@ TEST_CASE("Codegen EnTT: unsupported ordered extern scaffold is rejected", "[cod
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<ExternSystemNode>(&decl)) {
+        if (auto* sys = std::get_if<ExternRuleNode>(&decl)) {
             CHECK_THROWS_AS(EnttSystemEmitter::emit_extern_system(*sys, decorated), std::runtime_error);
         }
     }
 }
 
-TEST_CASE("Codegen EnTT: system order by emits registry sort for single key", "[codegen-entt][system-order-by]") {
+TEST_CASE("Codegen EnTT: rule order by emits registry sort for single key", "[codegen-entt][rule-order-by]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n"
         "trait Sprite:\n"
         "    var layer: int\n"
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:\n"
         "        Sprite as s\n"
         "    order by:\n"
@@ -1847,7 +1847,7 @@ TEST_CASE("Codegen EnTT: system order by emits registry sort for single key", "[
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.sort<Sprite>([&](entt::entity a, entt::entity b)") != std::string::npos);
             CHECK(code.find("registry.get<Sprite>(a).layer < registry.get<Sprite>(b).layer") != std::string::npos);
@@ -1855,7 +1855,7 @@ TEST_CASE("Codegen EnTT: system order by emits registry sort for single key", "[
     }
 }
 
-TEST_CASE("Codegen EnTT: system order by emits multi-key comparator", "[codegen-entt][system-order-by]") {
+TEST_CASE("Codegen EnTT: rule order by emits multi-key comparator", "[codegen-entt][rule-order-by]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
@@ -1864,7 +1864,7 @@ TEST_CASE("Codegen EnTT: system order by emits multi-key comparator", "[codegen-
         "    var pos: vec2\n"
         "trait Sprite:\n"
         "    var layer: int\n"
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:\n"
         "        Position as p\n"
         "        Sprite as s\n"
@@ -1876,7 +1876,7 @@ TEST_CASE("Codegen EnTT: system order by emits multi-key comparator", "[codegen-
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("if (registry.get<Sprite>(a).layer != registry.get<Sprite>(b).layer)") !=
                   std::string::npos);
@@ -1886,14 +1886,14 @@ TEST_CASE("Codegen EnTT: system order by emits multi-key comparator", "[codegen-
     }
 }
 
-TEST_CASE("Codegen EnTT: system without order by emits no sort call", "[codegen-entt][system-order-by]") {
+TEST_CASE("Codegen EnTT: rule without order by emits no sort call", "[codegen-entt][rule-order-by]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
         "    dt: float\n"
         "trait Sprite:\n"
         "    var layer: int\n"
-        "system Render:\n"
+        "rule Render:\n"
         "    filter:\n"
         "        Sprite\n"
         "    on tick:\n"
@@ -1901,21 +1901,21 @@ TEST_CASE("Codegen EnTT: system without order by emits no sort call", "[codegen-
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.sort<") == std::string::npos);
         }
     }
 }
 
-TEST_CASE("Codegen EnTT: generic extern system name does not infer lifecycle dispatch",
-          "[codegen-entt][extern-system]") {
+TEST_CASE("Codegen EnTT: generic extern rule name does not infer lifecycle dispatch",
+          "[codegen-entt][extern-rule]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait Position:\n"
         "    var x: float\n"
         "event run\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        Position\n"
         "    on run:\n"
@@ -1927,7 +1927,7 @@ TEST_CASE("Codegen EnTT: generic extern system name does not infer lifecycle dis
 }
 
 TEST_CASE("Codegen EnTT: stdlib-style spelling cannot impersonate compiler-owned extern",
-          "[codegen-entt][extern-system]") {
+          "[codegen-entt][extern-rule]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "trait Transform:\n"
@@ -1935,7 +1935,7 @@ TEST_CASE("Codegen EnTT: stdlib-style spelling cannot impersonate compiler-owned
         "trait Renderer:\n"
         "    var layer: int\n"
         "event run\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        Transform\n"
         "        Renderer\n"
@@ -1956,7 +1956,7 @@ TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses rec
         "    dt: float\n"
         "trait Parent:\n"
         "    var parent: entity_id\n"
-        "system Hierarchy:\n"
+        "rule Hierarchy:\n"
         "    on tick:\n"
         "        add Parent:\n"
         "            parent = self\n"
@@ -1968,7 +1968,7 @@ TEST_CASE("Codegen EnTT: self lowers to current entity and destroy self uses rec
     CHECK(code.find("cactus_destroy_entity_recursive(registry, entity)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: flat transform propagation extern system is recognized", "[codegen-entt][hierarchy]") {
+TEST_CASE("Codegen EnTT: flat transform propagation extern rule is recognized", "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.transform.flat\n"
@@ -1983,7 +1983,7 @@ TEST_CASE("Codegen EnTT: flat transform propagation extern system is recognized"
         "    var rotation: float\n"
         "    var scale: vec2\n"
         "event run\n"
-        "extern system TransformPropagation:\n"
+        "extern rule TransformPropagation:\n"
         "    filter:\n"
         "        Parent\n"
         "        LocalTransform\n"
@@ -2017,7 +2017,7 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
         "    var rotation: float\n"
         "    var scale: vec2\n"
         "event run\n"
-        "extern system TransformPropagation:\n"
+        "extern rule TransformPropagation:\n"
         "    filter:\n"
         "        Parent\n"
         "        LocalTransform\n"
@@ -2036,7 +2036,7 @@ TEST_CASE("Codegen EnTT: hierarchy propagation handles stale parents and cycles 
     CHECK(code.find("registry.all_of<LocalTransform, WorldTransform>(entity)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: volume transform propagation extern system is recognized", "[codegen-entt][hierarchy]") {
+TEST_CASE("Codegen EnTT: volume transform propagation extern rule is recognized", "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.transform.volume\n"
@@ -2051,7 +2051,7 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern system is recognize
         "    var rotation: quat\n"
         "    var scale: vec3\n"
         "event run\n"
-        "extern system TransformPropagation:\n"
+        "extern rule TransformPropagation:\n"
         "    filter:\n"
         "        Parent\n"
         "        LocalTransform\n"
@@ -2214,7 +2214,7 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
         "    amount: int\n"
         "trait Detector:\n"
         "    var hits: list[Hit]\n"
-        "system Detect:\n"
+        "rule Detect:\n"
         "    filter:\n"
         "        Detector\n"
         "    on tick:\n"
@@ -2240,13 +2240,13 @@ TEST_CASE("Codegen EnTT: projected traits use registry components in filters and
         "    var hp: int\n"
         "trait DamageFlash:\n"
         "    var intensity: float = 0.0\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    filter:\n"
         "        Health\n"
         "    on tick:\n"
         "        project DamageFlash:\n"
         "            intensity = 1.0\n"
-        "system Consumer:\n"
+        "rule Consumer:\n"
         "    filter:\n"
         "        Health\n"
         "        DamageFlash as flash\n"
@@ -2273,14 +2273,14 @@ TEST_CASE("Codegen EnTT: projected traits use registry components in filters and
     CHECK(code.find("clear_projected_traits(registry);") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: filtered systems use native views and no early-return guards", "[codegen-entt][project]") {
+TEST_CASE("Codegen EnTT: filtered rules use native views and no early-return guards", "[codegen-entt][project]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "pub event tick:\n"
         "    dt: float\n"
         "trait Wanted\n"
         "trait Blocked\n"
-        "system Consumer:\n"
+        "rule Consumer:\n"
         "    filter:\n"
         "        Wanted\n"
         "    exclude:\n"
@@ -2290,7 +2290,7 @@ TEST_CASE("Codegen EnTT: filtered systems use native views and no early-return g
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.view<Wanted>(entt::exclude<Blocked>)") != std::string::npos);
             CHECK(code.find("registry.storage<entt::entity>()") == std::string::npos);
@@ -2309,7 +2309,7 @@ TEST_CASE("Codegen EnTT: projected trait cleanup restores durable or removes pro
         "    var hp: int\n"
         "trait Flash:\n"
         "    var amount: int = 0\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    filter:\n"
         "        Health\n"
         "    on tick:\n"
@@ -2336,7 +2336,7 @@ TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codeg
         "    dt: float\n"
         "trait Actor\n"
         "trait Grounded\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    filter:\n"
         "        Actor\n"
         "    on tick:\n"
@@ -2355,7 +2355,7 @@ TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codeg
 
 // ── std.text.format codegen tests (add-stdlib-text-format) ───────────────────
 
-TEST_CASE("Codegen EnTT: aliased std.text.format lowers to std::format in system handler",
+TEST_CASE("Codegen EnTT: aliased std.text.format lowers to std::format in rule handler",
           "[codegen-entt][std-text-format]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -2364,7 +2364,7 @@ TEST_CASE("Codegen EnTT: aliased std.text.format lowers to std::format in system
         "    dt: float\n"
         "trait Score:\n"
         "    var value: int\n"
-        "system Display:\n"
+        "rule Display:\n"
         "    filter:\n"
         "        Score\n"
         "    on tick:\n"
@@ -2384,7 +2384,7 @@ TEST_CASE("Codegen EnTT: std.text import causes format header to be emitted", "[
         "    dt: float\n"
         "trait Score:\n"
         "    var value: int\n"
-        "system Display:\n"
+        "rule Display:\n"
         "    filter:\n"
         "        Score\n"
         "    on tick:\n"
@@ -2406,7 +2406,7 @@ TEST_CASE("Codegen EnTT: no std.text import means no format header", "[codegen-e
     CHECK(code.find("#include <format>") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in system handler",
+TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in rule handler",
           "[codegen-entt][std-text-format]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -2415,7 +2415,7 @@ TEST_CASE("Codegen EnTT: unaliased std.text format lowers to std::format in syst
         "    dt: float\n"
         "trait Score:\n"
         "    var value: int\n"
-        "system Display:\n"
+        "rule Display:\n"
         "    filter:\n"
         "        Score\n"
         "    on tick:\n"
@@ -2486,7 +2486,7 @@ TEST_CASE("Codegen EnTT: mixed entity creation order preserved", "[codegen-entt]
 }
 // ── std.editor codegen tests (add-std-editor) ──────────────────────────────
 
-TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, Editor entity, extern system stubs",
+TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, Editor entity, extern rule stubs",
           "[codegen-entt][stdlib][editor]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -2517,7 +2517,7 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
         "    previous: entity_id\n"
         "    current: entity_id\n"
         "pub extern func hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
-        "pub extern system EditorTemplatePalette:\n"
+        "pub extern rule EditorTemplatePalette:\n"
         "    filter:\n"
         "        EditorState\n"
         "    on tick:\n"
@@ -2539,7 +2539,7 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
     CHECK(code.find("struct EditorSnap") != std::string::npos);
     // EditorSelectionChanged event should have a struct
     CHECK(code.find("struct EditorSelectionChanged") != std::string::npos);
-    // EditorTemplatePalette extern system stub (snake_case name)
+    // EditorTemplatePalette extern rule stub (snake_case name)
     CHECK(code.find("editor_template_palette_tick") != std::string::npos);
     // HexColor for #00FF00FF is not in this test, but HexColor conversion path should exist
 }
@@ -2558,7 +2558,7 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
         "    var mode: int = 1\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
-        "system Gizmo2D:\n"
+        "rule Gizmo2D:\n"
         "    filter:\n"
         "        EditorGizmo2D\n"
         "    on tick:\n"
@@ -2584,8 +2584,8 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
     CHECK(code.find("clear_projected_traits(registry)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
-          "[codegen-entt][stdlib][editor][extern-system]") {
+TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
+          "[codegen-entt][stdlib][editor][extern-rule]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.editor\n"
@@ -2598,7 +2598,7 @@ TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
         "    var mode: int = 1\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
-        "pub extern system EditorTemplatePalette:\n"
+        "pub extern rule EditorTemplatePalette:\n"
         "    filter:\n"
         "        EditorState\n"
         "    on tick:\n"
@@ -2606,7 +2606,7 @@ TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
         "            EditorState\n"
         "        effects:\n"
         "            editor\n"
-        "pub extern system EditorPropertyPanel:\n"
+        "pub extern rule EditorPropertyPanel:\n"
         "    filter:\n"
         "        EditorState\n"
         "    on tick:\n"
@@ -2614,7 +2614,7 @@ TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
         "            EditorState\n"
         "        effects:\n"
         "            editor\n"
-        "pub extern system GizmoRenderer2D:\n"
+        "pub extern rule GizmoRenderer2D:\n"
         "    filter:\n"
         "        EditorGizmo2D\n"
         "    on tick:\n"
@@ -2630,7 +2630,7 @@ TEST_CASE("Codegen EnTT: editor extern systems generate correct dispatch calls",
     CHECK(code.find("editor_template_palette_tick") != std::string::npos);
     // EditorPropertyPanel should have a tick call
     CHECK(code.find("editor_property_panel_tick") != std::string::npos);
-    // EditorTemplatePalette and EditorPropertyPanel extern system stubs are generated
+    // EditorTemplatePalette and EditorPropertyPanel extern rule stubs are generated
     // (GizmoRenderer2D dispatch requires WorldTransform in filter + stdlib contract flag,
     //  which are tested in the actual editor-test.cactus example via test_example_cpp_compilation)
 }
@@ -2656,7 +2656,7 @@ TEST_CASE("Codegen EnTT: GizmoRenderer3D emits grid wire boxes and mode handles 
         "    let model: model_id\n"
         "    var visible: bool = true\n"
         "event tick\n"
-        "pub extern system GizmoRenderer3D:\n"
+        "pub extern rule GizmoRenderer3D:\n"
         "    filter:\n"
         "        EditorGizmo3D\n"
         "    on tick:\n"
@@ -2896,7 +2896,7 @@ static const char* const kQueryPreamble =
 TEST_CASE("Codegen EnTT: query.exists lowers to entt view begin/end check", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kQueryPreamble) +
-                                       "system S:\n"
+                                       "rule S:\n"
                                        "    on tick:\n"
                                        "        if query.exists[Boss]():\n"
                                        "            let x = 1\n",
@@ -2910,7 +2910,7 @@ TEST_CASE("Codegen EnTT: query.exists lowers to entt view begin/end check", "[co
 TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kQueryPreamble) +
-                                       "system S:\n"
+                                       "rule S:\n"
                                        "    on tick:\n"
                                        "        if query.exists[Enemy, not Dead]():\n"
                                        "            let x = 1\n",
@@ -2923,7 +2923,7 @@ TEST_CASE("Codegen EnTT: query.exists with negation lowers to excluded view", "[
 TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kQueryPreamble) +
-                                       "system S:\n"
+                                       "rule S:\n"
                                        "    on tick:\n"
                                        "        let n = query.count[Enemy, not Dead]()\n",
                                    program);
@@ -2936,7 +2936,7 @@ TEST_CASE("Codegen EnTT: query.count lowers to counting loop", "[codegen-entt][q
 TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kQueryPreamble) +
-                                       "system S:\n"
+                                       "rule S:\n"
                                        "    on tick:\n"
                                        "        let t = query.first[Boss]()\n",
                                    program);
@@ -2951,7 +2951,7 @@ TEST_CASE("Codegen EnTT: query.first lowers to begin/end with null fallback", "[
 TEST_CASE("Codegen EnTT: query.all lowers to vector collection loop", "[codegen-entt][query]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kQueryPreamble) +
-                                       "system S:\n"
+                                       "rule S:\n"
                                        "    on tick:\n"
                                        "        let all = query.all[Enemy]()\n",
                                    program);
@@ -2970,7 +2970,7 @@ TEST_CASE("Codegen EnTT: query.parent lowers to Parent component try_get", "[cod
         "    dt: float\n"
         "trait Child:\n"
         "    var child_id: entity_id\n"
-        "system S:\n"
+        "rule S:\n"
         "    filter:\n"
         "        Child\n"
         "    on tick:\n"
@@ -2991,7 +2991,7 @@ TEST_CASE("Codegen EnTT: fully qualified std.query path is lowered correctly", "
         "    dt: float\n"
         "trait Boss:\n"
         "    var hp: int\n"
-        "system S:\n"
+        "rule S:\n"
         "    on tick:\n"
         "        let t = std.query.first[Boss]()\n",
         program);
@@ -3017,7 +3017,7 @@ TEST_CASE("Codegen EnTT: flat query.nearest lowers to WorldTransform distance se
           "[codegen-entt][query][spatial]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kFlatQueryPreamble) +
-                                       "system S:\n"
+                                       "rule S:\n"
                                        "    on tick:\n"
                                        "        let p = query.nearest[Enemy](from = tick.dt)\n",
                                    program);
@@ -3036,7 +3036,7 @@ TEST_CASE("Codegen EnTT: flat query.overlap_box excludes negative filter matches
     ProgramNode program;
     auto decorated = full_pipeline(
         std::string(kFlatQueryPreamble) +
-            "system S:\n"
+            "rule S:\n"
             "    on tick:\n"
             "        let p = query.overlap_box[Pickup, not Collected](center = tick.dt, size = tick.dt)\n",
         program);
@@ -3053,7 +3053,7 @@ TEST_CASE("Codegen EnTT: flat query.overlap_circle lowers to radius-based search
     ProgramNode program;
     auto decorated =
         full_pipeline(std::string(kFlatQueryPreamble) +
-                          "system S:\n"
+                          "rule S:\n"
                           "    on tick:\n"
                           "        let hits = query.overlap_circle[Enemy](center = tick.dt, radius = tick.dt)\n",
                       program);
@@ -3069,7 +3069,7 @@ TEST_CASE("Codegen EnTT: flat query.raycast lowers to directional hit search", "
     ProgramNode program;
     auto decorated = full_pipeline(
         std::string(kFlatQueryPreamble) +
-            "system S:\n"
+            "rule S:\n"
             "    on tick:\n"
             "        let hit = query.raycast[Wall](origin = tick.dt, dir = tick.dt, max_dist = tick.dt)\n",
         program);
@@ -3095,7 +3095,7 @@ static const char* const kVolumeQueryPreamble =
 TEST_CASE("Codegen EnTT: volume query.nearest lowers to 3D distance search", "[codegen-entt][query][spatial][3d]") {
     ProgramNode program;
     auto decorated = full_pipeline(std::string(kVolumeQueryPreamble) +
-                                       "system S:\n"
+                                       "rule S:\n"
                                        "    on tick:\n"
                                        "        let e = query.nearest[Enemy](from = tick.dt)\n",
                                    program);
@@ -3113,7 +3113,7 @@ TEST_CASE("Codegen EnTT: volume query.overlap_sphere lowers to 3D radius search"
     ProgramNode program;
     auto decorated =
         full_pipeline(std::string(kVolumeQueryPreamble) +
-                          "system S:\n"
+                          "rule S:\n"
                           "    on tick:\n"
                           "        let hits = query.overlap_sphere[Enemy](center = tick.dt, radius = tick.dt)\n",
                       program);
@@ -3213,7 +3213,7 @@ TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls cano
           "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                        "system S:\n"
+                                        "rule S:\n"
                                         "    on tick:\n"
                                         "        let root = spawn Rig:\n"
                                         "            Tag:\n"
@@ -3228,7 +3228,7 @@ TEST_CASE("Codegen EnTT: override-free spawn of hierarchical template calls cano
 TEST_CASE("Codegen EnTT: spawn with child overrides expands inline per node", "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                        "system S:\n"
+                                        "rule S:\n"
                                         "    on tick:\n"
                                         "        let root = spawn Rig:\n"
                                         "            Tag:\n"
@@ -3285,7 +3285,7 @@ TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in se
 TEST_CASE("Codegen EnTT: destroy cascade code coexists with hierarchical creation", "[codegen-entt][hierarchy]") {
     ProgramNode program;
     auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX +
-                                        "system S:\n"
+                                        "rule S:\n"
                                         "    filter:\n"
                                         "        Tag\n"
                                         "    on tick:\n"
@@ -3334,7 +3334,7 @@ TEST_CASE("Codegen EnTT: std.input mouse_delta and wheel_delta lower to correct 
         "pub event tick\n"
         "trait Rig:\n"
         "    var active: bool\n"
-        "system NavPoll:\n"
+        "rule NavPoll:\n"
         "    filter:\n"
         "        Rig\n"
         "    on tick:\n"
@@ -3343,9 +3343,9 @@ TEST_CASE("Codegen EnTT: std.input mouse_delta and wheel_delta lower to correct 
         program);
 
     const auto code   = CppEnttCodegen::generate(decorated);
-    const auto system = generated_function(code, "void nav_poll_tick");
-    CHECK(system.find("cactus::runtime::entt_backend::editor_wheel_delta()") != std::string::npos);
-    CHECK(system.find("cactus::runtime::entt_backend::editor_mouse_delta_screen()") != std::string::npos);
+    const auto rule = generated_function(code, "void nav_poll_tick");
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_wheel_delta()") != std::string::npos);
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_mouse_delta_screen()") != std::string::npos);
 }
 
 // ── 5.3: editor_consume generates correct runtime call ───────────────────────
@@ -3360,7 +3360,7 @@ TEST_CASE("Codegen EnTT: input.consume call generates runtime consume invocation
         "    mouse = inp.MouseButton.Right\n"
         "trait EditorSt:\n"
         "    var active: bool = true\n"
-        "system EditorInputConsume:\n"
+        "rule EditorInputConsume:\n"
         "    filter:\n"
         "        EditorSt\n"
         "    on input:\n"
@@ -3369,9 +3369,9 @@ TEST_CASE("Codegen EnTT: input.consume call generates runtime consume invocation
         std_input_imports());
 
     const auto code   = CppEnttCodegen::generate(decorated);
-    const auto system = generated_function(code, "void editor_input_consume_input");
+    const auto rule = generated_function(code, "void editor_input_consume_input");
     // The call must pass K_NAV_DRAG (the generated enum constant) to editor_consume.
-    CHECK(system.find("cactus::runtime::entt_backend::editor_consume(K_NAV_DRAG)") != std::string::npos);
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_consume(K_NAV_DRAG)") != std::string::npos);
 }
 
 // ── 5.4: Camera rig lifecycle registration in generated_init_project ─────────
@@ -3473,7 +3473,7 @@ TEST_CASE("Codegen EnTT: std.camera.flat projection helpers lower to correct run
         "pub event tick\n"
         "trait Scene:\n"
         "    var active: bool\n"
-        "system Project2D:\n"
+        "rule Project2D:\n"
         "    filter:\n"
         "        Scene\n"
         "    on tick:\n"
@@ -3482,9 +3482,9 @@ TEST_CASE("Codegen EnTT: std.camera.flat projection helpers lower to correct run
         program);
 
     const auto code   = CppEnttCodegen::generate(decorated);
-    const auto system = generated_function(code, "void project2_d_tick");
-    CHECK(system.find("cactus::runtime::entt_backend::editor_screen_to_world_2d(") != std::string::npos);
-    CHECK(system.find("cactus::runtime::entt_backend::screen_delta_to_world_2d(") != std::string::npos);
+    const auto rule = generated_function(code, "void project2_d_tick");
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_screen_to_world_2d(") != std::string::npos);
+    CHECK(rule.find("cactus::runtime::entt_backend::screen_delta_to_world_2d(") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as first argument",
@@ -3495,7 +3495,7 @@ TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as f
         "pub event tick\n"
         "trait Selection:\n"
         "    var sel: entity_id\n"
-        "system GetPos:\n"
+        "rule GetPos:\n"
         "    filter:\n"
         "        Selection\n"
         "    on tick:\n"
@@ -3503,8 +3503,8 @@ TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as f
         program);
 
     const auto code   = CppEnttCodegen::generate(decorated);
-    const auto system = generated_function(code, "void get_pos_tick");
-    CHECK(system.find("cactus::runtime::entt_backend::editor_entity_position_2d(registry,") != std::string::npos);
+    const auto rule = generated_function(code, "void get_pos_tick");
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_entity_position_2d(registry,") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers with registry injected",
@@ -3515,7 +3515,7 @@ TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers wi
         "pub extern func spawn_template(template_name: string, position_2d: vec2, position_3d: vec3) entity_id\n"
         "trait Placer:\n"
         "    var result: entity_id\n"
-        "system PlaceTest:\n"
+        "rule PlaceTest:\n"
         "    filter:\n"
         "        Placer\n"
         "    on tick:\n"
@@ -3526,8 +3526,8 @@ TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers wi
     decorated.funcs["spawn_template"].module_name = "std.editor";
 
     const auto code   = CppEnttCodegen::generate(decorated);
-    const auto system = generated_function(code, "void place_test_tick");
-    CHECK(system.find("cactus::runtime::entt_backend::editor_spawn_template(registry,") != std::string::npos);
+    const auto rule = generated_function(code, "void place_test_tick");
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_spawn_template(registry,") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: same simple component name from different modules produces distinct C++ symbols",
@@ -3563,7 +3563,7 @@ TEST_CASE("Codegen EnTT: user-defined trait with explicit module_name produces c
     CHECK(code.find("struct WorldTransform") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: system function name uses canonical module prefix when program.module_name is set",
+TEST_CASE("Codegen EnTT: rule function name uses canonical module prefix when program.module_name is set",
           "[codegen-entt][canonical-identity]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -3571,7 +3571,7 @@ TEST_CASE("Codegen EnTT: system function name uses canonical module prefix when 
         "    dt: float\n"
         "trait Velocity:\n"
         "    var vx: float\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Velocity\n"
         "    on tick:\n"
@@ -3592,7 +3592,7 @@ TEST_CASE("Codegen EnTT: registry view uses canonical C++ type names for module-
         "    dt: float\n"
         "trait Position:\n"
         "    var x: float\n"
-        "system Move:\n"
+        "rule Move:\n"
         "    filter:\n"
         "        Position\n"
         "    on tick:\n"
@@ -3601,7 +3601,7 @@ TEST_CASE("Codegen EnTT: registry view uses canonical C++ type names for module-
     decorated.traits.at("Position").module_name = "my.game";
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             const auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.view<my_game__Position>()") != std::string::npos);
             CHECK(code.find("my_game__Position& my_game__Position_comp") != std::string::npos);
@@ -3618,7 +3618,7 @@ TEST_CASE("Codegen EnTT: stdlib func lowering falls back to program.funcs when n
         "    dt: float\n"
         "trait Value:\n"
         "    var x: float\n"
-        "system Demo:\n"
+        "rule Demo:\n"
         "    filter:\n"
         "        Value\n"
         "    on tick:\n"
@@ -3636,7 +3636,7 @@ TEST_CASE("Codegen EnTT: stdlib func lowering falls back to program.funcs when n
     CHECK(code.find("cactus::runtime::stdlib::math::lerp(0.0F, 10.0F, 0.5F)") != std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: stdlib extern system lowering uses canonical C++ names for module-qualified traits",
+TEST_CASE("Codegen EnTT: stdlib extern rule lowering uses canonical C++ names for module-qualified traits",
           "[codegen-entt][canonical-identity]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -3652,7 +3652,7 @@ TEST_CASE("Codegen EnTT: stdlib extern system lowering uses canonical C++ names 
         "    var visible: bool\n"
         "    var layer: int\n"
         "event tick\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        Renderer\n"
@@ -3741,10 +3741,10 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
         "        input\n"
         "    every: 0.5\n"
         "    max: 2\n"
-        "system First:\n"
+        "rule First:\n"
         "    on input:\n"
         "        let sample = input.dt\n"
-        "system Second:\n"
+        "rule Second:\n"
         "    filter:\n"
         "        Marker\n"
         "    on input:\n"
@@ -3865,7 +3865,7 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     const auto legacy = full_pipeline(
         "event tick:\n"
         "    dt: float\n"
-        "system Legacy:\n"
+        "rule Legacy:\n"
         "    on tick:\n"
         "        let sample = tick.dt\n",
         legacy_program);
@@ -3976,7 +3976,7 @@ TEST_CASE("Codegen EnTT: graph-driven render flush wires per-frame housekeeping 
         "phase render:\n"
         "    after:\n"
         "        input\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        Renderer\n"
@@ -4049,18 +4049,18 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
         "phase tick:\n"
         "    from:\n"
         "        frame\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    on tick:\n"
         "        emit Contact:\n"
         "            amount = 1\n"
-        "system FirstContact:\n"
+        "rule FirstContact:\n"
         "    on Contact:\n"
         "        emit Reaction:\n"
         "            amount = Contact.amount\n"
-        "system SecondContact:\n"
+        "rule SecondContact:\n"
         "    on Contact:\n"
         "        let sample = Contact.amount\n"
-        "system ReactionConsumer:\n"
+        "rule ReactionConsumer:\n"
         "    on Reaction:\n"
         "        let sample = Reaction.amount\n",
         program);
@@ -4105,7 +4105,7 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         "        frame\n"
         "    every: 0.5\n"
         "    max: 2\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    filter:\n"
         "        Position\n"
         "    on fixed_tick:\n"
@@ -4116,7 +4116,7 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         "        remove Active from self\n"
         "        emit Contact:\n"
         "            victim = self\n"
-        "system ContactConsumer:\n"
+        "rule ContactConsumer:\n"
         "    on Contact:\n"
         "        destroy Contact.victim\n",
         program);
@@ -4162,7 +4162,7 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
         "        x = 0.0\n"
         "event tick:\n"
         "    dt: float\n"
-        "system LegacySpawner:\n"
+        "rule LegacySpawner:\n"
         "    on tick:\n"
         "        let particle = spawn Particle:\n"
         "            Position:\n"
@@ -4200,7 +4200,7 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
         "phase render:\n"
         "    from:\n"
         "        frame\n"
-        "extern system SpriteRenderer:\n"
+        "extern rule SpriteRenderer:\n"
         "    filter:\n"
         "        WorldTransform\n"
         "        Renderer\n"
@@ -4210,7 +4210,7 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
         "            Renderer\n"
         "        effects:\n"
         "            graphics\n"
-        "extern system AnimatedSpriteSystem:\n"
+        "extern rule SpriteAnimation:\n"
         "    filter:\n"
         "        AnimatedSprite\n"
         "    on render:\n"
@@ -4221,8 +4221,8 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
         program);
 
     for (auto& declaration : program.declarations) {
-        if (auto* system = std::get_if<ExternSystemNode>(&declaration)) {
-            system->is_stdlib = true;
+        if (auto* rule = std::get_if<ExternRuleNode>(&declaration)) {
+            rule->is_stdlib = true;
         }
     }
 
@@ -4232,19 +4232,19 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
                            "void generated_dispatch_phase_std_render_sprites__render(entt::registry& registry, const "
                            "std_render_sprites__renderPhaseRuntimeState& phase)");
     const auto first  = dispatch.find("::sprite_renderer_tick(registry);");
-    const auto second = dispatch.find("::animated_sprite_system_tick(registry);");
+    const auto second = dispatch.find("::sprite_animation_tick(registry);");
     REQUIRE(first != std::string::npos);
     REQUIRE(second != std::string::npos);
     CHECK(first < second);
 
     CHECK(code.find("cactus_external__std_render_sprites__SpriteRenderer") == std::string::npos);
-    CHECK(code.find("cactus_external__std_render_sprites__AnimatedSpriteSystem") == std::string::npos);
+    CHECK(code.find("cactus_external__std_render_sprites__SpriteAnimation") == std::string::npos);
     const auto update = generated_function(code, "void generated_update_project(");
     const auto render = generated_function(code, "void generated_render_project(");
     CHECK(update.find("sprite_renderer_tick") == std::string::npos);
-    CHECK(update.find("animated_sprite_system_tick") == std::string::npos);
+    CHECK(update.find("sprite_animation_tick") == std::string::npos);
     CHECK(render.find("sprite_renderer_tick") == std::string::npos);
-    CHECK(render.find("animated_sprite_system_tick") == std::string::npos);
+    CHECK(render.find("sprite_animation_tick") == std::string::npos);
 }
 
 // ── Pair relations (dsl-pair-relations, 5.5) ─────────────────────────────────
@@ -4268,7 +4268,7 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
         "event tick:\n"
         "    dt: float\n" +
             PAIR_CODEGEN_TRAITS +
-            "system DetectContacts:\n"
+            "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
             "            DynamicBody\n"
@@ -4283,7 +4283,7 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             // Two independent typed snapshots, not a materialized tuple list.
             CHECK(code.find("std::vector<entt::entity> body_snapshot;") != std::string::npos);
@@ -4327,7 +4327,7 @@ TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other bind
         "event tick:\n"
         "    dt: float\n" +
             PAIR_CODEGEN_TRAITS +
-            "system DetectContacts:\n"
+            "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
             "            Collider\n"
@@ -4340,7 +4340,7 @@ TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other bind
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.get<const Collider>(body).mask") != std::string::npos);
             CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
@@ -4363,7 +4363,7 @@ TEST_CASE("Codegen EnTT: pair binding-local alias shadowing another trait's name
         "event tick:\n"
         "    dt: float\n" +
             PAIR_CODEGEN_TRAITS +
-            "system DetectContacts:\n"
+            "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
             "            DynamicBody\n"
@@ -4376,7 +4376,7 @@ TEST_CASE("Codegen EnTT: pair binding-local alias shadowing another trait's name
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.get<const Solid>(wall).active") != std::string::npos);
             CHECK(code.find("registry.get<const Collider>(wall)") == std::string::npos);
@@ -4391,7 +4391,7 @@ TEST_CASE("Codegen EnTT: pair binding-local alias and qualified imported trait r
         "event tick:\n"
         "    dt: float\n" +
             PAIR_CODEGEN_TRAITS +
-            "system DetectContacts:\n"
+            "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
             "            DynamicBody\n"
@@ -4404,7 +4404,7 @@ TEST_CASE("Codegen EnTT: pair binding-local alias and qualified imported trait r
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.get<const Collider>(wall).mask") != std::string::npos);
         }
@@ -4423,7 +4423,7 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
             PAIR_CODEGEN_TRAITS +
             "trait GroundContact:\n"
             "    var active: bool = true\n"
-            "system DetectContacts:\n"
+            "rule DetectContacts:\n"
             "    pairs:\n"
             "        body:\n"
             "            DynamicBody\n"
@@ -4446,7 +4446,7 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
     CHECK(code.find("const auto target = body;") != std::string::npos);
     CHECK(code.find("if (registry.valid(target)) {") != std::string::npos);
     CHECK(code.find("generated_emit_targeted_event(ContactEvent{.other = wall}, target);") != std::string::npos);
-    // Project remains an immediate (non-buffered) call, same as unary systems.
+    // Project remains an immediate (non-buffered) call, same as unary rules.
     CHECK(code.find("project_GroundContact(registry, body);") != std::string::npos);
 }
 
@@ -4461,7 +4461,7 @@ TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snaps
         "trait Solid\n"
         "event Contact:\n"
         "    other: entity_id\n"
-        "system DetectContacts:\n"
+        "rule DetectContacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -4473,7 +4473,7 @@ TEST_CASE("Codegen EnTT: pair binding on a marker (zero-field) trait still snaps
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("registry.view<Solid>()") != std::string::npos);
             CHECK(code.find("std::vector<entt::entity> wall_snapshot;") != std::string::npos);
@@ -4495,7 +4495,7 @@ TEST_CASE("Codegen EnTT: drain_event_cascade drops a stale-recipient occurrence 
         "        frame\n"
         "event Contact:\n"
         "    other: entity_id\n"
-        "system Consumer:\n"
+        "rule Consumer:\n"
         "    on Contact:\n"
         "        let x = 1\n",
         program);
@@ -4528,7 +4528,7 @@ TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's reci
         "        frame\n"
         "event Contact:\n"
         "    other: entity_id\n"
-        "system Producer:\n"
+        "rule Producer:\n"
         "    on tick:\n"
         "        emit Contact to Producer:\n"
         "            other = Producer\n",
@@ -4551,13 +4551,13 @@ TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an opti
     auto decorated = full_pipeline(
         "event Contact:\n"
         "    other: entity_id\n"
-        "system Observer:\n"
+        "rule Observer:\n"
         "    on Contact:\n"
         "        let x = 1\n",
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("std::optional<entt::entity> cactus_recipient = std::nullopt") != std::string::npos);
             CHECK(code.find("(void)cactus_recipient;") != std::string::npos);
@@ -4577,7 +4577,7 @@ TEST_CASE("Codegen EnTT: targeted unary handler runs at most once for the recipi
         "    other: entity_id\n"
         "trait Health:\n"
         "    var hp: int\n"
-        "system ResolveContact:\n"
+        "rule ResolveContact:\n"
         "    filter:\n"
         "        Health\n"
         "    on Contact:\n"
@@ -4585,7 +4585,7 @@ TEST_CASE("Codegen EnTT: targeted unary handler runs at most once for the recipi
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("if (cactus_recipient.has_value()) {") != std::string::npos);
             CHECK(code.find("entt::entity entity = *cactus_recipient;") != std::string::npos);
@@ -4613,7 +4613,7 @@ TEST_CASE("Codegen EnTT: targeted external handler dispatch is gated on the reci
         "    other: entity_id\n"
         "trait Health:\n"
         "    var hp: int\n"
-        "extern system ResolveContact:\n"
+        "extern rule ResolveContact:\n"
         "    filter:\n"
         "        Health\n"
         "    on Contact:\n"
@@ -4638,7 +4638,7 @@ TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the fie
         "    amount: int\n"
         "trait Health:\n"
         "    var current: int\n"
-        "system ResolveContact:\n"
+        "rule ResolveContact:\n"
         "    filter:\n"
         "        Health as hp\n"
         "    on Contact as dmg:\n"
@@ -4646,7 +4646,7 @@ TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the fie
         program);
 
     for (auto& decl : program.declarations) {
-        if (auto* sys = std::get_if<SystemNode>(&decl)) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             // The alias `hp` is already declared as a reference to the Health
             // component; the assignment must reuse it via ordinary member

@@ -104,7 +104,7 @@ std::string handler_trigger_cpp_type(const DecoratedProgram& program, const Reso
 }
 
 std::string external_handler_callback_name(const HandlerIdentity& identity) {
-    return "cactus_external__" + canonical_to_cpp_name(identity.system) + "__on__" +
+    return "cactus_external__" + canonical_to_cpp_name(identity.rule) + "__on__" +
            canonical_to_cpp_name(identity.trigger.symbol);
 }
 
@@ -122,7 +122,7 @@ std::vector<std::string> sorted_strings(const std::unordered_set<std::string>& s
 }
 
 std::string external_handler_capability_name(const HandlerIdentity& identity) {
-    return "CactusCapabilities__" + canonical_to_cpp_name(identity.system) + "__on__" +
+    return "CactusCapabilities__" + canonical_to_cpp_name(identity.rule) + "__on__" +
            canonical_to_cpp_name(identity.trigger.symbol);
 }
 
@@ -162,41 +162,41 @@ const TemplateNode* find_template(const DecoratedProgram& program, const SymbolI
     return nullptr;
 }
 
-const ExternSystemNode* find_external_system(const DecoratedProgram& program, const SymbolId& system_id) {
+const ExternRuleNode* find_external_rule(const DecoratedProgram& program, const SymbolId& rule_id) {
     if (program.ast == nullptr) {
         return nullptr;
     }
     for (const auto& declaration : program.ast->declarations) {
-        const auto* system = std::get_if<ExternSystemNode>(&declaration);
-        if (system != nullptr && system->resolved_system_id.has_value() && *system->resolved_system_id == system_id) {
-            return system;
+        const auto* rule = std::get_if<ExternRuleNode>(&declaration);
+        if (rule != nullptr && rule->resolved_rule_id.has_value() && *rule->resolved_rule_id == rule_id) {
+            return rule;
         }
     }
     return nullptr;
 }
 
 bool is_user_external_handler(const DecoratedProgram& program, const HandlerNode& node) {
-    const auto* system = find_external_system(program, node.identity.system);
-    return node.implementation == HandlerImplementationKind::External && (system == nullptr || !system->is_stdlib);
+    const auto* rule = find_external_rule(program, node.identity.rule);
+    return node.implementation == HandlerImplementationKind::External && (rule == nullptr || !rule->is_stdlib);
 }
 
-bool has_compiler_owned_external_handler(const DecoratedProgram& program, const ExternSystemNode& system) {
-    if (!system.resolved_system_id.has_value()) {
+bool has_compiler_owned_external_handler(const DecoratedProgram& program, const ExternRuleNode& rule) {
+    if (!rule.resolved_rule_id.has_value()) {
         return false;
     }
     return std::ranges::any_of(program.execution_graph.handlers, [&](const auto& handler) {
-        return handler.identity.system == *system.resolved_system_id &&
+        return handler.identity.rule == *rule.resolved_rule_id &&
                handler.implementation == HandlerImplementationKind::External &&
                !is_user_external_handler(program, handler);
     });
 }
 
-bool has_user_external_handler(const DecoratedProgram& program, const ExternSystemNode& system) {
-    if (!system.resolved_system_id.has_value()) {
+bool has_user_external_handler(const DecoratedProgram& program, const ExternRuleNode& rule) {
+    if (!rule.resolved_rule_id.has_value()) {
         return false;
     }
     return std::ranges::any_of(program.execution_graph.handlers, [&](const auto& handler) {
-        return handler.identity.system == *system.resolved_system_id && is_user_external_handler(program, handler);
+        return handler.identity.rule == *rule.resolved_rule_id && is_user_external_handler(program, handler);
     });
 }
 
@@ -995,9 +995,9 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 continue;
             }
             if (graph_node->implementation == HandlerImplementationKind::External) {
-                const auto* system = find_external_system(program, graph_node->identity.system);
-                if (system != nullptr && system->is_stdlib) {
-                    out << "    ::" << system_function_name(program.module_name, system->name, "tick")
+                const auto* rule = find_external_rule(program, graph_node->identity.rule);
+                if (rule != nullptr && rule->is_stdlib) {
+                    out << "    ::" << system_function_name(program.module_name, rule->name, "tick")
                         << "(registry);\n";
                     emitted = true;
                 }
@@ -1007,20 +1007,20 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 continue;
             }
             for (const auto& declaration : program.ast->declarations) {
-                const auto* system = std::get_if<SystemNode>(&declaration);
-                if (system == nullptr || !system->resolved_system_id.has_value() ||
-                    *system->resolved_system_id != identity.system) {
+                const auto* rule = std::get_if<RuleNode>(&declaration);
+                if (rule == nullptr || !rule->resolved_rule_id.has_value() ||
+                    *rule->resolved_rule_id != identity.rule) {
                     continue;
                 }
-                const auto handler = std::ranges::find_if(system->handlers, [&](const auto& candidate) {
+                const auto handler = std::ranges::find_if(rule->handlers, [&](const auto& candidate) {
                     return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
                 });
-                if (handler == system->handlers.end()) {
+                if (handler == rule->handlers.end()) {
                     continue;
                 }
                 out << "    ::"
                     << system_function_name(program.module_name,
-                                            system->name,
+                                            rule->name,
                                             handler->event_name.find('.') == std::string::npos
                                                 ? handler->event_name
                                                 : canonical_to_cpp_name(identity.trigger.symbol))
@@ -1066,9 +1066,9 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 continue;
             }
             if (graph_node->implementation == HandlerImplementationKind::External) {
-                const auto* system = find_external_system(program, graph_node->identity.system);
-                if (system != nullptr && system->is_stdlib) {
-                    out << "    ::" << system_function_name(program.module_name, system->name, "tick")
+                const auto* rule = find_external_rule(program, graph_node->identity.rule);
+                if (rule != nullptr && rule->is_stdlib) {
+                    out << "    ::" << system_function_name(program.module_name, rule->name, "tick")
                         << "(registry);\n";
                     emitted = true;
                 }
@@ -1078,20 +1078,20 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 continue;
             }
             for (const auto& declaration : program.ast->declarations) {
-                const auto* system = std::get_if<SystemNode>(&declaration);
-                if (system == nullptr || !system->resolved_system_id.has_value() ||
-                    *system->resolved_system_id != identity.system) {
+                const auto* rule = std::get_if<RuleNode>(&declaration);
+                if (rule == nullptr || !rule->resolved_rule_id.has_value() ||
+                    *rule->resolved_rule_id != identity.rule) {
                     continue;
                 }
-                const auto handler = std::ranges::find_if(system->handlers, [&](const auto& candidate) {
+                const auto handler = std::ranges::find_if(rule->handlers, [&](const auto& candidate) {
                     return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
                 });
-                if (handler == system->handlers.end()) {
+                if (handler == rule->handlers.end()) {
                     continue;
                 }
                 out << "    ::"
                     << system_function_name(program.module_name,
-                                            system->name,
+                                            rule->name,
                                             handler->event_name.find('.') == std::string::npos
                                                 ? handler->event_name
                                                 : canonical_to_cpp_name(identity.trigger.symbol))
@@ -2219,7 +2219,7 @@ bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& 
 
 // The phase treated as "the render phase" for graph-driven codegen: the
 // phase batch whose dispatch call gets wrapped in begin_render_frame()/
-// end_render_frame() so render-phase extern systems (mesh/sprite/light/text
+// end_render_frame() so render-phase extern rules (mesh/sprite/light/text
 // renderers, the viewport loop, editor HUD overlay, gizmos) actually flush
 // to the screen. Prefers std.core's `render` phase (present in every real
 // program); falls back to a linked program's own phase literally named
@@ -2673,7 +2673,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // once at every entity's creation site (load-time and committed spawn both
     // route through emit_archetype_trait_initializers), never reassigned.
     // Emitted unconditionally (not gated on the graph-runtime/phases flag used
-    // elsewhere) since a pairs: system can exist in a program with no phase
+    // elsewhere) since a pairs: rule can exist in a program with no phase
     // declarations, driven only by bare events.
     out << "namespace cactus::runtime::entt_backend {\n\n";
     out << "struct CactusCreationOrdinal {\n";
@@ -2866,15 +2866,15 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     if (program.ast != nullptr) {
         out << "// ── Systems ─────────────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
-            if (auto* sys = std::get_if<SystemNode>(&decl)) {
-                out << EnttSystemEmitter::emit_system(*sys, program);
+            if (auto* rule = std::get_if<RuleNode>(&decl)) {
+                out << EnttSystemEmitter::emit_system(*rule, program);
             }
-            if (auto* sys = std::get_if<ExternSystemNode>(&decl); sys != nullptr) {
-                if (has_compiler_owned_external_handler(program, *sys)) {
-                    out << EnttSystemEmitter::emit_extern_system(*sys, program);
-                } else if (program.execution_graph.phases.empty() && has_user_external_handler(program, *sys)) {
-                    throw std::runtime_error("cpp-entt user external system '" +
-                                             make_canonical_id(*sys->resolved_system_id) +
+            if (auto* rule = std::get_if<ExternRuleNode>(&decl); rule != nullptr) {
+                if (has_compiler_owned_external_handler(program, *rule)) {
+                    out << EnttSystemEmitter::emit_extern_system(*rule, program);
+                } else if (program.execution_graph.phases.empty() && has_user_external_handler(program, *rule)) {
+                    throw std::runtime_error("cpp-entt user external rule '" +
+                                             make_canonical_id(*rule->resolved_rule_id) +
                                              "' requires a linked phase graph and contract-shaped callback ABI");
                 }
             }

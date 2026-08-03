@@ -6,14 +6,14 @@ Define canonical handler execution-graph nodes and the deterministic dependency,
 ## Requirements
 
 ### Requirement: Canonical handler graph nodes
-The compiler SHALL produce one execution-graph node per handler with canonical identity composed from module, owning system, and resolved trigger. A system MUST NOT declare more than one handler for the same trigger.
+The compiler SHALL produce one execution-graph node per handler with canonical identity composed from module, owning rule, and resolved trigger. A rule MUST NOT declare more than one handler for the same trigger.
 
-#### Scenario: Separate system handlers become separate nodes
+#### Scenario: Separate rule handlers become separate nodes
 - **WHEN** Player declares `on fixed_tick` and `on Damaged`
 - **THEN** the graph contains distinct Player.fixed_tick and Player.Damaged nodes
 
 #### Scenario: Duplicate trigger is rejected
-- **WHEN** one system declares two handlers for fixed_tick
+- **WHEN** one rule declares two handlers for fixed_tick
 - **THEN** semantic analysis reports a duplicate handler trigger
 
 ### Requirement: Relation cardinality does not multiply graph nodes
@@ -21,7 +21,7 @@ A selectionless, unary, or pair handler SHALL each occupy one canonical executio
 
 #### Scenario: Pair tuple count is graph-independent
 - **WHEN** a pair handler's snapshots produce one thousand tuples
-- **THEN** the graph contains one node for that system and trigger
+- **THEN** the graph contains one node for that rule and trigger
 
 ### Requirement: Phase and event flow edges
 The graph SHALL include phase barrier edges from upstream phase completion to downstream phase handlers and event-flow edges from a handler that may emit an event to every handler consuming that event. Event-handler nodes SHALL be activated per event occurrence within the current activation's bounded cascade.
@@ -50,11 +50,11 @@ Beyond handler-to-handler `EventFlowEdge`s, the execution graph SHALL represent 
 These are distinct from the existing host-injected extern-event mechanism (`pub extern event`, e.g. `frame`), which is injected by the embedding application rather than synthesized by the graph's own commit/scheduler machinery.
 
 #### Scenario: Commit-synthesized edge for spawn
-- **WHEN** a system declares `on spawn` and no handler in the program declares `emits: spawn`
+- **WHEN** a rule declares `on spawn` and no handler in the program declares `emits: spawn`
 - **THEN** the graph still records a producer edge into that handler's node, attributed to the commit step rather than to any `HandlerIdentity`
 
 #### Scenario: Scheduler-boundary edge for load
-- **WHEN** a system declares `on load`
+- **WHEN** a rule declares `on load`
 - **THEN** the graph records a producer edge into that handler's node attributed to the scheduler's boot boundary, distinct from an `EventFlowEdge` whose producer is another handler
 
 #### Scenario: Handler-emitted producer edges are unaffected
@@ -90,14 +90,14 @@ Graph conflict construction SHALL use the conservative trait reads, durable writ
 - **THEN** the graph adds the same writer-before-reader dependency required for unary consumers
 
 ### Requirement: Explicit handler ordering
-A handler SHALL accept an optional leading `after:` block naming canonical or qualified handler nodes. The referenced node MUST be eligible under the same trigger or activation context. Existing system-level `after:` SHALL remain compatibility shorthand that creates edges only between matching triggers on the referenced and dependent systems.
+A handler SHALL accept an optional leading `after:` block naming canonical or qualified handler nodes. The referenced node MUST be eligible under the same trigger or activation context. Existing rule-level `after:` SHALL remain compatibility shorthand that creates edges only between matching triggers on the referenced and dependent rules.
 
 #### Scenario: Handler-level edge resolves
 - **WHEN** `SpriteRenderer.render` declares after `TransformInterpolation.render`
 - **THEN** the graph records that explicit handler edge
 
-#### Scenario: System shorthand applies to matching phase
-- **WHEN** system B is after system A and both have tick and Damaged handlers
+#### Scenario: Rule shorthand applies to matching phase
+- **WHEN** rule B is after rule A and both have tick and Damaged handlers
 - **THEN** B.tick follows A.tick and B.Damaged follows A.Damaged without adding cross-trigger edges
 
 ### Requirement: Graph validation and deterministic execution

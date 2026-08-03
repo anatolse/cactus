@@ -55,14 +55,14 @@ entity Player from Mover:
     Position:
         x = 1.0
 
-extern system InputSource:
+extern rule InputSource:
     on input:
         emits:
             InputSample
         effects:
             input
 
-extern system NativeMovement:
+extern rule NativeMovement:
     filter:
         Position
         Velocity
@@ -78,7 +78,7 @@ extern system NativeMovement:
         effects:
             physics
 
-extern system SpriteRenderer:
+extern rule SpriteRenderer:
     filter:
         Position
         Sprite
@@ -89,7 +89,7 @@ extern system SpriteRenderer:
         effects:
             graphics
 
-extern system AudioOutput:
+extern rule AudioOutput:
     on SoundRequested:
         effects:
             audio

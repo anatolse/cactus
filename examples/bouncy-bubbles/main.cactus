@@ -22,10 +22,10 @@ event WallBounce:
 event BubbleBounce:
     new_velocity: vec2
 
-# ── Systems ───────────────────────────────────────────────────────────────────
+# ── Rules ─────────────────────────────────────────────────────────────────────
 
 # MoveBubbles: integrates every bubble's position from its current velocity.
-system MoveBubbles:
+rule MoveBubbles:
     filter:
         Bubble
         tf.WorldTransform
@@ -37,7 +37,7 @@ system MoveBubbles:
 # overlap against the wall's authored size, gated by a closing-speed check
 # along the wall's fixed normal so a resting/sliding bubble doesn't re-trigger
 # every tick. Emits a targeted WallBounce to the bubble side only.
-system DetectWallContact:
+rule DetectWallContact:
     pairs:
         bubble:
             Bubble
@@ -62,7 +62,7 @@ system DetectWallContact:
 
 # ResolveWallBounce: unary consumer. Reflects the bubble's own velocity across
 # the wall normal carried by the event (elastic reflection, speed-preserving).
-system ResolveWallBounce:
+rule ResolveWallBounce:
     filter:
         Bubble
 
@@ -79,7 +79,7 @@ system ResolveWallBounce:
 # both sides' current velocity — legal under the pair read-only rule since
 # it's a pure read. The reverse tuple (b, a) independently computes and emits
 # b's half from the same unmutated pre-collision state.
-system DetectBubbleContact:
+rule DetectBubbleContact:
     pairs:
         a:
             Bubble
@@ -116,7 +116,7 @@ system DetectBubbleContact:
 
 # ResolveBubbleBounce: unary consumer. Applies the resolved post-collision
 # velocity computed by DetectBubbleContact directly.
-system ResolveBubbleBounce:
+rule ResolveBubbleBounce:
     filter:
         Bubble
 

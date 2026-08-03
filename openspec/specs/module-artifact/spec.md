@@ -15,8 +15,8 @@ The module artifact system SHALL serialize a module's `DecoratedProgram` (resolv
 The module artifact system SHALL load a `.cmod` file and reconstruct the `DecoratedProgram` with all resolved types, dependency graph, string pool, and AST intact. The deserialized program SHALL be identical to the original.
 
 #### Scenario: Round-trip serialization
-- **WHEN** a `DecoratedProgram` with 2 traits, 1 enum, and 3 system dependencies is serialized then deserialized
-- **THEN** the deserialized program contains the same 2 traits, 1 enum, and 3 system dependencies with identical field data
+- **WHEN** a `DecoratedProgram` with 2 traits, 1 enum, and 3 rule dependencies is serialized then deserialized
+- **THEN** the deserialized program contains the same 2 traits, 1 enum, and 3 rule dependencies with identical field data
 
 ### Requirement: Extract public symbols from .cmod artifact
 The module artifact system SHALL provide a function to extract only the `pub`-marked symbols from a `.cmod` artifact into an `ImportedSymbols` struct, without loading the full AST into memory.
@@ -86,7 +86,7 @@ The `extract_pub_symbols` function SHALL read the funcs section and include `pub
 - **THEN** `ImportedSymbols.funcs["lerp"]` is present with `is_extern = true` and correct signature
 
 ### Requirement: Execution declarations and graph round-trip
-Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler domain variants, pair binding names and trait identities, binding-qualified reads, projected outputs, remaining contract capabilities, explicit ordering, and handler execution-graph edges without collapsing them into system-level summaries. The artifact format version SHALL be incremented.
+Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler domain variants, pair binding names and trait identities, binding-qualified reads, projected outputs, remaining contract capabilities, explicit ordering, and handler execution-graph edges without collapsing them into rule-level summaries. The artifact format version SHALL be incremented.
 
 #### Scenario: Handler graph survives round-trip
 - **WHEN** a module containing selectionless, unary, and pair handlers is saved and loaded
@@ -106,3 +106,14 @@ Public external events and public phases SHALL be included in extracted imported
 #### Scenario: Imported phase metadata is available
 - **WHEN** a dependent module imports a public periodic phase
 - **THEN** its artifact symbols expose the phase trigger identity, fields, and cadence/completion metadata required for resolution
+
+### Requirement: Rule dependency graph renamed in `.cmod` binary format
+The module artifact binary format's serialized system-dependency section is renamed to a rule-dependency section, matching the `system` → `rule` DSL keyword rename (`SystemDependency` → `RuleDependency`). The `CURRENT_VERSION` constant SHALL be incremented to 10 to reflect this format change. Artifacts produced with version 9 or earlier SHALL be rejected when loaded.
+
+#### Scenario: Version 9 artifact rejected
+- **WHEN** a `.cmod` file with version byte `9` is loaded after this change
+- **THEN** the artifact loader reports a version mismatch error and returns `nullopt`
+
+#### Scenario: Rule dependency graph round-trips
+- **WHEN** a module containing rule `after:` ordering edges is saved to `.cmod` and reloaded
+- **THEN** the loaded program's rule dependency graph is identical to the original

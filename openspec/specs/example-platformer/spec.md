@@ -44,7 +44,7 @@ The platformer example SHALL NOT rely on helper functions that are neither decla
 - **THEN** it uses declared Cactus `input` actions and `std.input` query functions rather than an undeclared `is_jump_pressed` helper
 
 #### Scenario: No undeclared cross-entity helpers are required
-- **WHEN** platformer systems are semantically analyzed
+- **WHEN** platformer rules are semantically analyzed
 - **THEN** they do not require undeclared helpers such as `get_player_position`, `get_player_width`, `get_player_height`, or `get_player_entity`
 
 #### Scenario: No undeclared camera helper is required
@@ -72,7 +72,7 @@ The platformer example SHALL resolve player collision against solid platforms an
 #### Scenario: Platformer imports physics query API
 - **WHEN** `examples/platformer/platformer.cactus` is read
 - **THEN** it imports `std.physics.flat` or an alias of that module
-- **AND** player movement systems can call the stdlib physics query functions declared by that module
+- **AND** player movement rules can call the stdlib physics query functions declared by that module
 
 #### Scenario: Player movement casts against solid colliders
 - **WHEN** the platformer updates player movement
@@ -85,16 +85,16 @@ The platformer example SHALL resolve player collision against solid platforms an
 - **AND** the grounded state is not determined by comparing the player's position directly to hardcoded platform or ground constants
 
 ### Requirement: Platformer level colliders use distinct query layers
-The platformer example SHALL assign collision layers and masks so solid terrain, the player, enemies, and collectibles can be queried independently by gameplay systems.
+The platformer example SHALL assign collision layers and masks so solid terrain, the player, enemies, and collectibles can be queried independently by gameplay rules.
 
 #### Scenario: Solid terrain is queryable separately
 - **WHEN** ground and floating platform units are declared
 - **THEN** their `Collider.layer` values identify them as solid terrain for player movement queries
 
 #### Scenario: Player can exclude itself from queries
-- **WHEN** player movement or interaction systems call physics query functions
+- **WHEN** player movement or interaction rules call physics query functions
 - **THEN** they pass `self` as the explicit excluded entity so the player's own collider is not returned as a contact
 
 #### Scenario: Interaction layers are separable from solid layers
-- **WHEN** enemies or collectibles are queried by platformer gameplay systems
+- **WHEN** enemies or collectibles are queried by platformer gameplay rules
 - **THEN** their `Collider.layer` values can be distinguished from solid terrain so overlap queries can target interactions without treating every solid as an interaction

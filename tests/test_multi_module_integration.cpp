@@ -347,7 +347,7 @@ TEST_CASE("integration: imported input phase handlers preserve linked declaratio
         "        frame\n"
         "pub trait EditorNavState:\n"
         "    var moves: float\n"
-        "system EditorNav:\n"
+        "rule EditorNav:\n"
         "    filter:\n"
         "        EditorNavState\n"
         "    on input:\n"
@@ -361,7 +361,7 @@ TEST_CASE("integration: imported input phase handlers preserve linked declaratio
     ModuleArtifact lib_artifact(lib_errors);
     REQUIRE(lib_artifact.save(*lib_prog, "editorlib", build_dir));
 
-    // Step 2: Compile a root module with its own `on input` gameplay system.
+    // Step 2: Compile a root module with its own `on input` gameplay rule.
     ImportedSymbols lib_syms;
     lib_syms.module_name = "editorlib";
     for (auto& [name, trait] : lib_prog->traits) {
@@ -389,7 +389,7 @@ TEST_CASE("integration: imported input phase handlers preserve linked declaratio
         "\n"
         "trait PlayerState:\n"
         "    var moves: float\n"
-        "system GameplayInput:\n"
+        "rule GameplayInput:\n"
         "    filter:\n"
         "        PlayerState\n"
         "    on editorlib.input:\n"
@@ -548,14 +548,14 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
         syms.templates[name] = tmpl;
     }
     for (const auto& dep : prog.dependency_graph) {
-        const auto symbol = make_symbol_id(SymbolKind::System, module_name, dep.system_name);
-        ImportedSystem sys;
+        const auto symbol = make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name);
+        ImportedRule sys;
         sys.name                      = symbol.local_name;
         sys.module_name               = symbol.module.name;
         sys.canonical_id              = make_canonical_id(symbol);
         sys.symbol_id                 = symbol;
-        sys.after_systems             = dep.after_systems;
-        syms.systems[dep.system_name] = sys;
+        sys.after_rules             = dep.after_rules;
+        syms.rules[dep.rule_name] = sys;
     }
     for (const auto& [name, event] : prog.events) {
         if (!event.is_pub) {
@@ -837,9 +837,9 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
     REQUIRE(decorated->execution_graph.phases.size() == 5);
     REQUIRE(decorated->execution_graph.handlers.size() == 4);
 
-    const auto handler = [](const std::string& system, HandlerTriggerKind kind, const std::string& trigger) {
+    const auto handler = [](const std::string& rule, HandlerTriggerKind kind, const std::string& trigger) {
         return HandlerIdentity{
-            .system  = make_symbol_id(SymbolKind::System, "runtime_phase_contracts", system),
+            .rule  = make_symbol_id(SymbolKind::Rule, "runtime_phase_contracts", rule),
             .trigger = ResolvedHandlerTrigger{
                 .kind   = kind,
                 .symbol = make_symbol_id(kind == HandlerTriggerKind::Phase ? SymbolKind::Phase : SymbolKind::Event,

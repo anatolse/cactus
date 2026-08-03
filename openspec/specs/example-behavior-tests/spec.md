@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Headless functional testing of generated Cactus examples via compile-time-dispatched `cactus::runtime::raylib` wrappers: scripted input, direct `generated_*_project` invocation without a window, and call-log assertions (approximate value + call order) against recorded draw/input-adjacent calls. This complements `example-cpp-compilation-tests` (which only proves curated examples compile/link/lint) by proving generated systems actually produce the expected rendered output and input-driven behavior.
+Headless functional testing of generated Cactus examples via compile-time-dispatched `cactus::runtime::raylib` wrappers: scripted input, direct `generated_*_project` invocation without a window, and call-log assertions (approximate value + call order) against recorded draw/input-adjacent calls. This complements `example-cpp-compilation-tests` (which only proves curated examples compile/link/lint) by proving generated rules actually produce the expected rendered output and input-driven behavior.
 
 ## Requirements
 

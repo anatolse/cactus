@@ -74,8 +74,8 @@ String literals SHALL be permitted as the path value in `asset` declarations. Th
 - **WHEN** `asset Theme: music = "audio/theme.ogg"` appears in a source file that has no `const` block
 - **THEN** the parser and semantic analyzer accept the string literal without error
 
-#### Scenario: String literal in system handler still rejected
-- **WHEN** a system handler contains `let path = "assets/foo.png"` (a string literal in logic)
+#### Scenario: String literal in rule handler still rejected
+- **WHEN** a rule handler contains `let path = "assets/foo.png"` (a string literal in logic)
 - **THEN** the semantic analyzer reports an error: string literals are not permitted outside `const` blocks or `asset` declarations
 
 ### Requirement: Asset declarations participate in module visibility
@@ -90,14 +90,14 @@ An `asset` declaration without `pub` SHALL be module-private. A `pub asset` decl
 - **THEN** `SharedTex` is available in module B with type `texture_id`
 
 ### Requirement: Assets are declared at module scope only
-Asset declarations SHALL be permitted only at the top level of a module. They SHALL NOT be permitted inside trait bodies, system bodies, func bodies, or any other nested scope.
+Asset declarations SHALL be permitted only at the top level of a module. They SHALL NOT be permitted inside trait bodies, rule bodies, func bodies, or any other nested scope.
 
 #### Scenario: Asset at top level accepted
 - **WHEN** `asset Snd: sound = "hit.wav"` appears as a top-level declaration
 - **THEN** the parser accepts it
 
-#### Scenario: Asset inside system body rejected
-- **WHEN** `asset Snd: sound = "hit.wav"` appears inside a `system` block
+#### Scenario: Asset inside rule body rejected
+- **WHEN** `asset Snd: sound = "hit.wav"` appears inside a `rule` block
 - **THEN** the parser reports an error: asset declarations are only allowed at module top level
 
 ### Requirement: Asset paths are module-relative

@@ -40,7 +40,7 @@ pub entity WavingSquare:
     Clock:
         elapsed = 0.0
 
-system WaveSystem:
+rule WaveSystem:
     filter:
         tf.WorldTransform
         rtext.TextLabel

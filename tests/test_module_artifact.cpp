@@ -57,9 +57,9 @@ static DecoratedProgram make_test_program() {
     dir.variants            = {"Up", "Down", "Left", "Right"};
     prog.enums["Direction"] = dir;
 
-    // System dependency
-    SystemDependency dep;
-    dep.system_name = "MoveSystem";
+    // Rule dependency
+    RuleDependency dep;
+    dep.rule_name = "MoveSystem";
     dep.reads       = {"Position"};
     dep.writes      = {"Position"};
     dep.emits       = {};
@@ -137,7 +137,7 @@ TEST_CASE("ModuleArtifact: round-trip save and load", "[artifact]") {
     CHECK(loaded->enums.at("Direction").variants.size() == 4);
 
     // Verify dep graph
-    CHECK(loaded->dependency_graph[0].system_name == "MoveSystem");
+    CHECK(loaded->dependency_graph[0].rule_name == "MoveSystem");
     CHECK(loaded->dependency_graph[0].reads.count("Position") == 1);
 
     // Clean up
@@ -251,6 +251,36 @@ TEST_CASE("ModuleArtifact: version mismatch error", "[artifact]") {
         const char bad_version = 99;
         out.write(&bad_version, 1);
         // rest is garbage
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    auto result = artifact.load(path, name);
+    CHECK_FALSE(result.has_value());
+    CHECK(errors.has_errors());
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: pre-rename version 9 artifact rejected cleanly", "[artifact]") {
+    // Version 9 is the last format version before the system->rule rename bumped
+    // CURRENT_VERSION to 10 (SystemDependency -> RuleDependency). A `.cmod` produced
+    // by that older compiler must be rejected with the version-mismatch diagnostic
+    // rather than crashing or silently misreading the renamed section as the old shape.
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "pre-rename.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char old_version = 9;
+        out.write(&old_version, 1);
+        // rest is garbage in the old (SystemDependency) shape; the version check
+        // must reject before any of it is interpreted.
     }
 
     ErrorReporter errors;
@@ -565,7 +595,7 @@ TEST_CASE("ModuleArtifact: canonical identity preserved as-is (not derived) when
     fs::remove_all(build_dir, ec);
 }
 
-TEST_CASE("ModuleArtifact: dep_graph after_systems round-trips through save/load", "[artifact][4.6]") {
+TEST_CASE("ModuleArtifact: dep_graph after_rules round-trips through save/load", "[artifact][4.6]") {
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -574,10 +604,10 @@ TEST_CASE("ModuleArtifact: dep_graph after_systems round-trips through save/load
     ModuleArtifact artifact(errors);
     DecoratedProgram prog;
 
-    SystemDependency dep;
-    dep.system_name = "Follow2D";
+    RuleDependency dep;
+    dep.rule_name = "Follow2D";
     dep.reads.insert("std.transform.flat.WorldTransform");
-    dep.after_systems = {"std.transform.flat.TransformPropagation"};
+    dep.after_rules = {"std.transform.flat.TransformPropagation"};
     prog.dependency_graph.push_back(dep);
 
     REQUIRE(artifact.save(prog, "game", build_dir));
@@ -590,10 +620,10 @@ TEST_CASE("ModuleArtifact: dep_graph after_systems round-trips through save/load
 
     REQUIRE(loaded->dependency_graph.size() == 1);
     const auto& d = loaded->dependency_graph[0];
-    CHECK(d.system_name == "Follow2D");
+    CHECK(d.rule_name == "Follow2D");
     CHECK(d.reads.count("std.transform.flat.WorldTransform") == 1);
-    REQUIRE(d.after_systems.size() == 1);
-    CHECK(d.after_systems[0] == "std.transform.flat.TransformPropagation");
+    REQUIRE(d.after_rules.size() == 1);
+    CHECK(d.after_rules[0] == "std.transform.flat.TransformPropagation");
 
     fs::remove_all(build_dir, ec);
 }
@@ -608,11 +638,11 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     const auto position = test_symbol(SymbolKind::Trait, "Position");
     const auto spawned  = test_symbol(SymbolKind::Event, "Spawned");
     const auto tmpl     = test_symbol(SymbolKind::Template, "Actor");
-    const auto first    = test_symbol(SymbolKind::System, "First");
-    const auto second   = test_symbol(SymbolKind::System, "Second");
+    const auto first    = test_symbol(SymbolKind::Rule, "First");
+    const auto second   = test_symbol(SymbolKind::Rule, "Second");
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
-    const HandlerIdentity first_handler{.system = first, .trigger = tick_trigger};
-    const HandlerIdentity second_handler{.system = second, .trigger = tick_trigger};
+    const HandlerIdentity first_handler{.rule = first, .trigger = tick_trigger};
+    const HandlerIdentity second_handler{.rule = second, .trigger = tick_trigger};
 
     DecoratedProgram prog;
     ResolvedEvent frame_decl;
@@ -657,7 +687,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     contract.effects          = {"graphics"};
     InferredHandlerContract inferred;
     static_cast<HandlerContract&>(inferred) = contract;
-    inferred.system                         = second;
+    inferred.rule                         = second;
     inferred.trigger                        = tick_trigger;
     prog.handler_contracts.push_back(std::move(inferred));
 
@@ -752,9 +782,9 @@ TEST_CASE("ModuleArtifact: pair-domain handler contract round-trips through save
     const auto ground_contact = test_symbol(SymbolKind::Trait, "GroundContact");
     const auto contact_event  = test_symbol(SymbolKind::Event, "Contact");
     const auto tick           = test_symbol(SymbolKind::Event, "tick");
-    const auto detect         = test_symbol(SymbolKind::System, "DetectContacts");
+    const auto detect         = test_symbol(SymbolKind::Rule, "DetectContacts");
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
-    const HandlerIdentity detect_handler{.system = detect, .trigger = tick_trigger};
+    const HandlerIdentity detect_handler{.rule = detect, .trigger = tick_trigger};
 
     HandlerContract contract;
     contract.domain_kind   = HandlerDomainKind::Pair;
@@ -772,7 +802,7 @@ TEST_CASE("ModuleArtifact: pair-domain handler contract round-trips through save
 
     InferredHandlerContract inferred;
     static_cast<HandlerContract&>(inferred) = contract;
-    inferred.system                         = detect;
+    inferred.rule                         = detect;
     inferred.trigger                        = tick_trigger;
 
     DecoratedProgram prog;
@@ -822,8 +852,8 @@ TEST_CASE("ModuleArtifact: selectionless and unary contracts still round-trip af
 
     const auto position = test_symbol(SymbolKind::Trait, "Position");
     const auto tick      = test_symbol(SymbolKind::Event, "tick");
-    const auto selectionless_system = test_symbol(SymbolKind::System, "Once");
-    const auto unary_system         = test_symbol(SymbolKind::System, "Move");
+    const auto selectionless_system = test_symbol(SymbolKind::Rule, "Once");
+    const auto unary_system         = test_symbol(SymbolKind::Rule, "Move");
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
 
     HandlerContract selectionless;
@@ -837,12 +867,12 @@ TEST_CASE("ModuleArtifact: selectionless and unary contracts still round-trip af
 
     InferredHandlerContract inferred_selectionless;
     static_cast<HandlerContract&>(inferred_selectionless) = selectionless;
-    inferred_selectionless.system                         = selectionless_system;
+    inferred_selectionless.rule                         = selectionless_system;
     inferred_selectionless.trigger                        = tick_trigger;
 
     InferredHandlerContract inferred_unary;
     static_cast<HandlerContract&>(inferred_unary) = unary;
-    inferred_unary.system                         = unary_system;
+    inferred_unary.rule                         = unary_system;
     inferred_unary.trigger                        = tick_trigger;
 
     DecoratedProgram prog;

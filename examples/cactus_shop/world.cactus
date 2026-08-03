@@ -31,14 +31,14 @@ pub entity Sun:
         direction = vec3(SUN_DIR_X, SUN_DIR_Y, SUN_DIR_Z)
         intensity = 1.0
 
-system WorldRenderer:
+rule WorldRenderer:
     filter:
         Terrain as t
 
     on tick:
         draw_plane(vec3(0.0, 0.0, 0.0), vec2(t.ground_size, t.ground_size), t.ground_color)
 
-system LightSystem:
+rule LightSystem:
     filter:
         SunLight as sun
 

@@ -1,6 +1,6 @@
 module std.camera.flat
 
-# ── 2D Camera Traits & Systems ────────────────────────────────────────────────
+# ── 2D Camera Traits & Rules ──────────────────────────────────────────────────
 
 # 2D orthographic camera configuration.
 # zoom:     magnification factor (1.0 = normal, 2.0 = 2x zoom in)
@@ -21,8 +21,8 @@ pub trait FollowCamera:
     var offset: vec2 = vec2(0.0, 0.0)
     var smoothing: float = 8.0
 
-# FollowCameraSystem is not yet implemented — it requires entity-by-id field
-# access which is not yet available in the language.
+# A rule to drive FollowCamera automatically is not yet implemented — it
+# requires entity-by-id field access which is not yet available in the language.
 
 # ── Screen/World Projection Helpers ──────────────────────────────────────────
 # Converts screen-space coordinates through the active 2D camera.

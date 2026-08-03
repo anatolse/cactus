@@ -78,7 +78,7 @@ void ModuleArtifact::write_trigger(std::ostream& out, const ResolvedHandlerTrigg
 }
 
 void ModuleArtifact::write_handler_identity(std::ostream& out, const HandlerIdentity& identity) {
-    write_symbol_id(out, identity.system);
+    write_symbol_id(out, identity.rule);
     write_trigger(out, identity.trigger);
 }
 
@@ -310,11 +310,11 @@ void ModuleArtifact::write_symbol_vector(std::ostream& out, const std::vector<Sy
     }
 }
 
-void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<SystemDependency>& graph) {
+void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph) {
     write_u32(out, static_cast<uint32_t>(graph.size()));
     for (const auto& dep : graph) {
-        write_str(out, dep.system_name);
-        write_optional_symbol_id(out, dep.system_id);
+        write_str(out, dep.rule_name);
+        write_optional_symbol_id(out, dep.rule_id);
         // reads
         write_u32(out, static_cast<uint32_t>(dep.reads.size()));
         for (const auto& r : dep.reads) {
@@ -330,12 +330,12 @@ void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<System
         for (const auto& e : dep.emits) {
             write_str(out, e);
         }
-        // after_systems (canonical system IDs, task 4.3)
-        write_u32(out, static_cast<uint32_t>(dep.after_systems.size()));
-        for (const auto& a : dep.after_systems) {
+        // after_rules (canonical rule IDs, task 4.3)
+        write_u32(out, static_cast<uint32_t>(dep.after_rules.size()));
+        for (const auto& a : dep.after_rules) {
             write_str(out, a);
         }
-        write_symbol_vector(out, dep.resolved_after_system_ids);
+        write_symbol_vector(out, dep.resolved_after_rule_ids);
     }
 }
 
@@ -368,7 +368,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
 void ModuleArtifact::write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts) {
     write_u32(out, static_cast<uint32_t>(contracts.size()));
     for (const auto& contract : contracts) {
-        write_symbol_id(out, contract.system);
+        write_symbol_id(out, contract.rule);
         write_trigger(out, contract.trigger);
         write_contract(out, contract);
     }
@@ -526,7 +526,7 @@ ResolvedHandlerTrigger ModuleArtifact::read_trigger(std::istream& in) {
 }
 
 HandlerIdentity ModuleArtifact::read_handler_identity(std::istream& in) {
-    return HandlerIdentity{.system = read_symbol_id(in), .trigger = read_trigger(in)};
+    return HandlerIdentity{.rule = read_symbol_id(in), .trigger = read_trigger(in)};
 }
 
 DeclarationOrder ModuleArtifact::read_declaration_order(std::istream& in) {
@@ -777,14 +777,14 @@ std::vector<SymbolId> ModuleArtifact::read_symbol_vector(std::istream& in) {
     return values;
 }
 
-std::vector<SystemDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
-    std::vector<SystemDependency> graph;
+std::vector<RuleDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
+    std::vector<RuleDependency> graph;
     uint32_t count = read_u32(in);
     graph.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
-        SystemDependency dep;
-        dep.system_name = read_str(in);
-        dep.system_id   = read_optional_symbol_id(in);
+        RuleDependency dep;
+        dep.rule_name = read_str(in);
+        dep.rule_id   = read_optional_symbol_id(in);
 
         uint32_t reads_count = read_u32(in);
         for (uint32_t j = 0; j < reads_count; ++j) {
@@ -802,11 +802,11 @@ std::vector<SystemDependency> ModuleArtifact::read_dep_graph(std::istream& in) {
         }
 
         uint32_t after_count = read_u32(in);
-        dep.after_systems.reserve(after_count);
+        dep.after_rules.reserve(after_count);
         for (uint32_t j = 0; j < after_count; ++j) {
-            dep.after_systems.push_back(read_str(in));
+            dep.after_rules.push_back(read_str(in));
         }
-        dep.resolved_after_system_ids = read_symbol_vector(in);
+        dep.resolved_after_rule_ids = read_symbol_vector(in);
 
         graph.push_back(std::move(dep));
     }
@@ -858,7 +858,7 @@ std::vector<InferredHandlerContract> ModuleArtifact::read_handler_contracts(std:
     contracts.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         InferredHandlerContract contract;
-        contract.system                         = read_symbol_id(in);
+        contract.rule                            = read_symbol_id(in);
         contract.trigger                        = read_trigger(in);
         static_cast<HandlerContract&>(contract) = read_contract(in);
         contracts.push_back(std::move(contract));
@@ -1150,14 +1150,14 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     }
 
     for (const auto& dep : program->dependency_graph) {
-        const auto symbol = dep.system_id.value_or(make_symbol_id(SymbolKind::System, module_name, dep.system_name));
-        ImportedSystem sys;
-        sys.name                         = symbol.local_name;
-        sys.module_name                  = symbol.module.name;
-        sys.canonical_id                 = make_canonical_id(symbol);
-        sys.symbol_id                    = symbol;
-        sys.after_systems                = dep.after_systems;
-        symbols.systems[dep.system_name] = sys;
+        const auto symbol = dep.rule_id.value_or(make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name));
+        ImportedRule rule;
+        rule.name                      = symbol.local_name;
+        rule.module_name               = symbol.module.name;
+        rule.canonical_id              = make_canonical_id(symbol);
+        rule.symbol_id                 = symbol;
+        rule.after_rules               = dep.after_rules;
+        symbols.rules[dep.rule_name]   = rule;
     }
 
     for (const auto& [name, event] : program->events) {

@@ -460,10 +460,10 @@ pub entity Tree6 from TreeTemplate:
             TreeRng:
                 rng = rand.seeded(106)
 
-# ── Systems ───────────────────────────────────────────────────────────────────
+# ── Rules ─────────────────────────────────────────────────────────────────────
 
 # Task 3.3 — read each player's own keyboard mapping into shared input state.
-system ReadPlayer1Input:
+rule ReadPlayer1Input:
     filter:
         PlayerInput
         Player1Tag
@@ -474,7 +474,7 @@ system ReadPlayer1Input:
         throw_pressed = input.down(P1Throw)
         fly = input.axis(P1FlyAxis)
 
-system ReadPlayer2Input:
+rule ReadPlayer2Input:
     filter:
         PlayerInput
         Player2Tag
@@ -487,7 +487,7 @@ system ReadPlayer2Input:
 
 # Task 3.3 — move both players on the X/Z ground plane. The camera follows for
 # free because each player entity owns its own viewport camera.
-system PlayerMoveSystem:
+rule PlayerMoveSystem:
     filter:
         tv.WorldTransform
         PlayerInput
@@ -501,7 +501,7 @@ system PlayerMoveSystem:
 # growth data; slowdown stretches how long a tree takes to reach full size.
 # std.random drives a per-entity wobble so each piece grows at a slightly
 # different pace, producing natural-looking variation without hand-authored noise.
-system TreeGrowthSystem:
+rule TreeGrowthSystem:
     filter:
         tv.WorldTransform
         TreeGrowth
@@ -516,7 +516,7 @@ system TreeGrowthSystem:
 
 # Task 3.4 — throw a bomb: consume one from inventory and spawn an orange bomb
 # with authored launch velocity, tagged with its owning player.
-system ThrowSystem:
+rule ThrowSystem:
     filter:
         tv.WorldTransform
         PlayerInput
@@ -544,7 +544,7 @@ system ThrowSystem:
 # tree roots inside the blast radius and destroy each root. The crown is a
 # hierarchy child of the root, so the existing Parent-based recursive destroy
 # fells the whole tree. Score one point per felled tree for the thrower.
-system BombSystem:
+rule BombSystem:
     filter:
         tv.WorldTransform
         Bomb
@@ -568,7 +568,7 @@ system BombSystem:
 # Task 3.7 — apply tree-hit deltas to the throwing player's score. Event
 # delivery broadcasts to every entity the handler's filter matches, so the
 # payload carries the thrower and the handler credits only that entity.
-system ScoreSystem:
+rule ScoreSystem:
     filter:
         Score
 

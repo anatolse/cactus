@@ -40,11 +40,11 @@ Each module SHALL have one local namespace for all module-scope declaration kind
 After semantic analysis, every reference to a module-scope declaration that is consumed by linking or code generation SHALL carry a resolved typed `SymbolId`. Later phases SHALL NOT resolve aliases, imported module qualifiers, unqualified imported names, or stdlib source spellings.
 
 #### Scenario: Aliased filter resolves before codegen
-- **WHEN** source imports `use std.physics.flat as phys` and a system filter references `phys.Body as body`
+- **WHEN** source imports `use std.physics.flat as phys` and a rule filter references `phys.Body as body`
 - **THEN** the resolved filter entry carries the trait symbol identity for `std.physics.flat.Body` and code generation consumes that identity directly
 
 #### Scenario: Prelude event resolves before codegen
-- **WHEN** a system handler declares `on tick:`
+- **WHEN** a rule handler declares `on tick:`
 - **THEN** semantic analysis resolves the handler event to the event symbol identity `std.core.tick`
 
 ### Requirement: Oberon-style import bindings
@@ -66,11 +66,11 @@ Ordinary imports SHALL bind a module namespace or alias and SHALL NOT inject imp
 The semantic analyzer SHALL resolve every symbol reference — declaration-level and expression-level, qualified and unqualified — through a single name-resolution routine over a single scope environment with fixed precedence: expression-scope bindings (locals, filter aliases, handler-event aliases), then module qualifiers, then module-local declarations, then the `std.core` prelude. The referenced declaration kind SHALL be checked after lookup succeeds, and a kind mismatch SHALL produce a diagnostic naming both the expected and the found kind.
 
 #### Scenario: Kind mismatch reported after successful lookup
-- **WHEN** a system filter references `m.clamp` where `use std.math as m` and `clamp` is a func
+- **WHEN** a rule filter references `m.clamp` where `use std.math as m` and `clamp` is a func
 - **THEN** semantic analysis reports an error stating a trait was expected but func `std.math.clamp` was found, rather than reporting the name as unknown
 
 #### Scenario: Declaration-level and expression-level references resolve identically
-- **WHEN** `phys.Body` appears in a system filter and the same spelling appears inside a handler expression
+- **WHEN** `phys.Body` appears in a rule filter and the same spelling appears inside a handler expression
 - **THEN** both resolve through the same routine to the same trait symbol identity `std.physics.flat.Body`
 
 #### Scenario: Expression binding shadows module qualifier
@@ -118,7 +118,7 @@ When a reference that linking or code generation consumes fails to resolve, the 
 Phase declarations SHALL have canonical symbol identities and SHALL participate in the uniform module-scope resolution routine. Decorated handler triggers SHALL store a canonical symbol plus an explicit phase-or-event kind, and downstream phases MUST NOT infer trigger meaning from source spelling.
 
 #### Scenario: Standard tick phase resolves through prelude
-- **WHEN** a system declares `on tick` without explicitly importing std.core
+- **WHEN** a rule declares `on tick` without explicitly importing std.core
 - **THEN** the handler resolves to canonical phase `std.core.tick`
 
 #### Scenario: Qualified custom phase resolves

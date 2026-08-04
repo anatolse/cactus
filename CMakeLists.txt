@@ -302,7 +302,11 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
             "Unsupported Cactus headless behavior test backend '${CACTUS_HEADLESS_TEST_BACKEND}' for target ${TARGET_NAME}")
     endif()
 
-    add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+    # Registered asset paths (e.g. model assets) are relative to the repo
+    # root, not ctest's default per-test working directory (the binary dir
+    # where add_test was called, i.e. build/tests) — run from the source
+    # root so any example needing real file-backed assets resolves them.
+    add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endfunction()
 
 set(BLUE_SQUARE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/blue-square.generated.cpp")

@@ -544,6 +544,7 @@ LightingShaderState& skinned_lighting_shader_state() noexcept {
     return state;
 }
 
+#ifndef CACTUS_RAYLIB_FAKE
 std::string light_uniform_name(const int index, const std::string_view field) {
     std::string result{"lights["};
     result += std::to_string(index);
@@ -551,6 +552,7 @@ std::string light_uniform_name(const int index, const std::string_view field) {
     result += field;
     return result;
 }
+#endif
 
 void reset_lighting_shader_state(LightingShaderState& state) noexcept {
     state = {};
@@ -562,6 +564,19 @@ void reset_lighting_shader_state(LightingShaderState& state) noexcept {
 }
 
 bool load_lighting_shader(LightingShaderState& state, const char* vertex_src, const char* fragment_src) {
+#ifdef CACTUS_RAYLIB_FAKE
+    // Shader compilation (LoadShaderFromMemory) and GetShaderLocation both
+    // need a real GL context, which headless behavioral tests never create.
+    // Every caller already treats "no shader" as a valid, gracefully
+    // degrading outcome (see ensure_lighting_shader's nullptr contract), so
+    // shaders simply never load under the fake, regardless of the fake's
+    // scripted window_ready — that flag is a business-logic gate (should
+    // resources be considered ready), not a real-context guarantee.
+    (void)state;
+    (void)vertex_src;
+    (void)fragment_src;
+    return false;
+#else
     if (!cactus::runtime::raylib::IsWindowReady()) {
         return false;
     }
@@ -594,6 +609,7 @@ bool load_lighting_shader(LightingShaderState& state, const char* vertex_src, co
     }
 
     return true;
+#endif
 }
 
 Shader* ensure_lighting_shader() {
@@ -780,8 +796,17 @@ Mesh* ensure_mesh_resource(const int runtime_id) {
         if (!cactus::runtime::raylib::IsWindowReady()) {
             return nullptr;
         }
+#ifdef CACTUS_RAYLIB_FAKE
+        // UploadMesh needs a real GL context to create VBOs; headless
+        // behavioral tests never create one. The fake's DrawMesh only
+        // records its Mesh argument by value (never dereferences its data
+        // pointers), so a zeroed placeholder is sufficient once the window
+        // is (fake-)ready.
+        entry.mesh = Mesh{};
+#else
         entry.mesh = GenMeshCube(1.0F, 1.0F, 1.0F);
         UploadMesh(&entry.mesh, false);
+#endif
         entry.loaded = true;
         entry.owned  = true;
     }
@@ -814,6 +839,31 @@ void record_model_load_failure(const std::string& message) {
     note_missing_asset();
 }
 
+#ifdef CACTUS_RAYLIB_FAKE
+// LoadModel parses the GLB *and* uploads its meshes/textures to the GPU;
+// headless behavioral tests never create a real GL context. Every fake
+// model shares one static, unskinned, single-submesh placeholder — the
+// fake's DrawMesh only records its Mesh/Material arguments by value, and
+// per-entity attribution comes from the caller-supplied transform, not from
+// mesh/material content, so sharing is safe. boneMatrices stays null so
+// upload_skinned_pose (which needs a real GL context too) no-ops.
+Model fake_model_resource() noexcept {
+    static Mesh mesh{};
+    static MaterialMap material_maps[1]{};
+    static Material material{.shader = {}, .maps = material_maps, .params = {}};
+    static int mesh_material[1]{0};
+
+    Model model{};
+    model.transform     = MatrixIdentity();
+    model.meshCount     = 1;
+    model.materialCount = 1;
+    model.meshes        = &mesh;
+    model.materials     = &material;
+    model.meshMaterial  = mesh_material;
+    return model;
+}
+#endif
+
 // Lazily load a registered model on first render-time use (dsl-model-assets
 // D3/D4/D6). Missing or empty files mark the entry failed — the draw is
 // skipped without placeholder geometry and the load is never retried.
@@ -840,7 +890,11 @@ Model* ensure_model_resource(const int runtime_id) {
     if (!cactus::runtime::raylib::IsWindowReady()) {
         return nullptr;
     }
+#ifdef CACTUS_RAYLIB_FAKE
+    entry.model = fake_model_resource();
+#else
     entry.model = LoadModel(entry.path.c_str());
+#endif
     if (entry.model.meshCount == 0) {
         entry.failed = true;
         record_model_load_failure("model load failed: " + entry.path);
@@ -881,10 +935,18 @@ void ensure_model_animations(ModelResourceEntry& entry) {
     if (entry.path.empty() || !FileExists(entry.path.c_str())) {
         return;
     }
+#ifdef CACTUS_RAYLIB_FAKE
+    // Fake models (see fake_model_resource) never carry animation clips —
+    // resolve_animation_clip already degrades gracefully (bind pose, one
+    // diagnostic) when animation_count stays 0, and clip playback isn't
+    // part of what headless behavioral tests assert.
+    return;
+#else
     entry.animations = LoadModelAnimations(entry.path.c_str(), &entry.animation_count);
     if (entry.animations == nullptr) {
         entry.animation_count = 0;
     }
+#endif
 }
 
 // Resolve an animated submission's clip to animation data. Out-of-range or

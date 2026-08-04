@@ -31,6 +31,16 @@ namespace cactus_raylib_fake {
     return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
 
+// Attributes a `RecordedDrawMesh::transform` to an entity's world position:
+// raylib's Matrix is column-major (Matrix's declared field order is m0, m4,
+// m8, m12 for the first row, etc. — see raylib.h), so the translation column
+// lives at m12/m13/m14 regardless of how the rotation/scale factors were
+// composed into it.
+[[nodiscard]] inline bool approx_equal(Matrix transform, Vector3 expected_translation, float epsilon = 0.0001F) noexcept {
+    const Vector3 translation{.x = transform.m12, .y = transform.m13, .z = transform.m14};
+    return approx_equal(translation, expected_translation, epsilon);
+}
+
 // ── Find a recorded call by type ────────────────────────────────────────────
 // Returns a pointer to the first matching entry, or nullptr. The pointer is
 // valid until the next call that mutates the log (a subsequent frame or a

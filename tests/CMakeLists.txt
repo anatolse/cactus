@@ -124,6 +124,18 @@ cactus_add_headless_behavior_test(test_blue_square_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_blue_square_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_mesh_renderer_headless_behavior
+    CACTUS_SOURCE examples/mesh-renderer/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_renderer_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_model_animation_headless_behavior
+    CACTUS_SOURCE examples/model-animation/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_animation_headless_behavior.cpp
+)
+
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)
 add_dependencies(test_example_cpp_compilation cactus)

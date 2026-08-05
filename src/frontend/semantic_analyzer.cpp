@@ -2946,7 +2946,7 @@ void SemanticAnalyzer::validate_event_stmts(
             return;
         }
 
-        const auto* event = find_resolved_event(emit.event_name);
+        const auto* event = find_resolved_event(event_symbol->local_name);
         std::unordered_set<std::string> event_fields;
         if (event != nullptr) {
             for (const auto& field : event->fields) {

@@ -3,53 +3,48 @@ Define the visual rendering behavior of the in-game editor, including render-pha
 
 ## Requirements
 
-### Requirement: Editor extern render rules run in the render phase
-`GizmoRenderer2D`, `GizmoRenderer3D`, `EditorTemplatePalette`, and `EditorPropertyPanel` SHALL be recognized as render-phase extern rules by `is_render_phase_extern` in the codegen. They SHALL be emitted as calls within the render-frame flush boundary (the code path between `begin_render_frame` and `end_render_frame`) — inside `generated_render_project` for the legacy main loop, or inside the render phase activation's dispatch for the graph-driven main loop — not in `generated_update_project` or any non-render phase activation.
+### Requirement: Editor render-phase rules run in the render phase
+`GizmoRenderer2D`, `GizmoRenderer3D`, and `EditorTemplatePalette` are plain DSL rules (see `stdlib-editor`) using the standard `on render:` phase, not compiler-owned extern rules dispatched by name. They SHALL be scheduled within the render-frame flush boundary (the code path between `begin_render_frame` and `end_render_frame`) — inside `generated_render_project` for the legacy main loop, or inside the render phase activation's dispatch for the graph-driven main loop — the same as any other rule declaring `on render:`. No name-matching codegen dispatch (`is_render_phase_extern`/`is_editor_extern_system`) is required for them.
+
+`EditorPropertyPanel` remains a compiler-owned `extern rule` and continues to require explicit render-phase recognition, unchanged from prior behavior.
 
 #### Scenario: Editor rules placed in render phase (legacy main loop)
-- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern rules, and is generated with the legacy main loop
-- **THEN** the generated `generated_render_project` contains calls to `gizmo_renderer2_d_tick` and `editor_template_palette_tick`
-- **THEN** the generated `generated_update_project` does NOT contain calls to `gizmo_renderer2_d_tick` or `editor_template_palette_tick`
+- **WHEN** a module imports `std.editor` and is generated with the legacy main loop
+- **THEN** the generated `generated_render_project` contains calls reachable from `GizmoRenderer2D` and `EditorTemplatePalette`'s compiled handler functions
+- **THEN** the generated `generated_update_project` does NOT contain calls to those handler functions
 
 #### Scenario: Editor rules placed in render phase (graph-driven main loop)
-- **WHEN** a module imports `std.editor`, declares `GizmoRenderer2D` and `EditorTemplatePalette` as extern rules, and is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
-- **THEN** the render phase activation's dispatch contains calls to `gizmo_renderer2_d_tick` and `editor_template_palette_tick`, wrapped by that frame's `begin_render_frame`/`end_render_frame` calls
-- **THEN** no other phase activation contains calls to `gizmo_renderer2_d_tick` or `editor_template_palette_tick`
+- **WHEN** a module imports `std.editor` and is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
+- **THEN** the render phase activation's dispatch contains calls reachable from `GizmoRenderer2D` and `EditorTemplatePalette`'s compiled handler functions, wrapped by that frame's `begin_render_frame`/`end_render_frame` calls
+- **THEN** no other phase activation contains calls to those handler functions
 
-### Requirement: GizmoRenderer2D draws Blender-style selection and transform handles
-When `EditorState.active` is true, `GizmoRenderer2D` SHALL open a `BeginMode2D(get_active_camera_2d())` block and draw the following for each entity that has both `EditorGizmo2D` and `WorldTransform`:
-
-- **Always**: A rectangle outline (`DrawRectangleLinesEx`) around the entity's AABB. The AABB uses `BoxCollider.size` if present, otherwise a 1×1 world-unit square centered at `WorldTransform.position`. The outline color SHALL be the `EditorGizmo2D.color` field.
-- **mode=1 (Translate)**: A red arrow along +X and a green arrow along +Y, each of length `EditorGizmo2D.size` world units, with a filled triangle arrowhead. Arrow shaft drawn with `DrawLineEx`.
-- **mode=2 (Rotate)**: A cyan ring (`DrawRing`) centered at `WorldTransform.position` with inner radius `EditorGizmo2D.size * 0.8` and outer radius `EditorGizmo2D.size`.
-- **mode=3 (Scale)**: Red and green lines along +X and +Y with a small filled square (`DrawRectangleV`) at the tip of each.
-
-All coordinates are in world space. The `BeginMode2D` camera transform maps them to screen pixels.
+### Requirement: GizmoRenderer2D emits debug-draw primitives for selection and transform handles
+`GizmoRenderer2D` (see `stdlib-editor`) SHALL compute Blender-style selection and transform handle geometry in DSL and SHALL emit `std.debug`/`std.ui` primitive events (per `editor-debug-draw`) to draw it, rather than the backend hardcoding the geometry decision. The generic event renderers SHALL open the `BeginMode2D(get_active_camera_2d())` block for world-space primitives.
 
 #### Scenario: Selection outline in edit mode
-- **WHEN** an entity has `EditorSelected` and `EditorGizmo2D` with mode=1 and `EditorState.active=true`
-- **THEN** the render phase draws a rectangle outline around the entity and a red+green arrow pair
+- **WHEN** an entity has `EditorSelected` and `EditorState.active=true`
+- **THEN** the render phase draws a rectangle outline around the entity's AABB (`DrawDebugRectOutline2D`) and, in Translate mode, a red+green arrow pair (`DrawDebugLine2D` + `DrawDebugTriangle2D`)
 
 #### Scenario: No gizmos outside edit mode
 - **WHEN** `EditorState.active` is false
-- **THEN** `GizmoRenderer2D` draws nothing (early return)
+- **THEN** `GizmoRenderer2D` emits no debug-draw events (early return in the DSL rule)
 
 #### Scenario: Rotate gizmo
-- **WHEN** an entity has `EditorGizmo2D` with mode=2
-- **THEN** the render phase draws a cyan ring at the entity's world position
+- **WHEN** an entity has `EditorSelected` and `EditorState.mode` is `GizmoMode.Rotate`
+- **THEN** the render phase draws a cyan ring (`DrawDebugRingOutline2D`) at the entity's world position
 
 ### Requirement: EditorTemplatePalette draws screen-space template buttons and handles clicks
-`EditorTemplatePalette` SHALL iterate `cactus_template_registry` in the render phase and draw one button per `pub template` along the left screen edge (starting at screen position (10, 40), each button 140×26px with 4px gap). Each button SHALL have a deterministic tint color derived from `std::hash<std::string>` of the template name, mapped to a hue in HSL space with fixed saturation=70% and lightness=55%. The template name SHALL be drawn as white text on the tinted button.
+`EditorTemplatePalette` (see `stdlib-editor`) SHALL iterate `template_names()` in a DSL `for` loop and SHALL emit `DrawScreenRect` + `ScreenLabel` updates for one button per registered `pub template`, along the left screen edge (starting at screen position (10, 40), each button 140×26px with 4px gap). Each button's tint color SHALL be assigned deterministically by its index in the returned list (per `stdlib-editor`), not derived from the template name.
 
-When `EditorState.active` is true and the left mouse button is pressed, if the cursor is within a button's rectangle, the rule SHALL:
+When `EditorState.active` is true and the left mouse button is pressed, if the cursor is within a button's rectangle, the DSL rule itself SHALL:
 1. Set `EditorState.active_template` to that template's name
-2. Set `EditorState.mode` to 4 (Place)
+2. Set `EditorState.mode` to `GizmoMode.Place`
 
-The palette SHALL only be rendered (and handle input) when `EditorState.active` is true.
+The palette SHALL only emit its draw events and handle input when `EditorState.active` is true.
 
 #### Scenario: Palette visible in edit mode
 - **WHEN** `EditorState.active` is true and templates "Box" and "PlayerSpawn" are registered
-- **THEN** two buttons are drawn at (10,40) and (10,70) with distinct tint colors
+- **THEN** two buttons are drawn at (10,40) and (10,70) with distinct index-derived tint colors
 
 #### Scenario: Palette hidden outside edit mode
 - **WHEN** `EditorState.active` is false
@@ -57,20 +52,20 @@ The palette SHALL only be rendered (and handle input) when `EditorState.active` 
 
 #### Scenario: Clicking a template button
 - **WHEN** `EditorState.active` is true and the user clicks on the "Box" button
-- **THEN** `EditorState.active_template` is set to "Box" and `EditorState.mode` is set to 4
+- **THEN** `EditorState.active_template` is set to "Box" and `EditorState.mode` is set to `GizmoMode.Place`
 
-### Requirement: Edit-mode overlay drawn in render phase
-After all other render-phase extern rules run, the codegen SHALL draw an edit-mode overlay when any EditorState entity has `active=true`, within the same render-frame flush boundary described above (`generated_render_project` under the legacy main loop, or the render phase activation's dispatch under the graph-driven main loop). The overlay consists of:
-- A yellow rectangle outline 3px thick along the full screen boundary (`DrawRectangleLinesEx({0,0,screenW,screenH}, 3, YELLOW)`)
-- A HUD text line at position (10, 10) in yellow showing the current mode: `"EDIT [<MODE>]  F1:toggle  W:trans  E:rot  R:scale  T:place"` where `<MODE>` is one of SELECT / TRANSLATE / ROTATE / SCALE / PLACE based on `EditorState.mode`
+### Requirement: Edit-mode overlay drawn by a DSL rule in the render phase
+The edit-mode overlay SHALL be drawn by `EditorHUDOverlay` (see `stdlib-editor`), an ordinary DSL rule, rather than being spliced unconditionally into codegen. It SHALL draw, when any `EditorState` entity has `active=true`:
+- A yellow rectangle outline 3px thick along the full screen boundary, via `DrawScreenRect` (outline, using `screen_size()`)
+- A HUD text line at position (10, 10) in yellow showing the current mode, via a `ScreenLabel` built with `text.format`: `"EDIT [<MODE>]  F1:toggle  W:trans  E:rot  R:scale  T:place"` where `<MODE>` is one of SELECT / TRANSLATE / ROTATE / SCALE / PLACE based on `EditorState.mode`
 
 #### Scenario: Overlay visible in edit mode
 - **WHEN** `EditorState.active` is true and `EditorState.mode` is 1
-- **THEN** a yellow border and the text "EDIT [TRANSLATE]  F1:toggle  W:trans  E:rot  R:scale  T:place" are drawn
+- **THEN** a yellow border (`DrawScreenRect`) and the text "EDIT [TRANSLATE]  F1:toggle  W:trans  E:rot  R:scale  T:place" (`ScreenLabel`) are drawn
 
 #### Scenario: Overlay hidden outside edit mode
 - **WHEN** `EditorState.active` is false
-- **THEN** no border and no HUD text are drawn
+- **THEN** no border is drawn and the HUD `ScreenLabel` is not visible
 
 #### Scenario: Overlay renders under the graph-driven main loop
 - **WHEN** a program using `std.editor` with `EditorState.active = true` is generated with a non-empty execution graph and a resolved external frame event (graph-driven main loop)
@@ -110,33 +105,26 @@ After all other render-phase extern rules run, the codegen SHALL draw an edit-mo
 - **WHEN** the active camera zoom is 64.0 and the mouse moved 64 pixels horizontally
 - **THEN** `editor_mouse_delta_2d()` returns approximately `{1.0, 0.0}`
 
-### Requirement: GizmoRenderer3D draws the edit-mode ground grid and selection gizmos
-The emitted `GizmoRenderer3D` render-phase function SHALL early-return when no `EditorState` entity has `active=true`. When editing is active it SHALL open a `BeginMode3D(get_active_camera_3d())` block and draw, in order:
-
-1. **Ground grid (always, independent of selection)**: `DrawGrid(20, 1.0F)` — a horizontal grid on the y=0 plane centered at the world origin. The grid SHALL be drawn even when no entity carries `EditorGizmo3D`.
-2. **For each entity with both `EditorGizmo3D` and `WorldTransform` (vec3)**:
-   - **Always**: a wire box (`DrawCubeWiresV`) around the entity. The box uses the entity's model bind-pose bounds scaled by `WorldTransform.scale` when the entity has `ModelRenderer` and its model resolves; otherwise a 1×1×1 world-unit cube centered at `WorldTransform.position`. The wire color SHALL be the `EditorGizmo3D.color` field.
-   - **mode=1 (Translate)**: a red line along +X, a green line along +Y, and a blue line along +Z from the entity position, each of length `EditorGizmo3D.size` world units.
-   - **mode=2 (Rotate)**: a cyan circle (`DrawCircle3D`) of radius `EditorGizmo3D.size` centered at the entity position, lying in the horizontal plane.
-   - **mode=3 (Scale)**: the same three axis lines as Translate with a small cube (`DrawCubeV`) at the tip of each.
-
-The block SHALL close with `EndMode3D()`.
+### Requirement: GizmoRenderer3D emits debug-draw primitives for the ground grid and selection gizmos
+The ground grid SHALL remain a dedicated, always-on generic extern rule gated on `EditorCamera3D` existence (per `editor-debug-draw`), independent of `GizmoRenderer3D`. `GizmoRenderer3D` (see `stdlib-editor`) SHALL compute per-entity gizmo geometry in DSL and SHALL emit `std.debug` primitive events for it, rather than the backend hardcoding the geometry decision.
 
 #### Scenario: Grid visible in edit mode with empty selection
 - **WHEN** `EditorState.active` is true and no entity has `EditorGizmo3D`
-- **THEN** the render phase draws the y=0 grid and nothing else in the 3D gizmo pass
+- **THEN** the render phase draws the y=0 grid (via the dedicated grid extern rule) and nothing else in the 3D gizmo pass
 
 #### Scenario: No grid or gizmos outside edit mode
 - **WHEN** `EditorState.active` is false
-- **THEN** `GizmoRenderer3D` draws nothing (early return, no `BeginMode3D` block opened)
+- **THEN** no `EditorCamera3D` rig exists (per the existing camera lifecycle), so the grid extern rule draws nothing, and `GizmoRenderer3D` emits no debug-draw events
 
-#### Scenario: Selected model gets a wire box sized from its bounds
-- **WHEN** an entity has `EditorGizmo3D`, `WorldTransform`, and `ModelRenderer` with a loaded model, and `EditorState.active` is true
-- **THEN** the render phase draws a wire box matching the model's bind-pose bounds scaled by the entity's transform scale
+#### Scenario: Selected entity gets a fixed-size wire box
+- **WHEN** an entity has `EditorSelected` and `std.transform.volume.WorldTransform`, and `EditorState.active` is true
+- **THEN** the render phase draws a 1×1×1 wire box (`DrawDebugWireBox3D`) centered on the entity's position
+
+Fixed-size rather than `ModelRenderer`-bounds-scaled: see `editor-declarative-rendering`'s design notes (decision 8) — reading optional `ModelRenderer`/`BoxCollider` bounds from DSL would require `std.editor` to `use std.render.models`/`use std.physics.flat`, an untested cross-module dependency risk given `std.editor` already needs dedicated codegen special-casing to keep its existing unconditional `std.transform.flat`/`std.transform.volume` imports from leaking the wrong dimension's extern rule into flat-only or volume-only programs.
 
 #### Scenario: Translate mode draws three axis lines
-- **WHEN** an entity has `EditorGizmo3D` with mode=1 and `EditorState.active` is true
-- **THEN** the render phase draws red (+X), green (+Y), and blue (+Z) axis lines at the entity's position
+- **WHEN** an entity has `EditorSelected` with `EditorState.mode` = `GizmoMode.Translate` and `EditorState.active` is true
+- **THEN** the render phase draws red (+X), green (+Y), and blue (+Z) axis lines (`DrawDebugLine3D`) at the entity's position
 
 ### Requirement: editor_plane_project_3d intersects the cursor ray with a plane
 `editor_plane_project_3d(screen, plane_origin, plane_normal)` SHALL build a picking ray from the active 3D camera through `screen` (raylib `GetScreenToWorldRay` or equivalent) and return the ray/plane intersection point. When the ray is parallel to the plane (|denominator| below epsilon) or the intersection lies behind the ray origin (`t < 0`), it SHALL return `plane_origin`.

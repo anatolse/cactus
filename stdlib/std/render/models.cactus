@@ -74,8 +74,12 @@ pub extern func animation_name(m: model_id, clip: int) string
 pub extern func bounds_size(m: model_id) vec3
 
 # Midpoint of the bind-pose bounding box ((min + max) / 2), in model space.
-# Add this (scaled by the entity's world scale) to its world position to
-# center a wire box on the actual mesh rather than the entity origin, for
+# Add this (scaled by the entity's world scale) to a model's world position
+# to center a wire box on the actual mesh rather than the entity origin, for
 # models whose bind-pose bounds aren't centered on the origin. Same
-# load/fallback behavior as bounds_size.
+# load/fallback behavior as bounds_size. Not currently called by
+# std.editor's gizmo renderers — those intentionally use a fixed-size
+# fallback instead of mesh-aware bounds (see the editor-declarative-rendering
+# change's design.md decision 8); this accessor is available for other
+# callers that need bind-pose-centered placement.
 pub extern func bounds_center(m: model_id) vec3

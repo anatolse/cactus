@@ -2817,6 +2817,24 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     // Template registry (used by editor_spawn_template and EditorTemplatePalette)
     if (uses_editor && program.ast != nullptr) {
+        // kEditorPaletteMaxSlots below sizes a fixed palette-button label pool; a
+        // pub template count beyond it would silently drop palette buttons with no
+        // indication why (editor-declarative-rendering), so fail the build instead.
+        constexpr std::size_t kEditorPaletteMaxSlots = 16;
+        std::size_t pub_template_count = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* tmpl = std::get_if<TemplateNode>(&decl); tmpl != nullptr && tmpl->is_pub) {
+                ++pub_template_count;
+            }
+        }
+        if (pub_template_count > kEditorPaletteMaxSlots) {
+            throw std::runtime_error(
+                "cpp-entt backend: " + std::to_string(pub_template_count) +
+                " pub templates registered, but std.editor's palette button pool only supports " +
+                std::to_string(kEditorPaletteMaxSlots) +
+                "; reduce the number of pub templates or raise kEditorPaletteMaxSlots in cpp_entt_codegen.cpp");
+        }
+
         out << "// ── Template Registry ───────────────────────────────────────────────\n\n";
         out << "using CactusTemplateFactory = entt::entity(*)(entt::registry&);\n";
         out << "static const std::unordered_map<std::string, CactusTemplateFactory> cactus_template_registry = {\n";
@@ -2863,16 +2881,18 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         // entities, indexed by editor_palette_label_slot(), sidesteps both: the palette rule
         // gets a stable per-index entity_id via `project ScreenLabel to
         // palette_label_slot(idx): ...` (the existing cross-entity project-to-target
-        // mechanism). Sized generously past any realistic template count; templates beyond
-        // the pool are silently not shown as palette buttons.
+        // mechanism). Sized generously past any realistic template count; the pub
+        // template count is checked against this pool size above and the build
+        // fails loudly rather than silently dropping palette buttons.
         const std::string sl_cpp = EnttCodegenUtils::trait_cpp_name("ScreenLabel", program);
         out << "// ── Editor Palette Label Slot Pool ──────────────────────────────────\n\n";
         out << "namespace cactus::runtime::entt_backend {\n";
-        out << "inline constexpr int kEditorPaletteMaxSlots = 16;\n";
+        out << "inline constexpr int kEditorPaletteMaxSlots = " << kEditorPaletteMaxSlots << ";\n";
         // Not noexcept: reserve()/push_back() allocate and could (in principle, on OOM) throw —
         // same reasoning as editor_template_names() above.
         out << "std::vector<entt::entity>& editor_palette_label_slots(entt::registry& registry) {\n";
-        out << "    static std::vector<entt::entity> slots;\n";
+        out << "    static std::unordered_map<entt::registry*, std::vector<entt::entity>> pools;\n";
+        out << "    auto& slots = pools[&registry];\n";
         out << "    if (slots.empty()) {\n";
         out << "        slots.reserve(kEditorPaletteMaxSlots);\n";
         out << "        for (int i = 0; i < kEditorPaletteMaxSlots; ++i) {\n";

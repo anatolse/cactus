@@ -48,3 +48,41 @@ The generated spawn impl SHALL be registered whenever the program declares a `Wo
 #### Scenario: Registry is accessible from EditorTemplatePalette
 - **WHEN** `EditorTemplatePalette` iterates `cactus_template_registry` to render buttons
 - **THEN** it sees all registered `pub template` names without additional setup
+
+### Requirement: editor_template_names exposes registered template names as a deterministic list
+The backend SHALL expose an `editor_template_names()` runtime function returning a `list[string]` of every name currently registered in `cactus_template_registry`. The returned order SHALL be deterministic and match the declaration order of the corresponding `pub template` statements in source — the backend SHALL maintain this ordering explicitly (e.g. via a companion ordered list populated at registration time) rather than relying on the iteration order of the underlying map storage.
+
+The `std.editor` module SHALL declare `pub extern func template_names() list[string]` bridging to this runtime function, for use by DSL-authored palette rendering.
+
+#### Scenario: Template names returned in declaration order
+- **WHEN** a module declares `pub template Box` followed by `pub template PlayerSpawn`
+- **THEN** `editor_template_names()` returns `["Box", "PlayerSpawn"]`, in that order
+
+#### Scenario: Order is stable across calls within a run
+- **WHEN** `editor_template_names()` is called multiple times within the same program run without any template registration changing
+- **THEN** every call returns the same order
+
+#### Scenario: Empty registry returns an empty list
+- **WHEN** a module declares no `pub template`
+- **THEN** `editor_template_names()` returns an empty list
+
+#### Scenario: template_names accessible from a DSL rule
+- **WHEN** a rule in `std.editor` calls `template_names()` inside a bounded `for` loop
+- **THEN** the loop iterates once per registered `pub template`, bound to that template's name
+
+### Requirement: editor_template_index exposes a name's position in the deterministic order
+The backend SHALL expose an `editor_template_index(name)` runtime function returning the zero-based position of `name` within the same declaration-ordered sequence `editor_template_names()` returns, or `-1` if `name` is not a registered template. The `std.editor` module SHALL declare `pub extern func template_index(name: string) int` bridging to this runtime function.
+
+This exists because bounded `for` loops cannot mutate an outer-scope counter across iterations (confirmed unsupported — see `editor-declarative-rendering`'s design notes), so DSL rules that need a per-item index for index-based layout/tint (e.g. `EditorTemplatePalette`) obtain it via this narrow per-name lookup instead of a loop-local accumulator.
+
+#### Scenario: Index matches declaration order
+- **WHEN** a module declares `pub template Box` followed by `pub template PlayerSpawn`
+- **THEN** `editor_template_index("Box")` returns `0` and `editor_template_index("PlayerSpawn")` returns `1`
+
+#### Scenario: Unknown name returns -1
+- **WHEN** `name` does not match any registered `pub template`
+- **THEN** `editor_template_index(name)` returns `-1`
+
+#### Scenario: template_index accessible from a DSL rule iterating template_names
+- **WHEN** a rule calls `template_index(name)` for each `name` yielded by iterating `template_names()`
+- **THEN** the returned indices are `0, 1, 2, ...` in the same order as the iteration

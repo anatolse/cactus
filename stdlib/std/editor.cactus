@@ -330,6 +330,9 @@ rule EditorSelection2D:
     filter:
         EditorState
 
+    after:
+        EditorTemplatePalette
+
     on input:
         if active and not use_3d:
             if input.pressed(EditorSelectClick):
@@ -357,6 +360,9 @@ rule EditorTranslate2D:
 rule EditorPlace2D:
     filter:
         EditorState
+
+    after:
+        EditorTemplatePalette
 
     on input:
         if active and not use_3d:
@@ -457,6 +463,9 @@ rule EditorSelection3D:
     filter:
         EditorState
 
+    after:
+        EditorTemplatePalette
+
     on input:
         if active and use_3d:
             if input.pressed(EditorSelectClick):
@@ -484,6 +493,9 @@ rule EditorTranslate3D:
 rule EditorPlace3D:
     filter:
         EditorState
+
+    after:
+        EditorTemplatePalette
 
     on input:
         if active and use_3d:
@@ -574,6 +586,29 @@ rule EditorTemplatePalette:
     filter:
         EditorState
 
+    # Runs in the input phase, before EditorSelection2D/3D and EditorPlace2D/3D
+    # (see their after: EditorTemplatePalette), so a click that lands on a
+    # palette button is consumed here and never reaches world-space
+    # selection/raycast or template placement.
+    on input:
+        if not active:
+            return
+
+        if not input.pressed(EditorSelectClick):
+            return
+
+        let click_pos = input.mouse_position()
+
+        for name in template_names():
+            let idx = template_index(name)
+            let x = 10.0
+            let y = palette_button_y(idx)
+
+            if click_pos.x >= x and click_pos.x <= x + 140.0 and click_pos.y >= y and click_pos.y <= y + 26.0:
+                active_template = name
+                mode = 4
+                input.consume(EditorSelectClick)
+
     on render:
         let names = template_names()
 
@@ -588,9 +623,6 @@ rule EditorTemplatePalette:
                     color = #FFFFFFFF
                     visible = false
             return
-
-        let click_pos = input.mouse_position()
-        let clicked = input.pressed(EditorSelectClick)
 
         for name in names:
             let idx = template_index(name)
@@ -613,11 +645,6 @@ rule EditorTemplatePalette:
                 font_size = 14
                 color = #FFFFFFFF
                 visible = true
-
-            if clicked:
-                if click_pos.x >= x and click_pos.x <= x + 140.0 and click_pos.y >= y and click_pos.y <= y + 26.0:
-                    active_template = name
-                    mode = 4
 
 # Yellow 3px border spanning the full screen plus a top-left mode readout,
 # drawn only while EditorState.active is true. A real, documented, DSL-visible

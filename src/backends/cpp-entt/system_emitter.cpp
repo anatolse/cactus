@@ -82,7 +82,8 @@ const std::unordered_map<std::string, FuncRenameMap> kRuntimeFuncNames = {
     {"std.render.models",
      {{"animation_count", "model_animation_count"},
       {"animation_name", "model_animation_name"},
-      {"bounds_size", "model_bounds_size"}}},
+      {"bounds_size", "model_bounds_size"},
+      {"bounds_center", "model_bounds_center"}}},
     {"std.editor",
      {{"spawn_template", "editor_spawn_template"},
       {"hit_test_2d", "editor_hit_test_2d"},
@@ -90,7 +91,16 @@ const std::unordered_map<std::string, FuncRenameMap> kRuntimeFuncNames = {
       {"camera_enter", "editor_camera_enter"},
       {"camera_exit", "editor_camera_exit"},
       {"apply_camera_2d", "editor_apply_camera_2d"},
-      {"apply_camera_3d", "editor_apply_camera_3d"}}},
+      {"apply_camera_3d", "editor_apply_camera_3d"},
+      {"active_mode", "editor_active_mode"},
+      {"is_editor_active", "editor_is_active"},
+      {"template_names", "editor_template_names"},
+      {"template_index", "editor_template_index"},
+      {"screen_size", "editor_screen_size"},
+      {"palette_label_slot", "editor_palette_label_slot"},
+      {"palette_color", "editor_palette_color"},
+      {"mode_label", "editor_mode_label"},
+      {"palette_button_y", "editor_palette_button_y"}}},
     {"std.input",
      {{"mouse_delta", "editor_mouse_delta_screen"},
       {"wheel_delta", "editor_wheel_delta"},
@@ -160,10 +170,13 @@ bool stdlib_call_needs_registry(const SymbolId& func_id) {
         return false;
     }
     if (func_id.module.name == "std.editor") {
+        // template_names()/template_index()/screen_size() read codegen-emitted globals or
+        // raw window state, not per-registry ECS data, so they don't need registry injected.
         return func_id.local_name == "spawn_template" || func_id.local_name == "hit_test_2d" ||
                func_id.local_name == "raycast_3d" || func_id.local_name == "camera_enter" ||
                func_id.local_name == "camera_exit" || func_id.local_name == "apply_camera_2d" ||
-               func_id.local_name == "apply_camera_3d";
+               func_id.local_name == "apply_camera_3d" || func_id.local_name == "active_mode" ||
+               func_id.local_name == "is_editor_active" || func_id.local_name == "palette_label_slot";
     }
     return (func_id.module.name == "std.transform.flat" || func_id.module.name == "std.transform.volume") &&
            func_id.local_name == "world_position";
@@ -569,12 +582,85 @@ bool is_screen_label_render(const ExternRuleNode& sys) {
     return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.render.text", "ScreenLabelRender");
 }
 
+// EditorTemplatePalette, GizmoRenderer2D, and GizmoRenderer3D are no longer compiler-owned
+// extern rules (editor-declarative-rendering) — their geometry/layout decisions moved into
+// DSL rules in std.editor.cactus (EditorTemplatePalette, EditorGizmoRenderer2D/3D) that emit
+// the generic std.debug/std.ui primitive events instead. EditorPropertyPanel remains the sole
+// extern rule here — still an unimplemented stub.
 bool is_editor_extern_system(const ExternRuleNode& sys) {
-    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "EditorTemplatePalette") ||
-           symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "EditorPropertyPanel") ||
-           symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer2D") ||
-           symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer3D");
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "EditorPropertyPanel");
 }
+
+bool is_debug_grid_3d(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "DebugGrid3D");
+}
+
+// Generic, non-branching event-payload renderers (editor-debug-draw / editor-screen-ui):
+// exactly one compiler-owned handler per event, triggered by `on <Event>:` rather than a
+// filter+phase view. Each reads only its event's own payload fields (delivered as the
+// `occurrence` parameter — see generated_dispatch_event's HandlerImplementationKind::External
+// + HandlerTriggerKind::Event branch in cpp_entt_codegen.cpp, which now passes the occurrence
+// through instead of dropping it) and issues one raylib call.
+bool is_draw_debug_line_2d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugLine2DRenderer");
+}
+bool is_draw_debug_triangle_2d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugTriangle2DRenderer");
+}
+bool is_draw_debug_ring_outline_2d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugRingOutline2DRenderer");
+}
+bool is_draw_debug_rect_outline_2d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugRectOutline2DRenderer");
+}
+bool is_draw_debug_line_3d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugLine3DRenderer");
+}
+bool is_draw_debug_wire_box_3d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugWireBox3DRenderer");
+}
+bool is_draw_debug_circle_3d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugCircle3DRenderer");
+}
+bool is_draw_debug_cube_3d_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.debug", "DrawDebugCube3DRenderer");
+}
+bool is_draw_screen_rect_renderer(const ExternRuleNode& sys) {
+    return symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.ui", "DrawScreenRectRenderer");
+}
+
+// Shared shape for every one-event-one-handler generic renderer above: resolve the
+// triggering event's runtime type from the (sole) handler's resolved trigger, emit a
+// `(registry, occurrence)` function (unlike the `(registry)`-only shape every filter/phase
+// extern rule above uses, since these have no view to iterate — event dispatch already
+// delivers exactly one invocation per occurrence), and wrap `draw_call_body` in the given
+// BeginMode/EndMode pair for world-space primitives (empty strings for screen-space ones).
+std::string emit_event_renderer_body(const ExternRuleNode& sys,
+                                     const DecoratedProgram& program,
+                                     const std::string& mode_begin,
+                                     const std::string& mode_end,
+                                     const std::string& draw_call_body) {
+    const auto& handler   = sys.handlers.front();
+    const auto event_type = event_cpp_type(handler.resolved_trigger->symbol, program);
+    std::ostringstream out;
+    out << "void " << system_function_name(program.module_name, sys.name, "tick")
+        << "(entt::registry& registry, const " << event_type << "& occurrence) {\n";
+    out << "    (void)registry;\n";
+    if (!mode_begin.empty()) {
+        out << "    " << mode_begin << "\n";
+    }
+    out << draw_call_body;
+    if (!mode_end.empty()) {
+        out << "    " << mode_end << "\n";
+    }
+    out << "}\n\n";
+    return out.str();
+}
+
+const std::string kBeginMode2D = "cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());";
+const std::string kEndMode2D   = "cactus::runtime::raylib::EndMode2D();";
+const std::string kBeginMode3D = "cactus::runtime::raylib::BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());";
+const std::string kEndMode3D   = "cactus::runtime::raylib::EndMode3D();";
 
 std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const RuleNode& sys) {
     auto alias_to_trait = [&]() -> std::string {
@@ -1756,7 +1842,11 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                        rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
                 const bool graph_runtime = !program.execution_graph.phases.empty();
-                const auto event_type    = event_cpp_type(s.event_name, program);
+                // event_name is now dotted for cross-module events (e.g. "std.debug.DrawDebugLine2D"),
+                // so the resolved symbol must drive the lookup — the string overload only matches a
+                // bare declared name and would silently fall through to an invalid C++ type name.
+                const auto event_type = s.resolved_event_id.has_value() ? event_cpp_type(*s.resolved_event_id, program)
+                                                                        : event_cpp_type(s.event_name, program);
                 std::string payload;
                 for (size_t i = 0; i < s.payload.size(); ++i) {
                     if (i > 0) {
@@ -1775,7 +1865,10 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     } else if (dispatcher_available) {
                         emit_call = "dispatcher.trigger(" + event_type + "{";
                     } else {
-                        emit_call = s.event_name + "_buffer.push_back({";
+                        // event_type (already computed above) is a valid, collision-resistant C++
+                        // identifier; event_name may be dotted for cross-module events and cannot be
+                        // used directly to build an identifier.
+                        emit_call = event_type + "_buffer.push_back({";
                     }
                     return ind + emit_call + payload + "});\n";
                 }
@@ -1800,7 +1893,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            payload + "}, " + RECIPIENT + ");\n" + ind + "    }\n" + ind + "}\n";
                 }
                 std::string emit_call = dispatcher_available ? "dispatcher.trigger(" + event_type + "{"
-                                                             : s.event_name + "_buffer.push_back({";
+                                                             : event_type + "_buffer.push_back({";
                 return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + payload + "});\n" +
                        ind + "}\n";
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
@@ -2571,200 +2664,123 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternRuleNode& sys, con
         return out.str();
     }
 
+    if (is_draw_debug_line_2d_renderer(sys)) {
+        out << emit_event_renderer_body(sys,
+                                        program,
+                                        kBeginMode2D,
+                                        kEndMode2D,
+                                        "    cactus::runtime::raylib::DrawLineEx(occurrence.start, occurrence.end, "
+                                        "occurrence.thickness, occurrence.color);\n");
+        return out.str();
+    }
+
+    if (is_draw_debug_triangle_2d_renderer(sys)) {
+        out << emit_event_renderer_body(
+            sys,
+            program,
+            kBeginMode2D,
+            kEndMode2D,
+            "    cactus::runtime::raylib::DrawTriangle(occurrence.a, occurrence.b, occurrence.c, occurrence.color);\n");
+        return out.str();
+    }
+
+    if (is_draw_debug_ring_outline_2d_renderer(sys)) {
+        out << emit_event_renderer_body(sys,
+                                        program,
+                                        kBeginMode2D,
+                                        kEndMode2D,
+                                        "    cactus::runtime::raylib::DrawRing(occurrence.center, "
+                                        "occurrence.inner_radius, occurrence.outer_radius, 0.0F, 360.0F, 32, "
+                                        "occurrence.color);\n");
+        return out.str();
+    }
+
+    if (is_draw_debug_rect_outline_2d_renderer(sys)) {
+        std::string body =
+            "    const Rectangle __rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
+            "                          .width = occurrence.size.x, .height = occurrence.size.y};\n"
+            "    cactus::runtime::raylib::DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color);\n";
+        out << emit_event_renderer_body(sys, program, kBeginMode2D, kEndMode2D, body);
+        return out.str();
+    }
+
+    if (is_draw_debug_line_3d_renderer(sys)) {
+        out << emit_event_renderer_body(
+            sys,
+            program,
+            kBeginMode3D,
+            kEndMode3D,
+            "    cactus::runtime::raylib::DrawLine3D(occurrence.start, occurrence.end, occurrence.color);\n");
+        return out.str();
+    }
+
+    if (is_draw_debug_wire_box_3d_renderer(sys)) {
+        out << emit_event_renderer_body(
+            sys,
+            program,
+            kBeginMode3D,
+            kEndMode3D,
+            "    cactus::runtime::raylib::DrawCubeWiresV(occurrence.center, occurrence.size, occurrence.color);\n");
+        return out.str();
+    }
+
+    if (is_draw_debug_circle_3d_renderer(sys)) {
+        // raylib's DrawCircle3D takes a rotation axis + angle, not a plane normal; the event's
+        // `normal` field maps to rotationAxis with a fixed 90-degree angle, matching the exact
+        // hardcoded call this replaces (Rotate gizmo always passed axis (1,0,0), angle 90) —
+        // task 5.3 visual-equivalence requirement, not a general normal-to-rotation solver.
+        out << emit_event_renderer_body(sys,
+                                        program,
+                                        kBeginMode3D,
+                                        kEndMode3D,
+                                        "    cactus::runtime::raylib::DrawCircle3D(occurrence.center, occurrence.radius, "
+                                        "occurrence.normal, 90.0F, occurrence.color);\n");
+        return out.str();
+    }
+
+    if (is_draw_debug_cube_3d_renderer(sys)) {
+        out << emit_event_renderer_body(
+            sys,
+            program,
+            kBeginMode3D,
+            kEndMode3D,
+            "    cactus::runtime::raylib::DrawCubeV(occurrence.center, occurrence.size, occurrence.color);\n");
+        return out.str();
+    }
+
+    if (is_draw_screen_rect_renderer(sys)) {
+        std::string body =
+            "    const Rectangle __rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
+            "                          .width = occurrence.size.x, .height = occurrence.size.y};\n"
+            "    if (occurrence.filled) {\n"
+            "        cactus::runtime::raylib::DrawRectangleRec(__rect, occurrence.color);\n"
+            "    } else {\n"
+            "        cactus::runtime::raylib::DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color);\n"
+            "    }\n";
+        out << emit_event_renderer_body(sys, program, "", "", body);
+        return out.str();
+    }
+
+    if (is_debug_grid_3d(sys)) {
+        // Filter-gated existence check (no per-entity data needed) — same
+        // existence-scan shape the now-removed hardcoded GizmoRenderer2D/3D
+        // bodies used for their __editor_active check.
+        const std::string cam3d = EnttCodegenUtils::trait_cpp_name("EditorCamera3D", program);
+        out << "void " << system_function_name(program.module_name, sys.name, "tick")
+            << "(entt::registry& registry) {\n";
+        out << "    bool __has_3d_rig = false;\n";
+        out << "    auto __cam3d_view = registry.view<" << cam3d << ">();\n";
+        out << "    for (auto __e : __cam3d_view) { (void)__e; __has_3d_rig = true; break; }\n";
+        out << "    if (!__has_3d_rig) { return; }\n";
+        out << "    " << kBeginMode3D << "\n";
+        out << "    cactus::runtime::raylib::DrawGrid(20, 1.0F);\n";
+        out << "    " << kEndMode3D << "\n";
+        out << "}\n\n";
+        return out.str();
+    }
+
     if (is_editor_extern_system(sys)) {
-        if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer2D") &&
-            !world_transform_is_volume(program)) {
-            const bool has_box_collider = EnttCodegenUtils::has_trait(program, "std.physics.flat.BoxCollider");
-            const std::string es        = EnttCodegenUtils::trait_cpp_name("EditorState", program);
-            const std::string eg2d      = EnttCodegenUtils::trait_cpp_name("EditorGizmo2D", program);
-            const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
-            const std::string bc = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
-            out << "void " << system_function_name(program.module_name, sys.name, "tick")
-                << "(entt::registry& registry) {\n";
-            out << "    bool __editor_active = false;\n";
-            out << "    auto __estate_view = registry.view<" << es << ">();\n";
-            out << "    for (auto __e : __estate_view) {\n";
-            out << "        if (__estate_view.get<" << es << ">(__e).active) { __editor_active = true; break; }\n";
-            out << "    }\n";
-            out << "    if (!__editor_active) { return; }\n";
-            out << "    cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());\n";
-            out << "    auto view = registry.view<" << eg2d << ", " << wt << ">();\n";
-            out << "    view.each([&](entt::entity entity, const " << eg2d << "& gizmo, const " << wt << "& xform) {\n";
-            out << "        (void)entity;\n";
-            out << "        Rectangle rect{.x = xform.position.x - 0.5F, .y = xform.position.y - 0.5F,\n";
-            out << "                       .width = 1.0F, .height = 1.0F};\n";
-            if (has_box_collider) {
-                out << "        if (const auto* box = registry.try_get<" << bc << ">(entity)) {\n";
-                out << "            rect = {.x = xform.position.x, .y = xform.position.y,\n";
-                out << "                    .width = box->size.x, .height = box->size.y};\n";
-                out << "        }\n";
-            }
-            out << "        cactus::runtime::raylib::DrawRectangleLinesEx(rect, 0.05F, gizmo.color);\n";
-            out << "        const float arrow_len   = gizmo.size;\n";
-            out << "        const float arrow_thick = arrow_len * 0.05F;\n";
-            out << "        const Vector2 center    = xform.position;\n";
-            out << "        if (gizmo.mode == 1) {\n";
-            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
-            out << "            cactus::runtime::raylib::DrawTriangle(\n";
-            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y - (arrow_len * "
-                   "0.1F)},\n";
-            out << "                {.x = center.x + arrow_len - (arrow_len * 0.2F), .y = center.y + (arrow_len * "
-                   "0.1F)},\n";
-            out << "                {.x = center.x + arrow_len, .y = center.y}, RED);\n";
-            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
-            out << "            cactus::runtime::raylib::DrawTriangle(\n";
-            out << "                {.x = center.x - (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * "
-                   "0.2F)},\n";
-            out << "                {.x = center.x + (arrow_len * 0.1F), .y = center.y + arrow_len - (arrow_len * "
-                   "0.2F)},\n";
-            out << "                {.x = center.x, .y = center.y + arrow_len}, GREEN);\n";
-            out << "        } else if (gizmo.mode == 2) {\n";
-            out << "            cactus::runtime::raylib::DrawRing(center, gizmo.size * 0.8F, gizmo.size, 0.0F, 360.0F, 32, SKYBLUE);\n";
-            out << "        } else if (gizmo.mode == 3) {\n";
-            out << "            const float sq = arrow_len * 0.15F;\n";
-            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x + arrow_len, .y = center.y}, arrow_thick, RED);\n";
-            out << "            cactus::runtime::raylib::DrawRectangleV(\n";
-            out << "                {.x = center.x + arrow_len - (sq * 0.5F), .y = center.y - (sq * 0.5F)},\n";
-            out << "                {.x = sq, .y = sq}, RED);\n";
-            out << "            cactus::runtime::raylib::DrawLineEx(center, {.x = center.x, .y = center.y + arrow_len}, arrow_thick, GREEN);\n";
-            out << "            cactus::runtime::raylib::DrawRectangleV(\n";
-            out << "                {.x = center.x - (sq * 0.5F), .y = center.y + arrow_len - (sq * 0.5F)},\n";
-            out << "                {.x = sq, .y = sq}, GREEN);\n";
-            out << "        }\n";
-            out << "    });\n";
-            out << "    cactus::runtime::raylib::EndMode2D();\n";
-            out << "}\n\n";
-            return out.str();
-        }
-        if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "EditorTemplatePalette")) {
-            const std::string es = EnttCodegenUtils::trait_cpp_name("EditorState", program);
-            out << "void " << system_function_name(program.module_name, sys.name, "tick")
-                << "(entt::registry& registry) {\n";
-            out << "    auto __estate_view = registry.view<" << es << ">();\n";
-            out << "    for (auto __ed_ent : __estate_view) {\n";
-            out << "        auto& __es = __estate_view.get<" << es << ">(__ed_ent);\n";
-            out << "        if (!__es.active) { continue; }\n";
-            out << "        static std::unordered_map<std::string, Color> __tint_cache;\n";
-            out << "        int __idx = 0;\n";
-            out << "        for (const auto& [__name, __factory] : cactus_template_registry) {\n";
-            out << "            if (!__tint_cache.contains(__name)) {\n";
-            out << "                const float __hue = static_cast<float>(std::hash<std::string>{}(__name) % 360);\n";
-            out << "                const float __h   = __hue / 60.0F;\n";
-            out << "                const float __s   = 0.70F;\n";
-            out << "                const float __l   = 0.55F;\n";
-            out << "                const float __c   = (1.0F - std::abs((2.0F * __l) - 1.0F)) * __s;\n";
-            out << "                const float __x   = __c * (1.0F - std::abs(std::fmod(__h, 2.0F) - 1.0F));\n";
-            out << "                const float __m   = __l - (__c * 0.5F);\n";
-            out << "                float __r = 0.0F;\n";
-            out << "                float __g = 0.0F;\n";
-            out << "                float __b = 0.0F;\n";
-            out << "                switch (static_cast<int>(__h) % 6) {\n";
-            out << "                    case 0: __r = __c; __g = __x; break;\n";
-            out << "                    case 1: __r = __x; __g = __c; break;\n";
-            out << "                    case 2: __g = __c; __b = __x; break;\n";
-            out << "                    case 3: __g = __x; __b = __c; break;\n";
-            out << "                    case 4: __r = __x; __b = __c; break;\n";
-            out << "                    case 5: __r = __c; __b = __x; break;\n";
-            out << "                    default: break;\n";
-            out << "                }\n";
-            out << "                __tint_cache[__name] = Color{\n";
-            out << "                    .r = static_cast<unsigned char>((__r + __m) * 255.0F),\n";
-            out << "                    .g = static_cast<unsigned char>((__g + __m) * 255.0F),\n";
-            out << "                    .b = static_cast<unsigned char>((__b + __m) * 255.0F),\n";
-            out << "                    .a = 200};\n";
-            out << "            }\n";
-            out << "            const Rectangle __btn = {.x = 10.0F,\n";
-            out << "                                     .y = 40.0F + (static_cast<float>(__idx) * 30.0F),\n";
-            out << "                                     .width = 140.0F, .height = 26.0F};\n";
-            out << "            cactus::runtime::raylib::DrawRectangleRec(__btn, __tint_cache[__name]);\n";
-            out << "            cactus::runtime::raylib::DrawText(__name.c_str(), static_cast<int>(__btn.x) + 6,\n";
-            out << "                     static_cast<int>(__btn.y) + 6, 14, WHITE);\n";
-            out << "            if (cactus::runtime::raylib::IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&\n";
-            out << "                CheckCollisionPointRec(cactus::runtime::raylib::GetMousePosition(), __btn)) {\n";
-            out << "                __es.active_template = __name;\n";
-            out << "                __es.mode = 4;\n";
-            out << "            }\n";
-            out << "            ++__idx;\n";
-            out << "        }\n";
-            out << "        break;\n";
-            out << "    }\n";
-            out << "}\n\n";
-            return out.str();
-        }
-        if (symbol_is(sys.resolved_rule_id, SymbolKind::Rule, "std.editor", "GizmoRenderer3D") &&
-            world_transform_is_volume(program)) {
-            const bool has_model_renderer = EnttCodegenUtils::has_trait(program, "ModelRenderer");
-            const std::string es          = EnttCodegenUtils::trait_cpp_name("EditorState", program);
-            const std::string eg3d        = EnttCodegenUtils::trait_cpp_name("EditorGizmo3D", program);
-            const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-            const std::string mr = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
-            out << "void " << system_function_name(program.module_name, sys.name, "tick")
-                << "(entt::registry& registry) {\n";
-            out << "    bool __editor_active = false;\n";
-            out << "    auto __estate_view = registry.view<" << es << ">();\n";
-            out << "    for (auto __e : __estate_view) {\n";
-            out << "        if (__estate_view.get<" << es << ">(__e).active) { __editor_active = true; break; }\n";
-            out << "    }\n";
-            out << "    if (!__editor_active) { return; }\n";
-            out << "    cactus::runtime::raylib::BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());\n";
-            out << "    cactus::runtime::raylib::DrawGrid(20, 1.0F);\n";
-            out << "    auto view = registry.view<" << eg3d << ", " << wt << ">();\n";
-            out << "    view.each([&](entt::entity entity, const " << eg3d << "& gizmo, const " << wt << "& xform) {\n";
-            out << "        (void)entity;\n";
-            out << "        Vector3 box_center = xform.position;\n";
-            out << "        Vector3 box_size{.x = 1.0F, .y = 1.0F, .z = 1.0F};\n";
-            if (has_model_renderer) {
-                out << "        if (const auto* renderer = registry.try_get<" << mr << ">(entity)) {\n";
-                out << "            const BoundingBox bounds = "
-                       "cactus::runtime::entt_backend::model_bounds_box(renderer->model);\n";
-                out << "            const Vector3 extents{.x = bounds.max.x - bounds.min.x,\n";
-                out << "                                  .y = bounds.max.y - bounds.min.y,\n";
-                out << "                                  .z = bounds.max.z - bounds.min.z};\n";
-                out << "            if (extents.x > 0.0F || extents.y > 0.0F || extents.z > 0.0F) {\n";
-                out << "                box_size = Vector3{.x = extents.x * xform.scale.x,\n";
-                out << "                                   .y = extents.y * xform.scale.y,\n";
-                out << "                                   .z = extents.z * xform.scale.z};\n";
-                out << "                box_center = Vector3{\n";
-                out << "                    .x = xform.position.x + ((bounds.min.x + bounds.max.x) * 0.5F * "
-                       "xform.scale.x),\n";
-                out << "                    .y = xform.position.y + ((bounds.min.y + bounds.max.y) * 0.5F * "
-                       "xform.scale.y),\n";
-                out << "                    .z = xform.position.z + ((bounds.min.z + bounds.max.z) * 0.5F * "
-                       "xform.scale.z)};\n";
-                out << "            }\n";
-                out << "        }\n";
-            }
-            out << "        cactus::runtime::raylib::DrawCubeWiresV(box_center, box_size, gizmo.color);\n";
-            out << "        const Vector3 origin = xform.position;\n";
-            out << "        const float axis_len = gizmo.size;\n";
-            out << "        if (gizmo.mode == 1 || gizmo.mode == 3) {\n";
-            out << "            cactus::runtime::raylib::DrawLine3D(origin, Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z}, "
-                   "RED);\n";
-            out << "            cactus::runtime::raylib::DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z}, "
-                   "GREEN);\n";
-            out << "            cactus::runtime::raylib::DrawLine3D(origin, Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len}, "
-                   "BLUE);\n";
-            out << "        }\n";
-            out << "        if (gizmo.mode == 2) {\n";
-            out << "            cactus::runtime::raylib::DrawCircle3D(origin, axis_len, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 90.0F, "
-                   "SKYBLUE);\n";
-            out << "        }\n";
-            out << "        if (gizmo.mode == 3) {\n";
-            out << "            const float tip = axis_len * 0.15F;\n";
-            out << "            cactus::runtime::raylib::DrawCubeV(Vector3{.x = origin.x + axis_len, .y = origin.y, .z = origin.z},\n";
-            out << "                      Vector3{.x = tip, .y = tip, .z = tip}, RED);\n";
-            out << "            cactus::runtime::raylib::DrawCubeV(Vector3{.x = origin.x, .y = origin.y + axis_len, .z = origin.z},\n";
-            out << "                      Vector3{.x = tip, .y = tip, .z = tip}, GREEN);\n";
-            out << "            cactus::runtime::raylib::DrawCubeV(Vector3{.x = origin.x, .y = origin.y, .z = origin.z + axis_len},\n";
-            out << "                      Vector3{.x = tip, .y = tip, .z = tip}, BLUE);\n";
-            out << "        }\n";
-            out << "    });\n";
-            out << "    cactus::runtime::raylib::EndMode3D();\n";
-            out << "}\n\n";
-            return out.str();
-        }
-        // EditorPropertyPanel and the dimension-mismatched gizmo renderer
-        // (GizmoRenderer3D in flat programs, GizmoRenderer2D in volume) — stub
+        // EditorPropertyPanel — unimplemented stub.
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
             << "(entt::registry& registry) {\n";
         out << "    (void)registry;\n";

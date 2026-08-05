@@ -8,6 +8,10 @@ use std.camera.flat as camera2d
 use std.camera.volume as camera3d
 use std.transform.flat as transform2d
 use std.transform.volume as transform3d
+use std.debug as debug
+use std.ui as ui
+use std.text as strfmt
+use std.render.text as labels
 
 # ── Editor Input Actions ──────────────────────────────────────────────────────
 
@@ -77,6 +81,12 @@ pub trait EditorState:
 
 pub entity Editor:
     EditorState
+    labels.ScreenLabel:
+        text = ""
+        position = vec2(10.0, 10.0)
+        font_size = 14
+        color = #FFFF00FF
+        visible = false
 
 # ── Selection Marker Traits ───────────────────────────────────────────────────
 
@@ -186,17 +196,67 @@ pub extern func apply_camera_2d(view_center: vec2, zoom: float)
 
 pub extern func apply_camera_3d(position: vec3, rotation: quat)
 
+# Current EditorState.mode of the singleton Editor entity. Narrow singleton-read
+# accessor mirroring transform.world_position(of:) — for rules (e.g. the gizmo
+# renderers) that are not filtered on EditorState itself and have no other way
+# to read it.
+pub extern func active_mode() int
+
+# Current EditorState.active of the singleton Editor entity. Same narrow-accessor
+# idiom as active_mode() — needed because EditorSelected persists across an
+# editor deactivate (only a selection change clears it), so a rule filtered on
+# EditorSelected but not EditorState has no other way to detect "editor is off".
+pub extern func is_editor_active() bool
+
+# Registered pub template names, in declaration order (editor-template-registry).
+pub extern func template_names() list[string]
+
+# name's zero-based position in the same order template_names() returns, or -1
+# if name is not a registered template. Used to obtain a per-item index for
+# DSL-authored layout/tint without a loop-local counter — bounded `foreach`
+# cannot mutate an outer-scope var across iterations (confirmed unsupported;
+# see the editor-declarative-rendering change's design notes).
+pub extern func template_index(name: string) int
+
+# Current window/render-target size in screen pixels.
+pub extern func screen_size() vec2
+
+# Entity handle for the Nth pre-spawned palette-button label slot (a small
+# fixed pool, sized to a max template count), or an invalid entity_id if index
+# is out of range. ScreenLabel is entity-attached, not an event, so the
+# palette rule needs a stable per-index entity to `project ScreenLabel to`
+# each frame; see editor-declarative-rendering's task 6.3 design notes.
+pub extern func palette_label_slot(index: int) entity_id
+
+# Cycles a small fixed 6-color palette by index % 6, for index-based palette
+# button tinting. Computed here rather than a DSL `let` + conditional
+# reassignment: `if`/`for` bodies can't mutate an outer-scope local (confirmed
+# codegen bug, same root cause as the foreach-mutation finding in
+# editor-declarative-rendering's design notes) — a `let color = <default>`
+# followed by `if ...: color = ...` branches would silently keep the
+# first-declared value instead of the branch's.
+pub extern func palette_color(index: int) color
+
+# GizmoMode name (SELECT/TRANSLATE/ROTATE/SCALE/PLACE) for the HUD overlay's
+# mode text. Same reason this is a backend accessor and not a DSL if-chain as
+# palette_color above.
+pub extern func mode_label(mode: int) string
+
+# Y screen position (pixels) for the index'th palette button: 40 + index * 30
+# (140x26px buttons, 4px gap). Computed here rather than DSL `40.0 + (idx *
+# 30.0)`: the DSL has no explicit int-to-float cast, so the generated C++
+# promotes `idx` implicitly, which the project's clang-tidy narrowing-
+# conversion check (correctly, if pedantically) flags.
+pub extern func palette_button_y(index: int) float
+
 # ── Extern Rule Declarations ──────────────────────────────────────────────────
-
-pub extern rule EditorTemplatePalette:
-    filter:
-        EditorState
-
-    on render:
-        writes:
-            EditorState
-        effects:
-            graphics
+# EditorTemplatePalette, GizmoRenderer2D, and GizmoRenderer3D are no longer
+# declared here as extern rules — their geometry/layout decisions moved into
+# plain DSL rules (see the Built-in Editor Rules section below: the plain
+# rule EditorTemplatePalette, and EditorGizmoRenderer2D/3D, which still
+# project EditorGizmo2D/3D below for any other consumer but now also emit the
+# std.debug/std.ui primitive events directly). EditorPropertyPanel remains the
+# only extern rule — still an unimplemented stub.
 
 pub extern rule EditorPropertyPanel:
     filter:
@@ -208,29 +268,17 @@ pub extern rule EditorPropertyPanel:
         effects:
             graphics
 
-pub extern rule GizmoRenderer2D:
+# Always-on edit-mode ground grid, independent of any specific gizmo or
+# debug-draw event. Rig existence is the edit-mode gate (see the camera rig
+# comment above); no per-entity data is required. Declared here (not
+# std.debug) since EditorCamera3D is editor-specific and std.debug must stay
+# independent of std.editor — see the editor-debug-draw capability for the
+# documented behavior.
+pub extern rule DebugGrid3D:
     filter:
-        EditorGizmo2D
-        transform2d.WorldTransform
+        EditorCamera3D
 
     on render:
-        reads:
-            EditorState
-            EditorGizmo2D
-            transform2d.WorldTransform
-        effects:
-            graphics
-
-pub extern rule GizmoRenderer3D:
-    filter:
-        EditorGizmo3D
-        transform3d.WorldTransform
-
-    on render:
-        reads:
-            EditorState
-            EditorGizmo3D
-            transform3d.WorldTransform
         effects:
             graphics
 
@@ -320,15 +368,90 @@ rule EditorPlace2D:
                         add EditorSelected to id
                         selected = id
 
+# Computes Blender-style selection/transform-handle geometry per active_mode()
+# and emits std.debug/std.ui primitive events to draw it (editor-debug-draw).
+# Also keeps projecting EditorGizmo2D for any other consumer. Geometry constants
+# (arrow length ratios, arrowhead size, ring inner/outer radius ratio, tip size)
+# match the values the hardcoded C++ this replaces used, for visual parity —
+# see design.md decision 8 for the one accepted deviation (fixed-size AABB
+# instead of reading BoxCollider.size).
+# GizmoMode: 1=Translate, 2=Rotate, 3=Scale (0=Select, 4=Place draw no handles).
 rule EditorGizmoRenderer2D:
     filter:
+        transform2d.WorldTransform as xform
         EditorSelected
 
-    on tick:
+    on render:
+        if not is_editor_active():
+            return
+
+        let mode = active_mode()
         project EditorGizmo2D:
-            mode = 1
+            mode = mode
             color = #00FF00FF
             size = 1.0
+
+        let center = xform.position
+        let arrow_len = 1.0
+        let arrow_thick = arrow_len * 0.05
+
+        emit debug.DrawDebugRectOutline2D:
+            position = vec2(center.x - 0.5, center.y - 0.5)
+            size = vec2(1.0, 1.0)
+            thickness = 0.05
+            color = #00FF00FF
+
+        if mode == 1:
+            emit debug.DrawDebugLine2D:
+                start = center
+                end = vec2(center.x + arrow_len, center.y)
+                color = #E62937FF
+                thickness = arrow_thick
+            emit debug.DrawDebugTriangle2D:
+                a = vec2(center.x + arrow_len - (arrow_len * 0.2), center.y - (arrow_len * 0.1))
+                b = vec2(center.x + arrow_len - (arrow_len * 0.2), center.y + (arrow_len * 0.1))
+                c = vec2(center.x + arrow_len, center.y)
+                color = #E62937FF
+            emit debug.DrawDebugLine2D:
+                start = center
+                end = vec2(center.x, center.y + arrow_len)
+                color = #00E430FF
+                thickness = arrow_thick
+            emit debug.DrawDebugTriangle2D:
+                a = vec2(center.x - (arrow_len * 0.1), center.y + arrow_len - (arrow_len * 0.2))
+                b = vec2(center.x + (arrow_len * 0.1), center.y + arrow_len - (arrow_len * 0.2))
+                c = vec2(center.x, center.y + arrow_len)
+                color = #00E430FF
+
+        if mode == 2:
+            emit debug.DrawDebugRingOutline2D:
+                center = center
+                inner_radius = arrow_len * 0.8
+                outer_radius = arrow_len
+                color = #66BFFFFF
+
+        if mode == 3:
+            let sq = arrow_len * 0.15
+            emit debug.DrawDebugLine2D:
+                start = center
+                end = vec2(center.x + arrow_len, center.y)
+                color = #E62937FF
+                thickness = arrow_thick
+            emit debug.DrawDebugRectOutline2D:
+                position = vec2(center.x + arrow_len - (sq * 0.5), center.y - (sq * 0.5))
+                size = vec2(sq, sq)
+                thickness = sq * 0.4
+                color = #E62937FF
+            emit debug.DrawDebugLine2D:
+                start = center
+                end = vec2(center.x, center.y + arrow_len)
+                color = #00E430FF
+                thickness = arrow_thick
+            emit debug.DrawDebugRectOutline2D:
+                position = vec2(center.x - (sq * 0.5), center.y + arrow_len - (sq * 0.5))
+                size = vec2(sq, sq)
+                thickness = sq * 0.4
+                color = #00E430FF
 
 rule EditorSelection3D:
     filter:
@@ -372,15 +495,158 @@ rule EditorPlace3D:
                         add EditorSelected to id
                         selected = id
 
+# Same shape as EditorGizmoRenderer2D (see its comment for geometry-parity notes
+# and the design.md decision 8 fixed-size trade-off — here: fixed 1x1x1 wire box
+# instead of reading ModelRenderer bind-pose bounds). The always-on ground grid
+# is a separate, dedicated extern rule (DebugGrid3D above), not part of this rule.
 rule EditorGizmoRenderer3D:
     filter:
+        transform3d.WorldTransform as xform
         EditorSelected
 
-    on tick:
+    on render:
+        if not is_editor_active():
+            return
+
+        let mode = active_mode()
         project EditorGizmo3D:
-            mode = 1
+            mode = mode
             color = #00FF00FF
             size = 1.0
+
+        let origin = xform.position
+        let axis_len = 1.0
+
+        emit debug.DrawDebugWireBox3D:
+            center = origin
+            size = vec3(1.0, 1.0, 1.0)
+            color = #00FF00FF
+
+        if mode == 1 or mode == 3:
+            emit debug.DrawDebugLine3D:
+                start = origin
+                end = vec3(origin.x + axis_len, origin.y, origin.z)
+                color = #E62937FF
+            emit debug.DrawDebugLine3D:
+                start = origin
+                end = vec3(origin.x, origin.y + axis_len, origin.z)
+                color = #00E430FF
+            emit debug.DrawDebugLine3D:
+                start = origin
+                end = vec3(origin.x, origin.y, origin.z + axis_len)
+                color = #0079F1FF
+
+        if mode == 2:
+            emit debug.DrawDebugCircle3D:
+                center = origin
+                radius = axis_len
+                normal = vec3(1.0, 0.0, 0.0)
+                color = #66BFFFFF
+
+        if mode == 3:
+            let tip = axis_len * 0.15
+            emit debug.DrawDebugCube3D:
+                center = vec3(origin.x + axis_len, origin.y, origin.z)
+                size = vec3(tip, tip, tip)
+                color = #E62937FF
+            emit debug.DrawDebugCube3D:
+                center = vec3(origin.x, origin.y + axis_len, origin.z)
+                size = vec3(tip, tip, tip)
+                color = #00E430FF
+            emit debug.DrawDebugCube3D:
+                center = vec3(origin.x, origin.y, origin.z + axis_len)
+                size = vec3(tip, tip, tip)
+                color = #0079F1FF
+
+# One button per registered pub template, stacked down the left edge starting
+# at (10, 40), each 140x26px with a 4px gap (30px stride). Iterates
+# template_names() and gets each button's index via template_index(name)
+# rather than an outer-scope counter, since bounded `for` can't mutate one
+# across iterations. Button tint cycles a small fixed palette by index
+# (idx % 6), not the template name — see design.md decision 6's accepted
+# palette-tint drift from the old hash-based scheme. Click hit-testing and the
+# EditorState writes happen directly here (self bound to EditorState), not in
+# the generic DrawScreenRect renderer, since a generic per-event handler has
+# no reference to mutate a foreign EditorState entity. Labels are projected
+# onto palette_label_slot(idx) — see its doc comment for why a fixed entity
+# pool is needed instead of one ScreenLabel per rule invocation.
+rule EditorTemplatePalette:
+    filter:
+        EditorState
+
+    on render:
+        let names = template_names()
+
+        if not active:
+            for name in names:
+                let idx = template_index(name)
+                let slot = palette_label_slot(idx)
+                project labels.ScreenLabel to slot:
+                    text = ""
+                    position = vec2(0.0, 0.0)
+                    font_size = 14
+                    color = #FFFFFFFF
+                    visible = false
+            return
+
+        let click_pos = input.mouse_position()
+        let clicked = input.pressed(EditorSelectClick)
+
+        for name in names:
+            let idx = template_index(name)
+            let x = 10.0
+            let y = palette_button_y(idx)
+
+            let tint = palette_color(idx)
+
+            emit ui.DrawScreenRect:
+                position = vec2(x, y)
+                size = vec2(140.0, 26.0)
+                color = tint
+                filled = true
+                thickness = 0.0
+
+            let slot = palette_label_slot(idx)
+            project labels.ScreenLabel to slot:
+                text = name
+                position = vec2(x + 6.0, y + 6.0)
+                font_size = 14
+                color = #FFFFFFFF
+                visible = true
+
+            if clicked:
+                if click_pos.x >= x and click_pos.x <= x + 140.0 and click_pos.y >= y and click_pos.y <= y + 26.0:
+                    active_template = name
+                    mode = 4
+
+# Yellow 3px border spanning the full screen plus a top-left mode readout,
+# drawn only while EditorState.active is true. A real, documented, DSL-visible
+# rule for the first time — the prior overlay was unconditionally spliced into
+# codegen with no DSL identity. The HUD ScreenLabel lives directly on the
+# Editor entity (declared above) rather than a pool slot like the palette's:
+# there's exactly one HUD label, always tied 1:1 to the singleton EditorState
+# entity, so no per-frame dynamic count/indexing problem exists here.
+rule EditorHUDOverlay:
+    filter:
+        EditorState
+        labels.ScreenLabel
+
+    on render:
+        if not active:
+            visible = false
+            return
+
+        emit ui.DrawScreenRect:
+            position = vec2(0.0, 0.0)
+            size = screen_size()
+            color = #FFFF00FF
+            filled = false
+            thickness = 3.0
+
+        text = strfmt.format("EDIT [{}]  F1:toggle  W:trans  E:rot  R:scale  T:place", mode_label(mode))
+        position = vec2(10.0, 10.0)
+        color = #FFFF00FF
+        visible = true
 
 # ── Editor Camera Navigation (2D) ─────────────────────────────────────────────
 # Pan: right or middle drag (world follows the cursor). Zoom: wheel or -/=,

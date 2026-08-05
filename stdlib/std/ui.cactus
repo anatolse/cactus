@@ -1,0 +1,23 @@
+module std.ui
+
+# ── Screen-Space UI Primitives ─────────────────────────────────────────────────
+# Generic screen-space rectangle draw event, usable by any Cactus program — not
+# editor-specific. Screen-space text reuses the existing std.render.text
+# ScreenLabel trait; no new text primitive is introduced here.
+
+pub event DrawScreenRect:
+    position:  vec2
+    size:      vec2
+    color:     color
+    filled:    bool
+    thickness: float
+
+# ── Generic Backend Renderer ────────────────────────────────────────────────────
+# Reads only the event's own payload (see std.debug's renderers for the same
+# no-filter, no-reads, effects-only shape) and issues DrawRectangleRec when
+# filled, DrawRectangleLinesEx otherwise. No editor-specific branching.
+
+pub extern rule DrawScreenRectRenderer:
+    on DrawScreenRect:
+        effects:
+            graphics

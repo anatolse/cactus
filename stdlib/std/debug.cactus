@@ -1,0 +1,107 @@
+module std.debug
+
+# ── Debug Draw Primitives ──────────────────────────────────────────────────────
+# One-shot, world-space vector debug-draw events. Generic and reusable by any
+# Cactus program (gizmos, waypoint markers, hitbox visualization, ...) — not
+# editor-specific. Each event has exactly one compiler-owned generic renderer
+# (see the cpp-entt backend) that reads only the event's payload fields and
+# issues the matching raylib draw call; emit the event once per primitive
+# needed that frame.
+#
+# `start`/`end` name the line-segment endpoints instead of `from`/`to`: both
+# `from` and `to` are reserved DSL keywords (`remove ... from ...`,
+# `project ... to ...`) and cannot be used as field names.
+
+pub event DrawDebugLine2D:
+    start:     vec2
+    end:       vec2
+    color:     color
+    thickness: float
+
+pub event DrawDebugTriangle2D:
+    a:     vec2
+    b:     vec2
+    c:     vec2
+    color: color
+
+pub event DrawDebugRingOutline2D:
+    center:       vec2
+    inner_radius: float
+    outer_radius: float
+    color:        color
+
+pub event DrawDebugRectOutline2D:
+    position:  vec2
+    size:      vec2
+    thickness: float
+    color:     color
+
+pub event DrawDebugLine3D:
+    start: vec3
+    end:   vec3
+    color: color
+
+pub event DrawDebugWireBox3D:
+    center: vec3
+    size:   vec3
+    color:  color
+
+pub event DrawDebugCircle3D:
+    center: vec3
+    radius: float
+    normal: vec3
+    color:  color
+
+pub event DrawDebugCube3D:
+    center: vec3
+    size:   vec3
+    color:  color
+
+# ── Generic Backend Renderers ──────────────────────────────────────────────────
+# Each handler reads only its event's own payload (an event trigger's payload
+# isn't a `reads:`-able trait, so no reads/writes contract entries apply here
+# — see runtime-phase-contracts.cactus's AudioOutput extern rule for the same
+# no-filter, no-reads, effects-only shape) and issues one raylib call; no
+# mode/editor-specific branching. World-space 2D primitives open
+# BeginMode2D(get_active_camera_2d()); world-space 3D primitives open
+# BeginMode3D(get_active_camera_3d()).
+
+pub extern rule DrawDebugLine2DRenderer:
+    on DrawDebugLine2D:
+        effects:
+            graphics
+
+pub extern rule DrawDebugTriangle2DRenderer:
+    on DrawDebugTriangle2D:
+        effects:
+            graphics
+
+pub extern rule DrawDebugRingOutline2DRenderer:
+    on DrawDebugRingOutline2D:
+        effects:
+            graphics
+
+pub extern rule DrawDebugRectOutline2DRenderer:
+    on DrawDebugRectOutline2D:
+        effects:
+            graphics
+
+pub extern rule DrawDebugLine3DRenderer:
+    on DrawDebugLine3D:
+        effects:
+            graphics
+
+pub extern rule DrawDebugWireBox3DRenderer:
+    on DrawDebugWireBox3D:
+        effects:
+            graphics
+
+pub extern rule DrawDebugCircle3DRenderer:
+    on DrawDebugCircle3D:
+        effects:
+            graphics
+
+pub extern rule DrawDebugCube3DRenderer:
+    on DrawDebugCube3D:
+        effects:
+            graphics

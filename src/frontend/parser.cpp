@@ -1981,7 +1981,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {  // NOLINT(readability-fun
     // emit statement
     if (check(TokenType::EMIT)) {
         advance();
-        auto event_name = consume(TokenType::IDENTIFIER, "expected event name").value;
+        // Dotted so cross-module events (imports stay namespace-qualified —
+        // "Oberon policy", see SemanticAnalyzer::resolve_name) can be emitted,
+        // not just same-module ones. Mirrors on <trigger>: (parse_lifecycle_event_name),
+        // which already accepts dotted/alias-qualified event references.
+        auto event_name = parse_dotted_name();
         std::optional<std::unique_ptr<ExprNode>> target;
         if (match(TokenType::TO)) {
             target = parse_expression();

@@ -547,7 +547,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     // through every call site.
     const bool viewport_uses_flat    = module_uses_camera_flat(program);
     const bool viewport_uses_volume  = module_uses_camera_volume(program);
-    const bool viewport_uses_editor  = module_uses_editor(program);
     const bool render_uses_viewport  = module_uses_camera_viewport(program) && render_phase != nullptr;
     const WorldTransformUsage render_wt_usage = EnttCodegenUtils::world_transform_usage(program);
     const bool render_rig_is_2d      = render_wt_usage.flat || (viewport_uses_flat && !render_wt_usage.volume);
@@ -558,10 +557,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     const bool render_emit_2d_helper =
         render_uses_viewport && viewport_uses_flat && (render_rig_is_2d || !render_rig_is_3d);
     const bool render_emit_3d_helper = render_uses_viewport && viewport_uses_volume && render_rig_is_3d;
-    const bool render_has_editor_state =
-        viewport_uses_editor && render_phase != nullptr && EnttCodegenUtils::has_trait(program, "EditorState");
-    const std::string render_es_cpp =
-        render_has_editor_state ? EnttCodegenUtils::trait_cpp_name("EditorState", program) : "";
 
     std::ostringstream out;
     out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
@@ -810,39 +805,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << indent << "}\n";
     };
 
-    // Edit-mode HUD overlay: screen-space (no camera transform), drawn once
-    // after the render-flush boundary closes — mirrors the legacy
-    // generated_render_project's overlay, ported here since it's hardcoded
-    // there rather than behind any phase/handler dispatch.
-    const auto emit_render_editor_overlay = [&](const std::string& indent) {
-        if (!render_has_editor_state) {
-            return;
-        }
-        out << indent << "{\n";
-        out << indent << "    bool __editor_active = false;\n";
-        out << indent << "    int  __editor_mode   = 0;\n";
-        out << indent << "    auto __ed_view = registry.view<" << render_es_cpp << ">();\n";
-        out << indent << "    for (auto __ed_ent : __ed_view) {\n";
-        out << indent << "        const auto& __es = __ed_view.get<" << render_es_cpp << ">(__ed_ent);\n";
-        out << indent << "        if (__es.active) { __editor_active = true; __editor_mode = __es.mode; break; }\n";
-        out << indent << "    }\n";
-        out << indent << "    if (__editor_active) {\n";
-        out << indent << "        cactus::runtime::raylib::DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
-        out << indent << "                              .width  = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),\n";
-        out << indent << "                              .height = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())}, 3, "
-                          "YELLOW);\n";
-        out << indent << "        const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", "
-                          "\"ROTATE\", \"SCALE\", \"PLACE\"};\n";
-        out << indent << "        const char* __mode_str = (__editor_mode >= 0 && __editor_mode < 5)\n";
-        out << indent << "                                     ? __mode_names[static_cast<std::size_t>(__editor_mode)] "
-                          ": \"SELECT\";\n";
-        out << indent << "        std::string __hud = std::string(\"EDIT [\") + __mode_str +\n";
-        out << indent << "                            \"]  F1:toggle  W:trans  E:rot  R:scale  T:place\";\n";
-        out << indent << "        cactus::runtime::raylib::DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
-        out << indent << "    }\n";
-        out << indent << "}\n";
-    };
-
     const auto phase_order = phase_activation_order(program);
     for (const auto* phase : phase_order) {
         if (!phase->runtime_root.has_value()) {
@@ -875,7 +837,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                 out << "        begin_render_frame();\n";
                 emit_render_phase_dispatch("        ", phase_name);
                 out << "        end_render_frame();\n";
-                emit_render_editor_overlay("        ");
             } else {
                 out << "        generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
             }
@@ -913,7 +874,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                 out << "    begin_render_frame();\n";
                 emit_render_phase_dispatch("    ", phase_name);
                 out << "    end_render_frame();\n";
-                emit_render_editor_overlay("    ");
             } else {
                 out << "    generated_dispatch_phase_" << phase_name << "(registry, phase);\n";
             }
@@ -1068,8 +1028,12 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
             if (graph_node->implementation == HandlerImplementationKind::External) {
                 const auto* rule = find_external_rule(program, graph_node->identity.rule);
                 if (rule != nullptr && rule->is_stdlib) {
+                    // Event-triggered extern rules (editor-debug-draw / editor-screen-ui generic
+                    // renderers) have no filter view to iterate, so their generated body takes the
+                    // occurrence directly instead of the (registry)-only shape phase-triggered
+                    // filter/view extern rules use — see emit_event_renderer_body in system_emitter.cpp.
                     out << "    ::" << system_function_name(program.module_name, rule->name, "tick")
-                        << "(registry);\n";
+                        << "(registry, occurrence);\n";
                     emitted = true;
                 }
                 continue;
@@ -2865,6 +2829,68 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
             }
         }
         out << "};\n\n";
+
+        // Declaration-ordered companion to cactus_template_registry: the map's iteration
+        // order is not guaranteed to match source order, so template_names()/template_index()
+        // (editor-template-registry) need an explicit ordered list instead.
+        out << "static const std::vector<std::string> cactus_template_registry_order = {\n";
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+                if (tmpl->is_pub) {
+                    out << "    \"" << tmpl->name << "\",\n";
+                }
+            }
+        }
+        out << "};\n\n";
+        out << "namespace cactus::runtime::entt_backend {\n";
+        // Not noexcept: returns std::vector<std::string> by value, which allocates and could
+        // (in principle, on OOM) throw — clang-tidy's bugprone-exception-escape correctly flags
+        // a noexcept function that isn't actually exception-safe.
+        out << "std::vector<std::string> editor_template_names() { return cactus_template_registry_order; }\n";
+        out << "int editor_template_index(const std::string& name) noexcept {\n";
+        out << "    const auto it = std::ranges::find(cactus_template_registry_order, name);\n";
+        out << "    if (it == cactus_template_registry_order.end()) { return -1; }\n";
+        out << "    return static_cast<int>(std::distance(cactus_template_registry_order.begin(), it));\n";
+        out << "}\n";
+        out << "}  // namespace cactus::runtime::entt_backend\n\n";
+
+        // EditorTemplatePalette (stdlib-editor) needs one ScreenLabel-carrying entity per
+        // button, but ScreenLabel is entity-attached, not an event, and the palette rule
+        // (self-scoped to EditorState) has no DSL mechanism to spawn or discover entities
+        // indexed by an arbitrary per-frame count — bounded `for` can't mutate an outer-scope
+        // counter (see editor-declarative-rendering design notes) and there's no list-index
+        // or query-by-field-value expression. A small fixed pool of lazily-spawned label
+        // entities, indexed by editor_palette_label_slot(), sidesteps both: the palette rule
+        // gets a stable per-index entity_id via `project ScreenLabel to
+        // palette_label_slot(idx): ...` (the existing cross-entity project-to-target
+        // mechanism). Sized generously past any realistic template count; templates beyond
+        // the pool are silently not shown as palette buttons.
+        const std::string sl_cpp = EnttCodegenUtils::trait_cpp_name("ScreenLabel", program);
+        out << "// ── Editor Palette Label Slot Pool ──────────────────────────────────\n\n";
+        out << "namespace cactus::runtime::entt_backend {\n";
+        out << "inline constexpr int kEditorPaletteMaxSlots = 16;\n";
+        // Not noexcept: reserve()/push_back() allocate and could (in principle, on OOM) throw —
+        // same reasoning as editor_template_names() above.
+        out << "std::vector<entt::entity>& editor_palette_label_slots(entt::registry& registry) {\n";
+        out << "    static std::vector<entt::entity> slots;\n";
+        out << "    if (slots.empty()) {\n";
+        out << "        slots.reserve(kEditorPaletteMaxSlots);\n";
+        out << "        for (int i = 0; i < kEditorPaletteMaxSlots; ++i) {\n";
+        out << "            auto entity = registry.create();\n";
+        out << "            registry.emplace<" << sl_cpp << ">(entity);\n";
+        out << "            slots.push_back(entity);\n";
+        out << "        }\n";
+        out << "    }\n";
+        out << "    return slots;\n";
+        out << "}\n";
+        // Not noexcept either: calls editor_palette_label_slots() above, which isn't noexcept.
+        out << "entt::entity editor_palette_label_slot(entt::registry& registry, int index) {\n";
+        out << "    auto& slots = editor_palette_label_slots(registry);\n";
+        out << "    if (index < 0 || static_cast<std::size_t>(index) >= slots.size()) { return entt::entity{entt::null}; "
+               "}\n";
+        out << "    return slots[static_cast<std::size_t>(index)];\n";
+        out << "}\n";
+        out << "}  // namespace cactus::runtime::entt_backend\n\n";
     }
 
     // System functions
@@ -3031,6 +3057,23 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "                }\n";
         out << "            }\n";
         out << "            return nearest;\n";
+        out << "        });\n";
+    }
+    if (uses_editor) {
+        // EditorState/Editor are declared unconditionally in std.editor, so this is
+        // always available whenever std.editor is imported.
+        const std::string es_cpp = EnttCodegenUtils::trait_cpp_name("EditorState", program);
+        out << "    cactus::runtime::entt_backend::register_editor_active_mode_impl(\n";
+        out << "        [](entt::registry& reg) -> int {\n";
+        out << "            auto view = reg.view<" << es_cpp << ">();\n";
+        out << "            for (auto entity : view) { return view.get<" << es_cpp << ">(entity).mode; }\n";
+        out << "            return 0;\n";
+        out << "        });\n";
+        out << "    cactus::runtime::entt_backend::register_editor_is_active_impl(\n";
+        out << "        [](entt::registry& reg) -> bool {\n";
+        out << "            auto view = reg.view<" << es_cpp << ">();\n";
+        out << "            for (auto entity : view) { return view.get<" << es_cpp << ">(entity).active; }\n";
+        out << "            return false;\n";
         out << "        });\n";
     }
     // ── Camera rig lifecycle impls ────────────────────────────────────────────
@@ -3293,32 +3336,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << "    cactus::runtime::entt_backend::end_render_frame();\n";
 
-    // Edit-mode overlay drawn after end_render_frame (screen-space, no camera transform)
-    if (uses_editor && EnttCodegenUtils::has_trait(program, "EditorState")) {
-        const std::string es_cpp = EnttCodegenUtils::trait_cpp_name("EditorState", program);
-        out << "    {\n";
-        out << "        bool __editor_active = false;\n";
-        out << "        int  __editor_mode   = 0;\n";
-        out << "        auto __ed_view = registry.view<" << es_cpp << ">();\n";
-        out << "        for (auto __ed_ent : __ed_view) {\n";
-        out << "            const auto& __es = __ed_view.get<" << es_cpp << ">(__ed_ent);\n";
-        out << "            if (__es.active) { __editor_active = true; __editor_mode = __es.mode; break; }\n";
-        out << "        }\n";
-        out << "        if (__editor_active) {\n";
-        out << "            cactus::runtime::raylib::DrawRectangleLinesEx({.x = 0.0F, .y = 0.0F,\n";
-        out << "                                  .width  = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),\n";
-        out << "                                  .height = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())}, 3, YELLOW);\n";
-        out << "            const std::array<const char*, 5> __mode_names = {\"SELECT\", \"TRANSLATE\", \"ROTATE\", "
-               "\"SCALE\", \"PLACE\"};\n";
-        out << "            const char* __mode_str = (__editor_mode >= 0 && __editor_mode < 5)\n";
-        out << "                                         ? __mode_names[static_cast<std::size_t>(__editor_mode)] : "
-               "\"SELECT\";\n";
-        out << "            std::string __hud = std::string(\"EDIT [\") + __mode_str +\n";
-        out << "                                \"]  F1:toggle  W:trans  E:rot  R:scale  T:place\";\n";
-        out << "            cactus::runtime::raylib::DrawText(__hud.c_str(), 10, 10, 14, YELLOW);\n";
-        out << "        }\n";
-        out << "    }\n";
-    }
+    // The unconditional HUD overlay splice that used to live here is gone —
+    // EditorHUDOverlay (stdlib/std/editor.cactus) draws it now via the standard
+    // DSL rule dispatch (editor-declarative-rendering). That relies on custom
+    // event dispatch (emit DrawScreenRect), which — like all custom events —
+    // only works under the graph-driven main loop; the legacy path here has no
+    // custom-event dispatch regardless (a pre-existing gap this change doesn't
+    // change the scope of, consistent with task 2.2's scoping of the new
+    // debug-draw/screen-ui event dispatch to graph-driven only).
 
     out << "    clear_projected_traits(registry);\n";
     out << "}\n";

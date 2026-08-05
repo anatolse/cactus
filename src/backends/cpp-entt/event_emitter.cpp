@@ -36,6 +36,8 @@ std::string EnttEventEmitter::emit_event(const EventNode& event, const Decorated
             type = {.kind = TypeKind::Vec2, .name = "vec2"};
         } else if (field.type.name == "vec3") {
             type = {.kind = TypeKind::Vec3, .name = "vec3"};
+        } else if (field.type.name == "color") {
+            type = {.kind = TypeKind::Color, .name = "color"};
         } else if (field.type.name == "entity_id") {
             type = {.kind = TypeKind::EntityId, .name = "entity_id"};
         } else if (program.structs.contains(field.type.name)) {

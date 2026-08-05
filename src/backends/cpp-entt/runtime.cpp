@@ -54,6 +54,16 @@ EditorRaycastImpl& raycast_impl_storage() noexcept {
     return impl;
 }
 
+EditorActiveModeImpl& active_mode_impl_storage() noexcept {
+    static EditorActiveModeImpl impl;
+    return impl;
+}
+
+EditorIsActiveImpl& is_active_impl_storage() noexcept {
+    static EditorIsActiveImpl impl;
+    return impl;
+}
+
 struct SpriteSubmission {
     Vector2 position{};
     Vector2 size{};
@@ -1593,6 +1603,13 @@ BoundingBox model_bounds_box(const AssetHandle model) noexcept {
     return GetModelBoundingBox(*loaded);
 }
 
+Vector3 model_bounds_center(const AssetHandle model) noexcept {
+    const BoundingBox box = model_bounds_box(model);
+    return Vector3{.x = (box.min.x + box.max.x) * 0.5F,
+                   .y = (box.min.y + box.max.y) * 0.5F,
+                   .z = (box.min.z + box.max.z) * 0.5F};
+}
+
 void submit_billboard(const Vector3 /*position*/,
                       const Vector2 /*size*/,
                       const Color /*color*/,
@@ -1822,6 +1839,14 @@ void register_editor_raycast_impl(EditorRaycastImpl fn) noexcept {
     raycast_impl_storage() = std::move(fn);
 }
 
+void register_editor_active_mode_impl(EditorActiveModeImpl fn) noexcept {
+    active_mode_impl_storage() = std::move(fn);
+}
+
+void register_editor_is_active_impl(EditorIsActiveImpl fn) noexcept {
+    is_active_impl_storage() = std::move(fn);
+}
+
 entt::entity editor_spawn_template(entt::registry& registry,
                                    const std::string& template_name,
                                    Vector2 position_2d,
@@ -1846,6 +1871,57 @@ entt::entity editor_raycast_3d(entt::registry& registry, Vector2 screen_pos, int
         return raycast_impl_storage()(registry, ray, mask);
     }
     return entt::entity{entt::null};
+}
+
+int editor_active_mode(entt::registry& registry) noexcept {
+    if (active_mode_impl_storage()) {
+        return active_mode_impl_storage()(registry);
+    }
+    return 0;
+}
+
+bool editor_is_active(entt::registry& registry) noexcept {
+    if (is_active_impl_storage()) {
+        return is_active_impl_storage()(registry);
+    }
+    return false;
+}
+
+Vector2 editor_screen_size() noexcept {
+    return Vector2{.x = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),
+                   .y = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())};
+}
+
+Color editor_palette_color(const int index) noexcept {
+    static constexpr std::array<Color, 6> kPalette{{
+        {.r = 230, .g = 41, .b = 55, .a = 255},
+        {.r = 0, .g = 228, .b = 48, .a = 255},
+        {.r = 0, .g = 121, .b = 241, .a = 255},
+        {.r = 253, .g = 249, .b = 0, .a = 255},
+        {.r = 200, .g = 122, .b = 255, .a = 255},
+        {.r = 255, .g = 161, .b = 0, .a = 255},
+    }};
+    const int remainder = ((index % 6) + 6) % 6;
+    return kPalette[static_cast<std::size_t>(remainder)];
+}
+
+std::string editor_mode_label(const int mode) noexcept {
+    switch (mode) {
+        case 1:
+            return "TRANSLATE";
+        case 2:
+            return "ROTATE";
+        case 3:
+            return "SCALE";
+        case 4:
+            return "PLACE";
+        default:
+            return "SELECT";
+    }
+}
+
+float editor_palette_button_y(const int index) noexcept {
+    return 40.0F + (static_cast<float>(index) * 30.0F);
 }
 
 Vector2 editor_screen_to_world_2d(Vector2 screen) noexcept {

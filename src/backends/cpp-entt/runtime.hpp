@@ -138,6 +138,12 @@ void submit_model(Vector3 position,
 // model space). Triggers the lazy model load like model_bounds_size; returns a
 // zero-extent box at the origin for an unresolvable handle or failed load.
 [[nodiscard]] BoundingBox model_bounds_box(AssetHandle model) noexcept;
+// Midpoint of the bind-pose AABB ((min + max) / 2) in model space — the offset
+// a caller must add (scaled) to an entity's world position to center a wire
+// box on the actual mesh rather than the entity origin, for models whose
+// bind-pose bounds aren't centered on the origin. Same fallback/load behavior
+// as model_bounds_size/model_bounds_box.
+[[nodiscard]] Vector3 model_bounds_center(AssetHandle model) noexcept;
 void submit_billboard(Vector3 position, Vector2 size, Color color, AssetHandle texture, bool visible) noexcept;
 void register_point_light(Vector3 position, Color color, float intensity, float range, bool enabled) noexcept;
 void register_directional_light(Vector3 direction, Color color, float intensity, bool enabled) noexcept;
@@ -171,13 +177,54 @@ void submit_text_3d(std::uint32_t entity_id,
 /// 2D hit-test: return the top-most entity under screen_pos matching mask, or entt::null.
 [[nodiscard]] entt::entity editor_hit_test_2d(entt::registry& registry, Vector2 screen_pos, int mask) noexcept;
 
+/// Current EditorState.mode of the singleton Editor entity (0 if none exists). Narrow
+/// singleton-read accessor mirroring world_position(of:) — for rules (e.g. the gizmo
+/// renderers) that are not filtered on EditorState itself and have no other way to read it.
+[[nodiscard]] int editor_active_mode(entt::registry& registry) noexcept;
+
+/// Current EditorState.active of the singleton Editor entity (false if none exists). Same
+/// narrow-accessor idiom as editor_active_mode — needed because EditorSelected persists across
+/// an editor deactivate (only a selection change clears it), so a rule filtered on
+/// EditorSelected but not EditorState (e.g. the gizmo renderers) has no other way to detect
+/// "editor is off" and stop drawing.
+[[nodiscard]] bool editor_is_active(entt::registry& registry) noexcept;
+
+/// Current window/render-target size in screen pixels.
+[[nodiscard]] Vector2 editor_screen_size() noexcept;
+
+/// Cycles a small fixed 6-color palette by index % 6, for index-based palette
+/// button tinting (editor-declarative-rendering design decision 6). Computed
+/// here rather than as a DSL if-chain assigning into a `let`-bound local:
+/// VarAssign to a plain local inside a nested `if`/`for` block always
+/// redeclares with `auto` instead of mutating the outer binding (confirmed
+/// codegen bug — see the design notes on task 1.1's foreach-mutation finding,
+/// which is the same root cause, just also reachable via `if`, not only
+/// `for`), so a DSL `let color = <default>` followed by `if ...: color =
+/// ...` branches would silently keep the first-declared value.
+[[nodiscard]] Color editor_palette_color(int index) noexcept;
+
+/// GizmoMode name (SELECT/TRANSLATE/ROTATE/SCALE/PLACE) for the HUD overlay's mode text.
+/// Same reason this is a backend accessor and not a DSL if-chain as editor_palette_color.
+[[nodiscard]] std::string editor_mode_label(int mode) noexcept;
+
+/// Y screen position (pixels) for the index'th palette button: 40 + index * 30 (140x26px
+/// buttons, 4px gap). Computed here rather than DSL `40.0 + (idx * 30.0)`: the DSL has no
+/// explicit int-to-float cast, so the generated C++ promotes `idx` implicitly, which
+/// clang-tidy's narrowing-conversion check (correctly, if pedantically) flags — the explicit
+/// cast here is exception-free and warning-free.
+[[nodiscard]] float editor_palette_button_y(int index) noexcept;
+
 // ── Editor impl registration (called by generated_init_project) ───────────────
-using EditorHitTestImpl = std::function<entt::entity(entt::registry&, Vector2, int)>;
-using EditorSpawnImpl   = std::function<entt::entity(entt::registry&, const std::string&, Vector2, Vector3)>;
-using EditorRaycastImpl = std::function<entt::entity(entt::registry&, Ray, int)>;
+using EditorHitTestImpl    = std::function<entt::entity(entt::registry&, Vector2, int)>;
+using EditorSpawnImpl      = std::function<entt::entity(entt::registry&, const std::string&, Vector2, Vector3)>;
+using EditorRaycastImpl    = std::function<entt::entity(entt::registry&, Ray, int)>;
+using EditorActiveModeImpl = std::function<int(entt::registry&)>;
+using EditorIsActiveImpl   = std::function<bool(entt::registry&)>;
 void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept;
 void register_editor_spawn_impl(EditorSpawnImpl fn) noexcept;
 void register_editor_raycast_impl(EditorRaycastImpl fn) noexcept;
+void register_editor_active_mode_impl(EditorActiveModeImpl fn) noexcept;
+void register_editor_is_active_impl(EditorIsActiveImpl fn) noexcept;
 
 // ── Editor camera rig lifecycle ───────────────────────────────────────────────
 // Impl callbacks registered from generated_init_project; they reference

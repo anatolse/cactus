@@ -813,6 +813,197 @@ TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via DrawCircleV alon
     CHECK(code.find("DrawRectangleV(WorldTransform_comp.position") != std::string::npos);
 }
 
+// editor-debug-draw: each std.debug event has exactly one generic, non-branching,
+// non-looping handler — unlike every filter/phase extern rule above (which iterates a
+// `registry.view<...>().each(...)`), these take the event occurrence directly (event
+// dispatch already delivers exactly one invocation per `emit`), so "emit once -> one draw
+// call", "emit N times -> N draw calls", and "emit zero times -> no draw call" all follow
+// structurally from there being no view, no loop, and no conditional around the single
+// draw call in the generated body — checked here as "the body is exactly one unconditional
+// raylib call reading occurrence fields." Declared and tested independent of std.editor.
+TEST_CASE("Codegen EnTT: std.debug 2D event renderers issue one unconditional raylib call each",
+          "[codegen-entt][render][debug-draw]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.debug\n"
+        "pub event DrawDebugLine2D:\n"
+        "    start: vec2\n"
+        "    end: vec2\n"
+        "    color: color\n"
+        "    thickness: float\n"
+        "pub event DrawDebugTriangle2D:\n"
+        "    a: vec2\n"
+        "    b: vec2\n"
+        "    c: vec2\n"
+        "    color: color\n"
+        "pub event DrawDebugRingOutline2D:\n"
+        "    center: vec2\n"
+        "    inner_radius: float\n"
+        "    outer_radius: float\n"
+        "    color: color\n"
+        "pub event DrawDebugRectOutline2D:\n"
+        "    position: vec2\n"
+        "    size: vec2\n"
+        "    thickness: float\n"
+        "    color: color\n"
+        "pub extern rule DrawDebugLine2DRenderer:\n"
+        "    on DrawDebugLine2D:\n"
+        "        effects:\n"
+        "            graphics\n"
+        "pub extern rule DrawDebugTriangle2DRenderer:\n"
+        "    on DrawDebugTriangle2D:\n"
+        "        effects:\n"
+        "            graphics\n"
+        "pub extern rule DrawDebugRingOutline2DRenderer:\n"
+        "    on DrawDebugRingOutline2D:\n"
+        "        effects:\n"
+        "            graphics\n"
+        "pub extern rule DrawDebugRectOutline2DRenderer:\n"
+        "    on DrawDebugRectOutline2D:\n"
+        "        effects:\n"
+        "            graphics\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto line_tick = generated_function(code, "void draw_debug_line2_d_renderer_tick");
+    CHECK(line_tick.find("const DrawDebugLine2DEvent& occurrence") != std::string::npos);
+    CHECK(line_tick.find("BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d())") != std::string::npos);
+    CHECK(line_tick.find("DrawLineEx(occurrence.start, occurrence.end, occurrence.thickness, occurrence.color)") !=
+          std::string::npos);
+    CHECK(line_tick.find("EndMode2D()") != std::string::npos);
+    CHECK(count_occurrences(line_tick, "DrawLineEx(") == 1);
+
+    const auto tri_tick = generated_function(code, "void draw_debug_triangle2_d_renderer_tick");
+    CHECK(tri_tick.find("DrawTriangle(occurrence.a, occurrence.b, occurrence.c, occurrence.color)") !=
+          std::string::npos);
+    CHECK(count_occurrences(tri_tick, "DrawTriangle(") == 1);
+
+    const auto ring_tick = generated_function(code, "void draw_debug_ring_outline2_d_renderer_tick");
+    CHECK(ring_tick.find("DrawRing(occurrence.center, occurrence.inner_radius, occurrence.outer_radius, 0.0F, "
+                         "360.0F, 32, occurrence.color)") != std::string::npos);
+
+    const auto rect_tick = generated_function(code, "void draw_debug_rect_outline2_d_renderer_tick");
+    CHECK(rect_tick.find(".x = occurrence.position.x") != std::string::npos);
+    CHECK(rect_tick.find("DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: std.debug 3D event renderers issue one unconditional raylib call each",
+          "[codegen-entt][render][debug-draw]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.debug\n"
+        "pub event DrawDebugLine3D:\n"
+        "    start: vec3\n"
+        "    end: vec3\n"
+        "    color: color\n"
+        "pub event DrawDebugWireBox3D:\n"
+        "    center: vec3\n"
+        "    size: vec3\n"
+        "    color: color\n"
+        "pub event DrawDebugCircle3D:\n"
+        "    center: vec3\n"
+        "    radius: float\n"
+        "    normal: vec3\n"
+        "    color: color\n"
+        "pub event DrawDebugCube3D:\n"
+        "    center: vec3\n"
+        "    size: vec3\n"
+        "    color: color\n"
+        "pub extern rule DrawDebugLine3DRenderer:\n"
+        "    on DrawDebugLine3D:\n"
+        "        effects:\n"
+        "            graphics\n"
+        "pub extern rule DrawDebugWireBox3DRenderer:\n"
+        "    on DrawDebugWireBox3D:\n"
+        "        effects:\n"
+        "            graphics\n"
+        "pub extern rule DrawDebugCircle3DRenderer:\n"
+        "    on DrawDebugCircle3D:\n"
+        "        effects:\n"
+        "            graphics\n"
+        "pub extern rule DrawDebugCube3DRenderer:\n"
+        "    on DrawDebugCube3D:\n"
+        "        effects:\n"
+        "            graphics\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto line_tick = generated_function(code, "void draw_debug_line3_d_renderer_tick");
+    CHECK(line_tick.find("const DrawDebugLine3DEvent& occurrence") != std::string::npos);
+    CHECK(line_tick.find("BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d())") != std::string::npos);
+    CHECK(line_tick.find("DrawLine3D(occurrence.start, occurrence.end, occurrence.color)") != std::string::npos);
+    CHECK(line_tick.find("EndMode3D()") != std::string::npos);
+
+    const auto box_tick = generated_function(code, "void draw_debug_wire_box3_d_renderer_tick");
+    CHECK(box_tick.find("DrawCubeWiresV(occurrence.center, occurrence.size, occurrence.color)") != std::string::npos);
+
+    const auto circle_tick = generated_function(code, "void draw_debug_circle3_d_renderer_tick");
+    CHECK(circle_tick.find("DrawCircle3D(occurrence.center, occurrence.radius, occurrence.normal, 90.0F, "
+                           "occurrence.color)") != std::string::npos);
+
+    const auto cube_tick = generated_function(code, "void draw_debug_cube3_d_renderer_tick");
+    CHECK(cube_tick.find("DrawCubeV(occurrence.center, occurrence.size, occurrence.color)") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: DebugGrid3D draws the grid only when an EditorCamera3D rig exists",
+          "[codegen-entt][stdlib][editor][debug-draw]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "pub trait EditorCamera3D:\n"
+        "    var focus: vec3\n"
+        "event render\n"
+        "pub extern rule DebugGrid3D:\n"
+        "    filter:\n"
+        "        EditorCamera3D\n"
+        "    on render:\n"
+        "        effects:\n"
+        "            graphics\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void debug_grid3_d_tick");
+    CHECK(tick.find("registry.view<EditorCamera3D>()") != std::string::npos);
+    CHECK(tick.find("if (!__has_3d_rig) { return; }") != std::string::npos);
+    CHECK(tick.find("DrawGrid(20, 1.0F)") != std::string::npos);
+}
+
+// editor-screen-ui: same one-event-one-unconditional-handler shape as std.debug (see the
+// comment above the std.debug tests) — DrawScreenRect's handler branches only on `filled`
+// to pick which single raylib call to issue, still with no view/loop, so the same "N emits
+// -> N draws" reasoning holds. Declared and tested independent of std.editor.
+TEST_CASE("Codegen EnTT: std.ui DrawScreenRect renderer draws filled or outline based on the occurrence",
+          "[codegen-entt][render][screen-ui]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.ui\n"
+        "pub event DrawScreenRect:\n"
+        "    position: vec2\n"
+        "    size: vec2\n"
+        "    color: color\n"
+        "    filled: bool\n"
+        "    thickness: float\n"
+        "pub extern rule DrawScreenRectRenderer:\n"
+        "    on DrawScreenRect:\n"
+        "        effects:\n"
+        "            graphics\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void draw_screen_rect_renderer_tick");
+    CHECK(tick.find("const DrawScreenRectEvent& occurrence") != std::string::npos);
+    CHECK(tick.find(".x = occurrence.position.x") != std::string::npos);
+    CHECK(tick.find(".width = occurrence.size.x") != std::string::npos);
+    CHECK(tick.find("if (occurrence.filled)") != std::string::npos);
+    CHECK(tick.find("DrawRectangleRec(__rect, occurrence.color)") != std::string::npos);
+    CHECK(tick.find("DrawRectangleLinesEx(__rect, occurrence.thickness, occurrence.color)") != std::string::npos);
+    // Screen-space: no camera-mode wrapping (world-space std.debug primitives get one).
+    CHECK(tick.find("BeginMode2D") == std::string::npos);
+    CHECK(tick.find("BeginMode3D") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: model renderer extern rule binds to backend runtime without user callback",
           "[codegen-entt][assets][dsl-model-assets]") {
     ProgramNode program;
@@ -1678,7 +1869,10 @@ TEST_CASE("Codegen EnTT: targeted emit uses validity guard", "[codegen-entt][ent
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
             CHECK(code.find("if (registry.valid(c.other))") != std::string::npos);
-            CHECK(code.find("Hit_buffer.push_back({.amount = 1})") != std::string::npos);
+            // Buffer identifier is built from the canonical event type name (HitEvent), not
+            // the raw source spelling, so cross-module dotted emit names (e.g. "std.debug.Foo")
+            // never leak a dot into a C++ identifier.
+            CHECK(code.find("HitEvent_buffer.push_back({.amount = 1})") != std::string::npos);
         }
     }
 }
@@ -2568,7 +2762,12 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
         "    previous: entity_id\n"
         "    current: entity_id\n"
         "pub extern func hit_test_2d(screen_pos: vec2, mask: int) entity_id\n"
-        "pub extern rule EditorTemplatePalette:\n"
+        // EditorPropertyPanel, not EditorTemplatePalette: GizmoRenderer2D/3D and
+        // EditorTemplatePalette stopped being compiler-owned extern rules
+        // (editor-declarative-rendering) — EditorPropertyPanel is the sole
+        // remaining one, still exercising the same generic
+        // extern-rule-stub-emission mechanism this test checks.
+        "pub extern rule EditorPropertyPanel:\n"
         "    filter:\n"
         "        EditorState\n"
         "    on tick:\n"
@@ -2590,9 +2789,371 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
     CHECK(code.find("struct EditorSnap") != std::string::npos);
     // EditorSelectionChanged event should have a struct
     CHECK(code.find("struct EditorSelectionChanged") != std::string::npos);
-    // EditorTemplatePalette extern rule stub (snake_case name)
-    CHECK(code.find("editor_template_palette_tick") != std::string::npos);
+    // EditorPropertyPanel extern rule stub (snake_case name)
+    CHECK(code.find("editor_property_panel_tick") != std::string::npos);
     // HexColor for #00FF00FF is not in this test, but HexColor conversion path should exist
+}
+
+TEST_CASE("Codegen EnTT: editor active_mode() reads the singleton EditorState.mode via a registered impl",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "use std.editor\n"
+        "pub event tick\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "pub extern func active_mode() int\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    // Impl registered from generated_init_project, reading EditorState.mode off the
+    // singleton Editor entity — mirrors the hit_test/spawn/raycast impl-registration idiom.
+    const auto init = generated_function(code, "void generated_init_project");
+    CHECK(init.find("register_editor_active_mode_impl(") != std::string::npos);
+    CHECK(init.find("reg.view<EditorState>()") != std::string::npos);
+    CHECK(init.find(".mode;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: editor template_names()/template_index() expose a declaration-ordered companion list",
+          "[codegen-entt][stdlib][editor][editor-template-registry]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "use std.editor\n"
+        "pub event tick\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "trait Position:\n"
+        "    var value: vec2 = vec2(0.0, 0.0)\n"
+        "pub template Box:\n"
+        "    Position\n"
+        "pub template PlayerSpawn:\n"
+        "    Position\n"
+        "pub extern func template_names() list[string]\n"
+        "pub extern func template_index(name: string) int\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    // Order-stable companion to cactus_template_registry (an unordered_map), populated in
+    // the same declaration-order loop as the registry itself.
+    const auto order_start = code.find("cactus_template_registry_order = {");
+    REQUIRE(order_start != std::string::npos);
+    const auto box_pos    = code.find("\"Box\"", order_start);
+    const auto spawn_pos  = code.find("\"PlayerSpawn\"", order_start);
+    REQUIRE(box_pos != std::string::npos);
+    REQUIRE(spawn_pos != std::string::npos);
+    CHECK(box_pos < spawn_pos);
+    CHECK(code.find("std::vector<std::string> editor_template_names() { return "
+                    "cactus_template_registry_order; }") != std::string::npos);
+    CHECK(code.find("int editor_template_index(const std::string& name) noexcept {") != std::string::npos);
+    CHECK(code.find("return -1;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: clean-named editor extern funcs active_mode/template_names/screen_size lower without "
+          "registry injection except active_mode",
+          "[codegen-entt][editor][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick\n"
+        "pub extern func active_mode() int\n"
+        "pub extern func template_names() list[string]\n"
+        "pub extern func template_index(name: string) int\n"
+        "pub extern func screen_size() vec2\n"
+        "trait Probe:\n"
+        "    var mode: int = 0\n"
+        "    var idx: int = 0\n"
+        "    var sz: vec2 = vec2(0.0, 0.0)\n"
+        "rule ProbeTest:\n"
+        "    filter:\n"
+        "        Probe\n"
+        "    on tick:\n"
+        "        mode = active_mode()\n"
+        "        idx = template_index(\"Box\")\n"
+        "        sz = screen_size()\n",
+        program);
+
+    for (const auto* name : {"active_mode", "template_names", "template_index", "screen_size"}) {
+        decorated.funcs[name].is_stdlib   = true;
+        decorated.funcs[name].module_name = "std.editor";
+    }
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto rule = generated_function(code, "void probe_test_tick");
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_active_mode(registry)") != std::string::npos);
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_template_index(\"Box\")") != std::string::npos);
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_screen_size()") != std::string::npos);
+    // Only active_mode reads ECS state (the EditorState singleton); the others read
+    // codegen-emitted globals or raw window state and take no registry argument.
+    CHECK(rule.find("editor_template_index(registry,") == std::string::npos);
+    CHECK(rule.find("editor_screen_size(registry)") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emits mode-specific debug-draw events",
+          "[codegen-entt][stdlib][editor][debug-draw]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "use std.editor\n"
+        "use std.debug as debug\n"
+        "pub event render\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "pub trait EditorSelected\n"
+        "pub trait EditorGizmo2D:\n"
+        "    var mode: int = 1\n"
+        "    var color: color = #00FF00FF\n"
+        "    var size: float = 1.0\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "pub event DrawDebugLine2D:\n"
+        "    start: vec2\n"
+        "    end: vec2\n"
+        "    color: color\n"
+        "    thickness: float\n"
+        "pub event DrawDebugTriangle2D:\n"
+        "    a: vec2\n"
+        "    b: vec2\n"
+        "    c: vec2\n"
+        "    color: color\n"
+        "pub event DrawDebugRingOutline2D:\n"
+        "    center: vec2\n"
+        "    inner_radius: float\n"
+        "    outer_radius: float\n"
+        "    color: color\n"
+        "pub event DrawDebugRectOutline2D:\n"
+        "    position: vec2\n"
+        "    size: vec2\n"
+        "    thickness: float\n"
+        "    color: color\n"
+        "pub extern func active_mode() int\n"
+        "pub extern func is_editor_active() bool\n"
+        "rule EditorGizmoRenderer2D:\n"
+        "    filter:\n"
+        "        WorldTransform as xform\n"
+        "        EditorSelected\n"
+        "    on render:\n"
+        "        if not is_editor_active():\n"
+        "            return\n"
+        "        let mode = active_mode()\n"
+        "        project EditorGizmo2D:\n"
+        "            mode = mode\n"
+        "            color = #00FF00FF\n"
+        "            size = 1.0\n"
+        "        let center = xform.position\n"
+        "        emit DrawDebugRectOutline2D:\n"
+        "            position = vec2(center.x - 0.5, center.y - 0.5)\n"
+        "            size = vec2(1.0, 1.0)\n"
+        "            thickness = 0.05\n"
+        "            color = #00FF00FF\n"
+        "        if mode == 1:\n"
+        "            emit DrawDebugLine2D:\n"
+        "                start = center\n"
+        "                end = vec2(center.x + 1.0, center.y)\n"
+        "                color = #E62937FF\n"
+        "                thickness = 0.05\n"
+        "            emit DrawDebugTriangle2D:\n"
+        "                a = center\n"
+        "                b = center\n"
+        "                c = center\n"
+        "                color = #E62937FF\n"
+        "        if mode == 2:\n"
+        "            emit DrawDebugRingOutline2D:\n"
+        "                center = center\n"
+        "                inner_radius = 0.8\n"
+        "                outer_radius = 1.0\n"
+        "                color = #66BFFFFF\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void editor_gizmo_renderer2_d_render");
+    // Early return when inactive: EditorSelected persists across an editor toggle-off, so the
+    // rule can't rely on the filter alone to gate drawing.
+    CHECK(tick.find("editor_is_active(registry)") != std::string::npos);
+    // Mode drives both the projection and the mode-specific branches, not a hardcoded literal.
+    CHECK(tick.find("editor_active_mode(registry)") != std::string::npos);
+    CHECK(tick.find("project_EditorGizmo2D(registry, entity)") != std::string::npos);
+    CHECK(tick.find(".mode = mode;") != std::string::npos);
+    // Always-drawn AABB outline, independent of mode.
+    CHECK(tick.find("DrawDebugRectOutline2DEvent_buffer.push_back(") != std::string::npos);
+    // Translate handles only inside the mode == 1 branch.
+    const auto mode1 = tick.find("if (mode == 1) {");
+    REQUIRE(mode1 != std::string::npos);
+    const auto mode2 = tick.find("if (mode == 2) {");
+    REQUIRE(mode2 != std::string::npos);
+    CHECK(tick.find("DrawDebugLine2DEvent_buffer.push_back(", mode1) < mode2);
+    CHECK(tick.find("DrawDebugRingOutline2DEvent_buffer.push_back(", mode2) != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: EditorTemplatePalette iterates templates by index, tints via palette_color, and "
+          "hit-tests clicks",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "use std.editor\n"
+        "pub event render\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "    var active_template: string = \"\"\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "pub trait ScreenLabel:\n"
+        "    var text: string = \"\"\n"
+        "    var position: vec2\n"
+        "    var font_size: int = 32\n"
+        "    var color: color = #FFFFFFFF\n"
+        "    var visible: bool = true\n"
+        "pub event DrawScreenRect:\n"
+        "    position: vec2\n"
+        "    size: vec2\n"
+        "    color: color\n"
+        "    filled: bool\n"
+        "    thickness: float\n"
+        "pub extern func template_names() list[string]\n"
+        "pub extern func template_index(name: string) int\n"
+        "pub extern func palette_label_slot(index: int) entity_id\n"
+        "pub extern func palette_color(index: int) color\n"
+        "rule EditorTemplatePalette:\n"
+        "    filter:\n"
+        "        EditorState\n"
+        "    on render:\n"
+        "        let names = template_names()\n"
+        "        if not active:\n"
+        "            for name in names:\n"
+        "                let idx = template_index(name)\n"
+        "                let slot = palette_label_slot(idx)\n"
+        "                project ScreenLabel to slot:\n"
+        "                    text = \"\"\n"
+        "                    position = vec2(0.0, 0.0)\n"
+        "                    font_size = 14\n"
+        "                    color = #FFFFFFFF\n"
+        "                    visible = false\n"
+        "            return\n"
+        "        for name in names:\n"
+        "            let idx = template_index(name)\n"
+        "            let x = 10.0\n"
+        "            let y = 40.0 + (idx * 30.0)\n"
+        "            let tint = palette_color(idx)\n"
+        "            emit DrawScreenRect:\n"
+        "                position = vec2(x, y)\n"
+        "                size = vec2(140.0, 26.0)\n"
+        "                color = tint\n"
+        "                filled = true\n"
+        "                thickness = 0.0\n"
+        "            let slot = palette_label_slot(idx)\n"
+        "            project ScreenLabel to slot:\n"
+        "                text = name\n"
+        "                position = vec2(x + 6.0, y + 6.0)\n"
+        "                font_size = 14\n"
+        "                color = #FFFFFFFF\n"
+        "                visible = true\n"
+        "            if x >= 0.0:\n"
+        "                if y >= 0.0:\n"
+        "                    active_template = name\n"
+        "                    mode = 4\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void editor_template_palette_render");
+    // Inactive branch: labels hidden via ScreenLabel.visible = false, no DrawScreenRect emitted.
+    CHECK(tick.find("visible = false;") != std::string::npos);
+    // Active branch: index comes from template_index(name), not a loop-local counter — bounded
+    // `for` can't mutate an outer-scope var across iterations.
+    CHECK(tick.find("editor_template_index(name)") != std::string::npos);
+    // Color comes from the palette_color() extern func, not a DSL if-chain — `if`/`for` bodies
+    // can't mutate an outer-scope local either (same root cause), so a computed-then-conditionally
+    // -overridden local would silently keep its first value.
+    CHECK(tick.find("editor_palette_color(idx)") != std::string::npos);
+    CHECK(tick.find("DrawScreenRectEvent_buffer.push_back(") != std::string::npos);
+    // Click hit-testing and the EditorState writes happen directly in this rule (self bound to
+    // EditorState), writing the real component fields, not a generic renderer.
+    CHECK(tick.find(".active_template = name;") != std::string::npos);
+    CHECK((tick.find(".mode = 4;") != std::string::npos || tick.find(".mode = 4.0F;") != std::string::npos));
+}
+
+TEST_CASE("Codegen EnTT: EditorHUDOverlay draws a screen border and mode-text label only while active",
+          "[codegen-entt][stdlib][editor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "use std.editor\n"
+        "pub event render\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "    var mode: int = 0\n"
+        "pub trait ScreenLabel:\n"
+        "    var text: string = \"\"\n"
+        "    var position: vec2\n"
+        "    var font_size: int = 32\n"
+        "    var color: color = #FFFFFFFF\n"
+        "    var visible: bool = true\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "    ScreenLabel:\n"
+        "        text = \"\"\n"
+        "        position = vec2(10.0, 10.0)\n"
+        "        font_size = 14\n"
+        "        color = #FFFF00FF\n"
+        "        visible = false\n"
+        "pub event DrawScreenRect:\n"
+        "    position: vec2\n"
+        "    size: vec2\n"
+        "    color: color\n"
+        "    filled: bool\n"
+        "    thickness: float\n"
+        "pub extern func screen_size() vec2\n"
+        "pub extern func mode_label(mode: int) string\n"
+        "rule EditorHUDOverlay:\n"
+        "    filter:\n"
+        "        EditorState\n"
+        "        ScreenLabel\n"
+        "    on render:\n"
+        "        if not active:\n"
+        "            visible = false\n"
+        "            return\n"
+        "        emit DrawScreenRect:\n"
+        "            position = vec2(0.0, 0.0)\n"
+        "            size = screen_size()\n"
+        "            color = #FFFF00FF\n"
+        "            filled = false\n"
+        "            thickness = 3.0\n"
+        "        let label = mode_label(mode)\n"
+        "        text = label\n"
+        "        position = vec2(10.0, 10.0)\n"
+        "        color = #FFFF00FF\n"
+        "        visible = true\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    // snake_case inserts an underscore before every uppercase letter, including consecutive
+    // ones in an acronym: "HUD" -> "_h_u_d", not "_hud".
+    const auto render = generated_function(code, "void editor_h_u_d_overlay_render");
+    // Inactive: hide the label and return, before the border/text-update code runs at all.
+    const auto inactive_hide = render.find("visible = false;");
+    const auto early_return  = render.find("return;");
+    REQUIRE(inactive_hide != std::string::npos);
+    REQUIRE(early_return != std::string::npos);
+    CHECK(inactive_hide < early_return);
+    // Border/label update only appear after the early return (i.e. gated on active).
+    const auto border = render.find("DrawScreenRectEvent_buffer.push_back(");
+    REQUIRE(border != std::string::npos);
+    CHECK(border > early_return);
+    // Active: border spans screen_size(), mode text built via mode_label(), then shown.
+    CHECK(render.find("editor_screen_size()") != std::string::npos);
+    CHECK(render.find("editor_mode_label(") != std::string::npos);
+    CHECK(render.find("visible = true;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[codegen-entt][stdlib][editor]") {
@@ -2637,6 +3198,10 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
 
 TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
           "[codegen-entt][stdlib][editor][extern-rule]") {
+    // GizmoRenderer2D/3D and EditorTemplatePalette stopped being compiler-owned extern rules
+    // (editor-declarative-rendering) — EditorPropertyPanel is the sole remaining one now; its
+    // own coverage is task 6/7's dedicated EditorTemplatePalette/EditorHUDOverlay tests plus
+    // the real editor-test.cactus/editor-3d example compiles.
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.editor\n"
@@ -2645,18 +3210,6 @@ TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
         "    var mode: int = 0\n"
-        "pub trait EditorGizmo2D:\n"
-        "    var mode: int = 1\n"
-        "    var color: color = #00FF00FF\n"
-        "    var size: float = 1.0\n"
-        "pub extern rule EditorTemplatePalette:\n"
-        "    filter:\n"
-        "        EditorState\n"
-        "    on tick:\n"
-        "        reads:\n"
-        "            EditorState\n"
-        "        effects:\n"
-        "            editor\n"
         "pub extern rule EditorPropertyPanel:\n"
         "    filter:\n"
         "        EditorState\n"
@@ -2664,37 +3217,33 @@ TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
         "        reads:\n"
         "            EditorState\n"
         "        effects:\n"
-        "            editor\n"
-        "pub extern rule GizmoRenderer2D:\n"
-        "    filter:\n"
-        "        EditorGizmo2D\n"
-        "    on tick:\n"
-        "        reads:\n"
-        "            EditorGizmo2D\n"
-        "        effects:\n"
-        "            graphics\n",
+        "            editor\n",
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
 
-    // EditorTemplatePalette should have a tick call (snake_case names)
-    CHECK(code.find("editor_template_palette_tick") != std::string::npos);
-    // EditorPropertyPanel should have a tick call
+    // EditorPropertyPanel should have a tick call (snake_case name)
     CHECK(code.find("editor_property_panel_tick") != std::string::npos);
-    // EditorTemplatePalette and EditorPropertyPanel extern rule stubs are generated
-    // (GizmoRenderer2D dispatch requires WorldTransform in filter + stdlib contract flag,
-    //  which are tested in the actual editor-test.cactus example via test_example_cpp_compilation)
 }
 
-TEST_CASE("Codegen EnTT: GizmoRenderer3D emits grid wire boxes and mode handles without inferred dispatch",
-          "[codegen-entt][stdlib][editor]") {
+// Replaces the old "GizmoRenderer3D emits grid wire boxes..." test, which asserted the hardcoded
+// C++ geometry a compiler-owned GizmoRenderer3D extern rule used to emit — GizmoRenderer3D
+// stopped being an extern rule entirely (editor-declarative-rendering); the geometry decision
+// moved into the plain rule EditorGizmoRenderer3D, mirroring the EditorGizmoRenderer2D test above.
+TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emits mode-specific debug-draw events",
+          "[codegen-entt][stdlib][editor][debug-draw]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.editor\n"
         "use std.editor\n"
+        "use std.debug as debug\n"
+        "pub event render\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
         "    var mode: int = 0\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "pub trait EditorSelected\n"
         "pub trait EditorGizmo3D:\n"
         "    var mode: int = 1\n"
         "    var color: color = #00FF00FF\n"
@@ -2703,43 +3252,77 @@ TEST_CASE("Codegen EnTT: GizmoRenderer3D emits grid wire boxes and mode handles 
         "    var position: vec3\n"
         "    var rotation: quat\n"
         "    var scale: vec3\n"
-        "trait ModelRenderer:\n"
-        "    let model: model_id\n"
-        "    var visible: bool = true\n"
-        "event tick\n"
-        "pub extern rule GizmoRenderer3D:\n"
+        "pub event DrawDebugLine3D:\n"
+        "    start: vec3\n"
+        "    end: vec3\n"
+        "    color: color\n"
+        "pub event DrawDebugWireBox3D:\n"
+        "    center: vec3\n"
+        "    size: vec3\n"
+        "    color: color\n"
+        "pub event DrawDebugCircle3D:\n"
+        "    center: vec3\n"
+        "    radius: float\n"
+        "    normal: vec3\n"
+        "    color: color\n"
+        "pub extern func active_mode() int\n"
+        "pub extern func is_editor_active() bool\n"
+        "rule EditorGizmoRenderer3D:\n"
         "    filter:\n"
-        "        EditorGizmo3D\n"
-        "    on tick:\n"
-        "        reads:\n"
-        "            EditorGizmo3D\n"
-        "        effects:\n"
-        "            graphics\n",
+        "        WorldTransform as xform\n"
+        "        EditorSelected\n"
+        "    on render:\n"
+        "        if not is_editor_active():\n"
+        "            return\n"
+        "        let mode = active_mode()\n"
+        "        project EditorGizmo3D:\n"
+        "            mode = mode\n"
+        "            color = #00FF00FF\n"
+        "            size = 1.0\n"
+        "        let origin = xform.position\n"
+        "        emit DrawDebugWireBox3D:\n"
+        "            center = origin\n"
+        "            size = vec3(1.0, 1.0, 1.0)\n"
+        "            color = #00FF00FF\n"
+        "        if mode == 1 or mode == 3:\n"
+        "            emit DrawDebugLine3D:\n"
+        "                start = origin\n"
+        "                end = vec3(origin.x + 1.0, origin.y, origin.z)\n"
+        "                color = #E62937FF\n"
+        "        if mode == 2:\n"
+        "            emit DrawDebugCircle3D:\n"
+        "                center = origin\n"
+        "                radius = 1.0\n"
+        "                normal = vec3(1.0, 0.0, 0.0)\n"
+        "                color = #66BFFFFF\n",
         program);
 
-    auto code = CppEnttCodegen::generate(decorated);
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto tick = generated_function(code, "void editor_gizmo_renderer3_d_render");
+    // Early return when inactive: EditorSelected persists across an editor toggle-off, so the
+    // rule can't rely on the filter alone to gate drawing.
+    CHECK(tick.find("editor_is_active(registry)") != std::string::npos);
+    // Mode drives both the projection and the mode-specific branches, not a hardcoded literal.
+    CHECK(tick.find("editor_active_mode(registry)") != std::string::npos);
+    CHECK(tick.find("project_EditorGizmo3D(registry, entity)") != std::string::npos);
+    CHECK(tick.find(".mode = mode;") != std::string::npos);
+    // Always-drawn wire box, independent of mode.
+    CHECK(tick.find("DrawDebugWireBox3DEvent_buffer.push_back(") != std::string::npos);
+    // Translate/scale axis line only inside the (mode == 1 || mode == 3) branch; circle only
+    // inside mode == 2.
+    const auto translate_branch = tick.find("mode == 1");
+    REQUIRE(translate_branch != std::string::npos);
+    const auto rotate_branch = tick.find("if (mode == 2) {");
+    REQUIRE(rotate_branch != std::string::npos);
+    CHECK(tick.find("DrawDebugLine3DEvent_buffer.push_back(", translate_branch) < rotate_branch);
+    CHECK(tick.find("DrawDebugCircle3DEvent_buffer.push_back(", rotate_branch) != std::string::npos);
 
-    const auto tick = generated_function(code, "void gizmo_renderer3_d_tick");
-    // Early-return when no EditorState is active
-    CHECK(tick.find("__editor_active") != std::string::npos);
-    CHECK(tick.find("if (!__editor_active) { return; }") != std::string::npos);
-    // Ground grid and selection wire box inside a 3D camera block
-    CHECK(tick.find("BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d())") != std::string::npos);
-    CHECK(tick.find("DrawGrid(20, 1.0F)") != std::string::npos);
-    CHECK(tick.find("DrawCubeWiresV") != std::string::npos);
-    CHECK(tick.find("model_bounds_box") != std::string::npos);
-    // Mode handles: translate/scale axis lines, rotate circle, scale tip cubes
-    CHECK(tick.find("DrawLine3D") != std::string::npos);
-    CHECK(tick.find("DrawCircle3D") != std::string::npos);
-    CHECK(tick.find("DrawCubeV") != std::string::npos);
-    CHECK(tick.find("EndMode3D()") != std::string::npos);
-
-    // The adapter is not implicitly attached to either legacy hook. Linked
-    // phase metadata is required to schedule it.
+    // The rule is not implicitly attached to either legacy hook — linked phase metadata is
+    // required to schedule it, same as any other rule.
     const auto render_project = generated_function(code, "void generated_render_project");
-    CHECK(render_project.find("gizmo_renderer3_d_tick(registry)") == std::string::npos);
+    CHECK(render_project.find("editor_gizmo_renderer3_d_render(registry)") == std::string::npos);
     const auto update_project = generated_function(code, "void generated_update_project");
-    CHECK(update_project.find("gizmo_renderer3_d_tick") == std::string::npos);
+    CHECK(update_project.find("editor_gizmo_renderer3_d_render") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: volume-transform editor program registers pos3d spawn impl and raycast impl",

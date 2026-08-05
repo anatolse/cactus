@@ -72,3 +72,10 @@ pub extern func animation_name(m: model_id, clip: int) string
 # Returns vec3(0.0, 0.0, 0.0) for an unresolvable handle, a failed load, or a
 # call before the rendering window exists.
 pub extern func bounds_size(m: model_id) vec3
+
+# Midpoint of the bind-pose bounding box ((min + max) / 2), in model space.
+# Add this (scaled by the entity's world scale) to its world position to
+# center a wire box on the actual mesh rather than the entity origin, for
+# models whose bind-pose bounds aren't centered on the origin. Same
+# load/fallback behavior as bounds_size.
+pub extern func bounds_center(m: model_id) vec3

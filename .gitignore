@@ -27,8 +27,10 @@ Thumbs.db
 build-clang-o3-release/
 build-remove-cpp-manual/
 openspec/changes/archive/*
+openspec/changes/*
 .claude/
 .cline/
 .clinerules/
 .codex/
 .github/skills/
+.agents/

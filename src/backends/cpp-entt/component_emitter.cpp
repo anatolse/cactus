@@ -3,6 +3,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include <sstream>
+#include <unordered_map>
 
 namespace cactus {
 
@@ -19,16 +20,12 @@ bool should_defer_to_raylib_enum(const std::string& name) {
     return name == "MouseButton" || name == "GamepadButton" || name == "GamepadAxis";
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::string stdlib_trait_default(const ResolvedTrait& trait, const ResolvedField& field) {
     if (!trait.is_stdlib) {
         return {};
     }
-    if (trait.name == "Collider") {
-        if (field.name == "layer" || field.name == "mask") {
-            return "{1}";
-        }
-    }
+    // BoxCollider.size's default depends on the field's own resolved type
+    // (Vec2 vs Vec3), so it can't be a flat (trait, field) -> value lookup.
     if (trait.name == "BoxCollider" && field.name == "size") {
         if (field.type.kind == TypeKind::Vec2) {
             return "{.x = 1.0F, .y = 1.0F}";
@@ -36,24 +33,26 @@ std::string stdlib_trait_default(const ResolvedTrait& trait, const ResolvedField
         if (field.type.kind == TypeKind::Vec3) {
             return "{.x = 1.0F, .y = 1.0F, .z = 1.0F}";
         }
+        return {};
     }
-    if ((trait.name == "CircleCollider" || trait.name == "SphereCollider") && field.name == "radius") {
-        return "{0.5F}";
+    static const std::unordered_map<std::string, std::unordered_map<std::string, std::string>> defaults{
+        {"Collider", {{"layer", "{1}"}, {"mask", "{1}"}}},
+        {"CircleCollider", {{"radius", "{0.5F}"}}},
+        {"SphereCollider", {{"radius", "{0.5F}"}}},
+        {"CapsuleCollider", {{"radius", "{0.5F}"}, {"height", "{1.0F}"}}},
+        {"Viewport",
+         {{"width", "{1.0F}"},
+          {"height", "{1.0F}"},
+          {"clear", "{true}"},
+          {"active", "{true}"},
+          {"clear_color", "{.r = 0, .g = 0, .b = 0, .a = 255}"}}},
+    };
+    const auto trait_it = defaults.find(trait.name);
+    if (trait_it == defaults.end()) {
+        return {};
     }
-    if (trait.name == "CapsuleCollider") {
-        if (field.name == "radius") {
-            return "{0.5F}";
-        }
-        if (field.name == "height") {
-            return "{1.0F}";
-        }
-    }
-    if (trait.name == "Viewport") {
-        if (field.name == "width" || field.name == "height") { return "{1.0F}"; }
-        if (field.name == "clear" || field.name == "active") { return "{true}"; }
-        if (field.name == "clear_color") { return "{.r = 0, .g = 0, .b = 0, .a = 255}"; }
-    }
-    return {};
+    const auto field_it = trait_it->second.find(field.name);
+    return field_it == trait_it->second.end() ? std::string{} : field_it->second;
 }
 
 }  // namespace

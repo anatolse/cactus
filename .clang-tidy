@@ -20,6 +20,7 @@ WarningsAsErrors: '*'
 FormatStyle: 'file'
 
 HeaderFilterRegex: '(src|backends)/.*\.hpp$'
+ExcludeHeaderFilterRegex: '_deps/'
 
 CheckOptions:
   - key: modernize-use-nullptr.NullMacros

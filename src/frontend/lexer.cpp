@@ -1,5 +1,7 @@
 #include "frontend/lexer.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <unordered_map>
 
@@ -208,7 +210,7 @@ void Lexer::process_line_start(std::vector<Token>& tokens) {
     }
 }
 
-std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive-complexity)
+std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive-complexity) -- still 43 after table-driving the two-char/single-char operator dispatch; not further in scope here
     std::vector<Token> tokens;
 
     while (!is_at_end()) {
@@ -281,124 +283,46 @@ std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive
 
         // Two-character operators
         auto loc = current_location();
-        if (c == '-' && peek_next() == '>') {
+        struct TwoCharOperator {
+            char first;
+            char second;
+            TokenType type;
+            const char* spelling;
+        };
+        static constexpr std::array<TwoCharOperator, 8> kTwoCharOperators{{
+            {.first = '-', .second = '>', .type = TokenType::ARROW, .spelling = "->"},
+            {.first = '=', .second = '>', .type = TokenType::FAT_ARROW, .spelling = "=>"},
+            {.first = '=', .second = '=', .type = TokenType::EQUALS, .spelling = "=="},
+            {.first = '!', .second = '=', .type = TokenType::NOT_EQUALS, .spelling = "!="},
+            {.first = '<', .second = '=', .type = TokenType::LESS_EQ, .spelling = "<="},
+            {.first = '>', .second = '=', .type = TokenType::GREATER_EQ, .spelling = ">="},
+            {.first = '+', .second = '=', .type = TokenType::PLUS_ASSIGN, .spelling = "+="},
+            {.first = '-', .second = '=', .type = TokenType::MINUS_ASSIGN, .spelling = "-="},
+        }};
+        const auto two_char_op = std::ranges::find_if(
+            kTwoCharOperators, [&](const auto& op) { return op.first == c && op.second == peek_next(); });
+        if (two_char_op != kTwoCharOperators.end()) {
             advance_char();
             advance_char();
-            tokens.emplace_back(TokenType::ARROW, "->", loc);
-            continue;
-        }
-        if (c == '=' && peek_next() == '>') {
-            advance_char();
-            advance_char();
-            tokens.emplace_back(TokenType::FAT_ARROW, "=>", loc);
-            continue;
-        }
-        if (c == '=' && peek_next() == '=') {
-            advance_char();
-            advance_char();
-            tokens.emplace_back(TokenType::EQUALS, "==", loc);
-            continue;
-        }
-        if (c == '!' && peek_next() == '=') {
-            advance_char();
-            advance_char();
-            tokens.emplace_back(TokenType::NOT_EQUALS, "!=", loc);
-            continue;
-        }
-        if (c == '<' && peek_next() == '=') {
-            advance_char();
-            advance_char();
-            tokens.emplace_back(TokenType::LESS_EQ, "<=", loc);
-            continue;
-        }
-        if (c == '>' && peek_next() == '=') {
-            advance_char();
-            advance_char();
-            tokens.emplace_back(TokenType::GREATER_EQ, ">=", loc);
-            continue;
-        }
-        if (c == '+' && peek_next() == '=') {
-            advance_char();
-            advance_char();
-            tokens.emplace_back(TokenType::PLUS_ASSIGN, "+=", loc);
-            continue;
-        }
-        if (c == '-' && peek_next() == '=') {
-            advance_char();
-            advance_char();
-            tokens.emplace_back(TokenType::MINUS_ASSIGN, "-=", loc);
+            tokens.emplace_back(two_char_op->type, two_char_op->spelling, loc);
             continue;
         }
 
         // Single-character operators and punctuation
+        static const std::unordered_map<char, TokenType> kSingleCharTokens{
+            {':', TokenType::COLON},     {',', TokenType::COMMA},    {'.', TokenType::DOT},
+            {'(', TokenType::LPAREN},    {')', TokenType::RPAREN},   {'[', TokenType::LBRACKET},
+            {']', TokenType::RBRACKET},  {'{', TokenType::LBRACE},   {'}', TokenType::RBRACE},
+            {'+', TokenType::PLUS},      {'-', TokenType::MINUS},    {'*', TokenType::STAR},
+            {'/', TokenType::SLASH},     {'%', TokenType::PERCENT},  {'&', TokenType::AMPERSAND},
+            {'|', TokenType::PIPE},      {'^', TokenType::CARET},    {'~', TokenType::TILDE},
+            {'<', TokenType::LESS},      {'>', TokenType::GREATER},  {'=', TokenType::ASSIGN},
+        };
         advance_char();
-        switch (c) {
-            case ':':
-                tokens.emplace_back(TokenType::COLON, ":", loc);
-                break;
-            case ',':
-                tokens.emplace_back(TokenType::COMMA, ",", loc);
-                break;
-            case '.':
-                tokens.emplace_back(TokenType::DOT, ".", loc);
-                break;
-            case '(':
-                tokens.emplace_back(TokenType::LPAREN, "(", loc);
-                break;
-            case ')':
-                tokens.emplace_back(TokenType::RPAREN, ")", loc);
-                break;
-            case '[':
-                tokens.emplace_back(TokenType::LBRACKET, "[", loc);
-                break;
-            case ']':
-                tokens.emplace_back(TokenType::RBRACKET, "]", loc);
-                break;
-            case '{':
-                tokens.emplace_back(TokenType::LBRACE, "{", loc);
-                break;
-            case '}':
-                tokens.emplace_back(TokenType::RBRACE, "}", loc);
-                break;
-            case '+':
-                tokens.emplace_back(TokenType::PLUS, "+", loc);
-                break;
-            case '-':
-                tokens.emplace_back(TokenType::MINUS, "-", loc);
-                break;
-            case '*':
-                tokens.emplace_back(TokenType::STAR, "*", loc);
-                break;
-            case '/':
-                tokens.emplace_back(TokenType::SLASH, "/", loc);
-                break;
-            case '%':
-                tokens.emplace_back(TokenType::PERCENT, "%", loc);
-                break;
-            case '&':
-                tokens.emplace_back(TokenType::AMPERSAND, "&", loc);
-                break;
-            case '|':
-                tokens.emplace_back(TokenType::PIPE, "|", loc);
-                break;
-            case '^':
-                tokens.emplace_back(TokenType::CARET, "^", loc);
-                break;
-            case '~':
-                tokens.emplace_back(TokenType::TILDE, "~", loc);
-                break;
-            case '<':
-                tokens.emplace_back(TokenType::LESS, "<", loc);
-                break;
-            case '>':
-                tokens.emplace_back(TokenType::GREATER, ">", loc);
-                break;
-            case '=':
-                tokens.emplace_back(TokenType::ASSIGN, "=", loc);
-                break;
-            default:
-                errors_.error(loc, std::string("unexpected character '") + c + "'");
-                break;
+        if (const auto single_char_op = kSingleCharTokens.find(c); single_char_op != kSingleCharTokens.end()) {
+            tokens.emplace_back(single_char_op->second, std::string(1, c), loc);
+        } else {
+            errors_.error(loc, std::string("unexpected character '") + c + "'");
         }
     }
 

@@ -5,7 +5,10 @@
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <functional>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -84,7 +87,7 @@ struct StdlibFuncInfo {
     std::string runtime_name;
     bool needs_registry = false;
 };
-using FuncRenameMap                                                    = std::unordered_map<std::string, StdlibFuncInfo>;
+using FuncRenameMap = std::unordered_map<std::string, StdlibFuncInfo>;
 const std::unordered_map<std::string, FuncRenameMap> kRuntimeFuncNames = {
     {"std.render.models",
      {{"animation_count", {.runtime_name = "model_animation_count"}},
@@ -299,7 +302,7 @@ std::string handler_trigger_cpp_type(const EventHandlerNode& handler, const Deco
 }
 
 std::string handler_trigger_suffix(const EventHandlerNode& handler) {
-    if (handler.event_name.find('.') == std::string::npos || !handler.resolved_trigger.has_value()) {
+    if (!handler.event_name.contains('.') || !handler.resolved_trigger.has_value()) {
         return handler.event_name;
     }
     return canonical_to_cpp_name(handler.resolved_trigger->symbol);
@@ -453,7 +456,7 @@ std::vector<std::string> filter_cpp_type_names(const FilterClause& filter, const
 struct PairBindingCodegen {
     std::vector<std::string> cpp_types;  // dedup'd view<> template args, source order
     PairCodegenBinding scope;            // access-key -> resolved trait, for rewrite_expr; scope.binding_name
-                                          // is also this binding's source-level name
+                                         // is also this binding's source-level name
 };
 
 // Mirrors the frontend's build_pair_scope (semantic_analyzer.cpp): consumes
@@ -628,8 +631,8 @@ std::string emit_event_renderer_body(const ExternRuleNode& sys,
     const auto& handler   = sys.handlers.front();
     const auto event_type = event_cpp_type(handler.resolved_trigger->symbol, program);
     std::ostringstream out;
-    out << "void " << system_function_name(program.module_name, sys.name, "tick")
-        << "(entt::registry& registry, const " << event_type << "& occurrence) {\n";
+    out << "void " << system_function_name(program.module_name, sys.name, "tick") << "(entt::registry& registry, const "
+        << event_type << "& occurrence) {\n";
     out << "    (void)registry;\n";
     if (!mode_begin.empty()) {
         out << "    " << mode_begin << "\n";
@@ -642,10 +645,12 @@ std::string emit_event_renderer_body(const ExternRuleNode& sys,
     return out.str();
 }
 
-const std::string kBeginMode2D = "cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());";
-const std::string kEndMode2D   = "cactus::runtime::raylib::EndMode2D();";
-const std::string kBeginMode3D = "cactus::runtime::raylib::BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());";
-const std::string kEndMode3D   = "cactus::runtime::raylib::EndMode3D();";
+const std::string kBeginMode2D =
+    "cactus::runtime::raylib::BeginMode2D(cactus::runtime::entt_backend::get_active_camera_2d());";
+const std::string kEndMode2D = "cactus::runtime::raylib::EndMode2D();";
+const std::string kBeginMode3D =
+    "cactus::runtime::raylib::BeginMode3D(cactus::runtime::entt_backend::get_active_camera_3d());";
+const std::string kEndMode3D = "cactus::runtime::raylib::EndMode3D();";
 
 // One row per generic event-payload renderer (see the comment above); (module_name, rule_name)
 // identifies the extern rule to match, mode_begin/mode_end wrap world-space primitives in a
@@ -661,65 +666,65 @@ struct DebugDrawRendererSpec {
 
 const std::vector<DebugDrawRendererSpec>& debug_draw_renderer_specs() {
     static const std::vector<DebugDrawRendererSpec> specs = {
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugLine2DRenderer",
-         .mode_begin    = kBeginMode2D,
-         .mode_end      = kEndMode2D,
+        {.module_name    = "std.debug",
+         .rule_name      = "DrawDebugLine2DRenderer",
+         .mode_begin     = kBeginMode2D,
+         .mode_end       = kEndMode2D,
          .draw_call_body = "    cactus::runtime::raylib::DrawLineEx(occurrence.start, occurrence.end, "
                            "occurrence.thickness, occurrence.color);\n"},
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugTriangle2DRenderer",
-         .mode_begin    = kBeginMode2D,
-         .mode_end      = kEndMode2D,
-         .draw_call_body =
-             "    cactus::runtime::raylib::DrawTriangle(occurrence.a, occurrence.b, occurrence.c, occurrence.color);\n"},
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugRingOutline2DRenderer",
-         .mode_begin    = kBeginMode2D,
-         .mode_end      = kEndMode2D,
+        {.module_name    = "std.debug",
+         .rule_name      = "DrawDebugTriangle2DRenderer",
+         .mode_begin     = kBeginMode2D,
+         .mode_end       = kEndMode2D,
+         .draw_call_body = "    cactus::runtime::raylib::DrawTriangle(occurrence.a, occurrence.b, occurrence.c, "
+                           "occurrence.color);\n"},
+        {.module_name    = "std.debug",
+         .rule_name      = "DrawDebugRingOutline2DRenderer",
+         .mode_begin     = kBeginMode2D,
+         .mode_end       = kEndMode2D,
          .draw_call_body = "    cactus::runtime::raylib::DrawRing(occurrence.center, "
                            "occurrence.inner_radius, occurrence.outer_radius, 0.0F, 360.0F, 32, "
                            "occurrence.color);\n"},
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugRectOutline2DRenderer",
-         .mode_begin    = kBeginMode2D,
-         .mode_end      = kEndMode2D,
+        {.module_name    = "std.debug",
+         .rule_name      = "DrawDebugRectOutline2DRenderer",
+         .mode_begin     = kBeginMode2D,
+         .mode_end       = kEndMode2D,
          .draw_call_body = "    const Rectangle __rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
                            "                          .width = occurrence.size.x, .height = occurrence.size.y};\n"
                            "    cactus::runtime::raylib::DrawRectangleLinesEx(__rect, occurrence.thickness, "
                            "occurrence.color);\n"},
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugLine3DRenderer",
-         .mode_begin    = kBeginMode3D,
-         .mode_end      = kEndMode3D,
+        {.module_name = "std.debug",
+         .rule_name   = "DrawDebugLine3DRenderer",
+         .mode_begin  = kBeginMode3D,
+         .mode_end    = kEndMode3D,
          .draw_call_body =
              "    cactus::runtime::raylib::DrawLine3D(occurrence.start, occurrence.end, occurrence.color);\n"},
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugWireBox3DRenderer",
-         .mode_begin    = kBeginMode3D,
-         .mode_end      = kEndMode3D,
+        {.module_name = "std.debug",
+         .rule_name   = "DrawDebugWireBox3DRenderer",
+         .mode_begin  = kBeginMode3D,
+         .mode_end    = kEndMode3D,
          .draw_call_body =
              "    cactus::runtime::raylib::DrawCubeWiresV(occurrence.center, occurrence.size, occurrence.color);\n"},
         // raylib's DrawCircle3D takes a rotation axis + angle, not a plane normal; the event's
         // `normal` field maps to rotationAxis with a fixed 90-degree angle, matching the exact
         // hardcoded call this replaces (Rotate gizmo always passed axis (1,0,0), angle 90) —
         // task 5.3 visual-equivalence requirement, not a general normal-to-rotation solver.
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugCircle3DRenderer",
-         .mode_begin    = kBeginMode3D,
-         .mode_end      = kEndMode3D,
+        {.module_name    = "std.debug",
+         .rule_name      = "DrawDebugCircle3DRenderer",
+         .mode_begin     = kBeginMode3D,
+         .mode_end       = kEndMode3D,
          .draw_call_body = "    cactus::runtime::raylib::DrawCircle3D(occurrence.center, occurrence.radius, "
                            "occurrence.normal, 90.0F, occurrence.color);\n"},
-        {.module_name   = "std.debug",
-         .rule_name     = "DrawDebugCube3DRenderer",
-         .mode_begin    = kBeginMode3D,
-         .mode_end      = kEndMode3D,
+        {.module_name = "std.debug",
+         .rule_name   = "DrawDebugCube3DRenderer",
+         .mode_begin  = kBeginMode3D,
+         .mode_end    = kEndMode3D,
          .draw_call_body =
              "    cactus::runtime::raylib::DrawCubeV(occurrence.center, occurrence.size, occurrence.color);\n"},
-        {.module_name   = "std.ui",
-         .rule_name     = "DrawScreenRectRenderer",
-         .mode_begin    = "",
-         .mode_end      = "",
+        {.module_name    = "std.ui",
+         .rule_name      = "DrawScreenRectRenderer",
+         .mode_begin     = "",
+         .mode_end       = "",
          .draw_call_body = "    const Rectangle __rect{.x = occurrence.position.x, .y = occurrence.position.y,\n"
                            "                          .width = occurrence.size.x, .height = occurrence.size.y};\n"
                            "    if (occurrence.filled) {\n"
@@ -958,6 +963,122 @@ static std::string rewrite_expr(const ExprNode& expr,
                                 const std::unordered_map<std::string, std::string>& cpp_overrides = {},
                                 const PairCodegenScope* pair_scope                                = nullptr);
 
+// Comma-joined rewrite_expr(*args[i], ...) for a call/list argument list.
+static std::string join_rewritten_args(const std::vector<std::unique_ptr<ExprNode>>& args,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_set<std::string>& pointer_aliases,
+                                       const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                       const PairCodegenScope* pair_scope) {
+    std::string result;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += rewrite_expr(*args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+    }
+    return result;
+}
+
+// (object, member) -> runtime-call dispatch table for rewrite_expr's
+// input/camera2d/camera3d/transform2d/transform3d builtin call rewriting
+// (camera2d/camera3d/transform2d/transform3d are aliases declared in
+// std.editor and are invisible from the root program's AST, so
+// imported_module_name cannot resolve them and they need hardcoded
+// dispatch). required_arg_count mirrors each original site's own
+// e.args.size() check (nullopt for the input.axis/pressed/down/released
+// group, which never checked arg count); call_body receives the args
+// already rewritten and comma-joined (join_rewritten_args on a single-arg
+// list is exactly rewrite_expr(*args[0], ...), so this covers the 1-arg
+// sites too without a separate code path).
+struct BuiltinMemberCallSpec {
+    const char* object_name;
+    const char* member_name;
+    std::optional<std::size_t> required_arg_count;
+    std::function<std::string(const std::string& joined_args)> call_body;
+};
+
+const std::array<BuiltinMemberCallSpec, 14>& builtin_member_call_specs() {
+    static const std::array<BuiltinMemberCallSpec, 14> specs{{
+        {.object_name        = "input",
+         .member_name        = "mouse_position",
+         .required_arg_count = 0,
+         .call_body          = [](const std::string&) { return "cactus::runtime::entt_backend::mouse_position()"; }},
+        {.object_name        = "input",
+         .member_name        = "axis",
+         .required_arg_count = std::nullopt,
+         .call_body          = [](const std::string& args) { return "InputEvent::axis(" + args + ")"; }},
+        {.object_name        = "input",
+         .member_name        = "pressed",
+         .required_arg_count = std::nullopt,
+         .call_body          = [](const std::string& args) { return "InputEvent::pressed(" + args + ")"; }},
+        {.object_name        = "input",
+         .member_name        = "down",
+         .required_arg_count = std::nullopt,
+         .call_body          = [](const std::string& args) { return "InputEvent::down(" + args + ")"; }},
+        {.object_name        = "input",
+         .member_name        = "released",
+         .required_arg_count = std::nullopt,
+         .call_body          = [](const std::string& args) { return "InputEvent::released(" + args + ")"; }},
+        {.object_name        = "input",
+         .member_name        = "mouse_delta",
+         .required_arg_count = 0,
+         .call_body = [](const std::string&) { return "cactus::runtime::entt_backend::editor_mouse_delta_screen()"; }},
+        {.object_name        = "input",
+         .member_name        = "wheel_delta",
+         .required_arg_count = 0,
+         .call_body = [](const std::string&) { return "cactus::runtime::entt_backend::editor_wheel_delta()"; }},
+        {.object_name        = "input",
+         .member_name        = "consume",
+         .required_arg_count = 1,
+         .call_body =
+             [](const std::string& args) { return "cactus::runtime::entt_backend::editor_consume(" + args + ")"; }},
+        {.object_name        = "camera2d",
+         .member_name        = "screen_to_world",
+         .required_arg_count = 1,
+         .call_body =
+             [](const std::string& args) {
+                 return "cactus::runtime::entt_backend::editor_screen_to_world_2d(" + args + ")";
+             }},
+        {.object_name        = "camera2d",
+         .member_name        = "screen_delta_to_world",
+         .required_arg_count = 1,
+         .call_body =
+             [](const std::string& args) {
+                 return "cactus::runtime::entt_backend::screen_delta_to_world_2d(" + args + ")";
+             }},
+        {.object_name        = "camera3d",
+         .member_name        = "screen_to_plane",
+         .required_arg_count = 3,
+         .call_body =
+             [](const std::string& args) {
+                 return "cactus::runtime::entt_backend::editor_plane_project_3d(" + args + ")";
+             }},
+        {.object_name        = "camera3d",
+         .member_name        = "screen_delta_on_plane",
+         .required_arg_count = 4,
+         .call_body =
+             [](const std::string& args) {
+                 return "cactus::runtime::entt_backend::screen_delta_on_plane_3d(" + args + ")";
+             }},
+        {.object_name        = "transform2d",
+         .member_name        = "world_position",
+         .required_arg_count = 1,
+         .call_body =
+             [](const std::string& args) {
+                 return "cactus::runtime::entt_backend::editor_entity_position_2d(registry, " + args + ")";
+             }},
+        {.object_name        = "transform3d",
+         .member_name        = "world_position",
+         .required_arg_count = 1,
+         .call_body =
+             [](const std::string& args) {
+                 return "cactus::runtime::entt_backend::editor_entity_position_3d(registry, " + args + ")";
+             }},
+    }};
+    return specs;
+}
+
 static std::string rewrite_stmt(const StmtNode& stmt,
                                 int indent,
                                 const std::vector<std::string>& trait_names,
@@ -1116,7 +1237,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     // plausibly bind via `let`; mangle them so an override expression referencing such a
     // variable can't be captured by these compiler-internal declarations (same class of bug as
     // the target/parent self-reference cases above).
-    const std::string spawned_name  = gen_temp_name("spawned", location);
+    const std::string spawned_name   = gen_temp_name("spawned", location);
     const std::string committed_name = gen_temp_name("committed", location);
     if (graph_runtime) {
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
@@ -1131,8 +1252,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     } else {
         out << "    auto " << spawned_name << " = "
             << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path) << "(registry);\n";
-        out << emit_spawn_overrides(
-            spawned_name, root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
+        out << emit_spawn_overrides(spawned_name, root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
     emit_spawn_child_expansion(out,
                                tmpl_module,
@@ -1280,8 +1400,7 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         const std::string parent_cpp  = EnttCodegenUtils::trait_cpp_name("Parent", program);
         const std::string parent_comp = gen_temp_name("parent_component", qcall.location);
         return "[&]{ if (auto* " + parent_comp + " = registry.try_get<" + parent_cpp + ">(" + of_expr + "); " +
-               parent_comp + " != nullptr) return " + parent_comp +
-               "->parent; return entt::entity{entt::null}; }()";
+               parent_comp + " != nullptr) return " + parent_comp + "->parent; return entt::entity{entt::null}; }()";
     }
     return "/* unsupported std.query func: " + func_name + " */";
 }
@@ -1430,16 +1549,19 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
                                          const std::unordered_map<std::string, std::string>& cpp_overrides = {},
                                          const PairCodegenScope* pair_scope                                = nullptr);
 
-static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-function-cognitive-complexity)
-                                const std::vector<std::string>& trait_names,
-                                const DecoratedProgram& program,
-                                const std::unordered_set<std::string>& pointer_aliases,
-                                const std::unordered_map<std::string, std::string>& cpp_overrides,
-                                const PairCodegenScope* pair_scope) {
+static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-complexity) -- still 250 after table-driving
+                                  // the input/camera/transform builtin dispatch (task 5.4); this is the full
+                                  // expression-rewrite dispatch, dozens of unrelated arms remain
+    const ExprNode& expr,
+    const std::vector<std::string>& trait_names,
+    const DecoratedProgram& program,
+    const std::unordered_set<std::string>& pointer_aliases,
+    const std::unordered_map<std::string, std::string>& cpp_overrides,
+    const PairCodegenScope* pair_scope) {
     auto known_fields = collect_trait_fields(trait_names, program);
 
     return std::visit(
-        [&](auto& e) -> std::string {  // NOLINT(readability-function-cognitive-complexity)
+        [&](auto& e) -> std::string {  // NOLINT(readability-function-cognitive-complexity) -- still 198, same reason
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
                 if (e.kind == LiteralExpr::Kind::String) {
@@ -1545,15 +1667,10 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                     // Bare DSL input-state builtins: fallback when no module resolved.
                     if (ident->name == "axis" || ident->name == "pressed" || ident->name == "down" ||
                         ident->name == "released") {
-                        std::string result = "InputEvent::" + ident->name + "(";
-                        for (size_t i = 0; i < e.args.size(); ++i) {
-                            if (i > 0) {
-                                result += ", ";
-                            }
-                            result += rewrite_expr(
-                                *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                        }
-                        return result + ")";
+                        return "InputEvent::" + ident->name + "(" +
+                               join_rewritten_args(
+                                   e.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                               ")";
                     }
                 }
                 // Disambiguate module-alias.func() when the alias shadows a known field name
@@ -1587,106 +1704,18 @@ static std::string rewrite_expr(const ExprNode& expr,  // NOLINT(readability-fun
                 }
                 if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
                     if (const auto* object = std::get_if<IdentExpr>(&member->object->expr)) {
-                        if (object->name == "input" && member->member == "mouse_position" && e.args.empty()) {
-                            return "cactus::runtime::entt_backend::mouse_position()";
-                        }
-                        if (object->name == "input" && (member->member == "axis" || member->member == "pressed" ||
-                                                        member->member == "down" || member->member == "released")) {
-                            std::string result = "InputEvent::" + member->member + "(";
-                            for (size_t i = 0; i < e.args.size(); ++i) {
-                                if (i > 0) {
-                                    result += ", ";
-                                }
-                                result += rewrite_expr(
-                                    *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+                        for (const auto& spec : builtin_member_call_specs()) {
+                            if (object->name == spec.object_name && member->member == spec.member_name &&
+                                (!spec.required_arg_count.has_value() || e.args.size() == *spec.required_arg_count)) {
+                                return spec.call_body(join_rewritten_args(
+                                    e.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope));
                             }
-                            return result + ")";
-                        }
-                        if (object->name == "input" && member->member == "mouse_delta" && e.args.empty()) {
-                            return "cactus::runtime::entt_backend::editor_mouse_delta_screen()";
-                        }
-                        if (object->name == "input" && member->member == "wheel_delta" && e.args.empty()) {
-                            return "cactus::runtime::entt_backend::editor_wheel_delta()";
-                        }
-                        if (object->name == "input" && member->member == "consume" && e.args.size() == 1) {
-                            return "cactus::runtime::entt_backend::editor_consume(" +
-                                   rewrite_expr(
-                                       *e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
-                                   ")";
-                        }
-                        // camera2d/camera3d/transform2d/transform3d are aliases declared in
-                        // std.editor and are invisible from the root program's AST, so
-                        // imported_module_name cannot resolve them and they need hardcoded dispatch.
-                        if (object->name == "camera2d") {
-                            if (member->member == "screen_to_world" && e.args.size() == 1) {
-                                return "cactus::runtime::entt_backend::editor_screen_to_world_2d(" +
-                                       rewrite_expr(*e.args[0],
-                                                    trait_names,
-                                                    program,
-                                                    pointer_aliases,
-                                                    cpp_overrides,
-                                                    pair_scope) +
-                                       ")";
-                            }
-                            if (member->member == "screen_delta_to_world" && e.args.size() == 1) {
-                                return "cactus::runtime::entt_backend::screen_delta_to_world_2d(" +
-                                       rewrite_expr(*e.args[0],
-                                                    trait_names,
-                                                    program,
-                                                    pointer_aliases,
-                                                    cpp_overrides,
-                                                    pair_scope) +
-                                       ")";
-                            }
-                        }
-                        if (object->name == "camera3d") {
-                            if (member->member == "screen_to_plane" && e.args.size() == 3) {
-                                std::string result = "cactus::runtime::entt_backend::editor_plane_project_3d(";
-                                for (size_t i = 0; i < e.args.size(); ++i) {
-                                    if (i > 0) {
-                                        result += ", ";
-                                    }
-                                    result += rewrite_expr(
-                                        *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                                }
-                                return result + ")";
-                            }
-                            if (member->member == "screen_delta_on_plane" && e.args.size() == 4) {
-                                std::string result = "cactus::runtime::entt_backend::screen_delta_on_plane_3d(";
-                                for (size_t i = 0; i < e.args.size(); ++i) {
-                                    if (i > 0) {
-                                        result += ", ";
-                                    }
-                                    result += rewrite_expr(
-                                        *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                                }
-                                return result + ")";
-                            }
-                        }
-                        if (object->name == "transform2d" && member->member == "world_position" && e.args.size() == 1) {
-                            return "cactus::runtime::entt_backend::editor_entity_position_2d(registry, " +
-                                   rewrite_expr(
-                                       *e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
-                                   ")";
-                        }
-                        if (object->name == "transform3d" && member->member == "world_position" && e.args.size() == 1) {
-                            return "cactus::runtime::entt_backend::editor_entity_position_3d(registry, " +
-                                   rewrite_expr(
-                                       *e.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
-                                   ")";
                         }
                     }
                 }
-                std::string result =
-                    rewrite_expr(*e.callee, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "(";
-                for (size_t i = 0; i < e.args.size(); ++i) {
-                    if (i > 0) {
-                        result += ", ";
-                    }
-                    result +=
-                        rewrite_expr(*e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                }
-                return result + ")";
+                return rewrite_expr(*e.callee, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "(" +
+                       join_rewritten_args(e.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) +
+                       ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 // Pair-bound member chain (e.g. `body.tf.WorldTransform.position`):
                 // consume leading segments against the binding's resolved trait
@@ -1844,6 +1873,272 @@ static std::string emit_trait_match_stmt(const TraitMatchStmt& match_stmt,
     return out.str();
 }
 
+static std::string emit_emit_stmt(const EmitStmt& s,
+                                  int indent,
+                                  const std::vector<std::string>& trait_names,
+                                  const DecoratedProgram& program,
+                                  const std::unordered_set<std::string>& pointer_aliases,
+                                  bool dispatcher_available,
+                                  const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                  const PairCodegenScope* pair_scope) {
+    std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const bool graph_runtime = !program.execution_graph.phases.empty();
+    // event_name is now dotted for cross-module events (e.g. "std.debug.DrawDebugLine2D"),
+    // so the resolved symbol must drive the lookup — the string overload only matches a
+    // bare declared name and would silently fall through to an invalid C++ type name.
+    const auto event_type = s.resolved_event_id.has_value() ? event_cpp_type(*s.resolved_event_id, program)
+                                                            : event_cpp_type(s.event_name, program);
+    std::string payload;
+    for (size_t i = 0; i < s.payload.size(); ++i) {
+        if (i > 0) {
+            payload += ", ";
+        }
+        payload += "." + s.payload[i].name + " = " +
+                   rewrite_expr(*s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+    }
+
+    if (!s.target.has_value()) {
+        std::string emit_call;
+        if (graph_runtime) {
+            emit_call = "cactus::runtime::entt_backend::generated_emit_event(" + event_type + "{";
+        } else if (dispatcher_available) {
+            emit_call = "dispatcher.trigger(" + event_type + "{";
+        } else {
+            // event_type (already computed above) is a valid, collision-resistant C++
+            // identifier; event_name may be dotted for cross-module events and cannot be
+            // used directly to build an identifier.
+            emit_call = event_type + "_buffer.push_back({";
+        }
+        return ind + emit_call + payload + "});\n";
+    }
+
+    // Targeted emit: evaluate the target exactly once and, on the
+    // graph-runtime path, carry its identity into the queued
+    // occurrence (targeted-event-delivery) rather than lowering to
+    // a validity guard around broadcast dispatch. The legacy
+    // dispatcher/buffer paths (unused by the modern runtime) keep
+    // their existing validity-guarded shape, since they have no
+    // recipient-aware delivery mechanism to carry a target through.
+    const std::string TARGET =
+        rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+    if (graph_runtime) {
+        // TARGET is arbitrary, rewritten DSL text (e.g. a bare identifier such as
+        // `target`) — the recipient temporary must use a name that can never collide
+        // with it, or the declaration below becomes self-referential.
+        const std::string RECIPIENT = gen_temp_name("emit_target", s.location);
+        return ind + "{\n" + ind + "    const auto " + RECIPIENT + " = " + TARGET + ";\n" + ind +
+               "    if (registry.valid(" + RECIPIENT + ")) {\n" + ind +
+               "        cactus::runtime::entt_backend::generated_emit_targeted_event(" + event_type + "{" + payload +
+               "}, " + RECIPIENT + ");\n" + ind + "    }\n" + ind + "}\n";
+    }
+    std::string emit_call =
+        dispatcher_available ? "dispatcher.trigger(" + event_type + "{" : event_type + "_buffer.push_back({";
+    return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + payload + "});\n" + ind + "}\n";
+}
+
+static std::string emit_spawn_stmt(const SpawnStmt& s,
+                                   int indent,
+                                   const std::vector<std::string>& trait_names,
+                                   const DecoratedProgram& program,
+                                   const std::unordered_set<std::string>& pointer_aliases,
+                                   const PairCodegenScope* pair_scope) {
+    std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const SymbolId tmpl_id = s.resolved_template_id.has_value()
+                                 ? *s.resolved_template_id
+                                 : make_symbol_id(SymbolKind::Template, program.module_name, s.template_name);
+    if (!s.child_overrides.empty()) {
+        if (const auto* children = find_template_children(program, tmpl_id)) {
+            return ind +
+                   emit_hierarchical_spawn_expansion(tmpl_id,
+                                                     s.overrides,
+                                                     s.child_overrides,
+                                                     *children,
+                                                     trait_names,
+                                                     program,
+                                                     pointer_aliases,
+                                                     s.location,
+                                                     pair_scope) +
+                   ";\n";
+        }
+    }
+    std::ostringstream result;
+    const std::string spawned_name = gen_temp_name("spawned", s.location);
+    result << ind << "{\n";
+    if (!program.execution_graph.phases.empty()) {
+        result << ind << "    auto " << spawned_name
+               << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
+        result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+        result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
+        result << ind << "        [=](entt::registry& registry) mutable {\n";
+        result << ind << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, "
+               << spawned_name << ");\n";
+        result << emit_spawn_overrides(
+            spawned_name, s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
+        result << ind << "        });\n";
+    } else {
+        result << ind << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
+               << "(registry);\n";
+        result << emit_spawn_overrides(
+            spawned_name, s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
+    }
+    result << ind << "}\n";
+    return result.str();
+}
+
+static std::string emit_add_trait_stmt(const AddTraitStmt& s,
+                                       int indent,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_set<std::string>& pointer_aliases,
+                                       const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                       const PairCodegenScope* pair_scope) {
+    std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    std::string target =
+        s.target_expr.has_value()
+            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+            : "entity";
+    const bool GUARDED    = s.target_expr.has_value();
+    const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
+    // `target` above is arbitrary rewritten DSL text; the generated temporaries must
+    // use names that cannot collide with it or with each other (same class of bug as
+    // the reserved-double-underscore names these replace).
+    const std::string target_name   = gen_temp_name("target", s.location);
+    const std::string existing_name = gen_temp_name("existing", s.location);
+    const std::string value_name    = gen_temp_name("value", s.location);
+    if (!program.execution_graph.phases.empty()) {
+        std::ostringstream result;
+        result << ind << "{\n";
+        result << ind << "    const auto " << target_name << " = " << target << ";\n";
+        result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+        result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Add,\n";
+        result << ind << "        [=](entt::registry& registry) mutable {\n";
+        result << ind << "            if (!registry.valid(" << target_name << ")) { return; }\n";
+        result << ind << "            cancel_projected_" << cpp << "(" << target_name << ");\n";
+        if (s.args.empty()) {
+            result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name << ");\n";
+        } else {
+            result << ind << "            auto " << existing_name << " = registry.try_get<" << cpp << ">("
+                   << target_name << ");\n";
+            result << ind << "            auto " << value_name << " = " << existing_name << " ? *" << existing_name
+                   << " : " << cpp << "{};\n";
+            for (const auto& arg : s.args) {
+                result << ind << "            " << value_name << "." << arg.name << " = "
+                       << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                       << ";\n";
+            }
+            result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name << ", "
+                   << value_name << ");\n";
+        }
+        result << ind << "        });\n";
+        result << ind << "}\n";
+        return result.str();
+    }
+    if (s.args.empty()) {
+        if (GUARDED) {
+            return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" +
+                   target + ");\n" + ind + "    registry.emplace_or_replace<" + cpp + ">(" + target + ");\n" + ind +
+                   "}\n";
+        }
+        return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "registry.emplace_or_replace<" + cpp +
+               ">(" + target + ");\n";
+    }
+
+    std::ostringstream result;
+    if (GUARDED) {
+        result << ind << "if (registry.valid(" << target << ")) {\n";
+    }
+    result << ind << (GUARDED ? "    " : "") << "{\n";
+    result << ind << (GUARDED ? "        " : "    ") << "cancel_projected_" << cpp << "(" << target << ");\n";
+    result << ind << (GUARDED ? "        " : "    ") << "auto " << existing_name << " = registry.try_get<" << cpp
+           << ">(" << target << ");\n";
+    result << ind << (GUARDED ? "        " : "    ") << "auto " << value_name << " = " << existing_name << " ? *"
+           << existing_name << " : " << cpp << "{};\n";
+    for (const auto& arg : s.args) {
+        result << ind << (GUARDED ? "        " : "    ") << value_name << "." << arg.name << " = "
+               << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
+    }
+    result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">(" << target << ", "
+           << value_name << ");\n";
+    result << ind << (GUARDED ? "    " : "") << "}\n";
+    if (GUARDED) {
+        result << ind << "}\n";
+    }
+    return result.str();
+}
+
+static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
+                                          int indent,
+                                          const std::vector<std::string>& trait_names,
+                                          const DecoratedProgram& program,
+                                          const std::unordered_set<std::string>& pointer_aliases,
+                                          const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                          const PairCodegenScope* pair_scope) {
+    std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    std::string target =
+        s.target_expr.has_value()
+            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+            : "entity";
+    const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
+    if (!program.execution_graph.phases.empty()) {
+        const std::string target_name = gen_temp_name("target", s.location);
+        return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
+               "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
+               "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Remove,\n" + ind +
+               "        [=](entt::registry& registry) {\n" + ind + "            if (!registry.valid(" + target_name +
+               ")) { return; }\n" + ind + "            cancel_projected_" + cpp + "(" + target_name + ");\n" + ind +
+               "            if (registry.all_of<" + cpp + ">(" + target_name + ")) {\n" + ind +
+               "                registry.remove<" + cpp + ">(" + target_name + ");\n" + ind + "            }\n" + ind +
+               "        });\n" + ind + "}\n";
+    }
+    if (s.target_expr.has_value()) {
+        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" + target +
+               ");\n" + ind + "    if (registry.all_of<" + cpp + ">(" + target + ")) {\n" + ind +
+               "        registry.remove<" + cpp + ">(" + target + ");\n" + ind + "    }\n" + ind + "}\n";
+    }
+    return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "if (registry.all_of<" + cpp + ">(" +
+           target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" + target + ");\n" + ind + "}\n";
+}
+
+static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,
+                                           int indent,
+                                           const std::vector<std::string>& trait_names,
+                                           const DecoratedProgram& program,
+                                           const std::unordered_set<std::string>& pointer_aliases,
+                                           const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                           const PairCodegenScope* pair_scope) {
+    std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const std::string target =
+        s.target_expr.has_value()
+            ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+            : "entity";
+    const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
+    const auto simple =
+        s.trait_name.rfind('.') != std::string::npos ? s.trait_name.substr(s.trait_name.rfind('.') + 1) : s.trait_name;
+    const auto* resolved_pt = s.resolved_trait_id.has_value()
+                                  ? EnttCodegenUtils::find_trait(program, make_canonical_id(*s.resolved_trait_id))
+                                  : EnttCodegenUtils::find_trait(program, simple);
+    const bool is_marker    = resolved_pt == nullptr || resolved_pt->fields.empty();
+    std::ostringstream result;
+    result << ind << "if (registry.valid(" << target << ")) {\n";
+    if (is_marker) {
+        result << ind << "    project_" << cpp << "(registry, " << target << ");\n";
+    } else {
+        const std::string projected_name = gen_temp_name("projected", s.location);
+        result << ind << "    [[maybe_unused]] auto& " << projected_name << " = project_" << cpp << "(registry, "
+               << target << ");\n";
+        for (const auto& arg : s.args) {
+            result << ind << "    " << projected_name << "." << arg.name << " = "
+                   << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+                   << ";\n";
+        }
+    }
+    result << ind << "}\n";
+    return result.str();
+}
+
+// Still 73 after extracting emit_emit_stmt/emit_spawn_stmt/emit_add_trait_stmt/
+// emit_remove_trait_stmt/emit_project_trait_stmt (task 6.7); the visit lambda's
+// own nesting is counted into the enclosing function too.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static std::string rewrite_stmt(const StmtNode& stmt,
                                 int indent,
@@ -1857,6 +2152,9 @@ static std::string rewrite_stmt(const StmtNode& stmt,
     std::string ind(static_cast<size_t>(indent) * 4, ' ');
 
     return std::visit(
+        // Still 57 after task 6.7's extraction; remaining branches (LetStmt/VarAssign/
+        // DestroyStmt/ReturnStmt/ExprStmt/IfStmt/TraitMatchStmt/ForeachStmt) are the
+        // exhaustive AST-dispatch arms, an inherent shape.
         // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         [&](auto& s) -> std::string {
             using S = std::decay_t<decltype(s)>;
@@ -1911,238 +2209,18 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return ind + lhs + " " + s.op + " " +
                        rewrite_expr(*s.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + ";\n";
             } else if constexpr (std::is_same_v<S, EmitStmt>) {
-                const bool graph_runtime = !program.execution_graph.phases.empty();
-                // event_name is now dotted for cross-module events (e.g. "std.debug.DrawDebugLine2D"),
-                // so the resolved symbol must drive the lookup — the string overload only matches a
-                // bare declared name and would silently fall through to an invalid C++ type name.
-                const auto event_type = s.resolved_event_id.has_value() ? event_cpp_type(*s.resolved_event_id, program)
-                                                                        : event_cpp_type(s.event_name, program);
-                std::string payload;
-                for (size_t i = 0; i < s.payload.size(); ++i) {
-                    if (i > 0) {
-                        payload += ", ";
-                    }
-                    payload +=
-                        "." + s.payload[i].name + " = " +
-                        rewrite_expr(
-                            *s.payload[i].value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                }
-
-                if (!s.target.has_value()) {
-                    std::string emit_call;
-                    if (graph_runtime) {
-                        emit_call = "cactus::runtime::entt_backend::generated_emit_event(" + event_type + "{";
-                    } else if (dispatcher_available) {
-                        emit_call = "dispatcher.trigger(" + event_type + "{";
-                    } else {
-                        // event_type (already computed above) is a valid, collision-resistant C++
-                        // identifier; event_name may be dotted for cross-module events and cannot be
-                        // used directly to build an identifier.
-                        emit_call = event_type + "_buffer.push_back({";
-                    }
-                    return ind + emit_call + payload + "});\n";
-                }
-
-                // Targeted emit: evaluate the target exactly once and, on the
-                // graph-runtime path, carry its identity into the queued
-                // occurrence (targeted-event-delivery) rather than lowering to
-                // a validity guard around broadcast dispatch. The legacy
-                // dispatcher/buffer paths (unused by the modern runtime) keep
-                // their existing validity-guarded shape, since they have no
-                // recipient-aware delivery mechanism to carry a target through.
-                const std::string TARGET =
-                    rewrite_expr(**s.target, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
-                if (graph_runtime) {
-                    // TARGET is arbitrary, rewritten DSL text (e.g. a bare identifier such as
-                    // `target`) — the recipient temporary must use a name that can never collide
-                    // with it, or the declaration below becomes self-referential.
-                    const std::string RECIPIENT = gen_temp_name("emit_target", s.location);
-                    return ind + "{\n" + ind + "    const auto " + RECIPIENT + " = " + TARGET + ";\n" + ind +
-                           "    if (registry.valid(" + RECIPIENT + ")) {\n" + ind +
-                           "        cactus::runtime::entt_backend::generated_emit_targeted_event(" + event_type + "{" +
-                           payload + "}, " + RECIPIENT + ");\n" + ind + "    }\n" + ind + "}\n";
-                }
-                std::string emit_call = dispatcher_available ? "dispatcher.trigger(" + event_type + "{"
-                                                             : event_type + "_buffer.push_back({";
-                return ind + "if (registry.valid(" + TARGET + ")) {\n" + ind + "    " + emit_call + payload + "});\n" +
-                       ind + "}\n";
+                return emit_emit_stmt(
+                    s, indent, trait_names, program, pointer_aliases, dispatcher_available, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<S, SpawnStmt>) {
-                const SymbolId tmpl_id =
-                    s.resolved_template_id.has_value()
-                        ? *s.resolved_template_id
-                        : make_symbol_id(SymbolKind::Template, program.module_name, s.template_name);
-                if (!s.child_overrides.empty()) {
-                    if (const auto* children = find_template_children(program, tmpl_id)) {
-                        return ind +
-                               emit_hierarchical_spawn_expansion(tmpl_id,
-                                                                 s.overrides,
-                                                                 s.child_overrides,
-                                                                 *children,
-                                                                 trait_names,
-                                                                 program,
-                                                                 pointer_aliases,
-                                                                 s.location,
-                                                                 pair_scope) +
-                               ";\n";
-                    }
-                }
-                std::ostringstream result;
-                const std::string spawned_name = gen_temp_name("spawned", s.location);
-                result << ind << "{\n";
-                if (!program.execution_graph.phases.empty()) {
-                    result << ind << "    auto " << spawned_name
-                           << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
-                    result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-                    result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
-                    result << ind << "        [=](entt::registry& registry) mutable {\n";
-                    result << ind << "            " << archetype_create_at_function_name(tmpl_id, program)
-                           << "(registry, " << spawned_name << ");\n";
-                    result << emit_spawn_overrides(
-                        spawned_name, s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
-                    result << ind << "        });\n";
-                } else {
-                    result << ind << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
-                           << "(registry);\n";
-                    result << emit_spawn_overrides(
-                        spawned_name, s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
-                }
-                result << ind << "}\n";
-                return result.str();
+                return emit_spawn_stmt(s, indent, trait_names, program, pointer_aliases, pair_scope);
             } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
-                std::string target =
-                    s.target_expr.has_value()
-                        ? rewrite_expr(
-                              **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-                        : "entity";
-                const bool GUARDED    = s.target_expr.has_value();
-                const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
-                // `target` above is arbitrary rewritten DSL text; the generated temporaries must
-                // use names that cannot collide with it or with each other (same class of bug as
-                // the reserved-double-underscore names these replace).
-                const std::string target_name   = gen_temp_name("target", s.location);
-                const std::string existing_name = gen_temp_name("existing", s.location);
-                const std::string value_name    = gen_temp_name("value", s.location);
-                if (!program.execution_graph.phases.empty()) {
-                    std::ostringstream result;
-                    result << ind << "{\n";
-                    result << ind << "    const auto " << target_name << " = " << target << ";\n";
-                    result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-                    result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Add,\n";
-                    result << ind << "        [=](entt::registry& registry) mutable {\n";
-                    result << ind << "            if (!registry.valid(" << target_name << ")) { return; }\n";
-                    result << ind << "            cancel_projected_" << cpp << "(" << target_name << ");\n";
-                    if (s.args.empty()) {
-                        result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name
-                               << ");\n";
-                    } else {
-                        result << ind << "            auto " << existing_name << " = registry.try_get<" << cpp << ">("
-                               << target_name << ");\n";
-                        result << ind << "            auto " << value_name << " = " << existing_name << " ? *"
-                               << existing_name << " : " << cpp << "{};\n";
-                        for (const auto& arg : s.args) {
-                            result << ind << "            " << value_name << "." << arg.name << " = "
-                                   << rewrite_expr(
-                                          *arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-                                   << ";\n";
-                        }
-                        result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name
-                               << ", " << value_name << ");\n";
-                    }
-                    result << ind << "        });\n";
-                    result << ind << "}\n";
-                    return result.str();
-                }
-                if (s.args.empty()) {
-                    if (GUARDED) {
-                        return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp +
-                               "(" + target + ");\n" + ind + "    registry.emplace_or_replace<" + cpp + ">(" + target +
-                               ");\n" + ind + "}\n";
-                    }
-                    return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind +
-                           "registry.emplace_or_replace<" + cpp + ">(" + target + ");\n";
-                }
-
-                std::ostringstream result;
-                if (GUARDED) {
-                    result << ind << "if (registry.valid(" << target << ")) {\n";
-                }
-                result << ind << (GUARDED ? "    " : "") << "{\n";
-                result << ind << (GUARDED ? "        " : "    ") << "cancel_projected_" << cpp << "(" << target
-                       << ");\n";
-                result << ind << (GUARDED ? "        " : "    ") << "auto " << existing_name << " = registry.try_get<"
-                       << cpp << ">(" << target << ");\n";
-                result << ind << (GUARDED ? "        " : "    ") << "auto " << value_name << " = " << existing_name
-                       << " ? *" << existing_name << " : " << cpp << "{};\n";
-                for (const auto& arg : s.args) {
-                    result << ind << (GUARDED ? "        " : "    ") << value_name << "." << arg.name << " = "
-                           << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-                           << ";\n";
-                }
-                result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">("
-                       << target << ", " << value_name << ");\n";
-                result << ind << (GUARDED ? "    " : "") << "}\n";
-                if (GUARDED) {
-                    result << ind << "}\n";
-                }
-                return result.str();
+                return emit_add_trait_stmt(s, indent, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
-                std::string target =
-                    s.target_expr.has_value()
-                        ? rewrite_expr(
-                              **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-                        : "entity";
-                const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
-                if (!program.execution_graph.phases.empty()) {
-                    const std::string target_name = gen_temp_name("target", s.location);
-                    return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
-                           "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
-                           "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Remove,\n" + ind +
-                           "        [=](entt::registry& registry) {\n" + ind + "            if (!registry.valid(" +
-                           target_name + ")) { return; }\n" + ind + "            cancel_projected_" + cpp + "(" +
-                           target_name + ");\n" + ind + "            if (registry.all_of<" + cpp + ">(" + target_name +
-                           ")) {\n" + ind + "                registry.remove<" + cpp + ">(" + target_name + ");\n" +
-                           ind + "            }\n" + ind + "        });\n" + ind + "}\n";
-                }
-                if (s.target_expr.has_value()) {
-                    return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" +
-                           target + ");\n" + ind + "    if (registry.all_of<" + cpp + ">(" + target + ")) {\n" + ind +
-                           "        registry.remove<" + cpp + ">(" + target + ");\n" + ind + "    }\n" + ind + "}\n";
-                }
-                return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "if (registry.all_of<" + cpp +
-                       ">(" + target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" + target + ");\n" + ind +
-                       "}\n";
+                return emit_remove_trait_stmt(
+                    s, indent, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
-                const std::string target =
-                    s.target_expr.has_value()
-                        ? rewrite_expr(
-                              **s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-                        : "entity";
-                const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
-                const auto simple     = s.trait_name.rfind('.') != std::string::npos
-                                            ? s.trait_name.substr(s.trait_name.rfind('.') + 1)
-                                            : s.trait_name;
-                const auto* resolved_pt =
-                    s.resolved_trait_id.has_value()
-                        ? EnttCodegenUtils::find_trait(program, make_canonical_id(*s.resolved_trait_id))
-                        : EnttCodegenUtils::find_trait(program, simple);
-                const bool is_marker = resolved_pt == nullptr || resolved_pt->fields.empty();
-                std::ostringstream result;
-                result << ind << "if (registry.valid(" << target << ")) {\n";
-                if (is_marker) {
-                    result << ind << "    project_" << cpp << "(registry, " << target << ");\n";
-                } else {
-                    const std::string projected_name = gen_temp_name("projected", s.location);
-                    result << ind << "    [[maybe_unused]] auto& " << projected_name << " = project_" << cpp
-                           << "(registry, " << target << ");\n";
-                    for (const auto& arg : s.args) {
-                        result << ind << "    " << projected_name << "." << arg.name << " = "
-                               << rewrite_expr(
-                                      *arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-                               << ";\n";
-                    }
-                }
-                result << ind << "}\n";
-                return result.str();
+                return emit_project_trait_stmt(
+                    s, indent, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<S, DestroyStmt>) {
                 if (!program.execution_graph.phases.empty()) {
                     const std::string target =
@@ -2238,9 +2316,146 @@ static std::string rewrite_stmt(const StmtNode& stmt,
         stmt.stmt);
 }
 
-std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cognitive-complexity)
-    const RuleNode& sys,
-    const DecoratedProgram& program) {
+// A pair handler snapshots both bindings' live memberships up
+// front (deterministic, creation-ordinal order), then iterates
+// their directed Cartesian product left-binding-major without
+// ever materializing the full tuple list. Component access inside
+// the body is read-only (const), matching the read-only pair
+// trait rule enforced by semantic analysis.
+static void emit_pair_handler_body(std::ostringstream& out,
+                                   const EventHandlerNode& handler,
+                                   const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                   const PairCodegenScope& pair_codegen_scope,
+                                   const DecoratedProgram& program) {
+    for (const auto& binding : pair_binding_codegens) {
+        emit_pair_binding_snapshot(out, binding, 1);
+    }
+    const auto& left  = pair_binding_codegens[0];
+    const auto& right = pair_binding_codegens[1];
+    std::string pair_body;
+    for (const auto& stmt : handler.body) {
+        pair_body += rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
+    }
+    // Recipient-targeted delivery: only tuples incident to the
+    // recipient run (targeted-event-delivery, "Pair target routes to
+    // incident tuples"). A tuple where both bindings equal the
+    // recipient is covered exactly once, by the first block below.
+    // Membership is tested with all_of<> against the binding's own
+    // component set (an O(1) sparse-set check) rather than scanning
+    // the snapshot vector, since the snapshot was built moments
+    // earlier from that same view and cannot have changed since.
+    out << "    if (cactus_recipient.has_value()) {\n";
+    out << "        const auto target = *cactus_recipient;\n";
+    out << "        if (registry.all_of<";
+    for (std::size_t i = 0; i < left.cpp_types.size(); ++i) {
+        out << (i == 0 ? "" : ", ") << left.cpp_types[i];
+    }
+    out << ">(target)) {\n";
+    out << "            auto " << left.scope.binding_name << " = target;\n";
+    out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
+        << "_snapshot) {\n";
+    out << pair_body;
+    out << "            }\n";
+    out << "        }\n";
+    out << "        if (registry.all_of<";
+    for (std::size_t i = 0; i < right.cpp_types.size(); ++i) {
+        out << (i == 0 ? "" : ", ") << right.cpp_types[i];
+    }
+    out << ">(target)) {\n";
+    out << "            for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
+    out << "                if (" << left.scope.binding_name << " == target) { continue; }\n";
+    out << "                auto " << right.scope.binding_name << " = target;\n";
+    out << pair_body;
+    out << "            }\n";
+    out << "        }\n";
+    out << "    } else {\n";
+    out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
+    out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
+        << "_snapshot) {\n";
+    out << pair_body;
+    out << "            }\n";
+    out << "        }\n";
+    out << "    }\n";
+}
+
+static void emit_selectionless_handler_body(std::ostringstream& out,
+                                            const EventHandlerNode& handler,
+                                            const std::vector<std::string>& filter_traits,
+                                            const DecoratedProgram& program,
+                                            const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
+    out << "    (void)registry;\n";
+    for (const auto& stmt : handler.body) {
+        out << rewrite_stmt(*stmt, 1, filter_traits, program, {}, false, filter_cpp_overrides);
+    }
+}
+
+static void emit_filtered_handler_body(std::ostringstream& out,
+                                       const RuleNode& sys,
+                                       const EventHandlerNode& handler,
+                                       const std::vector<FilterBinding>& filter_bindings_list,
+                                       const std::vector<std::string>& filter_traits,
+                                       const std::vector<std::string>& filter_cpp_types,
+                                       const std::vector<std::string>& exclude_cpp_types,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
+    std::string filtered_body;
+    for (const auto& stmt : handler.body) {
+        filtered_body += rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
+    }
+    // Recipient-targeted delivery: run at most once, for the
+    // recipient, and only if it satisfies this handler's selection
+    // (targeted-event-delivery, "Unary target ... only if it
+    // satisfies that consumer's selection").
+    out << "    if (cactus_recipient.has_value()) {\n";
+    out << "        entt::entity entity = *cactus_recipient;\n";
+    out << "        if (registry.all_of<";
+    for (std::size_t i = 0; i < filter_cpp_types.size(); ++i) {
+        out << (i == 0 ? "" : ", ") << filter_cpp_types[i];
+    }
+    out << ">(entity)";
+    if (!exclude_cpp_types.empty()) {
+        out << " && !registry.any_of<";
+        for (std::size_t i = 0; i < exclude_cpp_types.size(); ++i) {
+            out << (i == 0 ? "" : ", ") << exclude_cpp_types[i];
+        }
+        out << ">(entity)";
+    }
+    out << ") {\n";
+    out << "            (void)entity;\n";
+    emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
+    emit_filter_alias_bindings(out, sys.filter, program, 3);
+    out << filtered_body;
+    out << "        }\n";
+    out << "    } else {\n";
+    emit_sort_call(out, sys, 2);
+    emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2);
+    emit_view_each_header(out, filter_bindings_list, 2, program);
+    out << "        (void)entity;\n";
+    emit_filter_alias_bindings(out, sys.filter, program, 3);
+    out << filtered_body;
+    out << "        });\n";
+    out << "    }\n";
+}
+
+// Defensive fallback (should not occur for a well-formed contract lookup):
+// no filter clause, contract not classified selectionless.
+static void emit_fallback_handler_body(std::ostringstream& out,
+                                       const RuleNode& sys,
+                                       const EventHandlerNode& handler,
+                                       const std::vector<std::string>& filter_traits,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
+    emit_sort_call(out, sys);
+    out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
+    out << "        (void)entity;\n";
+    emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
+    for (const auto& stmt : handler.body) {
+        out << rewrite_stmt(*stmt, 2, filter_traits, program, {}, false, filter_cpp_overrides);
+    }
+    out << "    }\n";
+}
+
+std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
     const auto filter_bindings_list = filter_bindings(sys.filter, program);
     const auto filter_traits        = filter_trait_names(sys.filter, program);
@@ -2285,117 +2500,21 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
         out << "    (void)cactus_recipient;\n";
 
         if (is_pair) {
-            // A pair handler snapshots both bindings' live memberships up
-            // front (deterministic, creation-ordinal order), then iterates
-            // their directed Cartesian product left-binding-major without
-            // ever materializing the full tuple list. Component access inside
-            // the body is read-only (const), matching the read-only pair
-            // trait rule enforced by semantic analysis.
-            for (const auto& binding : pair_binding_codegens) {
-                emit_pair_binding_snapshot(out, binding, 1);
-            }
-            const auto& left  = pair_binding_codegens[0];
-            const auto& right = pair_binding_codegens[1];
-            std::string pair_body;
-            for (const auto& stmt : handler.body) {
-                pair_body += rewrite_stmt(*stmt, 4, {}, program, {}, false, {}, &pair_codegen_scope);
-            }
-            // Recipient-targeted delivery: only tuples incident to the
-            // recipient run (targeted-event-delivery, "Pair target routes to
-            // incident tuples"). A tuple where both bindings equal the
-            // recipient is covered exactly once, by the first block below.
-            // Membership is tested with all_of<> against the binding's own
-            // component set (an O(1) sparse-set check) rather than scanning
-            // the snapshot vector, since the snapshot was built moments
-            // earlier from that same view and cannot have changed since.
-            out << "    if (cactus_recipient.has_value()) {\n";
-            out << "        const auto target = *cactus_recipient;\n";
-            out << "        if (registry.all_of<";
-            for (std::size_t i = 0; i < left.cpp_types.size(); ++i) {
-                out << (i == 0 ? "" : ", ") << left.cpp_types[i];
-            }
-            out << ">(target)) {\n";
-            out << "            auto " << left.scope.binding_name << " = target;\n";
-            out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
-                << "_snapshot) {\n";
-            out << pair_body;
-            out << "            }\n";
-            out << "        }\n";
-            out << "        if (registry.all_of<";
-            for (std::size_t i = 0; i < right.cpp_types.size(); ++i) {
-                out << (i == 0 ? "" : ", ") << right.cpp_types[i];
-            }
-            out << ">(target)) {\n";
-            out << "            for (auto " << left.scope.binding_name << " : " << left.scope.binding_name
-                << "_snapshot) {\n";
-            out << "                if (" << left.scope.binding_name << " == target) { continue; }\n";
-            out << "                auto " << right.scope.binding_name << " = target;\n";
-            out << pair_body;
-            out << "            }\n";
-            out << "        }\n";
-            out << "    } else {\n";
-            out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name
-                << "_snapshot) {\n";
-            out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
-                << "_snapshot) {\n";
-            out << pair_body;
-            out << "            }\n";
-            out << "        }\n";
-            out << "    }\n";
+            emit_pair_handler_body(out, handler, pair_binding_codegens, pair_codegen_scope, program);
         } else if (selectionless) {
-            out << "    (void)registry;\n";
-            for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 1, filter_traits, program, {}, false, filter_cpp_overrides);
-            }
+            emit_selectionless_handler_body(out, handler, filter_traits, program, filter_cpp_overrides);
         } else if (!filter_traits.empty()) {
-            std::string filtered_body;
-            for (const auto& stmt : handler.body) {
-                filtered_body += rewrite_stmt(*stmt, 3, filter_traits, program, {}, false, filter_cpp_overrides);
-            }
-            // Recipient-targeted delivery: run at most once, for the
-            // recipient, and only if it satisfies this handler's selection
-            // (targeted-event-delivery, "Unary target ... only if it
-            // satisfies that consumer's selection").
-            out << "    if (cactus_recipient.has_value()) {\n";
-            out << "        entt::entity entity = *cactus_recipient;\n";
-            out << "        if (registry.all_of<";
-            for (std::size_t i = 0; i < filter_cpp_types.size(); ++i) {
-                out << (i == 0 ? "" : ", ") << filter_cpp_types[i];
-            }
-            out << ">(entity)";
-            if (!exclude_cpp_types.empty()) {
-                out << " && !registry.any_of<";
-                for (std::size_t i = 0; i < exclude_cpp_types.size(); ++i) {
-                    out << (i == 0 ? "" : ", ") << exclude_cpp_types[i];
-                }
-                out << ">(entity)";
-            }
-            out << ") {\n";
-            out << "            (void)entity;\n";
-            emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
-            emit_filter_alias_bindings(out, sys.filter, program, 3);
-            out << filtered_body;
-            out << "        }\n";
-            out << "    } else {\n";
-            emit_sort_call(out, sys, 2);
-            emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2);
-            emit_view_each_header(out, filter_bindings_list, 2, program);
-            out << "        (void)entity;\n";
-            emit_filter_alias_bindings(out, sys.filter, program, 3);
-            out << filtered_body;
-            out << "        });\n";
-            out << "    }\n";
+            emit_filtered_handler_body(out,
+                                       sys,
+                                       handler,
+                                       filter_bindings_list,
+                                       filter_traits,
+                                       filter_cpp_types,
+                                       exclude_cpp_types,
+                                       program,
+                                       filter_cpp_overrides);
         } else {
-            // Defensive fallback (should not occur for a well-formed contract
-            // lookup): no filter clause, contract not classified selectionless.
-            emit_sort_call(out, sys);
-            out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
-            out << "        (void)entity;\n";
-            emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
-            for (const auto& stmt : handler.body) {
-                out << rewrite_stmt(*stmt, 2, filter_traits, program, {}, false, filter_cpp_overrides);
-            }
-            out << "    }\n";
+            emit_fallback_handler_body(out, sys, handler, filter_traits, program, filter_cpp_overrides);
         }
         out << "}\n\n";
     }
@@ -2403,9 +2522,95 @@ std::string EnttSystemEmitter::emit_system(  // NOLINT(readability-function-cogn
     return out.str();
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-std::string EnttSystemEmitter::emit_extern_system(const ExternRuleNode& sys, const DecoratedProgram& program) {
+// Shared shape for single-view, single-call component renderers: one runtime
+// call per matching entity, no per-entity branching, no program-level
+// gating. Renderers with a switch/conditional/extra prelude beyond the one
+// call (shape_renderer, sprite_animation, model_animation, model_render,
+// the flavor-gated text renderers) don't fit this shape and stay
+// hand-written, same as the transform-propagation/shape-renderer pair task
+// 5.3 explicitly carves out. call_body builds the exact call expression from
+// the two resolved cpp component variable names — the argument lists differ
+// too much between renderers (which transform fields, which data fields, in
+// what order) to also templatize as a string.
+struct SingleViewRendererSpec {
+    bool (*matches)(const ExternRuleNode&);
+    const char* transform_trait;
+    const char* data_trait;
+    std::function<std::string(const std::string& transform_var, const std::string& data_var)> call_body;
+};
+
+const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
+    static const std::array<SingleViewRendererSpec, 4> specs{{
+        {.matches         = is_sprite_renderer,
+         .transform_trait = "std.transform.flat.WorldTransform",
+         .data_trait      = "Renderer",
+         .call_body =
+             [](const std::string& t, const std::string& d) {
+                 return "cactus::runtime::entt_backend::submit_sprite(" + t + ".position, " + d + ".size, " + d +
+                        ".color, " + d + ".texture, " + d + ".visible, " + d + ".layer)";
+             }},
+        {.matches         = is_mesh_renderer,
+         .transform_trait = "std.transform.volume.WorldTransform",
+         .data_trait      = "Renderer",
+         .call_body =
+             [](const std::string& t, const std::string& d) {
+                 return "cactus::runtime::entt_backend::submit_mesh(" + t + ".position, " + t + ".rotation, " + t +
+                        ".scale, " + d + ".mesh, " + d + ".material, " + d + ".visible, " + d + ".cast_shadow)";
+             }},
+        {.matches         = is_billboard_renderer,
+         .transform_trait = "std.transform.volume.WorldTransform",
+         .data_trait      = "BillboardRenderer",
+         .call_body =
+             [](const std::string& t, const std::string& d) {
+                 return "cactus::runtime::entt_backend::submit_billboard(" + t + ".position, " + d + ".size, " + d +
+                        ".color, " + d + ".texture, " + d + ".visible)";
+             }},
+        {.matches         = is_point_light_render,
+         .transform_trait = "std.transform.volume.WorldTransform",
+         .data_trait      = "PointLight",
+         .call_body =
+             [](const std::string& t, const std::string& d) {
+                 return "cactus::runtime::entt_backend::register_point_light(" + t + ".position, " + d + ".color, " +
+                        d + ".intensity, " + d + ".range, " + d + ".enabled)";
+             }},
+    }};
+    return specs;
+}
+
+std::string emit_single_view_renderer_body(const ExternRuleNode& sys,
+                                           const DecoratedProgram& program,
+                                           const SingleViewRendererSpec& spec) {
+    const std::string transform     = EnttCodegenUtils::trait_cpp_name(spec.transform_trait, program);
+    const std::string data          = EnttCodegenUtils::trait_cpp_name(spec.data_trait, program);
+    const std::string transform_var = transform + "_comp";
+    const std::string data_var      = data + "_comp";
     std::ostringstream out;
+    out << "void " << system_function_name(program.module_name, sys.name, "tick") << "(entt::registry& registry) {\n";
+    out << "    auto view = registry.view<" << transform << ", " << data << ">();\n";
+    out << "    view.each([&](entt::entity entity, const " << transform << "& " << transform_var << ", const " << data
+        << "& " << data_var << ") {\n";
+    out << "        (void)entity;\n";
+    out << "        " << spec.call_body(transform_var, data_var) << ";\n";
+    out << "    });\n";
+    out << "}\n\n";
+    return out.str();
+}
+
+std::string
+EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive-complexity) -- still 29 after
+                                        // single-view-renderer table extraction (many hand-written kinds remain:
+                                        // transform-propagation x2, shape_renderer, sprite_animation, model_animation,
+                                        // model_render, directional_light, text_2d/3d, debug-grid, editor-stub); not
+                                        // further in scope here
+    const ExternRuleNode& sys,
+    const DecoratedProgram& program) {
+    std::ostringstream out;
+
+    for (const auto& spec : single_view_renderer_specs()) {
+        if (spec.matches(sys)) {
+            return emit_single_view_renderer_body(sys, program, spec);
+        }
+    }
 
     if (is_flat_transform_propagation(sys, program)) {
         const std::string lt     = EnttCodegenUtils::trait_cpp_name("std.transform.flat.LocalTransform", program);
@@ -2528,23 +2733,6 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternRuleNode& sys, con
         return out.str();
     }
 
-    if (is_sprite_renderer(sys)) {
-        const std::string wt       = EnttCodegenUtils::trait_cpp_name("std.transform.flat.WorldTransform", program);
-        const std::string renderer = EnttCodegenUtils::trait_cpp_name("Renderer", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<" << wt << ", " << renderer << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << renderer
-            << "& " << renderer << "_comp) {\n";
-        out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_sprite(" << wt << "_comp.position, " << renderer
-            << "_comp.size, " << renderer << "_comp.color, " << renderer << "_comp.texture, " << renderer
-            << "_comp.visible, " << renderer << "_comp.layer);\n";
-        out << "    });\n";
-        out << "}\n\n";
-        return out.str();
-    }
-
     if (is_sprite_animation(sys)) {
         const std::string anim = EnttCodegenUtils::trait_cpp_name("AnimatedSprite", program);
         out << "void " << system_function_name(program.module_name, sys.name, "tick")
@@ -2588,23 +2776,6 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternRuleNode& sys, con
         return out.str();
     }
 
-    if (is_mesh_renderer(sys)) {
-        const std::string wt       = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-        const std::string renderer = EnttCodegenUtils::trait_cpp_name("Renderer", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<" << wt << ", " << renderer << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << renderer
-            << "& " << renderer << "_comp) {\n";
-        out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_mesh(" << wt << "_comp.position, " << wt
-            << "_comp.rotation, " << wt << "_comp.scale, " << renderer << "_comp.mesh, " << renderer
-            << "_comp.material, " << renderer << "_comp.visible, " << renderer << "_comp.cast_shadow);\n";
-        out << "    });\n";
-        out << "}\n\n";
-        return out.str();
-    }
-
     if (is_model_render(sys)) {
         const std::string wt    = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
         const std::string mr    = EnttCodegenUtils::trait_cpp_name("ModelRenderer", program);
@@ -2626,38 +2797,6 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternRuleNode& sys, con
         out << "        cactus::runtime::entt_backend::submit_model(" << wt << "_comp.position, " << wt
             << "_comp.rotation, " << wt << "_comp.scale, " << mr << "_comp.model, " << mr << "_comp.visible, " << mr
             << "_comp.cast_shadow);\n";
-        out << "    });\n";
-        out << "}\n\n";
-        return out.str();
-    }
-
-    if (is_billboard_renderer(sys)) {
-        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-        const std::string br = EnttCodegenUtils::trait_cpp_name("BillboardRenderer", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<" << wt << ", " << br << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << br << "& "
-            << br << "_comp) {\n";
-        out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::submit_billboard(" << wt << "_comp.position, " << br
-            << "_comp.size, " << br << "_comp.color, " << br << "_comp.texture, " << br << "_comp.visible);\n";
-        out << "    });\n";
-        out << "}\n\n";
-        return out.str();
-    }
-
-    if (is_point_light_render(sys)) {
-        const std::string wt = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-        const std::string pl = EnttCodegenUtils::trait_cpp_name("PointLight", program);
-        out << "void " << system_function_name(program.module_name, sys.name, "tick")
-            << "(entt::registry& registry) {\n";
-        out << "    auto view = registry.view<" << wt << ", " << pl << ">();\n";
-        out << "    view.each([&](entt::entity entity, const " << wt << "& " << wt << "_comp, const " << pl << "& "
-            << pl << "_comp) {\n";
-        out << "        (void)entity;\n";
-        out << "        cactus::runtime::entt_backend::register_point_light(" << wt << "_comp.position, " << pl
-            << "_comp.color, " << pl << "_comp.intensity, " << pl << "_comp.range, " << pl << "_comp.enabled);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();
@@ -2778,10 +2917,9 @@ std::string EnttSystemEmitter::emit_extern_system(const ExternRuleNode& sys, con
         return "";
     }
 
-    throw std::runtime_error(
-        "cpp-entt has no compiler-owned implementation for external rule '" +
-        (sys.resolved_rule_id.has_value() ? make_canonical_id(*sys.resolved_rule_id) : sys.name) +
-        "'; user external handlers must be lowered through their per-handler callback ABI");
+    throw std::runtime_error("cpp-entt has no compiler-owned implementation for external rule '" +
+                             (sys.resolved_rule_id.has_value() ? make_canonical_id(*sys.resolved_rule_id) : sys.name) +
+                             "'; user external handlers must be lowered through their per-handler callback ABI");
 }
 
 bool EnttSystemEmitter::requires_entt_hierarchy_helpers(const DecoratedProgram& program) {

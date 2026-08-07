@@ -9,11 +9,13 @@
 
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -66,12 +68,8 @@ static std::unique_ptr<cactus::ProgramNode> lex_and_parse(const std::string& pat
 
 /// Returns true if program has any `use` declarations.
 static bool has_use_declarations(const cactus::ProgramNode& prog) {
-    for (const auto& decl : prog.declarations) {  // NOLINT(readability-use-anyofallof)
-        if (std::holds_alternative<cactus::UseNode>(decl)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(
+        prog.declarations, [](const auto& decl) { return std::holds_alternative<cactus::UseNode>(decl); });
 }
 
 /// Validate the root file's explicit module declaration on CLI paths that may
@@ -246,19 +244,100 @@ static bool compile_implicit_std_core(const fs::path& build_dir,
     return true;
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
-
-int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-complexity)
-    if (argc < 2) {
-        print_usage(argv[0]);
-        return 1;
+/// Compiles one resolved module (lex, parse, semantic-analyze, save artifact,
+/// merge into the codegen AST), updating `compiled`/`artifact_paths`/
+/// `merged_codegen_prog` on success. Prints diagnostics and returns false on
+/// any failure.
+static bool compile_module(const cactus::ModuleInfo& mod,
+                           const fs::path& build_dir,
+                           std::unordered_map<std::string, cactus::DecoratedProgram>& compiled,
+                           std::vector<fs::path>& artifact_paths,
+                           cactus::ProgramNode& merged_codegen_prog) {
+    // Lex + parse module file
+    cactus::ErrorReporter mod_errors;
+    auto mod_prog = lex_and_parse(mod.file_path.string(), mod_errors);
+    if (!mod_prog || mod_errors.has_errors()) {
+        print_errors(mod_errors);
+        return false;
     }
 
+    // Build ModuleImports from already-compiled dependencies.
+    // Register each dependency under the same qualifier the source uses:
+    // either the module name itself, or the `use ... as alias` alias.
+    cactus::ModuleImports imports;
+    auto std_core_it = compiled.find("std.core");
+    if (std_core_it != compiled.end() && mod.qualified_name != "std.core") {
+        auto syms = extract_pub_symbols("std.core", std_core_it->second);
+        imports.add("std.core", std::move(syms), {}, std_core_it->second.non_pub_templates);
+    }
+    auto qualifiers_for_dependency = [&mod_prog](const std::string& dep_name) {
+        std::vector<std::string> qualifiers;
+        for (const auto& decl : mod_prog->declarations) {
+            const auto* use = std::get_if<cactus::UseNode>(&decl);
+            if (use != nullptr && use->module_name == dep_name) {
+                qualifiers.push_back(use->alias.value_or(use->module_name));
+            }
+        }
+        if (qualifiers.empty()) {
+            qualifiers.push_back(dep_name);
+        }
+        return qualifiers;
+    };
+    for (const auto& dep_name : mod.dependencies) {
+        auto it = compiled.find(dep_name);
+        if (it == compiled.end()) {
+            continue;
+        }
+        for (const auto& qualifier : qualifiers_for_dependency(dep_name)) {
+            auto syms = extract_pub_symbols(dep_name, it->second);
+            imports.add(qualifier, std::move(syms), {}, it->second.non_pub_templates);
+        }
+    }
+
+    // Semantic analyze
+    cactus::SemanticAnalyzer analyzer(mod_errors);
+    auto dec = analyzer.analyze(*mod_prog, imports);
+    if (mod_errors.has_errors()) {
+        print_errors(mod_errors);
+        return false;
+    }
+
+    // Save artifact
+    cactus::ErrorReporter art_errors;
+    cactus::ModuleArtifact artifact(art_errors);
+    if (!artifact.save(dec, mod.qualified_name, build_dir)) {
+        print_errors(art_errors);
+        return false;
+    }
+    artifact_paths.push_back(build_dir / (mod.qualified_name + ".cmod"));
+
+    // Preserve full declaration ASTs for final codegen so imported
+    // units/rules/extern rules from stdlib modules are also emitted.
+    // Tag events with their source module so emit_event can use the canonical module prefix.
+    for (auto& decl : mod_prog->declarations) {
+        if (auto* ev = std::get_if<cactus::EventNode>(&decl)) {
+            ev->module_name = mod.qualified_name;
+        }
+    }
+    merged_codegen_prog.declarations.insert(merged_codegen_prog.declarations.end(),
+                                            std::make_move_iterator(mod_prog->declarations.begin()),
+                                            std::make_move_iterator(mod_prog->declarations.end()));
+
+    compiled[mod.qualified_name] = std::move(dec);
+    return true;
+}
+
+/// Parsed CLI arguments (see print_usage for the flag reference).
+struct CliArgs {
     std::string input_file;
     std::string backend = "cpp-entt";
     std::string output_file;
     std::vector<fs::path> module_paths;  // 6.1: --module-path flag
+};
 
+/// Parses argv into `out`. Returns an exit code if main() should return
+/// immediately (0 for --help, 1 for a usage error), or nullopt to continue.
+static std::optional<int> parse_cli_args(int argc, char** argv, CliArgs& out) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
@@ -269,9 +348,9 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
                 std::cerr << "error: --backend requires an argument\n";
                 return 1;
             }
-            backend = argv[++i];
-            if (backend != "cpp-entt") {
-                std::cerr << "error: unknown backend '" << backend << "' (use cpp-entt)\n";
+            out.backend = argv[++i];
+            if (out.backend != "cpp-entt") {
+                std::cerr << "error: unknown backend '" << out.backend << "' (use cpp-entt)\n";
                 return 1;
             }
         } else if (std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "-o") == 0) {
@@ -279,26 +358,45 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
                 std::cerr << "error: --output requires an argument\n";
                 return 1;
             }
-            output_file = argv[++i];
+            out.output_file = argv[++i];
         } else if (std::strcmp(argv[i], "--module-path") == 0) {
             // 6.1: collect repeatable --module-path directories
             if (i + 1 >= argc) {
                 std::cerr << "error: --module-path requires an argument\n";
                 return 1;
             }
-            module_paths.emplace_back(argv[++i]);
+            out.module_paths.emplace_back(argv[++i]);
         } else if (argv[i][0] == '-') {
             std::cerr << "error: unknown option '" << argv[i] << "'\n";
             return 1;
         } else {
-            input_file = argv[i];
+            out.input_file = argv[i];
         }
     }
 
-    if (input_file.empty()) {
+    if (out.input_file.empty()) {
         std::cerr << "error: no input file specified\n";
         return 1;
     }
+    return std::nullopt;
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-complexity) -- still 43 after parse_cli_args/compile_module extraction; remaining branching is the multi-module vs single-module pipeline split plus codegen/output, not further in scope here
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    CliArgs args;
+    if (auto exit_code = parse_cli_args(argc, argv, args); exit_code.has_value()) {
+        return *exit_code;
+    }
+    const std::string& input_file             = args.input_file;
+    std::string backend                       = args.backend;
+    const std::string& output_file            = args.output_file;
+    const std::vector<fs::path>& module_paths = args.module_paths;
 
     // ── Lex + parse root file ─────────────────────────────────────────────────
     cactus::ErrorReporter errors;
@@ -366,78 +464,9 @@ int main(int argc, char* argv[]) {  // NOLINT(readability-function-cognitive-com
                 // Keep the preloaded artifact as the single source of symbols.
                 continue;
             }
-
-            // Lex + parse module file
-            cactus::ErrorReporter mod_errors;
-            auto mod_prog = lex_and_parse(mod.file_path.string(), mod_errors);
-            if (!mod_prog || mod_errors.has_errors()) {
-                print_errors(mod_errors);
+            if (!compile_module(mod, build_dir, compiled, artifact_paths, *merged_codegen_prog)) {
                 return 1;
             }
-
-            // Build ModuleImports from already-compiled dependencies.
-            // Register each dependency under the same qualifier the source uses:
-            // either the module name itself, or the `use ... as alias` alias.
-            cactus::ModuleImports imports;
-            auto std_core_it = compiled.find("std.core");
-            if (std_core_it != compiled.end() && mod.qualified_name != "std.core") {
-                auto syms = extract_pub_symbols("std.core", std_core_it->second);
-                imports.add("std.core", std::move(syms), {}, std_core_it->second.non_pub_templates);
-            }
-            auto qualifiers_for_dependency = [&mod_prog](const std::string& dep_name) {
-                std::vector<std::string> qualifiers;
-                for (const auto& decl : mod_prog->declarations) {
-                    const auto* use = std::get_if<cactus::UseNode>(&decl);
-                    if (use != nullptr && use->module_name == dep_name) {
-                        qualifiers.push_back(use->alias.value_or(use->module_name));
-                    }
-                }
-                if (qualifiers.empty()) {
-                    qualifiers.push_back(dep_name);
-                }
-                return qualifiers;
-            };
-            for (auto& dep_name : mod.dependencies) {
-                auto it = compiled.find(dep_name);
-                if (it == compiled.end()) {
-                    continue;
-                }
-                for (const auto& qualifier : qualifiers_for_dependency(dep_name)) {
-                    auto syms = extract_pub_symbols(dep_name, it->second);
-                    imports.add(qualifier, std::move(syms), {}, it->second.non_pub_templates);
-                }
-            }
-
-            // Semantic analyze
-            cactus::SemanticAnalyzer analyzer(mod_errors);
-            auto dec = analyzer.analyze(*mod_prog, imports);
-            if (mod_errors.has_errors()) {
-                print_errors(mod_errors);
-                return 1;
-            }
-
-            // Save artifact
-            cactus::ErrorReporter art_errors;
-            cactus::ModuleArtifact artifact(art_errors);
-            if (!artifact.save(dec, mod.qualified_name, build_dir)) {
-                print_errors(art_errors);
-                return 1;
-            }
-            artifact_paths.push_back(build_dir / (mod.qualified_name + ".cmod"));
-
-            // Preserve full declaration ASTs for final codegen so imported
-            // units/rules/extern rules from stdlib modules are also emitted.
-            // Tag events with their source module so emit_event can use the canonical module prefix.
-            for (auto& decl : mod_prog->declarations) {
-                if (auto* ev = std::get_if<cactus::EventNode>(&decl)) {
-                    ev->module_name = mod.qualified_name;
-                }
-            }
-            merged_codegen_prog->declarations.insert(merged_codegen_prog->declarations.end(),
-                                                     std::make_move_iterator(mod_prog->declarations.begin()),
-                                                     std::make_move_iterator(mod_prog->declarations.end()));
-
-            compiled[mod.qualified_name] = std::move(dec);
         }
 
         // Link all compiled modules

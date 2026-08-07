@@ -110,6 +110,15 @@ private:
     uint64_t compute_trait_mask(const std::vector<ArchetypeTraitEntry>& traits) const;
     static FieldValue make_field_value(const ResolvedField& field, const std::optional<FieldValue>& config_val);
 
+    // ── build_records helpers ───────────────────────────────────────────────
+    EntityInstanceData build_record(const std::string& name, const std::vector<ArchetypeTraitEntry>& traits);
+    // Hierarchical load-time entities serialize as one ordinary flat record per
+    // node in preorder; the format is unchanged and Parent wiring stays in
+    // generated setup code (dsl-hierarchical-entity-templates D10).
+    void add_child_records(std::vector<EntityInstanceData>& records,
+                           const ChildArchetypeNode& child,
+                           const std::string& parent_name);
+
     // ── Binary write helpers ────────────────────────────────────────────────
     static void write_u8(std::ostream& out, uint8_t v);
     static void write_u16(std::ostream& out, uint16_t v);

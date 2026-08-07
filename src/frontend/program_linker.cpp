@@ -1,11 +1,11 @@
 #include "frontend/program_linker.hpp"
 
+#include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/symbol_identity.hpp"
 
 #include <algorithm>
 #include <functional>
-#include <sstream>
 
 namespace cactus {
 
@@ -24,6 +24,48 @@ bool declaration_precedes(const HandlerNode& left, const HandlerNode& right) {
         return lhs.handler_index < rhs.handler_index;
     }
     return left.identity.canonical_id() < right.identity.canonical_id();
+}
+
+// Phase-lineage cycle checking operates on string-keyed PhaseNode names with
+// 2-state coloring, a different shape from the HandlerIdentity-keyed
+// handler-cycle DFS inside compute_handler_schedule, so it stays a separate
+// helper rather than folding into the shared core (see design.md's Non-Goals).
+void check_phase_lineage_cycles(const std::vector<PhasePlan>& phases, ErrorReporter& errors) {
+    std::unordered_map<SymbolId, std::vector<SymbolId>> phase_adjacency;
+    for (const auto& phase : phases) {
+        for (const auto& upstream : phase.completion_dependencies) {
+            phase_adjacency[upstream].push_back(phase.phase);
+        }
+        for (const auto& source : phase.source_dependencies) {
+            if (source.kind == HandlerTriggerKind::Phase) {
+                phase_adjacency[source.symbol].push_back(phase.phase);
+            }
+        }
+    }
+    enum class Color : std::uint8_t { White, Gray, Black };
+    std::unordered_map<SymbolId, Color> phase_color;
+    for (const auto& phase : phases) {
+        phase_color[phase.phase] = Color::White;
+    }
+    std::function<void(const SymbolId&)> phase_dfs = [&](const SymbolId& phase) {
+        phase_color[phase] = Color::Gray;
+        for (const auto& downstream : phase_adjacency[phase]) {
+            if (!phase_color.contains(downstream)) {
+                continue;
+            }
+            if (phase_color[downstream] == Color::Gray) {
+                errors.error({}, "phase cycle: " + make_canonical_id(phase) + " -> " + make_canonical_id(downstream));
+            } else if (phase_color[downstream] == Color::White) {
+                phase_dfs(downstream);
+            }
+        }
+        phase_color[phase] = Color::Black;
+    };
+    for (const auto& phase : phases) {
+        if (phase_color[phase.phase] == Color::White) {
+            phase_dfs(phase.phase);
+        }
+    }
 }
 
 }  // namespace
@@ -180,9 +222,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
     return ok;
 }
 
-bool ProgramLinker::rebuild_execution_graph(
-    DecoratedProgram& program,
-    bool validate_references) {  // NOLINT(readability-function-cognitive-complexity)
+bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool validate_references) {
     auto& graph = program.execution_graph;
     graph.schedule_edges.clear();
     graph.phase_barriers.clear();
@@ -228,278 +268,10 @@ bool ProgramLinker::rebuild_execution_graph(
         }
     }
 
-    std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> explicit_adjacency;
-    for (const auto& edge : graph.schedule_edges) {
-        explicit_adjacency[edge.before].push_back(edge.after);
-    }
-    const auto explicitly_precedes = [&](const HandlerIdentity& before, const HandlerIdentity& after) {
-        std::vector<HandlerIdentity> pending{before};
-        std::unordered_set<HandlerIdentity, HandlerIdentityHash> visited;
-        while (!pending.empty()) {
-            auto current = pending.back();
-            pending.pop_back();
-            if (!visited.insert(current).second) {
-                continue;
-            }
-            if (current == after) {
-                return true;
-            }
-            if (const auto found = explicit_adjacency.find(current); found != explicit_adjacency.end()) {
-                pending.insert(pending.end(), found->second.begin(), found->second.end());
-            }
-        }
-        return false;
-    };
+    const bool schedule_ok = compute_handler_schedule(graph, errors_);
+    check_phase_lineage_cycles(graph.phases, errors_);
 
-    const auto produced_by_handler = precompute_produced_by_handler(graph.handlers);
-
-    for (std::size_t left_index = 0; left_index < graph.handlers.size(); ++left_index) {
-        const auto& left = graph.handlers[left_index];
-        for (std::size_t right_index = left_index + 1; right_index < graph.handlers.size(); ++right_index) {
-            const auto& right = graph.handlers[right_index];
-            if (left.identity.trigger != right.identity.trigger) {
-                continue;
-            }
-
-            std::vector<SymbolId> trait_provenance;
-            bool left_writes_right = false;
-            bool right_writes_left = false;
-            const auto add_trait   = [&](const SymbolId& trait) {
-                if (std::ranges::find(trait_provenance, trait) == trait_provenance.end()) {
-                    trait_provenance.push_back(trait);
-                }
-            };
-            for (const auto& trait : produced_by_handler[left_index]) {
-                if (right.contract.reads.contains(trait)) {
-                    left_writes_right = true;
-                    add_trait(trait);
-                }
-            }
-            for (const auto& trait : produced_by_handler[right_index]) {
-                if (left.contract.reads.contains(trait)) {
-                    right_writes_left = true;
-                    add_trait(trait);
-                }
-            }
-            std::ranges::sort(trait_provenance, [](const SymbolId& a, const SymbolId& b) {
-                return make_canonical_id(a) < make_canonical_id(b);
-            });
-
-            std::vector<std::string> effect_provenance;
-            for (const auto& effect : left.contract.effects) {
-                if (right.contract.effects.contains(effect)) {
-                    effect_provenance.push_back(effect);
-                }
-            }
-            std::ranges::sort(effect_provenance);
-            if (trait_provenance.empty() && effect_provenance.empty()) {
-                continue;
-            }
-
-            const HandlerNode* before           = nullptr;
-            const HandlerNode* after            = nullptr;
-            ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::DeclarationOrder;
-            if (explicitly_precedes(left.identity, right.identity)) {
-                before      = &left;
-                after       = &right;
-                orientation = ScheduleEdgeOrientation::Explicit;
-            } else if (explicitly_precedes(right.identity, left.identity)) {
-                before      = &right;
-                after       = &left;
-                orientation = ScheduleEdgeOrientation::Explicit;
-            } else if (left_writes_right != right_writes_left) {
-                before      = left_writes_right ? &left : &right;
-                after       = left_writes_right ? &right : &left;
-                orientation = ScheduleEdgeOrientation::WriterBeforeReader;
-            } else if (declaration_precedes(left, right)) {
-                before = &left;
-                after  = &right;
-            } else {
-                before = &right;
-                after  = &left;
-            }
-            if (!trait_provenance.empty()) {
-                graph.schedule_edges.push_back(ScheduleEdge{.before           = before->identity,
-                                                            .after            = after->identity,
-                                                            .kind             = ScheduleEdgeKind::DataConflict,
-                                                            .orientation      = orientation,
-                                                            .trait_provenance = std::move(trait_provenance)});
-            }
-            if (!effect_provenance.empty()) {
-                graph.schedule_edges.push_back(ScheduleEdge{.before            = before->identity,
-                                                            .after             = after->identity,
-                                                            .kind              = ScheduleEdgeKind::EffectConflict,
-                                                            .orientation       = orientation,
-                                                            .effect_provenance = std::move(effect_provenance)});
-            }
-        }
-    }
-
-    for (const auto& phase : graph.phases) {
-        for (const auto& upstream : phase.completion_dependencies) {
-            for (const auto& handler : graph.handlers) {
-                if (handler.identity.trigger.kind == HandlerTriggerKind::Phase &&
-                    handler.identity.trigger.symbol == phase.phase) {
-                    graph.phase_barriers.push_back(
-                        PhaseBarrierEdge{.upstream_phase = upstream, .downstream_handler = handler.identity});
-                }
-            }
-        }
-    }
-    for (const auto& producer : graph.handlers) {
-        std::vector<SymbolId> emitted(producer.contract.emits.begin(), producer.contract.emits.end());
-        std::ranges::sort(
-            emitted, [](const SymbolId& a, const SymbolId& b) { return make_canonical_id(a) < make_canonical_id(b); });
-        for (const auto& event : emitted) {
-            for (const auto& consumer : graph.handlers) {
-                if (consumer.identity.trigger.kind == HandlerTriggerKind::Event &&
-                    consumer.identity.trigger.symbol == event) {
-                    graph.event_flows.push_back(
-                        EventFlowEdge{.producer = producer.identity, .event = event, .consumer = consumer.identity});
-                }
-            }
-        }
-    }
-
-    enum class Color : std::uint8_t { White, Gray, Black };
-    std::unordered_map<HandlerIdentity, Color, HandlerIdentityHash> color;
-    std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> adjacency;
-    for (const auto& [identity, _] : nodes) {
-        color[identity] = Color::White;
-    }
-    for (const auto& edge : graph.schedule_edges) {
-        if (nodes.contains(edge.before) && nodes.contains(edge.after)) {
-            adjacency[edge.before].push_back(edge.after);
-        }
-    }
-    std::vector<HandlerIdentity> path;
-    std::function<void(const HandlerIdentity&)> dfs = [&](const HandlerIdentity& node) {
-        color[node] = Color::Gray;
-        path.push_back(node);
-        for (const auto& neighbor : adjacency[node]) {
-            if (color[neighbor] == Color::Gray) {
-                const auto start = std::ranges::find(path, neighbor);
-                std::ostringstream cycle;
-                for (auto it = start; it != path.end(); ++it) {
-                    if (it != start) {
-                        cycle << " -> ";
-                    }
-                    cycle << it->canonical_id();
-                }
-                cycle << " -> " << neighbor.canonical_id();
-                errors_.error({}, "handler cycle: " + cycle.str());
-            } else if (color[neighbor] == Color::White) {
-                dfs(neighbor);
-            }
-        }
-        path.pop_back();
-        color[node] = Color::Black;
-    };
-    for (const auto& handler : graph.handlers) {
-        if (color[handler.identity] == Color::White) {
-            dfs(handler.identity);
-        }
-    }
-
-    std::unordered_map<SymbolId, std::vector<SymbolId>> phase_adjacency;
-    for (const auto& phase : graph.phases) {
-        for (const auto& upstream : phase.completion_dependencies) {
-            phase_adjacency[upstream].push_back(phase.phase);
-        }
-        for (const auto& source : phase.source_dependencies) {
-            if (source.kind == HandlerTriggerKind::Phase) {
-                phase_adjacency[source.symbol].push_back(phase.phase);
-            }
-        }
-    }
-    std::unordered_map<SymbolId, Color> phase_color;
-    for (const auto& phase : graph.phases) {
-        phase_color[phase.phase] = Color::White;
-    }
-    std::function<void(const SymbolId&)> phase_dfs = [&](const SymbolId& phase) {
-        phase_color[phase] = Color::Gray;
-        for (const auto& downstream : phase_adjacency[phase]) {
-            if (!phase_color.contains(downstream)) {
-                continue;
-            }
-            if (phase_color[downstream] == Color::Gray) {
-                errors_.error({}, "phase cycle: " + make_canonical_id(phase) + " -> " + make_canonical_id(downstream));
-            } else if (phase_color[downstream] == Color::White) {
-                phase_dfs(downstream);
-            }
-        }
-        phase_color[phase] = Color::Black;
-    };
-    for (const auto& phase : graph.phases) {
-        if (phase_color[phase.phase] == Color::White) {
-            phase_dfs(phase.phase);
-        }
-    }
-
-    std::vector<ResolvedHandlerTrigger> activations;
-    for (const auto& handler : graph.handlers) {
-        if (std::ranges::find(activations, handler.identity.trigger) == activations.end()) {
-            activations.push_back(handler.identity.trigger);
-        }
-    }
-    std::ranges::sort(activations, [&](const auto& left, const auto& right) {
-        const auto lhs =
-            std::ranges::find_if(graph.handlers, [&](const auto& node) { return node.identity.trigger == left; });
-        const auto rhs =
-            std::ranges::find_if(graph.handlers, [&](const auto& node) { return node.identity.trigger == right; });
-        return lhs != graph.handlers.end() && rhs != graph.handlers.end()
-                   ? declaration_precedes(*lhs, *rhs)
-                   : make_canonical_id(left.symbol) < make_canonical_id(right.symbol);
-    });
-    for (const auto& activation : activations) {
-        std::vector<const HandlerNode*> activation_nodes;
-        for (const auto& handler : graph.handlers) {
-            if (handler.identity.trigger == activation) {
-                activation_nodes.push_back(&handler);
-            }
-        }
-        std::ranges::sort(activation_nodes,
-                          [](const auto* left, const auto* right) { return declaration_precedes(*left, *right); });
-        std::unordered_map<HandlerIdentity, std::uint64_t, HandlerIdentityHash> indegree;
-        std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> local_adjacency;
-        for (const auto* node : activation_nodes) {
-            indegree[node->identity] = 0;
-        }
-        std::unordered_set<std::string> dependency_pairs;
-        for (const auto& edge : graph.schedule_edges) {
-            if (!indegree.contains(edge.before) || !indegree.contains(edge.after)) {
-                continue;
-            }
-            const auto pair = edge.before.canonical_id() + "\n" + edge.after.canonical_id();
-            if (dependency_pairs.insert(pair).second) {
-                local_adjacency[edge.before].push_back(edge.after);
-                ++indegree[edge.after];
-            }
-        }
-        std::unordered_set<HandlerIdentity, HandlerIdentityHash> emitted;
-        std::uint64_t level_index = 0;
-        while (emitted.size() < activation_nodes.size()) {
-            std::vector<HandlerIdentity> ready;
-            for (const auto* node : activation_nodes) {
-                if (!emitted.contains(node->identity) && indegree[node->identity] == 0) {
-                    ready.push_back(node->identity);
-                }
-            }
-            if (ready.empty()) {
-                break;
-            }
-            graph.dependency_levels.push_back(
-                DependencyLevel{.activation = activation, .index = level_index++, .handlers = ready});
-            graph.stable_topological_order.insert(graph.stable_topological_order.end(), ready.begin(), ready.end());
-            for (const auto& identity : ready) {
-                emitted.insert(identity);
-                for (const auto& dependent : local_adjacency[identity]) {
-                    --indegree[dependent];
-                }
-            }
-        }
-    }
-    return !errors_.has_errors();
+    return schedule_ok && !errors_.has_errors();
 }
 
 // ── 5.1: Link from artifact files ───────────────────────────────────────────

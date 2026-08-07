@@ -21,6 +21,9 @@ public:
     static std::string emit_enum(const ResolvedEnum& e);
     static std::string emit_expr(const ExprNode& expr, const ProgramNode* ast = nullptr);
     static std::string emit_expr(const ExprNode& expr, const DecoratedProgram& program);
+    // Comma-joined emit_expr(*args[i], program) for a call/query argument list.
+    static std::string join_emitted_args(const std::vector<std::unique_ptr<ExprNode>>& args,
+                                         const DecoratedProgram& program);
 
     // Canonical generated names. These overloads are the codegen-facing path:
     // resolved SymbolIds are lowered directly without alias/module lookup.

@@ -5,6 +5,8 @@
 #include "frontend/token.hpp"
 
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <vector>
 
 namespace cactus {
@@ -50,6 +52,25 @@ private:
     TemplateNode parse_template(bool is_pub);
     RuleNode parse_rule();
     ExternRuleNode parse_extern_rule();
+
+    struct CommonRuleClauses {
+        FilterClause filter;
+        FilterClause exclude;
+        std::vector<SortKey> order_by;
+        std::vector<std::string> after_rules;
+        std::optional<std::string> target;
+    };
+    // Parses the filter:/exclude:/order by:/after:/target: clauses shared by
+    // `rule` and `extern rule` declarations, in that order. on_clause_parsed,
+    // when set, is invoked with each of filter:/exclude:/order by:'s start
+    // location and name right after that clause is parsed (before its own
+    // synchronize check) — never for after:/target:, which are compatible
+    // with `pairs:`. parse_rule uses this to reject a clause combined with
+    // `pairs:` at the
+    // same point in the sequence the un-extracted code did, rather than
+    // batching all such diagnostics after every clause has been parsed.
+    CommonRuleClauses parse_common_rule_clauses(
+        const std::function<void(const SourceLocation&, const char*)>& on_clause_parsed = nullptr);
     ViewNode parse_view();
     EventNode parse_event(bool is_pub = false, bool is_external = false);
     PhaseNode parse_phase(bool is_pub = false);
@@ -116,6 +137,17 @@ private:
     ProjectTraitStmt parse_project_trait_stmt();
     ForeachStmt parse_foreach_stmt();
     TraitMatchStmt parse_trait_match_stmt();
+    LetStmt parse_let_stmt();
+    EmitStmt parse_emit_stmt();
+    ReturnStmt parse_return_stmt();
+    IfStmt parse_if_stmt();
+    SpawnStmt parse_spawn_stmt();
+    DestroyStmt parse_destroy_stmt();
+    LoadStmt parse_load_stmt();
+    // Assignment target: IDENTIFIER (DOT IDENTIFIER)* (= | += | -=) expression,
+    // backtracking to expression-statement parsing when the identifier (with
+    // or without a dotted chain) isn't followed by an assignment operator.
+    std::unique_ptr<StmtNode> parse_assign_or_expr_stmt();
     std::unique_ptr<StmtNode> parse_statement();
     std::vector<std::unique_ptr<StmtNode>> parse_block();
 
@@ -130,6 +162,8 @@ private:
     std::unique_ptr<ExprNode> parse_unary_expr();
     std::unique_ptr<ExprNode> parse_postfix_expr();
     std::unique_ptr<ExprNode> parse_primary_expr();
+    MatchExpr parse_match_expr();
+    IfExpr parse_if_expr();
 
     std::vector<Token> tokens_;
     size_t current_ = 0;

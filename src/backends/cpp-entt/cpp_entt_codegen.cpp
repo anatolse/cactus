@@ -25,8 +25,9 @@ namespace {
 std::string snake_case(const std::string& value);
 std::string archetype_create_at_function_name(const std::string& module_name, const std::string& archetype_name);
 const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program);
-const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name,
-                                          bool require_external = false);
+const ResolvedEvent* find_std_core_event(const DecoratedProgram& program,
+                                         std::string_view name,
+                                         bool require_external = false);
 bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& event_symbol);
 const PhasePlan* find_render_phase(const DecoratedProgram& program);
 
@@ -62,12 +63,7 @@ bool module_uses_editor(const DecoratedProgram& program) {
 
 // Task 6.1: Check if the program has any extern funcs requiring the runtime header
 bool has_extern_funcs(const DecoratedProgram& program) {
-    for (const auto& [name, func] : program.funcs) {  // NOLINT(readability-use-anyofallof)
-        if (func.is_extern) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(program.funcs, [](const auto& entry) { return entry.second.is_extern; });
 }
 
 std::string runtime_value_cpp_type(const TypeInfo& type) {
@@ -545,15 +541,15 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     // pure functions of `program`, so recomputing them here is safe and keeps
     // this function self-contained rather than threading extra parameters
     // through every call site.
-    const bool viewport_uses_flat    = module_uses_camera_flat(program);
-    const bool viewport_uses_volume  = module_uses_camera_volume(program);
-    const bool render_uses_viewport  = module_uses_camera_viewport(program) && render_phase != nullptr;
+    const bool viewport_uses_flat             = module_uses_camera_flat(program);
+    const bool viewport_uses_volume           = module_uses_camera_volume(program);
+    const bool render_uses_viewport           = module_uses_camera_viewport(program) && render_phase != nullptr;
     const WorldTransformUsage render_wt_usage = EnttCodegenUtils::world_transform_usage(program);
-    const bool render_rig_is_2d      = render_wt_usage.flat || (viewport_uses_flat && !render_wt_usage.volume);
-    const bool render_rig_is_3d      = render_wt_usage.volume;
-    const std::string render_vp_cpp    = EnttCodegenUtils::trait_cpp_name("Viewport", program);
-    const std::string render_cam2d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
-    const std::string render_cam3d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
+    const bool render_rig_is_2d               = render_wt_usage.flat || (viewport_uses_flat && !render_wt_usage.volume);
+    const bool render_rig_is_3d               = render_wt_usage.volume;
+    const std::string render_vp_cpp           = EnttCodegenUtils::trait_cpp_name("Viewport", program);
+    const std::string render_cam2d_cpp        = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
+    const std::string render_cam3d_cpp        = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
     const bool render_emit_2d_helper =
         render_uses_viewport && viewport_uses_flat && (render_rig_is_2d || !render_rig_is_3d);
     const bool render_emit_3d_helper = render_uses_viewport && viewport_uses_volume && render_rig_is_3d;
@@ -692,8 +688,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << "    }\n";
     } else {
         const auto spawn_type   = has_spawn_handler ? event_runtime_cpp_type(program, *spawn_event->symbol_id) : "";
-        const auto destroy_type =
-            has_destroy_handler ? event_runtime_cpp_type(program, *destroy_event->symbol_id) : "";
+        const auto destroy_type = has_destroy_handler ? event_runtime_cpp_type(program, *destroy_event->symbol_id) : "";
         // Looping until no new commands were queued lets an `on spawn`/`on
         // destroy` handler that issues further spawn/destroy commands have
         // those commands applied within the same activation, bounded by the
@@ -743,7 +738,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         const auto found = std::ranges::find_if(program.execution_graph.handlers,
                                                 [&](const auto& handler) { return handler.identity == identity; });
         out << "    {\"" << identity.canonical_id() << "\", "
-            << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless() ? "true" : "false")
+            << (found != program.execution_graph.handlers.end() && found->contract.is_selectionless() ? "true"
+                                                                                                      : "false")
             << "},\n";
     }
     out << "}};\n\n";
@@ -769,8 +765,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << indent << "    const int __sh = cactus::runtime::raylib::GetScreenHeight();\n";
         out << indent << "    static std::vector<std::pair<int,entt::entity>> __vps;\n";
         out << indent << "    __vps.clear();\n";
-        out << indent << "    for (const auto& [__vp_e, __vp] : registry.view<" << render_vp_cpp
-            << ">().each()) {\n";
+        out << indent << "    for (const auto& [__vp_e, __vp] : registry.view<" << render_vp_cpp << ">().each()) {\n";
         out << indent << "        if (__vp.active) { __vps.emplace_back(__vp.depth, __vp_e); }\n";
         out << indent << "    }\n";
         out << indent << "    std::ranges::sort(__vps);\n";
@@ -785,16 +780,15 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << indent << "        if (__vp.clear) { cactus::runtime::raylib::ClearBackground(__vp.clear_color); }\n";
         if (render_emit_2d_helper) {
             out << indent << "        if (registry.all_of<" << render_cam2d_cpp << ">(__vp_ent)) {\n";
-            out << indent << "            const auto& __cam = registry.get<" << render_cam2d_cpp
-                << ">(__vp_ent);\n";
+            out << indent << "            const auto& __cam = registry.get<" << render_cam2d_cpp << ">(__vp_ent);\n";
             out << indent << "            set_active_camera_2d(__translate_camera_2d(__cam, __sw, __sh));\n";
             out << indent << "        }\n";
         }
         if (render_emit_3d_helper) {
-            out << indent << (render_emit_2d_helper ? "        else if (registry.all_of<" : "        if (registry.all_of<")
+            out << indent
+                << (render_emit_2d_helper ? "        else if (registry.all_of<" : "        if (registry.all_of<")
                 << render_cam3d_cpp << ">(__vp_ent)) {\n";
-            out << indent << "            const auto& __cam = registry.get<" << render_cam3d_cpp
-                << ">(__vp_ent);\n";
+            out << indent << "            const auto& __cam = registry.get<" << render_cam3d_cpp << ">(__vp_ent);\n";
             out << indent << "            set_active_camera_3d(__translate_camera_3d(__vp_ent, __cam, registry));\n";
             out << indent << "        }\n";
         }
@@ -810,8 +804,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         if (!phase->runtime_root.has_value()) {
             continue;
         }
-        const auto phase_name    = canonical_to_cpp_name(phase->phase);
-        const auto root_type     = event_runtime_cpp_type(program, *phase->runtime_root);
+        const auto phase_name            = canonical_to_cpp_name(phase->phase);
+        const auto root_type             = event_runtime_cpp_type(program, *phase->runtime_root);
         const bool is_render_phase_batch = phase == render_phase;
         out << "void generated_dispatch_phase_" << phase_name << "(entt::registry&, const " << phase_name
             << "PhaseRuntimeState&);\n\n";
@@ -886,7 +880,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     }
 
     for (const auto* event : external_events) {
-        const auto root_type    = event_runtime_cpp_type(program, *event->symbol_id);
+        const auto root_type     = event_runtime_cpp_type(program, *event->symbol_id);
         const bool is_frame_root = event == frame_event;
         out << "void generated_process_root_event(entt::registry& registry, const " << root_type << "& root_event) {\n";
         // Input-consumption reset fires once per real (display) frame, before
@@ -957,8 +951,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
             if (graph_node->implementation == HandlerImplementationKind::External) {
                 const auto* rule = find_external_rule(program, graph_node->identity.rule);
                 if (rule != nullptr && rule->is_stdlib) {
-                    out << "    ::" << system_function_name(program.module_name, rule->name, "tick")
-                        << "(registry);\n";
+                    out << "    ::" << system_function_name(program.module_name, rule->name, "tick") << "(registry);\n";
                     emitted = true;
                 }
                 continue;
@@ -981,7 +974,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 out << "    ::"
                     << system_function_name(program.module_name,
                                             rule->name,
-                                            handler->event_name.find('.') == std::string::npos
+                                            !handler->event_name.contains('.')
                                                 ? handler->event_name
                                                 : canonical_to_cpp_name(identity.trigger.symbol))
                     << "(registry, phase);\n";
@@ -1056,7 +1049,7 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 out << "    ::"
                     << system_function_name(program.module_name,
                                             rule->name,
-                                            handler->event_name.find('.') == std::string::npos
+                                            !handler->event_name.contains('.')
                                                 ? handler->event_name
                                                 : canonical_to_cpp_name(identity.trigger.symbol))
                     << "(registry, occurrence, target);\n";
@@ -1086,7 +1079,8 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
     out << "            continue;\n";
     out << "        }\n";
     out << "        std::visit(\n";
-    out << "            [&](const auto& occurrence) { generated_dispatch_event(registry, occurrence, queued.target); },\n";
+    out << "            [&](const auto& occurrence) { generated_dispatch_event(registry, occurrence, queued.target); "
+           "},\n";
     out << "            queued.occurrence);\n";
     out << "    }\n";
     out << "    activation.current_cascade_depth = 0;\n";
@@ -1330,6 +1324,238 @@ std::optional<std::string> raylib_mouse_constant(const ExprNode& expr) {
 [[noreturn]] void fail_unresolved_input_binding(const std::string& input_name, const std::string& prop_key) {
     throw std::runtime_error("internal error: input '" + input_name + "' property '" + prop_key +
                              "' lacks a resolved std.input binding; semantic analysis must reject this program");
+}
+
+// Emits InputButton/InputAxis constants, their cactus_input_button_key/mouse
+// and cactus_input_axis_value lookup functions, and the InputEvent facade
+// struct, for whichever of axis/button input kinds the program declares.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::string emit_input_constants(const DecoratedProgram& program) {
+    std::ostringstream out;
+    if (program.ast == nullptr) {
+        return out.str();
+    }
+    bool has_axis_input   = false;
+    bool has_button_input = false;
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+            has_axis_input   = has_axis_input || input->input_kind == InputKind::Axis;
+            has_button_input = has_button_input || input->input_kind == InputKind::Button;
+        }
+    }
+
+    if (has_button_input) {
+        out << "using InputButton = std::uint8_t;\n";
+        std::uint8_t button_index = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Button) {
+                    continue;
+                }
+                out << "[[maybe_unused]] constexpr InputButton " << input_action_constant_name(input->name)
+                    << " = static_cast<InputButton>(" << static_cast<int>(button_index++) << ");\n";
+            }
+        }
+        out << "\n";
+
+        out << "namespace cactus::runtime::entt_backend {\n";
+        out << "int cactus_input_button_key(std::uint8_t button) noexcept {\n";
+        out << "    switch (button) {\n";
+        button_index = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Button) {
+                    continue;
+                }
+                std::string key = "0";
+                for (const auto& prop : input->props) {
+                    if (prop.key == "key") {
+                        if (auto maybe_key = raylib_key_constant(*prop.value)) {
+                            key = *maybe_key;
+                        } else {
+                            fail_unresolved_input_binding(input->name, prop.key);
+                        }
+                    }
+                }
+                out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
+                    << key << ";\n";
+            }
+        }
+        out << "        default:\n";
+        out << "            break;\n";
+        out << "    }\n";
+        out << "    return 0;\n";
+        out << "}\n";
+        out << "int cactus_input_button_mouse(std::uint8_t button) noexcept {\n";
+        out << "    switch (button) {\n";
+        button_index = 0;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Button) {
+                    continue;
+                }
+                std::string mouse = "-1";
+                for (const auto& prop : input->props) {
+                    if (prop.key == "mouse") {
+                        if (auto maybe_mouse = raylib_mouse_constant(*prop.value)) {
+                            mouse = *maybe_mouse;
+                        } else {
+                            fail_unresolved_input_binding(input->name, prop.key);
+                        }
+                    }
+                }
+                out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
+                    << mouse << ";\n";
+            }
+        }
+        out << "        default:\n";
+        out << "            break;\n";
+        out << "    }\n";
+        out << "    return -1;\n";
+        out << "}\n";
+        out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    }
+
+    if (has_axis_input) {
+        out << "using InputAxis = std::uint8_t;\n";
+        out << "enum class CactusInputAxisTag : std::uint8_t { ";
+        bool first = true;
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Axis) {
+                    continue;
+                }
+                out << (first ? "" : ", ") << input->name;
+                first = false;
+            }
+        }
+        out << " };\n\n";
+
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Axis) {
+                    continue;
+                }
+                out << "[[maybe_unused]] constexpr InputAxis " << input_action_constant_name(input->name)
+                    << " = static_cast<InputAxis>(CactusInputAxisTag::" << input->name << ");\n";
+            }
+        }
+        out << "\n";
+
+        out << "namespace cactus::runtime::entt_backend {\n";
+        out << "float cactus_input_axis_value(std::uint8_t action) noexcept {\n";
+        out << "    switch (action) {\n";
+        for (const auto& decl : program.ast->declarations) {
+            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
+                if (input->input_kind != InputKind::Axis) {
+                    continue;
+                }
+                // Consumed keys contribute 0.0 so editor-owned controls stay
+                // invisible to same-key gameplay axes (editor input override).
+                const auto axis_side = [](const std::string& key) {
+                    std::string result = "((!is_input_key_consumed(";
+                    result += key;
+                    result += ") && cactus::runtime::raylib::IsKeyDown(";
+                    result += key;
+                    result += ")) ? 1.0F : 0.0F)";
+                    return result;
+                };
+                std::string negative = "0";
+                std::string positive = "0";
+                for (const auto& prop : input->props) {
+                    if (prop.key == "negative") {
+                        if (auto key = raylib_key_constant(*prop.value)) {
+                            negative = axis_side(*key);
+                        } else {
+                            fail_unresolved_input_binding(input->name, prop.key);
+                        }
+                    } else if (prop.key == "positive") {
+                        if (auto key = raylib_key_constant(*prop.value)) {
+                            positive = axis_side(*key);
+                        } else {
+                            fail_unresolved_input_binding(input->name, prop.key);
+                        }
+                    }
+                }
+                out << "        case static_cast<InputAxis>(CactusInputAxisTag::" << input->name << "):\n";
+                out << "            return " << positive << " - " << negative << ";\n";
+            }
+        }
+        out << "        default:\n";
+        out << "            return 0.0F;\n";
+        out << "    }\n";
+        out << "}\n\n";
+        out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    }
+
+    if (has_axis_input || has_button_input) {
+        out << "struct InputEvent {\n";
+        if (has_axis_input) {
+            out << "    [[nodiscard]] static float axis(InputAxis action) {\n";
+            out << "        return cactus::runtime::entt_backend::axis(action);\n";
+            out << "    }\n";
+        }
+        if (has_button_input) {
+            out << "    [[nodiscard]] static bool pressed(InputButton action) {\n";
+            out << "        return cactus::runtime::entt_backend::pressed(action);\n";
+            out << "    }\n";
+            out << "    [[nodiscard]] static bool down(InputButton action) {\n";
+            out << "        return cactus::runtime::entt_backend::down(action);\n";
+            out << "    }\n";
+            out << "    [[nodiscard]] static bool released(InputButton action) {\n";
+            out << "        return cactus::runtime::entt_backend::released(action);\n";
+            out << "    }\n";
+        }
+        out << "};\n\n";
+    }
+
+    return out.str();
+}
+
+// Emits the __translate_camera_2d/3d helpers (raylib-facing camera struct
+// conversion), once, gated on whichever of the 2D/3D rigs the program uses.
+std::string emit_camera_translate_helpers(bool emit_2d_helper,
+                                          bool emit_3d_helper,
+                                          const std::string& cam2d_cpp,
+                                          const std::string& cam3d_cpp,
+                                          const std::string& wt3d_cpp) {
+    std::ostringstream out;
+    if (!emit_2d_helper && !emit_3d_helper) {
+        return out.str();
+    }
+    out << "namespace {\n";
+    if (emit_2d_helper) {
+        out << "Camera2D __translate_camera_2d(const " << cam2d_cpp << "& cam, int sw, int sh) noexcept {\n";
+        out << "    Camera2D cam2d{};\n";
+        out << "    cam2d.target   = cam.offset;\n";
+        out << "    cam2d.zoom     = cam.zoom;\n";
+        out << "    cam2d.rotation = cam.rotation * (180.0F / 3.14159265F);\n";
+        out << "    cam2d.offset   = {.x = static_cast<float>(sw) * 0.5F,\n";
+        out << "                      .y = static_cast<float>(sh) * 0.5F};\n";
+        out << "    return cam2d;\n";
+        out << "}\n";
+    }
+    if (emit_3d_helper) {
+        out << "Camera3D __translate_camera_3d(entt::entity entity, const " << cam3d_cpp
+            << "& cam, entt::registry& registry) {\n";
+        out << "    Camera3D cam3d{};\n";
+        out << "    cam3d.fovy       = cam.fov_y;\n";
+        out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
+        out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
+        out << "    if (registry.all_of<" << wt3d_cpp << ">(entity)) {\n";
+        out << "        const auto& xform = registry.get<" << wt3d_cpp << ">(entity);\n";
+        out << "        cam3d.position = xform.position;\n";
+        out << "        const auto& q  = xform.rotation;\n";
+        out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
+        out << "                          .y = xform.position.y + (2.0F * ((q.w * q.x) - (q.y * q.z))),\n";
+        out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * "
+               "q.y)))))};\n";
+        out << "    }\n";
+        out << "    return cam3d;\n";
+        out << "}\n";
+    }
+    out << "}  // namespace\n\n";
+    return out.str();
 }
 
 std::string pad_to_width(const std::string& value, std::size_t width) {
@@ -2153,8 +2379,9 @@ void cactus_dispatch_stdlib_volume_collisions(entt::registry& registry, entt::di
 // declaration itself and falling back to the lowest-canonical-id same-named
 // event from another linked module. `require_external` additionally
 // restricts matches to externally-implemented events (used for `frame`).
-const ResolvedEvent* find_std_core_event(const DecoratedProgram& program, std::string_view name,
-                                          bool require_external) {
+const ResolvedEvent* find_std_core_event(const DecoratedProgram& program,
+                                         std::string_view name,
+                                         bool require_external) {
     const ResolvedEvent* fallback = nullptr;
     for (const auto& [_, event] : program.events) {
         if (event.name != name || !event.symbol_id.has_value() || (require_external && !event.is_external)) {
@@ -2238,8 +2465,7 @@ std::string emit_backend_main(const DecoratedProgram& program) {
         out << "        auto& boundary_activation = "
                "cactus::runtime::entt_backend::generated_scheduler_state().activation;\n";
         out << "        boundary_activation.active = true;\n";
-        out << "        cactus::runtime::entt_backend::generated_dispatch_event(registry, " << event_type
-            << "{});\n";
+        out << "        cactus::runtime::entt_backend::generated_dispatch_event(registry, " << event_type << "{});\n";
         out << "        cactus::runtime::entt_backend::generated_drain_event_cascade(registry);\n";
         out << "        cactus::runtime::entt_backend::generated_commit_activation(registry);\n";
         out << "        boundary_activation.active = false;\n";
@@ -2310,10 +2536,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     const bool rig_is_3d        = wt_usage.volume;
     const std::string cam2d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.flat.Camera", program);
     const std::string cam3d_cpp = EnttCodegenUtils::trait_cpp_name("std.camera.volume.Camera", program);
-    const std::string wt3d_cpp =
-        EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
-    const bool emit_2d_helper = uses_viewport && uses_flat && (rig_is_2d || !rig_is_3d);
-    const bool emit_3d_helper = uses_viewport && uses_volume && rig_is_3d;
+    const std::string wt3d_cpp  = EnttCodegenUtils::trait_cpp_name("std.transform.volume.WorldTransform", program);
+    const bool emit_2d_helper   = uses_viewport && uses_flat && (rig_is_2d || !rig_is_3d);
+    const bool emit_3d_helper   = uses_viewport && uses_volume && rig_is_3d;
 
     // Header
     out << "// Generated by Cactus DSL Compiler (cpp-entt backend)\n\n";
@@ -2393,176 +2618,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "    return cactus::runtime::Quat{.x = x, .y = y, .z = z, .w = w};\n";
     out << "}\n\n";
 
-    if (program.ast != nullptr) {
-        bool has_axis_input   = false;
-        bool has_button_input = false;
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                has_axis_input   = has_axis_input || input->input_kind == InputKind::Axis;
-                has_button_input = has_button_input || input->input_kind == InputKind::Button;
-            }
-        }
-
-        if (has_button_input) {
-            out << "using InputButton = std::uint8_t;\n";
-            std::uint8_t button_index = 0;
-            for (const auto& decl : program.ast->declarations) {
-                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                    if (input->input_kind != InputKind::Button) {
-                        continue;
-                    }
-                    out << "[[maybe_unused]] constexpr InputButton " << input_action_constant_name(input->name)
-                        << " = static_cast<InputButton>(" << static_cast<int>(button_index++) << ");\n";
-                }
-            }
-            out << "\n";
-
-            out << "namespace cactus::runtime::entt_backend {\n";
-            out << "int cactus_input_button_key(std::uint8_t button) noexcept {\n";
-            out << "    switch (button) {\n";
-            button_index = 0;
-            for (const auto& decl : program.ast->declarations) {
-                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                    if (input->input_kind != InputKind::Button) {
-                        continue;
-                    }
-                    std::string key = "0";
-                    for (const auto& prop : input->props) {
-                        if (prop.key == "key") {
-                            if (auto maybe_key = raylib_key_constant(*prop.value)) {
-                                key = *maybe_key;
-                            } else {
-                                fail_unresolved_input_binding(input->name, prop.key);
-                            }
-                        }
-                    }
-                    out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
-                        << key << ";\n";
-                }
-            }
-            out << "        default:\n";
-            out << "            break;\n";
-            out << "    }\n";
-            out << "    return 0;\n";
-            out << "}\n";
-            out << "int cactus_input_button_mouse(std::uint8_t button) noexcept {\n";
-            out << "    switch (button) {\n";
-            button_index = 0;
-            for (const auto& decl : program.ast->declarations) {
-                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                    if (input->input_kind != InputKind::Button) {
-                        continue;
-                    }
-                    std::string mouse = "-1";
-                    for (const auto& prop : input->props) {
-                        if (prop.key == "mouse") {
-                            if (auto maybe_mouse = raylib_mouse_constant(*prop.value)) {
-                                mouse = *maybe_mouse;
-                            } else {
-                                fail_unresolved_input_binding(input->name, prop.key);
-                            }
-                        }
-                    }
-                    out << "        case static_cast<InputButton>(" << static_cast<int>(button_index++) << "): return "
-                        << mouse << ";\n";
-                }
-            }
-            out << "        default:\n";
-            out << "            break;\n";
-            out << "    }\n";
-            out << "    return -1;\n";
-            out << "}\n";
-            out << "}  // namespace cactus::runtime::entt_backend\n\n";
-        }
-
-        if (has_axis_input) {
-            out << "using InputAxis = std::uint8_t;\n";
-            out << "enum class CactusInputAxisTag : std::uint8_t { ";
-            bool first = true;
-            for (const auto& decl : program.ast->declarations) {
-                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                    if (input->input_kind != InputKind::Axis) {
-                        continue;
-                    }
-                    out << (first ? "" : ", ") << input->name;
-                    first = false;
-                }
-            }
-            out << " };\n\n";
-
-            for (const auto& decl : program.ast->declarations) {
-                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                    if (input->input_kind != InputKind::Axis) {
-                        continue;
-                    }
-                    out << "[[maybe_unused]] constexpr InputAxis " << input_action_constant_name(input->name)
-                        << " = static_cast<InputAxis>(CactusInputAxisTag::" << input->name << ");\n";
-                }
-            }
-            out << "\n";
-
-            out << "namespace cactus::runtime::entt_backend {\n";
-            out << "float cactus_input_axis_value(std::uint8_t action) noexcept {\n";
-            out << "    switch (action) {\n";
-            for (const auto& decl : program.ast->declarations) {
-                if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
-                    if (input->input_kind != InputKind::Axis) {
-                        continue;
-                    }
-                    // Consumed keys contribute 0.0 so editor-owned controls stay
-                    // invisible to same-key gameplay axes (editor input override).
-                    const auto axis_side = [](const std::string& key) {
-                        return "((!is_input_key_consumed(" + key + ") && cactus::runtime::raylib::IsKeyDown(" + key + ")) ? 1.0F : 0.0F)";
-                    };
-                    std::string negative = "0";
-                    std::string positive = "0";
-                    for (const auto& prop : input->props) {
-                        if (prop.key == "negative") {
-                            if (auto key = raylib_key_constant(*prop.value)) {
-                                negative = axis_side(*key);
-                            } else {
-                                fail_unresolved_input_binding(input->name, prop.key);
-                            }
-                        } else if (prop.key == "positive") {
-                            if (auto key = raylib_key_constant(*prop.value)) {
-                                positive = axis_side(*key);
-                            } else {
-                                fail_unresolved_input_binding(input->name, prop.key);
-                            }
-                        }
-                    }
-                    out << "        case static_cast<InputAxis>(CactusInputAxisTag::" << input->name << "):\n";
-                    out << "            return " << positive << " - " << negative << ";\n";
-                }
-            }
-            out << "        default:\n";
-            out << "            return 0.0F;\n";
-            out << "    }\n";
-            out << "}\n\n";
-            out << "}  // namespace cactus::runtime::entt_backend\n\n";
-        }
-
-        if (has_axis_input || has_button_input) {
-            out << "struct InputEvent {\n";
-            if (has_axis_input) {
-                out << "    [[nodiscard]] static float axis(InputAxis action) {\n";
-                out << "        return cactus::runtime::entt_backend::axis(action);\n";
-                out << "    }\n";
-            }
-            if (has_button_input) {
-                out << "    [[nodiscard]] static bool pressed(InputButton action) {\n";
-                out << "        return cactus::runtime::entt_backend::pressed(action);\n";
-                out << "    }\n";
-                out << "    [[nodiscard]] static bool down(InputButton action) {\n";
-                out << "        return cactus::runtime::entt_backend::down(action);\n";
-                out << "    }\n";
-                out << "    [[nodiscard]] static bool released(InputButton action) {\n";
-                out << "        return cactus::runtime::entt_backend::released(action);\n";
-                out << "    }\n";
-            }
-            out << "};\n\n";
-        }
-    }
+    out << emit_input_constants(program);
 
     if (program.ast != nullptr) {
         for (const auto& decl : program.ast->declarations) {
@@ -2660,40 +2716,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // phase batch's per-viewport wrap) and before the legacy generated_render_project
     // (which also calls these). Defining them once here avoids a redefinition
     // between the two call sites.
-    if (emit_2d_helper || emit_3d_helper) {
-        out << "namespace {\n";
-        if (emit_2d_helper) {
-            out << "Camera2D __translate_camera_2d(const " << cam2d_cpp << "& cam, int sw, int sh) noexcept {\n";
-            out << "    Camera2D cam2d{};\n";
-            out << "    cam2d.target   = cam.offset;\n";
-            out << "    cam2d.zoom     = cam.zoom;\n";
-            out << "    cam2d.rotation = cam.rotation * (180.0F / 3.14159265F);\n";
-            out << "    cam2d.offset   = {.x = static_cast<float>(sw) * 0.5F,\n";
-            out << "                      .y = static_cast<float>(sh) * 0.5F};\n";
-            out << "    return cam2d;\n";
-            out << "}\n";
-        }
-        if (emit_3d_helper) {
-            out << "Camera3D __translate_camera_3d(entt::entity entity, const " << cam3d_cpp
-                << "& cam, entt::registry& registry) {\n";
-            out << "    Camera3D cam3d{};\n";
-            out << "    cam3d.fovy       = cam.fov_y;\n";
-            out << "    cam3d.projection = CAMERA_PERSPECTIVE;\n";
-            out << "    cam3d.up         = {.x = 0.0F, .y = 1.0F, .z = 0.0F};\n";
-            out << "    if (registry.all_of<" << wt3d_cpp << ">(entity)) {\n";
-            out << "        const auto& xform = registry.get<" << wt3d_cpp << ">(entity);\n";
-            out << "        cam3d.position = xform.position;\n";
-            out << "        const auto& q  = xform.rotation;\n";
-            out << "        cam3d.target   = {.x = xform.position.x + (-(2.0F * ((q.x * q.z) + (q.w * q.y)))),\n";
-            out << "                          .y = xform.position.y + (2.0F * ((q.w * q.x) - (q.y * q.z))),\n";
-            out << "                          .z = xform.position.z + (-(1.0F - (2.0F * ((q.x * q.x) + (q.y * "
-                   "q.y)))))};\n";
-            out << "    }\n";
-            out << "    return cam3d;\n";
-            out << "}\n";
-        }
-        out << "}  // namespace\n\n";
-    }
+    out << emit_camera_translate_helpers(emit_2d_helper, emit_3d_helper, cam2d_cpp, cam3d_cpp, wt3d_cpp);
 
     out << emit_projected_trait_registry_helpers(program);
 
@@ -2821,7 +2844,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         // pub template count beyond it would silently drop palette buttons with no
         // indication why (editor-declarative-rendering), so fail the build instead.
         constexpr std::size_t kEditorPaletteMaxSlots = 16;
-        std::size_t pub_template_count = 0;
+        std::size_t pub_template_count               = 0;
         for (const auto& decl : program.ast->declarations) {
             if (const auto* tmpl = std::get_if<TemplateNode>(&decl); tmpl != nullptr && tmpl->is_pub) {
                 ++pub_template_count;
@@ -2906,7 +2929,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         // Not noexcept either: calls editor_palette_label_slots() above, which isn't noexcept.
         out << "entt::entity editor_palette_label_slot(entt::registry& registry, int index) {\n";
         out << "    auto& slots = editor_palette_label_slots(registry);\n";
-        out << "    if (index < 0 || static_cast<std::size_t>(index) >= slots.size()) { return entt::entity{entt::null}; "
+        out << "    if (index < 0 || static_cast<std::size_t>(index) >= slots.size()) { return "
+               "entt::entity{entt::null}; "
                "}\n";
         out << "    return slots[static_cast<std::size_t>(index)];\n";
         out << "}\n";

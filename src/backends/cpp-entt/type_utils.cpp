@@ -27,7 +27,7 @@ std::string resolved_decl_cpp_name(const ResolvedDecl& decl) {
 }
 
 template <typename Map>
-const typename Map::mapped_type* find_decl_by_symbol(const Map& map, const SymbolId& symbol) {
+const Map::mapped_type* find_decl_by_symbol(const Map& map, const SymbolId& symbol) {
     const auto canonical = make_canonical_id(symbol);
     if (auto it = map.find(canonical); it != map.end()) {
         return &it->second;
@@ -224,10 +224,12 @@ std::string EnttCodegenUtils::emit_enum(const ResolvedEnum& e) {
     return out.str();
 }
 
+// Exhaustive per-ExprNode-kind C++ text emission; self-recursive by
+// construction (an expr tree emits its own subexpressions).
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
 std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode* ast) {
     return std::visit(
-        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity) -- per-ExprNode-kind emission
         [&](auto& e) -> std::string {
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, LiteralExpr>) {
@@ -295,32 +297,50 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
         expr.expr);
 }
 
+std::string EnttCodegenUtils::join_emitted_args(const std::vector<std::unique_ptr<ExprNode>>& args,
+                                                const DecoratedProgram& program) {
+    std::string result;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += EnttCodegenUtils::emit_expr(*args[i], program);
+    }
+    return result;
+}
+
+// DecoratedProgram overload: same exhaustive per-ExprNode-kind emission, plus
+// stdlib call-site rewriting that needs the linked program's resolved symbols.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
 std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedProgram& program) {
     return std::visit(
-        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity) -- per-ExprNode-kind emission
         [&](auto& e) -> std::string {
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, CallExpr>) {
                 auto stdlib_prefix_for_module = [](const std::string& mod) -> std::string {
-                    if (mod == "std.math") { return "cactus::runtime::stdlib::math"; }
-                    if (mod == "std.math.vec2") { return "cactus::runtime::stdlib::math::vec2"; }
-                    if (mod == "std.math.vec3") { return "cactus::runtime::stdlib::math::vec3"; }
-                    if (mod == "std.math.quat") { return "cactus::runtime::stdlib::math::quat"; }
-                    if (mod == "std.random") { return "cactus::runtime::stdlib::random"; }
+                    if (mod == "std.math") {
+                        return "cactus::runtime::stdlib::math";
+                    }
+                    if (mod == "std.math.vec2") {
+                        return "cactus::runtime::stdlib::math::vec2";
+                    }
+                    if (mod == "std.math.vec3") {
+                        return "cactus::runtime::stdlib::math::vec3";
+                    }
+                    if (mod == "std.math.quat") {
+                        return "cactus::runtime::stdlib::math::quat";
+                    }
+                    if (mod == "std.random") {
+                        return "cactus::runtime::stdlib::random";
+                    }
                     return {};
                 };
                 if (e.resolved_callee_id.has_value() && e.resolved_callee_id->kind == SymbolKind::Func) {
                     const auto prefix = stdlib_prefix_for_module(e.resolved_callee_id->module.name);
                     if (!prefix.empty()) {
-                        std::string result = prefix + "::" + e.resolved_callee_id->local_name + "(";
-                        for (size_t i = 0; i < e.args.size(); ++i) {
-                            if (i > 0) {
-                                result += ", ";
-                            }
-                            result += EnttCodegenUtils::emit_expr(*e.args[i], program);
-                        }
-                        return result + ")";
+                        return prefix + "::" + e.resolved_callee_id->local_name + "(" +
+                               EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
                     }
                 }
                 // Fallback: scan UseNode aliases when resolved_callee_id is not set
@@ -335,14 +355,8 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                                     if (alias_matches) {
                                         const auto prefix = stdlib_prefix_for_module(use_node->module_name);
                                         if (!prefix.empty()) {
-                                            std::string result = prefix + "::" + member_callee->member + "(";
-                                            for (size_t i = 0; i < e.args.size(); ++i) {
-                                                if (i > 0) {
-                                                    result += ", ";
-                                                }
-                                                result += EnttCodegenUtils::emit_expr(*e.args[i], program);
-                                            }
-                                            return result + ")";
+                                            return prefix + "::" + member_callee->member + "(" +
+                                                   EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
                                         }
                                     }
                                 }
@@ -350,14 +364,8 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                         }
                     }
                 }
-                std::string result = EnttCodegenUtils::emit_expr(*e.callee, program) + "(";
-                for (size_t i = 0; i < e.args.size(); ++i) {
-                    if (i > 0) {
-                        result += ", ";
-                    }
-                    result += EnttCodegenUtils::emit_expr(*e.args[i], program);
-                }
-                return result + ")";
+                return EnttCodegenUtils::emit_expr(*e.callee, program) + "(" +
+                       EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 // Three-level: alias.EnumType.Variant → canonical_EnumType::Variant
                 if (const auto* inner_member = std::get_if<MemberExpr>(&e.object->expr)) {
@@ -449,11 +457,10 @@ const ResolvedTrait* EnttCodegenUtils::find_trait(const DecoratedProgram& progra
         if (match != nullptr && match->canonical_id != t.canonical_id) {
             // Picking either variant would depend on map iteration order; the
             // silent wrong pick is exactly what disabled the editor glue.
-            throw std::runtime_error("internal error: trait lookup '" + name +
-                                     "' is ambiguous in the merged program (candidates include '" +
-                                     (match->canonical_id.empty() ? match->name : match->canonical_id) + "' and '" +
-                                     (t.canonical_id.empty() ? t.name : t.canonical_id) +
-                                     "'); codegen must look it up by canonical id");
+            throw std::runtime_error(
+                "internal error: trait lookup '" + name + "' is ambiguous in the merged program (candidates include '" +
+                (match->canonical_id.empty() ? match->name : match->canonical_id) + "' and '" +
+                (t.canonical_id.empty() ? t.name : t.canonical_id) + "'); codegen must look it up by canonical id");
         }
         if (match == nullptr) {
             match = &t;

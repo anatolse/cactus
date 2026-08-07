@@ -7,6 +7,7 @@
 #include "frontend/symbol_identity.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -23,7 +24,7 @@ namespace cactus {
 struct PhaseFieldSource {
     enum class Kind : std::uint8_t { RootEvent, UpstreamPhase };
     Kind kind = Kind::RootEvent;
-    SymbolId source;    // the runtime root event or upstream phase this field reads from
+    SymbolId source;     // the runtime root event or upstream phase this field reads from
     std::string member;  // field name on that source
 };
 
@@ -187,8 +188,8 @@ struct BoundTraitAccess {
 
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
-    std::vector<SymbolId> selection;            // Unary domain: positive traits
-    std::vector<SymbolId> exclusion;            // Unary domain: excluded traits
+    std::vector<SymbolId> selection;             // Unary domain: positive traits
+    std::vector<SymbolId> exclusion;             // Unary domain: excluded traits
     std::vector<RelationBinding> pair_bindings;  // Pair domain: exactly two, source order
 
     [[nodiscard]] bool is_selectionless() const {
@@ -196,7 +197,7 @@ struct HandlerContract {
     }
 
     std::unordered_set<SymbolId> reads;         // conservative canonical read union
-    std::vector<BoundTraitAccess> bound_reads;   // precise pair binding + trait reads
+    std::vector<BoundTraitAccess> bound_reads;  // precise pair binding + trait reads
     std::unordered_set<SymbolId> writes;        // durable trait writes
     std::unordered_set<SymbolId> projects;      // projected (transient) trait outputs
     std::unordered_set<SymbolId> emits;
@@ -478,10 +479,23 @@ private:
     void check_func_purity_expr(const ExprNode& expr, const std::string& func_name);
     void check_no_recursion(ProgramNode& program);
     void check_persist_sync(ProgramNode& program);
+    // The 5 sequential phases of validate_phase_declarations, in order: collect
+    // phases/constants; validate from:/after:/every:/max:; DFS lineage+cycle
+    // detection; synthesize dt/alpha fields; validate+bind field initializers.
+    struct PhaseCollection {
+        std::unordered_map<std::string, PhaseNode*> local_phases;
+        std::vector<std::string> phase_order;
+        std::unordered_map<std::string, const ExprNode*> constants;
+    };
+    [[nodiscard]] static PhaseCollection collect_phase_declarations(ProgramNode& program);
+    void validate_phase_from_after_every_max(const PhaseCollection& phases);
+    void resolve_phase_lineage(const PhaseCollection& phases);
+    void synthesize_phase_periodic_fields(const PhaseCollection& phases);
+    void validate_phase_field_initializers(const PhaseCollection& phases);
     void validate_phase_declarations(ProgramNode& program);
     void validate_rule_filters(ProgramNode& program);
     void validate_pair_bindings(RuleNode& rule);
-    [[nodiscard]] PairScope build_pair_scope(const PairClause& pairs) const;
+    [[nodiscard]] static PairScope build_pair_scope(const PairClause& pairs);
     void validate_external_handler_contracts(ProgramNode& program);
     void validateOrderByClause(const RuleNode& rule);
     void validateOrderByClause(const ExternRuleNode& rule);
@@ -499,6 +513,21 @@ private:
                                    const std::string& rule_name,
                                    bool in_rule_handler,
                                    const PairScope* pair_scope = nullptr);
+
+    // Shared by the 6 trait-override-assignment validation sites (template/entity
+    // trait blocks, child archetypes, child overrides, template-backed entity
+    // overrides, spawn statements, spawn expressions): given entries already known
+    // to target a valid trait on their override site (or, when report_unknown_trait
+    // is true, entries whose trait validity this call itself should check),
+    // validates each assignment's field against the resolved trait and, when
+    // check_self is set, rejects `self` usage. When provided is non-null, every
+    // assigned field name is also recorded there for the caller's required-field
+    // coverage check.
+    void validate_trait_override_assignments(const std::vector<const ArchetypeTraitEntry*>& entries,
+                                             const std::string& context_desc,
+                                             bool check_self,
+                                             bool report_unknown_trait,
+                                             std::unordered_set<std::string>* provided = nullptr);
 
     // Phase 3: Dynamic ECS validations (dynamic-ecs-language change)
     void validate_template_unit_declarations(ProgramNode& program);
@@ -545,28 +574,80 @@ private:
                                              const std::string& fallback_name) const;
     const ResolvedFunc* find_resolved_func(const SymbolId& symbol) const;
     const ResolvedStruct* find_resolved_event(const std::string& name) const;
+
+    /// Shared by validateOrderByClause, validate_event_usage, and
+    /// validate_text_format_calls: resolves a filter: clause's rich entries
+    /// and backward-compat trait_names into a name/alias -> ResolvedTrait map.
+    [[nodiscard]] std::unordered_map<std::string, const ResolvedTrait*> build_filter_bindings(
+        const FilterClause& filter) const;
+    // Shared by validateOrderByClause(RuleNode)/validateOrderByClause(ExternRuleNode):
+    // resolves one order-by key's dotted field path against its filter alias's
+    // trait, reporting "not declared"/"not a valid field"/"not scalar-comparable"
+    // as appropriate.
+    void validate_order_by_key(const SortKey& key,
+                               const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings);
     TypeInfo infer_expr_type(const ExprNode& expr,
                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                              const std::unordered_map<std::string, TypeInfo>& local_bindings,
                              const ResolvedStruct* handler_event,
                              const PairScope* pair_scope = nullptr) const;
+    // infer_expr_type's IdentExpr and MemberExpr arms, its two largest and
+    // most branching cases.
+    TypeInfo infer_ident_expr_type(const IdentExpr& ident,
+                                   const SourceLocation& location,
+                                   const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                   const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                   const PairScope* pair_scope) const;
+    TypeInfo infer_member_expr_type(const MemberExpr& member,
+                                    const SourceLocation& location,
+                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                    const ResolvedStruct* handler_event,
+                                    const PairScope* pair_scope) const;
+
+    /// Shared by validate_event_stmts's 4 command lambdas and
+    /// validate_context_stmts's 3 command arms: if target_expr is present,
+    /// infers its type and reports wrong_type_message unless it's entity_id
+    /// (or still-unknown). No-op when target_expr is absent — callers that
+    /// require an explicit target (e.g. inside a pair handler) check that
+    /// themselves first.
+    void require_optional_entity_id_target(const std::optional<std::unique_ptr<ExprNode>>& target_expr,
+                                           const SourceLocation& location,
+                                           const std::string& wrong_type_message,
+                                           const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                           const std::unordered_map<std::string, TypeInfo>& locals,
+                                           const ResolvedStruct* handler_event,
+                                           const PairScope* pair_scope = nullptr);
+
+    /// Shared by validate_event_stmts's validate_add/validate_project lambdas:
+    /// validates a trait's supplied field arguments (unknown-field detection,
+    /// per-field type mismatch) and required-field coverage, reporting
+    /// "... in <context_desc>" (e.g. "`add Foo`") for each kind of failure.
+    void validate_trait_field_supply(const ResolvedTrait& trait,
+                                     const std::vector<FieldAssignment>& args,
+                                     const std::string& context_desc,
+                                     const SourceLocation& required_field_location,
+                                     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                     const std::unordered_map<std::string, TypeInfo>& locals,
+                                     const ResolvedStruct* handler_event,
+                                     const PairScope* pair_scope);
 
     // Resolved binding + canonical trait identity for a pair member-access
     // chain (e.g. `body.tf.WorldTransform.position`), plus how many leading
     // dotted segments (after the binding) named the trait itself — the
     // remainder is an ordinary field/aggregate-member path on that trait.
     struct PairMemberResolution {
-        std::size_t binding_index     = 0;
+        std::size_t binding_index = 0;
         SymbolId trait_id;
         std::size_t consumed_segments = 0;
     };
-    [[nodiscard]] std::optional<PairMemberResolution> resolve_pair_member_chain(
+    [[nodiscard]] static std::optional<PairMemberResolution> resolve_pair_member_chain(
         const std::string& binding_name,
         const std::vector<std::string>& segments,
-        const PairScope& pair_scope) const;
+        const PairScope& pair_scope);
     InferredHandlerContract infer_pair_handler_contract(const RuleNode& rule,
-                                                         const EventHandlerNode& handler,
-                                                         const PairScope& pair_scope) const;
+                                                        const EventHandlerNode& handler,
+                                                        const PairScope& pair_scope) const;
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);
@@ -577,9 +658,36 @@ private:
 
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);
+    // build_dependency_graph's 3 per-declaration-kind branches, one per
+    // Declaration alternative it handles.
+    void collect_phase_plan(const PhaseNode& phase, std::size_t declaration_index);
+    void collect_rule_dependency(const RuleNode& rule, std::size_t declaration_index);
+    void collect_extern_rule_dependency(const ExternRuleNode& rule, std::size_t declaration_index);
     void collect_rule_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, RuleDependency& dep);
-    InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule,
-                                                           const EventHandlerNode& handler) const;
+
+    using LocalNames = std::unordered_set<std::string>;
+
+    // Shared AST-walking core for infer_regular_handler_contract and
+    // infer_pair_handler_contract: walks a handler body accumulating
+    // commands/effects/emits/reads-via-TraitMatchStmt identically for both,
+    // delegating the two points where the callers genuinely differ — how a
+    // read resolves off an identifier/member-chain expression, and what a
+    // `VarAssign`/`project` statement does — to the supplied hooks.
+    // resolve_read(expr, locals) is checked first in visit_expr; returning
+    // true means "fully handled, stop" (matching each caller's own
+    // short-circuit shape), false falls through to the shared per-kind walk
+    // (where IdentExpr is a no-op and MemberExpr falls back to visiting the
+    // object). handle_var_assign(node, locals) runs after node.value has
+    // already been visited for reads. on_project_trait(trait) runs for a
+    // resolved `project` statement's trait id.
+    void walk_handler_body(const std::vector<std::unique_ptr<StmtNode>>& body,
+                           LocalNames handler_locals,
+                           InferredHandlerContract& contract,
+                           const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read,
+                           const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
+                           const std::function<void(const SymbolId&)>& on_project_trait) const;
+
+    InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule, const EventHandlerNode& handler) const;
 
     // Phase 3: std.text.format validation
     bool is_std_text_format_callee(const ExprNode& callee) const;
@@ -617,6 +725,12 @@ private:
     /// Sets out_simple_name to the unqualified trait name on success.
     bool resolve_filter_entry(const FilterEntry& entry, std::string& out_simple_name);
 
+    /// Shared by validate_rule_filters's RuleNode/ExternRuleNode branches:
+    /// validates a filter: clause's traits (rich entries, or the
+    /// backward-compat simple trait_names list), reporting "<owner_desc>
+    /// filters on unknown trait '...'" for any that don't resolve.
+    void validate_filter_clause_traits(FilterClause& filter, const std::string& owner_desc);
+
     /// Resolve a trait reference (dotted or simple) to its canonical ID.
     /// Reports an error and returns "" on failure.
     std::string resolve_trait_ref_to_canonical(const std::string& ref, const SourceLocation& loc);
@@ -650,8 +764,8 @@ private:
         const SourceLocation& loc,
         const std::unordered_set<std::string>& local_rule_names) const;
     std::string resolve_rule_after_ref(const std::string& ref,
-                                         const SourceLocation& loc,
-                                         const std::unordered_set<std::string>& local_rule_names);
+                                       const SourceLocation& loc,
+                                       const std::unordered_set<std::string>& local_rule_names);
 
     /// Resolve a template/entity reference to its canonical SymbolId.
     std::optional<SymbolId> try_resolve_template_ref_to_symbol(const std::string& ref) const;

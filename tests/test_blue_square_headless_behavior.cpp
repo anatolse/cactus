@@ -5,7 +5,6 @@
 #endif
 
 #define CACTUS_GENERATED_NO_MAIN
-#include CACTUS_HEADLESS_GENERATED_CPP
 
 #include "fake_raylib/fake_raylib.hpp"
 #include "fake_raylib/fake_raylib_assertions.hpp"
@@ -37,7 +36,7 @@ TEST_CASE("blue-square headless: scripted MoveX input moves the square and is ob
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kDt);
 
-    const auto& log = cactus_raylib_fake::call_log();
+    const auto& log  = cactus_raylib_fake::call_log();
     const auto* draw = cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleV>(log);
     REQUIRE(draw != nullptr);
 
@@ -49,9 +48,10 @@ TEST_CASE("blue-square headless: scripted MoveX input moves the square and is ob
     // The draw must land between the shape renderer's BeginMode2D/EndMode2D
     // pair — this is the ungated draw-call gap the change targets.
     CHECK(cactus_raylib_fake::ordered_subsequence(
-        log, {cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedBeginMode2D>(),
-              cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedDrawRectangleV>(),
-              cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedEndMode2D>()}));
+        log,
+        {cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedBeginMode2D>(),
+         cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedDrawRectangleV>(),
+         cactus_raylib_fake::is_call<cactus_raylib_fake::RecordedEndMode2D>()}));
 }
 
 TEST_CASE("blue-square headless: no scripted input leaves the square at its starting position",
@@ -63,8 +63,8 @@ TEST_CASE("blue-square headless: no scripted input leaves the square at its star
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kDt);
 
-    const auto* draw = cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleV>(
-        cactus_raylib_fake::call_log());
+    const auto* draw =
+        cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleV>(cactus_raylib_fake::call_log());
     REQUIRE(draw != nullptr);
     CHECK(cactus_raylib_fake::approx_equal(draw->position, kStartPosition));
 }
@@ -90,8 +90,8 @@ TEST_CASE("blue-square headless: repeated scripted MoveX input across multiple f
     REQUIRE(draw_positions.size() == static_cast<std::size_t>(kFrameCount));
 
     for (int frame = 0; frame < kFrameCount; ++frame) {
-        const Vector2 expected_position{
-            .x = kStartPosition.x + (kSpeed * kDt * static_cast<float>(frame + 1)), .y = kStartPosition.y};
+        const Vector2 expected_position{.x = kStartPosition.x + (kSpeed * kDt * static_cast<float>(frame + 1)),
+                                        .y = kStartPosition.y};
         CHECK(cactus_raylib_fake::approx_equal(draw_positions[static_cast<std::size_t>(frame)], expected_position));
     }
 }

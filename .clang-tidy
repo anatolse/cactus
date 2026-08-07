@@ -19,7 +19,7 @@ WarningsAsErrors: '*'
 
 FormatStyle: 'file'
 
-HeaderFilterRegex: '(src|backends)/.*\.h$'
+HeaderFilterRegex: '(src|backends)/.*\.hpp$'
 
 CheckOptions:
   - key: modernize-use-nullptr.NullMacros

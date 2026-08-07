@@ -60,6 +60,14 @@ general C++23 feature survey.
   compile pass rather than short-circuiting on the first error — keep using
   `ErrorReporter` for anything that reports to the user.
 
+## Testing
+
+All new code must be covered by unit tests — this applies to every change under
+`src/common`, `src/frontend`, `src/backends`, not just bug fixes. Prefer writing the
+test first (TDD): write a failing Catch2 test in `tests/` that captures the intended
+behavior, watch it fail, then implement until it passes. Follow the existing
+`test_*.cpp` naming and structure in `tests/`.
+
 ## Formatting
 
 `.clang-tidy`'s `FormatStyle: 'file'` couples `--fix` to `.clang-format` already —

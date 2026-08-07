@@ -6899,8 +6899,8 @@ void SemanticAnalyzer::validate_after_clauses(
         };
         if (auto* rule = std::get_if<RuleNode>(&decl)) {
             expand_rule(*rule);
-        } else if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
-            expand_rule(*rule);
+        } else if (auto* extern_rule = std::get_if<ExternRuleNode>(&decl)) {
+            expand_rule(*extern_rule);
         }
     }
 

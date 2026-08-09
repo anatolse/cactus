@@ -143,6 +143,15 @@ int GetScreenHeight() noexcept {
     return state().screen_height;
 }
 
+Vector2 MeasureTextEx(const Font /*font*/, const char* text, const float fontSize, const float /*spacing*/) noexcept {
+    // Deterministic stand-in for real glyph-metric measurement (see
+    // raylib_io.hpp): half a font-size unit per character, one font-size unit
+    // tall. Monotonic in both text length and font size, which is all layout
+    // regression tests need to observe — not a claim of pixel accuracy.
+    const std::size_t length = text != nullptr ? std::char_traits<char>::length(text) : 0;
+    return Vector2{.x = static_cast<float>(length) * fontSize * 0.5F, .y = fontSize};
+}
+
 void ClearBackground(Color color) noexcept {
     record(RecordedClearBackground{.color = color});
 }

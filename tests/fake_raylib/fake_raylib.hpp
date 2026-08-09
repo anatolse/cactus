@@ -217,6 +217,8 @@ void set_screen_size(int width, int height) noexcept;
 [[nodiscard]] int GetScreenWidth() noexcept;
 [[nodiscard]] int GetScreenHeight() noexcept;
 
+[[nodiscard]] Vector2 MeasureTextEx(Font font, const char* text, float fontSize, float spacing) noexcept;
+
 void ClearBackground(Color color) noexcept;
 void BeginMode2D(Camera2D camera) noexcept;
 void EndMode2D() noexcept;

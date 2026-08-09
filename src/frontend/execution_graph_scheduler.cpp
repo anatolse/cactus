@@ -29,7 +29,10 @@ bool declaration_precedes(const HandlerNode& left, const HandlerNode& right) {
 
 }  // namespace
 
-bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {  // NOLINT(readability-function-cognitive-complexity) -- the single consolidated home for what used to be two independently-duplicated ~250-line scheduling algorithms; see design.md D1-D5
+// The single consolidated home for what used to be two independently-duplicated
+// ~250-line scheduling algorithms; see design.md D1-D5.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
     std::unordered_map<HandlerIdentity, const HandlerNode*, HandlerIdentityHash> nodes;
     for (const auto& handler : graph.handlers) {
         nodes.emplace(handler.identity, &handler);
@@ -124,13 +127,19 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {  /
                 }
             };
             for (const auto& trait : produced_by_handler[left_index]) {
-                if (right.contract.reads.contains(trait)) {
+                const bool projected_match_consumer =
+                    left.contract.projects.contains(trait) && !right.contract.projects.contains(trait) &&
+                    std::ranges::find(right.contract.selection, trait) != right.contract.selection.end();
+                if (right.contract.reads.contains(trait) || projected_match_consumer) {
                     left_writes_right = true;
                     add_trait(trait);
                 }
             }
             for (const auto& trait : produced_by_handler[right_index]) {
-                if (left.contract.reads.contains(trait)) {
+                const bool projected_match_consumer =
+                    right.contract.projects.contains(trait) && !left.contract.projects.contains(trait) &&
+                    std::ranges::find(left.contract.selection, trait) != left.contract.selection.end();
+                if (left.contract.reads.contains(trait) || projected_match_consumer) {
                     right_writes_left = true;
                     add_trait(trait);
                 }
@@ -174,17 +183,17 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {  /
             }
             if (!trait_provenance.empty()) {
                 graph.schedule_edges.push_back(ScheduleEdge{.before           = before->identity,
-                                                             .after            = after->identity,
-                                                             .kind             = ScheduleEdgeKind::DataConflict,
-                                                             .orientation      = orientation,
-                                                             .trait_provenance = std::move(trait_provenance)});
+                                                            .after            = after->identity,
+                                                            .kind             = ScheduleEdgeKind::DataConflict,
+                                                            .orientation      = orientation,
+                                                            .trait_provenance = std::move(trait_provenance)});
             }
             if (!effect_provenance.empty()) {
                 graph.schedule_edges.push_back(ScheduleEdge{.before            = before->identity,
-                                                             .after             = after->identity,
-                                                             .kind              = ScheduleEdgeKind::EffectConflict,
-                                                             .orientation       = orientation,
-                                                             .effect_provenance = std::move(effect_provenance)});
+                                                            .after             = after->identity,
+                                                            .kind              = ScheduleEdgeKind::EffectConflict,
+                                                            .orientation       = orientation,
+                                                            .effect_provenance = std::move(effect_provenance)});
             }
         }
     }
@@ -264,7 +273,7 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {  /
             }
         }
         std::ranges::sort(activation_nodes,
-                           [](const auto* left, const auto* right) { return declaration_precedes(*left, *right); });
+                          [](const auto* left, const auto* right) { return declaration_precedes(*left, *right); });
         std::unordered_map<HandlerIdentity, std::uint64_t, HandlerIdentityHash> indegree;
         std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> local_adjacency;
         for (const auto* node : activation_nodes) {

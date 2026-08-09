@@ -13,6 +13,9 @@ std::string entt_type_to_cpp(const TypeInfo& type) {
     if (type.kind == TypeKind::EntityId) {
         return "entt::entity";
     }
+    if (type.kind == TypeKind::List && type.element != nullptr) {
+        return "std::vector<" + entt_type_to_cpp(*type.element) + ">";
+    }
     return EnttCodegenUtils::type_to_cpp(type);
 }
 

@@ -258,6 +258,26 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
         const auto capability_name = external_handler_capability_name(node.identity);
         out << "struct " << capability_name << " {\n";
         out << "    entt::registry& registry;\n";
+        for (const auto& trait : sorted_symbols(node.contract.projects)) {
+            const auto type            = EnttCodegenUtils::trait_cpp_name(trait);
+            const auto* resolved_trait = EnttCodegenUtils::find_trait(program, make_canonical_id(trait));
+            if (resolved_trait == nullptr) {
+                throw std::runtime_error("cpp-entt cannot lower external project capability for missing trait '" +
+                                         make_canonical_id(trait) + "'");
+            }
+            if (resolved_trait->fields.empty()) {
+                out << "    [[nodiscard]] bool project_" << type << "(entt::entity target) const {\n";
+                out << "        if (!registry.valid(target)) { return false; }\n";
+                out << "        ::project_" << type << "(registry, target);\n";
+                out << "        return true;\n";
+                out << "    }\n";
+            } else {
+                out << "    [[nodiscard]] " << type << "* project_" << type << "(entt::entity target) const {\n";
+                out << "        if (!registry.valid(target)) { return nullptr; }\n";
+                out << "        return &::project_" << type << "(registry, target);\n";
+                out << "    }\n";
+            }
+        }
         for (const auto& event : sorted_symbols(node.contract.emits)) {
             const auto event_name = canonical_to_cpp_name(event);
             const auto event_type = event_runtime_cpp_type(program, event);
@@ -1141,9 +1161,20 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
         out << "    projected_" << cpp_name << "_previous.erase(entity);\n";
         out << "}\n\n";
     }
-    out << "void clear_projected_traits(entt::registry& registry) {\n";
+    // One function per trait (rather than one loop iteration inlined into a
+    // single dispatcher body) keeps every generated function under
+    // readability-function-size's statement threshold regardless of how many
+    // projected traits a program declares — a program-wide trait count is not
+    // bounded, so an inlined per-trait loop body eventually exceeds it (first
+    // observed via std.ui's DesiredSize/ComputedLayout pushing editor-3d over
+    // 800 statements).
+    std::vector<std::string> clear_fn_names;
+    clear_fn_names.reserve(program.traits.size());
     for (const auto& [name, trait] : program.traits) {
-        const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
+        const std::string cpp_name      = canonical_to_cpp_name(trait.module_name, trait.name);
+        const std::string clear_fn_name = "clear_projected_" + cpp_name;
+        clear_fn_names.push_back(clear_fn_name);
+        out << "void " << clear_fn_name << "(entt::registry& registry) {\n";
         out << "    for (const auto entity : projected_" << cpp_name << "_entities) {\n";
         out << "        auto previous_it = projected_" << cpp_name << "_previous.find(entity);\n";
         out << "        if (previous_it == projected_" << cpp_name << "_previous.end()) {\n";
@@ -1168,6 +1199,11 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
         out << "    }\n";
         out << "    projected_" << cpp_name << "_entities.clear();\n";
         out << "    projected_" << cpp_name << "_previous.clear();\n";
+        out << "}\n\n";
+    }
+    out << "void clear_projected_traits(entt::registry& registry) {\n";
+    for (const auto& clear_fn_name : clear_fn_names) {
+        out << "    " << clear_fn_name << "(registry);\n";
     }
     out << "}\n\n";
     out << "}  // namespace\n\n";
@@ -2937,6 +2973,16 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "}  // namespace cactus::runtime::entt_backend\n\n";
     }
 
+    // Authored pure functions must precede systems that call them.
+    if (program.ast != nullptr) {
+        out << "// ── Authored Functions ───────────────────────────────────────────────\n\n";
+        for (auto& decl : program.ast->declarations) {
+            if (auto* func = std::get_if<FuncNode>(&decl); func != nullptr && !func->is_extern) {
+                out << EnttSystemEmitter::emit_func(*func, program);
+            }
+        }
+    }
+
     // System functions
     if (program.ast != nullptr) {
         out << "// ── Systems ─────────────────────────────────────────────────────────\n\n";
@@ -3290,6 +3336,152 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            }\n";
         out << "            return Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};\n";
         out << "        });\n";
+    }
+    // ── Generic pointer candidate providers (std.pointer, design decision #8) ──
+    // Registered like the editor hit-test/raycast impls above: real component
+    // types are only known here (codegen time), so the shared, program-
+    // agnostic pointer_top_target() in runtime.cpp delegates to whichever
+    // impls a given program actually needs. Window and world (flat XOR
+    // volume, matching rig_is_2d/rig_is_3d's mutual exclusivity) are gated
+    // independently since a program may use either, both, or neither.
+    if (EnttCodegenUtils::has_trait(program, "std.pointer.PointerTarget")) {
+        const std::string ptarget_cpp = EnttCodegenUtils::trait_cpp_name("std.pointer.PointerTarget", program);
+        if (EnttCodegenUtils::has_trait(program, "std.ui.ComputedLayout")) {
+            const std::string cl_cpp = EnttCodegenUtils::trait_cpp_name("std.ui.ComputedLayout", program);
+            out << "    cactus::runtime::entt_backend::register_pointer_window_candidates_impl(\n";
+            out << "        [](entt::registry& reg, Vector2 pointer_pos) -> "
+                   "std::vector<cactus::runtime::entt_backend::PointerCandidate> {\n";
+            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> __result;\n";
+            out << "            auto view = reg.view<" << cl_cpp << ", " << ptarget_cpp << ">();\n";
+            out << "            for (auto entity : view) {\n";
+            out << "                const auto& layout = view.get<" << cl_cpp << ">(entity);\n";
+            out << "                const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
+            out << "                if (!layout.effective_visible) { continue; }\n";
+            out << "                const Vector2 __max = Vector2{.x = layout.position.x + layout.size.x,\n";
+            out << "                                              .y = layout.position.y + layout.size.y};\n";
+            out << "                if (!cactus::runtime::entt_backend::point_in_rect(pointer_pos, layout.position, "
+                   "__max)) { continue; }\n";
+            out << "                if (!cactus::runtime::entt_backend::point_in_rect(\n";
+            out << "                        pointer_pos, layout.clip_min, layout.clip_max)) { continue; }\n";
+            out << "                __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+            out << "                    .entity = entity, .enabled = target.enabled, .blocks_lower = "
+                   "target.blocks_lower,\n";
+            out << "                    .priority = target.priority, .draw_order = layout.draw_order});\n";
+            out << "            }\n";
+            out << "            cactus::runtime::entt_backend::sort_window_pointer_candidates(__result);\n";
+            out << "            return __result;\n";
+            out << "        });\n";
+        }
+        const bool has_flat_box      = EnttCodegenUtils::has_trait(program, "std.physics.flat.BoxCollider");
+        const bool has_flat_circle   = EnttCodegenUtils::has_trait(program, "std.physics.flat.CircleCollider");
+        const bool has_volume_box    = EnttCodegenUtils::has_trait(program, "std.physics.volume.BoxCollider");
+        const bool has_volume_sphere = EnttCodegenUtils::has_trait(program, "std.physics.volume.SphereCollider");
+        if (wt_usage.flat && (has_flat_box || has_flat_circle)) {
+            out << "    cactus::runtime::entt_backend::register_pointer_world_candidates_impl(\n";
+            out << "        [](entt::registry& reg, Vector2 pointer_screen_pos) -> "
+                   "std::vector<cactus::runtime::entt_backend::PointerCandidate> {\n";
+            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> __result;\n";
+            out << "            const Vector2 __world_pos = "
+                   "cactus::runtime::entt_backend::editor_screen_to_world_2d(pointer_screen_pos);\n";
+            if (has_flat_box) {
+                const std::string box_cpp = EnttCodegenUtils::trait_cpp_name("std.physics.flat.BoxCollider", program);
+                out << "            {\n";
+                out << "                auto view = reg.view<" << wt2d_cpp << ", " << ptarget_cpp << ", " << box_cpp
+                    << ">();\n";
+                out << "                for (auto entity : view) {\n";
+                out << "                    const auto& xform  = view.get<" << wt2d_cpp << ">(entity);\n";
+                out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
+                out << "                    const auto& box    = view.get<" << box_cpp << ">(entity);\n";
+                out << "                    if (!cactus::runtime::entt_backend::point_in_flat_box(\n";
+                out << "                            __world_pos, xform.position, box.size)) { continue; }\n";
+                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                        .entity = entity, .enabled = target.enabled,\n";
+                out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
+                out << "                        .creation_ordinal = "
+                       "reg.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(entity).value});\n";
+                out << "                }\n";
+                out << "            }\n";
+            }
+            if (has_flat_circle) {
+                const std::string circle_cpp =
+                    EnttCodegenUtils::trait_cpp_name("std.physics.flat.CircleCollider", program);
+                out << "            {\n";
+                out << "                auto view = reg.view<" << wt2d_cpp << ", " << ptarget_cpp << ", " << circle_cpp
+                    << ">();\n";
+                out << "                for (auto entity : view) {\n";
+                out << "                    const auto& xform  = view.get<" << wt2d_cpp << ">(entity);\n";
+                out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
+                out << "                    const auto& circle = view.get<" << circle_cpp << ">(entity);\n";
+                out << "                    if (!cactus::runtime::entt_backend::point_in_flat_circle(\n";
+                out << "                            __world_pos, xform.position, circle.radius)) { continue; }\n";
+                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                        .entity = entity, .enabled = target.enabled,\n";
+                out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
+                out << "                        .creation_ordinal = "
+                       "reg.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(entity).value});\n";
+                out << "                }\n";
+                out << "            }\n";
+            }
+            out << "            cactus::runtime::entt_backend::sort_flat_world_pointer_candidates(__result);\n";
+            out << "            return __result;\n";
+            out << "        });\n";
+        } else if (wt_usage.volume && (has_volume_box || has_volume_sphere)) {
+            out << "    cactus::runtime::entt_backend::register_pointer_world_candidates_impl(\n";
+            out << "        [](entt::registry& reg, Vector2 pointer_screen_pos) -> "
+                   "std::vector<cactus::runtime::entt_backend::PointerCandidate> {\n";
+            out << "            std::vector<cactus::runtime::entt_backend::PointerCandidate> __result;\n";
+            out << "            const Ray __ray = GetScreenToWorldRay(\n";
+            out << "                pointer_screen_pos, cactus::runtime::entt_backend::get_active_camera_3d());\n";
+            if (has_volume_box) {
+                const std::string box3d_cpp =
+                    EnttCodegenUtils::trait_cpp_name("std.physics.volume.BoxCollider", program);
+                out << "            {\n";
+                out << "                auto view = reg.view<" << wt3d_cpp << ", " << ptarget_cpp << ", " << box3d_cpp
+                    << ">();\n";
+                out << "                for (auto entity : view) {\n";
+                out << "                    const auto& xform  = view.get<" << wt3d_cpp << ">(entity);\n";
+                out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
+                out << "                    const auto& box    = view.get<" << box3d_cpp << ">(entity);\n";
+                out << "                    const BoundingBox __bbox{\n";
+                out << "                        .min = Vector3{.x = xform.position.x - (box.size.x * 0.5F),\n";
+                out << "                                       .y = xform.position.y - (box.size.y * 0.5F),\n";
+                out << "                                       .z = xform.position.z - (box.size.z * 0.5F)},\n";
+                out << "                        .max = Vector3{.x = xform.position.x + (box.size.x * 0.5F),\n";
+                out << "                                       .y = xform.position.y + (box.size.y * 0.5F),\n";
+                out << "                                       .z = xform.position.z + (box.size.z * 0.5F)}};\n";
+                out << "                    const RayCollision __hit = GetRayCollisionBox(__ray, __bbox);\n";
+                out << "                    if (!__hit.hit || __hit.distance <= 0.0F) { continue; }\n";
+                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                        .entity = entity, .enabled = target.enabled,\n";
+                out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
+                out << "                        .distance = __hit.distance});\n";
+                out << "                }\n";
+                out << "            }\n";
+            }
+            if (has_volume_sphere) {
+                const std::string sphere_cpp =
+                    EnttCodegenUtils::trait_cpp_name("std.physics.volume.SphereCollider", program);
+                out << "            {\n";
+                out << "                auto view = reg.view<" << wt3d_cpp << ", " << ptarget_cpp << ", " << sphere_cpp
+                    << ">();\n";
+                out << "                for (auto entity : view) {\n";
+                out << "                    const auto& xform  = view.get<" << wt3d_cpp << ">(entity);\n";
+                out << "                    const auto& target = view.get<" << ptarget_cpp << ">(entity);\n";
+                out << "                    const auto& sphere = view.get<" << sphere_cpp << ">(entity);\n";
+                out << "                    const RayCollision __hit =\n";
+                out << "                        GetRayCollisionSphere(__ray, xform.position, sphere.radius);\n";
+                out << "                    if (!__hit.hit || __hit.distance <= 0.0F) { continue; }\n";
+                out << "                    __result.push_back(cactus::runtime::entt_backend::PointerCandidate{\n";
+                out << "                        .entity = entity, .enabled = target.enabled,\n";
+                out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
+                out << "                        .distance = __hit.distance});\n";
+                out << "                }\n";
+                out << "            }\n";
+            }
+            out << "            cactus::runtime::entt_backend::sort_volume_world_pointer_candidates(__result);\n";
+            out << "            return __result;\n";
+            out << "        });\n";
+        }
     }
     out << "}\n\n";
 

@@ -61,6 +61,7 @@ enum class TokenType {
     MAX,
     READS,
     WRITES,
+    PROJECTS,
     EMITS,
     COMMANDS,
     EFFECTS,
@@ -243,6 +244,8 @@ inline const char* token_type_to_string(TokenType t) {
             return "READS";
         case TokenType::WRITES:
             return "WRITES";
+        case TokenType::PROJECTS:
+            return "PROJECTS";
         case TokenType::EMITS:
             return "EMITS";
         case TokenType::COMMANDS:

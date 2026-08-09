@@ -523,11 +523,13 @@ struct ExternHandlerNode {
     std::vector<HandlerReferenceNode> after_handlers;
     std::vector<LocatedName> reads;
     std::vector<LocatedName> writes;
+    std::vector<LocatedName> projects;
     std::vector<LocatedName> emits;
     std::vector<HandlerCommandNode> commands;
     std::vector<LocatedName> effects;
     std::vector<SymbolId> resolved_reads;
     std::vector<SymbolId> resolved_writes;
+    std::vector<SymbolId> resolved_projects;
     std::vector<SymbolId> resolved_emits;
     std::vector<std::string> resolved_effects;
     SourceLocation location;

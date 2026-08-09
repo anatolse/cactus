@@ -1,0 +1,57 @@
+module std.pointer
+
+use std.core as core
+
+# Generic mouse-to-entity interaction model (design.md decision #8): shared by
+# window UI, flat-world entities, volume-world entities, editor handles, and
+# other collidable gameplay objects. PointerTarget controls whether an entity
+# accepts pointer interaction at all — collider or hit-region membership only
+# defines where an entity CAN be intersected; decorative hit regions without
+# PointerTarget are never routed to.
+
+pub trait PointerTarget:
+    var enabled: bool = true
+    var blocks_lower: bool = true
+    var priority: int = 0
+
+pub trait PointerState:
+    var hovered: bool = false
+    var pressed: bool = false
+
+# Targeted pointer lifecycle events (design decision #9). Each carries the
+# current screen-space pointer position; delivery is routed to the recipient
+# via ordinary targeted-event semantics (spec §5.4), not broadcast.
+
+pub event PointerEnter:
+    position: vec2
+
+pub event PointerLeave:
+    position: vec2
+
+pub event PointerPress:
+    position: vec2
+
+pub event PointerRelease:
+    position: vec2
+
+pub event Click:
+    position: vec2
+
+# Merges window, flat-world, and volume-world PointerTarget candidates at the
+# current pointer position (design decisions #8/#9) and resolves the first
+# accepted target under front-to-back blocking; a stale entity_id when
+# nothing accepts.
+pub extern func top_target() entity_id
+
+# The standard router rule (design decisions #8/#9: hover tracking, primary
+# capture, Click validation, input consumption) is declared in std.ui, not
+# here — it must run after std.ui.ArrangeUi within the input phase (so it
+# routes against this frame's freshly-arranged ComputedLayout, not last
+# frame's), which requires a `reads: ComputedLayout` contract entry that only
+# a module already depending on std.ui can express; std.pointer itself stays
+# free of a std.ui dependency (std.ui already depends on std.pointer, for
+# Button's PointerState-driven presentation, and a two-way `use` would be
+# circular). Every other std.pointer capability above — traits, events,
+# top_target(), and the candidate-provider registration hooks in
+# cpp_entt_codegen.cpp — is fully UI-independent and reusable by a future
+# world-only router if one is ever needed without std.ui.

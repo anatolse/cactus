@@ -136,6 +136,48 @@ cactus_add_headless_behavior_test(test_model_animation_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_animation_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_hierarchy_query_headless_behavior
+    CACTUS_SOURCE tests/fixtures/hierarchy_query_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_hierarchy_query_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_lexical_local_mutation_headless_behavior
+    CACTUS_SOURCE tests/fixtures/lexical_local_mutation_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_lexical_local_mutation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_standard_ui_layout_headless_behavior
+    CACTUS_SOURCE tests/fixtures/standard_ui_layout_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_standard_ui_layout_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_standard_ui_render_headless_behavior
+    CACTUS_SOURCE tests/fixtures/standard_ui_layout_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_standard_ui_render_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_pointer_candidates_headless_behavior
+    CACTUS_SOURCE tests/fixtures/pointer_candidates_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pointer_candidates_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_standard_ui_animation_headless_behavior
+    CACTUS_SOURCE tests/fixtures/standard_ui_layout_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_standard_ui_animation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_standard_ui_example_headless_behavior
+    CACTUS_SOURCE examples/standard-ui/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_standard_ui_example_headless_behavior.cpp
+)
+
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)
 add_dependencies(test_example_cpp_compilation cactus)
@@ -202,6 +244,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_SOURCE="examples/split-screen-forest-bombs/forest_bombs.cactus"
     CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP="${SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP}"
     CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_TARGET="example_split_screen_forest_bombs_generated"
+
+    CACTUS_EXAMPLE_STANDARD_UI_SOURCE="examples/standard-ui/main.cactus"
+    CACTUS_EXAMPLE_STANDARD_UI_GENERATED_CPP="${STANDARD_UI_GENERATED_CPP}"
+    CACTUS_EXAMPLE_STANDARD_UI_TARGET="example_standard_ui_generated"
 
     CACTUS_EXTERNAL_HANDLER_LINK_TARGET="example_external_handler_user_library"
     CACTUS_EXTERNAL_HANDLER_MISSING_TARGET="example_external_handler_missing_implementations"

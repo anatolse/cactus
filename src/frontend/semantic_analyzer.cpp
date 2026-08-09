@@ -2747,15 +2747,33 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
         add_filter_aliases(rule->filter);
         add_filter_aliases(rule->exclude);
 
+        std::unordered_set<SymbolId> selected_traits;
+        for (const auto& entry : rule->filter.entries) {
+            const auto symbol = entry.resolved_trait_id.has_value()
+                                    ? entry.resolved_trait_id
+                                    : try_resolve_trait_ref_to_symbol(entry.qualified_name);
+            if (symbol.has_value()) {
+                selected_traits.insert(*symbol);
+            }
+        }
+        for (const auto& name : rule->filter.trait_names) {
+            if (const auto symbol = try_resolve_trait_ref_to_symbol(name); symbol.has_value()) {
+                selected_traits.insert(*symbol);
+            }
+        }
+
         for (auto& handler : rule->handlers) {
             handler.resolved_reads.clear();
             handler.resolved_writes.clear();
+            handler.resolved_projects.clear();
             handler.resolved_emits.clear();
             handler.resolved_effects.clear();
 
-            const auto resolve_traits = [this, &aliases, &rule](const std::vector<LocatedName>& entries,
-                                                                std::vector<SymbolId>& output,
-                                                                const char* clause) {
+            const auto resolve_traits = [this, &aliases, &rule, &selected_traits](
+                                            const std::vector<LocatedName>& entries,
+                                            std::vector<SymbolId>& output,
+                                            const char* clause,
+                                            bool must_be_selected = false) {
                 std::unordered_set<SymbolId> seen;
                 for (const auto& entry : entries) {
                     std::optional<SymbolId> symbol;
@@ -2776,11 +2794,29 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
                                           make_canonical_id(*symbol) + "'");
                         continue;
                     }
+                    if (must_be_selected && !selected_traits.contains(*symbol)) {
+                        errors_.error(entry.location,
+                                      std::string(clause) + " contract entry '" + make_canonical_id(*symbol) +
+                                          "' must be selected by extern rule '" + rule->name + "' filter");
+                        continue;
+                    }
                     output.push_back(*symbol);
                 }
             };
             resolve_traits(handler.reads, handler.resolved_reads, "reads");
             resolve_traits(handler.writes, handler.resolved_writes, "writes");
+            resolve_traits(handler.projects, handler.resolved_projects, "projects", true);
+
+            const std::unordered_set<SymbolId> durable_writes(handler.resolved_writes.begin(),
+                                                              handler.resolved_writes.end());
+            for (const auto& projected : handler.resolved_projects) {
+                if (durable_writes.contains(projected)) {
+                    errors_.error(handler.location,
+                                  "trait '" + make_canonical_id(projected) +
+                                      "' cannot be both a writes and projects contract entry in extern rule '" +
+                                      rule->name + "'");
+                }
+            }
 
             std::unordered_set<SymbolId> emitted;
             for (const auto& entry : handler.emits) {
@@ -2911,7 +2947,16 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 }
 
                 std::optional<ResolvedStruct> phase_activation;
-                const ResolvedStruct* handler_event = event_trigger ? find_resolved_event(handler.event_name) : nullptr;
+                // handler.event_name is the raw source spelling, which is
+                // dotted/qualified for a cross-module trigger (e.g.
+                // "pointer.Click") and would never match event_structs_'
+                // simple-name keys — resolved_trigger's already-resolved
+                // symbol carries the correct local_name regardless of how
+                // the author wrote the reference (bare, aliased, or fully
+                // qualified), the same way the phase_trigger branch below
+                // already does for phase symbols.
+                const ResolvedStruct* handler_event =
+                    event_trigger ? find_resolved_event(handler.resolved_trigger->symbol.local_name) : nullptr;
                 if (phase_trigger) {
                     const auto& phase_symbol = handler.resolved_trigger->symbol;
                     if (const auto* fields = find_phase_fields(phase_symbol); fields != nullptr) {
@@ -3454,6 +3499,7 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
             contract.reads.insert(write);
             contract.writes.insert(write);
         }
+        contract.projects.insert(handler.resolved_projects.begin(), handler.resolved_projects.end());
         for (const auto& sort_key : rule.order_by) {
             if (const auto found = filter_aliases.find(sort_key.alias); found != filter_aliases.end()) {
                 contract.reads.insert(found->second);
@@ -4733,7 +4779,8 @@ static std::optional<std::string> extract_dotted_path(const ExprNode& expr) {
 }
 
 static bool is_known_query_module(const std::string& name) {
-    return name == "std.query" || name == "std.physics.flat.query" || name == "std.physics.volume.query";
+    return name == "std.query" || name == "std.physics.flat.query" || name == "std.physics.volume.query" ||
+           name == "std.ui";
 }
 
 // Whether a known query module actually provides the named function; the
@@ -4741,7 +4788,8 @@ static bool is_known_query_module(const std::string& name) {
 static bool query_module_provides(const std::string& module_name, const std::string& func_name) {
     if (module_name == "std.query") {
         return func_name == "exists" || func_name == "count" || func_name == "first" || func_name == "all" ||
-               func_name == "parent";
+               func_name == "parent" || func_name == "children" || func_name == "hierarchy_preorder" ||
+               func_name == "hierarchy_postorder";
     }
     if (module_name == "std.physics.flat.query") {
         return func_name == "nearest" || func_name == "overlap_box" || func_name == "overlap_circle" ||
@@ -4750,6 +4798,9 @@ static bool query_module_provides(const std::string& module_name, const std::str
     if (module_name == "std.physics.volume.query") {
         return func_name == "nearest" || func_name == "overlap_box" || func_name == "overlap_sphere" ||
                func_name == "raycast";
+    }
+    if (module_name == "std.ui") {
+        return func_name == "stacking_order";
     }
     return false;
 }
@@ -4814,15 +4865,15 @@ void SemanticAnalyzer::validate_query_named_args(
     if (func_name == "raycast" && (!has_arg("origin") || !has_arg("dir") || !has_arg("max_dist"))) {
         errors_.error(qcall.location, "`raycast` requires `origin`, `dir`, and `max_dist` named arguments");
     }
-    if (func_name == "parent") {
+    if (func_name == "parent" || func_name == "children" || func_name == "stacking_order") {
         if (!has_arg("of")) {
-            errors_.error(qcall.location, "`parent` requires an `of` named argument");
+            errors_.error(qcall.location, "`" + func_name + "` requires an `of` named argument");
         } else {
             auto of_it = std::ranges::find_if(qcall.named_args, [](const auto& a) { return a.name == "of"; });
             if (of_it != qcall.named_args.end()) {
                 auto of_type = infer_expr_type(*of_it->value, filter_bindings, local_bindings, handler_event);
                 if (of_type.kind != TypeKind::EntityId && of_type.kind != TypeKind::Unknown) {
-                    errors_.error(of_it->location, "`parent` `of` argument must be of type `entity_id`");
+                    errors_.error(of_it->location, "`" + func_name + "` `of` argument must be of type `entity_id`");
                 }
             }
         }
@@ -4985,7 +5036,15 @@ void SemanticAnalyzer::validate_text_format_calls(  // NOLINT(readability-functi
                         auto filter_bindings = build_filter_bindings(node.filter);
 
                         std::optional<ResolvedStruct> phase_activation;
-                        const ResolvedStruct* handler_event = find_resolved_event(handler.event_name);
+                        // See the identical fix/comment where this pattern first
+                        // appears (rule handler validation, above): handler.event_name
+                        // is the raw, possibly-dotted source spelling and won't match
+                        // event_structs_' simple-name keys for a cross-module trigger.
+                        const ResolvedStruct* handler_event =
+                            (handler.resolved_trigger.has_value() &&
+                             handler.resolved_trigger->kind == HandlerTriggerKind::Event)
+                                ? find_resolved_event(handler.resolved_trigger->symbol.local_name)
+                                : nullptr;
                         if (handler.resolved_trigger.has_value() &&
                             handler.resolved_trigger->kind == HandlerTriggerKind::Phase) {
                             const auto& phase_symbol = handler.resolved_trigger->symbol;
@@ -5301,13 +5360,14 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         if (func_name == "exists") {
             return make_bool_type();
         }
-        if (func_name == "count") {
+        if (func_name == "count" || func_name == "stacking_order") {
             return make_int_type();
         }
         if (func_name == "first" || func_name == "nearest" || func_name == "parent" || func_name == "raycast") {
             return make_entity_id_type();
         }
-        if (func_name == "all" || func_name == "overlap_box" || func_name == "overlap_circle" ||
+        if (func_name == "all" || func_name == "children" || func_name == "hierarchy_preorder" ||
+            func_name == "hierarchy_postorder" || func_name == "overlap_box" || func_name == "overlap_circle" ||
             func_name == "overlap_sphere") {
             return make_list_type(make_entity_id_type());
         }

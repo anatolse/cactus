@@ -214,6 +214,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_SPLIT_SCREEN_FOREST_BOMBS_TARGET,
         },
+        ExampleCase{
+            .name           = "standard-ui",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_STANDARD_UI_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_STANDARD_UI_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_STANDARD_UI_TARGET,
+        },
     };
 }
 

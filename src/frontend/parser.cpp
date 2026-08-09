@@ -810,6 +810,12 @@ ExternHandlerNode Parser::parse_extern_handler() {
             auto entries         = parse_name_block(TokenType::WRITES, "writes");
             handler.writes.insert(
                 handler.writes.end(), std::make_move_iterator(entries.begin()), std::make_move_iterator(entries.end()));
+        } else if (at_clause(TokenType::PROJECTS, "projects")) {
+            saw_non_after_clause = true;
+            auto entries         = parse_name_block(TokenType::PROJECTS, "projects");
+            handler.projects.insert(handler.projects.end(),
+                                    std::make_move_iterator(entries.begin()),
+                                    std::make_move_iterator(entries.end()));
         } else if (at_clause(TokenType::EMITS, "emits")) {
             saw_non_after_clause = true;
             auto entries         = parse_name_block(TokenType::EMITS, "emits");
@@ -828,8 +834,9 @@ ExternHandlerNode Parser::parse_extern_handler() {
                                    std::make_move_iterator(entries.begin()),
                                    std::make_move_iterator(entries.end()));
         } else {
-            errors_.error(peek().location,
-                          "expected external handler clause (after, reads, writes, emits, commands, effects)");
+            errors_.error(
+                peek().location,
+                "expected external handler clause (after, reads, writes, projects, emits, commands, effects)");
             // `synchronize()` intentionally preserves declaration-start tokens for
             // top-level recovery. Inside a handler body that can otherwise leave
             // us parked on a reserved declaration keyword forever, so consume the
@@ -1227,9 +1234,9 @@ RuleNode Parser::parse_rule() {
 
     skip_newlines();
     if (at_pairs_clause()) {
-        saw_pairs                = true;
+        saw_pairs               = true;
         auto error_count_before = errors_.error_count();
-        node.pairs               = parse_pairs_clause();
+        node.pairs              = parse_pairs_clause();
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
@@ -1237,7 +1244,7 @@ RuleNode Parser::parse_rule() {
 
     // A pairs: rule selects tuples, not a single-entity filter, so it
     // cannot also carry a filter/exclude/order-by clause meant for that model.
-    auto common = parse_common_rule_clauses([&](const SourceLocation& clause_loc, const char* clause_name) {
+    auto common      = parse_common_rule_clauses([&](const SourceLocation& clause_loc, const char* clause_name) {
         if (saw_pairs) {
             errors_.error(clause_loc,
                           std::string("'") + clause_name + "' cannot be combined with 'pairs:' on the same rule");
@@ -1269,15 +1276,17 @@ RuleNode Parser::parse_rule() {
 
 // Shared by parse_rule/parse_extern_rule (task 4.1). See parser.hpp for the
 // on_clause_parsed hook's contract.
-Parser::CommonRuleClauses Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-complexity) -- the single consolidated home for what used to be duplicated across parse_rule/parse_extern_rule
+Parser::CommonRuleClauses
+Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-complexity) -- the single consolidated home
+                                    // for what used to be duplicated across parse_rule/parse_extern_rule
     const std::function<void(const SourceLocation&, const char*)>& on_clause_parsed) {
     CommonRuleClauses result;
 
     skip_newlines();
     if (check(TokenType::FILTER)) {
-        auto filter_loc          = peek().location;
-        auto error_count_before  = errors_.error_count();
-        result.filter             = parse_filter_clause();
+        auto filter_loc         = peek().location;
+        auto error_count_before = errors_.error_count();
+        result.filter           = parse_filter_clause();
         if (on_clause_parsed) {
             on_clause_parsed(filter_loc, "filter:");
         }
@@ -1289,9 +1298,9 @@ Parser::CommonRuleClauses Parser::parse_common_rule_clauses(  // NOLINT(readabil
     // Task 4.4: Parse optional exclude: clause
     skip_newlines();
     if (check(TokenType::EXCLUDE)) {
-        auto exclude_loc         = peek().location;
-        auto error_count_before  = errors_.error_count();
-        result.exclude            = parse_exclude_clause();
+        auto exclude_loc        = peek().location;
+        auto error_count_before = errors_.error_count();
+        result.exclude          = parse_exclude_clause();
         if (on_clause_parsed) {
             on_clause_parsed(exclude_loc, "exclude:");
         }
@@ -1303,9 +1312,9 @@ Parser::CommonRuleClauses Parser::parse_common_rule_clauses(  // NOLINT(readabil
     skip_newlines();
     if (check(TokenType::IDENTIFIER) && peek().value == "order" && peek_next().type == TokenType::IDENTIFIER &&
         peek_next().value == "by") {
-        auto order_loc           = peek().location;
-        auto error_count_before  = errors_.error_count();
-        result.order_by           = parse_order_by_clause();
+        auto order_loc          = peek().location;
+        auto error_count_before = errors_.error_count();
+        result.order_by         = parse_order_by_clause();
         if (on_clause_parsed) {
             on_clause_parsed(order_loc, "order by:");
         }
@@ -1450,8 +1459,7 @@ PairClause Parser::parse_pairs_clause() {
         expect_dedent();
 
         if (binding.traits.empty()) {
-            errors_.error(binding.location,
-                           "pair binding '" + binding.name + "' must declare at least one trait");
+            errors_.error(binding.location, "pair binding '" + binding.name + "' must declare at least one trait");
         }
         clause.bindings.push_back(std::move(binding));
 
@@ -2010,12 +2018,22 @@ EmitStmt Parser::parse_emit_stmt() {
     if (match(TokenType::TO)) {
         target = parse_expression();
     }
-    consume(TokenType::COLON, "expected ':'");
     EmitStmt emit;
     emit.event_name = event_name;
     emit.target     = std::move(target);
-    emit.payload    = parse_field_assignment_block();
-    emit.location   = loc;
+    // The field block is optional: a zero-field event (e.g. std.ui.StartBump)
+    // has nothing to assign, and the indentation-sensitive lexer only ever
+    // emits an INDENT token ahead of actual indented content, so
+    // parse_field_assignment_block's mandatory expect_indent() can't accept
+    // an "empty" block — `emit Event` / `emit Event to target` with no
+    // trailing ':' is how an author spells "no payload".
+    if (check(TokenType::COLON)) {
+        advance();
+        emit.payload = parse_field_assignment_block();
+    } else {
+        expect_newline();
+    }
+    emit.location = loc;
     return emit;
 }
 
@@ -2753,8 +2771,8 @@ ExternRuleNode Parser::parse_extern_rule() {
 
     skip_newlines();
     if (at_pairs_clause()) {
-        auto pairs_loc           = peek().location;
-        auto error_count_before  = errors_.error_count();
+        auto pairs_loc          = peek().location;
+        auto error_count_before = errors_.error_count();
         parse_pairs_clause();  // parsed and discarded; pair domains are regular-rule-only
         errors_.error(pairs_loc, "pair domains are regular-rule-only; 'extern rule' cannot declare 'pairs:'");
         if (errors_.error_count() > error_count_before) {

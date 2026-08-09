@@ -5,6 +5,7 @@
 #endif
 
 #define CACTUS_GENERATED_NO_MAIN
+#include CACTUS_HEADLESS_GENERATED_CPP
 
 #include "fake_raylib/fake_raylib.hpp"
 #include "fake_raylib/fake_raylib_assertions.hpp"

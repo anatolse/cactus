@@ -1,0 +1,268 @@
+module main
+
+use std.core
+use std.ui as ui
+use std.pointer as pointer
+
+# Representative Standard UI scene (openspec add-standard-ui, task 11.1):
+# a centered panel with measured text, a Grid of swatches, an Overlay
+# demonstrating sibling z-index overlap, an animated Image, and a generic
+# PointerTarget Button whose Click is handled as ordinary gameplay code
+# (a targeted event read through `self`, not backend-special-cased UI
+# logic). A second, independent panel demonstrates clip_children against
+# an intentionally oversized child. Every trait field below is set
+# explicitly — cpp-entt codegen does not apply a trait's declared default
+# when an entity omits a field (see project memory
+# feedback-cactus-build-testing.md).
+
+const:
+    WINDOW_WIDTH = 960
+    WINDOW_HEIGHT = 540
+    WINDOW_TITLE = "Standard UI Demo"
+    TARGET_FPS = 60
+
+# Reuses the platformer example's art (no new binary asset for this demo);
+# FrameAnimation below just cycles two source rectangles across it to
+# demonstrate the animation mechanism, not a real spritesheet.
+asset SpinnerTex: texture = "../platformer/assets/sprites/gem.png"
+
+trait ClickCounter:
+    var count: int = 0
+
+rule ClickButtonGameplay:
+    filter:
+        ClickCounter as counter
+
+    on pointer.Click:
+        counter.count = counter.count + 1
+        emit ui.StartBump to self
+
+pub entity Root:
+    ui.Node:
+        visible = true
+        enabled = true
+        z_index = 0
+        clip_children = false
+    ui.Panel:
+        background = #14141CFF
+        border_color = #00000000
+        border_width = 0.0
+    children:
+        entity CenterPanel:
+            ui.Node:
+                visible = true
+                enabled = true
+                z_index = 0
+                clip_children = false
+            ui.Panel:
+                background = #2A2A3AFF
+                border_color = #6495EDFF
+                border_width = 2.0
+            ui.PreferredSize:
+                min_size = vec2(360.0, 240.0)
+            ui.Anchors:
+                min = vec2(0.5, 0.5)
+                max = vec2(0.5, 0.5)
+                pivot = vec2(0.5, 0.5)
+                offset = vec2(0.0, 0.0)
+                margin_min = vec2(0.0, 0.0)
+                margin_max = vec2(0.0, 0.0)
+            children:
+                entity ContentStack:
+                    ui.Node:
+                        visible = true
+                        enabled = true
+                        z_index = 0
+                        clip_children = false
+                    ui.Stack:
+                        axis = ui.Axis.Vertical
+                        gap = 10.0
+                        align = ui.Align.Center
+                        padding = vec2(14.0, 14.0)
+                    children:
+                        entity Title:
+                            ui.Node:
+                                visible = true
+                                enabled = true
+                                z_index = 0
+                                clip_children = false
+                            ui.Text:
+                                value = "Standard UI Demo"
+                                font_size = 22
+                                color = #FFFFFFFF
+                                align = ui.TextAlign.Center
+                        entity IconGrid:
+                            ui.Node:
+                                visible = true
+                                enabled = true
+                                z_index = 0
+                                clip_children = false
+                            ui.Grid:
+                                columns = 3
+                                cell_size = vec2(28.0, 28.0)
+                                gap = vec2(6.0, 6.0)
+                                padding = vec2(0.0, 0.0)
+                            children:
+                                entity Cell0:
+                                    ui.Node:
+                                        visible = true
+                                        enabled = true
+                                        z_index = 0
+                                        clip_children = false
+                                    ui.Panel:
+                                        background = #6495EDFF
+                                        border_color = #00000000
+                                        border_width = 0.0
+                                    ui.PreferredSize:
+                                        min_size = vec2(28.0, 28.0)
+                                entity Cell1:
+                                    ui.Node:
+                                        visible = true
+                                        enabled = true
+                                        z_index = 0
+                                        clip_children = false
+                                    ui.Panel:
+                                        background = #50C878FF
+                                        border_color = #00000000
+                                        border_width = 0.0
+                                    ui.PreferredSize:
+                                        min_size = vec2(28.0, 28.0)
+                                entity Cell2:
+                                    ui.Node:
+                                        visible = true
+                                        enabled = true
+                                        z_index = 0
+                                        clip_children = false
+                                    ui.Panel:
+                                        background = #FFAA33FF
+                                        border_color = #00000000
+                                        border_width = 0.0
+                                    ui.PreferredSize:
+                                        min_size = vec2(28.0, 28.0)
+                        entity Badge:
+                            ui.Node:
+                                visible = true
+                                enabled = true
+                                z_index = 0
+                                clip_children = false
+                            ui.Overlay:
+                                padding = vec2(0.0, 0.0)
+                            children:
+                                entity BadgeBack:
+                                    ui.Node:
+                                        visible = true
+                                        enabled = true
+                                        z_index = 0
+                                        clip_children = false
+                                    ui.Panel:
+                                        background = #FFAA00FF
+                                        border_color = #00000000
+                                        border_width = 0.0
+                                    ui.PreferredSize:
+                                        min_size = vec2(48.0, 48.0)
+                                entity BadgeFront:
+                                    ui.Node:
+                                        visible = true
+                                        enabled = true
+                                        z_index = 1
+                                        clip_children = false
+                                    ui.Panel:
+                                        background = #CC2222FF
+                                        border_color = #00000000
+                                        border_width = 0.0
+                                    ui.PreferredSize:
+                                        min_size = vec2(24.0, 24.0)
+                                    ui.Anchors:
+                                        min = vec2(0.5, 0.5)
+                                        max = vec2(0.5, 0.5)
+                                        pivot = vec2(0.5, 0.5)
+                                        offset = vec2(0.0, 0.0)
+                                        margin_min = vec2(0.0, 0.0)
+                                        margin_max = vec2(0.0, 0.0)
+                        entity Spinner:
+                            ui.Node:
+                                visible = true
+                                enabled = true
+                                z_index = 0
+                                clip_children = false
+                            ui.Image:
+                                texture = SpinnerTex
+                                tint = #FFFFFFFF
+                                fit = ui.ImageFit.Contain
+                            ui.FrameAnimation:
+                                frame_count = 2
+                                fps = 4.0
+                                frame = 0
+                                elapsed = 0.0
+                                playing = true
+                            ui.PreferredSize:
+                                min_size = vec2(40.0, 40.0)
+                        entity ClickButton:
+                            ui.Node:
+                                visible = true
+                                enabled = true
+                                z_index = 0
+                                clip_children = false
+                            ui.Button:
+                                label = "Click Me"
+                                normal_color = #404058FF
+                                hover_color = #55557AFF
+                                pressed_color = #2A2A3EFF
+                                disabled_color = #22222AFF
+                                text_color = #FFFFFFFF
+                                padding = vec2(12.0, 8.0)
+                            ui.Visual:
+                                scale = vec2(1.0, 1.0)
+                                opacity = 1.0
+                            ui.BumpAnimation:
+                                from_scale = vec2(0.85, 0.85)
+                                to_scale = vec2(1.0, 1.0)
+                                duration = 0.15
+                                elapsed = 0.0
+                                playing = false
+                            pointer.PointerTarget:
+                                enabled = true
+                                blocks_lower = true
+                                priority = 0
+                            pointer.PointerState:
+                                hovered = false
+                                pressed = false
+                            ClickCounter:
+                                count = 0
+        entity ClipWindow:
+            ui.Node:
+                visible = true
+                enabled = true
+                z_index = 0
+                clip_children = true
+            ui.Panel:
+                background = #10101AE6
+                border_color = #FFFFFFFF
+                border_width = 1.0
+            ui.Anchors:
+                min = vec2(0.0, 0.8)
+                max = vec2(1.0, 1.0)
+                pivot = vec2(0.0, 0.0)
+                offset = vec2(0.0, 0.0)
+                margin_min = vec2(340.0, 10.0)
+                margin_max = vec2(340.0, 10.0)
+            children:
+                entity Overflow:
+                    ui.Node:
+                        visible = true
+                        enabled = true
+                        z_index = 0
+                        clip_children = false
+                    ui.Panel:
+                        background = #33CC55FF
+                        border_color = #00000000
+                        border_width = 0.0
+                    ui.PreferredSize:
+                        min_size = vec2(600.0, 40.0)
+                    ui.Anchors:
+                        min = vec2(0.0, 0.0)
+                        max = vec2(0.0, 0.0)
+                        pivot = vec2(0.0, 0.0)
+                        offset = vec2(0.0, 0.0)
+                        margin_min = vec2(0.0, 0.0)
+                        margin_max = vec2(0.0, 0.0)

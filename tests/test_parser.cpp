@@ -98,12 +98,12 @@ TEST_CASE("AST: runtime phase and handler reference values support equality and 
     CHECK(phase_debug.str() == phase_name.debug_string());
 
     const HandlerReferenceNode reference{
-        .rule   = LocatedName{.spelling = "game.Animation", .location = location},
+        .rule     = LocatedName{.spelling = "game.Animation", .location = location},
         .trigger  = phase_name,
         .location = location,
     };
     const HandlerReferenceNode reference_copy{
-        .rule   = LocatedName{.spelling = "game.Animation", .location = same_location},
+        .rule     = LocatedName{.spelling = "game.Animation", .location = same_location},
         .trigger  = phase_name_copy,
         .location = same_location,
     };
@@ -495,6 +495,34 @@ TEST_CASE("Parser: emit statement", "[parser]") {
     CHECK(emit->payload.size() == 2);
     CHECK(emit->payload[0].name == "amount");
     CHECK(emit->payload[1].name == "source");
+}
+
+TEST_CASE("Parser: emit statement with no payload omits the field block", "[parser]") {
+    // A zero-field event (e.g. std.ui.StartBump) has nothing to assign, and
+    // the indentation-sensitive lexer only emits INDENT ahead of actual
+    // indented content, so the trailing ':' + field block is optional —
+    // `emit Event` / `emit Event to target` on one line is how a zero-payload
+    // emit is spelled (see EmitStmt's the parser fix for the underlying gap:
+    // this construct previously failed with "expected indented block").
+    auto prog = parse(
+        "func test():\n"
+        "    emit Ping\n"
+        "    emit Ping to self\n");
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    REQUIRE(decl.body.size() == 2);
+
+    auto* broadcast = std::get_if<EmitStmt>(&decl.body[0]->stmt);
+    REQUIRE(broadcast != nullptr);
+    CHECK(broadcast->event_name == "Ping");
+    CHECK(broadcast->payload.empty());
+    CHECK_FALSE(broadcast->target.has_value());
+
+    auto* targeted = std::get_if<EmitStmt>(&decl.body[1]->stmt);
+    REQUIRE(targeted != nullptr);
+    CHECK(targeted->event_name == "Ping");
+    CHECK(targeted->payload.empty());
+    REQUIRE(targeted->target.has_value());
+    CHECK(std::holds_alternative<SelfExpr>((*targeted->target)->expr));
 }
 
 TEST_CASE("Parser: assignment operators", "[parser]") {
@@ -1512,8 +1540,7 @@ TEST_CASE("Parser: pairs clause preserves source order and locations", "[parser]
     CHECK(sys.pairs->bindings[0].traits[0].location.line > sys.pairs->bindings[0].location.line);
 }
 
-TEST_CASE("Parser: pairs remains a contextual identifier outside rule-clause position",
-          "[parser][pair-relations]") {
+TEST_CASE("Parser: pairs remains a contextual identifier outside rule-clause position", "[parser][pair-relations]") {
     auto prog = parse(
         "rule UsesPairsLocal:\n"
         "    filter:\n"
@@ -1639,7 +1666,7 @@ TEST_CASE("Parser: bare assignment target still has an empty path", "[parser][pa
         "        Position\n"
         "    on tick:\n"
         "        x = 1\n");
-    auto& sys           = std::get<RuleNode>(prog.declarations[0]);
+    auto& sys          = std::get<RuleNode>(prog.declarations[0]);
     const auto* assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
     REQUIRE(assign != nullptr);
     CHECK(assign->name == "x");
@@ -1687,6 +1714,39 @@ TEST_CASE("Parser: extern rule rejects executable handler statements", "[parser]
         "    on tick:\n"
         "        pass\n");
     REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: external projects clauses preserve every entry and source location",
+          "[parser][extern-rule][handler-contract]") {
+    auto prog = parse(
+        "extern rule ExternalLayout:\n"
+        "    on input:\n"
+        "        reads:\n"
+        "            Node\n"
+        "        projects:\n"
+        "            DesiredSize\n"
+        "            ui.ComputedLayout\n"
+        "        writes:\n"
+        "            PointerState\n"
+        "        projects:\n"
+        "            interaction.PointerHit\n"
+        "        effects:\n"
+        "            graphics\n");
+
+    REQUIRE(prog.declarations.size() == 1);
+    const auto& rule = std::get<ExternRuleNode>(prog.declarations[0]);
+    REQUIRE(rule.handlers.size() == 1);
+    const auto& handler = rule.handlers.front();
+    REQUIRE(handler.projects.size() == 3);
+    CHECK(handler.projects[0].spelling == "DesiredSize");
+    CHECK(handler.projects[0].location == SourceLocation{"test.cactus", 7, 13});
+    CHECK(handler.projects[1].spelling == "ui.ComputedLayout");
+    CHECK(handler.projects[1].location == SourceLocation{"test.cactus", 8, 13});
+    CHECK(handler.projects[2].spelling == "interaction.PointerHit");
+    CHECK(handler.projects[2].location == SourceLocation{"test.cactus", 12, 13});
+    REQUIRE(handler.reads.size() == 1);
+    REQUIRE(handler.writes.size() == 1);
+    REQUIRE(handler.effects.size() == 1);
 }
 
 TEST_CASE("Parser: canonical frame phase graph preserves dependencies and initializers",

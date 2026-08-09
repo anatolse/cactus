@@ -1,9 +1,785 @@
 module std.ui
 
-# ── Screen-Space UI Primitives ─────────────────────────────────────────────────
+use std.core as core
+use std.query as query
+use std.pointer as pointer
+use std.math as math
+use std.math.vec2 as vecmath
+
+pub enum Axis:
+    Horizontal
+    Vertical
+
+pub enum Align:
+    Start
+    Center
+    End
+    Stretch
+
+pub enum TextAlign:
+    Start
+    Center
+    End
+
+pub enum ImageFit:
+    Stretch
+    Contain
+    Cover
+
+pub trait Node:
+    var visible: bool = true
+    var enabled: bool = true
+    var z_index: int = 0
+    var clip_children: bool = false
+
+pub trait Visual:
+    var scale: vec2 = vec2(1.0, 1.0)
+    var opacity: float = 1.0
+
+pub trait PreferredSize:
+    var min_size: vec2 = vec2(0.0, 0.0)
+
+pub trait DesiredSize:
+    var size: vec2 = vec2(0.0, 0.0)
+
+pub trait Anchors:
+    var min: vec2 = vec2(0.0, 0.0)
+    var max: vec2 = vec2(0.0, 0.0)
+    var pivot: vec2 = vec2(0.0, 0.0)
+    var offset: vec2 = vec2(0.0, 0.0)
+    var margin_min: vec2 = vec2(0.0, 0.0)
+    var margin_max: vec2 = vec2(0.0, 0.0)
+
+pub trait ComputedLayout:
+    var position: vec2 = vec2(0.0, 0.0)
+    var size: vec2 = vec2(0.0, 0.0)
+    var effective_visible: bool = true
+    var effective_enabled: bool = true
+    var effective_opacity: float = 1.0
+    var clip_min: vec2 = vec2(0.0, 0.0)
+    var clip_max: vec2 = vec2(0.0, 0.0)
+    var draw_order: int = 0
+
+pub trait Panel:
+    var background: color = #00000000
+    var border_color: color = #00000000
+    var border_width: float = 0.0
+
+pub trait Text:
+    var value: string = ""
+    var font_size: int = 16
+    var color: color = #FFFFFFFF
+    var align: TextAlign
+
+pub trait Image:
+    let texture: texture_id
+    var tint: color = #FFFFFFFF
+    var fit: ImageFit
+
+pub trait Button:
+    var label: string = ""
+    var normal_color: color = #404040FF
+    var hover_color: color = #505050FF
+    var pressed_color: color = #303030FF
+    var disabled_color: color = #202020FF
+    var text_color: color = #FFFFFFFF
+    var padding: vec2 = vec2(8.0, 4.0)
+
+pub trait Stack:
+    var axis: Axis
+    var gap: float = 0.0
+    var align: Align
+    var padding: vec2 = vec2(0.0, 0.0)
+
+pub trait Grid:
+    var columns: int = 1
+    var cell_size: vec2 = vec2(0.0, 0.0)
+    var gap: vec2 = vec2(0.0, 0.0)
+    var padding: vec2 = vec2(0.0, 0.0)
+
+pub trait GridItem:
+    var column: int = -1
+    var row: int = -1
+    var column_span: int = 1
+    var row_span: int = 1
+
+pub trait Overlay:
+    var padding: vec2 = vec2(0.0, 0.0)
+
+pub trait FrameAnimation:
+    var frame_count: int = 1
+    var fps: float = 0.0
+    var frame: int = 0
+    var elapsed: float = 0.0
+    var playing: bool = false
+
+pub trait BumpAnimation:
+    var from_scale: vec2 = vec2(0.8, 0.8)
+    var to_scale: vec2 = vec2(1.0, 1.0)
+    var duration: float = 0.15
+    var elapsed: float = 0.0
+    var playing: bool = false
+
+pub event StartBump
+
+# Pure measurement helpers keep normalization policy visible in authored Cactus.
+func nonnegative(value: float) float:
+    if value < 0.0:
+        return 0.0
+    return value
+
+func at_least_one(value: int) int:
+    if value < 1:
+        return 1
+    return value
+
+func max_scalar(left: float, right: float) float:
+    if right > left:
+        return right
+    return left
+
+func max_size(left: vec2, right: vec2) vec2:
+    return vec2(max_scalar(left.x, right.x), max_scalar(left.y, right.y))
+
+func normalized_size(value: vec2) vec2:
+    return vec2(nonnegative(value.x), nonnegative(value.y))
+
+func padded_size(content: vec2, padding: vec2) vec2:
+    let safe_padding = normalized_size(padding)
+    return vec2(nonnegative(content.x) + safe_padding.x + safe_padding.x, nonnegative(content.y) + safe_padding.y + safe_padding.y)
+
+func button_intrinsic(label_size: vec2, padding: vec2) vec2:
+    return padded_size(label_size, padding)
+
+func image_intrinsic(texture_metrics: vec2) vec2:
+    return normalized_size(texture_metrics)
+
+func normalize_leaf(intrinsic: vec2, preferred: vec2) vec2:
+    return max_size(normalized_size(intrinsic), normalized_size(preferred))
+
+func min_scalar(left: float, right: float) float:
+    if right < left:
+        return right
+    return left
+
+func clamp_unit(value: float) float:
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+func fixed_axis_position(slot_position: float, slot_size: float, anchor: float, desired: float, pivot: float, offset: float, margin_min: float, margin_max: float) float:
+    return slot_position + slot_size * clamp_unit(anchor) + offset - nonnegative(desired) * clamp_unit(pivot) + nonnegative(margin_min) - nonnegative(margin_max)
+
+func stretched_axis_position(slot_position: float, slot_size: float, anchor_min: float, offset: float, margin_min: float) float:
+    return slot_position + slot_size * clamp_unit(anchor_min) + offset + nonnegative(margin_min)
+
+func stretched_axis_size(slot_size: float, anchor_min: float, anchor_max: float, margin_min: float, margin_max: float) float:
+    return nonnegative(slot_size * (clamp_unit(anchor_max) - clamp_unit(anchor_min)) - nonnegative(margin_min) - nonnegative(margin_max))
+
+rule MeasureUi:
+    on core.input:
+        for item in query.hierarchy_postorder[Node]():
+            let preferred_minimum = vec2(0.0, 0.0)
+            match item:
+                PreferredSize as preferred =>
+                    preferred_minimum = normalized_size(preferred.min_size)
+            let intrinsic = vec2(0.0, 0.0)
+            match item:
+                Text as text =>
+                    intrinsic = normalized_size(text_size(text.value, at_least_one(text.font_size)))
+            match item:
+                Image as image =>
+                    intrinsic = max_size(intrinsic, image_intrinsic(texture_size(image.texture)))
+            match item:
+                Button as button =>
+                    intrinsic = max_size(intrinsic, button_intrinsic(text_size(button.label, 16), button.padding))
+            let measured = intrinsic
+            let used_container = false
+            match item:
+                Stack as stack =>
+                    used_container = true
+                    let cursor = 0.0
+                    let cross = 0.0
+                    let child_count = 0
+                    for child in query.children[Node](of = item):
+                        match child:
+                            DesiredSize as desired =>
+                                if stack.axis == Axis.Horizontal:
+                                    cursor += desired.size.x
+                                    if desired.size.y > cross:
+                                        cross = desired.size.y
+                                else:
+                                    cursor += desired.size.y
+                                    if desired.size.x > cross:
+                                        cross = desired.size.x
+                                child_count += 1
+                    if child_count > 1:
+                        cursor += nonnegative(stack.gap) * (child_count - 1)
+                    if stack.axis == Axis.Horizontal:
+                        measured = padded_size(vec2(cursor, cross), stack.padding)
+                    else:
+                        measured = padded_size(vec2(cross, cursor), stack.padding)
+            if not used_container:
+                match item:
+                    Grid as grid =>
+                        used_container = true
+                        let column_count = at_least_one(grid.columns)
+                        let safe_gap = normalized_size(grid.gap)
+                        let cell = normalized_size(grid.cell_size)
+                        let occupied_columns = column_count
+                        let occupied_rows = 0
+                        let automatic_index = 0
+                        for child in query.children[Node](of = item):
+                            let column = automatic_index % column_count
+                            let row = automatic_index / column_count
+                            let column_span = 1
+                            let row_span = 1
+                            match child:
+                                GridItem as placement =>
+                                    column_span = at_least_one(placement.column_span)
+                                    row_span = at_least_one(placement.row_span)
+                                    if placement.column >= 0:
+                                        column = placement.column
+                                    if placement.row >= 0:
+                                        row = placement.row
+                            if column < 0:
+                                column = 0
+                            if row < 0:
+                                row = 0
+                            let column_end = column + column_span
+                            let row_end = row + row_span
+                            if column_end > occupied_columns:
+                                occupied_columns = column_end
+                            if row_end > occupied_rows:
+                                occupied_rows = row_end
+                            match child:
+                                DesiredSize as desired =>
+                                    let needed_cell_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
+                                    let needed_cell_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
+                                    if needed_cell_width > cell.x:
+                                        cell.x = needed_cell_width
+                                    if needed_cell_height > cell.y:
+                                        cell.y = needed_cell_height
+                            automatic_index += 1
+                        let content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
+                        if occupied_columns > 1:
+                            content.x += safe_gap.x * (occupied_columns - 1)
+                        if occupied_rows > 1:
+                            content.y += safe_gap.y * (occupied_rows - 1)
+                        measured = padded_size(content, grid.padding)
+            if not used_container:
+                let child_maximum = vec2(0.0, 0.0)
+                for child in query.children[Node](of = item):
+                    match child:
+                        DesiredSize as desired =>
+                            child_maximum = max_size(child_maximum, desired.size)
+                let overlay_padding = vec2(0.0, 0.0)
+                match item:
+                    Overlay as overlay =>
+                        overlay_padding = overlay.padding
+                measured = max_size(measured, padded_size(child_maximum, overlay_padding))
+            measured = normalize_leaf(measured, preferred_minimum)
+            project DesiredSize to item:
+                size = measured
+
+    on core.late_tick:
+        for item in query.hierarchy_postorder[Node]():
+            let preferred_minimum = vec2(0.0, 0.0)
+            match item:
+                PreferredSize as preferred =>
+                    preferred_minimum = normalized_size(preferred.min_size)
+            let intrinsic = vec2(0.0, 0.0)
+            match item:
+                Text as text =>
+                    intrinsic = normalized_size(text_size(text.value, at_least_one(text.font_size)))
+            match item:
+                Image as image =>
+                    intrinsic = max_size(intrinsic, image_intrinsic(texture_size(image.texture)))
+            match item:
+                Button as button =>
+                    intrinsic = max_size(intrinsic, button_intrinsic(text_size(button.label, 16), button.padding))
+            let measured = intrinsic
+            let used_container = false
+            match item:
+                Stack as stack =>
+                    used_container = true
+                    let cursor = 0.0
+                    let cross = 0.0
+                    let child_count = 0
+                    for child in query.children[Node](of = item):
+                        match child:
+                            DesiredSize as desired =>
+                                if stack.axis == Axis.Horizontal:
+                                    cursor += desired.size.x
+                                    cross = max_scalar(cross, desired.size.y)
+                                else:
+                                    cursor += desired.size.y
+                                    cross = max_scalar(cross, desired.size.x)
+                                child_count += 1
+                    if child_count > 1:
+                        cursor += nonnegative(stack.gap) * (child_count - 1)
+                    if stack.axis == Axis.Horizontal:
+                        measured = padded_size(vec2(cursor, cross), stack.padding)
+                    else:
+                        measured = padded_size(vec2(cross, cursor), stack.padding)
+            if not used_container:
+                match item:
+                    Grid as grid =>
+                        used_container = true
+                        let column_count = at_least_one(grid.columns)
+                        let safe_gap = normalized_size(grid.gap)
+                        let cell = normalized_size(grid.cell_size)
+                        let occupied_columns = column_count
+                        let occupied_rows = 0
+                        let automatic_index = 0
+                        for child in query.children[Node](of = item):
+                            let column = automatic_index % column_count
+                            let row = automatic_index / column_count
+                            let column_span = 1
+                            let row_span = 1
+                            match child:
+                                GridItem as placement =>
+                                    column_span = at_least_one(placement.column_span)
+                                    row_span = at_least_one(placement.row_span)
+                                    if placement.column >= 0:
+                                        column = placement.column
+                                    if placement.row >= 0:
+                                        row = placement.row
+                            if column < 0:
+                                column = 0
+                            if row < 0:
+                                row = 0
+                            let column_end = column + column_span
+                            let row_end = row + row_span
+                            if column_end > occupied_columns:
+                                occupied_columns = column_end
+                            if row_end > occupied_rows:
+                                occupied_rows = row_end
+                            match child:
+                                DesiredSize as desired =>
+                                    let needed_cell_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
+                                    let needed_cell_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
+                                    if needed_cell_width > cell.x:
+                                        cell.x = needed_cell_width
+                                    if needed_cell_height > cell.y:
+                                        cell.y = needed_cell_height
+                            automatic_index += 1
+                        let content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
+                        if occupied_columns > 1:
+                            content.x += safe_gap.x * (occupied_columns - 1)
+                        if occupied_rows > 1:
+                            content.y += safe_gap.y * (occupied_rows - 1)
+                        measured = padded_size(content, grid.padding)
+            if not used_container:
+                let child_maximum = vec2(0.0, 0.0)
+                for child in query.children[Node](of = item):
+                    match child:
+                        DesiredSize as desired =>
+                            child_maximum = max_size(child_maximum, desired.size)
+                let overlay_padding = vec2(0.0, 0.0)
+                match item:
+                    Overlay as overlay =>
+                        overlay_padding = overlay.padding
+                measured = max_size(measured, padded_size(child_maximum, overlay_padding))
+            measured = normalize_leaf(measured, preferred_minimum)
+            project DesiredSize to item:
+                size = measured
+
+rule ArrangeUi:
+    on core.input:
+        let root_size = window_size()
+        for item in query.hierarchy_preorder[Node]():
+            let slot_position = vec2(0.0, 0.0)
+            let slot_size = normalized_size(root_size)
+            let inherited_visible = true
+            let inherited_enabled = true
+            let inherited_opacity = 1.0
+            let clip_min = vec2(0.0, 0.0)
+            let clip_max = normalized_size(root_size)
+            let parent = query.parent(of = item)
+            match parent:
+                ComputedLayout as parent_layout =>
+                    slot_position = parent_layout.position
+                    slot_size = normalized_size(parent_layout.size)
+                    inherited_visible = parent_layout.effective_visible
+                    inherited_enabled = parent_layout.effective_enabled
+                    inherited_opacity = parent_layout.effective_opacity
+                    clip_min = parent_layout.clip_min
+                    clip_max = parent_layout.clip_max
+                    let used_parent_container = false
+                    match parent:
+                        Stack as stack =>
+                            used_parent_container = true
+                            let padding = normalized_size(stack.padding)
+                            let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
+                            let content_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
+                            let cursor = 0.0
+                            for sibling in query.children[Node](of = parent):
+                                let sibling_size = vec2(0.0, 0.0)
+                                match sibling:
+                                    DesiredSize as desired =>
+                                        sibling_size = normalized_size(desired.size)
+                                if sibling == item:
+                                    if stack.axis == Axis.Horizontal:
+                                        slot_position = vec2(content_position.x + cursor, content_position.y)
+                                        slot_size = vec2(sibling_size.x, content_size.y)
+                                        if stack.align != Align.Stretch:
+                                            slot_size.y = sibling_size.y
+                                            if stack.align == Align.Center:
+                                                slot_position.y += (content_size.y - slot_size.y) / 2.0
+                                            if stack.align == Align.End:
+                                                slot_position.y += content_size.y - slot_size.y
+                                    else:
+                                        slot_position = vec2(content_position.x, content_position.y + cursor)
+                                        slot_size = vec2(content_size.x, sibling_size.y)
+                                        if stack.align != Align.Stretch:
+                                            slot_size.x = sibling_size.x
+                                            if stack.align == Align.Center:
+                                                slot_position.x += (content_size.x - slot_size.x) / 2.0
+                                            if stack.align == Align.End:
+                                                slot_position.x += content_size.x - slot_size.x
+                                if stack.axis == Axis.Horizontal:
+                                    cursor += sibling_size.x + nonnegative(stack.gap)
+                                else:
+                                    cursor += sibling_size.y + nonnegative(stack.gap)
+                    if not used_parent_container:
+                        match parent:
+                            Grid as grid =>
+                                used_parent_container = true
+                                let padding = normalized_size(grid.padding)
+                                let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
+                                let column_count = at_least_one(grid.columns)
+                                let safe_gap = normalized_size(grid.gap)
+                                let cell = normalized_size(grid.cell_size)
+                                for sibling in query.children[Node](of = parent):
+                                    let column_span = 1
+                                    let row_span = 1
+                                    match sibling:
+                                        GridItem as placement =>
+                                            column_span = at_least_one(placement.column_span)
+                                            row_span = at_least_one(placement.row_span)
+                                    match sibling:
+                                        DesiredSize as desired =>
+                                            let needed_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
+                                            let needed_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
+                                            cell = max_size(cell, vec2(needed_width, needed_height))
+                                let automatic_index = 0
+                                for sibling in query.children[Node](of = parent):
+                                    let column = automatic_index % column_count
+                                    let row = automatic_index / column_count
+                                    let column_span = 1
+                                    let row_span = 1
+                                    match sibling:
+                                        GridItem as placement =>
+                                            column_span = at_least_one(placement.column_span)
+                                            row_span = at_least_one(placement.row_span)
+                                            if placement.column >= 0:
+                                                column = placement.column
+                                            if placement.row >= 0:
+                                                row = placement.row
+                                    if sibling == item:
+                                        slot_position = vec2(content_position.x + column * (cell.x + safe_gap.x), content_position.y + row * (cell.y + safe_gap.y))
+                                        slot_size = vec2(cell.x * column_span + safe_gap.x * (column_span - 1), cell.y * row_span + safe_gap.y * (row_span - 1))
+                                    automatic_index += 1
+                    if not used_parent_container:
+                        let padding = vec2(0.0, 0.0)
+                        match parent:
+                            Overlay as overlay =>
+                                padding = normalized_size(overlay.padding)
+                        slot_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
+                        slot_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
+            let position = slot_position
+            let size = normalized_size(slot_size)
+            match item:
+                Anchors as anchors =>
+                    let desired = vec2(0.0, 0.0)
+                    match item:
+                        DesiredSize as desired_size =>
+                            desired = normalized_size(desired_size.size)
+                    if anchors.min.x == anchors.max.x:
+                        size.x = desired.x
+                        position.x = fixed_axis_position(slot_position.x, slot_size.x, anchors.min.x, size.x, anchors.pivot.x, anchors.offset.x, anchors.margin_min.x, anchors.margin_max.x)
+                    else:
+                        position.x = stretched_axis_position(slot_position.x, slot_size.x, anchors.min.x, anchors.offset.x, anchors.margin_min.x)
+                        size.x = stretched_axis_size(slot_size.x, anchors.min.x, anchors.max.x, anchors.margin_min.x, anchors.margin_max.x)
+                    if anchors.min.y == anchors.max.y:
+                        size.y = desired.y
+                        position.y = fixed_axis_position(slot_position.y, slot_size.y, anchors.min.y, size.y, anchors.pivot.y, anchors.offset.y, anchors.margin_min.y, anchors.margin_max.y)
+                    else:
+                        position.y = stretched_axis_position(slot_position.y, slot_size.y, anchors.min.y, anchors.offset.y, anchors.margin_min.y)
+                        size.y = stretched_axis_size(slot_size.y, anchors.min.y, anchors.max.y, anchors.margin_min.y, anchors.margin_max.y)
+            size = normalized_size(size)
+            let visible = inherited_visible
+            let enabled = inherited_enabled
+            match item:
+                Node as node =>
+                    visible = visible and node.visible
+                    enabled = enabled and node.enabled
+                    if node.clip_children:
+                        clip_min = max_size(clip_min, position)
+                        clip_max = vec2(min_scalar(clip_max.x, position.x + size.x), min_scalar(clip_max.y, position.y + size.y))
+                        clip_max = max_size(clip_min, clip_max)
+            let opacity = inherited_opacity
+            match item:
+                Visual as visual =>
+                    opacity = opacity * visual.opacity
+            project ComputedLayout to item:
+                position = position
+                size = size
+                effective_visible = visible
+                effective_enabled = enabled
+                effective_opacity = opacity
+                clip_min = clip_min
+                clip_max = clip_max
+                draw_order = std.ui.stacking_order(of = item)
+
+    on core.late_tick:
+        let root_size = window_size()
+        for item in query.hierarchy_preorder[Node]():
+            let slot_position = vec2(0.0, 0.0)
+            let slot_size = normalized_size(root_size)
+            let inherited_visible = true
+            let inherited_enabled = true
+            let inherited_opacity = 1.0
+            let clip_min = vec2(0.0, 0.0)
+            let clip_max = normalized_size(root_size)
+            let parent = query.parent(of = item)
+            match parent:
+                ComputedLayout as parent_layout =>
+                    slot_position = parent_layout.position
+                    slot_size = normalized_size(parent_layout.size)
+                    inherited_visible = parent_layout.effective_visible
+                    inherited_enabled = parent_layout.effective_enabled
+                    inherited_opacity = parent_layout.effective_opacity
+                    clip_min = parent_layout.clip_min
+                    clip_max = parent_layout.clip_max
+                    let used_parent_container = false
+                    match parent:
+                        Stack as stack =>
+                            used_parent_container = true
+                            let padding = normalized_size(stack.padding)
+                            let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
+                            let content_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
+                            let cursor = 0.0
+                            for sibling in query.children[Node](of = parent):
+                                let sibling_size = vec2(0.0, 0.0)
+                                match sibling:
+                                    DesiredSize as desired =>
+                                        sibling_size = normalized_size(desired.size)
+                                if sibling == item:
+                                    if stack.axis == Axis.Horizontal:
+                                        slot_position = vec2(content_position.x + cursor, content_position.y)
+                                        slot_size = vec2(sibling_size.x, content_size.y)
+                                        if stack.align != Align.Stretch:
+                                            slot_size.y = sibling_size.y
+                                            if stack.align == Align.Center:
+                                                slot_position.y += (content_size.y - slot_size.y) / 2.0
+                                            if stack.align == Align.End:
+                                                slot_position.y += content_size.y - slot_size.y
+                                    else:
+                                        slot_position = vec2(content_position.x, content_position.y + cursor)
+                                        slot_size = vec2(content_size.x, sibling_size.y)
+                                        if stack.align != Align.Stretch:
+                                            slot_size.x = sibling_size.x
+                                            if stack.align == Align.Center:
+                                                slot_position.x += (content_size.x - slot_size.x) / 2.0
+                                            if stack.align == Align.End:
+                                                slot_position.x += content_size.x - slot_size.x
+                                if stack.axis == Axis.Horizontal:
+                                    cursor += sibling_size.x + nonnegative(stack.gap)
+                                else:
+                                    cursor += sibling_size.y + nonnegative(stack.gap)
+                    if not used_parent_container:
+                        match parent:
+                            Grid as grid =>
+                                used_parent_container = true
+                                let padding = normalized_size(grid.padding)
+                                let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
+                                let column_count = at_least_one(grid.columns)
+                                let safe_gap = normalized_size(grid.gap)
+                                let cell = normalized_size(grid.cell_size)
+                                for sibling in query.children[Node](of = parent):
+                                    let column_span = 1
+                                    let row_span = 1
+                                    match sibling:
+                                        GridItem as placement =>
+                                            column_span = at_least_one(placement.column_span)
+                                            row_span = at_least_one(placement.row_span)
+                                    match sibling:
+                                        DesiredSize as desired =>
+                                            let needed_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
+                                            let needed_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
+                                            cell = max_size(cell, vec2(needed_width, needed_height))
+                                let automatic_index = 0
+                                for sibling in query.children[Node](of = parent):
+                                    let column = automatic_index % column_count
+                                    let row = automatic_index / column_count
+                                    let column_span = 1
+                                    let row_span = 1
+                                    match sibling:
+                                        GridItem as placement =>
+                                            column_span = at_least_one(placement.column_span)
+                                            row_span = at_least_one(placement.row_span)
+                                            if placement.column >= 0:
+                                                column = placement.column
+                                            if placement.row >= 0:
+                                                row = placement.row
+                                    if sibling == item:
+                                        slot_position = vec2(content_position.x + column * (cell.x + safe_gap.x), content_position.y + row * (cell.y + safe_gap.y))
+                                        slot_size = vec2(cell.x * column_span + safe_gap.x * (column_span - 1), cell.y * row_span + safe_gap.y * (row_span - 1))
+                                    automatic_index += 1
+                    if not used_parent_container:
+                        let padding = vec2(0.0, 0.0)
+                        match parent:
+                            Overlay as overlay =>
+                                padding = normalized_size(overlay.padding)
+                        slot_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
+                        slot_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
+            let position = slot_position
+            let size = normalized_size(slot_size)
+            match item:
+                Anchors as anchors =>
+                    let desired = vec2(0.0, 0.0)
+                    match item:
+                        DesiredSize as desired_size =>
+                            desired = normalized_size(desired_size.size)
+                    if anchors.min.x == anchors.max.x:
+                        size.x = desired.x
+                        position.x = fixed_axis_position(slot_position.x, slot_size.x, anchors.min.x, size.x, anchors.pivot.x, anchors.offset.x, anchors.margin_min.x, anchors.margin_max.x)
+                    else:
+                        position.x = stretched_axis_position(slot_position.x, slot_size.x, anchors.min.x, anchors.offset.x, anchors.margin_min.x)
+                        size.x = stretched_axis_size(slot_size.x, anchors.min.x, anchors.max.x, anchors.margin_min.x, anchors.margin_max.x)
+                    if anchors.min.y == anchors.max.y:
+                        size.y = desired.y
+                        position.y = fixed_axis_position(slot_position.y, slot_size.y, anchors.min.y, size.y, anchors.pivot.y, anchors.offset.y, anchors.margin_min.y, anchors.margin_max.y)
+                    else:
+                        position.y = stretched_axis_position(slot_position.y, slot_size.y, anchors.min.y, anchors.offset.y, anchors.margin_min.y)
+                        size.y = stretched_axis_size(slot_size.y, anchors.min.y, anchors.max.y, anchors.margin_min.y, anchors.margin_max.y)
+            size = normalized_size(size)
+            let visible = inherited_visible
+            let enabled = inherited_enabled
+            match item:
+                Node as node =>
+                    visible = visible and node.visible
+                    enabled = enabled and node.enabled
+                    if node.clip_children:
+                        clip_min = max_size(clip_min, position)
+                        clip_max = vec2(min_scalar(clip_max.x, position.x + size.x), min_scalar(clip_max.y, position.y + size.y))
+                        clip_max = max_size(clip_min, clip_max)
+            let opacity = inherited_opacity
+            match item:
+                Visual as visual =>
+                    opacity = opacity * visual.opacity
+            project ComputedLayout to item:
+                position = position
+                size = size
+                effective_visible = visible
+                effective_enabled = enabled
+                effective_opacity = opacity
+                clip_min = clip_min
+                clip_max = clip_max
+                draw_order = std.ui.stacking_order(of = item)
+
+# Advances horizontal-strip frame animation from a monotonic elapsed clock
+# (design decision #12: tick, between input RoutePointer and late_tick
+# MeasureUi). `frame` is recomputed each tick as floor(elapsed * fps) mod the
+# clamped frame count rather than accumulated step-by-step, so elapsed never
+# needs subdividing into "whole frames consumed" — floor(float) already
+# yields an int with no further int/float arithmetic required, and pausing
+# (playing = false) simply stops elapsed from advancing, leaving frame
+# untouched.
+rule AnimateUiFrames:
+    filter:
+        FrameAnimation as anim
+
+    on core.tick as tick:
+        if anim.playing and anim.fps > 0.0:
+            anim.elapsed = anim.elapsed + tick.dt
+            let safe_frame_count = at_least_one(anim.frame_count)
+            anim.frame = math.floor(anim.elapsed * anim.fps) % safe_frame_count
+
+# Reusable Visual.scale bump: a targeted StartBump (re)starts the animation
+# on its recipient only (unary consumer, spec.md "Targeted bump affects one
+# entity"); the tick handler interpolates scale and snaps to the exact
+# terminal to_scale/playing=false on completion rather than trusting a t=1.0
+# lerp to land exactly on it.
+rule AnimateUiBump:
+    filter:
+        Visual as visual
+        BumpAnimation as bump
+
+    on StartBump:
+        bump.elapsed = 0.0
+        bump.playing = true
+
+    on core.tick as tick:
+        if not bump.playing:
+            return
+        bump.elapsed = bump.elapsed + tick.dt
+        if bump.duration <= 0.0 or bump.elapsed >= bump.duration:
+            visual.scale = bump.to_scale
+            bump.playing = false
+        else:
+            let t = math.clamp(bump.elapsed / bump.duration, 0.0, 1.0)
+            visual.scale = vecmath.lerp(bump.from_scale, bump.to_scale, t)
+
+pub extern func window_size() vec2
+pub extern func text_size(value: string, font_size: int) vec2
+pub extern func texture_size(texture: texture_id) vec2
+
+# Sibling-local (z_index, creation_ordinal) stacking-context painter index for
+# `of`, computed over the complete Node forest with each subtree kept atomic.
+pub extern func stacking_order(of: entity_id) int
+
+pub extern rule RenderUi:
+    on core.render:
+        reads:
+            Node
+            Visual
+            ComputedLayout
+            Panel
+            Text
+            Image
+            Button
+            FrameAnimation
+            pointer.PointerState
+        effects:
+            graphics
+
+# Standard pointer router (design decisions #8/#9): merges window/flat-world/
+# volume-world PointerTarget candidates (std.pointer.top_target(), see
+# cpp_entt_codegen.cpp's candidate-provider registration), tracks singleton
+# hover, drives primary capture/press/release/Click, and consumes the primary
+# mouse action. Declared here rather than in std.pointer.cactus so it can
+# read ComputedLayout directly (see std.pointer's doc comment on top_target
+# for why) — this `reads:` entry is also what orders RoutePointer after
+# ArrangeUi's `project ComputedLayout` within the same input-phase trigger,
+# so routing always sees this frame's freshly-arranged layout, never last
+# frame's (spec.md "Input consumes current layout").
+pub extern rule RoutePointer:
+    on core.input:
+        reads:
+            Node
+            ComputedLayout
+            pointer.PointerTarget
+        writes:
+            pointer.PointerState
+        emits:
+            pointer.PointerEnter
+            pointer.PointerLeave
+            pointer.PointerPress
+            pointer.PointerRelease
+            pointer.Click
+        effects:
+            input
+
+# ── Screen-Space UI Primitives (low-level compatibility path) ──────────────────
 # Generic screen-space rectangle draw event, usable by any Cactus program — not
-# editor-specific. Screen-space text reuses the existing std.render.text
-# ScreenLabel trait; no new text primitive is introduced here.
+# editor-specific. Predates Standard UI and remains available alongside it, per
+# design decision #10: Standard UI is a higher-level unified painter path, not a
+# replacement for this or the std.render.text ScreenLabel primitive.
 
 pub event DrawScreenRect:
     position:  vec2
@@ -12,7 +788,6 @@ pub event DrawScreenRect:
     filled:    bool
     thickness: float
 
-# ── Generic Backend Renderer ────────────────────────────────────────────────────
 # Reads only the event's own payload (see std.debug's renderers for the same
 # no-filter, no-reads, effects-only shape) and issues DrawRectangleRec when
 # filled, DrawRectangleLinesEx otherwise. No editor-specific branching.

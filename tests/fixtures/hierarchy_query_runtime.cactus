@@ -1,0 +1,25 @@
+module hierarchy_query_runtime
+
+use std.query as query
+
+pub trait Node
+pub trait Hidden
+pub trait RequestedRoot
+
+pub trait Results:
+    var requested: entity_id
+    var direct: list[entity_id]
+    var preorder: list[entity_id]
+    var postorder: list[entity_id]
+
+pub entity Observer:
+    Results
+
+rule CollectHierarchySnapshots:
+    filter:
+        Results
+
+    on tick:
+        direct = query.children[Node, not Hidden](of = requested)
+        preorder = query.hierarchy_preorder[Node, not Hidden]()
+        postorder = query.hierarchy_postorder[Node, not Hidden]()

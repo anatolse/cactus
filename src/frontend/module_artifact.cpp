@@ -2,6 +2,7 @@
 
 #include "frontend/symbol_identity.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstring>
@@ -290,15 +291,27 @@ void ModuleArtifact::write_phases(std::ostream& out,
 }
 
 void ModuleArtifact::write_string_set(std::ostream& out, const std::unordered_set<std::string>& values) {
-    ModuleArtifact::write_u32(out, static_cast<uint32_t>(values.size()));
-    for (const auto& value : values) {
+    std::vector<std::string> ordered(values.begin(), values.end());
+    std::ranges::sort(ordered);
+    ModuleArtifact::write_u32(out, static_cast<uint32_t>(ordered.size()));
+    for (const auto& value : ordered) {
         ModuleArtifact::write_str(out, value);
     }
 }
 
 void ModuleArtifact::write_symbol_set(std::ostream& out, const std::unordered_set<SymbolId>& values) {
-    write_u32(out, static_cast<uint32_t>(values.size()));
-    for (const auto& value : values) {
+    std::vector<SymbolId> ordered(values.begin(), values.end());
+    std::ranges::sort(ordered, [](const SymbolId& left, const SymbolId& right) {
+        if (left.kind != right.kind) {
+            return left.kind < right.kind;
+        }
+        if (left.module.name != right.module.name) {
+            return left.module.name < right.module.name;
+        }
+        return left.local_name < right.local_name;
+    });
+    write_u32(out, static_cast<uint32_t>(ordered.size()));
+    for (const auto& value : ordered) {
         write_symbol_id(out, value);
     }
 }
@@ -589,9 +602,9 @@ ResolvedField ModuleArtifact::read_field(std::istream& in) {
     field.type               = read_type_info(in);
     if (read_bool(in)) {
         PhaseFieldSource binding;
-        binding.kind          = read_bool(in) ? PhaseFieldSource::Kind::UpstreamPhase : PhaseFieldSource::Kind::RootEvent;
-        binding.source        = read_symbol_id(in);
-        binding.member        = read_str(in);
+        binding.kind   = read_bool(in) ? PhaseFieldSource::Kind::UpstreamPhase : PhaseFieldSource::Kind::RootEvent;
+        binding.source = read_symbol_id(in);
+        binding.member = read_str(in);
         field.source_binding = binding;
     }
     return field;
@@ -823,7 +836,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     contract.pair_bindings.reserve(binding_count);
     for (uint32_t i = 0; i < binding_count; ++i) {
         RelationBinding binding;
-        binding.name             = read_str(in);
+        binding.name            = read_str(in);
         binding.required_traits = read_symbol_vector(in);
         contract.pair_bindings.push_back(std::move(binding));
     }
@@ -835,14 +848,14 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     for (uint32_t i = 0; i < bound_read_count; ++i) {
         BoundTraitAccess access;
         access.binding_index = static_cast<std::size_t>(read_u64(in));
-        access.trait          = read_symbol_id(in);
+        access.trait         = read_symbol_id(in);
         contract.bound_reads.push_back(access);
     }
 
-    contract.writes           = read_symbol_set(in);
-    contract.projects         = read_symbol_set(in);
-    contract.emits            = read_symbol_set(in);
-    const auto command_count  = read_u32(in);
+    contract.writes          = read_symbol_set(in);
+    contract.projects        = read_symbol_set(in);
+    contract.emits           = read_symbol_set(in);
+    const auto command_count = read_u32(in);
     contract.commands.reserve(command_count);
     for (uint32_t i = 0; i < command_count; ++i) {
         contract.commands.push_back(InferredHandlerCommand{.kind   = static_cast<HandlerCommandKind>(read_u8(in)),
@@ -858,7 +871,7 @@ std::vector<InferredHandlerContract> ModuleArtifact::read_handler_contracts(std:
     contracts.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         InferredHandlerContract contract;
-        contract.rule                            = read_symbol_id(in);
+        contract.rule                           = read_symbol_id(in);
         contract.trigger                        = read_trigger(in);
         static_cast<HandlerContract&>(contract) = read_contract(in);
         contracts.push_back(std::move(contract));
@@ -1152,12 +1165,12 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     for (const auto& dep : program->dependency_graph) {
         const auto symbol = dep.rule_id.value_or(make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name));
         ImportedRule rule;
-        rule.name                      = symbol.local_name;
-        rule.module_name               = symbol.module.name;
-        rule.canonical_id              = make_canonical_id(symbol);
-        rule.symbol_id                 = symbol;
-        rule.after_rules               = dep.after_rules;
-        symbols.rules[dep.rule_name]   = rule;
+        rule.name                    = symbol.local_name;
+        rule.module_name             = symbol.module.name;
+        rule.canonical_id            = make_canonical_id(symbol);
+        rule.symbol_id               = symbol;
+        rule.after_rules             = dep.after_rules;
+        symbols.rules[dep.rule_name] = rule;
     }
 
     for (const auto& [name, event] : program->events) {

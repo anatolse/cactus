@@ -61,6 +61,17 @@ CACTUS_RL_WRAP(bool, IsWindowReady, (), ())
 CACTUS_RL_WRAP(int, GetScreenWidth, (), ())
 CACTUS_RL_WRAP(int, GetScreenHeight, (), ())
 
+// ── Font metrics (computed when faked; never recorded) ─────────────────────
+// Real MeasureTextEx depends on the loaded default font's glyph data, which a
+// headless test has no way to script pixel-accurately; the fake instead
+// returns a deterministic, monotonic-in-length/font-size approximation (see
+// fake_raylib.cpp), sufficient to prove layout code reacts to text metrics
+// without demanding cross-platform pixel-perfect acceptance (design.md's
+// "Text metrics vary by font backend and platform" risk mitigation).
+
+CACTUS_RL_WRAP(Vector2, MeasureTextEx, (Font font, const char* text, float fontSize, float spacing),
+              (font, text, fontSize, spacing))
+
 // ── Drawing (recorded into the call log when faked) ────────────────────────
 
 CACTUS_RL_WRAP_VOID(ClearBackground, (Color color), (color))

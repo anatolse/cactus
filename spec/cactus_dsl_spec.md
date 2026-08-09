@@ -514,7 +514,7 @@ extern_handler      = "on" event_name ":" NEWLINE INDENT
                       { contract_clause }
                       DEDENT ;
 
-contract_clause     = ( "reads" | "writes" | "emits" | "effects" ) ":"
+contract_clause     = ( "reads" | "writes" | "emits" | "effects" | "projects" ) ":"
                       NEWLINE INDENT { dotted_name NEWLINE } DEDENT
                     | "commands" ":" NEWLINE INDENT
                       { command_capability NEWLINE } DEDENT ;
@@ -547,6 +547,8 @@ extern system InputSource:
 ```
 
 An extern handler is **selectionless** when its owner has neither `filter:` nor `exclude:` and therefore runs once per trigger occurrence. Any filter or exclude clause creates an entity-selection pass. Selection does not itself grant read access: every component access by an extern handler must appear in `reads:` or `writes:`. `writes:` includes read access to the same trait.
+
+`projects:` declares, per trait, that the handler's generated callback capability object exposes a target-safe frame-local projection call for that trait — the same `project` overlay semantics `project_stmt` (§3.16) gives authored Cactus code, but reachable from a native/compiler-owned callback instead. A trait entry cannot appear in both `writes:` and `projects:` on the same handler, and duplicate entries within `projects:` are rejected. This is a generic capability for external producers (e.g. a future pointer/render-adjacent native adapter); Standard UI's own `MeasureUi`/`ArrangeUi` project `DesiredSize`/`ComputedLayout` through ordinary authored `project` statements and do not need it.
 
 ### 3.11 Events and Phases
 
@@ -675,6 +677,47 @@ spawn_expr      = "spawn" IDENTIFIER ":" NEWLINE INDENT
 
 `spawn TemplateName:` is runtime entity creation. It creates an `entity_id` from the named template's already-composed archetype, then applies the spawn body's nested trait override blocks. Unlike body-level `use TemplateName`, `spawn` can run inside handlers and creates a new entity at the activation commit boundary.
 
+#### 3.15.1 World and Hierarchy Queries
+
+`std.query` exposes bounded, snapshot-returning world/hierarchy operations as query-call expressions:
+
+```ebnf
+query_call_expr = postfix_expr "." IDENTIFIER "[" [ query_filter { "," query_filter } ] "]"
+                   "(" [ named_arg { "," named_arg } ] ")"
+                 | postfix_expr "." IDENTIFIER "(" [ named_arg { "," named_arg } ] ")" ;
+query_filter    = [ "not" ] dotted_name ;
+named_arg       = IDENTIFIER "=" expression ;
+```
+
+`std.query` declares:
+
+```cactus
+pub extern func exists() bool
+pub extern func count() int
+pub extern func first() entity_id
+pub extern func all() list[entity_id]
+pub extern func parent(of: entity_id) entity_id
+pub extern func children(of: entity_id) list[entity_id]
+pub extern func hierarchy_preorder() list[entity_id]
+pub extern func hierarchy_postorder() list[entity_id]
+```
+
+`exists`/`count`/`first`/`all` take a bracketed trait filter (positive trait names, or `not TraitName` to exclude) and no value arguments other than the filter. `parent`/`children` take a live `of: entity_id`; `children` additionally accepts a bracketed filter. `hierarchy_preorder`/`hierarchy_postorder` take a bracketed filter and no other arguments — they walk the *complete* structural forest (via generated `Parent` edges from `children:` archetypes or runtime `add`), restricted to the filter, rather than one entity's direct children.
+
+```cactus
+for item in query.hierarchy_postorder[Node]():
+    ...
+
+for child in query.children[Node](of = item):
+    ...
+
+let parent = query.parent(of = item)
+if query.exists[Health, not Dead]():
+    ...
+```
+
+Every query call returns an immutable, finite snapshot taken once at the call site — not a live view. `children`/`hierarchy_preorder`/`hierarchy_postorder` order matching entities by stable creation ordinal (siblings and, for preorder/postorder, roots too); a missing, stale, or non-matching structural parent makes a matching node a traversal root instead of erroring. Runtime `Parent` cycles are traversed finitely and each matching entity appears at most once in a hierarchy traversal.
+
 ### 3.16 Statements
 
 ```ebnf
@@ -686,7 +729,8 @@ let_decl        = "let" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 var_decl        = "var" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
 var_assign      = IDENTIFIER ( "=" | "+=" | "-=" ) expression NEWLINE ;
 
-emit_stmt       = "emit" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
+emit_stmt       = "emit" IDENTIFIER [ "to" expression ] NEWLINE
+                | "emit" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
                   { field_assignment }
                   DEDENT ;
 
@@ -721,6 +765,9 @@ emit PlayerJumped:
     position = p.pos
     jumps_remaining = phys.jumps_remaining
 
+emit Ping
+emit Ping to self
+
 let bullet = spawn PlayerBullet:
     Position:
         pos = p.pos
@@ -736,6 +783,8 @@ remove Frozen
 destroy bullet
 load levels.level2
 ```
+
+`emit` (like `add` and `project`) may omit the `:` payload block entirely when the event has no fields to set (e.g. a zero-field `pub event StartBump`) or when every field should take its default; `to expression` is still allowed without a block for a targeted zero-field emit.
 
 Bounded foreach is allowed only inside system event handlers. The iterable expression is evaluated once before the loop and must have type `list[T]`; the loop variable is a read-only binding scoped to the loop body. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
 
@@ -1072,6 +1121,48 @@ Renderers are ordinary `on render` handlers with `effects: graphics`; input prod
 
 These surfaces are active, but they are **not the minimal gameplay-core language story**.
 
+### 7.4 Standard UI (`std.ui`, `std.pointer`)
+
+Standard UI is an ordinary ECS capability, not core-language syntax: every widget is a regular entity carrying `std.ui.Node` plus whichever presentation/container traits it needs, composed with the same `entity`/`template`/`children:` archetype syntax as any other gameplay object (§3.7). There is no `view`/`panel`/`button` keyword.
+
+**Traits (`std.ui`):**
+
+- `Node` — `visible`, `enabled`, `z_index`, `clip_children`. Every widget has one.
+- `Visual` — `scale`, `opacity`. Presentation only: scale never affects logical/hit bounds.
+- `PreferredSize` — `min_size`, a component-wise floor applied on top of measured intrinsic/content size (never a maximum/cap).
+- `Anchors` — `min`, `max`, `pivot`, `offset`, `margin_min`, `margin_max`. Equal `min`/`max` on an axis is a **fixed** axis (sized from the item's own `DesiredSize`); unequal is a **stretched** axis (sized purely from the parent slot and margins, ignoring `DesiredSize`).
+- `Panel`, `Text`, `Image`, `Button` — presentation traits with their own color/value/font/fit/label fields; see `stdlib/std/ui.cactus` for the exhaustive field list.
+- `Stack` (`axis`, `gap`, `align`, `padding`), `Grid` (`columns`, `cell_size`, `gap`, `padding`), `GridItem` (`column`, `row`, `column_span`, `row_span`), `Overlay` (`padding`) — container traits. If more than one is present on the same entity, precedence is Stack, then Grid, then Overlay; a Node with none of them behaves as Overlay.
+- `FrameAnimation` (`frame_count`, `fps`, `frame`, `elapsed`, `playing`) and `BumpAnimation` (`from_scale`, `to_scale`, `duration`, `elapsed`, `playing`) plus the zero-field targeted `pub event StartBump` that (re)starts a `BumpAnimation` on its recipient only.
+- `DesiredSize` (`size`) and `ComputedLayout` (`position`, `size`, `effective_visible`, `effective_enabled`, `effective_opacity`, `clip_min`, `clip_max`, `draw_order`) are **projected** traits (§3.16): authored `MeasureUi`/`ArrangeUi` rules `project` them each frame; they hold no meaningful value outside the phases that project and consume them (see §7.4.2).
+
+**Layout.** `MeasureUi` reduces bottom-up over `query.hierarchy_postorder[Node]()`: leaf intrinsic size (text/image/button metrics) combines with descendant `DesiredSize` per the active container's policy, then `PreferredSize.min_size` raises the result as a floor. `ArrangeUi` allocates top-down over `query.hierarchy_preorder[Node]()`: a Node whose parent is absent/stale or a live non-Node entity is a root and receives the full window rect; otherwise its container-typed parent allocates it a slot (Stack: sequential with gap/align; Grid: cell-indexed, explicit `GridItem` overriding automatic placement; Overlay/none: the full parent content rect), and `Anchors`, if present, resolves inside that slot. `effective_visible`/`effective_enabled`/`effective_opacity` inherit down the tree (ANDed/multiplied with the node's own `Node`/`Visual` fields) and `clip_children` intersects `clip_min`/`clip_max` into descendants.
+
+**Stacking and painter order.** `draw_order` is a single recursive, sibling-local stacking-context traversal: each parent's direct children are sorted by `(z_index, creation_ordinal)`, and each child's whole subtree is emitted atomically before the next sibling — a high-`z_index` descendant cannot escape its parent's subtree and overlap an unrelated later sibling. `RenderUi` (one unified painter, not one renderer per trait) submits primitives in ascending `draw_order`; pointer window-candidate collection (below) consumes the same order descending.
+
+**Pointer interaction (`std.pointer`).** Generic, not UI-specific: `PointerTarget` (`enabled`, `blocks_lower`, `priority`) opts any entity — a widget, a flat/volume-world entity, an editor handle — into pointer interaction, and `PointerState` (`hovered`, `pressed`) is its presentation-facing hover/press state. `top_target()` merges window (`ComputedLayout`-bounds), flat-world (2D camera + collider), and volume-world (3D camera ray + collider) candidates window-before-world, front-to-back, honoring `blocks_lower`/`priority`. `RoutePointer` (declared in `std.ui` because it must run after `ArrangeUi`'s `project ComputedLayout` within the same input-phase batch, so routing always sees the current frame's layout) tracks singleton hover with deterministic Leave-before-Enter transitions, drives primary capture across press/hold/release, validates `Click` only on release over the still-current captured target, and consumes the primary logical pointer action on any accepted hit. `PointerEnter`, `PointerLeave`, `PointerPress`, `PointerRelease`, and `Click` are ordinary targeted events (`position: vec2`) delivered to the target — a ClickButton reacting to `on pointer.Click:` is regular gameplay code (§5.4), including reading the recipient through `self`.
+
+#### 7.4.1 Standard UI Phase Order
+
+Within the canonical phase graph (§5.1), Standard UI's rules run in this fixed order:
+
+```text
+input:      MeasureUi -> ArrangeUi -> RoutePointer
+tick:       AnimateUiFrames, AnimateUiBump
+late_tick:  MeasureUi -> ArrangeUi
+render:     RenderUi
+```
+
+`MeasureUi`/`ArrangeUi` run twice — once in `input` (so `RoutePointer` and gameplay code see current-frame layout) and once in `late_tick` (so `tick`-phase presentation changes, e.g. a `BumpAnimation` scale update, render in the same frame without having affected this frame's logical hit-testing, since `Visual.scale` never changes hit bounds).
+
+#### 7.4.2 Frame-Local Projected Layout
+
+Because `DesiredSize`/`ComputedLayout` are projected traits, they are visible to `filter:`/`exclude:` matching and direct reads only until the end-of-frame projected-trait cleanup that follows `render` (§3.16) — never across a frame boundary. Code (including tests) that needs a value computed by an earlier phase in the *same* frame can read it normally; code that runs after a full frame has completed must not assume it survived, and should instead re-derive it (Standard UI recomputes both every frame regardless) rather than caching a stale read.
+
+#### 7.4.3 Deferred UI Features
+
+Not part of the current Standard UI surface: keyboard/gamepad focus, text entry/editing, scrolling and virtualized lists, themes, data binding, accessibility, and general style inheritance. Layout containers use symmetric `vec2` padding only (no per-edge padding) in the initial surface. These remain candidates for a later change, not core-language syntax (§8.1 still applies to `view`/`panel`/`button`-style retained-tree keywords).
+
 ## 8. Deferred and Migration Notes
 
 ### 8.1 Deferred Features
@@ -1080,7 +1171,8 @@ The following are deferred from the current profile:
 
 - `view`
 - `interface`
-- any UI-specific retained-tree syntax without an accepted capability and runtime story
+- core-language `view`/`panel`/`button`/recursive-layout/reduction/`Top(1)` retained-tree syntax — Standard UI (§7.4) covers this need as an ordinary stdlib capability (entities, traits, `std.query` hierarchy queries) instead, so this now specifically excludes new *core-language keywords* for UI, not UI as a capability
+- keyboard/gamepad focus, text entry, scrolling/virtualized lists, themes, data binding, accessibility, and general style inheritance for Standard UI (§7.4.3)
 
 ### 8.2 Legacy Syntax to Migrate Away From
 

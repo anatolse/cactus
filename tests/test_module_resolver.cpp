@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -178,6 +179,151 @@ TEST_CASE("ModuleResolver: std.text compiles without fixed-arity format extern",
     REQUIRE_FALSE(errors.has_errors());
     CHECK(decorated.funcs.empty());
     CHECK_FALSE(decorated.funcs.contains("format"));
+}
+
+TEST_CASE("ModuleResolver: std.ui exposes the canonical Standard UI data model", "[resolver][stdlib][ui]") {
+    const auto ui_path = ModuleResolver::locate_file("std.ui", {stdlib_root()});
+    REQUIRE_FALSE(ui_path.empty());
+
+    auto program = parse_file(ui_path);
+
+    const auto require_enum = [&program](const char* name, std::initializer_list<const char*> variants) {
+        const auto found = std::ranges::find_if(program.declarations, [name](const Declaration& declaration) {
+            const auto* value = std::get_if<EnumNode>(&declaration);
+            return value != nullptr && value->name == name;
+        });
+        REQUIRE(found != program.declarations.end());
+        const auto& resolved = std::get<EnumNode>(*found);
+        REQUIRE(resolved.variants.size() == variants.size());
+        std::size_t index = 0;
+        for (const auto* variant : variants) {
+            CHECK(resolved.variants[index].name == variant);
+            ++index;
+        }
+    };
+    require_enum("Axis", {"Horizontal", "Vertical"});
+    require_enum("Align", {"Start", "Center", "End", "Stretch"});
+    require_enum("TextAlign", {"Start", "Center", "End"});
+    require_enum("ImageFit", {"Stretch", "Contain", "Cover"});
+
+    const auto require_fields = [&program](const char* name,
+                                           std::initializer_list<const char*> fields,
+                                           std::initializer_list<const char*> defaulted_fields = {}) {
+        const auto found = std::ranges::find_if(program.declarations, [name](const Declaration& declaration) {
+            const auto* value = std::get_if<TraitNode>(&declaration);
+            return value != nullptr && value->name == name;
+        });
+        REQUIRE(found != program.declarations.end());
+        const auto& resolved = std::get<TraitNode>(*found);
+        REQUIRE(resolved.is_pub);
+        REQUIRE(resolved.fields.size() == fields.size());
+        std::size_t index = 0;
+        for (const auto* field : fields) {
+            CHECK(resolved.fields[index].name == field);
+            ++index;
+        }
+        for (const auto* field : defaulted_fields) {
+            const auto declared = std::ranges::find_if(
+                resolved.fields, [field](const FieldNode& candidate) { return candidate.name == field; });
+            REQUIRE(declared != resolved.fields.end());
+            CHECK(declared->default_value.has_value());
+        }
+    };
+    require_fields(
+        "Node", {"visible", "enabled", "z_index", "clip_children"}, {"visible", "enabled", "z_index", "clip_children"});
+    require_fields("Visual", {"scale", "opacity"}, {"scale", "opacity"});
+    require_fields("PreferredSize", {"min_size"}, {"min_size"});
+    require_fields("DesiredSize", {"size"}, {"size"});
+    require_fields("Anchors",
+                   {"min", "max", "pivot", "offset", "margin_min", "margin_max"},
+                   {"min", "max", "pivot", "offset", "margin_min", "margin_max"});
+    require_fields("ComputedLayout",
+                   {"position",
+                    "size",
+                    "effective_visible",
+                    "effective_enabled",
+                    "effective_opacity",
+                    "clip_min",
+                    "clip_max",
+                    "draw_order"},
+                   {"position",
+                    "size",
+                    "effective_visible",
+                    "effective_enabled",
+                    "effective_opacity",
+                    "clip_min",
+                    "clip_max",
+                    "draw_order"});
+    require_fields(
+        "Panel", {"background", "border_color", "border_width"}, {"background", "border_color", "border_width"});
+    require_fields("Text", {"value", "font_size", "color", "align"}, {"value", "font_size", "color"});
+    require_fields("Image", {"texture", "tint", "fit"}, {"tint"});
+    require_fields(
+        "Button",
+        {"label", "normal_color", "hover_color", "pressed_color", "disabled_color", "text_color", "padding"},
+        {"label", "normal_color", "hover_color", "pressed_color", "disabled_color", "text_color", "padding"});
+    require_fields("Stack", {"axis", "gap", "align", "padding"}, {"gap", "padding"});
+    require_fields("Grid", {"columns", "cell_size", "gap", "padding"}, {"columns", "cell_size", "gap", "padding"});
+    require_fields(
+        "GridItem", {"column", "row", "column_span", "row_span"}, {"column", "row", "column_span", "row_span"});
+    require_fields("Overlay", {"padding"}, {"padding"});
+    require_fields("FrameAnimation",
+                   {"frame_count", "fps", "frame", "elapsed", "playing"},
+                   {"frame_count", "fps", "frame", "elapsed", "playing"});
+    require_fields("BumpAnimation",
+                   {"from_scale", "to_scale", "duration", "elapsed", "playing"},
+                   {"from_scale", "to_scale", "duration", "elapsed", "playing"});
+
+    const auto bump_decl = std::ranges::find_if(program.declarations, [](const Declaration& declaration) {
+        const auto* value = std::get_if<EventNode>(&declaration);
+        return value != nullptr && value->name == "StartBump";
+    });
+    REQUIRE(bump_decl != program.declarations.end());
+    const auto& bump = std::get<EventNode>(*bump_decl);
+    REQUIRE(bump.is_pub);
+    CHECK(bump.fields.empty());
+
+    const auto render_rule = std::ranges::find_if(program.declarations, [](const Declaration& declaration) {
+        const auto* rule = std::get_if<ExternRuleNode>(&declaration);
+        return rule != nullptr && rule->name == "RenderUi";
+    });
+    REQUIRE(render_rule != program.declarations.end());
+    const auto& rule = std::get<ExternRuleNode>(*render_rule);
+    REQUIRE(rule.handlers.size() == 1);
+    REQUIRE(rule.handlers[0].effects.size() == 1);
+    CHECK(rule.handlers[0].trigger_name == "core.render");
+    CHECK(rule.handlers[0].effects[0].spelling == "graphics");
+
+    const auto require_rule_query = [&program](const char* rule_name, const char* query_name) {
+        const auto found = std::ranges::find_if(program.declarations, [rule_name](const Declaration& declaration) {
+            const auto* value = std::get_if<RuleNode>(&declaration);
+            return value != nullptr && value->name == rule_name;
+        });
+        REQUIRE(found != program.declarations.end());
+        const auto& authored = std::get<RuleNode>(*found);
+        REQUIRE_FALSE(authored.handlers.empty());
+        for (const auto& handler : authored.handlers) {
+            REQUIRE_FALSE(handler.body.empty());
+
+            const ForeachStmt* traversal = nullptr;
+            for (const auto& statement : handler.body) {
+                if (const auto* candidate = std::get_if<ForeachStmt>(&statement->stmt)) {
+                    traversal = candidate;
+                    break;
+                }
+            }
+            REQUIRE(traversal != nullptr);
+            const auto* query = std::get_if<QueryCallExpr>(&traversal->iterable->expr);
+            REQUIRE(query != nullptr);
+            const auto* callee = std::get_if<MemberExpr>(&query->callee->expr);
+            REQUIRE(callee != nullptr);
+            CHECK(callee->member == query_name);
+            REQUIRE(query->filters.size() == 1);
+            CHECK(query->filters[0].trait_name == "Node");
+        }
+    };
+    require_rule_query("MeasureUi", "hierarchy_postorder");
+    require_rule_query("ArrangeUi", "hierarchy_preorder");
 }
 
 // ── Full Resolution ─────────────────────────────────────────────────────────

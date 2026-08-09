@@ -55,7 +55,8 @@ static std::unique_ptr<ExprNode> make_member_expr(const std::string& owner, cons
     return std::make_unique<ExprNode>(ExprNode::Variant{std::move(expression)}, SourceLocation{});
 }
 
-static std::unique_ptr<ExprNode> make_binary_expr(std::unique_ptr<ExprNode> left, const std::string& op,
+static std::unique_ptr<ExprNode> make_binary_expr(std::unique_ptr<ExprNode> left,
+                                                  const std::string& op,
                                                   std::unique_ptr<ExprNode> right) {
     BinaryExpr expression{.op = op, .left = std::move(left), .right = std::move(right), .location = {}};
     return std::make_unique<ExprNode>(ExprNode::Variant{std::move(expression)}, SourceLocation{});
@@ -788,16 +789,16 @@ static ImportedSymbols make_module_with_rule(const std::string& module_name, con
     ImportedSymbols syms;
     syms.module_name = module_name;
     ImportedRule sys;
-    sys.name               = rule_name;
-    sys.canonical_id       = make_canonical_id(module_name, rule_name);
+    sys.name              = rule_name;
+    sys.canonical_id      = make_canonical_id(module_name, rule_name);
     syms.rules[rule_name] = sys;
     return syms;
 }
 
 /// Make a program containing rule_name (with after: after_refs) plus any extra local rules.
 static ProgramNode make_program_with_rule_after(const std::string& rule_name,
-                                                  const std::vector<std::string>& after_refs,
-                                                  const std::vector<std::string>& extra_locals = {}) {
+                                                const std::vector<std::string>& after_refs,
+                                                const std::vector<std::string>& extra_locals = {}) {
     ProgramNode prog = make_program_with_module();
     for (const auto& name : extra_locals) {
         RuleNode s;
@@ -805,7 +806,7 @@ static ProgramNode make_program_with_rule_after(const std::string& rule_name,
         prog.declarations.emplace_back(std::move(s));
     }
     RuleNode sys;
-    sys.name          = rule_name;
+    sys.name        = rule_name;
     sys.after_rules = after_refs;
     prog.declarations.emplace_back(std::move(sys));
     return prog;
@@ -1487,10 +1488,10 @@ TEST_CASE("semantic_modules: phase cadence and initializers are statically valid
     sibling_read.initializer = make_member_expr("unrelated", "dt");
     invalid.fields.push_back(std::move(sibling_read));
     PhaseFieldNode compound;
-    compound.name        = "scaled";
-    compound.type.name   = "float";
-    compound.initializer = make_binary_expr(make_member_expr("frame", "dt"), "*",
-                                            make_literal_expr(LiteralExpr::Kind::Float, "2.0"));
+    compound.name      = "scaled";
+    compound.type.name = "float";
+    compound.initializer =
+        make_binary_expr(make_member_expr("frame", "dt"), "*", make_literal_expr(LiteralExpr::Kind::Float, "2.0"));
     invalid.fields.push_back(std::move(compound));
     prog.declarations.emplace_back(std::move(invalid));
 
@@ -1503,7 +1504,8 @@ TEST_CASE("semantic_modules: phase cadence and initializers are statically valid
     CHECK(has_diagnostic(errors, "phase field 'invalid.count' has type 'int' but initializer has type 'float'"));
     CHECK(has_diagnostic(errors, "initializer cannot read non-upstream value 'game.loop.unrelated'"));
     CHECK(has_diagnostic(
-        errors, "phase field 'invalid.scaled' initializer must be a plain member-chain read of upstream activation data"));
+        errors,
+        "phase field 'invalid.scaled' initializer must be a plain member-chain read of upstream activation data"));
 }
 
 TEST_CASE("semantic_modules: periodic completion alpha is downstream-only", "[semantic][modules][phase][2.2][errors]") {
@@ -1553,6 +1555,14 @@ TEST_CASE("semantic_modules: external handler contracts resolve canonical capabi
     position.name   = "Position";
     position.is_pub = true;
     physics.traits.emplace("Position", std::move(position));
+    ResolvedTrait computed_layout;
+    computed_layout.name   = "ComputedLayout";
+    computed_layout.is_pub = true;
+    physics.traits.emplace("ComputedLayout", std::move(computed_layout));
+    ResolvedTrait highlight;
+    highlight.name   = "Highlight";
+    highlight.is_pub = true;
+    physics.traits.emplace("Highlight", std::move(highlight));
     ImportedTemplate bullet;
     bullet.name = "Bullet";
     physics.templates.emplace("Bullet", std::move(bullet));
@@ -1565,10 +1575,19 @@ TEST_CASE("semantic_modules: external handler contracts resolve canonical capabi
     filtered.qualified_name = "phys.Position";
     filtered.alias          = "pos";
     rule.filter.entries.push_back(std::move(filtered));
+    FilterEntry projected_alias;
+    projected_alias.qualified_name = "phys.ComputedLayout";
+    projected_alias.alias          = "layout";
+    rule.filter.entries.push_back(std::move(projected_alias));
+    FilterEntry projected_canonical;
+    projected_canonical.qualified_name = "phys.Highlight";
+    rule.filter.entries.push_back(std::move(projected_canonical));
     ExternHandlerNode handler;
     handler.trigger_name = "pulse";
     handler.reads.push_back(LocatedName{.spelling = "pos", .location = {}});
     handler.writes.push_back(LocatedName{.spelling = "phys.Position", .location = {}});
+    handler.projects.push_back(LocatedName{.spelling = "layout", .location = {}});
+    handler.projects.push_back(LocatedName{.spelling = "phys.Highlight", .location = {}});
     handler.emits.push_back(LocatedName{.spelling = "spawned", .location = {}});
     HandlerCommandNode spawn_command;
     spawn_command.kind   = HandlerCommandKind::Spawn;
@@ -1581,7 +1600,7 @@ TEST_CASE("semantic_modules: external handler contracts resolve canonical capabi
 
     ErrorReporter errors;
     SemanticAnalyzer analyzer(errors);
-    analyzer.analyze(prog, imports);
+    const auto result = analyzer.analyze(prog, imports);
 
     REQUIRE_FALSE(errors.has_errors());
     const auto& resolved_system  = std::get<ExternRuleNode>(prog.declarations.back());
@@ -1589,12 +1608,19 @@ TEST_CASE("semantic_modules: external handler contracts resolve canonical capabi
     CHECK(resolved_handler.resolved_reads ==
           std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "engine.physics", "Position")});
     CHECK(resolved_handler.resolved_writes == resolved_handler.resolved_reads);
+    CHECK(resolved_handler.resolved_projects ==
+          std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "engine.physics", "ComputedLayout"),
+                                make_symbol_id(SymbolKind::Trait, "engine.physics", "Highlight")});
     CHECK(resolved_handler.resolved_emits ==
           std::vector<SymbolId>{make_symbol_id(SymbolKind::Event, "game.render", "spawned")});
     REQUIRE(resolved_handler.commands.front().resolved_target_id.has_value());
     CHECK(*resolved_handler.commands.front().resolved_target_id ==
           make_symbol_id(SymbolKind::Template, "engine.physics", "Bullet"));
     CHECK(resolved_handler.resolved_effects == std::vector<std::string>{"graphics.draw"});
+    REQUIRE(result.execution_graph.handlers.size() == 1);
+    CHECK(result.execution_graph.handlers.front().contract.projects ==
+          std::unordered_set<SymbolId>{make_symbol_id(SymbolKind::Trait, "engine.physics", "ComputedLayout"),
+                                       make_symbol_id(SymbolKind::Trait, "engine.physics", "Highlight")});
 }
 
 TEST_CASE("semantic_modules: selectionless external rules are valid but contracts are mandatory",
@@ -1640,17 +1666,29 @@ TEST_CASE("semantic_modules: malformed external capabilities are rejected",
     TraitNode position;
     position.name = "Position";
     prog.declarations.emplace_back(std::move(position));
+    TraitNode hidden;
+    hidden.name = "Hidden";
+    prog.declarations.emplace_back(std::move(hidden));
     EntityNode not_a_template;
     not_a_template.name = "Actor";
     prog.declarations.emplace_back(std::move(not_a_template));
 
     ExternRuleNode rule;
     rule.name = "BrokenHost";
+    FilterEntry selected_position;
+    selected_position.qualified_name = "Position";
+    selected_position.alias          = "position";
+    rule.filter.entries.push_back(std::move(selected_position));
     ExternHandlerNode handler;
     handler.trigger_name = "pulse";
     handler.reads.push_back(LocatedName{.spelling = "Position", .location = {}});
     handler.reads.push_back(LocatedName{.spelling = "Position", .location = {}});
+    handler.writes.push_back(LocatedName{.spelling = "Position", .location = {}});
     handler.writes.push_back(LocatedName{.spelling = "MissingTrait", .location = {}});
+    handler.projects.push_back(LocatedName{.spelling = "position", .location = {}});
+    handler.projects.push_back(LocatedName{.spelling = "Position", .location = {}});
+    handler.projects.push_back(LocatedName{.spelling = "Hidden", .location = {}});
+    handler.projects.push_back(LocatedName{.spelling = "MissingProject", .location = {}});
     handler.emits.push_back(LocatedName{.spelling = "missing_event", .location = {}});
     HandlerCommandNode bad_spawn;
     bad_spawn.kind   = HandlerCommandKind::Spawn;
@@ -1671,6 +1709,13 @@ TEST_CASE("semantic_modules: malformed external capabilities are rejected",
 
     CHECK(has_diagnostic(errors, "duplicate reads contract entry 'game.host.Position'"));
     CHECK(has_diagnostic(errors, "unknown writes contract entry 'MissingTrait'"));
+    CHECK(has_diagnostic(errors, "duplicate projects contract entry 'game.host.Position'"));
+    CHECK(has_diagnostic(
+        errors, "projects contract entry 'game.host.Hidden' must be selected by extern rule 'BrokenHost' filter"));
+    CHECK(has_diagnostic(errors, "unknown projects contract entry 'MissingProject'"));
+    CHECK(has_diagnostic(
+        errors,
+        "trait 'game.host.Position' cannot be both a writes and projects contract entry in extern rule 'BrokenHost'"));
     CHECK(has_diagnostic(errors, "unknown emits contract event 'missing_event'"));
     CHECK(has_diagnostic(errors, "spawn command target 'Actor' is not a template"));
     CHECK(has_diagnostic(errors, "add command requires a target"));
@@ -1846,8 +1891,8 @@ TEST_CASE("regular handler contracts infer extern function effect summaries", "[
     REQUIRE(diagnostics.empty());
     REQUIRE(decorated.handler_contracts.size() == 2);
     const auto contract_for = [&](const std::string& rule) -> const InferredHandlerContract& {
-        const auto found = std::ranges::find_if(
-            decorated.handler_contracts, [&](const auto& contract) { return contract.rule.local_name == rule; });
+        const auto found = std::ranges::find_if(decorated.handler_contracts,
+                                                [&](const auto& contract) { return contract.rule.local_name == rule; });
         REQUIRE(found != decorated.handler_contracts.end());
         return *found;
     };
@@ -1894,7 +1939,7 @@ TEST_CASE("handler graph expands rule shorthand only across matching canonical t
 
     const auto handler = [](const std::string& rule, const std::string& trigger) {
         return HandlerIdentity{
-            .rule  = make_symbol_id(SymbolKind::Rule, "game.graph", rule),
+            .rule    = make_symbol_id(SymbolKind::Rule, "game.graph", rule),
             .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                               .symbol = make_symbol_id(SymbolKind::Event, "game.graph", trigger)}};
     };
@@ -2089,7 +2134,7 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
 
     const auto handler = [](const std::string& rule, const std::string& trigger = "tick") {
         return HandlerIdentity{
-            .rule  = make_symbol_id(SymbolKind::Rule, "game.conflicts", rule),
+            .rule    = make_symbol_id(SymbolKind::Rule, "game.conflicts", rule),
             .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                               .symbol = make_symbol_id(SymbolKind::Event, "game.conflicts", trigger)}};
     };
@@ -2150,6 +2195,92 @@ TEST_CASE("handler graph orients data and effect conflicts with deterministic pr
     CHECK(std::ranges::none_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
         return edge.before == other_writer || edge.after == other_writer;
     }));
+}
+
+TEST_CASE("handler graph orders external project producers before same-activation match and read consumers",
+          "[semantic][handler-graph][extern-rule][projects]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.project_graph\n"
+        "event input\n"
+        "event tick\n"
+        "trait PointerHit\n"
+        "extern rule MatchConsumer:\n"
+        "    filter:\n"
+        "        PointerHit\n"
+        "    on input:\n"
+        "        effects:\n"
+        "            match.consumer\n"
+        "extern rule ReadConsumer:\n"
+        "    filter:\n"
+        "        PointerHit\n"
+        "    on input:\n"
+        "        reads:\n"
+        "            PointerHit\n"
+        "extern rule ProducerOne:\n"
+        "    filter:\n"
+        "        PointerHit\n"
+        "    on input:\n"
+        "        projects:\n"
+        "            PointerHit\n"
+        "extern rule ProducerTwo:\n"
+        "    filter:\n"
+        "        PointerHit\n"
+        "    on input:\n"
+        "        projects:\n"
+        "            PointerHit\n"
+        "extern rule OtherActivationConsumer:\n"
+        "    filter:\n"
+        "        PointerHit\n"
+        "    on tick:\n"
+        "        reads:\n"
+        "            PointerHit\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto identity = [](const std::string& rule, const std::string& trigger = "input") {
+        return HandlerIdentity{.rule    = make_symbol_id(SymbolKind::Rule, "game.project_graph", rule),
+                               .trigger = ResolvedHandlerTrigger{
+                                   .kind   = HandlerTriggerKind::Event,
+                                   .symbol = make_symbol_id(SymbolKind::Event, "game.project_graph", trigger)}};
+    };
+    const auto edge_between = [&](const HandlerIdentity& before, const HandlerIdentity& after) {
+        return std::ranges::find_if(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
+            return edge.kind == ScheduleEdgeKind::DataConflict && edge.before == before && edge.after == after;
+        });
+    };
+
+    const auto producer_one = identity("ProducerOne");
+    const auto producer_two = identity("ProducerTwo");
+    const auto match        = identity("MatchConsumer");
+    const auto reader       = identity("ReadConsumer");
+    const auto other        = identity("OtherActivationConsumer", "tick");
+    const auto projected    = make_symbol_id(SymbolKind::Trait, "game.project_graph", "PointerHit");
+
+    for (const auto& producer : {producer_one, producer_two}) {
+        const auto match_edge = edge_between(producer, match);
+        REQUIRE(match_edge != decorated.execution_graph.schedule_edges.end());
+        CHECK(match_edge->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+        CHECK(match_edge->trait_provenance == std::vector<SymbolId>{projected});
+
+        const auto read_edge = edge_between(producer, reader);
+        REQUIRE(read_edge != decorated.execution_graph.schedule_edges.end());
+        CHECK(read_edge->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+        CHECK(read_edge->trait_provenance == std::vector<SymbolId>{projected});
+    }
+
+    CHECK(std::ranges::none_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
+        return (edge.before == producer_one && edge.after == producer_two) ||
+               (edge.before == producer_two && edge.after == producer_one) || edge.before == other ||
+               edge.after == other;
+    }));
+    for (const auto& producer : {producer_one, producer_two}) {
+        const auto node = std::ranges::find_if(decorated.execution_graph.handlers,
+                                               [&](const auto& item) { return item.identity == producer; });
+        REQUIRE(node != decorated.execution_graph.handlers.end());
+        CHECK(node->contract.projects == std::unordered_set<SymbolId>{projected});
+        CHECK(node->contract.writes.empty());
+    }
 }
 
 // ── Pair relations in the execution graph (dsl-pair-relations, 3.4) ─────────
@@ -2218,12 +2349,12 @@ TEST_CASE("handler graph orders a pair reader after a unary writer of the same t
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     REQUIRE(diagnostics.empty());
 
-    const auto writer   = HandlerIdentity{.rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "WriteTransform"),
-                                        .trigger = ResolvedHandlerTrigger{
-                                            .kind = HandlerTriggerKind::Event,
-                                            .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+    const auto writer = HandlerIdentity{
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "WriteTransform"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
     const auto detector = HandlerIdentity{
-        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
 
@@ -2232,7 +2363,8 @@ TEST_CASE("handler graph orders a pair reader after a unary writer of the same t
     });
     REQUIRE(found != decorated.execution_graph.schedule_edges.end());
     CHECK(found->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
-    CHECK(found->trait_provenance == std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "game.pairs", "Transform")});
+    CHECK(found->trait_provenance ==
+          std::vector<SymbolId>{make_symbol_id(SymbolKind::Trait, "game.pairs", "Transform")});
 }
 
 TEST_CASE("handler graph orders a pair projection producer before a reader without treating it as a durable write",
@@ -2264,11 +2396,11 @@ TEST_CASE("handler graph orders a pair projection producer before a reader witho
 
     const auto ground_contact = make_symbol_id(SymbolKind::Trait, "game.pairs", "GroundContact");
     const auto detector       = HandlerIdentity{
-        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
     const auto reader = HandlerIdentity{
-        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "ReadGroundContact"),
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "ReadGroundContact"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
 
@@ -2345,12 +2477,12 @@ TEST_CASE("handler graph honors explicit after: ordering on a pair rule", "[sema
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     REQUIRE(diagnostics.empty());
 
-    const auto first    = HandlerIdentity{.rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "First"),
-                                        .trigger = ResolvedHandlerTrigger{
-                                            .kind = HandlerTriggerKind::Event,
-                                            .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
+    const auto first = HandlerIdentity{
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "First"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
     const auto detector = HandlerIdentity{
-        .rule  = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"),
         .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
                                           .symbol = make_symbol_id(SymbolKind::Event, "game.pairs", "tick")}};
 
@@ -2444,7 +2576,7 @@ TEST_CASE("handler graph separates phase barriers from cyclic event flow", "[sem
 
     const auto handler = [](const std::string& rule, HandlerTriggerKind kind, const std::string& trigger) {
         return HandlerIdentity{
-            .rule  = make_symbol_id(SymbolKind::Rule, "game.activation", rule),
+            .rule    = make_symbol_id(SymbolKind::Rule, "game.activation", rule),
             .trigger = ResolvedHandlerTrigger{
                 .kind   = kind,
                 .symbol = make_symbol_id(kind == HandlerTriggerKind::Phase ? SymbolKind::Phase : SymbolKind::Event,

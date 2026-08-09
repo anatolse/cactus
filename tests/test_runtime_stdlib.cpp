@@ -146,6 +146,145 @@ TEST_CASE("Runtime stdlib: quaternion helpers behave correctly", "[runtime][stdl
     CHECK(inv.w == Catch::Approx(1.0F));
 }
 
+TEST_CASE("Runtime stdlib: Standard UI image fit geometry computes Stretch/Contain/Cover source/dest rects",
+          "[runtime][stdlib][ui][render]") {
+    constexpr int kStretch = 0;
+    constexpr int kContain = 1;
+    constexpr int kCover   = 2;
+
+    // Stretch: whole frame maps onto the whole destination, no cropping.
+    const auto stretched = entt_backend::compute_image_draw_rects(
+        kStretch, Vector2{.x = 10.0F, .y = 20.0F}, Vector2{.x = 50.0F, .y = 25.0F}, Vector2{.x = 100.0F, .y = 50.0F},
+        /*frame_index=*/0, /*frame_count=*/1);
+    CHECK(stretched.source.x == Catch::Approx(0.0F));
+    CHECK(stretched.source.width == Catch::Approx(100.0F));
+    CHECK(stretched.dest.x == Catch::Approx(10.0F));
+    CHECK(stretched.dest.width == Catch::Approx(50.0F));
+    CHECK(stretched.dest.height == Catch::Approx(25.0F));
+
+    // Contain: a 100x50 (2:1) image inside a 40x40 (1:1) box is width-limited
+    // (scale 0.4), letterboxed and centered on the taller axis.
+    const auto contained = entt_backend::compute_image_draw_rects(
+        kContain, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 40.0F, .y = 40.0F}, Vector2{.x = 100.0F, .y = 50.0F}, 0, 1);
+    CHECK(contained.source.width == Catch::Approx(100.0F));
+    CHECK(contained.source.height == Catch::Approx(50.0F));
+    CHECK(contained.dest.width == Catch::Approx(40.0F));
+    CHECK(contained.dest.height == Catch::Approx(20.0F));
+    CHECK(contained.dest.x == Catch::Approx(0.0F));
+    CHECK(contained.dest.y == Catch::Approx(10.0F));  // (40 - 20) / 2
+
+    // Cover: the same 2:1 image filling a 40x40 box crops the source's width
+    // down to match the box's aspect ratio (height-limited, scale 0.8),
+    // centered horizontally, while the destination fills the whole box.
+    const auto covered = entt_backend::compute_image_draw_rects(
+        kCover, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 40.0F, .y = 40.0F}, Vector2{.x = 100.0F, .y = 50.0F}, 0, 1);
+    CHECK(covered.dest.width == Catch::Approx(40.0F));
+    CHECK(covered.dest.height == Catch::Approx(40.0F));
+    CHECK(covered.source.width == Catch::Approx(50.0F));
+    CHECK(covered.source.height == Catch::Approx(50.0F));
+    CHECK(covered.source.x == Catch::Approx(25.0F));  // (100 - 50) / 2
+
+    // Horizontal-strip frame slicing: a 400x100 4-frame strip's frame 2 (0-based)
+    // occupies x in [200, 300), independent of fit mode.
+    const auto frame2 = entt_backend::compute_image_draw_rects(
+        kStretch, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 100.0F, .y = 100.0F}, Vector2{.x = 400.0F, .y = 100.0F},
+        /*frame_index=*/2, /*frame_count=*/4);
+    CHECK(frame2.source.x == Catch::Approx(200.0F));
+    CHECK(frame2.source.width == Catch::Approx(100.0F));
+
+    // A negative/out-of-range frame index wraps modulo frame_count rather than
+    // producing a negative or out-of-bounds source rect.
+    const auto wrapped = entt_backend::compute_image_draw_rects(
+        kStretch, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 100.0F, .y = 100.0F}, Vector2{.x = 400.0F, .y = 100.0F},
+        /*frame_index=*/-1, /*frame_count=*/4);
+    CHECK(wrapped.source.x == Catch::Approx(300.0F));  // frame 3 of 4
+}
+
+TEST_CASE("Runtime stdlib: pointer candidate sorting orders each domain deterministically",
+          "[runtime][stdlib][pointer]") {
+    using entt_backend::PointerCandidate;
+
+    // Window: descending draw_order ("greater computed draw order is
+    // considered first").
+    std::vector<PointerCandidate> window{
+        PointerCandidate{.entity = entt::entity{1}, .draw_order = 2},
+        PointerCandidate{.entity = entt::entity{2}, .draw_order = 5},
+        PointerCandidate{.entity = entt::entity{3}, .draw_order = 0},
+    };
+    entt_backend::sort_window_pointer_candidates(window);
+    CHECK(window[0].entity == entt::entity{2});
+    CHECK(window[1].entity == entt::entity{1});
+    CHECK(window[2].entity == entt::entity{3});
+
+    // Flat world: priority descending, then stable creation ordinal ascending.
+    std::vector<PointerCandidate> flat{
+        PointerCandidate{.entity = entt::entity{1}, .priority = 0, .creation_ordinal = 5},
+        PointerCandidate{.entity = entt::entity{2}, .priority = 1, .creation_ordinal = 9},
+        PointerCandidate{.entity = entt::entity{3}, .priority = 0, .creation_ordinal = 1},
+    };
+    entt_backend::sort_flat_world_pointer_candidates(flat);
+    CHECK(flat[0].entity == entt::entity{2});  // highest priority
+    CHECK(flat[1].entity == entt::entity{3});  // tie on priority, lower creation ordinal first
+    CHECK(flat[2].entity == entt::entity{1});
+
+    // Volume world: nearest positive distance first.
+    std::vector<PointerCandidate> volume{
+        PointerCandidate{.entity = entt::entity{1}, .distance = 10.0F},
+        PointerCandidate{.entity = entt::entity{2}, .distance = 2.5F},
+        PointerCandidate{.entity = entt::entity{3}, .distance = 6.0F},
+    };
+    entt_backend::sort_volume_world_pointer_candidates(volume);
+    CHECK(volume[0].entity == entt::entity{2});
+    CHECK(volume[1].entity == entt::entity{3});
+    CHECK(volume[2].entity == entt::entity{1});
+}
+
+TEST_CASE("Runtime stdlib: pointer target resolution respects front-to-back blocking", "[runtime][stdlib][pointer]") {
+    using entt_backend::PointerCandidate;
+    using entt_backend::resolve_pointer_target;
+
+    // Window overlay wins over world entity: window candidates are simply
+    // ordered first in the concatenated list.
+    CHECK(resolve_pointer_target({PointerCandidate{.entity = entt::entity{1}, .enabled = true},
+                                  PointerCandidate{.entity = entt::entity{2}, .enabled = true}}) == entt::entity{1});
+
+    // Disabled control prevents click-through: a disabled blocking candidate
+    // stops evaluation, so neither it nor anything behind it is selected.
+    CHECK(resolve_pointer_target({PointerCandidate{.entity = entt::entity{1}, .enabled = false, .blocks_lower = true},
+                                  PointerCandidate{.entity = entt::entity{2}, .enabled = true}}) == entt::entity{entt::null});
+
+    // Nonblocking overlay permits the lower target.
+    CHECK(
+        resolve_pointer_target({PointerCandidate{.entity = entt::entity{1}, .enabled = false, .blocks_lower = false},
+                                PointerCandidate{.entity = entt::entity{2}, .enabled = true}}) == entt::entity{2});
+
+    // No candidates, or every candidate declines and none block: no target.
+    CHECK(resolve_pointer_target({}) == entt::entity{entt::null});
+    CHECK(resolve_pointer_target(
+              {PointerCandidate{.entity = entt::entity{1}, .enabled = false, .blocks_lower = false}}) == entt::entity{entt::null});
+}
+
+TEST_CASE("Runtime stdlib: pointer hit-test geometry covers rect/box/circle point containment",
+          "[runtime][stdlib][pointer]") {
+    using entt_backend::point_in_flat_box;
+    using entt_backend::point_in_flat_circle;
+    using entt_backend::point_in_rect;
+
+    CHECK(point_in_rect(Vector2{.x = 5.0F, .y = 5.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F}));
+    CHECK_FALSE(
+        point_in_rect(Vector2{.x = 15.0F, .y = 5.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F}));
+    // Boundary is inclusive.
+    CHECK(
+        point_in_rect(Vector2{.x = 10.0F, .y = 10.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F}));
+
+    CHECK(point_in_flat_box(Vector2{.x = 1.0F, .y = 1.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}));
+    CHECK_FALSE(
+        point_in_flat_box(Vector2{.x = 3.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}));
+
+    CHECK(point_in_flat_circle(Vector2{.x = 1.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 0.0F}, 2.0F));
+    CHECK_FALSE(point_in_flat_circle(Vector2{.x = 3.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 0.0F}, 2.0F));
+}
+
 TEST_CASE("Runtime stdlib: allocation-free helper contracts stay constexpr and noexcept",
           "[runtime][stdlib][contract]") {
     CHECK(kConstexprScalarLerp == Catch::Approx(5.0F));

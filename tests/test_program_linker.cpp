@@ -387,6 +387,41 @@ TEST_CASE("program_linker: rebuilds cross-module conflicts and event flow", "[li
     CHECK(merged.execution_graph.stable_topological_order[1] == reader.identity);
 }
 
+TEST_CASE("program_linker: preserves external project capabilities across module merge",
+          "[linker][extern-rule][projects]") {
+    const auto tick   = linked_symbol(SymbolKind::Phase, "runtime", "input");
+    const auto layout = linked_symbol(SymbolKind::Trait, "std.ui", "ComputedLayout");
+    const auto rule   = linked_symbol(SymbolKind::Rule, "std.ui", "MeasureUi");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+
+    InferredHandlerContract inferred;
+    inferred.rule     = rule;
+    inferred.trigger  = trigger;
+    inferred.projects = {layout};
+
+    DecoratedProgram module;
+    module.handler_contracts.push_back(inferred);
+    auto producer                   = linked_handler(rule, trigger, 0);
+    producer.implementation         = HandlerImplementationKind::External;
+    producer.contract.domain_kind   = HandlerDomainKind::Unary;
+    producer.contract.selection     = {layout};
+    producer.contract.projects      = {layout};
+    module.execution_graph.handlers = {producer};
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, module, "std.ui"));
+    REQUIRE_FALSE(errors.has_errors());
+
+    REQUIRE(merged.handler_contracts.size() == 1);
+    CHECK(merged.handler_contracts.front().projects == std::unordered_set<SymbolId>{layout});
+    CHECK(merged.handler_contracts.front().writes.empty());
+    REQUIRE(merged.execution_graph.handlers.size() == 1);
+    CHECK(merged.execution_graph.handlers.front().contract.projects == std::unordered_set<SymbolId>{layout});
+    CHECK(merged.execution_graph.handlers.front().contract.writes.empty());
+}
+
 // ── Pair relations (dsl-pair-relations, 4.4) ─────────────────────────────────
 
 TEST_CASE("program_linker: preserves pair contract domain, bindings, bound reads, and projects across merge",
@@ -398,9 +433,7 @@ TEST_CASE("program_linker: preserves pair contract domain, bindings, bound reads
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
 
     DecoratedProgram producer_program;
-    auto detector                   = linked_handler(linked_symbol(SymbolKind::Rule, "producer", "DetectContacts"),
-                                    tick_trigger,
-                                    0);
+    auto detector = linked_handler(linked_symbol(SymbolKind::Rule, "producer", "DetectContacts"), tick_trigger, 0);
     detector.contract.domain_kind   = HandlerDomainKind::Pair;
     detector.contract.pair_bindings = {
         RelationBinding{.name = "body", .required_traits = {dynamic_body}},
@@ -473,9 +506,9 @@ TEST_CASE("program_linker: artifact link preserves an imported pair trait identi
     std::error_code ec;
     fs::remove_all(build_dir, ec);
 
-    const auto tick          = linked_symbol(SymbolKind::Phase, "runtime", "tick");
-    const auto solid         = linked_symbol(SymbolKind::Trait, "phys", "Solid");
-    const auto dynamic_body  = linked_symbol(SymbolKind::Trait, "game", "DynamicBody");
+    const auto tick         = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const auto solid        = linked_symbol(SymbolKind::Trait, "phys", "Solid");
+    const auto dynamic_body = linked_symbol(SymbolKind::Trait, "game", "DynamicBody");
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
 
     DecoratedProgram phys_program;
@@ -487,9 +520,7 @@ TEST_CASE("program_linker: artifact link preserves an imported pair trait identi
     phys_program.traits["Solid"] = solid_trait;
 
     DecoratedProgram game_program;
-    auto detector                   = linked_handler(linked_symbol(SymbolKind::Rule, "game", "DetectContacts"),
-                                    tick_trigger,
-                                    0);
+    auto detector = linked_handler(linked_symbol(SymbolKind::Rule, "game", "DetectContacts"), tick_trigger, 0);
     detector.contract.domain_kind   = HandlerDomainKind::Pair;
     detector.contract.pair_bindings = {
         RelationBinding{.name = "body", .required_traits = {dynamic_body}},

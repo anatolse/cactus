@@ -407,8 +407,8 @@ TEST_CASE("Lexer: phase syntax token kinds have debug names", "[lexer][phase][ha
 
     // Clause words are contextual so existing declarations such as
     // `std.math.max` and fields named `max` remain source-compatible.
-    auto clause_tokens = token_types(lex("every max reads writes emits commands effects"));
-    REQUIRE(clause_tokens.size() == 7);
+    auto clause_tokens = token_types(lex("every max reads writes projects emits commands effects"));
+    REQUIRE(clause_tokens.size() == 8);
     for (auto type : clause_tokens) {
         CHECK(type == TokenType::IDENTIFIER);
     }
@@ -418,6 +418,7 @@ TEST_CASE("Lexer: phase syntax token kinds have debug names", "[lexer][phase][ha
     CHECK(std::string(token_type_to_string(TokenType::MAX)) == "MAX");
     CHECK(std::string(token_type_to_string(TokenType::READS)) == "READS");
     CHECK(std::string(token_type_to_string(TokenType::WRITES)) == "WRITES");
+    CHECK(std::string(token_type_to_string(TokenType::PROJECTS)) == "PROJECTS");
     CHECK(std::string(token_type_to_string(TokenType::EMITS)) == "EMITS");
     CHECK(std::string(token_type_to_string(TokenType::COMMANDS)) == "COMMANDS");
     CHECK(std::string(token_type_to_string(TokenType::EFFECTS)) == "EFFECTS");

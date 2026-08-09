@@ -1,0 +1,50 @@
+module lexical_local_mutation_runtime
+
+use std.core
+
+pub trait Boss:
+    var rank: int
+
+pub trait Results:
+    var subject: entity_id
+    var sum: int
+    var maximum: int
+    var count: int
+    var cursor: int
+
+pub entity Observer:
+    Results
+
+rule AccumulateNestedLocals:
+    filter:
+        Results
+
+    on tick:
+        let running_sum = 0
+        let running_max = 0
+        let running_count = 0
+        let running_cursor = 1
+        let values = [2, 5, 3]
+
+        for value in values:
+            running_sum += value
+            running_count += 1
+            if value > running_max:
+                running_max = value
+                running_cursor = running_cursor + 1
+            else:
+                running_cursor += 2
+
+        match subject:
+            Boss as boss =>
+                running_sum += boss.rank
+                running_count += 1
+                if boss.rank > running_max:
+                    running_max = boss.rank
+            _ =>
+                running_cursor += 100
+
+        sum = running_sum
+        maximum = running_max
+        count = running_count
+        cursor = running_cursor

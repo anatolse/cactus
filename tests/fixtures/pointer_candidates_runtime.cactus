@@ -1,0 +1,31 @@
+module pointer_candidates_runtime
+
+use std.ui as ui
+use std.pointer as pointer
+use std.transform.flat as xf
+use std.physics.flat as phys
+
+# Records targeted pointer-event delivery so headless tests can observe the
+# full RoutePointer -> generated_emit_targeted_event -> unary-consumer path,
+# not just compute_pointer_frame_transitions' decisions.
+trait PointerEventLog:
+    var enter_count: int = 0
+    var leave_count: int = 0
+    var press_count: int = 0
+    var release_count: int = 0
+    var click_count: int = 0
+
+rule LogPointerEvents:
+    filter:
+        PointerEventLog as log
+
+    on pointer.PointerEnter:
+        log.enter_count += 1
+    on pointer.PointerLeave:
+        log.leave_count += 1
+    on pointer.PointerPress:
+        log.press_count += 1
+    on pointer.PointerRelease:
+        log.release_count += 1
+    on pointer.Click:
+        log.click_count += 1

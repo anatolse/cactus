@@ -420,18 +420,16 @@ TEST_CASE("Semantic: std.physics.flat query types and extern funcs resolve",
 }
 
 TEST_CASE("Semantic: extern rule with filter is valid", "[semantic][extern-rule]") {
-    CHECK_FALSE(
-        analyze_has_errors(STDLIB_EVENTS +
-                           "trait Position:\n"
-                           "    var x: float\n"
-                           "extern rule SpriteRenderer:\n"
-                           "    filter:\n"
-                           "        Position\n"
-                           "    on tick:\n"
-                           "        reads:\n"
-                           "            Position\n"
-                           "        effects:\n"
-                           "            graphics\n"));
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
+                                                   "    var x: float\n"
+                                                   "extern rule SpriteRenderer:\n"
+                                                   "    filter:\n"
+                                                   "        Position\n"
+                                                   "    on tick:\n"
+                                                   "        reads:\n"
+                                                   "            Position\n"
+                                                   "        effects:\n"
+                                                   "            graphics\n"));
 }
 
 TEST_CASE("Semantic: extern rule requires filter", "[semantic][extern-rule]") {
@@ -1115,135 +1113,161 @@ TEST_CASE("Semantic: spawn of entity rejected", "[semantic][entity]") {
 // ── Query expression semantic tests ────────────────────────────────────────
 
 TEST_CASE("Semantic: query exists in rule handler returns bool — no errors", "[semantic][query]") {
-    CHECK_FALSE(analyze_has_errors(
-        "use std.query as query\n"
-        "trait Boss:\n"
-        "    var hp: int\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        if query.exists[Boss]():\n"
-        "            let x = 1\n"));
+    CHECK_FALSE(
+        analyze_has_errors("use std.query as query\n"
+                           "trait Boss:\n"
+                           "    var hp: int\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        if query.exists[Boss]():\n"
+                           "            let x = 1\n"));
 }
 
 TEST_CASE("Semantic: query count in rule handler returns int — no errors", "[semantic][query]") {
-    CHECK_FALSE(analyze_has_errors(
-        "use std.query as query\n"
-        "trait Enemy:\n"
-        "    var hp: int\n"
-        "trait Dead\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        let n = query.count[Enemy, not Dead]()\n"));
+    CHECK_FALSE(
+        analyze_has_errors("use std.query as query\n"
+                           "trait Enemy:\n"
+                           "    var hp: int\n"
+                           "trait Dead\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        let n = query.count[Enemy, not Dead]()\n"));
 }
 
 TEST_CASE("Semantic: query first in rule handler returns entity_id — no errors", "[semantic][query]") {
-    CHECK_FALSE(analyze_has_errors(
-        "use std.query as query\n"
-        "trait Boss:\n"
-        "    var hp: int\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        let t = query.first[Boss]()\n"));
+    CHECK_FALSE(
+        analyze_has_errors("use std.query as query\n"
+                           "trait Boss:\n"
+                           "    var hp: int\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        let t = query.first[Boss]()\n"));
 }
 
 TEST_CASE("Semantic: query all in rule handler returns list of entity_id — no errors", "[semantic][query]") {
-    CHECK_FALSE(analyze_has_errors(
-        "use std.query as query\n"
-        "trait Enemy:\n"
-        "    var hp: int\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        let all = query.all[Enemy]()\n"));
+    CHECK_FALSE(
+        analyze_has_errors("use std.query as query\n"
+                           "trait Enemy:\n"
+                           "    var hp: int\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        let all = query.all[Enemy]()\n"));
 }
 
 TEST_CASE("Semantic: query expression inside pure func is rejected", "[semantic][query]") {
-    CHECK(analyze_has_errors(
-        "use std.query as query\n"
-        "trait Boss:\n"
-        "    var hp: int\n"
-        "func count_bosses() int:\n"
-        "    let n = query.count[Boss]()\n"
-        "    return n\n"));
-    CHECK(analyze_first_error(
-              "use std.query as query\n"
-              "trait Boss:\n"
-              "    var hp: int\n"
-              "func count_bosses() int:\n"
-              "    let n = query.count[Boss]()\n"
-              "    return n\n")
+    CHECK(
+        analyze_has_errors("use std.query as query\n"
+                           "trait Boss:\n"
+                           "    var hp: int\n"
+                           "func count_bosses() int:\n"
+                           "    let n = query.count[Boss]()\n"
+                           "    return n\n"));
+    CHECK(analyze_first_error("use std.query as query\n"
+                              "trait Boss:\n"
+                              "    var hp: int\n"
+                              "func count_bosses() int:\n"
+                              "    let n = query.count[Boss]()\n"
+                              "    return n\n")
               .find("world access") != std::string::npos);
 }
 
 TEST_CASE("Semantic: undeclared trait in query filter is rejected", "[semantic][query]") {
-    CHECK(analyze_first_error(
-              "use std.query as query\n" +
-              STDLIB_EVENTS +
-              "rule S:\n"
-              "    on tick:\n"
-              "        let x = query.first[GhostBoss]()\n") ==
+    CHECK(analyze_first_error("use std.query as query\n" + STDLIB_EVENTS +
+                              "rule S:\n"
+                              "    on tick:\n"
+                              "        let x = query.first[GhostBoss]()\n") ==
           "undeclared trait 'GhostBoss' in query filter");
 }
 
 TEST_CASE("Semantic: valid traits in query filter are accepted", "[semantic][query]") {
-    CHECK_FALSE(analyze_has_errors(
-        "use std.query as query\n"
-        "trait EnemyAI:\n"
-        "    var active: bool\n"
-        "trait Dead\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        let n = query.count[EnemyAI, not Dead]()\n"));
+    CHECK_FALSE(
+        analyze_has_errors("use std.query as query\n"
+                           "trait EnemyAI:\n"
+                           "    var active: bool\n"
+                           "trait Dead\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        let n = query.count[EnemyAI, not Dead]()\n"));
 }
 
 TEST_CASE("Semantic: query parent with entity_id of argument accepted", "[semantic][query]") {
-    CHECK_FALSE(analyze_has_errors(
-        "use std.query as query\n"
-        "trait Child:\n"
-        "    var child_id: entity_id\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    filter:\n"
-        "        Child\n"
-        "    on tick:\n"
-        "        let p = query.parent(of = child_id)\n"));
+    CHECK_FALSE(
+        analyze_has_errors("use std.query as query\n"
+                           "trait Child:\n"
+                           "    var child_id: entity_id\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    filter:\n"
+                           "        Child\n"
+                           "    on tick:\n"
+                           "        let p = query.parent(of = child_id)\n"));
 }
 
 TEST_CASE("Semantic: query parent of argument must be entity_id", "[semantic][query]") {
-    CHECK(analyze_first_error(
-              "use std.query as query\n" +
-              STDLIB_EVENTS +
-              "rule S:\n"
-              "    on tick:\n"
-              "        let p = query.parent(of = 42)\n") ==
+    CHECK(analyze_first_error("use std.query as query\n" + STDLIB_EVENTS +
+                              "rule S:\n"
+                              "    on tick:\n"
+                              "        let p = query.parent(of = 42)\n") ==
           "`parent` `of` argument must be of type `entity_id`");
 }
 
+TEST_CASE("Semantic: hierarchy snapshot query forms are accepted", "[semantic][query][hierarchy]") {
+    CHECK_FALSE(
+        analyze_has_errors("use std.query as query\n"
+                           "trait Node:\n"
+                           "    var id: entity_id\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    filter:\n"
+                           "        Node\n"
+                           "    on tick:\n"
+                           "        let direct = query.children[Node](of = id)\n"
+                           "        let pre = query.hierarchy_preorder[Node]()\n"
+                           "        let post = query.hierarchy_postorder[Node]()\n"));
+}
+
+TEST_CASE("Semantic: query children of argument must be entity_id", "[semantic][query][hierarchy]") {
+    CHECK(analyze_first_error("use std.query as query\n" + STDLIB_EVENTS +
+                              "rule S:\n"
+                              "    on tick:\n"
+                              "        let children = query.children(of = 42)\n") ==
+          "`children` `of` argument must be of type `entity_id`");
+}
+
+TEST_CASE("Semantic: query children requires of argument", "[semantic][query][hierarchy]") {
+    CHECK(analyze_first_error("use std.query as query\n"
+                              "trait Node\n" +
+                              STDLIB_EVENTS +
+                              "rule S:\n"
+                              "    on tick:\n"
+                              "        let children = query.children[Node]()\n") ==
+          "`children` requires an `of` named argument");
+}
+
 TEST_CASE("Semantic: query nearest requires from argument", "[semantic][query]") {
-    CHECK(analyze_first_error(
-              "use std.physics.flat.query as query\n" +
-              STDLIB_EVENTS +
-              "trait Transform:\n"
-              "    var pos: vec2\n"
-              "rule S:\n"
-              "    on tick:\n"
-              "        let t = query.nearest[Transform]()\n")
+    CHECK(analyze_first_error("use std.physics.flat.query as query\n" + STDLIB_EVENTS +
+                              "trait Transform:\n"
+                              "    var pos: vec2\n"
+                              "rule S:\n"
+                              "    on tick:\n"
+                              "        let t = query.nearest[Transform]()\n")
               .find("`nearest` requires") != std::string::npos);
 }
 
 TEST_CASE("Semantic: module-qualified query path accepted", "[semantic][query]") {
-    CHECK_FALSE(analyze_has_errors(
-        "use std.query\n"
-        "trait Boss:\n"
-        "    var hp: int\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        let t = std.query.first[Boss]()\n"));
+    CHECK_FALSE(
+        analyze_has_errors("use std.query\n"
+                           "trait Boss:\n"
+                           "    var hp: int\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        let t = std.query.first[Boss]()\n"));
 }
 
 // dsl-model-assets: model asset declarations resolve to model_id
@@ -1258,39 +1282,39 @@ TEST_CASE("Semantic: model asset name resolves to model_id", "[semantic][dsl-mod
 }
 
 TEST_CASE("Semantic: mesh asset rejected where model_id expected", "[semantic][dsl-model-assets]") {
-    CHECK(analyze_has_errors(
-        "asset Rock: mesh = \"rock.glb\"\n"
-        "trait ModelRenderer:\n"
-        "    var model: model_id\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        add ModelRenderer:\n"
-        "            model = Rock\n"));
+    CHECK(
+        analyze_has_errors("asset Rock: mesh = \"rock.glb\"\n"
+                           "trait ModelRenderer:\n"
+                           "    var model: model_id\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        add ModelRenderer:\n"
+                           "            model = Rock\n"));
 }
 
 TEST_CASE("Semantic: model asset rejected where mesh_id expected", "[semantic][dsl-model-assets]") {
-    CHECK(analyze_has_errors(
-        "asset Robot: model = \"art/robot.glb\"\n"
-        "trait Renderer:\n"
-        "    var mesh: mesh_id\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        add Renderer:\n"
-        "            mesh = Robot\n"));
+    CHECK(
+        analyze_has_errors("asset Robot: model = \"art/robot.glb\"\n"
+                           "trait Renderer:\n"
+                           "    var mesh: mesh_id\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        add Renderer:\n"
+                           "            mesh = Robot\n"));
 }
 
 TEST_CASE("Semantic: model asset accepted where model_id expected in add", "[semantic][dsl-model-assets]") {
-    CHECK_FALSE(analyze_has_errors(
-        "asset Robot: model = \"art/robot.glb\"\n"
-        "trait ModelRenderer:\n"
-        "    var model: model_id\n" +
-        STDLIB_EVENTS +
-        "rule S:\n"
-        "    on tick:\n"
-        "        add ModelRenderer:\n"
-        "            model = Robot\n"));
+    CHECK_FALSE(
+        analyze_has_errors("asset Robot: model = \"art/robot.glb\"\n"
+                           "trait ModelRenderer:\n"
+                           "    var model: model_id\n" +
+                           STDLIB_EVENTS +
+                           "rule S:\n"
+                           "    on tick:\n"
+                           "        add ModelRenderer:\n"
+                           "            model = Robot\n"));
 }
 
 // ── Pair relations (dsl-pair-relations) ─────────────────────────────────────

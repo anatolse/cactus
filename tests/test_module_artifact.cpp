@@ -60,9 +60,9 @@ static DecoratedProgram make_test_program() {
     // Rule dependency
     RuleDependency dep;
     dep.rule_name = "MoveSystem";
-    dep.reads       = {"Position"};
-    dep.writes      = {"Position"};
-    dep.emits       = {};
+    dep.reads     = {"Position"};
+    dep.writes    = {"Position"};
+    dep.emits     = {};
     prog.dependency_graph.push_back(dep);
 
     prog.ast = nullptr;
@@ -636,6 +636,7 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     const auto frame    = test_symbol(SymbolKind::Event, "frame");
     const auto tick     = test_symbol(SymbolKind::Phase, "tick");
     const auto position = test_symbol(SymbolKind::Trait, "Position");
+    const auto layout   = test_symbol(SymbolKind::Trait, "ComputedLayout");
     const auto spawned  = test_symbol(SymbolKind::Event, "Spawned");
     const auto tmpl     = test_symbol(SymbolKind::Template, "Actor");
     const auto first    = test_symbol(SymbolKind::Rule, "First");
@@ -671,23 +672,25 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     tick_decl.fields          = {
         {.name = "dt", .type = make_float_type(), .is_synthesized = true},
         {.name = "alpha", .type = make_float_type(), .is_synthesized = true, .is_completion_only = true},
-        {.name           = "frame_dt",
-         .type           = make_float_type(),
-         .has_default    = true,
-         .source_binding = PhaseFieldSource{.kind = PhaseFieldSource::Kind::RootEvent, .source = frame, .member = "dt"}}};
+        {.name        = "frame_dt",
+         .type        = make_float_type(),
+         .has_default = true,
+         .source_binding =
+             PhaseFieldSource{.kind = PhaseFieldSource::Kind::RootEvent, .source = frame, .member = "dt"}}};
     prog.phases.emplace(tick_decl.name, tick_decl);
 
     HandlerContract contract;
-    contract.selection        = {position};
-    contract.domain_kind      = HandlerDomainKind::Unary;
-    contract.reads            = {position};
-    contract.writes           = {position};
-    contract.emits            = {spawned};
-    contract.commands         = {{.kind = HandlerCommandKind::Spawn, .target = tmpl}};
-    contract.effects          = {"graphics"};
+    contract.selection   = {position};
+    contract.domain_kind = HandlerDomainKind::Unary;
+    contract.reads       = {position};
+    contract.writes      = {position};
+    contract.projects    = {layout};
+    contract.emits       = {spawned};
+    contract.commands    = {{.kind = HandlerCommandKind::Spawn, .target = tmpl}};
+    contract.effects     = {"graphics"};
     InferredHandlerContract inferred;
     static_cast<HandlerContract&>(inferred) = contract;
-    inferred.rule                         = second;
+    inferred.rule                           = second;
     inferred.trigger                        = tick_trigger;
     prog.handler_contracts.push_back(std::move(inferred));
 
@@ -744,8 +747,12 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     REQUIRE(loaded->handler_contracts.size() == 1);
     CHECK(loaded->handler_contracts[0].effects.contains("graphics"));
     CHECK(loaded->handler_contracts[0].commands == contract.commands);
+    CHECK(loaded->handler_contracts[0].projects == std::unordered_set<SymbolId>{layout});
+    CHECK_FALSE(loaded->handler_contracts[0].writes.contains(layout));
     REQUIRE(loaded->execution_graph.handlers.size() == 2);
     CHECK(loaded->execution_graph.handlers[1].identity == second_handler);
+    CHECK(loaded->execution_graph.handlers[1].contract.projects == std::unordered_set<SymbolId>{layout});
+    CHECK_FALSE(loaded->execution_graph.handlers[1].contract.writes.contains(layout));
     CHECK(loaded->execution_graph.handlers[1].explicit_after == std::vector<HandlerIdentity>{first_handler});
     CHECK(loaded->execution_graph.handlers[1].location == SourceLocation{"runtime.cactus", 20, 5});
     REQUIRE(loaded->execution_graph.schedule_edges.size() == 1);
@@ -767,6 +774,81 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     CHECK(symbols->phase_symbols.at("tick").fields[1].is_completion_only);
     REQUIRE(symbols->phase_symbols.at("tick").fields[2].source_binding.has_value());
     CHECK(symbols->phase_symbols.at("tick").fields[2].source_binding->kind == PhaseFieldSource::Kind::RootEvent);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: contracts that omit project capabilities round-trip as empty",
+          "[artifact][extern-rule][projects]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto tick = test_symbol(SymbolKind::Event, "tick");
+    const auto host = test_symbol(SymbolKind::Rule, "LegacyHost");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
+
+    InferredHandlerContract inferred;
+    inferred.rule    = host;
+    inferred.trigger = trigger;
+
+    DecoratedProgram program;
+    program.handler_contracts.push_back(inferred);
+    program.execution_graph.handlers.push_back(HandlerNode{.identity       = {.rule = host, .trigger = trigger},
+                                                           .implementation = HandlerImplementationKind::External});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    CHECK(loaded->handler_contracts.front().projects.empty());
+    REQUIRE(loaded->execution_graph.handlers.size() == 1);
+    CHECK(loaded->execution_graph.handlers.front().contract.projects.empty());
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: project capability serialization is deterministic", "[artifact][extern-rule][projects]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto first  = test_symbol(SymbolKind::Trait, "FirstProjection");
+    const auto second = test_symbol(SymbolKind::Trait, "SecondProjection");
+    const auto tick   = test_symbol(SymbolKind::Event, "tick");
+    const auto host   = test_symbol(SymbolKind::Rule, "Host");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
+
+    const auto make_program = [&](const std::vector<SymbolId>& insertion_order) {
+        DecoratedProgram program;
+        InferredHandlerContract contract;
+        contract.rule    = host;
+        contract.trigger = trigger;
+        for (const auto& project : insertion_order) {
+            contract.projects.insert(project);
+        }
+        program.handler_contracts.push_back(contract);
+        return program;
+    };
+    const auto read_bytes = [](const fs::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        return std::vector<char>(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    };
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(make_program({second, first}), "runtime.lib", build_dir));
+    const auto first_bytes = read_bytes(build_dir / "runtime.lib.cmod");
+    REQUIRE(artifact.save(make_program({first, second}), "runtime.lib", build_dir));
+    const auto second_bytes = read_bytes(build_dir / "runtime.lib.cmod");
+
+    REQUIRE_FALSE(errors.has_errors());
+    CHECK(first_bytes == second_bytes);
 
     fs::remove_all(build_dir, ec);
 }
@@ -802,7 +884,7 @@ TEST_CASE("ModuleArtifact: pair-domain handler contract round-trips through save
 
     InferredHandlerContract inferred;
     static_cast<HandlerContract&>(inferred) = contract;
-    inferred.rule                         = detect;
+    inferred.rule                           = detect;
     inferred.trigger                        = tick_trigger;
 
     DecoratedProgram prog;
@@ -828,8 +910,7 @@ TEST_CASE("ModuleArtifact: pair-domain handler contract round-trips through save
     CHECK(loaded_contract.pair_bindings[1].name == "wall");
     CHECK(loaded_contract.pair_bindings[1].required_traits == std::vector<SymbolId>{solid});
     CHECK(loaded_contract.bound_reads.size() == 2);
-    CHECK(std::ranges::find(loaded_contract.bound_reads,
-                            BoundTraitAccess{.binding_index = 0, .trait = dynamic_body}) !=
+    CHECK(std::ranges::find(loaded_contract.bound_reads, BoundTraitAccess{.binding_index = 0, .trait = dynamic_body}) !=
           loaded_contract.bound_reads.end());
     CHECK(std::ranges::find(loaded_contract.bound_reads, BoundTraitAccess{.binding_index = 1, .trait = solid}) !=
           loaded_contract.bound_reads.end());
@@ -850,8 +931,8 @@ TEST_CASE("ModuleArtifact: selectionless and unary contracts still round-trip af
     std::error_code ec;
     fs::remove_all(build_dir, ec);
 
-    const auto position = test_symbol(SymbolKind::Trait, "Position");
-    const auto tick      = test_symbol(SymbolKind::Event, "tick");
+    const auto position             = test_symbol(SymbolKind::Trait, "Position");
+    const auto tick                 = test_symbol(SymbolKind::Event, "tick");
     const auto selectionless_system = test_symbol(SymbolKind::Rule, "Once");
     const auto unary_system         = test_symbol(SymbolKind::Rule, "Move");
     const ResolvedHandlerTrigger tick_trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
@@ -867,12 +948,12 @@ TEST_CASE("ModuleArtifact: selectionless and unary contracts still round-trip af
 
     InferredHandlerContract inferred_selectionless;
     static_cast<HandlerContract&>(inferred_selectionless) = selectionless;
-    inferred_selectionless.rule                         = selectionless_system;
+    inferred_selectionless.rule                           = selectionless_system;
     inferred_selectionless.trigger                        = tick_trigger;
 
     InferredHandlerContract inferred_unary;
     static_cast<HandlerContract&>(inferred_unary) = unary;
-    inferred_unary.rule                         = unary_system;
+    inferred_unary.rule                           = unary_system;
     inferred_unary.trigger                        = tick_trigger;
 
     DecoratedProgram prog;

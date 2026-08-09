@@ -326,6 +326,7 @@ set(EDITOR_TEST_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/editor-test.gene
 set(EDITOR_3D_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/editor-3d.generated.cpp")
 set(SPLIT_SCREEN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/split-screen.generated.cpp")
 set(SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/split-screen-forest-bombs.generated.cpp")
+set(STANDARD_UI_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/standard-ui.generated.cpp")
 set(EXTERNAL_HANDLER_LINK_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/external-handler-link.generated.cpp")
 
 add_custom_command(
@@ -461,6 +462,13 @@ cactus_add_example(example_split_screen_forest_bombs_generated
     SOURCE "examples/split-screen-forest-bombs/forest_bombs.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP}"
+    EXCLUDE_FROM_ALL
+)
+
+cactus_add_example(example_standard_ui_generated
+    SOURCE "examples/standard-ui/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${STANDARD_UI_GENERATED_CPP}"
     EXCLUDE_FROM_ALL
 )
 

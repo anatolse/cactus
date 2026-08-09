@@ -64,6 +64,28 @@ EditorIsActiveImpl& is_active_impl_storage() noexcept {
     return impl;
 }
 
+PointerCandidatesImpl& pointer_window_candidates_impl_storage() noexcept {
+    static PointerCandidatesImpl impl;
+    return impl;
+}
+
+PointerCandidatesImpl& pointer_world_candidates_impl_storage() noexcept {
+    static PointerCandidatesImpl impl;
+    return impl;
+}
+
+entt::entity& pointer_hovered_entity_storage() noexcept {
+    static entt::entity entity{entt::null};
+    return entity;
+}
+
+entt::entity& pointer_captured_entity_storage() noexcept {
+    static entt::entity entity{entt::null};
+    return entity;
+}
+
+constexpr int kPointerPrimaryMouseButton = 0;  // raylib MOUSE_BUTTON_LEFT
+
 struct SpriteSubmission {
     Vector2 position{};
     Vector2 size{};
@@ -788,9 +810,18 @@ Texture2D* ensure_texture_resource(const int runtime_id) {
         if (!cactus::runtime::raylib::IsWindowReady()) {
             return nullptr;
         }
+#ifdef CACTUS_RAYLIB_FAKE
+        // GenImageColor/LoadTextureFromImage/UnloadImage need a real GL context
+        // to create GPU resources; headless behavioral tests never create one
+        // (see ensure_mesh_resource's identical guard above). The fake's
+        // DrawTexturePro only records its Texture2D argument by value, so a
+        // zeroed placeholder is sufficient once the window is (fake-)ready.
+        entry.texture = Texture2D{};
+#else
         Image image   = GenImageColor(1, 1, WHITE);
         entry.texture = LoadTextureFromImage(image);
         UnloadImage(image);
+#endif
         entry.loaded = true;
         entry.owned  = true;
     }
@@ -1873,6 +1904,88 @@ entt::entity editor_raycast_3d(entt::registry& registry, Vector2 screen_pos, int
     return entt::entity{entt::null};
 }
 
+void register_pointer_window_candidates_impl(PointerCandidatesImpl fn) noexcept {
+    pointer_window_candidates_impl_storage() = std::move(fn);
+}
+
+void register_pointer_world_candidates_impl(PointerCandidatesImpl fn) noexcept {
+    pointer_world_candidates_impl_storage() = std::move(fn);
+}
+
+entt::entity pointer_top_target(entt::registry& registry) noexcept {
+    const Vector2 pointer_position = cactus::runtime::raylib::GetMousePosition();
+    std::vector<PointerCandidate> ordered;
+    if (pointer_window_candidates_impl_storage()) {
+        auto window = pointer_window_candidates_impl_storage()(registry, pointer_position);
+        ordered.insert(ordered.end(), window.begin(), window.end());
+    }
+    if (pointer_world_candidates_impl_storage()) {
+        auto world = pointer_world_candidates_impl_storage()(registry, pointer_position);
+        ordered.insert(ordered.end(), world.begin(), world.end());
+    }
+    return resolve_pointer_target(ordered);
+}
+
+void reset_pointer_router_state() noexcept {
+    pointer_hovered_entity_storage()  = entt::entity{entt::null};
+    pointer_captured_entity_storage() = entt::entity{entt::null};
+}
+
+PointerFrameTransitions compute_pointer_frame_transitions(entt::registry& registry) noexcept {
+    PointerFrameTransitions result;
+
+    // Stale-safe: an entity destroyed since it was hovered/captured is
+    // cleared silently before this frame's decisions — no event is ever
+    // constructed for a dead entity (spec.md "routing safely clears its
+    // stored hover handle"/"the capture is cleared safely").
+    auto& hovered  = pointer_hovered_entity_storage();
+    auto& captured = pointer_captured_entity_storage();
+    if (hovered != entt::entity{entt::null} && !registry.valid(hovered)) {
+        hovered = entt::entity{entt::null};
+    }
+    if (captured != entt::entity{entt::null} && !registry.valid(captured)) {
+        captured = entt::entity{entt::null};
+    }
+
+    const entt::entity top = pointer_top_target(registry);
+    result.top              = top;
+
+    if (top != hovered) {
+        result.hover_changed = true;
+        result.leave_target  = hovered;
+        result.enter_target  = top;
+        hovered               = top;
+    }
+
+    const bool pressed_now  = cactus::runtime::raylib::IsMouseButtonPressed(kPointerPrimaryMouseButton);
+    const bool released_now = cactus::runtime::raylib::IsMouseButtonReleased(kPointerPrimaryMouseButton);
+
+    if (pressed_now && captured == entt::entity{entt::null}) {
+        // A miss (top == null) leaves the logical action unconsumed
+        // (spec.md "Miss leaves gameplay input available").
+        if (top != entt::entity{entt::null}) {
+            captured                       = top;
+            result.press_occurred          = true;
+            result.press_target            = top;
+            result.should_consume_primary  = true;
+        }
+    } else if (captured != entt::entity{entt::null}) {
+        // An active capture consumes every frame it's held, not only its
+        // press/release edges (spec.md "owns an active primary capture").
+        result.should_consume_primary = true;
+    }
+
+    if (released_now && captured != entt::entity{entt::null}) {
+        result.release_occurred       = true;
+        result.release_target         = captured;
+        result.release_is_click       = (top == captured);
+        result.should_consume_primary = true;
+        captured                       = entt::entity{entt::null};
+    }
+
+    return result;
+}
+
 int editor_active_mode(entt::registry& registry) noexcept {
     if (active_mode_impl_storage()) {
         return active_mode_impl_storage()(registry);
@@ -1890,6 +2003,284 @@ bool editor_is_active(entt::registry& registry) noexcept {
 Vector2 editor_screen_size() noexcept {
     return Vector2{.x = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),
                    .y = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())};
+}
+
+// ── Standard UI metric fact bridges (std.ui window_size/text_size/texture_size) ─
+// Design decision #10: the backend owns platform facts (window bounds, font,
+// and texture metrics), not authored Cactus. Each returns a safe deterministic
+// fallback instead of touching platform state that may not exist yet (no
+// window, no GPU context) — see design.md's "safe fallback values" phrasing.
+
+Vector2 ui_window_size() noexcept {
+    if (!cactus::runtime::raylib::IsWindowReady()) {
+        return Vector2{.x = 0.0F, .y = 0.0F};
+    }
+    return Vector2{.x = static_cast<float>(cactus::runtime::raylib::GetScreenWidth()),
+                   .y = static_cast<float>(cactus::runtime::raylib::GetScreenHeight())};
+}
+
+Vector2 ui_text_size(const std::string& value, const int font_size) noexcept {
+    const float safe_font_size = font_size > 0 ? static_cast<float>(font_size) : 1.0F;
+    if (!cactus::runtime::raylib::IsWindowReady()) {
+        // No default font exists yet (it loads during window init); fall back
+        // to the same deterministic approximation the fake uses once ready
+        // (see raylib_io.hpp) rather than measuring against an empty Font.
+        return Vector2{.x = static_cast<float>(value.size()) * safe_font_size * 0.5F, .y = safe_font_size};
+    }
+    return cactus::runtime::raylib::MeasureTextEx(GetFontDefault(), value.c_str(), safe_font_size, 1.0F);
+}
+
+// Real per-asset pixel dimensions are not yet tracked anywhere in the asset
+// pipeline (texture registration only stores a path; ensure_texture_resource
+// above materializes every handle as the same GPU placeholder) — a resolved
+// handle reports a documented placeholder icon size rather than probing GPU
+// state, matching the rest of the placeholder asset pipeline's fidelity.
+Vector2 ui_texture_size(const AssetHandle texture) noexcept {
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, texture);
+    if (!resolved.ready()) {
+        return Vector2{.x = 0.0F, .y = 0.0F};
+    }
+    return Vector2{.x = 32.0F, .y = 32.0F};
+}
+
+namespace {
+constexpr int kImageFitContain = 1;
+constexpr int kImageFitCover   = 2;
+constexpr int kTextAlignCenter = 1;
+constexpr int kTextAlignEnd    = 2;
+}  // namespace
+
+ImageDrawRects compute_image_draw_rects(const int fit,
+                                        const Vector2 dest_position,
+                                        const Vector2 dest_size,
+                                        const Vector2 texture_size,
+                                        const int frame_index,
+                                        const int frame_count) noexcept {
+    const int safe_frame_count = frame_count > 0 ? frame_count : 1;
+    const int safe_frame       = ((frame_index % safe_frame_count) + safe_frame_count) % safe_frame_count;
+    const float frame_width    = texture_size.x / static_cast<float>(safe_frame_count);
+    const float frame_height   = texture_size.y;
+    const Rectangle frame_source{
+        .x      = frame_width * static_cast<float>(safe_frame),
+        .y      = 0.0F,
+        .width  = frame_width,
+        .height = frame_height,
+    };
+    const Rectangle full_dest{.x = dest_position.x, .y = dest_position.y, .width = dest_size.x, .height = dest_size.y};
+
+    const bool has_extent = frame_width > 0.0F && frame_height > 0.0F && dest_size.x > 0.0F && dest_size.y > 0.0F;
+
+    if (fit == kImageFitContain && has_extent) {
+        const float scale = std::min(dest_size.x / frame_width, dest_size.y / frame_height);
+        const Vector2 drawn_size{.x = frame_width * scale, .y = frame_height * scale};
+        const Rectangle centered_dest{
+            .x      = dest_position.x + ((dest_size.x - drawn_size.x) / 2.0F),
+            .y      = dest_position.y + ((dest_size.y - drawn_size.y) / 2.0F),
+            .width  = drawn_size.x,
+            .height = drawn_size.y,
+        };
+        return ImageDrawRects{.source = frame_source, .dest = centered_dest};
+    }
+
+    if (fit == kImageFitCover && has_extent) {
+        const float scale = std::max(dest_size.x / frame_width, dest_size.y / frame_height);
+        const Vector2 crop_size{.x = dest_size.x / scale, .y = dest_size.y / scale};
+        const Rectangle cropped_source{
+            .x      = frame_source.x + ((frame_width - crop_size.x) / 2.0F),
+            .y      = frame_source.y + ((frame_height - crop_size.y) / 2.0F),
+            .width  = crop_size.x,
+            .height = crop_size.y,
+        };
+        return ImageDrawRects{.source = cropped_source, .dest = full_dest};
+    }
+
+    // Stretch, or a degenerate (zero-extent) texture/dest that fit math can't
+    // meaningfully scale — draw the whole frame across the whole destination.
+    return ImageDrawRects{.source = frame_source, .dest = full_dest};
+}
+
+namespace {
+
+[[nodiscard]] Color tint_with_opacity(const Color color, const float opacity) noexcept {
+    return Color{.r = color.r,
+                .g = color.g,
+                .b = color.b,
+                .a = static_cast<unsigned char>(static_cast<float>(color.a) * opacity)};
+}
+
+void draw_ui_label(const std::string& text,
+                   const int font_size,
+                   const Color color,
+                   const Rectangle bounds,
+                   const int align) noexcept {
+    if (text.empty()) {
+        return;
+    }
+    const float safe_font_size = font_size > 0 ? static_cast<float>(font_size) : 1.0F;
+    const Vector2 measured     = ui_text_size(text, font_size);
+    float x                    = bounds.x;
+    if (align == kTextAlignCenter) {
+        x = bounds.x + ((bounds.width - measured.x) / 2.0F);
+    } else if (align == kTextAlignEnd) {
+        x = bounds.x + bounds.width - measured.x;
+    }
+    const Vector2 position{.x = x, .y = bounds.y + ((bounds.height - measured.y) / 2.0F)};
+    cactus::runtime::raylib::DrawTextEx(GetFontDefault(), text.c_str(), position, safe_font_size, 1.0F, color);
+}
+
+void draw_ui_image(const UiPrimitive& primitive, const Rectangle bounds, const float opacity) noexcept {
+    const auto resolved = shared_asset_registry().resolve(AssetKind::Texture, primitive.image_texture);
+    if (!resolved.ready()) {
+        return;
+    }
+    Texture2D* texture = ensure_texture_resource(resolved.runtime_id);
+    if (texture == nullptr) {
+        return;
+    }
+    const int frame_count = primitive.has_frame_animation ? primitive.frame_count : 1;
+    const int frame       = primitive.has_frame_animation ? primitive.frame : 0;
+    const auto rects      = compute_image_draw_rects(
+        primitive.image_fit,
+        Vector2{.x = bounds.x, .y = bounds.y},
+        Vector2{.x = bounds.width, .y = bounds.height},
+        Vector2{.x = static_cast<float>(texture->width), .y = static_cast<float>(texture->height)},
+        frame,
+        frame_count);
+    cactus::runtime::raylib::DrawTexturePro(*texture,
+                                            rects.source,
+                                            rects.dest,
+                                            Vector2{.x = 0.0F, .y = 0.0F},
+                                            0.0F,
+                                            tint_with_opacity(primitive.image_tint, opacity));
+}
+
+// disabled, pressed, hovered, then normal — spec.md "Button presentation
+// derives from generic pointer state": generic PointerState (not a
+// UI-specific routing state) drives presentation once std.pointer's router
+// exists (section 9); until then PointerState is simply absent/false.
+[[nodiscard]] Color button_fill_color(const UiPrimitive& primitive) noexcept {
+    if (!primitive.effective_enabled) {
+        return primitive.button_disabled_color;
+    }
+    if (primitive.pointer_pressed) {
+        return primitive.button_pressed_color;
+    }
+    if (primitive.pointer_hovered) {
+        return primitive.button_hover_color;
+    }
+    return primitive.button_normal_color;
+}
+
+}  // namespace
+
+void render_ui_primitive(const UiPrimitive& primitive) noexcept {
+    if (!primitive.effective_visible) {
+        return;
+    }
+    if (primitive.clip_max.x <= primitive.clip_min.x || primitive.clip_max.y <= primitive.clip_min.y) {
+        return;
+    }
+
+    cactus::runtime::raylib::BeginScissorMode(static_cast<int>(primitive.clip_min.x),
+                                              static_cast<int>(primitive.clip_min.y),
+                                              static_cast<int>(primitive.clip_max.x - primitive.clip_min.x),
+                                              static_cast<int>(primitive.clip_max.y - primitive.clip_min.y));
+
+    const float opacity = std::clamp(primitive.effective_opacity, 0.0F, 1.0F);
+
+    // Visual.scale presents around the entity's own center pivot without
+    // altering ComputedLayout's logical/hit rectangle (design decision #6).
+    const Vector2 center{.x = primitive.position.x + (primitive.size.x / 2.0F),
+                         .y = primitive.position.y + (primitive.size.y / 2.0F)};
+    const Vector2 scaled_size{.x = primitive.size.x * primitive.visual_scale.x,
+                              .y = primitive.size.y * primitive.visual_scale.y};
+    const Rectangle bounds{
+        .x      = center.x - (scaled_size.x / 2.0F),
+        .y      = center.y - (scaled_size.y / 2.0F),
+        .width  = scaled_size.x,
+        .height = scaled_size.y,
+    };
+
+    if (primitive.has_panel && primitive.panel_background.a > 0) {
+        cactus::runtime::raylib::DrawRectangleRec(bounds, tint_with_opacity(primitive.panel_background, opacity));
+    }
+
+    if (primitive.has_image) {
+        draw_ui_image(primitive, bounds, opacity);
+    }
+
+    if (primitive.has_button) {
+        cactus::runtime::raylib::DrawRectangleRec(bounds, tint_with_opacity(button_fill_color(primitive), opacity));
+    }
+
+    if (primitive.has_text) {
+        draw_ui_label(primitive.text_value,
+                      primitive.text_font_size,
+                      tint_with_opacity(primitive.text_color, opacity),
+                      bounds,
+                      primitive.text_align);
+    } else if (primitive.has_button) {
+        draw_ui_label(
+            primitive.button_label, 16, tint_with_opacity(primitive.button_text_color, opacity), bounds, kTextAlignCenter);
+    }
+
+    if (primitive.has_panel && primitive.panel_border_width > 0.0F && primitive.panel_border_color.a > 0) {
+        cactus::runtime::raylib::DrawRectangleLinesEx(
+            bounds, primitive.panel_border_width, tint_with_opacity(primitive.panel_border_color, opacity));
+    }
+
+    cactus::runtime::raylib::EndScissorMode();
+    ++render_debug_state_storage().submitted_ui_primitives;
+}
+
+void sort_window_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept {
+    std::ranges::stable_sort(
+        candidates, [](const PointerCandidate& left, const PointerCandidate& right) noexcept {
+            return left.draw_order > right.draw_order;
+        });
+}
+
+void sort_flat_world_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept {
+    std::ranges::stable_sort(candidates, [](const PointerCandidate& left, const PointerCandidate& right) noexcept {
+        if (left.priority != right.priority) {
+            return left.priority > right.priority;
+        }
+        return left.creation_ordinal < right.creation_ordinal;
+    });
+}
+
+void sort_volume_world_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept {
+    std::ranges::stable_sort(candidates, [](const PointerCandidate& left, const PointerCandidate& right) noexcept {
+        return left.distance < right.distance;
+    });
+}
+
+entt::entity resolve_pointer_target(const std::vector<PointerCandidate>& ordered_candidates) noexcept {
+    for (const auto& candidate : ordered_candidates) {
+        if (candidate.enabled) {
+            return candidate.entity;
+        }
+        if (candidate.blocks_lower) {
+            return entt::null;
+        }
+    }
+    return entt::null;
+}
+
+bool point_in_rect(const Vector2 point, const Vector2 rect_min, const Vector2 rect_max) noexcept {
+    return point.x >= rect_min.x && point.x <= rect_max.x && point.y >= rect_min.y && point.y <= rect_max.y;
+}
+
+bool point_in_flat_box(const Vector2 point, const Vector2 center, const Vector2 size) noexcept {
+    const float half_x = size.x * 0.5F;
+    const float half_y = size.y * 0.5F;
+    return std::abs(point.x - center.x) <= half_x && std::abs(point.y - center.y) <= half_y;
+}
+
+bool point_in_flat_circle(const Vector2 point, const Vector2 center, const float radius) noexcept {
+    const float dx = point.x - center.x;
+    const float dy = point.y - center.y;
+    return ((dx * dx) + (dy * dy)) <= (radius * radius);
 }
 
 Color editor_palette_color(const int index) noexcept {

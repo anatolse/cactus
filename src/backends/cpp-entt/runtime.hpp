@@ -56,6 +56,7 @@ struct RenderDebugState {
     int registered_directional_lights{0};
     int active_point_lights{0};
     int missing_assets{0};
+    int submitted_ui_primitives{0};
     bool used_default_2d_camera{false};
     bool used_default_3d_camera{false};
     bool used_lit_mesh_shader{false};
@@ -191,6 +192,202 @@ void submit_text_3d(std::uint32_t entity_id,
 
 /// Current window/render-target size in screen pixels.
 [[nodiscard]] Vector2 editor_screen_size() noexcept;
+
+// ── Standard UI metric fact bridges (std.ui) ───────────────────────────────
+
+/// Current window rectangle size; {0,0} when no window exists yet.
+[[nodiscard]] Vector2 ui_window_size() noexcept;
+/// Intrinsic size of `value` set in `font_size`, via the default font.
+[[nodiscard]] Vector2 ui_text_size(const std::string& value, int font_size) noexcept;
+/// Intrinsic size of a resolved texture asset; {0,0} for an unresolved handle.
+[[nodiscard]] Vector2 ui_texture_size(AssetHandle texture) noexcept;
+
+// ── Standard UI unified painter (std.ui RenderUi) ──────────────────────────
+// Design decision #10: one recognized external rule reads Node/Visual/
+// ComputedLayout plus whichever visual traits an entity carries and performs
+// one ordered draw pass; generated code (system_emitter.cpp's
+// is_standard_ui_render body) gathers each entity's data into this struct
+// (presence flags stand in for std::optional since generated code only does
+// plain field assignment) and calls render_ui_primitive in ascending
+// ComputedLayout.draw_order, already the complete window-space painter order
+// (design decision #7) — no additional traversal or clip-stack is needed
+// here because ComputedLayout.clip_min/max already holds each entity's fully
+// intersected ancestor clip rectangle.
+struct UiPrimitive {
+    Vector2 position{};
+    Vector2 size{};
+    bool effective_visible{true};
+    bool effective_enabled{true};
+    float effective_opacity{1.0F};
+    Vector2 clip_min{};
+    Vector2 clip_max{};
+    Vector2 visual_scale{.x = 1.0F, .y = 1.0F};
+
+    bool has_panel{false};
+    Color panel_background{};
+    Color panel_border_color{};
+    float panel_border_width{0.0F};
+
+    bool has_text{false};
+    std::string text_value;
+    int text_font_size{16};
+    Color text_color{};
+    int text_align{0};  // std_ui__TextAlign ordinal: Start=0, Center=1, End=2
+
+    bool has_image{false};
+    AssetHandle image_texture{0};
+    Color image_tint{};
+    int image_fit{0};  // std_ui__ImageFit ordinal: Stretch=0, Contain=1, Cover=2
+
+    bool has_frame_animation{false};
+    int frame_count{1};
+    int frame{0};
+
+    bool has_button{false};
+    std::string button_label;
+    Color button_normal_color{};
+    Color button_hover_color{};
+    Color button_pressed_color{};
+    Color button_disabled_color{};
+    Color button_text_color{};
+
+    // std.pointer.PointerState, when present (design decision: "Button
+    // presentation derives from generic pointer state"). Absent (both false)
+    // until section 8/9's pointer router exists to populate it.
+    bool pointer_hovered{false};
+    bool pointer_pressed{false};
+};
+
+/// Standard primitive order within one entity: background, image, button
+/// fill, text-or-button-label, then border (spec.md "one ordered window-space
+/// painter pass"). Skips entirely when !effective_visible or the effective
+/// clip rectangle is degenerate (fully clipped away).
+void render_ui_primitive(const UiPrimitive& primitive) noexcept;
+
+struct ImageDrawRects {
+    Rectangle source;
+    Rectangle dest;
+};
+
+/// Pure fit-mode geometry (Stretch/Contain/Cover) for drawing a
+/// `texture_size`-sized horizontal filmstrip frame into a `dest_position`/
+/// `dest_size` box. Exposed standalone so fit/frame math is unit-testable
+/// without a raylib window; `fit` is a std_ui__ImageFit ordinal (Stretch=0,
+/// Contain=1, Cover=2, matching UiPrimitive::image_fit).
+[[nodiscard]] ImageDrawRects compute_image_draw_rects(int fit,
+                                                       Vector2 dest_position,
+                                                       Vector2 dest_size,
+                                                       Vector2 texture_size,
+                                                       int frame_index,
+                                                       int frame_count) noexcept;
+
+// ── Generic pointer picking (std.pointer) ──────────────────────────────────
+// Design decision #8: one merged candidate lifecycle spans window UI,
+// flat-world, and volume-world entities. Generated code (system_emitter.cpp's
+// pointer-query lowering) gathers each domain's candidates — using the
+// program's real generated component types, which this shared, program-
+// agnostic runtime cannot reference directly — into this plain struct, in
+// each domain's own geometric order; the pure functions below own the
+// deterministic sort-within-domain and front-to-back blocking rules so they
+// are unit-testable without any ECS or generated code involved.
+struct PointerCandidate {
+    entt::entity entity{entt::null};
+    bool enabled{true};
+    bool blocks_lower{true};
+    int priority{0};
+    int draw_order{0};
+    float distance{0.0F};
+    std::uint64_t creation_ordinal{0};
+};
+
+/// Window candidates paint in ascending ComputedLayout.draw_order, so the
+/// pointer router considers them in reverse (spec.md "greater computed draw
+/// order is considered first").
+void sort_window_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept;
+
+/// PointerTarget.priority descending, then stable creation ordinal ascending
+/// ("priority followed by stable creation ordinal" — no standard 2D world
+/// painter depth exists yet).
+void sort_flat_world_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept;
+
+/// Nearest positive ray distance first. Callers must have already filtered
+/// out non-positive distances (behind the ray origin).
+void sort_volume_world_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept;
+
+/// Walks an already-domain-ordered, concatenated candidate list (window
+/// candidates first, then world) front-to-back: the first enabled candidate
+/// is selected; a disabled candidate with blocks_lower stops evaluation
+/// (nothing is selected); a disabled, nonblocking candidate is skipped.
+/// Returns entt::null when no candidate is selected.
+[[nodiscard]] entt::entity resolve_pointer_target(const std::vector<PointerCandidate>& ordered_candidates) noexcept;
+
+/// True when `point` (already in the same space as `rect_min`/`rect_max`)
+/// falls within the closed rectangle — used for window-space hit testing
+/// against a ComputedLayout bounds/clip rectangle.
+[[nodiscard]] bool point_in_rect(Vector2 point, Vector2 rect_min, Vector2 rect_max) noexcept;
+
+/// True when `point` falls within an axis-aligned box collider of `size`
+/// centered at `center` (std.physics.flat.BoxCollider).
+[[nodiscard]] bool point_in_flat_box(Vector2 point, Vector2 center, Vector2 size) noexcept;
+
+/// True when `point` falls within a circle collider (std.physics.flat.CircleCollider).
+[[nodiscard]] bool point_in_flat_circle(Vector2 point, Vector2 center, float radius) noexcept;
+
+// ── Pointer candidate gathering (registered by generated_init_project, like
+//    the editor hit-test/raycast impls above) ───────────────────────────────
+// Each impl gathers its domain's PointerCandidate list (already sorted by
+// that domain's own rule) from the real, program-specific component types,
+// which this shared runtime cannot reference directly. Absent impls (a
+// program that never uses window UI or world pointer targets) contribute an
+// empty list, not an error.
+using PointerCandidatesImpl = std::function<std::vector<PointerCandidate>(entt::registry&, Vector2)>;
+void register_pointer_window_candidates_impl(PointerCandidatesImpl fn) noexcept;
+void register_pointer_world_candidates_impl(PointerCandidatesImpl fn) noexcept;
+
+/// std.pointer.top_target(): merges window candidates (reverse painter
+/// order) before world candidates (flat priority/ordinal or volume nearest
+/// distance, whichever the program uses) at the current mouse position, and
+/// resolves the first accepted target under front-to-back blocking. Returns
+/// entt::null when nothing accepts.
+[[nodiscard]] entt::entity pointer_top_target(entt::registry& registry) noexcept;
+
+// ── Pointer router (std.ui.RoutePointer, design decisions #8/#9) ───────────
+// The decisions for one frame — hover/capture transitions, Click validity,
+// and whether the primary mouse action should be consumed — computed here as
+// one pure-ish step (registry + this frame's mouse edge state in, a plain
+// decision struct out) so it's unit-testable without any generated code.
+// Generated code (system_emitter.cpp's is_pointer_router body) turns the
+// decisions into real component writes and typed targeted event emission,
+// which need the program's real generated types this shared runtime cannot
+// reference. Hover/capture identity persists across frames in this TU's
+// static storage, reset only by reset_pointer_router_state (headless tests).
+struct PointerFrameTransitions {
+    entt::entity top{entt::null};
+
+    bool hover_changed{false};
+    entt::entity leave_target{entt::null};  // valid only if hover_changed && the former hover was live
+    entt::entity enter_target{entt::null};  // valid only if hover_changed && the new top is live
+
+    bool press_occurred{false};
+    entt::entity press_target{entt::null};
+
+    bool release_occurred{false};
+    entt::entity release_target{entt::null};
+    bool release_is_click{false};
+
+    // True when this frame's accepted press, active capture, or handled
+    // release should consume the primary logical mouse action (spec.md
+    // "accepted pointer actions consume their logical input"); false on a
+    // miss, so gameplay input elsewhere in the frame stays unaffected.
+    bool should_consume_primary{false};
+};
+
+[[nodiscard]] PointerFrameTransitions compute_pointer_frame_transitions(entt::registry& registry) noexcept;
+
+/// Clears hover/capture identity between frames/tests. Real programs never
+/// need this (state should simply persist); headless tests call it the same
+/// way they call cactus_raylib_fake::reset() for raylib's scripted state.
+void reset_pointer_router_state() noexcept;
 
 /// Cycles a small fixed 6-color palette by index % 6, for index-based palette
 /// button tinting (editor-declarative-rendering design decision 6). Computed

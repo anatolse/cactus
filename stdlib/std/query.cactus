@@ -18,3 +18,16 @@ pub extern func all() list[entity_id]
 
 # Direct parent of the given entity, or a stale entity_id if no parent exists.
 pub extern func parent(of: entity_id) entity_id
+
+# Matching direct children of the given live entity, captured as an immutable
+# snapshot in stable entity creation order. Parent is structural and does not
+# need to be named by the query filter.
+pub extern func children(of: entity_id) list[entity_id]
+
+# Matching live entities in deterministic hierarchy preorder. Missing, stale,
+# or nonmatching parents make matching nodes traversal roots.
+pub extern func hierarchy_preorder() list[entity_id]
+
+# Matching live entities in deterministic hierarchy postorder. Runtime cycles
+# are traversed finitely and each matching entity appears at most once.
+pub extern func hierarchy_postorder() list[entity_id]

@@ -550,11 +550,11 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
     for (const auto& dep : prog.dependency_graph) {
         const auto symbol = make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name);
         ImportedRule sys;
-        sys.name                      = symbol.local_name;
-        sys.module_name               = symbol.module.name;
-        sys.canonical_id              = make_canonical_id(symbol);
-        sys.symbol_id                 = symbol;
-        sys.after_rules             = dep.after_rules;
+        sys.name                  = symbol.local_name;
+        sys.module_name           = symbol.module.name;
+        sys.canonical_id          = make_canonical_id(symbol);
+        sys.symbol_id             = symbol;
+        sys.after_rules           = dep.after_rules;
         syms.rules[dep.rule_name] = sys;
     }
     for (const auto& [name, event] : prog.events) {
@@ -765,6 +765,65 @@ TEST_CASE("integration: linked 2D editor program emits hit-test/spawn glue and 2
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("integration: a handler on a dotted cross-module event trigger resolves self and reads event fields",
+          "[integration][pointer][handler-event]") {
+    // Regression test for a real bug found while writing add-standard-ui's
+    // section 11 example: handler_event resolution (self-reference and event
+    // field access validity) looked event structs up by handler.event_name
+    // verbatim, which is the *dotted* source spelling ("pointer.Click") for a
+    // cross-module trigger — event_structs_ is keyed by simple event names,
+    // so the lookup always missed and both `self` and `<alias>.<field>`
+    // silently failed with "only allowed inside rule event handlers", for
+    // every dotted `on <module>.<Event>:` handler in the language (i.e. std.pointer's
+    // entire targeted-event surface, unless the consumer imports the event
+    // unqualified). Fixed by resolving via handler.resolved_trigger's already-
+    // resolved symbol instead of the raw source string.
+    auto build_dir = integration_build_dir() / "dotted_event_handler_self";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module dotted_event_app\n"
+        "use std.pointer as pointer\n"
+        "\n"
+        "trait ClickCounter:\n"
+        "    var count: int = 0\n"
+        "    var last_x: float = 0.0\n"
+        "\n"
+        "rule HandleButtonClick:\n"
+        "    filter:\n"
+        "        ClickCounter as counter\n"
+        "        pointer.PointerTarget\n"
+        "\n"
+        "    on pointer.Click as click:\n"
+        "        counter.count = counter.count + 1\n"
+        "        counter.last_x = click.position.x\n"
+        "        emit pointer.PointerPress to self\n"
+        "\n"
+        "pub entity Button1:\n"
+        "    ClickCounter\n"
+        "    pointer.PointerTarget\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "dotted_event_app", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+
+    const auto code = CppEnttCodegen::generate(*merged);
+
+    // `self` in the targeted emit resolved and lowered instead of erroring
+    // ("self only allowed inside rule event handlers"): the emission call and
+    // the targeted event's generated type both appear. Generated event types
+    // are namespaced by the consuming module (dotted_event_app), not the
+    // declaring module (std.pointer).
+    CHECK(code.find("generated_emit_targeted_event(") != std::string::npos);
+    CHECK(code.find("dotted_event_app__PointerPressEvent") != std::string::npos);
+    // The aliased event occurrence's own field is readable, instead of
+    // erroring ("self only allowed..." also gated event-field lookup).
+    CHECK(code.find("click.position.x") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("integration: linked 3D editor program emits raycast glue and 3D rig", "[integration][editor][canonical]") {
     auto build_dir = integration_build_dir() / "editor_glue_3d";
     std::error_code ec;
@@ -839,7 +898,7 @@ TEST_CASE("integration: proposal frame graph and contracted handlers lower end t
 
     const auto handler = [](const std::string& rule, HandlerTriggerKind kind, const std::string& trigger) {
         return HandlerIdentity{
-            .rule  = make_symbol_id(SymbolKind::Rule, "runtime_phase_contracts", rule),
+            .rule    = make_symbol_id(SymbolKind::Rule, "runtime_phase_contracts", rule),
             .trigger = ResolvedHandlerTrigger{
                 .kind   = kind,
                 .symbol = make_symbol_id(kind == HandlerTriggerKind::Phase ? SymbolKind::Phase : SymbolKind::Event,

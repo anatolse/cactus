@@ -107,3 +107,39 @@ Spatial query expressions that select a single entity, including `nearest`, SHAL
 #### Scenario: Nearest returns stale handle on empty result
 - **WHEN** `query.nearest[Transform, Enemy](from = p)` has no live matching entity
 - **THEN** the expression returns a stale/non-live `entity_id` value
+
+### Requirement: `std.query` provides deterministic direct-child snapshots
+The `std.query` namespace SHALL provide a `children(of: entity_id) list[entity_id]` query operation that accepts the ordinary bracketed positive and negative trait predicates. It SHALL return the live direct children whose `Parent.parent` equals the supplied entity and that satisfy the filter, sorted by stable entity creation ordinal. The returned list SHALL be a finite immutable snapshot for bounded foreach.
+
+#### Scenario: Direct children retain stable order
+- **WHEN** authored code evaluates `query.children[ui.Node](of = panel)` for three matching children
+- **THEN** it receives those direct children in stable creation order and does not include grandchildren
+
+#### Scenario: Stale parent produces empty snapshot
+- **WHEN** `children` is called with a stale entity handle
+- **THEN** it returns an empty list without an error
+
+### Requirement: `std.query` provides deterministic hierarchy preorder snapshots
+The `std.query` namespace SHALL provide `hierarchy_preorder() list[entity_id]` with ordinary bracketed trait predicates. It SHALL return every matching live entity exactly once as a filtered forest in parent-before-descendant order. A matching entity whose direct parent is absent, stale, or does not satisfy the positive/negative filter SHALL be a root of that filtered forest. Roots and siblings SHALL use stable creation ordinal.
+
+#### Scenario: Preorder arranges parent before descendant
+- **WHEN** a matching forest contains root A, children B and C, and B's child D
+- **THEN** `query.hierarchy_preorder[Marker]()` returns A, B, D, C
+
+#### Scenario: Nonmatching parent creates filtered root
+- **WHEN** a matching Node has a live parent that does not carry Node
+- **THEN** the Node appears as a root in `hierarchy_preorder[Node]()`
+
+### Requirement: `std.query` provides deterministic hierarchy postorder snapshots
+The `std.query` namespace SHALL provide `hierarchy_postorder() list[entity_id]` with ordinary bracketed trait predicates. It SHALL return the same filtered forest membership and stable sibling order as hierarchy_preorder but with every descendant before its matching parent.
+
+#### Scenario: Postorder measures descendants before parent
+- **WHEN** a matching forest contains root A, children B and C, and B's child D
+- **THEN** `query.hierarchy_postorder[Marker]()` returns D, B, C, A
+
+### Requirement: hierarchy snapshots are total in the presence of invalid relations
+Hierarchy queries SHALL terminate for every finite live registry state. Stale parent references SHALL be treated as missing parents. A cycle SHALL not recurse indefinitely or duplicate entities; each cycle member SHALL appear exactly once in deterministic creation order as a root-equivalent component, and the runtime SHALL make the invalid relation diagnosable.
+
+#### Scenario: Cyclic Parent relation terminates
+- **WHEN** runtime mutation creates a Parent cycle among three matching entities
+- **THEN** preorder and postorder queries return finite deterministic snapshots containing each entity once

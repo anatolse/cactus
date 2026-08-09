@@ -1075,3 +1075,72 @@ The cpp-entt backend SHALL NOT use C++ reserved double-leading-underscore identi
 - **THEN** the generated snapshot temporary's name does not use a C++ reserved (double-leading-underscore) prefix
 - **AND** the name remains unique per call site so nested or sibling `foreach` statements in the same generated function do not collide
 
+### Requirement: cpp-entt lowers deterministic hierarchy query snapshots
+The cpp-entt backend SHALL lower trait-filtered `std.query.children`, `std.query.hierarchy_preorder`, and `std.query.hierarchy_postorder` calls to finite entity-list snapshots with the standard Parent, filter, stable creation-order, stale-parent, and cycle semantics.
+
+#### Scenario: Authored postorder foreach lowers successfully
+- **WHEN** an authored rule iterates `query.hierarchy_postorder[ui.Node]()`
+- **THEN** generated cpp-entt code produces a finite child-before-parent entity snapshot and iterates it through ordinary bounded foreach lowering
+
+#### Scenario: Direct children exclude grandchildren
+- **WHEN** generated code evaluates `query.children[ui.Node](of = parent)`
+- **THEN** its result contains only matching entities whose direct Parent references that parent
+
+### Requirement: cpp-entt preserves lexical local mutation in nested authored control flow
+The cpp-entt backend SHALL lower assignment and compound assignment to an already-declared mutable local as mutation of that lexical binding inside nested `if`, trait-match, and bounded-foreach bodies. It SHALL NOT silently redeclare a shadow local when the Cactus statement semantically targets the outer binding.
+
+#### Scenario: Foreach accumulator is updated
+- **WHEN** a handler declares `var total = 0.0` and executes `total += value` inside bounded foreach
+- **THEN** generated code mutates the outer total and its post-loop value reflects every iteration
+
+#### Scenario: Nested cursor mutation is visible to next iteration
+- **WHEN** an authored Stack arrangement rule advances an outer cursor inside a child foreach body
+- **THEN** each later child observes the advanced cursor rather than the initial value
+
+### Requirement: cpp-entt lowers external project capabilities
+The cpp-entt backend SHALL preserve resolved external projected outputs in linked program data and SHALL expose contract-bounded projection operations to external handlers. Such operations SHALL use standard projected-trait coalescing, stale-target safety, durable-value restoration, and post-render cleanup.
+
+#### Scenario: External projection is frame-local
+- **WHEN** an external handler projects a contracted trait to a live entity
+- **THEN** later handlers observe it during the frame and projected cleanup removes or restores it at the existing frame boundary
+
+#### Scenario: Undeclared projection is unavailable
+- **WHEN** a trait is absent from an external handler's projects contract
+- **THEN** the generated callback interface does not provide projection capability for that trait
+
+### Requirement: cpp-entt provides intrinsic Standard UI metric facts
+The cpp-entt standard binding SHALL provide the intrinsic text and texture dimensions required by authored Standard UI measurement. Metric calls SHALL return deterministic pixel-space values for loaded resources and safe non-negative fallback values when content is empty or unavailable.
+
+#### Scenario: Text metrics feed authored measurement
+- **WHEN** the authored MeasureUi rule requests metrics for a text value and font size
+- **THEN** cpp-entt returns a non-negative pixel size that the Cactus rule can combine with PreferredSize
+
+### Requirement: cpp-entt renders Standard UI in unified painter order
+The cpp-entt backend SHALL render visible Standard UI primitives in ascending computed draw order after world/viewport content, apply effective opacity and nested rectangular clipping, and use the fitting and per-entity primitive order required by `stdlib-standard-ui`.
+
+#### Scenario: Nested clip constrains drawing
+- **WHEN** a UI visual extends beyond its ComputedLayout effective clip
+- **THEN** cpp-entt draws no pixels for that visual outside the effective clip rectangle
+
+#### Scenario: Sibling painter order is preserved
+- **WHEN** two overlapping sibling subtrees have different computed draw orders
+- **THEN** cpp-entt draws them in that order without globally resorting descendants by raw z-index
+
+### Requirement: cpp-entt provides the generic pointer router
+The cpp-entt standard binding SHALL collect supported window, flat-world, and volume-world PointerTarget candidates; select them using the standard coordinate-space, priority, painter, distance, blocking, and stable-order rules; maintain hover and primary capture; consume accepted logical input; and emit the standard targeted pointer events.
+
+#### Scenario: Window and world candidates share event dispatch
+- **WHEN** cpp-entt selects either a window UI target or a collider-backed world target
+- **THEN** it delivers the same canonical targeted PointerPress, PointerRelease, and Click event types to that selected entity
+
+#### Scenario: Pointer state survives only live targets
+- **WHEN** a hovered or captured entity becomes stale
+- **THEN** cpp-entt clears the stored handle safely without accessing destroyed components
+
+### Requirement: cpp-entt tests Standard UI and pointer behavior headlessly
+The cpp-entt test surface SHALL expose sufficient deterministic debug state or headless hooks to verify computed layout, painter order, clipping, selected pointer target, capture transitions, targeted click delivery, and input consumption without relying only on manual visual inspection.
+
+#### Scenario: Headless topmost-click test
+- **WHEN** an automated test creates overlapping window targets and injects a primary press/release at their overlap
+- **THEN** it can assert that only the visually topmost accepted target received Click
+

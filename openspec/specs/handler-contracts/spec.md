@@ -49,18 +49,22 @@ Handler contracts SHALL record projected trait outputs separately from durable w
 - **THEN** contract graph construction can order the projection producer before the consumer without classifying projection as a durable component mutation
 
 ### Requirement: External handlers declare complete contracts
-An `extern rule` handler SHALL declare zero or more `reads:`, `writes:`, `emits:`, `commands:`, and `effects:` blocks because its implementation is unavailable for inference. Trait entries in `reads` and `writes` SHALL resolve through that rule's filter aliases or canonical trait references. Event and command entries SHALL resolve canonically.
+An `extern rule` handler SHALL declare zero or more `reads:`, `writes:`, `projects:`, `emits:`, `commands:`, and `effects:` blocks because its implementation is unavailable for inference. Trait entries in `reads`, `writes`, and `projects` SHALL resolve through that rule's filter aliases or canonical trait references. Event and command entries SHALL resolve canonically. Projected outputs SHALL remain distinct from durable writes, and the same canonical trait SHALL NOT appear in both `writes` and `projects` for one handler.
 
 #### Scenario: External movement contract resolves aliases
 - **WHEN** NativeMovement filters `Motion as motion` and `Transform as transform`, reads motion, and writes transform
 - **THEN** its handler contract stores canonical Motion in reads and canonical Transform in writes
+
+#### Scenario: External projection contract resolves trait
+- **WHEN** ExternalLayout lists `ComputedLayout` under projects
+- **THEN** its handler contract stores canonical ComputedLayout in projected outputs rather than durable writes
 
 #### Scenario: Unknown contract alias is rejected
 - **WHEN** an external handler lists `velocity` under reads but no filter binding or trait reference resolves it
 - **THEN** semantic analysis reports the unknown contract entry
 
 ### Requirement: Contracts constrain external implementations
-Generated external-handler APIs SHALL expose immutable access for `reads`, mutable access for `writes`, event emission only for `emits`, structural operations only for `commands`, and effect services only for declared `effects`. Backends MUST NOT grant undeclared world mutation through the generated contract API.
+Generated external-handler APIs SHALL expose immutable access for `reads`, mutable durable access for `writes`, frame-local projection capability only for `projects`, event emission only for `emits`, structural operations only for `commands`, and effect services only for declared `effects`. Backends MUST NOT grant undeclared world mutation or projection through the generated contract API.
 
 #### Scenario: Read entry is immutable
 - **WHEN** an external handler lists Sprite only under reads
@@ -69,6 +73,17 @@ Generated external-handler APIs SHALL expose immutable access for `reads`, mutab
 #### Scenario: Write entry is mutable
 - **WHEN** an external handler lists Transform under writes
 - **THEN** its generated C++ callback receives mutable Transform access
+
+#### Scenario: Project entry exposes only frame-local output
+- **WHEN** an external handler lists Highlight under projects but not writes
+- **THEN** its generated callback can project Highlight to a live target but cannot durably mutate or attach Highlight through that capability
+
+### Requirement: external projected outputs participate in producer scheduling
+An external `projects:` entry SHALL create the same project-producer scheduling information as an inferred regular `project` statement. For the same activation, a projected producer SHALL be ordered before handlers that match or read the projected trait according to the ordinary handler-conflict rules.
+
+#### Scenario: External projection precedes reader
+- **WHEN** an external input handler projects PointerHit and a later input handler reads PointerHit
+- **THEN** the execution graph orders the producer before the reader without classifying PointerHit as a durable write
 
 ### Requirement: Selection does not imply trait access
 `filter:` and `exclude:` SHALL determine entity selection without adding reads or writes. An `order by:` expression SHALL add a read for every trait whose data it evaluates.

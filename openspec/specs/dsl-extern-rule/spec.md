@@ -39,3 +39,29 @@ For every user-defined external handler, the backend SHALL generate a typed user
 #### Scenario: Missing callback remains a link error
 - **WHEN** a required user external-handler implementation is absent
 - **THEN** final linking reports the missing canonical handler callback
+
+### Requirement: external handlers support `projects:` contract clauses
+An external handler contract SHALL accept zero or more `projects:` blocks alongside `reads:`, `writes:`, `emits:`, `commands:`, and `effects:`. Each entry SHALL resolve through the external rule's filter aliases or an ordinary canonical trait reference and SHALL declare that the implementation can produce a frame-local projected value of that trait.
+
+```cactus
+extern rule ExternalProducer:
+    on input:
+        projects:
+            ComputedFact
+```
+
+#### Scenario: External projected trait resolves
+- **WHEN** an external handler lists a known trait under `projects:`
+- **THEN** parsing and semantic analysis record that canonical trait as a projected output of the handler
+
+#### Scenario: Unknown project entry is rejected
+- **WHEN** an external handler lists a name under `projects:` that resolves to neither a filter alias nor a declared trait
+- **THEN** semantic analysis reports an unknown projects contract entry
+
+#### Scenario: Duplicate project entry is rejected
+- **WHEN** the same canonical trait appears more than once across one handler's projects blocks
+- **THEN** semantic analysis reports a duplicate projects contract entry
+
+#### Scenario: Durable and projected output conflict is rejected
+- **WHEN** one external handler lists the same canonical trait under both `writes:` and `projects:`
+- **THEN** semantic analysis reports that one capability cannot be both a durable write and a projected output in that handler

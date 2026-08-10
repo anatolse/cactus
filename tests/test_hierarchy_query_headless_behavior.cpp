@@ -7,6 +7,8 @@
 #define CACTUS_GENERATED_NO_MAIN
 #include CACTUS_HEADLESS_GENERATED_CPP
 
+#include "fake_raylib/headless_frame_driver.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -31,11 +33,6 @@ entt::entity create_node(entt::registry& registry) {
 
 void set_parent(entt::registry& registry, entt::entity child, entt::entity parent) {
     registry.emplace_or_replace<std_core__Parent>(child, std_core__Parent{.parent = parent});
-}
-
-void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
-    cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
 
 }  // namespace
@@ -88,7 +85,7 @@ TEST_CASE("hierarchy queries headless: filtered forests are stable, finite, and 
 
     auto& results     = registry.get<hierarchy_query_runtime__Results>(observer);
     results.requested = root_a;
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
 
     const std::vector<entt::entity> expected_direct{child_b, child_c};
     const std::vector<entt::entity> expected_preorder{
@@ -140,7 +137,7 @@ TEST_CASE("hierarchy queries headless: filtered forests are stable, finite, and 
     CHECK(results.postorder == detached_postorder);
 
     results.requested = stale_parent;
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     CHECK(results.direct.empty());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

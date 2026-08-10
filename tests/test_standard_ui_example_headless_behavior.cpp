@@ -8,6 +8,7 @@
 #include CACTUS_HEADLESS_GENERATED_CPP
 
 #include "fake_raylib/fake_raylib.hpp"
+#include "fake_raylib/headless_frame_driver.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -39,12 +40,6 @@ namespace {
 
 constexpr int kWindowWidth  = 960;
 constexpr int kWindowHeight = 540;
-constexpr float kDt         = 1.0F / 60.0F;
-
-void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = kDt});
-    cactus::runtime::entt_backend::generated_drain_external_events(registry);
-}
 
 // ClickCounter is only ever attached to the one entity in this scene
 // (ClickButton), so it doubles as a stable handle onto it — the example
@@ -146,7 +141,7 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
 
     // Press: primary capture engages on the button.
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
     CHECK(registry.get<std_pointer__PointerState>(click_button).pressed);
 
@@ -158,7 +153,7 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
     // semantic_analyzer.cpp for a dotted cross-module event trigger
     // (`on pointer.Click:`) to work at all.
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     CHECK_FALSE(registry.get<std_pointer__PointerState>(click_button).pressed);
     CHECK(registry.get<main__ClickCounter>(click_button).count == 1);
 
@@ -171,16 +166,16 @@ TEST_CASE("standard-ui example: layout, top-hit agreement, capture, Click delive
     // 0.15s duration), then click again before it finishes: a fresh
     // StartBump must restart elapsed rather than let it keep accumulating.
     for (int i = 0; i < 3; ++i) {
-        drive_frame(registry);
+        cactus_headless_test::drive_frame(registry);
     }
     const float elapsed_before_restart = registry.get<std_ui__BumpAnimation>(click_button).elapsed;
     REQUIRE(elapsed_before_restart < registry.get<std_ui__BumpAnimation>(click_button).duration);
 
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
 
     const auto& bump_after_restart = registry.get<std_ui__BumpAnimation>(click_button);
     CHECK(bump_after_restart.playing);
@@ -205,9 +200,9 @@ TEST_CASE("standard-ui example: capture persists off-target, so releasing outsid
                                 .y = scene.click_button.position.y + (scene.click_button.size.y / 2.0F)};
 
     cactus_raylib_fake::set_mouse_position(button_center);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
     REQUIRE(registry.get<std_pointer__PointerState>(click_button).pressed);
 
@@ -215,7 +210,7 @@ TEST_CASE("standard-ui example: capture persists off-target, so releasing outsid
     // release (PointerState clears), but not a valid Click.
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 5.0F, .y = 5.0F});
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
 
     CHECK_FALSE(registry.get<std_pointer__PointerState>(click_button).pressed);
     CHECK(registry.get<main__ClickCounter>(click_button).count == 0);

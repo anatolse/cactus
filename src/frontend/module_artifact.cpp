@@ -302,13 +302,7 @@ void ModuleArtifact::write_string_set(std::ostream& out, const std::unordered_se
 void ModuleArtifact::write_symbol_set(std::ostream& out, const std::unordered_set<SymbolId>& values) {
     std::vector<SymbolId> ordered(values.begin(), values.end());
     std::ranges::sort(ordered, [](const SymbolId& left, const SymbolId& right) {
-        if (left.kind != right.kind) {
-            return left.kind < right.kind;
-        }
-        if (left.module.name != right.module.name) {
-            return left.module.name < right.module.name;
-        }
-        return left.local_name < right.local_name;
+        return make_canonical_id(left) < make_canonical_id(right);
     });
     write_u32(out, static_cast<uint32_t>(ordered.size()));
     for (const auto& value : ordered) {

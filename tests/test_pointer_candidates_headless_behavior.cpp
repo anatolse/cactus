@@ -52,11 +52,6 @@ entt::entity make_flat_box_target(entt::registry& registry, const Vector2 positi
     return entity;
 }
 
-void drive_frame(entt::registry& registry) {
-    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = 1.0F / 60.0F});
-    cactus::runtime::entt_backend::generated_drain_external_events(registry);
-}
-
 }  // namespace
 
 TEST_CASE("std.pointer.top_target selects window candidates over world candidates", "[runtime][stdlib][pointer]") {
@@ -331,7 +326,7 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
 
     // Frame 1: pointer enters the target, no button activity yet.
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     {
         const auto& state = registry.get<std_pointer__PointerState>(target);
         const auto& log   = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
@@ -342,7 +337,7 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
 
     // Frame 2: press.
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
     {
         const auto& state = registry.get<std_pointer__PointerState>(target);
@@ -353,7 +348,7 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
 
     // Frame 3: release while still over the target -> Click.
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     {
         const auto& state = registry.get<std_pointer__PointerState>(target);
         const auto& log   = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
@@ -364,7 +359,7 @@ TEST_CASE("RoutePointer end-to-end: hover, capture, release-inside Click, and Po
 
     // Frame 4: pointer leaves the target entirely.
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 900.0F, .y = 900.0F});
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     {
         const auto& state = registry.get<std_pointer__PointerState>(target);
         const auto& log   = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
@@ -389,12 +384,12 @@ TEST_CASE("RoutePointer end-to-end: release outside the target delivers PointerR
 
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
     cactus_raylib_fake::set_mouse_button_pressed_this_frame(0, false);
 
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 900.0F, .y = 900.0F});
     cactus_raylib_fake::set_mouse_button_released_this_frame(0, true);
-    drive_frame(registry);
+    cactus_headless_test::drive_frame(registry);
 
     const auto& log = registry.get<pointer_candidates_runtime__PointerEventLog>(target);
     CHECK(log.release_count == 1);

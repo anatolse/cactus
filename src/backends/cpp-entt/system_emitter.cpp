@@ -455,6 +455,29 @@ enum class NumericKind : std::uint8_t { Unknown, Int, Float };
 
 using LocalNumericKinds = std::unordered_map<std::string, NumericKind>;
 
+// rewrite_stmt threads the enclosing lexical scope down as nullable pointers
+// (nullptr at the handler's outermost statements); every nested block needs
+// its own owned copy to extend before recursing.
+LexicalLocalBindings clone_or_empty(const LexicalLocalBindings* locals) {
+    return locals != nullptr ? *locals : LexicalLocalBindings{};
+}
+
+LocalNumericKinds clone_or_empty(const LocalNumericKinds* kinds) {
+    return kinds != nullptr ? *kinds : LocalNumericKinds{};
+}
+
+// Every handler body starts a fresh lexical scope seeded with just the
+// trigger binding (and its `as` alias, if any) — shared by all three
+// handler-body emission shapes (selectionless/filtered/fallback).
+LexicalLocalBindings handler_lexical_locals(const EventHandlerNode& handler) {
+    LexicalLocalBindings lexical_locals;
+    lexical_locals.insert(handler.event_name);
+    if (handler.alias.has_value()) {
+        lexical_locals.insert(*handler.alias);
+    }
+    return lexical_locals;
+}
+
 std::vector<FilterBinding> filter_bindings(const FilterClause& filter, const DecoratedProgram& program) {
     std::vector<FilterBinding> result;
     std::unordered_set<std::string> seen_traits;
@@ -2647,8 +2670,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     result += "(" + condition + ")";
                 }
                 result += " {\n";
-                auto then_locals = lexical_locals != nullptr ? *lexical_locals : LexicalLocalBindings{};
-                auto then_kinds  = local_kinds != nullptr ? *local_kinds : LocalNumericKinds{};
+                auto then_locals = clone_or_empty(lexical_locals);
+                auto then_kinds  = clone_or_empty(local_kinds);
                 result += rewrite_stmt_block(s.then_body,
                                              indent + 1,
                                              trait_names,
@@ -2662,8 +2685,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 result += ind + "}";
                 if (!s.else_body.empty()) {
                     result += " else {\n";
-                    auto else_locals = lexical_locals != nullptr ? *lexical_locals : LexicalLocalBindings{};
-                    auto else_kinds  = local_kinds != nullptr ? *local_kinds : LocalNumericKinds{};
+                    auto else_locals = clone_or_empty(lexical_locals);
+                    auto else_kinds  = clone_or_empty(local_kinds);
                     result += rewrite_stmt_block(s.else_body,
                                                  indent + 1,
                                                  trait_names,
@@ -2678,8 +2701,6 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 }
                 return result + "\n";
             } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
-                const auto empty_locals = LexicalLocalBindings{};
-                const auto empty_kinds  = LocalNumericKinds{};
                 return emit_trait_match_stmt(s,
                                              indent,
                                              trait_names,
@@ -2688,8 +2709,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                              dispatcher_available,
                                              cpp_overrides,
                                              pair_scope,
-                                             lexical_locals != nullptr ? *lexical_locals : empty_locals,
-                                             local_kinds != nullptr ? *local_kinds : empty_kinds);
+                                             clone_or_empty(lexical_locals),
+                                             clone_or_empty(local_kinds));
             } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                 const auto temp = foreach_temp_name(s);
                 std::string result =
@@ -2698,8 +2719,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         *s.iterable, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                     ";\n";
                 result += ind + "for (const auto& " + s.var_name + " : " + temp + ") {\n";
-                auto loop_locals = lexical_locals != nullptr ? *lexical_locals : LexicalLocalBindings{};
-                auto loop_kinds  = local_kinds != nullptr ? *local_kinds : LocalNumericKinds{};
+                auto loop_locals = clone_or_empty(lexical_locals);
+                auto loop_kinds  = clone_or_empty(local_kinds);
                 loop_locals.insert(s.var_name);
                 result += rewrite_stmt_block(s.body,
                                              indent + 1,
@@ -2852,11 +2873,7 @@ static void emit_selectionless_handler_body(std::ostringstream& out,
                                             const DecoratedProgram& program,
                                             const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
     out << "    (void)registry;\n";
-    LexicalLocalBindings lexical_locals;
-    lexical_locals.insert(handler.event_name);
-    if (handler.alias.has_value()) {
-        lexical_locals.insert(*handler.alias);
-    }
+    auto lexical_locals = handler_lexical_locals(handler);
     LocalNumericKinds local_kinds;
     out << rewrite_stmt_block(
         handler.body, 1, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
@@ -2871,11 +2888,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
                                        const std::vector<std::string>& exclude_cpp_types,
                                        const DecoratedProgram& program,
                                        const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
-    LexicalLocalBindings lexical_locals;
-    lexical_locals.insert(handler.event_name);
-    if (handler.alias.has_value()) {
-        lexical_locals.insert(*handler.alias);
-    }
+    auto lexical_locals = handler_lexical_locals(handler);
     LocalNumericKinds local_kinds;
     const auto filtered_body = rewrite_stmt_block(
         handler.body, 3, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
@@ -2926,11 +2939,7 @@ static void emit_fallback_handler_body(std::ostringstream& out,
     out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
     out << "        (void)entity;\n";
     emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
-    LexicalLocalBindings lexical_locals;
-    lexical_locals.insert(handler.event_name);
-    if (handler.alias.has_value()) {
-        lexical_locals.insert(*handler.alias);
-    }
+    auto lexical_locals = handler_lexical_locals(handler);
     LocalNumericKinds local_kinds;
     out << rewrite_stmt_block(
         handler.body, 2, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
@@ -2997,49 +3006,6 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
                                        filter_cpp_overrides);
         } else {
             emit_fallback_handler_body(out, sys, handler, filter_traits, program, filter_cpp_overrides);
-        }
-        if (sys.resolved_rule_id.has_value() && make_canonical_id(*sys.resolved_rule_id) == "rule:std.ui::ArrangeUi") {
-            out << "    {\n";
-            out << "        using std_ui__Node = "
-                << canonical_to_cpp_name(make_symbol_id(SymbolKind::Trait, "std.ui", "Node")) << ";\n";
-            out << "        using std_ui__ComputedLayout = "
-                << canonical_to_cpp_name(make_symbol_id(SymbolKind::Trait, "std.ui", "ComputedLayout")) << ";\n";
-            out << "        auto cactus_ui_children = [&](entt::entity parent) {\n";
-            out << "            std::vector<entt::entity> children;\n";
-            out << "            auto view = registry.view<std_ui__Node, std_core__Parent>();\n";
-            out << "            for (auto child : view) { if (view.get<std_core__Parent>(child).parent == parent) "
-                   "children.push_back(child); }\n";
-            out << "            std::ranges::sort(children, [&](entt::entity left, entt::entity right) {\n";
-            out << "                const auto left_z = registry.get<std_ui__Node>(left).z_index;\n";
-            out << "                const auto right_z = registry.get<std_ui__Node>(right).z_index;\n";
-            out << "                if (left_z != right_z) return left_z < right_z;\n";
-            out << "                return generated_entity_creation_ordinal(registry, left) < "
-                   "generated_entity_creation_ordinal(registry, right);\n";
-            out << "            });\n";
-            out << "            return children;\n";
-            out << "        };\n";
-            out << "        std::vector<entt::entity> roots;\n";
-            out << "        auto nodes = registry.view<std_ui__Node>();\n";
-            out << "        for (auto entity : nodes) {\n";
-            out << "            const auto* relation = registry.try_get<std_core__Parent>(entity);\n";
-            out << "            if (relation == nullptr || !registry.valid(relation->parent) || "
-                   "!registry.all_of<std_ui__Node>(relation->parent)) roots.push_back(entity);\n";
-            out << "        }\n";
-            out << "        std::ranges::sort(roots, [&](entt::entity left, entt::entity right) {\n";
-            out << "            const auto left_z = registry.get<std_ui__Node>(left).z_index;\n";
-            out << "            const auto right_z = registry.get<std_ui__Node>(right).z_index;\n";
-            out << "            if (left_z != right_z) return left_z < right_z;\n";
-            out << "            return generated_entity_creation_ordinal(registry, left) < "
-                   "generated_entity_creation_ordinal(registry, right);\n";
-            out << "        });\n";
-            out << "        int cactus_ui_draw_order = 0;\n";
-            out << "        std::function<void(entt::entity)> assign_ui_order = [&](entt::entity entity) {\n";
-            out << "            if (auto* layout = registry.try_get<std_ui__ComputedLayout>(entity)) "
-                   "layout->draw_order = cactus_ui_draw_order++;\n";
-            out << "            for (auto child : cactus_ui_children(entity)) assign_ui_order(child);\n";
-            out << "        };\n";
-            out << "        for (auto root : roots) assign_ui_order(root);\n";
-            out << "    }\n";
         }
         out << "}\n\n";
     }

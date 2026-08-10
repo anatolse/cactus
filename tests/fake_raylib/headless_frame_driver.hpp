@@ -52,4 +52,12 @@ inline void drive_frames(entt::registry& registry, float dt, int frame_count) {
     }
 }
 
+// Drives a single frame on an already-initialized/loaded registry (unlike
+// drive_one_frame/drive_frames, does not re-run init/load) — for tests that
+// need to interleave other events or state changes between frames.
+inline void drive_frame(entt::registry& registry, float dt = 1.0F / 60.0F) {
+    cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = dt});
+    cactus::runtime::entt_backend::generated_drain_external_events(registry);
+}
+
 }  // namespace cactus_headless_test

@@ -15,7 +15,7 @@ const:
     HEALTH_BG_COLOR = #333333
     COIN_COLOR = #FFD700
 
-rule HUDSystem:
+rule DrawHud:
     filter:
         Health as h
         Wallet as w
@@ -24,7 +24,7 @@ rule HUDSystem:
         # Backend reads h.health, h.max_health, w.coins to render the HUD.
         draw_hud(h.health, h.max_health, w.coins)
 
-rule ShopUISystem:
+rule ToggleShopPanel:
     filter:
         Inventory as inv
         Wallet as w

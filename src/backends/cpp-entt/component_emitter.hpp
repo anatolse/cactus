@@ -10,7 +10,7 @@ namespace cactus {
 
 class EnttComponentEmitter {
 public:
-    static std::string emit_component(const ResolvedTrait& trait);
+    static std::string emit_component(const ResolvedTrait& trait, const DecoratedProgram& program = {});
     static std::string emit_pod_struct(const ResolvedStruct& s);
     static std::string emit_enum(const ResolvedEnum& e);
 };

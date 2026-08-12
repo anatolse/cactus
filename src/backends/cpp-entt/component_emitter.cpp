@@ -3,7 +3,6 @@
 #include "frontend/symbol_identity.hpp"
 
 #include <sstream>
-#include <unordered_map>
 
 namespace cactus {
 
@@ -23,44 +22,43 @@ bool should_defer_to_raylib_enum(const std::string& name) {
     return name == "MouseButton" || name == "GamepadButton" || name == "GamepadAxis";
 }
 
-std::string stdlib_trait_default(const ResolvedTrait& trait, const ResolvedField& field) {
-    if (!trait.is_stdlib) {
-        return {};
+// Finds a trait field's declared `= expression` default directly from the
+// parsed AST, so the generated struct's default member initializer always
+// matches the DSL source of truth (the trait declaration) instead of a
+// backend-side copy that can silently drift from it. Trait names can collide
+// across modules (e.g. `WorldTransform` is declared once in
+// `std.transform.flat` and once in `std.transform.volume`, with different
+// field types), so this tracks the enclosing module while scanning rather
+// than matching on trait name alone.
+const ExprNode* find_field_default_expr(const ProgramNode* ast,
+                                        const std::string& module_name,
+                                        const std::string& trait_name,
+                                        const std::string& field_name) {
+    if (ast == nullptr) {
+        return nullptr;
     }
-    // BoxCollider.size's default depends on the field's own resolved type
-    // (Vec2 vs Vec3), so it can't be a flat (trait, field) -> value lookup.
-    if (trait.name == "BoxCollider" && field.name == "size") {
-        if (field.type.kind == TypeKind::Vec2) {
-            return "{.x = 1.0F, .y = 1.0F}";
+    std::string current_module;
+    for (const auto& decl : ast->declarations) {
+        if (const auto* mod = std::get_if<ModuleNode>(&decl)) {
+            current_module = mod->name;
+            continue;
         }
-        if (field.type.kind == TypeKind::Vec3) {
-            return "{.x = 1.0F, .y = 1.0F, .z = 1.0F}";
+        const auto* trait_node = std::get_if<TraitNode>(&decl);
+        if (trait_node == nullptr || trait_node->name != trait_name || current_module != module_name) {
+            continue;
         }
-        return {};
+        for (const auto& field : trait_node->fields) {
+            if (field.name == field_name) {
+                return field.default_value.has_value() ? field.default_value->get() : nullptr;
+            }
+        }
     }
-    static const std::unordered_map<std::string, std::unordered_map<std::string, std::string>> defaults{
-        {"Collider", {{"layer", "{1}"}, {"mask", "{1}"}}},
-        {"CircleCollider", {{"radius", "{0.5F}"}}},
-        {"SphereCollider", {{"radius", "{0.5F}"}}},
-        {"CapsuleCollider", {{"radius", "{0.5F}"}, {"height", "{1.0F}"}}},
-        {"Viewport",
-         {{"width", "{1.0F}"},
-          {"height", "{1.0F}"},
-          {"clear", "{true}"},
-          {"active", "{true}"},
-          {"clear_color", "{.r = 0, .g = 0, .b = 0, .a = 255}"}}},
-    };
-    const auto trait_it = defaults.find(trait.name);
-    if (trait_it == defaults.end()) {
-        return {};
-    }
-    const auto field_it = trait_it->second.find(field.name);
-    return field_it == trait_it->second.end() ? std::string{} : field_it->second;
+    return nullptr;
 }
 
 }  // namespace
 
-std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait) {
+std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, const DecoratedProgram& program) {
     const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
     std::ostringstream out;
     if (trait.fields.empty()) {
@@ -71,8 +69,25 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait) {
     out << "struct " << cpp_name << " {\n";
     for (const auto& field : trait.fields) {
         out << "    " << entt_type_to_cpp(field.type) << " " << field.name;
-        const auto default_value = stdlib_trait_default(trait, field);
-        out << (default_value.empty() ? "{}" : default_value) << ";\n";
+        const auto* default_expr =
+            find_field_default_expr(program.ast, trait.module_name, trait.name, field.name);
+        if (default_expr == nullptr) {
+            out << "{};\n";
+            continue;
+        }
+        // A default expression may call a module-aliased stdlib extern func
+        // (e.g. `rand.seeded(0)`), which only the DecoratedProgram overload of
+        // emit_expr resolves to its runtime namespace.
+        const auto rendered = EnttCodegenUtils::emit_expr(*default_expr, program);
+        // A declared `= ""` default renders identically to std::string's own
+        // default construction; spelling it out trips clang-tidy's
+        // readability-redundant-string-init on generated output.
+        const bool is_redundant_empty_string = field.type.kind == TypeKind::String && rendered == "\"\"";
+        if (is_redundant_empty_string) {
+            out << "{};\n";
+        } else {
+            out << " = " << rendered << ";\n";
+        }
     }
     out << "};\n";
     return out.str();

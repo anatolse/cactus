@@ -155,14 +155,10 @@ event TreeHit:
 # Spawned when a player throws. Orange box on an authored projectile arc.
 template BombTemplate:
     tv.WorldTransform:
-        position = vec3(0.0, 0.0, 0.0)
-        rotation = quat.identity()
         scale    = vec3(0.6, 0.6, 0.6)
     meshes.Renderer:
         mesh        = SphereMesh
         material    = BombMaterial
-        visible     = true
-        cast_shadow = true
     Bomb:
         velocity = vec3(0.0, THROW_UP, -THROW_SPEED)
         gravity  = BOMB_GRAVITY
@@ -176,13 +172,10 @@ template BombTemplate:
 # crown positions stay authored per tree.
 template TreeTemplate:
     tv.WorldTransform:
-        rotation = quat.identity()
         scale    = vec3(0.4, 1.2, 0.4)
     meshes.Renderer:
         mesh        = BoxMesh
         material    = TrunkMaterial
-        visible     = true
-        cast_shadow = true
     TreeRoot
     TreeGrowth:
         progress     = 0.0
@@ -196,13 +189,10 @@ template TreeTemplate:
     children:
         entity Crown:
             tv.WorldTransform:
-                rotation = quat.identity()
                 scale    = vec3(1.4, 1.4, 1.4)
             meshes.Renderer:
                 mesh        = BoxMesh
                 material    = CrownMaterial
-                visible     = true
-                cast_shadow = true
             TreeCrown
             TreeGrowth:
                 progress     = 0.0
@@ -221,13 +211,10 @@ template TreeTemplate:
 pub entity Player1:
     tv.WorldTransform:
         position = vec3(-3.0, PLAYER_BODY_Y, 8.0)
-        rotation = quat.identity()
         scale    = vec3(0.5, 0.5, 0.5)
     meshes.Renderer:
         mesh        = CapsuleMesh
         material    = PlayerMaterial
-        visible     = true
-        cast_shadow = true
     PlayerInput:
         move_x        = 0.0
         move_z        = 0.0
@@ -242,18 +229,10 @@ pub entity Player1:
 pub entity Player1Camera:
     tv.WorldTransform:
         position = vec3(-3.0, PLAYER_BODY_Y + EYE_HEIGHT, 8.0)
-        rotation = quat.identity()
-        scale    = vec3(1.0, 1.0, 1.0)
     cam3d.Camera:
-        fov_y = 60.0
-        near  = 0.1
         far   = 500.0
     vp.Viewport:
-        x           = 0.0
-        y           = 0.0
         width       = 0.5
-        height      = 1.0
-        depth       = 0
         clear_color = #223047FF
     PlayerInput:
         move_x        = 0.0
@@ -264,13 +243,10 @@ pub entity Player1Camera:
 pub entity Player2:
     tv.WorldTransform:
         position = vec3(3.0, PLAYER_BODY_Y, 8.0)
-        rotation = quat.identity()
         scale    = vec3(0.5, 0.5, 0.5)
     meshes.Renderer:
         mesh        = CapsuleMesh
         material    = PlayerMaterial
-        visible     = true
-        cast_shadow = true
     PlayerInput:
         move_x        = 0.0
         move_z        = 0.0
@@ -285,18 +261,11 @@ pub entity Player2:
 pub entity Player2Camera:
     tv.WorldTransform:
         position = vec3(3.0, PLAYER_BODY_Y + EYE_HEIGHT, 8.0)
-        rotation = quat.identity()
-        scale    = vec3(1.0, 1.0, 1.0)
     cam3d.Camera:
-        fov_y = 60.0
-        near  = 0.1
         far   = 500.0
     vp.Viewport:
         x           = 0.5
-        y           = 0.0
         width       = 0.5
-        height      = 1.0
-        depth       = 0
         clear_color = #2A2440FF
     PlayerInput:
         move_x        = 0.0
@@ -308,40 +277,31 @@ pub entity Player2Camera:
 pub entity Ground:
     tv.WorldTransform:
         position = vec3(0.0, -0.5, 0.0)
-        rotation = quat.identity()
         scale    = vec3(60.0, 1.0, 60.0)
     meshes.Renderer:
         mesh        = BoxMesh
         material    = GroundMaterial
-        visible     = true
         cast_shadow = false
 
 pub entity SunLight:
     tv.WorldTransform:
         position = vec3(0.0, 20.0, 0.0)
-        rotation = quat.identity()
-        scale    = vec3(1.0, 1.0, 1.0)
     meshes.DirectionalLight:
         direction = vec3(-0.3, -1.0, -0.2)
         color     = #FFF3D6FF
         intensity = 1.1
-        enabled   = true
     meshes.PointLight:
         color     = #FFF3D6FF
         intensity = 2.8
         range     = 45.0
-        enabled   = true
 
 pub entity FillLight:
     tv.WorldTransform:
         position = vec3(-8.0, 6.0, 10.0)
-        rotation = quat.identity()
-        scale    = vec3(1.0, 1.0, 1.0)
     meshes.PointLight:
         color     = #BBD7FFFF
         intensity = 1.4
         range     = 35.0
-        enabled   = true
 
 # ── Scene: the forest ─────────────────────────────────────────────────────────
 # Task 2.5/3.1 — a bounded, deterministically-varied forest. Each tree is one
@@ -487,7 +447,7 @@ rule ReadPlayer2Input:
 
 # Task 3.3 — move both players on the X/Z ground plane. The camera follows for
 # free because each player entity owns its own viewport camera.
-rule PlayerMoveSystem:
+rule MovePlayer:
     filter:
         tv.WorldTransform
         PlayerInput
@@ -501,7 +461,7 @@ rule PlayerMoveSystem:
 # growth data; slowdown stretches how long a tree takes to reach full size.
 # std.random drives a per-entity wobble so each piece grows at a slightly
 # different pace, producing natural-looking variation without hand-authored noise.
-rule TreeGrowthSystem:
+rule GrowTrees:
     filter:
         tv.WorldTransform
         TreeGrowth
@@ -516,7 +476,7 @@ rule TreeGrowthSystem:
 
 # Task 3.4 — throw a bomb: consume one from inventory and spawn an orange bomb
 # with authored launch velocity, tagged with its owning player.
-rule ThrowSystem:
+rule ThrowBomb:
     filter:
         tv.WorldTransform
         PlayerInput
@@ -544,7 +504,7 @@ rule ThrowSystem:
 # tree roots inside the blast radius and destroy each root. The crown is a
 # hierarchy child of the root, so the existing Parent-based recursive destroy
 # fells the whole tree. Score one point per felled tree for the thrower.
-rule BombSystem:
+rule SimulateBomb:
     filter:
         tv.WorldTransform
         Bomb
@@ -568,7 +528,7 @@ rule BombSystem:
 # Task 3.7 — apply tree-hit deltas to the throwing player's score. Event
 # delivery broadcasts to every entity the handler's filter matches, so the
 # payload carries the thrower and the handler credits only that entity.
-rule ScoreSystem:
+rule TallyScore:
     filter:
         Score
 

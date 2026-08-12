@@ -38,7 +38,7 @@ rule WorldRenderer:
     on tick:
         draw_plane(vec3(0.0, 0.0, 0.0), vec2(t.ground_size, t.ground_size), t.ground_color)
 
-rule LightSystem:
+rule UpdateLight:
     filter:
         SunLight as sun
 

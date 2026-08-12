@@ -4,26 +4,26 @@
 TBD - created by archiving change blue-square-wasd-demo. Update Purpose after archive.
 ## Requirements
 ### Requirement: Blue square Cactus module
-The example SHALL provide a single `examples/blue-square/square.cactus` file that is valid Cactus DSL. It SHALL declare a `Position` trait with `x: float` and `y: float` fields, a `SPEED` constant, a `Square` unit applying `Position`, and a `MoveSystem` that reads WASD input and updates position on each `tick(dt)`.
+The example SHALL provide a single `examples/blue-square/square.cactus` file that is valid Cactus DSL. It SHALL declare a `Position` trait with `x: float` and `y: float` fields, a `SPEED` constant, a `Square` unit applying `Position`, and a `Move` rule that reads WASD input and updates position on each `tick(dt)`.
 
 #### Scenario: Module compiles without errors
 - **WHEN** the compiler is invoked with `cactus square.cactus --backend cpp-entt -o square.generated.h`
 - **THEN** the command exits with code 0 and produces a valid C++ header
 
 #### Scenario: MoveSystem updates position on W key
-- **WHEN** the W key is held and `MoveSystem` executes with `dt = 0.016`
+- **WHEN** the W key is held and `Move` executes with `dt = 0.016`
 - **THEN** the entity's `y` field decreases by `SPEED * dt` (moves upward in screen space)
 
 #### Scenario: MoveSystem updates position on S key
-- **WHEN** the S key is held and `MoveSystem` executes with `dt = 0.016`
+- **WHEN** the S key is held and `Move` executes with `dt = 0.016`
 - **THEN** the entity's `y` field increases by `SPEED * dt` (moves downward)
 
 #### Scenario: MoveSystem updates position on A key
-- **WHEN** the A key is held and `MoveSystem` executes with `dt = 0.016`
+- **WHEN** the A key is held and `Move` executes with `dt = 0.016`
 - **THEN** the entity's `x` field decreases by `SPEED * dt` (moves left)
 
 #### Scenario: MoveSystem updates position on D key
-- **WHEN** the D key is held and `MoveSystem` executes with `dt = 0.016`
+- **WHEN** the D key is held and `Move` executes with `dt = 0.016`
 - **THEN** the entity's `x` field increases by `SPEED * dt` (moves right)
 
 ### Requirement: C++ host application

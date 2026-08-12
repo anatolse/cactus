@@ -30,8 +30,6 @@ trait MoveInput:
 pub entity Square:
     tf.WorldTransform:
         position = vec2(375.0, 275.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     MoveInput:
         dx = 0.0
         dy = 0.0
@@ -39,12 +37,11 @@ pub entity Square:
         type = shapes.ShapeType.Rectangle
         size = vec2(50.0, 50.0)
         color = #6495EDFF
-        visible = true
 
 # ── Rules ─────────────────────────────────────────────────────────────────────
 
-# ReadInputSystem: runs every input poll, stores axis values into MoveInput fields
-rule ReadInputSystem:
+# ReadInput: runs every input poll, stores axis values into MoveInput fields
+rule ReadInput:
     filter:
         MoveInput
 
@@ -52,8 +49,8 @@ rule ReadInputSystem:
         dx = input.axis(MoveX)
         dy = input.axis(MoveY)
 
-# MoveSystem: applies stored input deltas to position each tick
-rule MoveSystem:
+# Move: applies stored input deltas to position each tick
+rule Move:
     filter:
         tf.WorldTransform
         MoveInput

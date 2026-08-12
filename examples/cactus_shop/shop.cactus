@@ -104,7 +104,7 @@ rule ShopInteraction:
                 emit ShopOpened:
                     shop_entity = get_self_entity()
 
-rule PurchaseSystem:
+rule Purchase:
     filter:
         Wallet as w
         Inventory as inv

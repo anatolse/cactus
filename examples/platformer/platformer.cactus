@@ -122,27 +122,20 @@ trait Collectible:
 # ── Templates ────────────────────────────────────────────────────────────────────
 
 template FloatingPlatformBase:
-    tf.WorldTransform:
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
+    tf.WorldTransform
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         color = PLATFORM_COLOR
-        visible = true
     phys.Collider:
-        layer = SOLID_LAYER
         mask = PLAYER_LAYER
     phys.BoxCollider
 
 template WalkerEnemyBase:
-    tf.WorldTransform:
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
+    tf.WorldTransform
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(ENEMY_WIDTH, ENEMY_HEIGHT)
         color = ENEMY_COLOR
-        visible = true
     phys.Collider:
         layer = ENEMY_LAYER
         mask = ENEMY_MASK
@@ -153,14 +146,11 @@ template WalkerEnemyBase:
         direction = 1.0
 
 template BlueGemBase:
-    tf.WorldTransform:
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
+    tf.WorldTransform
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(GEM_SIZE, GEM_SIZE)
         color = GEM_COLOR_BLUE
-        visible = true
     phys.Collider:
         layer = COLLECTIBLE_LAYER
         mask = COLLECTIBLE_MASK
@@ -172,14 +162,11 @@ template BlueGemBase:
         collected = false
 
 template GoldGemBase:
-    tf.WorldTransform:
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
+    tf.WorldTransform
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(GEM_SIZE, GEM_SIZE)
         color = GEM_COLOR_GOLD
-        visible = true
     phys.Collider:
         layer = COLLECTIBLE_LAYER
         mask = COLLECTIBLE_MASK
@@ -195,13 +182,10 @@ template GoldGemBase:
 pub entity Player:
     tf.WorldTransform:
         position = vec2(100.0, 300.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(PLAYER_WIDTH, PLAYER_HEIGHT)
         color = #44AAFFFF
-        visible = true
     phys.Collider:
         layer = PLAYER_LAYER
         mask = PLAYER_MASK
@@ -228,15 +212,11 @@ pub entity Player:
 pub entity GroundPlatform:
     tf.WorldTransform:
         position = vec2(0.0, GROUND_Y)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
         color = GROUND_COLOR
-        visible = true
     phys.Collider:
-        layer = SOLID_LAYER
         mask = PLAYER_LAYER
     phys.BoxCollider:
         size = vec2(GROUND_WIDTH, GROUND_HEIGHT)
@@ -301,7 +281,7 @@ rule ReadPlayerInput:
         move_axis = input.axis(MoveX)
         jump_requested = input.pressed(Jump)
 
-rule MovementSystem:
+rule Move:
     filter:
         tf.WorldTransform
         PlayerMotion
@@ -365,7 +345,7 @@ rule MovementSystem:
                         jumps_remaining = max_jumps
                         jump_state = JumpState.Grounded
 
-rule InvincibilitySystem:
+rule DecayInvincibility:
     filter:
         Health
 
@@ -373,7 +353,7 @@ rule InvincibilitySystem:
         if invincible_timer > 0.0:
             invincible_timer = invincible_timer - tick.dt
 
-rule PatrolSystem:
+rule Patrol:
     filter:
         tf.WorldTransform
         PatrolMotion
@@ -389,7 +369,7 @@ rule PatrolSystem:
             direction = 1.0
             position = vec2(patrol_min_x, position.y)
 
-rule CollectionSystem:
+rule Collect:
     filter:
         Collectible
         shapes.Shape

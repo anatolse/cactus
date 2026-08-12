@@ -288,6 +288,15 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                     }
                 }
                 return emit_expr(*e.object, ast) + "." + e.member;
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                std::string result = "{";
+                for (size_t i = 0; i < e.elements.size(); ++i) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += emit_expr(*e.elements[i], ast);
+                }
+                return result + "}";
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 return "/* spawn expr */";
             } else {

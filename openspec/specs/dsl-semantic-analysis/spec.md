@@ -221,7 +221,7 @@ The semantic analyzer SHALL produce a resolved representation in which every mod
 - **THEN** the semantic representation stores the referenced rule's canonical symbol identity rather than the authored string
 
 ### Requirement: Filter clause aliases for trait fields
-The semantic analyzer SHALL support `as` aliases in rule `filter:` clauses. Both the alias and the trait name are valid access paths. Unqualified field access (without any prefix) is not permitted.
+The semantic analyzer SHALL support `as` aliases in rule `filter:` clauses. The alias, the trait name, and — when it resolves to exactly one filtered trait — the bare field name are all valid access paths. See "Field access validation in rule handlers" for the bare-field resolution rule.
 
 #### Scenario: Filter alias used for field access
 - **WHEN** a rule has a filter entry `phys.Body as b`
@@ -231,8 +231,8 @@ The semantic analyzer SHALL support `as` aliases in rule `filter:` clauses. Both
 - **WHEN** a rule has a filter entry `Position` with no alias
 - **THEN** `Position.x` resolves to the `x` field of `Position`
 
-### Requirement: Field access validation — mandatory alias.field in rule handlers
-The semantic analyzer SHALL enforce that all trait field accesses within rule handler bodies use the `alias.field` or `TraitName.field` form. Bare unqualified identifiers that resolve to trait fields SHALL be rejected.
+### Requirement: Field access validation in rule handlers
+The semantic analyzer SHALL accept trait field access within rule handler bodies in the `alias.field` form, the `TraitName.field` form, or as a bare (unqualified) field name when the field name resolves to exactly one filtered trait.
 
 #### Scenario: Alias.field access accepted
 - **WHEN** a rule has `filter: Position as pos` and the handler body contains `pos.x += 1.0`
@@ -242,9 +242,9 @@ The semantic analyzer SHALL enforce that all trait field accesses within rule ha
 - **WHEN** a rule has `filter: Position` (no alias) and the handler body contains `Position.x += 1.0`
 - **THEN** the analyzer accepts `Position.x`
 
-#### Scenario: Bare field name rejected
-- **WHEN** a rule filters on `Position` and the handler body contains bare `x += 1.0`
-- **THEN** the analyzer reports an error: "unqualified field access 'x' not allowed; use 'Position.x' or declare an alias"
+#### Scenario: Bare field name resolves to the sole matching trait
+- **WHEN** a rule filters on `Position` (no alias, no other filtered trait declares a field named `x`) and the handler body contains bare `x += 1.0`
+- **THEN** the analyzer accepts the access and resolves `x` to `Position.x`
 
 ### Requirement: Local variable scope in rule handlers
 The semantic analyzer SHALL maintain a per-handler local variable scope. `let` declarations introduce immutable bindings; `var` declarations introduce mutable bindings. Re-declaration of an existing local in the same scope SHALL produce an error.

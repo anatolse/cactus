@@ -17,18 +17,14 @@ trait Clock:
 
 pub entity WavingLabel:
     tv.WorldTransform:
-        position = vec3(0.0, 0.0, 0.0)
-        rotation = quat.identity()
         scale    = vec3(3.0, 1.5, 1.0)
     rtext.TextLabel:
         text      = "00:00"
         font_size = 1
-        color     = #FFFFFFFF
-        visible   = true
     Clock:
         elapsed = 0.0
 
-rule WaveSystem:
+rule Wave:
     filter:
         tv.WorldTransform
         rtext.TextLabel

@@ -31,42 +31,28 @@ trait PlayerInput:
 
 # Left viewport: full left half of the screen, normal zoom.
 pub entity LeftCamera:
-    cam2d.Camera:
-        zoom = 1.0
-        offset = vec2(0.0, 0.0)
+    cam2d.Camera
     vp.Viewport:
-        x = 0.0
-        y = 0.0
         width = 0.5
-        height = 1.0
-        depth = 0
         clear_color = #1a1a2eFF
 
 # Right viewport: full right half of the screen, 2× zoom (shows the same world, closer in).
 pub entity RightCamera:
     cam2d.Camera:
         zoom = 2.0
-        offset = vec2(0.0, 0.0)
     vp.Viewport:
         x = 0.5
-        y = 0.0
         width = 0.5
-        height = 1.0
-        depth = 0
         clear_color = #1e3a1eFF
 
 # ── Scene Entities ────────────────────────────────────────────────────────────
 
 pub entity Player:
-    tf.WorldTransform:
-        position = vec2(0.0, 0.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
+    tf.WorldTransform
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #4488FFFF
-        visible = true
     PlayerInput:
         dx = 0.0
         dy = 0.0
@@ -74,39 +60,30 @@ pub entity Player:
 pub entity RedMarker:
     tf.WorldTransform:
         position = vec2(200.0, 0.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #FF4444FF
-        visible = true
 
 pub entity GreenMarker:
     tf.WorldTransform:
         position = vec2(-200.0, 0.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #44FF44FF
-        visible = true
 
 pub entity YellowMarker:
     tf.WorldTransform:
         position = vec2(0.0, -150.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(40.0, 40.0)
         color = #FFDD00FF
-        visible = true
 
 # ── Rules ─────────────────────────────────────────────────────────────────────
 
-rule ReadInputSystem:
+rule ReadInput:
     filter:
         PlayerInput
 
@@ -114,7 +91,7 @@ rule ReadInputSystem:
         dx = input.axis(MoveX)
         dy = input.axis(MoveY)
 
-rule MoveSystem:
+rule Move:
     filter:
         tf.WorldTransform
         PlayerInput

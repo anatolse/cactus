@@ -25,22 +25,16 @@ trait Clock:
 pub entity WavingSquare:
     tf.WorldTransform:
         position = vec2(CENTER_X, CENTER_Y)
-        rotation = 0.0
-        scale    = vec2(1.0, 1.0)
     shapes.Shape:
         type    = shapes.ShapeType.Rectangle
         size    = vec2(80.0, 80.0)
         color   = #6495EDFF
-        visible = true
     rtext.TextLabel:
         text      = "00:00"
-        font_size = 32
-        color     = #FFFFFFFF
-        visible   = true
     Clock:
         elapsed = 0.0
 
-rule WaveSystem:
+rule Wave:
     filter:
         tf.WorldTransform
         rtext.TextLabel

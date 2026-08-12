@@ -2725,7 +2725,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         if (uses_random && t.module_name == "std.random" && kRandomRuntimeTypes.contains(t.name)) {
             continue;
         }
-        out << EnttComponentEmitter::emit_component(t) << "\n";
+        out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
 
     // Monotonic, non-reused per-entity creation order (dsl-pair-relations):

@@ -21,7 +21,7 @@ The language should be understood in layers:
 ```text
 ┌──────────────────────────────────────────────┐
 │ Gameplay core                               │
-│ modules, traits, entities, templates, systems, │
+│ modules, traits, entities, templates, rules,   │
 │ events, inputs, assets, spawn, destroy,     │
 │ add/remove, scene flow                      │
 └──────────────────────────────────────────────┘
@@ -30,7 +30,7 @@ The language should be understood in layers:
 ┌──────────────────────────────────────────────┐
 │ Stdlib / backend-facing surface             │
 │ std.input, rendering, camera, physics,      │
-│ audio, extern funcs, extern systems         │
+│ audio, extern funcs, extern rules            │
 └──────────────────────────────────────────────┘
                     │
                     ▼
@@ -47,9 +47,9 @@ The current gameplay-core profile includes:
 - `module`, `use`, `const`
 - `struct`, `enum`, `trait`
 - `entity`, `template`
-- `system`, `extern system`, `event`, `extern event`, `phase`, `func`, `extern func`
+- `rule`, `extern rule`, `event`, `extern event`, `phase`, `func`, `extern func`
 - `asset`, `input`
-- `system` selection domains: selectionless, unary `filter:`/`exclude:`/`order by:`, and binary `pairs:` relations
+- `rule` selection domains: selectionless, unary `filter:`/`exclude:`/`order by:`, and binary `pairs:` relations
 - handlers triggered by declared phases or ordinary events, such as `on input:`, `on fixed_tick:`, `on tick:`, and `on PlayerDamaged:`
 - statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit` (broadcast or targeted with `to`), `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
 
@@ -87,7 +87,7 @@ Single-line comments start with `#` and extend to the end of the line.
 
 ```text
 module  use     const   struct  enum    trait   entity  template
-system  event   phase   func    extern  asset   input
+rule    event   phase   func    extern  asset   input
 let     var     persist sync    pub
 on      emit    if      else    match   return
 filter  exclude order   by      after   as      every  max
@@ -114,7 +114,7 @@ fixed_tick late_tick
 program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
                 | enum_decl | trait_decl | entity_decl | template_decl
-                | system_decl | extern_system_decl | event_decl | phase_decl
+                | rule_decl | extern_rule_decl | event_decl | phase_decl
                 | func_decl | extern_func_decl | asset_decl | input_decl ;
 ```
 
@@ -357,12 +357,12 @@ The four composition/creation constructs at a glance:
 
 Hierarchy syntax creates parent-child **relations only**. It does not by itself imply transform propagation, rendering, or physics attachment: a child follows its parent's transform only when the child carries the transform traits (`LocalTransform`/`WorldTransform`) required by the active transform propagation system. Destroying a root uses the existing `Parent`-based recursive destroy, so generated descendants are destroyed with it on backends that support the cascade.
 
-### 3.8 Systems
+### 3.8 Rules
 
-Systems contain gameplay logic over filtered entities. A regular system has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`/`order by:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:`, `exclude:`, and `order by:`.
+Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`/`order by:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:`, `exclude:`, and `order by:`.
 
 ```ebnf
-system_decl     = "system" IDENTIFIER ":" NEWLINE INDENT
+rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   ( unary_domain | pairs_clause )
                   [ after_clause ]
                   { event_handler }
@@ -390,7 +390,7 @@ after_clause    = "after" ":" NEWLINE INDENT
 ```
 
 ```cactus
-system PatrolSystem:
+rule Patrol:
     filter:
         Position as pos
         EnemyAI as ai
@@ -403,7 +403,7 @@ system PatrolSystem:
 
 #### 3.8.1 Pair Relations
 
-`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the system-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern system` declarations.
+`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the rule-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern rule` declarations.
 
 ```ebnf
 pairs_clause    = "pairs" ":" NEWLINE INDENT
@@ -418,7 +418,7 @@ pair_binding    = IDENTIFIER ":" NEWLINE INDENT
 Each binding requires at least one positive trait entry; a `pairs:` block always has exactly two bindings.
 
 ```cactus
-system DetectContacts:
+rule DetectContacts:
     pairs:
         body:
             DynamicBody
@@ -443,7 +443,7 @@ system DetectContacts:
 - `body.tf.WorldTransform.position` — an imported trait, reached as `binding.module_alias.Trait.field` (the authored `use ... as` qualification is preserved under the binding)
 - `wall.transform.position` — a binding-local alias declared with `as` inside that binding's block, reached as `binding.alias.field`
 
-Binding names and their aliases must be unambiguous within every handler scope on that system.
+Binding names and their aliases must be unambiguous within every handler scope on that rule.
 
 **The relation is a directed Cartesian product.** For bindings A and B, the handler executes once per pair `(a, b)` where `a` satisfies every trait A requires and `b` satisfies every trait B requires. The product is directed and finite: self-pairs (`a == b`, when one entity satisfies both bindings) and reverse-role tuples are included whenever membership permits. There is no relational `where:` surface — ordinary `if` statements are the authored mechanism for rejecting tuples, as with `if body != wall:` above.
 
@@ -497,12 +497,12 @@ on PlayerDamaged as dmg:
     hp.health = hp.health - dmg.amount
 ```
 
-### 3.10 Extern Systems
+### 3.10 Extern Rules
 
-`extern system` is an advanced backend-facing declaration. Its implementation is provided by a compiler-owned adapter or by a user library, but every extern system still declares one or more triggered handlers. Handler contracts are mandatory and shape both scheduling and the generated callback ABI.
+`extern rule` is an advanced backend-facing declaration. Its implementation is provided by a compiler-owned adapter or by a user library, but every extern rule still declares one or more triggered handlers. Handler contracts are mandatory and shape both scheduling and the generated callback ABI.
 
 ```ebnf
-extern_system_decl = "extern" "system" IDENTIFIER ":" NEWLINE INDENT
+extern_rule_decl   = "extern" "rule" IDENTIFIER ":" NEWLINE INDENT
                      [ filter_clause ]
                      [ exclude_clause ]
                      [ order_by_clause ]
@@ -526,7 +526,7 @@ command_capability  = "spawn" dotted_name
 ```
 
 ```cactus
-extern system NativeMovement:
+extern rule NativeMovement:
     filter:
         Position
         Velocity
@@ -538,7 +538,7 @@ extern system NativeMovement:
         effects:
             physics
 
-extern system InputSource:
+extern rule InputSource:
     on input:
         writes:
             PlayerInput
@@ -786,7 +786,7 @@ load levels.level2
 
 `emit` (like `add` and `project`) may omit the `:` payload block entirely when the event has no fields to set (e.g. a zero-field `pub event StartBump`) or when every field should take its default; `to expression` is still allowed without a block for a targeted zero-field emit.
 
-Bounded foreach is allowed only inside system event handlers. The iterable expression is evaluated once before the loop and must have type `list[T]`; the loop variable is a read-only binding scoped to the loop body. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
+Bounded foreach is allowed only inside rule event handlers. The iterable expression is evaluated once before the loop and must have type `list[T]`; the loop variable is a read-only binding scoped to the loop body. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
 
 `project` mirrors `add` field-initialization syntax but writes to a frame-local projected trait overlay instead of durable ECS component storage. If no `to` target is provided, the target is `self`. Projected traits are coalesced by `(entity, trait)`, visible to later `filter:` / `exclude:` matching during the same rendered frame, and cleared at the frame boundary after render processing. Use:
 
@@ -818,14 +818,14 @@ match collision.other:
 - **traits** define entity data
 - **entities** define pre-existing load-time entity instances
 - **templates** define spawnable blueprints
-- **systems** define logic over filtered entities
+- **rules** define behavior over filtered entities
 - **events** define typed gameplay messages
 
 Template composition is static blueprint reuse: a body-level `use TemplateName` inside an `entity` or `template` is resolved and flattened before runtime. Runtime `spawn TemplateName:` is separate; it creates an entity from the flattened template and applies spawn-site overrides.
 
 ### 4.2 Field Access and Handler Bindings
 
-Trait fields in systems are accessed through:
+Trait fields in rules are accessed through:
 
 - `alias.field` if a filter alias is declared
 - `TraitName.field` if no alias is declared
@@ -836,7 +836,7 @@ Phase and event payloads are accessed through:
 - or a handler alias declared with `on ... as alias:`
 
 ```cactus
-system Move:
+rule Move:
     filter:
         Position as pos
         Velocity as vel
@@ -844,7 +844,7 @@ system Move:
     on tick:
         pos.pos = pos.pos + vel.value * tick.dt
 
-system Damage:
+rule Damage:
     filter:
         Health as hp
 
@@ -852,7 +852,7 @@ system Damage:
         hp.health = hp.health - dmg.amount
 ```
 
-Bare unqualified trait-field access is not part of the current profile.
+Bare (unqualified) trait-field access is accepted when it resolves to exactly one selected trait; `alias.field`/`TraitName.field` remain the preferred style for handlers filtering multiple substantial traits.
 
 Pair handlers (§3.8.1) use a third, binding-qualified form instead of a filter alias: `binding.Trait.field`, `binding.module_alias.Trait.field`, or `binding.alias.field` for a binding-local `as` alias. Pair-bound access is read-only.
 
@@ -888,12 +888,12 @@ String literals are only allowed in:
 - `filter:` selects entities
 - `exclude:` removes entities from consideration
 - a leading handler `after:` names canonical handler identities and constrains order for that trigger
-- legacy system-level `after:` expands only between handlers with the same canonical trigger and never creates cross-trigger edges
-- `order by:` constrains iteration order for a system pass
+- legacy rule-level `after:` expands only between handlers with the same canonical trigger and never creates cross-trigger edges
+- `order by:` constrains iteration order for a rule pass
 - `filter:` and `exclude:` select entities but do not imply component reads
 - regular handler contracts are inferred from their bodies; extern handler contracts are declared explicitly
 
-Every handler has a canonical identity composed from its module, owning system, and resolved phase/event trigger. Co-eligible handlers are serialized for write/read, read/write, write/write, and matching observable-effect conflicts. Read/read and filter overlap do not conflict. Edge direction uses explicit `after:` first, then one-way writer-before-reader dependencies, then stable linked declaration order for remaining conflicts. The combined handler schedule must be acyclic.
+Every handler has a canonical identity composed from its module, owning rule, and resolved phase/event trigger. Co-eligible handlers are serialized for write/read, read/write, write/write, and matching observable-effect conflicts. Read/read and filter overlap do not conflict. Edge direction uses explicit `after:` first, then one-way writer-before-reader dependencies, then stable linked declaration order for remaining conflicts. The combined handler schedule must be acyclic.
 
 ## 5. Execution Model
 
@@ -996,7 +996,7 @@ trait MoveIntent:
     var axis_x: float = 0.0
     var jump_pressed: bool = false
 
-system ReadInput:
+rule ReadInput:
     filter:
         MoveIntent as move
 
@@ -1004,7 +1004,7 @@ system ReadInput:
         move.axis_x = input.axis(MoveX)
         move.jump_pressed = input.pressed(Jump)
 
-system JumpSystem:
+rule Jump:
     filter:
         Position as p
         PlayerPhysics as phys
@@ -1030,7 +1030,7 @@ template Bullet:
         damage = 1
         lifetime = 1.0
 
-system FireSystem:
+rule Fire:
     filter:
         Position as p
         Shooter as shooter
@@ -1046,7 +1046,7 @@ system FireSystem:
             emit ShotFired:
                 origin = p.pos
 
-system BulletHitSystem:
+rule ExpireBullets:
     filter:
         Bullet as bullet
 
@@ -1055,7 +1055,7 @@ system BulletHitSystem:
             destroy
 ```
 
-The shooter loop uses the same core constructs as the platformer loop: inputs, systems, templates, spawning, events, and cleanup.
+The shooter loop uses the same core constructs as the platformer loop: inputs, rules, templates, spawning, events, and cleanup.
 
 ### 6.3 Contact Detection (Pair Relations)
 
@@ -1073,7 +1073,7 @@ trait Collider:
 event Contact:
     other: entity_id
 
-system DetectContacts:
+rule DetectContacts:
     pairs:
         body:
             DynamicBody
@@ -1087,7 +1087,7 @@ system DetectContacts:
             emit Contact to body:
                 other = wall
 
-system ResolveContact:
+rule ResolveContact:
     filter:
         Health as hp
 
@@ -1113,11 +1113,11 @@ The gameplay core is extended by stdlib modules and backend-provided declaration
 
 `extern func` provides engine/runtime functionality such as math helpers, rendering calls, camera setters, collision helpers, and input helpers.
 
-### 7.3 Extern Systems
+### 7.3 Extern Rules
 
-`extern system` is used when a compiler-owned adapter or user library supplies handler implementations. The generated ABI is per handler and includes its canonical trigger identity. Selected callbacks receive only the declared const read references, mutable write references, entity context, and restricted event/command/effect adapters. Selectionless callbacks receive trigger data and declared capabilities but no entity. An unrestricted registry is not part of the user callback surface.
+`extern rule` is used when a compiler-owned adapter or user library supplies handler implementations. The generated ABI is per handler and includes its canonical trigger identity. Selected callbacks receive only the declared const read references, mutable write references, entity context, and restricted event/command/effect adapters. Selectionless callbacks receive trigger data and declared capabilities but no entity. An unrestricted registry is not part of the user callback surface.
 
-Renderers are ordinary `on render` handlers with `effects: graphics`; input producers are typically selectionless `on input` handlers. Runtime scheduling never infers behavior from a system name, filter shape, or lifecycle-like trigger spelling.
+Renderers are ordinary `on render` handlers with `effects: graphics`; input producers are typically selectionless `on input` handlers. Runtime scheduling never infers behavior from a rule name, filter shape, or lifecycle-like trigger spelling.
 
 These surfaces are active, but they are **not the minimal gameplay-core language story**.
 
@@ -1183,7 +1183,7 @@ The following older forms are not normative in the current profile:
 - parenthesized `emit Event(...)` as the main documented event form
 - flat `spawn Foo(...)` override syntax as the main documented spawn form
 - parameterized handler forms such as `on tick(dt: float):`
-- handlerless extern systems or extern filters treated as implicit reads
+- handlerless extern rules or extern filters treated as implicit reads
 - relying on lifecycle names or renderer names to select a runtime hook
 
 Prefer:

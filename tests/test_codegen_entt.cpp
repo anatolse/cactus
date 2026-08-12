@@ -288,28 +288,131 @@ extern rule Monitor:
     CHECK(generated.find("void game__Monitor__tick(entt::registry& registry)") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: stdlib collider components keep authored defaults", "[codegen-entt][stdlib][physics]") {
-    ResolvedTrait collider;
-    collider.name        = "Collider";
-    collider.module_name = "std.physics.flat";
-    collider.is_pub      = true;
-    collider.is_stdlib   = true;
-    collider.fields.push_back({.name = "layer", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
-    collider.fields.push_back({.name = "mask", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+// A field's default member initializer must come from the trait's own `=
+// expression` in the parsed AST (the DSL source of truth), not a backend-side
+// copy that can silently drift from it — so `emit_component` takes the
+// program's AST and looks the default up by (module, trait, field) instead of
+// hardcoding it. A field with no declared default still falls back to `{}`
+// (checked by the pre-existing "component struct from trait" test above,
+// which calls `emit_component` with no AST at all).
+TEST_CASE("Codegen EnTT: component struct field defaults come from the trait's own declaration",
+          "[codegen-entt][defaults]") {
+    ProgramNode ast;
+    auto decorated = full_pipeline(
+        "trait Defaults:\n"
+        "    var f: float = 1.5\n"
+        "    var v2: vec2 = vec2(1.0, 2.0)\n"
+        "    var v3: vec3 = vec3(1.0, 2.0, 3.0)\n"
+        "    var q: quat = quat(0.0, 0.0, 0.0, 1.0)\n"
+        "    var flag: bool = true\n"
+        "    var n: int = 7\n"
+        "    var c: color = #FF0000FF\n"
+        "    var items: list[int] = [1, 2]\n"
+        "    var empty_items: list[int] = []\n"
+        "    var s: string = \"hi\"\n"
+        "    var empty_s: string = \"\"\n"
+        "    var required: float\n",
+        ast);
 
-    const auto collider_code = EnttComponentEmitter::emit_component(collider);
-    CHECK(collider_code.find("int layer{1};") != std::string::npos);
-    CHECK(collider_code.find("int mask{1};") != std::string::npos);
+    ResolvedTrait defaults;
+    defaults.name        = "Defaults";
+    defaults.module_name = "test";  // full_pipeline auto-prepends `module test`
+    defaults.fields.push_back({.name = "f", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    defaults.fields.push_back({.name = "v2", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    defaults.fields.push_back({.name = "v3", .type = {.kind = TypeKind::Vec3, .name = "vec3"}, .is_var = true});
+    defaults.fields.push_back({.name = "q", .type = {.kind = TypeKind::Quat, .name = "quat"}, .is_var = true});
+    defaults.fields.push_back({.name = "flag", .type = {.kind = TypeKind::Bool, .name = "bool"}, .is_var = true});
+    defaults.fields.push_back({.name = "n", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+    defaults.fields.push_back({.name = "c", .type = {.kind = TypeKind::Color, .name = "color"}, .is_var = true});
+    const auto int_element = std::make_shared<TypeInfo>(TypeInfo{.kind = TypeKind::Int, .name = "int"});
+    defaults.fields.push_back(
+        {.name = "items", .type = {.kind = TypeKind::List, .name = "list", .element = int_element}, .is_var = true});
+    defaults.fields.push_back({.name       = "empty_items",
+                               .type       = {.kind = TypeKind::List, .name = "list", .element = int_element},
+                               .is_var     = true});
+    defaults.fields.push_back({.name = "s", .type = {.kind = TypeKind::String, .name = "string"}, .is_var = true});
+    defaults.fields.push_back(
+        {.name = "empty_s", .type = {.kind = TypeKind::String, .name = "string"}, .is_var = true});
+    defaults.fields.push_back(
+        {.name = "required", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
 
-    ResolvedTrait box;
-    box.name        = "BoxCollider";
-    box.module_name = "std.physics.flat";
-    box.is_pub      = true;
-    box.is_stdlib   = true;
-    box.fields.push_back({.name = "size", .type = {.kind = TypeKind::Vec2, .name = "vec2"}, .is_var = true});
+    const auto code = EnttComponentEmitter::emit_component(defaults, decorated);
+    CHECK(code.find("float f = 1.5F;") != std::string::npos);
+    CHECK(code.find("Vector2 v2 = vec2(1.0F, 2.0F);") != std::string::npos);
+    CHECK(code.find("Vector3 v3 = vec3(1.0F, 2.0F, 3.0F);") != std::string::npos);
+    CHECK(code.find("Quat q = quat(0.0F, 0.0F, 0.0F, 1.0F);") != std::string::npos);
+    CHECK(code.find("bool flag = true;") != std::string::npos);
+    CHECK(code.find("int n = 7;") != std::string::npos);
+    CHECK(code.find("Color c = Color{.r = 255, .g = 0, .b = 0, .a = 255};") != std::string::npos);
+    CHECK(code.find("std::vector<int> items = {1, 2};") != std::string::npos);
+    CHECK(code.find("std::vector<int> empty_items = {};") != std::string::npos);
+    CHECK(code.find("std::string s = \"hi\";") != std::string::npos);
+    // A declared `= ""` default is redundant with std::string's own default
+    // construction, and spelling it out trips clang-tidy's
+    // readability-redundant-string-init on generated output.
+    CHECK(code.find("std::string empty_s{};") != std::string::npos);
+    CHECK(code.find("empty_s = \"\"") == std::string::npos);
+    CHECK(code.find("float required{};") != std::string::npos);
+}
 
-    const auto box_code = EnttComponentEmitter::emit_component(box);
-    CHECK(box_code.find("Vector2 size{.x = 1.0F, .y = 1.0F};") != std::string::npos);
+// Trait names can collide across modules (e.g. stdlib declares a trait named
+// "WorldTransform" once in `std.transform.flat` and once in
+// `std.transform.volume`, with different defaults) — the AST lookup must key
+// off the enclosing module, not match the first same-named trait it finds.
+TEST_CASE("Codegen EnTT: same-named traits in different modules resolve independent defaults",
+          "[codegen-entt][defaults]") {
+    ProgramNode ast_a;
+    full_pipeline("module mod_a\n\ntrait Thing:\n    var x: float = 1.0\n", ast_a);
+    ProgramNode ast_b;
+    full_pipeline("module mod_b\n\ntrait Thing:\n    var x: float = 2.0\n", ast_b);
+
+    ProgramNode combined;
+    for (auto& decl : ast_a.declarations) {
+        combined.declarations.push_back(std::move(decl));
+    }
+    for (auto& decl : ast_b.declarations) {
+        combined.declarations.push_back(std::move(decl));
+    }
+    DecoratedProgram combined_program;
+    combined_program.ast = &combined;
+
+    ResolvedTrait thing_a;
+    thing_a.name        = "Thing";
+    thing_a.module_name = "mod_a";
+    thing_a.fields.push_back({.name = "x", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+
+    ResolvedTrait thing_b;
+    thing_b.name        = "Thing";
+    thing_b.module_name = "mod_b";
+    thing_b.fields.push_back({.name = "x", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+
+    const auto code_a = EnttComponentEmitter::emit_component(thing_a, combined_program);
+    CHECK(code_a.find("float x = 1.0F;") != std::string::npos);
+
+    const auto code_b = EnttComponentEmitter::emit_component(thing_b, combined_program);
+    CHECK(code_b.find("float x = 2.0F;") != std::string::npos);
+}
+
+// A default expression may call a module-aliased stdlib extern func (e.g.
+// stdlib's own `rand.seeded(0)`), which needs the same stdlib call-site
+// rewriting handler-body assignments already get — the DecoratedProgram
+// overload of emit_expr, not the bare-AST one.
+TEST_CASE("Codegen EnTT: field default calling a module-aliased stdlib func resolves to the runtime namespace",
+          "[codegen-entt][defaults][stdlib]") {
+    ProgramNode ast;
+    auto decorated = full_pipeline(
+        "use std.random as rand\n"
+        "trait TreeRng:\n"
+        "    var rng: int = rand.seeded(0)\n",
+        ast);
+
+    ResolvedTrait tree_rng;
+    tree_rng.name        = "TreeRng";
+    tree_rng.module_name = "test";
+    tree_rng.fields.push_back({.name = "rng", .type = {.kind = TypeKind::Int, .name = "int"}, .is_var = true});
+
+    const auto code = EnttComponentEmitter::emit_component(tree_rng, decorated);
+    CHECK(code.find("cactus::runtime::stdlib::random::seeded(0)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: registry view rule", "[codegen-entt]") {

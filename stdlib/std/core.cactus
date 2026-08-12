@@ -54,7 +54,7 @@ pub event unload
 # ── Standard Rules ───────────────────────────────────────────────────────────
 
 # SceneCleanup destroys all non-persistent entities on scene unload.
-# Entities that have `Persistent` in their apply: block are excluded.
+# Entities carrying the `Persistent` trait are excluded via `exclude: Persistent`.
 rule SceneCleanup:
     exclude:
         Persistent

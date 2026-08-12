@@ -81,7 +81,7 @@ rule ReadPlayerInput:
         input_state.move = input.axis2(MoveX, MoveY)
         input_state.fire_pressed = input.pressed(Fire)
 
-rule PlayerMoveSystem:
+rule MovePlayer:
     filter:
         Position as pos
         PlayerInput as input_state
@@ -91,7 +91,7 @@ rule PlayerMoveSystem:
         pos.velocity = input_state.move * PLAYER_SPEED
         pos.pos = pos.pos + pos.velocity * tick.dt
 
-rule FireSystem:
+rule Fire:
     filter:
         Position as pos
         PlayerInput as input_state
@@ -111,7 +111,7 @@ rule FireSystem:
             emit ShotFired:
                 origin = pos.pos
 
-rule BulletMoveSystem:
+rule MoveBullet:
     filter:
         Position as pos
         Bullet as bullet
@@ -122,7 +122,7 @@ rule BulletMoveSystem:
         if bullet.lifetime <= 0.0:
             destroy
 
-rule BulletHitSystem:
+rule DetectHit:
     filter:
         Position as pos
         Bullet as bullet
@@ -134,7 +134,7 @@ rule BulletHitSystem:
                 amount = bullet.damage
             destroy
 
-rule EnemyHealthSystem:
+rule DamageEnemy:
     filter:
         Enemy as enemy
 

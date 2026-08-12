@@ -482,6 +482,189 @@ TEST_CASE("Parser: if statement", "[parser]") {
     CHECK(if_stmt->then_body.size() == 1);
 }
 
+// Baseline (pre else-if): no test before this one exercised `else` in any
+// form. This captures today's two-branch if/else shape so later `else if`
+// work can be checked against it instead of assumed unaffected.
+TEST_CASE("Parser: if/else statement", "[parser]") {
+    auto prog = parse(
+        "func test():\n"
+        "    if x > 0:\n"
+        "        return x\n"
+        "    else:\n"
+        "        return 0\n");
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    REQUIRE(decl.body.size() == 1);
+    auto* if_stmt = std::get_if<IfStmt>(&decl.body[0]->stmt);
+    REQUIRE(if_stmt != nullptr);
+    REQUIRE(if_stmt->then_body.size() == 1);
+    REQUIRE(if_stmt->else_body.size() == 1);
+
+    auto* then_return = std::get_if<ReturnStmt>(&if_stmt->then_body[0]->stmt);
+    REQUIRE(then_return != nullptr);
+    REQUIRE(then_return->value.has_value());
+    auto* then_ident = std::get_if<IdentExpr>(&(*then_return->value)->expr);
+    REQUIRE(then_ident != nullptr);
+    CHECK(then_ident->name == "x");
+
+    auto* else_return = std::get_if<ReturnStmt>(&if_stmt->else_body[0]->stmt);
+    REQUIRE(else_return != nullptr);
+    REQUIRE(else_return->value.has_value());
+    auto* else_lit = std::get_if<LiteralExpr>(&(*else_return->value)->expr);
+    REQUIRE(else_lit != nullptr);
+    CHECK(else_lit->value == "0");
+}
+
+// Baseline: the legacy spelling for chained conditions is `else:` whose body
+// is a single nested `if`. This must keep parsing exactly as today (nested
+// IfStmt inside else_body) — the else-if grammar work does not touch this
+// path.
+TEST_CASE("Parser: legacy nested else+if chain", "[parser]") {
+    auto prog = parse(
+        "func test():\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    else:\n"
+        "        if b:\n"
+        "            return 2\n"
+        "        else:\n"
+        "            return 3\n");
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    REQUIRE(decl.body.size() == 1);
+    auto* outer_if = std::get_if<IfStmt>(&decl.body[0]->stmt);
+    REQUIRE(outer_if != nullptr);
+    REQUIRE(outer_if->else_body.size() == 1);
+    auto* nested_if = std::get_if<IfStmt>(&outer_if->else_body[0]->stmt);
+    REQUIRE(nested_if != nullptr);
+    CHECK(nested_if->then_body.size() == 1);
+    CHECK(nested_if->else_body.size() == 1);
+}
+
+// Baseline: today, a second `else:` with no owning chain slot to attach to
+// (the "duplicate terminal else" shape from specs/dsl-parser/spec.md) is not
+// a dedicated diagnostic — it falls through to the generic "expected
+// expression" error from parse_primary_expr's unrecognised-token fallback.
+// Captured here so the new-grammar diagnostic work (section 3) can compare
+// against this instead of assuming what today's behavior is.
+TEST_CASE("Parser: duplicate else with no owning if reports generic error", "[parser]") {
+    auto errors = parse_expect_errors(
+        "func test():\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    else:\n"
+        "        return 2\n"
+        "    else:\n"
+        "        return 3\n");
+    REQUIRE(errors.has_errors());
+
+    bool found = false;
+    for (const auto& diagnostic : errors.diagnostics()) {
+        if (diagnostic.message == "expected expression") {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("Parser: else-if chain parses into branch-list shape", "[parser]") {
+    auto prog = parse(
+        "func test():\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    else if b:\n"
+        "        return 2\n"
+        "    else if c:\n"
+        "        return 3\n"
+        "    else:\n"
+        "        return 4\n");
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    REQUIRE(decl.body.size() == 1);
+    auto* if_stmt = std::get_if<IfStmt>(&decl.body[0]->stmt);
+    REQUIRE(if_stmt != nullptr);
+    REQUIRE(if_stmt->then_body.size() == 1);
+    REQUIRE(if_stmt->else_if_branches.size() == 2);
+    REQUIRE(if_stmt->else_body.size() == 1);
+
+    auto* cond_a = std::get_if<IdentExpr>(&if_stmt->condition->expr);
+    REQUIRE(cond_a != nullptr);
+    CHECK(cond_a->name == "a");
+
+    auto* cond_b = std::get_if<IdentExpr>(&if_stmt->else_if_branches[0].condition->expr);
+    REQUIRE(cond_b != nullptr);
+    CHECK(cond_b->name == "b");
+    REQUIRE(if_stmt->else_if_branches[0].body.size() == 1);
+
+    auto* cond_c = std::get_if<IdentExpr>(&if_stmt->else_if_branches[1].condition->expr);
+    REQUIRE(cond_c != nullptr);
+    CHECK(cond_c->name == "c");
+    REQUIRE(if_stmt->else_if_branches[1].body.size() == 1);
+
+    // Branch bodies preserve source order: 1 (then), 2/3 (else-if arms), 4 (terminal else).
+    auto extract_return_literal = [](const std::unique_ptr<StmtNode>& stmt) -> const std::string& {
+        auto* ret = std::get_if<ReturnStmt>(&stmt->stmt);
+        REQUIRE(ret != nullptr);
+        REQUIRE(ret->value.has_value());
+        auto* lit = std::get_if<LiteralExpr>(&(*ret->value)->expr);
+        REQUIRE(lit != nullptr);
+        return lit->value;
+    };
+    CHECK(extract_return_literal(if_stmt->then_body[0]) == "1");
+    CHECK(extract_return_literal(if_stmt->else_if_branches[0].body[0]) == "2");
+    CHECK(extract_return_literal(if_stmt->else_if_branches[1].body[0]) == "3");
+    CHECK(extract_return_literal(if_stmt->else_body[0]) == "4");
+}
+
+TEST_CASE("Parser: else-if chain without terminal else has empty else body", "[parser]") {
+    auto prog = parse(
+        "func test():\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    else if b:\n"
+        "        return 2\n");
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    auto* if_stmt = std::get_if<IfStmt>(&decl.body[0]->stmt);
+    REQUIRE(if_stmt != nullptr);
+    REQUIRE(if_stmt->else_if_branches.size() == 1);
+    CHECK(if_stmt->else_body.empty());
+}
+
+// Note: "duplicate terminal else" (a second `else:` following an already-complete
+// if/else) is already exercised by the section-1 baseline test above
+// ("Parser: duplicate else with no owning if reports generic error") — the two
+// scenarios are the same source shape, so it is not duplicated here.
+
+TEST_CASE("Parser: else if after terminal else rejected", "[parser]") {
+    auto errors = parse_expect_errors(
+        "func test():\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    else:\n"
+        "        return 2\n"
+        "    else if c:\n"
+        "        return 3\n");
+    CHECK(errors.has_errors());
+}
+
+TEST_CASE("Parser: misindented else if rejected", "[parser]") {
+    auto errors = parse_expect_errors(
+        "func test():\n"
+        "    if a:\n"
+        "        return 1\n"
+        "        else if b:\n"
+        "            return 2\n");
+    CHECK(errors.has_errors());
+}
+
+TEST_CASE("Parser: empty else if suite rejected", "[parser]") {
+    auto errors = parse_expect_errors(
+        "func test():\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    else if b:\n"
+        "    return 2\n");
+    CHECK(errors.has_errors());
+}
+
 TEST_CASE("Parser: emit statement", "[parser]") {
     auto prog = parse(
         "func test():\n"

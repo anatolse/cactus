@@ -828,3 +828,68 @@ The parser SHALL accept `on Trigger:` blocks inside `extern rule` declarations a
 - **WHEN** InputSource declares only `on input` with `emits: InputSample`
 - **THEN** parsing succeeds without requiring a filter clause
 
+### Requirement: `if` / `else if` / `else` statement grammar
+The parser SHALL accept a chain of zero or more `else if` clauses between the
+`if` clause and an optional terminal `else` clause, each introducing an
+independent condition and body at the same syntactic level as the owning
+`if`. The existing single `if [else]` form remains valid as the zero-`else
+if` case of the same grammar.
+
+```ebnf
+if_stmt = "if" expression ":" suite
+          { "else" "if" expression ":" suite }
+          [ "else" ":" suite ] ;
+```
+
+Conditions SHALL be evaluated top to bottom. Exactly the first branch whose
+condition is true executes. If no condition is true and a terminal `else` is
+present, its body executes. If no condition is true and no terminal `else` is
+present, no branch executes.
+
+#### Scenario: Two-branch if/else parses
+- **WHEN** source contains `if x > 0:` with a body, followed by `else:` with a body
+- **THEN** the parser accepts it and both bodies are recorded in declaration order
+
+#### Scenario: Three-branch else-if chain parses
+- **WHEN** source contains `if a:`, `else if b:`, `else if c:`, and a terminal `else:`, each with a body
+- **THEN** the parser accepts the chain and preserves the branch order, each branch's condition, and its body
+
+#### Scenario: Else-if chain with no terminal else parses
+- **WHEN** source contains `if a:` followed by one or more `else if:` clauses with no trailing `else:`
+- **THEN** the parser accepts the chain with no terminal-else body
+
+#### Scenario: Legacy nested else+if spelling remains valid
+- **WHEN** source contains `else:` whose body is a single nested `if` statement (the pre-existing spelling for chained conditions)
+- **THEN** the parser accepts it unchanged and its runtime behavior matches the equivalent `else if` spelling
+
+### Requirement: Malformed else-if chains rejected
+The parser SHALL reject: an `else if` clause following a terminal `else` in
+the same chain; more than one terminal `else` in the same chain; an `else if`
+or terminal `else` clause whose indentation does not align with its owning
+`if`; and an `else if` clause with an empty suite.
+
+#### Scenario: else if after terminal else rejected
+- **WHEN** source contains `if a:` ... `else:` ... followed by a further `else if b:` clause at the same level
+- **THEN** the parser reports an error and does not silently accept the extra clause
+
+#### Scenario: duplicate terminal else rejected
+- **WHEN** source contains `if a:` ... `else:` ... followed by a second `else:` clause at the same level
+- **THEN** the parser reports an error and does not silently accept the second `else`
+
+#### Scenario: misindented else if rejected
+- **WHEN** an `else if` clause's indentation does not match the indentation of its owning `if`
+- **THEN** the parser reports an error rather than attaching the clause to an unrelated `if`
+
+#### Scenario: empty else if suite rejected
+- **WHEN** an `else if` clause's body contains no statements
+- **THEN** the parser reports an error rather than accepting a no-op branch
+
+### Requirement: else-if chain compiled behavior equivalent to legacy nested spelling
+The compiled behavior of an `else if` chain SHALL be equivalent to the
+compiled behavior of the same chain written using the legacy nested `else:` +
+`if` spelling.
+
+#### Scenario: Runtime branch selection matches legacy spelling
+- **WHEN** a rule handler contains a three-branch `else if` chain, and an equivalent handler is written using nested `else:` + `if` for the same conditions and bodies
+- **THEN** both compiled programs select the same branch for the same input values, for every combination of condition outcomes
+

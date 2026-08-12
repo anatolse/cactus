@@ -1436,6 +1436,10 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     } else if constexpr (std::is_same_v<S, IfStmt>) {
                         resolve_expr(*s.condition);
                         resolve_stmts(s.then_body);
+                        for (auto& branch : s.else_if_branches) {
+                            resolve_expr(*branch.condition);
+                            resolve_stmts(branch.body);
+                        }
                         resolve_stmts(s.else_body);
                     } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                         resolve_expr(*s.iterable);
@@ -1836,6 +1840,12 @@ void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::s
                 check_func_purity_expr(*s.condition, func_name);
                 for (auto& inner : s.then_body) {
                     check_func_purity_stmt(*inner, func_name);
+                }
+                for (auto& branch : s.else_if_branches) {
+                    check_func_purity_expr(*branch.condition, func_name);
+                    for (auto& inner : branch.body) {
+                        check_func_purity_stmt(*inner, func_name);
+                    }
                 }
                 for (auto& inner : s.else_body) {
                     check_func_purity_stmt(*inner, func_name);
@@ -3291,6 +3301,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         if (const auto* if_stmt = std::get_if<IfStmt>(&stmt->stmt)) {
             (void)infer_expr_type(*if_stmt->condition, filter_bindings, locals, handler_event, pair_scope);
             validate_event_stmts(if_stmt->then_body, filter_bindings, locals, handler_event, rule_name, pair_scope);
+            for (const auto& branch : if_stmt->else_if_branches) {
+                (void)infer_expr_type(*branch.condition, filter_bindings, locals, handler_event, pair_scope);
+                validate_event_stmts(branch.body, filter_bindings, locals, handler_event, rule_name, pair_scope);
+            }
             validate_event_stmts(if_stmt->else_body, filter_bindings, locals, handler_event, rule_name, pair_scope);
             continue;
         }
@@ -3719,6 +3733,10 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                     } else if constexpr (std::is_same_v<S, IfStmt>) {
                         visit_expr(*node.condition, locals);
                         visit_stmts(node.then_body, locals);
+                        for (const auto& branch : node.else_if_branches) {
+                            visit_expr(*branch.condition, locals);
+                            visit_stmts(branch.body, locals);
+                        }
                         visit_stmts(node.else_body, locals);
                     } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                         visit_expr(*node.iterable, locals);
@@ -3953,6 +3971,9 @@ void SemanticAnalyzer::collect_rule_deps(const std::vector<std::unique_ptr<StmtN
                     collect_rule_deps(s.body, dep);
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     collect_rule_deps(s.then_body, dep);
+                    for (const auto& branch : s.else_if_branches) {
+                        collect_rule_deps(branch.body, dep);
+                    }
                     collect_rule_deps(s.else_body, dep);
                 } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
                     for (const auto& arm : s.arms) {
@@ -5012,6 +5033,10 @@ void SemanticAnalyzer::validate_text_format_in_stmts(
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     validate_text_format_in_expr(*s.condition, filter_bindings, locals, handler_event);
                     validate_text_format_in_stmts(s.then_body, filter_bindings, locals, handler_event);
+                    for (const auto& branch : s.else_if_branches) {
+                        validate_text_format_in_expr(*branch.condition, filter_bindings, locals, handler_event);
+                        validate_text_format_in_stmts(branch.body, filter_bindings, locals, handler_event);
+                    }
                     validate_text_format_in_stmts(s.else_body, filter_bindings, locals, handler_event);
                 } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                     validate_text_format_in_expr(*s.iterable, filter_bindings, locals, handler_event);
@@ -6318,6 +6343,9 @@ void SemanticAnalyzer::validate_spawn_stmts(  // NOLINT(readability-function-cog
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     validate_spawn_stmts(s.then_body, context_name);
+                    for (const auto& branch : s.else_if_branches) {
+                        validate_spawn_stmts(branch.body, context_name);
+                    }
                     validate_spawn_stmts(s.else_body, context_name);
                 }
             },
@@ -6396,6 +6424,9 @@ void SemanticAnalyzer::validate_spawn_exprs(const std::vector<std::unique_ptr<St
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     validate_spawn_exprs(s.then_body, context_name);
+                    for (const auto& branch : s.else_if_branches) {
+                        validate_spawn_exprs(branch.body, context_name);
+                    }
                     validate_spawn_exprs(s.else_body, context_name);
                 }
             },
@@ -6552,6 +6583,9 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                     }
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     validate_context_stmts(s.then_body, context_name, in_rule_handler);
+                    for (const auto& branch : s.else_if_branches) {
+                        validate_context_stmts(branch.body, context_name, in_rule_handler);
+                    }
                     validate_context_stmts(s.else_body, context_name, in_rule_handler);
                 } else if constexpr (std::is_same_v<S, LetStmt> || std::is_same_v<S, VarAssign>) {
                     validate_self_expr(*s.value, s.location);
@@ -6607,6 +6641,9 @@ void SemanticAnalyzer::check_no_field_access(const std::vector<std::unique_ptr<S
                                       "': no filter clause declares this trait");
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
                     check_no_field_access(s.then_body, rule_name);
+                    for (const auto& branch : s.else_if_branches) {
+                        check_no_field_access(branch.body, rule_name);
+                    }
                     check_no_field_access(s.else_body, rule_name);
                 }
                 // emit, spawn, destroy, load, add, remove, return, expr: all allowed

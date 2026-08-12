@@ -288,10 +288,17 @@ struct ExprStmt {
     SourceLocation location;
 };
 
+struct ElseIfBranch {
+    std::unique_ptr<ExprNode> condition;
+    std::vector<std::unique_ptr<StmtNode>> body;
+    SourceLocation location;
+};
+
 struct IfStmt {
     std::unique_ptr<ExprNode> condition;
     std::vector<std::unique_ptr<StmtNode>> then_body;
-    std::vector<std::unique_ptr<StmtNode>> else_body;
+    std::vector<ElseIfBranch> else_if_branches;
+    std::vector<std::unique_ptr<StmtNode>> else_body;  // terminal `else`'s body only, if present
     SourceLocation location;
 };
 

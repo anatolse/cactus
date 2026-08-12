@@ -2133,6 +2133,103 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
     }
 }
 
+// Baseline (pre else-if): captures the exact emitted C++ shape for today's
+// only way to write a chained condition — `else:` whose body is a single
+// nested `if`. The IfStmt lowering recurses generically over else_body, so
+// this compiles to doubly-braced `else { if (...) {...} else {...} }`
+// rather than a flat `else if` cascade. Section 5 checks a fresh `else if`
+// chain compiles to equivalent behavior against this capture.
+TEST_CASE("Codegen EnTT: legacy nested else+if compiles to doubly-braced else { if }",
+          "[codegen-entt][control-flow]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Health:\n"
+        "    var hp: int = 0\n"
+        "rule HealthState:\n"
+        "    filter:\n"
+        "        Health\n"
+        "    on tick:\n"
+        "        if hp > 50:\n"
+        "            hp = 1\n"
+        "        else:\n"
+        "            if hp > 0:\n"
+        "                hp = 2\n"
+        "            else:\n"
+        "                hp = 3\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("if (Health_comp.hp > 50) {") != std::string::npos);
+            CHECK(code.find("Health_comp.hp = 1;") != std::string::npos);
+            CHECK(code.find("if (Health_comp.hp > 0) {") != std::string::npos);
+            CHECK(code.find("Health_comp.hp = 2;") != std::string::npos);
+            CHECK(code.find("Health_comp.hp = 3;") != std::string::npos);
+
+            // The doubly-braced shape: an outer `} else {` immediately
+            // followed (module whitespace/indentation) by the nested `if`,
+            // itself followed by its own `} else {` for the innermost body —
+            // two separate else-blocks, not one flat else-if cascade.
+            const auto outer_close_else = code.find("} else {\n");
+            REQUIRE(outer_close_else != std::string::npos);
+            const auto inner_if = code.find("if (Health_comp.hp > 0) {", outer_close_else);
+            REQUIRE(inner_if != std::string::npos);
+            const auto inner_close_else = code.find("} else {\n", inner_if);
+            REQUIRE(inner_close_else != std::string::npos);
+        }
+    }
+}
+
+// Same condition/body pairing and order as the baseline above ("if hp > 50 /
+// else nested-if hp > 0 / else"), but spelled with the new `else if` grammar.
+// Compiled behavior must be equivalent: same branch selected for every
+// combination of hp values. Before section 5.2 extends the IfStmt lowering to
+// walk else_if_branches, the emitter silently drops the middle branch — this
+// is expected to fail until that lowering lands.
+TEST_CASE("Codegen EnTT: else-if chain compiles equivalent to legacy nested else+if",
+          "[codegen-entt][control-flow]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Health:\n"
+        "    var hp: int = 0\n"
+        "rule HealthState:\n"
+        "    filter:\n"
+        "        Health\n"
+        "    on tick:\n"
+        "        if hp > 50:\n"
+        "            hp = 1\n"
+        "        else if hp > 0:\n"
+        "            hp = 2\n"
+        "        else:\n"
+        "            hp = 3\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("if (Health_comp.hp > 50) {") != std::string::npos);
+            CHECK(code.find("Health_comp.hp = 1;") != std::string::npos);
+            CHECK(code.find("else if (Health_comp.hp > 0) {") != std::string::npos);
+            CHECK(code.find("Health_comp.hp = 2;") != std::string::npos);
+            CHECK(code.find("Health_comp.hp = 3;") != std::string::npos);
+
+            // Flat cascade, not the doubly-braced legacy shape: exactly one
+            // `else if` per emitted handler body. emit_system emits the body
+            // twice (targeted-recipient path and broadcast view-iteration
+            // path), so 2 occurrences total is the flat-cascade signature —
+            // 4 would indicate the doubly-braced `else { if` shape leaking
+            // back in.
+            CHECK(count_occurrences(code, "else if (") == 2);
+            CHECK(code.find("} else {\n") != std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("Codegen EnTT: nested control flow mutates visible lexical locals without redeclaration",
           "[codegen-entt][lexical-locals]") {
     ProgramNode program;

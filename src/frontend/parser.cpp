@@ -2061,18 +2061,36 @@ IfStmt Parser::parse_if_stmt() {
     if (check(TokenType::NEWLINE) || check(TokenType::INDENT)) {
         expect_newline();
         auto then_body = parse_block();
-        std::vector<std::unique_ptr<StmtNode>> else_body;
+
+        std::vector<ElseIfBranch> else_if_branches;
         skip_newlines();
+        while (check(TokenType::ELSE) && peek_next().type == TokenType::IF) {
+            auto branch_loc = peek().location;
+            advance();  // 'else'
+            advance();  // 'if'
+            auto branch_condition = parse_expression();
+            consume(TokenType::COLON, "expected ':'");
+            expect_newline();
+            ElseIfBranch branch;
+            branch.condition = std::move(branch_condition);
+            branch.body      = parse_block();
+            branch.location  = branch_loc;
+            else_if_branches.push_back(std::move(branch));
+            skip_newlines();
+        }
+
+        std::vector<std::unique_ptr<StmtNode>> else_body;
         if (match(TokenType::ELSE)) {
             consume(TokenType::COLON, "expected ':'");
             expect_newline();
             else_body = parse_block();
         }
         IfStmt if_stmt;
-        if_stmt.condition = std::move(condition);
-        if_stmt.then_body = std::move(then_body);
-        if_stmt.else_body = std::move(else_body);
-        if_stmt.location  = loc;
+        if_stmt.condition        = std::move(condition);
+        if_stmt.then_body        = std::move(then_body);
+        if_stmt.else_if_branches = std::move(else_if_branches);
+        if_stmt.else_body        = std::move(else_body);
+        if_stmt.location         = loc;
         return if_stmt;
     }
     // Inline if: if cond: stmt

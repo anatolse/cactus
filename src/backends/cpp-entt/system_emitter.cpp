@@ -2661,15 +2661,15 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                            *s.expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                        ";\n";
             } else if constexpr (std::is_same_v<S, IfStmt>) {
+                const auto parenthesize_condition = [](const std::string& condition) {
+                    if (!condition.empty() && condition.front() == '(' && condition.back() == ')') {
+                        return condition;
+                    }
+                    return "(" + condition + ")";
+                };
                 const auto condition = rewrite_expr(
                     *s.condition, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
-                std::string result = ind + "if ";
-                if (!condition.empty() && condition.front() == '(' && condition.back() == ')') {
-                    result += condition;
-                } else {
-                    result += "(" + condition + ")";
-                }
-                result += " {\n";
+                std::string result = ind + "if " + parenthesize_condition(condition) + " {\n";
                 auto then_locals = clone_or_empty(lexical_locals);
                 auto then_kinds  = clone_or_empty(local_kinds);
                 result += rewrite_stmt_block(s.then_body,
@@ -2683,6 +2683,29 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                              then_locals,
                                              then_kinds);
                 result += ind + "}";
+                for (const auto& branch : s.else_if_branches) {
+                    const auto branch_condition = rewrite_expr(*branch.condition,
+                                                                trait_names,
+                                                                program,
+                                                                pointer_aliases,
+                                                                cpp_overrides,
+                                                                pair_scope,
+                                                                local_kinds);
+                    result += " else if " + parenthesize_condition(branch_condition) + " {\n";
+                    auto branch_locals = clone_or_empty(lexical_locals);
+                    auto branch_kinds  = clone_or_empty(local_kinds);
+                    result += rewrite_stmt_block(branch.body,
+                                                 indent + 1,
+                                                 trait_names,
+                                                 program,
+                                                 pointer_aliases,
+                                                 dispatcher_available,
+                                                 cpp_overrides,
+                                                 pair_scope,
+                                                 branch_locals,
+                                                 branch_kinds);
+                    result += ind + "}";
+                }
                 if (!s.else_body.empty()) {
                     result += " else {\n";
                     auto else_locals = clone_or_empty(lexical_locals);

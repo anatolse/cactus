@@ -334,21 +334,25 @@ rule EditorSelection2D:
         EditorTemplatePalette
 
     on input:
-        if active and not use_3d:
-            if input.pressed(EditorSelectClick):
-                let previous = selected
-                let hit = hit_test_2d(input.mouse_position(), 1)
+        if not active:
+            return
+        if use_3d:
+            return
+        if not input.pressed(EditorSelectClick):
+            return
+        let previous = selected
+        let hit = hit_test_2d(input.mouse_position(), 1)
 
-                if exists(previous):
-                    remove EditorSelected from previous
+        if exists(previous):
+            remove EditorSelected from previous
 
-                if exists(hit):
-                    add EditorSelected to hit
+        if exists(hit):
+            add EditorSelected to hit
 
-                selected = hit
-                emit EditorSelectionChanged:
-                    previous = previous
-                    current = hit
+        selected = hit
+        emit EditorSelectionChanged:
+            previous = previous
+            current = hit
 
 rule EditorTranslate2D:
     filter:
@@ -365,14 +369,20 @@ rule EditorPlace2D:
         EditorTemplatePalette
 
     on input:
-        if active and not use_3d:
-            if mode == 4:
-                if input.pressed(EditorSelectClick):
-                    let pos = camera2d.screen_to_world(input.mouse_position())
-                    let id = spawn_template(active_template, pos, vec3(0.0, 0.0, 0.0))
-                    if exists(id):
-                        add EditorSelected to id
-                        selected = id
+        if not active:
+            return
+        if use_3d:
+            return
+        if mode != 4:
+            return
+        if not input.pressed(EditorSelectClick):
+            return
+        let pos = camera2d.screen_to_world(input.mouse_position())
+        let id = spawn_template(active_template, pos, vec3(0.0, 0.0, 0.0))
+        if not exists(id):
+            return
+        add EditorSelected to id
+        selected = id
 
 # Computes Blender-style selection/transform-handle geometry per active_mode()
 # and emits std.debug/std.ui primitive events to draw it (editor-debug-draw).
@@ -467,21 +477,25 @@ rule EditorSelection3D:
         EditorTemplatePalette
 
     on input:
-        if active and use_3d:
-            if input.pressed(EditorSelectClick):
-                let previous = selected
-                let hit = raycast_3d(input.mouse_position(), 1)
+        if not active:
+            return
+        if not use_3d:
+            return
+        if not input.pressed(EditorSelectClick):
+            return
+        let previous = selected
+        let hit = raycast_3d(input.mouse_position(), 1)
 
-                if exists(previous):
-                    remove EditorSelected from previous
+        if exists(previous):
+            remove EditorSelected from previous
 
-                if exists(hit):
-                    add EditorSelected to hit
+        if exists(hit):
+            add EditorSelected to hit
 
-                selected = hit
-                emit EditorSelectionChanged:
-                    previous = previous
-                    current = hit
+        selected = hit
+        emit EditorSelectionChanged:
+            previous = previous
+            current = hit
 
 rule EditorTranslate3D:
     filter:
@@ -498,14 +512,20 @@ rule EditorPlace3D:
         EditorTemplatePalette
 
     on input:
-        if active and use_3d:
-            if mode == 4:
-                if input.pressed(EditorSelectClick):
-                    let pos = camera3d.screen_to_plane(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
-                    let id = spawn_template(active_template, vec2(0.0, 0.0), pos)
-                    if exists(id):
-                        add EditorSelected to id
-                        selected = id
+        if not active:
+            return
+        if not use_3d:
+            return
+        if mode != 4:
+            return
+        if not input.pressed(EditorSelectClick):
+            return
+        let pos = camera3d.screen_to_plane(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0))
+        let id = spawn_template(active_template, vec2(0.0, 0.0), pos)
+        if not exists(id):
+            return
+        add EditorSelected to id
+        selected = id
 
 # Same shape as EditorGizmoRenderer2D (see its comment for geometry-parity notes
 # and the design.md decision 8 fixed-size trade-off — here: fixed 1x1x1 wire box

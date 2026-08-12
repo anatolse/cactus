@@ -336,14 +336,12 @@ rule Move:
         if velocity.y > 0.0 and jump_state == JumpState.Jumping:
             jump_state = JumpState.Falling
 
-        if not grounded:
-            if velocity.y == 0.0:
-                let ground_probe = phys.query_cast_nearest(self, vec2(0.0, GROUND_PROBE_DISTANCE), SOLID_MASK, self)
-                if ground_probe.kind == phys.QueryResultKind.Hit:
-                    if ground_probe.contact.normal.y < 0.0:
-                        grounded = true
-                        jumps_remaining = max_jumps
-                        jump_state = JumpState.Grounded
+        if not grounded and velocity.y == 0.0:
+            let ground_probe = phys.query_cast_nearest(self, vec2(0.0, GROUND_PROBE_DISTANCE), SOLID_MASK, self)
+            if ground_probe.kind == phys.QueryResultKind.Hit and ground_probe.contact.normal.y < 0.0:
+                grounded = true
+                jumps_remaining = max_jumps
+                jump_state = JumpState.Grounded
 
 rule DecayInvincibility:
     filter:

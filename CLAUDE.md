@@ -37,6 +37,39 @@ Deliberately disabled in `.clang-tidy` — don't hand-apply the guidance below a
   required to convert.
 - `bugprone-easily-swappable-parameters` — adjacent same-type parameters allowed.
 
+## Control-flow nesting — C++ and Cactus
+
+Applies to the compiler's C++ (scope above) and to any `.cactus` source touched in
+this repo (`stdlib/`, `examples/`). Avoid step/staircase nesting: each `if` stacked
+inside another `if` forces the reader to hold one more live runtime condition to
+understand the branch at the bottom. Flatten instead of stacking:
+
+- Combine short, independent conditions with `&&`/`||` (C++) or `and`/`or` (Cactus)
+  into one guard instead of nesting them.
+- Prefer early return over nesting the happy path: gate on the negated condition and
+  `return`/`continue` immediately, one gate per line, rather than wrapping the rest of
+  the function/handler body in an `if`.
+- Dispatch mutually exclusive cases with `switch`/variant `visit` (C++) or value
+  `match` (Cactus, where the arm form in use supports it) instead of an
+  `if`/`else if` chain.
+- Treat 3 levels of nested executable control flow as a warning sign and 4 as a
+  rewrite trigger, in both languages. Structural/declarative nesting (C++ namespaces
+  and data aggregates; Cactus `children:` blocks and declarations) isn't executable
+  control flow and isn't what this rule targets.
+
+C++ already has a backstop: `readability-*` includes
+`readability-function-cognitive-complexity`, which trends toward failing the build
+(`WarningsAsErrors: '*'`) as nesting piles up — this rule is the authoring discipline
+that keeps you from hitting it, not a new mechanism.
+
+Cactus has no automated nesting lint yet, so this is enforced by hand-review. One
+correctness trap when flattening Cactus handlers: `return` exits the *entire* handler
+invocation, not a loop iteration — there is no `continue`/`break` in bounded
+`for ... in ...:` (see dsl-bounded-foreach). Converting a nested `if` guard inside a
+`for` loop into an early `return` changes behavior (it abandons the remaining items)
+instead of preserving it; keep the guard nested as an `if` there, or restructure the
+loop body, rather than reflexively applying the early-return transform.
+
 ## C++23 idioms for this codebase
 
 Verified to compile cleanly under both the `msvc` and `clang` presets before being

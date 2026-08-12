@@ -1842,6 +1842,49 @@ TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pai
     CHECK(assign->op == "+=");
 }
 
+TEST_CASE("Parser: star-assign and slash-assign parse into VarAssign with correct op", "[parser][vector-expressions]") {
+    auto prog = parse(
+        "rule Simple:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        motion.velocity *= 2.0\n"
+        "        motion.velocity /= 2.0\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers[0].body.size() == 2);
+
+    const auto* star_assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(star_assign != nullptr);
+    CHECK(star_assign->name == "motion");
+    REQUIRE(star_assign->path.size() == 1);
+    CHECK(star_assign->path[0] == "velocity");
+    CHECK(star_assign->op == "*=");
+
+    const auto* slash_assign = std::get_if<VarAssign>(&sys.handlers[0].body[1]->stmt);
+    REQUIRE(slash_assign != nullptr);
+    CHECK(slash_assign->name == "motion");
+    REQUIRE(slash_assign->path.size() == 1);
+    CHECK(slash_assign->path[0] == "velocity");
+    CHECK(slash_assign->op == "/=");
+}
+
+TEST_CASE("Parser: slash-assign parses a nested writable-component path", "[parser][vector-expressions]") {
+    auto prog = parse(
+        "rule Simple:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        motion.velocity.y /= 2.0\n");
+    auto& sys           = std::get<RuleNode>(prog.declarations[0]);
+    const auto* assign = std::get_if<VarAssign>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(assign != nullptr);
+    CHECK(assign->name == "motion");
+    REQUIRE(assign->path.size() == 2);
+    CHECK(assign->path[0] == "velocity");
+    CHECK(assign->path[1] == "y");
+    CHECK(assign->op == "/=");
+}
+
 TEST_CASE("Parser: bare assignment target still has an empty path", "[parser][pair-relations]") {
     auto prog = parse(
         "rule Simple:\n"

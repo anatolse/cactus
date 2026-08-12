@@ -604,6 +604,17 @@ private:
                                     const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                     const ResolvedStruct* handler_event,
                                     const PairScope* pair_scope) const;
+    // Validates vec2(...)/vec3(...) constructor calls (1-argument splat or
+    // 2-/3-argument component form, each argument float-typed) from
+    // infer_expr_type's CallExpr arm. Returns nullopt when the callee isn't
+    // vec2/vec3, so the caller falls through to its other CallExpr handling.
+    std::optional<TypeInfo> infer_vector_constructor_call_type(
+        const CallExpr& call,
+        const SourceLocation& location,
+        const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+        const std::unordered_map<std::string, TypeInfo>& local_bindings,
+        const ResolvedStruct* handler_event,
+        const PairScope* pair_scope) const;
 
     /// Shared by validate_event_stmts's 4 command lambdas and
     /// validate_context_stmts's 3 command arms: if target_expr is present,

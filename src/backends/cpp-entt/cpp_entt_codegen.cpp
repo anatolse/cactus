@@ -2641,15 +2641,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "using Quat = cactus::runtime::Quat;\n";
     out << "\n";
 
-    // Helper constructors for generated DSL built-ins
-    out << "inline Vector2 vec2(float x, float y) {\n";
-    out << "    return Vector2{.x = x, .y = y};\n";
-    out << "}\n\n";
-
-    out << "inline Vector3 vec3(float x, float y, float z) {\n";
-    out << "    return Vector3{.x = x, .y = y, .z = z};\n";
-    out << "}\n\n";
-
+    // vec2/vec3 constructors live in common/cactus_runtime.hpp's global
+    // namespace (always reachable via the runtime.hpp include above) - not
+    // emitted here to avoid a duplicate/ambiguous definition. quat's
+    // constructor stays codegen-emitted; out of scope for this migration.
     out << "inline cactus::runtime::Quat quat(float x, float y, float z, float w) {\n";
     out << "    return cactus::runtime::Quat{.x = x, .y = y, .z = z, .w = w};\n";
     out << "}\n\n";

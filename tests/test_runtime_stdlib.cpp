@@ -104,6 +104,83 @@ TEST_CASE("Runtime stdlib: scalar and vector math helpers behave correctly", "[r
     CHECK(reflected.y == Catch::Approx(1.0F));
 }
 
+TEST_CASE("Runtime stdlib: global-namespace vec2/vec3 splat constructors match component form",
+          "[runtime][stdlib][vector-expressions]") {
+    const auto splat2 = vec2(2.5F);
+    CHECK(splat2.x == Catch::Approx(2.5F));
+    CHECK(splat2.y == Catch::Approx(2.5F));
+    CHECK((splat2.x == vec2(2.5F, 2.5F).x && splat2.y == vec2(2.5F, 2.5F).y));
+
+    const auto splat3 = vec3(4.0F);
+    CHECK(splat3.x == Catch::Approx(4.0F));
+    CHECK(splat3.y == Catch::Approx(4.0F));
+    CHECK(splat3.z == Catch::Approx(4.0F));
+    CHECK((splat3.x == vec3(4.0F, 4.0F, 4.0F).x && splat3.z == vec3(4.0F, 4.0F, 4.0F).z));
+}
+
+TEST_CASE("Runtime stdlib: global-namespace vec2/vec3 component constructors", "[runtime][stdlib][vector-expressions]") {
+    const auto v2 = vec2(3.0F, 4.0F);
+    CHECK(v2.x == Catch::Approx(3.0F));
+    CHECK(v2.y == Catch::Approx(4.0F));
+
+    const auto v3 = vec3(1.0F, 2.0F, 3.0F);
+    CHECK(v3.x == Catch::Approx(1.0F));
+    CHECK(v3.y == Catch::Approx(2.0F));
+    CHECK(v3.z == Catch::Approx(3.0F));
+}
+
+TEST_CASE("Runtime stdlib: vec2/vec3 scalar multiply is commutative via reachable raymath + global operators",
+          "[runtime][stdlib][vector-expressions]") {
+    const auto a2 = vec2(2.0F, 3.0F) * 2.0F;  // raymath.h's vector-first operator*
+    const auto b2 = 2.0F * vec2(2.0F, 3.0F);  // this header's scalar-first operator*
+    CHECK(a2.x == Catch::Approx(b2.x));
+    CHECK(a2.y == Catch::Approx(b2.y));
+    CHECK(a2.x == Catch::Approx(4.0F));
+    CHECK(a2.y == Catch::Approx(6.0F));
+
+    const auto a3 = vec3(1.0F, 2.0F, 3.0F) * 3.0F;
+    const auto b3 = 3.0F * vec3(1.0F, 2.0F, 3.0F);
+    CHECK(a3.x == Catch::Approx(b3.x));
+    CHECK(a3.y == Catch::Approx(b3.y));
+    CHECK(a3.z == Catch::Approx(b3.z));
+}
+
+TEST_CASE("Runtime stdlib: vec2/vec3 component-wise multiply via raymath is not a dot product",
+          "[runtime][stdlib][vector-expressions]") {
+    const auto product2 = vec2(2.0F, 3.0F) * vec2(4.0F, 5.0F);  // raymath.h's component-wise operator*
+    CHECK(product2.x == Catch::Approx(8.0F));
+    CHECK(product2.y == Catch::Approx(15.0F));
+
+    const auto product3 = vec3(1.0F, 2.0F, 3.0F) * vec3(4.0F, 5.0F, 6.0F);
+    CHECK(product3.x == Catch::Approx(4.0F));
+    CHECK(product3.y == Catch::Approx(10.0F));
+    CHECK(product3.z == Catch::Approx(18.0F));
+}
+
+TEST_CASE("Runtime stdlib: vec2/vec3 add/subtract/divide and compound-assignment forms are reachable",
+          "[runtime][stdlib][vector-expressions]") {
+    auto sum2 = vec2(1.0F, 2.0F) + vec2(3.0F, 4.0F);
+    CHECK(sum2.x == Catch::Approx(4.0F));
+    CHECK(sum2.y == Catch::Approx(6.0F));
+    sum2 -= vec2(1.0F, 1.0F);
+    CHECK(sum2.x == Catch::Approx(3.0F));
+    CHECK(sum2.y == Catch::Approx(5.0F));
+    sum2 *= 2.0F;
+    CHECK(sum2.x == Catch::Approx(6.0F));
+    CHECK(sum2.y == Catch::Approx(10.0F));
+    sum2 /= 2.0F;
+    CHECK(sum2.x == Catch::Approx(3.0F));
+    CHECK(sum2.y == Catch::Approx(5.0F));
+
+    auto sum3 = vec3(1.0F, 2.0F, 3.0F) + vec3(1.0F, 1.0F, 1.0F);
+    sum3 -= vec3(0.0F, 1.0F, 2.0F);
+    sum3 *= 2.0F;
+    sum3 /= 2.0F;
+    CHECK(sum3.x == Catch::Approx(2.0F));
+    CHECK(sum3.y == Catch::Approx(2.0F));
+    CHECK(sum3.z == Catch::Approx(2.0F));
+}
+
 TEST_CASE("Runtime stdlib: quaternion helpers behave correctly", "[runtime][stdlib][quat]") {
     const auto identity = stdlib::math::quat::identity();
     CHECK(identity.x == Catch::Approx(0.0F));

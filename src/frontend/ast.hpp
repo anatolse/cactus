@@ -252,7 +252,7 @@ struct ExprNode {
 
 struct VarAssign {
     std::string name;
-    std::string op;  // "=", "+=", "-="
+    std::string op;  // "=", "+=", "-=", "*=", "/="
     // Extra dotted segments after `name` (e.g. ["Transform", "x"] for
     // `body.Transform.x = ...`). Empty for ordinary bare-identifier
     // assignment, which remains the only form unary/selectionless handlers

@@ -31,7 +31,7 @@ rule MoveBubbles:
         tf.WorldTransform
 
     on tick:
-        position = vec2(position.x + velocity.x * tick.dt, position.y + velocity.y * tick.dt)
+        position += velocity * tick.dt
 
 # DetectWallContact: cross-domain pair producer (Bubble x Wall). Circle-vs-box
 # overlap against the wall's authored size, gated by a closing-speed check
@@ -69,7 +69,7 @@ rule ResolveWallBounce:
     on WallBounce as bounce:
         let vn = velocity.x * bounce.normal.x + velocity.y * bounce.normal.y
         let reflect_scale = 2.0 * vn
-        velocity = vec2(velocity.x - bounce.normal.x * reflect_scale, velocity.y - bounce.normal.y * reflect_scale)
+        velocity -= bounce.normal * reflect_scale
 
 # DetectBubbleContact: same-domain pair producer (Bubble x Bubble). Per
 # dsl-pair-relations this iterates the full directed product, including
@@ -94,23 +94,21 @@ rule DetectBubbleContact:
             let pos_b = b.tf.WorldTransform.position
             let radius_a = a.Bubble.radius
             let radius_b = b.Bubble.radius
-            let dx = pos_b.x - pos_a.x
-            let dy = pos_b.y - pos_a.y
-            let dist = math.sqrt(dx * dx + dy * dy)
+            let delta_pos = pos_b - pos_a
+            let dist = math.sqrt(delta_pos.x * delta_pos.x + delta_pos.y * delta_pos.y)
             if dist < radius_a + radius_b:
-                let normal_x = dx / dist
-                let normal_y = dy / dist
+                let normal = delta_pos / dist
                 let vel_a = a.Bubble.velocity
                 let vel_b = b.Bubble.velocity
-                let closing = (vel_a.x - vel_b.x) * normal_x + (vel_a.y - vel_b.y) * normal_y
+                let closing = (vel_a.x - vel_b.x) * normal.x + (vel_a.y - vel_b.y) * normal.y
                 if closing > 0.0:
                     let mass_a = radius_a * radius_a
                     let mass_b = radius_b * radius_b
-                    let v1n = vel_a.x * normal_x + vel_a.y * normal_y
-                    let v2n = vel_b.x * normal_x + vel_b.y * normal_y
+                    let v1n = vel_a.x * normal.x + vel_a.y * normal.y
+                    let v2n = vel_b.x * normal.x + vel_b.y * normal.y
                     let v1n_prime = ((mass_a - mass_b) * v1n + 2.0 * mass_b * v2n) / (mass_a + mass_b)
                     let delta = v1n_prime - v1n
-                    let new_velocity = vec2(vel_a.x + normal_x * delta, vel_a.y + normal_y * delta)
+                    let new_velocity = vel_a + normal * delta
                     emit BubbleBounce to a:
                         new_velocity = new_velocity
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <raylib.h>
+#include <raymath.h>
 
 #include <cstdint>
 #include <functional>
@@ -9,6 +10,46 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+// vec2/vec3 constructors and the scalar*vector operator overloads below live
+// in the global namespace, not cactus::runtime: Vector2/Vector3 are plain C
+// structs from raylib with no associated namespace, so ADL only finds
+// operators/constructors for them here - matching the convention raymath.h's
+// own C++ operator overloads (+, -, vec*float, vec*vec, vec/float, vec/vec,
+// and their compound forms), included above, already use. Reaching this
+// header therefore also makes those raymath operators reachable from
+// generated handler code, which they are not otherwise.
+
+// vec2/vec3 component constructors: the callee generated code invokes for
+// every `vec2(x, y)`/`vec3(x, y, z)` call site. Previously emitted as
+// per-program codegen text (cpp_entt_codegen.cpp); identical for every
+// generated program, so it belongs here instead. Same signatures, same
+// behavior as the codegen text they replace.
+[[nodiscard]] inline Vector2 vec2(float x, float y) {
+    return Vector2{.x = x, .y = y};
+}
+[[nodiscard]] inline Vector3 vec3(float x, float y, float z) {
+    return Vector3{.x = x, .y = y, .z = z};
+}
+// Scalar splat constructors (dsl-vector-expressions): vec2(s) == vec2(s, s),
+// vec3(s) == vec3(s, s, s).
+[[nodiscard]] inline Vector2 vec2(float s) {
+    return vec2(s, s);
+}
+[[nodiscard]] inline Vector3 vec3(float s) {
+    return vec3(s, s, s);
+}
+
+// raymath.h defines `operator*(Vector2, float)`/`operator*(Vector3, float)`
+// but not the commutative scalar-first form; the dsl-vector-expressions
+// operator matrix accepts both orders, so add the one row raymath doesn't.
+// Not constexpr: delegates to raymath.h's own (non-constexpr) operator*.
+[[nodiscard]] inline Vector2 operator*(float scalar, const Vector2& v) {
+    return v * scalar;
+}
+[[nodiscard]] inline Vector3 operator*(float scalar, const Vector3& v) {
+    return v * scalar;
+}
 
 namespace cactus::runtime {
 

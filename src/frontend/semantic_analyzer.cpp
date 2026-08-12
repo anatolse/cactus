@@ -228,6 +228,45 @@ TypeKind type_kind_from_name(const std::string& name) {
     return TypeKind::Unknown;
 }
 
+// Closed (left TypeKind, operator, right TypeKind) -> result TypeKind matrix
+// for vec2/vec3 binary operators (dsl-vector-expressions spec). No ranking, no
+// ambiguity, no dot product on `*` - every accepted combination is an exact
+// row here. Shared by BinaryExpr type inference and compound-assignment
+// validation so the two stay consistent by construction.
+std::optional<TypeKind> lookup_vector_binary_op_result(TypeKind left, const std::string& op, TypeKind right) {
+    struct Row {
+        TypeKind left;
+        const char* op;
+        TypeKind right;
+        TypeKind result;
+    };
+    static constexpr std::array<Row, 12> kRows{{
+        {.left = TypeKind::Vec2, .op = "+", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
+        {.left = TypeKind::Vec3, .op = "+", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
+        {.left = TypeKind::Vec2, .op = "-", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
+        {.left = TypeKind::Vec3, .op = "-", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
+        {.left = TypeKind::Vec2, .op = "*", .right = TypeKind::Float, .result = TypeKind::Vec2},
+        {.left = TypeKind::Float, .op = "*", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
+        {.left = TypeKind::Vec3, .op = "*", .right = TypeKind::Float, .result = TypeKind::Vec3},
+        {.left = TypeKind::Float, .op = "*", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
+        {.left = TypeKind::Vec2, .op = "/", .right = TypeKind::Float, .result = TypeKind::Vec2},
+        {.left = TypeKind::Vec3, .op = "/", .right = TypeKind::Float, .result = TypeKind::Vec3},
+        {.left = TypeKind::Vec2, .op = "*", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
+        {.left = TypeKind::Vec3, .op = "*", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
+    }};
+    for (const auto& row : kRows) {
+        if (row.left == left && row.right == right && op == row.op) {
+            return row.result;
+        }
+    }
+    return std::nullopt;
+}
+
+// Every row in lookup_vector_binary_op_result's table results in Vec2 or Vec3.
+TypeInfo vector_result_type_info(TypeKind kind) {
+    return kind == TypeKind::Vec2 ? make_vec2_type() : make_vec3_type();
+}
+
 /// Map AssetKind → TypeKind for the resulting opaque ID
 TypeKind asset_kind_to_type_kind(AssetKind ak) {
     switch (ak) {
@@ -3231,6 +3270,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             continue;
         }
         if (const auto* assign_stmt = std::get_if<VarAssign>(&stmt->stmt)) {
+            bool target_rejected = false;
             if (pair_scope != nullptr) {
                 if (pair_scope->contains(assign_stmt->name)) {
                     errors_.error(assign_stmt->location, "pair-bound durable traits are read-only");
@@ -3239,17 +3279,23 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                   "pair handlers have no implicit current entity to assign into; use an explicit "
                                   "binding");
                 }
+                target_rejected = true;
             } else if (auto local_it = locals.find(assign_stmt->name);
                        local_it != locals.end() && local_it->second.is_let) {
                 errors_.error(assign_stmt->location, "foreach loop variable '" + assign_stmt->name + "' is read-only");
-            } else if (!assign_stmt->path.empty()) {
-                // Dotted assignment target outside a pair handler (e.g. `hp.health -= 1.0`
-                // where `hp` is a filter alias): codegen (system_emitter.cpp's VarAssign
-                // lowering) reconstructs this exact member-access chain and resolves it
-                // through rewrite_expr, so validate it here the same way — by rebuilding the
-                // identical chain and running it through the shared expression resolver — to
-                // catch an unknown alias/field with a precise DSL-level diagnostic instead of
-                // silently accepting it and surfacing a confusing error in generated C++.
+                target_rejected = true;
+            }
+
+            // Rebuild the assignment target as a member-access chain (e.g. `hp.health`
+            // for `hp.health -= 1.0` where `hp` is a filter alias) and resolve it through
+            // the shared expression resolver: codegen (system_emitter.cpp's VarAssign
+            // lowering) reconstructs this exact chain via rewrite_expr, so validating it
+            // here the same way catches an unknown alias/field with a precise DSL-level
+            // diagnostic instead of silently accepting it and surfacing a confusing error
+            // in generated C++. This also gives compound-assignment operator/type
+            // validation below the target's real type for both bare and dotted targets.
+            TypeInfo target_type = make_unknown_type();
+            if (!target_rejected) {
                 ExprNode chain(
                     ExprNode::Variant{IdentExpr{.name = assign_stmt->name, .location = assign_stmt->location}},
                     assign_stmt->location);
@@ -3261,9 +3307,28 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                                               .location             = assign_stmt->location}},
                                  assign_stmt->location);
                 }
-                (void)infer_expr_type(chain, filter_bindings, locals, handler_event, pair_scope);
+                target_type = infer_expr_type(chain, filter_bindings, locals, handler_event, pair_scope);
             }
-            (void)infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event, pair_scope);
+
+            auto value_type = infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event, pair_scope);
+
+            // Compound-assignment operator/type validation for vec2/vec3-typed targets,
+            // reusing the same closed matrix BinaryExpr inference consults (dsl-vector-
+            // expressions spec: legal exactly when a row exists with the target's type as
+            // both left operand and result). Other target types keep their prior
+            // (writability-only) behavior — this proposal does not add general "="/int/
+            // float compound-assignment type-checking.
+            if (!target_rejected && assign_stmt->op != "=" &&
+                (target_type.kind == TypeKind::Vec2 || target_type.kind == TypeKind::Vec3) &&
+                value_type.kind != TypeKind::Unknown) {
+                const auto binary_op   = assign_stmt->op.substr(0, 1);
+                auto result_kind       = lookup_vector_binary_op_result(target_type.kind, binary_op, value_type.kind);
+                if (!result_kind.has_value() || *result_kind != target_type.kind) {
+                    errors_.error(assign_stmt->location, "no compound assignment '" + assign_stmt->op +
+                                                              "' for target type '" + target_type.name +
+                                                              "' and source type '" + value_type.name + "'");
+                }
+            }
             continue;
         }
         if (const auto* expr_stmt = std::get_if<ExprStmt>(&stmt->stmt)) {
@@ -5308,6 +5373,38 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     return make_unknown_type();
 }
 
+std::optional<TypeInfo> SemanticAnalyzer::infer_vector_constructor_call_type(
+    const CallExpr& call,
+    const SourceLocation& location,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    const auto* ident = std::get_if<IdentExpr>(&call.callee->expr);
+    if (ident == nullptr || (ident->name != "vec2" && ident->name != "vec3")) {
+        return std::nullopt;
+    }
+
+    const bool is_vec2                = ident->name == "vec2";
+    const std::size_t component_count = is_vec2 ? 2 : 3;
+    TypeInfo result_type              = is_vec2 ? make_vec2_type() : make_vec3_type();
+
+    if (call.args.size() != 1 && call.args.size() != component_count) {
+        errors_.error(location, "'" + ident->name + "' expects 1 (splat) or " + std::to_string(component_count) +
+                                     " arguments, got " + std::to_string(call.args.size()));
+        return result_type;
+    }
+
+    for (const auto& arg : call.args) {
+        auto arg_type = infer_expr_type(*arg, filter_bindings, local_bindings, handler_event, pair_scope);
+        if (arg_type.kind != TypeKind::Float && arg_type.kind != TypeKind::Unknown) {
+            errors_.error(location,
+                          "'" + ident->name + "' argument must be of type 'float', got '" + arg_type.name + "'");
+        }
+    }
+    return result_type;
+}
+
 // 84 after extracting infer_ident_expr_type/infer_member_expr_type (task
 // 6.12); still the exhaustive ExprNode-variant type-inference dispatch, with
 // several arms recursing into itself (Unary/Binary/If/List).
@@ -5399,6 +5496,10 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return make_unknown_type();
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        if (auto vector_type = infer_vector_constructor_call_type(*call, expr.location, filter_bindings,
+                                                                   local_bindings, handler_event, pair_scope)) {
+            return *vector_type;
+        }
         if (is_std_text_format_callee(*call->callee)) {
             return make_string_type();
         }
@@ -5444,6 +5545,16 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         if (binary->op == "==" || binary->op == "!=" || binary->op == "<" || binary->op == ">" || binary->op == "<=" ||
             binary->op == ">=" || binary->op == "and" || binary->op == "or") {
             return make_bool_type();
+        }
+        if ((left.kind == TypeKind::Vec2 || left.kind == TypeKind::Vec3 || right.kind == TypeKind::Vec2 ||
+             right.kind == TypeKind::Vec3) &&
+            left.kind != TypeKind::Unknown && right.kind != TypeKind::Unknown) {
+            if (auto result_kind = lookup_vector_binary_op_result(left.kind, binary->op, right.kind)) {
+                return vector_result_type_info(*result_kind);
+            }
+            errors_.error(expr.location, "no operator '" + binary->op + "' for operand types '" + left.name +
+                                              "' and '" + right.name + "'");
+            return make_unknown_type();
         }
         if (left.kind == TypeKind::Float || right.kind == TypeKind::Float) {
             return make_float_type();

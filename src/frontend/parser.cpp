@@ -296,7 +296,8 @@ std::string Parser::parse_field_name_or_keyword_error(const char* error_msg) {
                   tok_type != TokenType::LBRACKET && tok_type != TokenType::RBRACKET && tok_type != TokenType::LBRACE &&
                   tok_type != TokenType::RBRACE && tok_type != TokenType::ASSIGN && tok_type != TokenType::ARROW &&
                   tok_type != TokenType::FAT_ARROW && tok_type != TokenType::PLUS_ASSIGN &&
-                  tok_type != TokenType::MINUS_ASSIGN && tok_type != TokenType::EQUALS &&
+                  tok_type != TokenType::MINUS_ASSIGN && tok_type != TokenType::STAR_ASSIGN &&
+                  tok_type != TokenType::SLASH_ASSIGN && tok_type != TokenType::EQUALS &&
                   tok_type != TokenType::NOT_EQUALS && tok_type != TokenType::LESS && tok_type != TokenType::GREATER &&
                   tok_type != TokenType::LESS_EQ && tok_type != TokenType::GREATER_EQ && tok_type != TokenType::PLUS &&
                   tok_type != TokenType::MINUS && tok_type != TokenType::STAR && tok_type != TokenType::SLASH &&
@@ -2154,7 +2155,8 @@ std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
             advance();  // '.'
             path.push_back(advance().value);
         }
-        if (check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN)) {
+        if (check(TokenType::ASSIGN) || check(TokenType::PLUS_ASSIGN) || check(TokenType::MINUS_ASSIGN) ||
+            check(TokenType::STAR_ASSIGN) || check(TokenType::SLASH_ASSIGN)) {
             auto op    = advance().value;
             auto value = parse_expression();
             expect_newline();
@@ -2393,6 +2395,7 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                     tok.type != TokenType::RBRACKET && tok.type != TokenType::LBRACE && tok.type != TokenType::RBRACE &&
                     tok.type != TokenType::ASSIGN && tok.type != TokenType::ARROW && tok.type != TokenType::FAT_ARROW &&
                     tok.type != TokenType::PLUS_ASSIGN && tok.type != TokenType::MINUS_ASSIGN &&
+                    tok.type != TokenType::STAR_ASSIGN && tok.type != TokenType::SLASH_ASSIGN &&
                     tok.type != TokenType::EQUALS && tok.type != TokenType::NOT_EQUALS && tok.type != TokenType::LESS &&
                     tok.type != TokenType::GREATER && tok.type != TokenType::LESS_EQ &&
                     tok.type != TokenType::GREATER_EQ && tok.type != TokenType::PLUS && tok.type != TokenType::MINUS &&

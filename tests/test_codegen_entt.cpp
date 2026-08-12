@@ -2006,6 +2006,42 @@ TEST_CASE("Codegen EnTT: exists compiles to registry.valid", "[codegen-entt][ent
     }
 }
 
+// dsl-vector-expressions relies on system_emitter.cpp's existing bare-text
+// BinaryExpr/VarAssign lowering needing no changes for vec2/vec3 operands
+// (design.md: rewrite_expr already emits "(" + left + " " + op + " " + right
+// + ")" / lhs + " " + op + " " + rhs with no per-type dispatch). This
+// confirms that lowering is still exactly the bare form once vec2/vec3
+// operands are involved - the operators become valid C++ solely because
+// common/cactus_runtime.hpp now makes real operators reachable, not because
+// codegen changed.
+TEST_CASE("Codegen EnTT: vector binary expression and compound assignment lower to bare operator text",
+          "[codegen-entt][vector-expressions]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Position:\n"
+        "    var pos: vec2\n"
+        "trait Motion:\n"
+        "    var velocity: vec2\n"
+        "rule Move:\n"
+        "    filter:\n"
+        "        Position as p\n"
+        "        Motion as m\n"
+        "    on tick:\n"
+        "        let sum = p.pos + m.velocity\n"
+        "        p.pos += m.velocity\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("auto sum = (p.pos + m.velocity);") != std::string::npos);
+            CHECK(code.find("p.pos += m.velocity;") != std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("Codegen EnTT: trait match is guarded by entity validity", "[codegen-entt][entity-id]") {
     ProgramNode program;
     auto decorated = full_pipeline(

@@ -581,6 +581,240 @@ TEST_CASE("Semantic: order by invalid vec2 member errors", "[semantic][rule-orde
                                              "        let x = 1\n"));
 }
 
+TEST_CASE("Semantic: vec2/vec3 splat constructors type-check as trait field defaults", "[semantic][vector-expressions]") {
+    auto result = analyze(
+        "trait Position:\n"
+        "    var pos2: vec2 = vec2(0.0)\n"
+        "    var pos3: vec3 = vec3(0.0)\n");
+    REQUIRE(result.traits.count("Position"));
+    auto& trait = result.traits["Position"];
+    REQUIRE(trait.fields.size() == 2);
+    CHECK(trait.fields[0].type.kind == TypeKind::Vec2);
+    CHECK(trait.fields[1].type.kind == TypeKind::Vec3);
+}
+
+TEST_CASE("Semantic: vec2/vec3 component constructors remain valid", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors("trait Position:\n"
+                                   "    var pos2: vec2 = vec2(400.0, 40.0)\n"
+                                   "    var pos3: vec3 = vec3(1.0, 2.0, 3.0)\n"));
+}
+
+TEST_CASE("Semantic: vec2 wrong constructor arity rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error("trait Position:\n"
+                                       "    var pos: vec2 = vec2(1.0, 2.0, 3.0)\n");
+    CHECK(message.find("vec2") != std::string::npos);
+    CHECK(message.find('3') != std::string::npos);
+}
+
+TEST_CASE("Semantic: vec3 wrong constructor arity rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error("trait Position:\n"
+                                       "    var pos: vec3 = vec3(1.0, 2.0)\n");
+    CHECK(message.find("vec3") != std::string::npos);
+    CHECK(message.find('2') != std::string::npos);
+}
+
+TEST_CASE("Semantic: vec2 zero-argument constructor rejected", "[semantic][vector-expressions]") {
+    CHECK(analyze_has_errors("trait Position:\n"
+                             "    var pos: vec2 = vec2()\n"));
+}
+
+TEST_CASE("Semantic: vec2 non-float constructor argument rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error("trait Position:\n"
+                                       "    var pos: vec2 = vec2(\"0\", \"0\")\n");
+    CHECK(message.find("string") != std::string::npos);
+}
+
+TEST_CASE("Semantic: vec2 splat constructor default mismatched against vec3 field rejected",
+          "[semantic][vector-expressions]") {
+    CHECK(analyze_has_errors("trait Position:\n"
+                             "    var pos: vec3 = vec2(0.0)\n"));
+}
+
+TEST_CASE("Semantic: vec2/vec3 constructors resolve to real types outside trait defaults",
+          "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
+                                                    "    var pos: vec2\n"
+                                                    "rule Move:\n"
+                                                    "    filter:\n"
+                                                    "        Position as p\n"
+                                                    "    on tick:\n"
+                                                    "        let origin = vec2(0.0)\n"
+                                                    "        p.Position.pos = origin\n"));
+}
+
+static const std::string VECTOR_MATRIX_STDLIB =
+    "trait Position:\n"
+    "    var pos2: vec2\n"
+    "    var pos3: vec3\n"
+    "trait Motion:\n"
+    "    var velocity2: vec2\n"
+    "    var velocity3: vec3\n";
+
+TEST_CASE("Semantic: vec2/vec3 component addition and subtraction typecheck", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "        Motion as m\n"
+                                   "    on tick:\n"
+                                   "        let sum2 = p.pos2 + m.velocity2\n"
+                                   "        let diff2 = p.pos2 - m.velocity2\n"
+                                   "        let sum3 = p.pos3 + m.velocity3\n"
+                                   "        let diff3 = p.pos3 - m.velocity3\n"));
+}
+
+TEST_CASE("Semantic: vec2/vec3 scalar multiply is commutative in both orders", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "    on tick:\n"
+                                   "        let a = p.pos2 * tick.dt\n"
+                                   "        let b = tick.dt * p.pos2\n"
+                                   "        let c = p.pos3 * tick.dt\n"
+                                   "        let d = tick.dt * p.pos3\n"));
+}
+
+TEST_CASE("Semantic: vec2/vec3 divide by float typechecks", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "    on tick:\n"
+                                   "        let a = p.pos2 / tick.dt\n"
+                                   "        let b = p.pos3 / tick.dt\n"));
+}
+
+TEST_CASE("Semantic: vec2/vec3 component-wise multiply stays vector-typed, not a dot product",
+          "[semantic][vector-expressions]") {
+    // If `p.pos2 * m.velocity2` inferred as a scalar dot product (float), adding
+    // it to another vec2 below would be rejected by the operator matrix (no
+    // `float + vec2` row); accepting it proves the result stayed `vec2`.
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "        Motion as m\n"
+                                   "    on tick:\n"
+                                   "        let component_product = p.pos2 * m.velocity2 + p.pos2\n"));
+}
+
+TEST_CASE("Semantic: mismatched vec2/vec3 dimensions rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                       "rule Test:\n"
+                                       "    filter:\n"
+                                       "        Position as p\n"
+                                       "    on tick:\n"
+                                       "        let bad = p.pos2 + p.pos3\n");
+    CHECK(message.find("vec2") != std::string::npos);
+    CHECK(message.find("vec3") != std::string::npos);
+}
+
+TEST_CASE("Semantic: vector-by-vector division rejected", "[semantic][vector-expressions]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                             "rule Test:\n"
+                             "    filter:\n"
+                             "        Position as p\n"
+                             "        Motion as m\n"
+                             "    on tick:\n"
+                             "        let bad = p.pos2 / m.velocity2\n"));
+}
+
+TEST_CASE("Semantic: vector plus bare scalar rejected", "[semantic][vector-expressions]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                             "rule Test:\n"
+                             "    filter:\n"
+                             "        Position as p\n"
+                             "    on tick:\n"
+                             "        let bad = p.pos2 + tick.dt\n"));
+}
+
+TEST_CASE("Semantic: vec2 addition compound assignment on a trait field", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "        Motion as m\n"
+                                   "    on tick:\n"
+                                   "        p.pos2 += m.velocity2\n"));
+}
+
+TEST_CASE("Semantic: vec3 scalar-multiply compound assignment on a trait field", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "    on tick:\n"
+                                   "        p.pos3 *= tick.dt\n"));
+}
+
+TEST_CASE("Semantic: vec2 component-wise compound multiply on a trait field", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "        Motion as m\n"
+                                   "    on tick:\n"
+                                   "        p.pos2 *= m.velocity2\n"));
+}
+
+TEST_CASE("Semantic: vec2 divide compound assignment on a trait field", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "    on tick:\n"
+                                   "        p.pos2 /= tick.dt\n"));
+}
+
+TEST_CASE("Semantic: vec2 compound assignment on a handler-local var", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Position as p\n"
+                                   "    on tick:\n"
+                                   "        let accel = vec2(0.0)\n"
+                                   "        accel += p.pos2\n"
+                                   "        accel *= tick.dt\n"));
+}
+
+TEST_CASE("Semantic: incompatible vec2 compound-assignment operand rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                       "rule Test:\n"
+                                       "    filter:\n"
+                                       "        Position as p\n"
+                                       "    on tick:\n"
+                                       "        p.pos2 += 5\n");
+    CHECK(message.find("vec2") != std::string::npos);
+    CHECK(message.find("+=") != std::string::npos);
+}
+
+TEST_CASE("Semantic: compound-assignment diagnostic names target and source types",
+          "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                       "rule Test:\n"
+                                       "    filter:\n"
+                                       "        Position as p\n"
+                                       "    on tick:\n"
+                                       "        p.pos2 -= \"east\"\n");
+    CHECK(message.find("vec2") != std::string::npos);
+    CHECK(message.find("-=") != std::string::npos);
+    CHECK(message.find("string") != std::string::npos);
+}
+
+TEST_CASE("Semantic: pair-bound compound assignment still rejected as read-only", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
+                                       "rule Test:\n"
+                                       "    pairs:\n"
+                                       "        body:\n"
+                                       "            Position\n"
+                                       "        other:\n"
+                                       "            Motion\n"
+                                       "    on fixed_tick:\n"
+                                       "        body.pos2 *= 2.0\n");
+    CHECK(message == "pair-bound durable traits are read-only");
+}
+
 // Task 12.8: ambiguous bare config key reports error
 TEST_CASE("Semantic: duplicate field across nested traits reports no error", "[semantic][config-qualification]") {
     CHECK_FALSE(

@@ -143,9 +143,9 @@ TEST_CASE("Lexer: inline comment", "[lexer]") {
 }
 
 TEST_CASE("Lexer: operators", "[lexer]") {
-    auto tokens = lex("-> => == != <= >= += -=");
+    auto tokens = lex("-> => == != <= >= += -= *= /=");
     auto types  = token_types(tokens);
-    REQUIRE(types.size() == 8);
+    REQUIRE(types.size() == 10);
     CHECK(types[0] == TokenType::ARROW);
     CHECK(types[1] == TokenType::FAT_ARROW);
     CHECK(types[2] == TokenType::EQUALS);
@@ -154,6 +154,26 @@ TEST_CASE("Lexer: operators", "[lexer]") {
     CHECK(types[5] == TokenType::GREATER_EQ);
     CHECK(types[6] == TokenType::PLUS_ASSIGN);
     CHECK(types[7] == TokenType::MINUS_ASSIGN);
+    CHECK(types[8] == TokenType::STAR_ASSIGN);
+    CHECK(types[9] == TokenType::SLASH_ASSIGN);
+}
+
+TEST_CASE("Lexer: star-assign and slash-assign do not regress star/slash", "[lexer]") {
+    auto tokens = lex("a * b a *= b a / b a /= b");
+    auto types  = token_types(tokens);
+    REQUIRE(types.size() == 12);
+    CHECK(types[0] == TokenType::IDENTIFIER);
+    CHECK(types[1] == TokenType::STAR);
+    CHECK(types[2] == TokenType::IDENTIFIER);
+    CHECK(types[3] == TokenType::IDENTIFIER);
+    CHECK(types[4] == TokenType::STAR_ASSIGN);
+    CHECK(types[5] == TokenType::IDENTIFIER);
+    CHECK(types[6] == TokenType::IDENTIFIER);
+    CHECK(types[7] == TokenType::SLASH);
+    CHECK(types[8] == TokenType::IDENTIFIER);
+    CHECK(types[9] == TokenType::IDENTIFIER);
+    CHECK(types[10] == TokenType::SLASH_ASSIGN);
+    CHECK(types[11] == TokenType::IDENTIFIER);
 }
 
 TEST_CASE("Lexer: single-char punctuation", "[lexer]") {

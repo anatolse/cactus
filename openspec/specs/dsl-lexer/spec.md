@@ -81,7 +81,7 @@ The lexer SHALL skip single-line comments starting with `#` (when not followed b
 - **THEN** the lexer produces no tokens for that line (only NEWLINE if applicable)
 
 ### Requirement: Operator and punctuation tokenization
-The lexer SHALL tokenize all operators and punctuation: `:`, `,`, `.`, `->`, `=>`, `(`, `)`, `[`, `]`, `{`, `}`, `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `~`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `=`, `+=`, `-=`.
+The lexer SHALL tokenize all operators and punctuation: `:`, `,`, `.`, `->`, `=>`, `(`, `)`, `[`, `]`, `{`, `}`, `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `~`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `=`, `+=`, `-=`, `*=`, `/=`.
 
 #### Scenario: Arrow operator
 - **WHEN** the source contains `->`
@@ -90,6 +90,14 @@ The lexer SHALL tokenize all operators and punctuation: `:`, `,`, `.`, `->`, `=>
 #### Scenario: Fat arrow
 - **WHEN** the source contains `=>`
 - **THEN** the lexer produces a token with type FAT_ARROW
+
+#### Scenario: Star-assign operator
+- **WHEN** the source contains `*=`
+- **THEN** the lexer produces a token with type STAR_ASSIGN
+
+#### Scenario: Slash-assign operator
+- **WHEN** the source contains `/=`
+- **THEN** the lexer produces a token with type SLASH_ASSIGN
 
 ### Requirement: New reserved keywords
 The lexer SHALL recognize the following additional reserved keywords:

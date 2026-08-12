@@ -2,11 +2,12 @@
 
 #include "common/source_location.hpp"
 
+#include <cstdint>
 #include <string>
 
 namespace cactus {
 
-enum class TokenType {
+enum class TokenType : std::uint8_t {
     // Keywords — declarations
     MODULE,
     USE,
@@ -125,6 +126,8 @@ enum class TokenType {
     ASSIGN,        // =
     PLUS_ASSIGN,   // +=
     MINUS_ASSIGN,  // -=
+    STAR_ASSIGN,   // *=
+    SLASH_ASSIGN,  // /=
 
     // Indentation tokens
     INDENT,
@@ -340,6 +343,10 @@ inline const char* token_type_to_string(TokenType t) {
             return "PLUS_ASSIGN";
         case TokenType::MINUS_ASSIGN:
             return "MINUS_ASSIGN";
+        case TokenType::STAR_ASSIGN:
+            return "STAR_ASSIGN";
+        case TokenType::SLASH_ASSIGN:
+            return "SLASH_ASSIGN";
         case TokenType::INDENT:
             return "INDENT";
         case TokenType::DEDENT:

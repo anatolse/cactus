@@ -289,7 +289,7 @@ std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive
             TokenType type;
             const char* spelling;
         };
-        static constexpr std::array<TwoCharOperator, 8> kTwoCharOperators{{
+        static constexpr std::array<TwoCharOperator, 10> kTwoCharOperators{{
             {.first = '-', .second = '>', .type = TokenType::ARROW, .spelling = "->"},
             {.first = '=', .second = '>', .type = TokenType::FAT_ARROW, .spelling = "=>"},
             {.first = '=', .second = '=', .type = TokenType::EQUALS, .spelling = "=="},
@@ -298,6 +298,8 @@ std::vector<Token> Lexer::tokenize() {  // NOLINT(readability-function-cognitive
             {.first = '>', .second = '=', .type = TokenType::GREATER_EQ, .spelling = ">="},
             {.first = '+', .second = '=', .type = TokenType::PLUS_ASSIGN, .spelling = "+="},
             {.first = '-', .second = '=', .type = TokenType::MINUS_ASSIGN, .spelling = "-="},
+            {.first = '*', .second = '=', .type = TokenType::STAR_ASSIGN, .spelling = "*="},
+            {.first = '/', .second = '=', .type = TokenType::SLASH_ASSIGN, .spelling = "/="},
         }};
         const auto two_char_op = std::ranges::find_if(
             kTwoCharOperators, [&](const auto& op) { return op.first == c && op.second == peek_next(); });

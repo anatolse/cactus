@@ -251,6 +251,14 @@ namespace quat {
     };
 }
 [[nodiscard]] Quat inverse(Quat q) noexcept;
+[[nodiscard]] Quat normalize(Quat value) noexcept;
+[[nodiscard]] constexpr float dot(Quat a, Quat b) noexcept {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z) + (a.w * b.w);
+}
+[[nodiscard]] Quat compose(Quat outer, Quat inner) noexcept;
+[[nodiscard]] Quat rotate_local(Quat current, Quat delta) noexcept;
+[[nodiscard]] Quat rotate_world(Quat current, Quat delta) noexcept;
+[[nodiscard]] bool same_rotation(Quat a, Quat b, float tolerance) noexcept;
 }  // namespace quat
 
 }  // namespace stdlib::math

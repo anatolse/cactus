@@ -12,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <numbers>
 #include <optional>
 #include <sstream>
@@ -221,6 +222,157 @@ TEST_CASE("Runtime stdlib: quaternion helpers behave correctly", "[runtime][stdl
     CHECK(inv.y == Catch::Approx(0.0F));
     CHECK(inv.z == Catch::Approx(0.0F));
     CHECK(inv.w == Catch::Approx(1.0F));
+}
+
+TEST_CASE("Runtime stdlib: quaternion total-behavior wrappers normalize and handle degenerate inputs",
+          "[runtime][stdlib][quat]") {
+    constexpr Quat kZeroQuat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 0.0F};
+    const auto identity = stdlib::math::quat::identity();
+
+    SECTION("inverse of the zero quaternion returns identity") {
+        const auto inv = stdlib::math::quat::inverse(kZeroQuat);
+        CHECK(inv.x == Catch::Approx(identity.x));
+        CHECK(inv.y == Catch::Approx(identity.y));
+        CHECK(inv.z == Catch::Approx(identity.z));
+        CHECK(inv.w == Catch::Approx(identity.w));
+    }
+
+    SECTION("slerp normalizes non-unit inputs and takes the shortest path") {
+        const Quat non_unit{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 2.0F};
+        const auto result = stdlib::math::quat::slerp(non_unit, non_unit, 0.5F);
+        const float len_sq = (result.x * result.x) + (result.y * result.y) + (result.z * result.z) + (result.w * result.w);
+        CHECK(len_sq == Catch::Approx(1.0F));
+
+        const Quat q{.x = 0.0F, .y = 0.0F, .z = 0.7071068F, .w = 0.7071068F};
+        const Quat negated_q{.x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w};
+        const auto shortest = stdlib::math::quat::slerp(identity, negated_q, 0.5F);
+        const auto direct    = stdlib::math::quat::slerp(identity, q, 0.5F);
+        CHECK(shortest.x == Catch::Approx(direct.x));
+        CHECK(shortest.y == Catch::Approx(direct.y));
+        CHECK(shortest.z == Catch::Approx(direct.z));
+        CHECK(shortest.w == Catch::Approx(direct.w));
+    }
+
+    SECTION("slerp of two zero quaternions returns identity") {
+        const auto result = stdlib::math::quat::slerp(kZeroQuat, kZeroQuat, 0.5F);
+        CHECK(result.x == Catch::Approx(identity.x));
+        CHECK(result.y == Catch::Approx(identity.y));
+        CHECK(result.z == Catch::Approx(identity.z));
+        CHECK(result.w == Catch::Approx(identity.w));
+    }
+
+    SECTION("rotate/forward/right/up normalize a non-unit quaternion input") {
+        const Quat non_unit{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 2.0F};
+
+        const auto rotated = stdlib::math::quat::rotate(non_unit, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F});
+        CHECK(rotated.x == Catch::Approx(1.0F));
+        CHECK(rotated.y == Catch::Approx(0.0F));
+        CHECK(rotated.z == Catch::Approx(0.0F));
+
+        const auto fwd = stdlib::math::quat::forward(non_unit);
+        CHECK(fwd.x == Catch::Approx(0.0F));
+        CHECK(fwd.y == Catch::Approx(0.0F));
+        CHECK(fwd.z == Catch::Approx(-1.0F));
+
+        const auto rt = stdlib::math::quat::right(non_unit);
+        CHECK(rt.x == Catch::Approx(1.0F));
+        CHECK(rt.y == Catch::Approx(0.0F));
+        CHECK(rt.z == Catch::Approx(0.0F));
+
+        const auto up = stdlib::math::quat::up(non_unit);
+        CHECK(up.x == Catch::Approx(0.0F));
+        CHECK(up.y == Catch::Approx(1.0F));
+        CHECK(up.z == Catch::Approx(0.0F));
+    }
+
+    SECTION("from_axis_angle with a zero-length axis returns identity") {
+        const auto result = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, 1.5F);
+        CHECK(result.x == Catch::Approx(identity.x));
+        CHECK(result.y == Catch::Approx(identity.y));
+        CHECK(result.z == Catch::Approx(identity.z));
+        CHECK(result.w == Catch::Approx(identity.w));
+    }
+}
+
+TEST_CASE("Runtime stdlib: quaternion new composition/comparison functions", "[runtime][stdlib][quat]") {
+    constexpr Quat kZeroQuat{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 0.0F};
+    const auto identity = stdlib::math::quat::identity();
+
+    SECTION("normalize scales a non-unit input to unit length and maps zero to identity") {
+        const Quat non_unit{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 2.0F};
+        const auto normalized = stdlib::math::quat::normalize(non_unit);
+        CHECK(normalized.x == Catch::Approx(0.0F));
+        CHECK(normalized.y == Catch::Approx(0.0F));
+        CHECK(normalized.z == Catch::Approx(0.0F));
+        CHECK(normalized.w == Catch::Approx(1.0F));
+
+        const auto zero_normalized = stdlib::math::quat::normalize(kZeroQuat);
+        CHECK(zero_normalized.x == Catch::Approx(identity.x));
+        CHECK(zero_normalized.y == Catch::Approx(identity.y));
+        CHECK(zero_normalized.z == Catch::Approx(identity.z));
+        CHECK(zero_normalized.w == Catch::Approx(identity.w));
+    }
+
+    SECTION("dot returns the raw unnormalized component dot product") {
+        const Quat a{.x = 1.0F, .y = 2.0F, .z = 3.0F, .w = 4.0F};
+        const Quat b{.x = 5.0F, .y = 6.0F, .z = 7.0F, .w = 8.0F};
+        CHECK(stdlib::math::quat::dot(a, b) == Catch::Approx(70.0F));
+    }
+
+    SECTION("compose applies inner first, outer second, and normalizes the result") {
+        const auto outer =
+            stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, std::numbers::pi_v<float> / 2.0F);
+        const auto inner =
+            stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, std::numbers::pi_v<float> / 4.0F);
+        const auto composed = stdlib::math::quat::compose(outer, inner);
+
+        const float len_sq =
+            (composed.x * composed.x) + (composed.y * composed.y) + (composed.z * composed.z) + (composed.w * composed.w);
+        CHECK(len_sq == Catch::Approx(1.0F));
+
+        const Vector3 v{.x = 1.0F, .y = 0.5F, .z = -0.25F};
+        const auto via_compose = stdlib::math::quat::rotate(composed, v);
+        const auto via_nested  = stdlib::math::quat::rotate(outer, stdlib::math::quat::rotate(inner, v));
+        CHECK(via_compose.x == Catch::Approx(via_nested.x));
+        CHECK(via_compose.y == Catch::Approx(via_nested.y));
+        CHECK(via_compose.z == Catch::Approx(via_nested.z));
+    }
+
+    SECTION("rotate_local and rotate_world delegate to compose with swapped argument order") {
+        const auto current =
+            stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, std::numbers::pi_v<float> / 3.0F);
+        const auto delta =
+            stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, std::numbers::pi_v<float> / 6.0F);
+
+        const auto local  = stdlib::math::quat::rotate_local(current, delta);
+        const auto expected_local = stdlib::math::quat::compose(current, delta);
+        CHECK(local.x == Catch::Approx(expected_local.x));
+        CHECK(local.y == Catch::Approx(expected_local.y));
+        CHECK(local.z == Catch::Approx(expected_local.z));
+        CHECK(local.w == Catch::Approx(expected_local.w));
+
+        const auto world = stdlib::math::quat::rotate_world(current, delta);
+        const auto expected_world = stdlib::math::quat::compose(delta, current);
+        CHECK(world.x == Catch::Approx(expected_world.x));
+        CHECK(world.y == Catch::Approx(expected_world.y));
+        CHECK(world.z == Catch::Approx(expected_world.z));
+        CHECK(world.w == Catch::Approx(expected_world.w));
+
+        const bool observably_different =
+            (local.x != Catch::Approx(world.x)) || (local.y != Catch::Approx(world.y)) ||
+            (local.z != Catch::Approx(world.z)) || (local.w != Catch::Approx(world.w));
+        CHECK(observably_different);
+    }
+
+    SECTION("same_rotation treats q and -q as equal, and rejects a negative tolerance") {
+        const auto q = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, 1.2F);
+        const Quat negated_q{.x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w};
+        CHECK(stdlib::math::quat::same_rotation(q, negated_q, 0.0001F));
+        CHECK_FALSE(stdlib::math::quat::same_rotation(q, negated_q, -0.0001F));
+
+        const auto other = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, 0.5F);
+        CHECK_FALSE(stdlib::math::quat::same_rotation(q, other, 0.0001F));
+    }
 }
 
 TEST_CASE("Runtime stdlib: Standard UI image fit geometry computes Stretch/Contain/Cover source/dest rects",
@@ -1152,6 +1304,121 @@ TEST_CASE("Runtime stdlib: query_raycast (3D) hits an entity within the perpendi
     const auto hit   = entt_backend::query_raycast(
         view, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 20.0F, position_of);
     CHECK(hit == on_ray);
+}
+
+// ── Hierarchy propagation (quaternion-rotation-semantics) ──────────────────────
+// The generated ACCUMULATE_FROM_PARENT lambda for std.transform.volume calls
+// quat::compose directly (system_emitter.cpp); mirror that exact lambda body
+// here against the real propagate_hierarchy runtime helper and a real
+// registry, so a drift/normalization regression fails here rather than only
+// showing up as a generated-code text mismatch.
+
+namespace {
+struct HierarchyParent {
+    entt::entity parent{entt::null};
+};
+struct HierarchyLocalTransform {
+    Vector3 position{};
+    Quat rotation{};
+    Vector3 scale{};
+};
+struct HierarchyWorldTransform {
+    Vector3 position{};
+    Quat rotation{};
+    Vector3 scale{};
+};
+}  // namespace
+
+TEST_CASE(
+    "Runtime stdlib: propagate_hierarchy composes quaternion rotation through a multi-level volume parent chain",
+    "[runtime][backend][hierarchy][quat]") {
+    entt::registry registry;
+
+    const auto root       = registry.create();
+    const auto child       = registry.create();
+    const auto grandchild = registry.create();
+
+    registry.emplace<HierarchyLocalTransform>(
+        root,
+        HierarchyLocalTransform{
+            .position = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, 0.7F),
+            .scale    = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        });
+    registry.emplace<HierarchyWorldTransform>(root, HierarchyWorldTransform{});
+
+    registry.emplace<HierarchyParent>(child, HierarchyParent{.parent = root});
+    registry.emplace<HierarchyLocalTransform>(
+        child,
+        HierarchyLocalTransform{
+            .position = Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, 0.9F),
+            .scale    = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        });
+    registry.emplace<HierarchyWorldTransform>(child, HierarchyWorldTransform{});
+
+    registry.emplace<HierarchyParent>(grandchild, HierarchyParent{.parent = child});
+    registry.emplace<HierarchyLocalTransform>(
+        grandchild,
+        HierarchyLocalTransform{
+            .position = Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F},
+            .rotation = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 0.0F, .z = 1.0F}, 1.1F),
+            .scale    = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        });
+    registry.emplace<HierarchyWorldTransform>(grandchild, HierarchyWorldTransform{});
+
+    const std::function<bool(entt::entity)> has_local_world = [&](entt::entity e) {
+        return registry.all_of<HierarchyLocalTransform, HierarchyWorldTransform>(e);
+    };
+    const std::function<entt::entity(entt::entity)> get_parent = [&](entt::entity e) {
+        if (const auto* parent = registry.try_get<HierarchyParent>(e); parent != nullptr) {
+            return parent->parent;
+        }
+        return entt::entity{entt::null};
+    };
+    const std::function<void(entt::entity)> copy_local = [&](entt::entity e) {
+        const auto& local = registry.get<HierarchyLocalTransform>(e);
+        auto& world        = registry.get<HierarchyWorldTransform>(e);
+        world.position      = local.position;
+        world.rotation      = local.rotation;
+        world.scale         = local.scale;
+    };
+    // Mirrors system_emitter.cpp's volume ACCUMULATE_FROM_PARENT lambda exactly, including the
+    // quat::compose call this change migrated off raw quat::multiply.
+    const std::function<void(entt::entity, entt::entity)> accumulate_from_parent =
+        [&](entt::entity parent_entity, entt::entity entity) {
+            const auto& local        = registry.get<HierarchyLocalTransform>(entity);
+            auto& world               = registry.get<HierarchyWorldTransform>(entity);
+            const auto& parent_world = registry.get<HierarchyWorldTransform>(parent_entity);
+            world.position = Vector3{
+                .x = parent_world.position.x + local.position.x,
+                .y = parent_world.position.y + local.position.y,
+                .z = parent_world.position.z + local.position.z,
+            };
+            world.rotation = stdlib::math::quat::compose(parent_world.rotation, local.rotation);
+            world.scale    = Vector3{
+                   .x = parent_world.scale.x * local.scale.x,
+                   .y = parent_world.scale.y * local.scale.y,
+                   .z = parent_world.scale.z * local.scale.z,
+            };
+        };
+
+    entt_backend::propagate_hierarchy(registry, has_local_world, get_parent, copy_local, accumulate_from_parent);
+
+    auto length_squared_of = [](Quat q) { return (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w); };
+    CHECK(length_squared_of(registry.get<HierarchyWorldTransform>(root).rotation) == Catch::Approx(1.0F));
+    CHECK(length_squared_of(registry.get<HierarchyWorldTransform>(child).rotation) == Catch::Approx(1.0F));
+    CHECK(length_squared_of(registry.get<HierarchyWorldTransform>(grandchild).rotation) == Catch::Approx(1.0F));
+
+    const auto expected_child_world = stdlib::math::quat::compose(
+        registry.get<HierarchyLocalTransform>(root).rotation, registry.get<HierarchyLocalTransform>(child).rotation);
+    const auto expected_grandchild_world = stdlib::math::quat::compose(
+        expected_child_world, registry.get<HierarchyLocalTransform>(grandchild).rotation);
+    const auto actual_grandchild_world = registry.get<HierarchyWorldTransform>(grandchild).rotation;
+    CHECK(actual_grandchild_world.x == Catch::Approx(expected_grandchild_world.x));
+    CHECK(actual_grandchild_world.y == Catch::Approx(expected_grandchild_world.y));
+    CHECK(actual_grandchild_world.z == Catch::Approx(expected_grandchild_world.z));
+    CHECK(actual_grandchild_world.w == Catch::Approx(expected_grandchild_world.w));
 }
 
 TEST_CASE("Runtime stdlib: sequence reproducibility", "[runtime][stdlib][random]") {

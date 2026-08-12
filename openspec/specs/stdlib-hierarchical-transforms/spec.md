@@ -34,7 +34,7 @@ The `std.transform.volume` module SHALL provide `LocalTransform` and `WorldTrans
 - **THEN** rules and backends may read world-space `position`, `rotation`, and `scale` from it
 
 ### Requirement: stdlib extern rules propagate transforms through parent chains
-The stdlib SHALL provide external rules that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`.
+The stdlib SHALL provide external rules that derive `WorldTransform` from `LocalTransform` and optional `Parent` relationships. For root entities, `WorldTransform` SHALL be derived directly from `LocalTransform`. For `std.transform.volume.WorldTransform`, the parent and local rotations SHALL be composed using normalized quaternion composition, so `WorldTransform.rotation` remains unit-length across repeated propagation rather than accumulating floating-point drift.
 
 #### Scenario: root entity copies local to world
 - **WHEN** an entity has `LocalTransform` and `WorldTransform` but no live parent
@@ -43,6 +43,10 @@ The stdlib SHALL provide external rules that derive `WorldTransform` from `Local
 #### Scenario: child entity derives world from parent and local
 - **WHEN** an entity has `Parent`, `LocalTransform`, and `WorldTransform`, and the parent has a live `WorldTransform`
 - **THEN** propagation derives the child `WorldTransform` from the parent world transform composed with the child local transform
+
+#### Scenario: volume rotation propagation stays normalized
+- **WHEN** an entity has `Parent`, `std.transform.volume.LocalTransform`, and `std.transform.volume.WorldTransform`, and the parent has a live `std.transform.volume.WorldTransform`
+- **THEN** the child's `WorldTransform.rotation` is derived via normalized quaternion composition of the parent's `WorldTransform.rotation` and the child's `LocalTransform.rotation`, and is unit-length
 
 #### Scenario: stale parent is treated as root-equivalent
 - **WHEN** an entity has `Parent.parent` set to a stale or missing entity

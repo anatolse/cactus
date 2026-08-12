@@ -18,6 +18,19 @@ namespace {
     return (v.x * v.x) + (v.y * v.y) + (v.z * v.z);
 }
 
+[[nodiscard]] constexpr float length_squared(Quat q) noexcept {
+    return (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w);
+}
+
+[[nodiscard]] Quat normalize_or_identity(Quat q) noexcept {
+    const float len_sq = length_squared(q);
+    if (len_sq <= 0.0F) {
+        return stdlib::math::quat::identity();
+    }
+    const float inv_len = 1.0F / std::sqrt(len_sq);
+    return Quat{.x = q.x * inv_len, .y = q.y * inv_len, .z = q.z * inv_len, .w = q.w * inv_len};
+}
+
 std::string asset_kind_name(const AssetKind kind) {
     switch (kind) {
         case AssetKind::Texture:
@@ -271,27 +284,57 @@ Quat from_axis_angle(Vector3 axis, float angle) noexcept {
 }
 
 Vector3 forward(Quat q) noexcept {
-    return Vector3RotateByQuaternion(Vector3{.x = 0.0F, .y = 0.0F, .z = -1.0F}, q);
+    return Vector3RotateByQuaternion(Vector3{.x = 0.0F, .y = 0.0F, .z = -1.0F}, normalize_or_identity(q));
 }
 
 Vector3 right(Quat q) noexcept {
-    return Vector3RotateByQuaternion(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, q);
+    return Vector3RotateByQuaternion(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, normalize_or_identity(q));
 }
 
 Vector3 up(Quat q) noexcept {
-    return Vector3RotateByQuaternion(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, q);
+    return Vector3RotateByQuaternion(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, normalize_or_identity(q));
 }
 
 Vector3 rotate(Quat q, Vector3 v) noexcept {
-    return Vector3RotateByQuaternion(v, q);
+    return Vector3RotateByQuaternion(v, normalize_or_identity(q));
 }
 
 Quat slerp(Quat a, Quat b, float t) noexcept {
-    return QuaternionSlerp(a, b, t);
+    const float clamped_t = stdlib::math::clamp(t, 0.0F, 1.0F);
+    return QuaternionSlerp(normalize_or_identity(a), normalize_or_identity(b), clamped_t);
 }
 
 Quat inverse(Quat q) noexcept {
+    if (length_squared(q) <= 0.0F) {
+        return identity();
+    }
     return QuaternionInvert(q);
+}
+
+Quat normalize(Quat value) noexcept {
+    return normalize_or_identity(value);
+}
+
+Quat compose(Quat outer, Quat inner) noexcept {
+    return normalize_or_identity(multiply(outer, inner));
+}
+
+Quat rotate_local(Quat current, Quat delta) noexcept {
+    return compose(current, delta);
+}
+
+Quat rotate_world(Quat current, Quat delta) noexcept {
+    return compose(delta, current);
+}
+
+bool same_rotation(Quat a, Quat b, float tolerance) noexcept {
+    if (tolerance < 0.0F) {
+        return false;
+    }
+    const Quat normalized_a = normalize_or_identity(a);
+    const Quat normalized_b = normalize_or_identity(b);
+    const float cos_angle   = dot(normalized_a, normalized_b);
+    return (1.0F - std::abs(cos_angle)) <= tolerance;
 }
 
 }  // namespace quat

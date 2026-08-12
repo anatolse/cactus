@@ -3227,7 +3227,7 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "            .y = parent_world.position.y + local.position.y,\n";
         out << "            .z = parent_world.position.z + local.position.z,\n";
         out << "        };\n";
-        out << "        world.rotation = cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, "
+        out << "        world.rotation = cactus::runtime::stdlib::math::quat::compose(parent_world.rotation, "
                "local.rotation);\n";
         out << "        world.scale = Vector3{\n";
         out << "            .x = parent_world.scale.x * local.scale.x,\n";

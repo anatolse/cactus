@@ -453,7 +453,7 @@ rule MovePlayer:
         PlayerInput
 
     on tick:
-        rotation = quat.multiply(rotation, quat.from_euler(0, -move_x * TURN_SPEED * tick.dt, 0))
+        rotation = quat.rotate_local(rotation, quat.from_euler(0, -move_x * TURN_SPEED * tick.dt, 0))
         let fwd = quat.forward(rotation)
         position = vec3(position.x + fwd.x * move_z * PLAYER_SPEED * tick.dt, position.y + fly * FLY_SPEED * tick.dt, position.z + fwd.z * move_z * PLAYER_SPEED * tick.dt)
 

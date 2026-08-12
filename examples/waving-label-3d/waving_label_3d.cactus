@@ -34,6 +34,6 @@ rule Wave:
         elapsed  = elapsed + tick.dt
         let ry   = quat.from_axis_angle(vec3(0.0, 1.0, 0.0), math.sin(elapsed * 1.2) * 1.2)
         let rx   = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), math.sin(elapsed * 0.7) * 0.5)
-        rotation = quat.multiply(ry, rx)
+        rotation = quat.compose(ry, rx)
         let secs = math.floor(elapsed)
         text = text.format("{:02}:{:02}", secs / 60, secs % 60)

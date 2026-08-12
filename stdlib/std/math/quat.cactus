@@ -3,33 +3,79 @@ module std.math.quat
 # ── Quaternion Pure Functions ─────────────────────────────────────────────────
 # Implementations provided by the backend. These declarations are symbol
 # references only — game code calls them; the backend resolves the bodies.
+#
+# Axes and handedness: right-handed coordinate system (+X right, +Y up,
+# +Z toward the viewer); a quaternion's local forward is -Z, right is +X,
+# up is +Y, matching identity()'s frame.
+# Euler order: from_euler(pitch, yaw, roll) applies pitch (around +X) first,
+# then yaw (around +Y), then roll (around +Z).
+# Units: all angles are radians.
+# Total behavior: every function below is defined for every input, including
+# zero-length/zero/non-unit quat inputs — see each declaration's comment for
+# its specific zero/degenerate-input result. None of these functions produce
+# NaN.
 
 # Identity quaternion (no rotation)
 pub extern func identity() quat
 
-# Quaternion from Euler angles (pitch, yaw, roll in radians)
+# Quaternion from Euler angles (pitch, yaw, roll in radians; pitch around +X
+# first, then yaw around +Y, then roll around +Z)
 pub extern func from_euler(pitch: float, yaw: float, roll: float) quat
 
-# Quaternion from axis and angle (axis must be unit length, angle in radians)
+# Quaternion from axis and angle (angle in radians). A non-unit axis is
+# normalized before use; a zero-length axis returns identity()
 pub extern func from_axis_angle(axis: vec3, angle: float) quat
 
-# Forward direction vector from quaternion (local -Z axis)
+# Forward direction vector from quaternion (local -Z axis). A non-unit q is
+# normalized before extracting the direction
 pub extern func forward(q: quat) vec3
 
-# Right direction vector from quaternion (local +X axis)
+# Right direction vector from quaternion (local +X axis). A non-unit q is
+# normalized before extracting the direction
 pub extern func right(q: quat) vec3
 
-# Up direction vector from quaternion (local +Y axis)
+# Up direction vector from quaternion (local +Y axis). A non-unit q is
+# normalized before extracting the direction
 pub extern func up(q: quat) vec3
 
-# Rotate a 3D vector by a quaternion
+# Rotate a 3D vector by a quaternion. A non-unit q is normalized before
+# rotating v, so v's length is preserved in the result
 pub extern func rotate(q: quat, v: vec3) vec3
 
-# Spherical linear interpolation between two quaternions by factor t (0..1)
+# Spherical linear interpolation between two quaternions by factor t.
+# t is clamped to [0.0, 1.0]; both inputs are normalized and the shortest
+# rotational path is taken before interpolating; slerp(zero, zero, t)
+# returns identity()
 pub extern func slerp(a: quat, b: quat, t: float) quat
 
-# Multiply two quaternions (compose rotations)
+# Multiply two quaternions: raw Hamilton product, no normalization.
+# Compatibility-only — prefer compose/rotate_local/rotate_world in new code,
+# which name reference frame and order explicitly and always normalize
 pub extern func multiply(a: quat, b: quat) quat
 
-# Inverse (conjugate) of a unit quaternion
+# Inverse (conjugate) of a quaternion. Returns identity() for the zero
+# quaternion instead of the zero quaternion unchanged
 pub extern func inverse(q: quat) quat
+
+# Normalize a quaternion to unit length (returns identity() for a zero-length input)
+pub extern func normalize(value: quat) quat
+
+# Raw dot product of two quaternions' unnormalized components (no normalization)
+pub extern func dot(a: quat, b: quat) float
+
+# Compose two rotations: applies inner's rotation first, then outer's
+# (normalized result), so rotate(compose(outer, inner), v) == rotate(outer, rotate(inner, v))
+pub extern func compose(outer: quat, inner: quat) quat
+
+# Apply delta as a rotation around current's own local axes (normalized
+# result); equivalent to compose(current, delta)
+pub extern func rotate_local(current: quat, delta: quat) quat
+
+# Apply delta as a rotation around world-space axes (normalized result);
+# equivalent to compose(delta, current)
+pub extern func rotate_world(current: quat, delta: quat) quat
+
+# Whether a and b represent the same rotation within tolerance (q and -q are
+# equal; a negative tolerance always returns false; both inputs are
+# normalized before comparing)
+pub extern func same_rotation(a: quat, b: quat, tolerance: float) bool

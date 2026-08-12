@@ -95,4 +95,5 @@ rule ApplyScreenSpaceRotation:
         let pitch_axis = quat.right(rotation)
         let yaw_delta = quat.from_axis_angle(yaw_axis, horizontal * ROTATION_SPEED * tick.dt)
         let pitch_delta = quat.from_axis_angle(pitch_axis, vertical * ROTATION_SPEED * tick.dt)
-        rotation = quat.multiply(pitch_delta, quat.multiply(yaw_delta, rotation))
+        rotation = quat.rotate_world(rotation, yaw_delta)
+        rotation = quat.rotate_world(rotation, pitch_delta)

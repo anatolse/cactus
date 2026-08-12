@@ -2629,7 +2629,7 @@ TEST_CASE("Codegen EnTT: volume transform propagation extern rule is recognized"
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("world.position = Vector3{") != std::string::npos);
     CHECK(code.find("parent_world.position.x + local.position.x") != std::string::npos);
-    CHECK(code.find("cactus::runtime::stdlib::math::quat::multiply(parent_world.rotation, local.rotation)") !=
+    CHECK(code.find("cactus::runtime::stdlib::math::quat::compose(parent_world.rotation, local.rotation)") !=
           std::string::npos);
     CHECK(code.find("parent_world.scale.z * local.scale.z") != std::string::npos);
 }

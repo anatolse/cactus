@@ -74,7 +74,7 @@ The `std.math.vec3` module SHALL provide pure functions operating on `vec3` valu
 ---
 
 ### Requirement: std.math.quat provides quaternion pure functions
-The `std.math.quat` module SHALL provide pure functions for 3D rotation using quaternions. It SHALL include construction, composition, and direction extraction. Declared extern functions SHALL be backed by concrete runtime/backend-library implementations and verified by behavioral tests.
+The `std.math.quat` module SHALL provide pure functions for 3D rotation using quaternions. It SHALL include construction, named-reference-frame composition, normalization, orientation comparison, direction extraction, and a raw dot product. Declared extern functions SHALL be backed by concrete runtime/backend-library implementations and verified by behavioral tests. Every function SHALL have a total (defined-for-every-input) result: zero-length or non-unit inputs SHALL produce the documented result rather than `NaN` or an unnormalized pass-through.
 
 #### Scenario: Identity quaternion
 - **WHEN** `use std.math.quat as quat` is imported and `quat.identity()` is called
@@ -84,21 +84,100 @@ The `std.math.quat` module SHALL provide pure functions for 3D rotation using qu
 - **WHEN** `quat.forward(quat.identity())` is called
 - **THEN** it returns `vec3(0.0, 0.0, -1.0)` (default forward direction)
 
+#### Scenario: Direction extraction normalizes its input
+- **WHEN** `quat.forward`, `quat.right`, or `quat.up` is called with a non-unit quaternion
+- **THEN** the quaternion is normalized before extracting the direction, and the result is a unit-length vector consistent with the normalized rotation
+
 #### Scenario: Quaternion from Euler angles
 - **WHEN** `quat.from_euler(0.0, math.PI, 0.0)` is called (180° yaw)
-- **THEN** it returns a quaternion representing a 180° rotation around the Y axis
+- **THEN** it returns a quaternion representing a 180° rotation around the Y axis, applied as pitch (around `+X`) first, then yaw (around `+Y`), then roll (around `+Z`)
+
+#### Scenario: Axis-angle construction accepts a non-unit axis
+- **WHEN** `quat.from_axis_angle(axis, angle)` is called with an `axis` that is not unit length
+- **THEN** the axis is normalized before construction and the result is a unit quaternion
+
+#### Scenario: Axis-angle construction handles a zero-length axis
+- **WHEN** `quat.from_axis_angle(vec3(0.0, 0.0, 0.0), angle)` is called
+- **THEN** it returns `quat.identity()`
 
 #### Scenario: Spherical interpolation
 - **WHEN** `quat.slerp(quat.identity(), some_rotation, 0.5)` is called
-- **THEN** it returns a quaternion halfway between identity and the target rotation
+- **THEN** it returns a normalized quaternion halfway between identity and the target rotation
+
+#### Scenario: Spherical interpolation clamps t and normalizes inputs
+- **WHEN** `quat.slerp(from, to, t)` is called with `t` outside `[0.0, 1.0]`, or with `from`/`to` that are not unit length
+- **THEN** `t` is clamped to `[0.0, 1.0]`, both inputs are normalized before interpolating, the shortest rotational path is taken (negating one input when their dot product is negative), and the result is a unit quaternion
+
+#### Scenario: Spherical interpolation of two zero quaternions
+- **WHEN** `quat.slerp(quat(0.0, 0.0, 0.0, 0.0), quat(0.0, 0.0, 0.0, 0.0), t)` is called
+- **THEN** it returns `quat.identity()`
 
 #### Scenario: Vector rotation by quaternion
 - **WHEN** `quat.rotate(quat.identity(), vec3(1.0, 0.0, 0.0))` is called
 - **THEN** it returns `vec3(1.0, 0.0, 0.0)` unchanged (identity rotation)
 
+#### Scenario: Vector rotation normalizes its quaternion input
+- **WHEN** `quat.rotate(rotation, value)` is called with a non-unit `rotation`
+- **THEN** `rotation` is normalized before rotating `value`, so the length of `value` is preserved in the result
+
+#### Scenario: Inverse of a non-zero quaternion
+- **WHEN** `quat.inverse(q)` is called with a non-zero `q`
+- **THEN** it returns the mathematical inverse of `q`
+
+#### Scenario: Inverse of the zero quaternion
+- **WHEN** `quat.inverse(quat(0.0, 0.0, 0.0, 0.0))` is called
+- **THEN** it returns `quat.identity()`
+
+#### Scenario: Explicit normalization
+- **WHEN** `quat.normalize(value)` is called with a non-unit, non-zero `value`
+- **THEN** it returns a unit quaternion representing the same rotation
+
+#### Scenario: Normalizing the zero quaternion
+- **WHEN** `quat.normalize(quat(0.0, 0.0, 0.0, 0.0))` is called
+- **THEN** it returns `quat.identity()`
+
+#### Scenario: Compose applies inner first, outer second
+- **WHEN** `quat.compose(outer, inner)` is called
+- **THEN** it returns a normalized quaternion equivalent to applying `inner`'s rotation first and `outer`'s rotation second, such that `quat.rotate(quat.compose(outer, inner), v)` equals `quat.rotate(outer, quat.rotate(inner, v))`
+
+#### Scenario: Rotate around local axes
+- **WHEN** `quat.rotate_local(current, delta)` is called
+- **THEN** it returns `quat.compose(current, delta)` — a normalized quaternion representing `delta` applied around the entity's current local axes
+
+#### Scenario: Rotate around world axes
+- **WHEN** `quat.rotate_world(current, delta)` is called
+- **THEN** it returns `quat.compose(delta, current)` — a normalized quaternion representing `delta` applied around world-space axes
+
+#### Scenario: Local and world incremental rotation are observably different
+- **WHEN** `quat.rotate_local(current, delta)` and `quat.rotate_world(current, delta)` are both called with the same non-identity `current` and the same non-identity `delta`
+- **THEN** the two results are different quaternions
+
+#### Scenario: Raw quaternion dot product
+- **WHEN** `quat.dot(a, b)` is called
+- **THEN** it returns the dot product of the raw (unnormalized) components of `a` and `b`, without normalizing either input
+
+#### Scenario: Same-rotation comparison treats q and -q as equal
+- **WHEN** `quat.same_rotation(q, negated_q, tolerance)` is called where `negated_q` is `q` with every component negated and `tolerance` is a valid non-negative value
+- **THEN** it returns `true`
+
+#### Scenario: Same-rotation comparison rejects a negative tolerance
+- **WHEN** `quat.same_rotation(a, b, tolerance)` is called with a negative `tolerance`
+- **THEN** it returns `false`
+
 #### Scenario: Quaternion extern coverage is behaviorally verified
 - **WHEN** the backend/runtime test suite runs
-- **THEN** it includes unit tests covering declared quaternion extern functions including `identity`, `from_euler`, `from_axis_angle`, `forward`, `right`, `up`, `rotate`, `slerp`, `multiply`, and `inverse`
+- **THEN** it includes unit tests covering declared quaternion extern functions including `identity`, `from_euler`, `from_axis_angle`, `forward`, `right`, `up`, `rotate`, `slerp`, `multiply`, `inverse`, `compose`, `rotate_local`, `rotate_world`, `normalize`, `same_rotation`, and `dot`
+
+### Requirement: std.math.quat retains a raw compatibility multiply
+The `std.math.quat` module SHALL provide `quat.multiply(a, b)`, computing the raw Hamilton product of `a` and `b` without normalizing the result, for source compatibility with existing callers. This function SHALL NOT be treated as the canonical composition call in new stdlib code, examples, or documentation.
+
+#### Scenario: Multiply does not normalize
+- **WHEN** `quat.multiply(a, b)` is called with non-unit `a` and/or `b`
+- **THEN** it returns the raw Hamilton product without normalizing the result
+
+#### Scenario: Existing multiply-based source keeps compiling
+- **WHEN** existing authored code calls `quat.multiply(a, b)`
+- **THEN** it compiles unchanged and produces the same raw Hamilton product as before this change
 
 ---
 

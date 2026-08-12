@@ -226,6 +226,29 @@ std::string stdlib_runtime_call_name(const SymbolId& func_id) {
     return result;
 }
 
+bool is_stdlib_editor_gizmo_mode_call(const SymbolId& func_id) {
+    return symbol_is(func_id, SymbolKind::Func, "std.editor", "active_mode") ||
+           symbol_is(func_id, SymbolKind::Func, "std.editor", "mode_label");
+}
+
+// runtime.hpp's editor_active_mode/editor_mode_label are precompiled and program-independent,
+// so they stay int-based internally rather than naming a per-program generated enum type (see
+// editor-gizmo-mode-enum's design.md decision 1). Bridge the DSL's GizmoMode-typed signature at
+// the call site instead: cast the runtime's int return/param to/from the program's generated
+// GizmoMode enum class.
+std::string stdlib_editor_gizmo_mode_call(const SymbolId& func_id,
+                                          const std::vector<std::unique_ptr<ExprNode>>& args,
+                                          const DecoratedProgram& program,
+                                          const auto& emit_arg) {
+    const std::string runtime_name = stdlib_runtime_call_name(func_id);
+    if (func_id.local_name == "active_mode") {
+        const std::string gizmo_mode_cpp = EnttCodegenUtils::enum_cpp_name("GizmoMode", program);
+        return "static_cast<" + gizmo_mode_cpp + ">(" + runtime_name + "(registry))";
+    }
+    // mode_label(mode: GizmoMode) string
+    return runtime_name + "(static_cast<int>(" + emit_arg(*args[0]) + "))";
+}
+
 bool stdlib_call_needs_registry(const SymbolId& func_id) {
     if (func_id.kind != SymbolKind::Func) {
         return false;
@@ -240,6 +263,7 @@ bool stdlib_call_needs_registry(const SymbolId& func_id) {
 
 std::string lower_resolved_stdlib_call(const SymbolId& func_id,
                                        const std::vector<std::unique_ptr<ExprNode>>& args,
+                                       const DecoratedProgram& program,
                                        const auto& emit_arg) {
     if (symbol_is(func_id, SymbolKind::Func, "std.text", "format")) {
         std::string result = "std::format(";
@@ -256,6 +280,9 @@ std::string lower_resolved_stdlib_call(const SymbolId& func_id,
     }
     if (is_stdlib_ui_metric_func(func_id)) {
         return stdlib_ui_metric_func_call(func_id, args, emit_arg);
+    }
+    if (is_stdlib_editor_gizmo_mode_call(func_id)) {
+        return stdlib_editor_gizmo_mode_call(func_id, args, program, emit_arg);
     }
     const std::string runtime_name = stdlib_runtime_call_name(func_id);
     if (runtime_name.empty()) {
@@ -1943,8 +1970,8 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 }
                 // Module-scope stdlib call: use resolved callee identity (preferred path).
                 if (e.resolved_callee_id.has_value()) {
-                    const auto lowered =
-                        lower_resolved_stdlib_call(*e.resolved_callee_id, e.args, [&](const ExprNode& arg) {
+                    auto lowered =
+                        lower_resolved_stdlib_call(*e.resolved_callee_id, e.args, program, [&](const ExprNode& arg) {
                             return rewrite_expr(
                                 arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                         });
@@ -1972,7 +1999,7 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                         }
                         const auto func_id =
                             make_symbol_id(SymbolKind::Func, ModuleId{.name = module_name}, ident->name);
-                        return lower_resolved_stdlib_call(func_id, e.args, [&](const ExprNode& arg) {
+                        return lower_resolved_stdlib_call(func_id, e.args, program, [&](const ExprNode& arg) {
                             return rewrite_expr(
                                 arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                         });
@@ -2020,8 +2047,8 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                                         const auto func_id = make_symbol_id(SymbolKind::Func,
                                                                             ModuleId{.name = use_node->module_name},
                                                                             member_callee->member);
-                                        const auto lowered =
-                                            lower_resolved_stdlib_call(func_id, e.args, [&](const ExprNode& arg) {
+                                        const auto lowered = lower_resolved_stdlib_call(
+                                            func_id, e.args, program, [&](const ExprNode& arg) {
                                                 return rewrite_expr(arg,
                                                                     trait_names,
                                                                     program,

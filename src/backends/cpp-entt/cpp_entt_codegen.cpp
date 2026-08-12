@@ -3151,7 +3151,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "    cactus::runtime::entt_backend::register_editor_active_mode_impl(\n";
         out << "        [](entt::registry& reg) -> int {\n";
         out << "            auto view = reg.view<" << es_cpp << ">();\n";
-        out << "            for (auto entity : view) { return view.get<" << es_cpp << ">(entity).mode; }\n";
+        out << "            for (auto entity : view) { return static_cast<int>(view.get<" << es_cpp
+            << ">(entity).mode); }\n";
         out << "            return 0;\n";
         out << "        });\n";
         out << "    cactus::runtime::entt_backend::register_editor_is_active_impl(\n";

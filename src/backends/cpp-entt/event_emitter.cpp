@@ -42,6 +42,8 @@ std::string EnttEventEmitter::emit_event(const EventNode& event, const Decorated
             type = {.kind = TypeKind::EntityId, .name = "entity_id"};
         } else if (program.structs.contains(field.type.name)) {
             type = {.kind = TypeKind::Struct, .name = field.type.name};
+        } else if (program.enums.contains(field.type.name)) {
+            type = {.kind = TypeKind::Enum, .name = EnttCodegenUtils::enum_cpp_name(field.type.name, program)};
         } else {
             type = {.kind = TypeKind::Int, .name = "int"};
         }

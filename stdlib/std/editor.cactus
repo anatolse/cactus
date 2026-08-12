@@ -72,7 +72,7 @@ pub enum GizmoMode:
 
 pub trait EditorState:
     var active: bool = true
-    var mode: int = 0
+    var mode: GizmoMode = GizmoMode.Select
     var selected: entity_id
     var active_template: string = ""
     var focused_trait: string = ""
@@ -153,12 +153,12 @@ pub trait EditorCamera3D:
 # ── Gizmo Projection Traits (frame-local) ─────────────────────────────────────
 
 pub trait EditorGizmo2D:
-    var mode: int = 1
+    var mode: GizmoMode = GizmoMode.Translate
     var color: color = #00FF00FF
     var size: float = 1.0
 
 pub trait EditorGizmo3D:
-    var mode: int = 1
+    var mode: GizmoMode = GizmoMode.Translate
     var color: color = #00FF00FF
     var size: float = 1.0
 
@@ -169,8 +169,8 @@ pub event EditorSelectionChanged:
     current: entity_id
 
 pub event EditorModeChanged:
-    previous_mode: int
-    current_mode: int
+    previous_mode: GizmoMode
+    current_mode: GizmoMode
 
 # ── Extern Func Bridges ───────────────────────────────────────────────────────
 # Only editor-specific bridges remain here. Generic input, camera projection,
@@ -200,7 +200,7 @@ pub extern func apply_camera_3d(position: vec3, rotation: quat)
 # accessor mirroring transform.world_position(of:) — for rules (e.g. the gizmo
 # renderers) that are not filtered on EditorState itself and have no other way
 # to read it.
-pub extern func active_mode() int
+pub extern func active_mode() GizmoMode
 
 # Current EditorState.active of the singleton Editor entity. Same narrow-accessor
 # idiom as active_mode() — needed because EditorSelected persists across an
@@ -240,7 +240,7 @@ pub extern func palette_color(index: int) color
 # GizmoMode name (SELECT/TRANSLATE/ROTATE/SCALE/PLACE) for the HUD overlay's
 # mode text. Same reason this is a backend accessor and not a DSL if-chain as
 # palette_color above.
-pub extern func mode_label(mode: int) string
+pub extern func mode_label(mode: GizmoMode) string
 
 # Y screen position (pixels) for the index'th palette button: 40 + index * 30
 # (140x26px buttons, 4px gap). Computed here rather than DSL `40.0 + (idx *
@@ -315,16 +315,16 @@ rule EditorModeToggle:
 
         if active:
             if input.pressed(EditorModeTranslate):
-                mode = 1
+                mode = GizmoMode.Translate
 
             if input.pressed(EditorModeRotate):
-                mode = 2
+                mode = GizmoMode.Rotate
 
             if input.pressed(EditorModeScale):
-                mode = 3
+                mode = GizmoMode.Scale
 
             if input.pressed(EditorModePlace):
-                mode = 4
+                mode = GizmoMode.Place
 
 rule EditorSelection2D:
     filter:
@@ -373,7 +373,7 @@ rule EditorPlace2D:
             return
         if use_3d:
             return
-        if mode != 4:
+        if mode != GizmoMode.Place:
             return
         if not input.pressed(EditorSelectClick):
             return
@@ -391,7 +391,7 @@ rule EditorPlace2D:
 # match the values the hardcoded C++ this replaces used, for visual parity —
 # see design.md decision 8 for the one accepted deviation (fixed-size AABB
 # instead of reading BoxCollider.size).
-# GizmoMode: 1=Translate, 2=Rotate, 3=Scale (0=Select, 4=Place draw no handles).
+# Select and Place draw no mode-specific handles, only the always-drawn AABB below.
 rule EditorGizmoRenderer2D:
     filter:
         transform2d.WorldTransform as xform
@@ -417,7 +417,7 @@ rule EditorGizmoRenderer2D:
             thickness = 0.05
             color = #00FF00FF
 
-        if mode == 1:
+        if mode == GizmoMode.Translate:
             emit debug.DrawDebugLine2D:
                 start = center
                 end = vec2(center.x + arrow_len, center.y)
@@ -439,14 +439,14 @@ rule EditorGizmoRenderer2D:
                 c = vec2(center.x, center.y + arrow_len)
                 color = #00E430FF
 
-        if mode == 2:
+        if mode == GizmoMode.Rotate:
             emit debug.DrawDebugRingOutline2D:
                 center = center
                 inner_radius = arrow_len * 0.8
                 outer_radius = arrow_len
                 color = #66BFFFFF
 
-        if mode == 3:
+        if mode == GizmoMode.Scale:
             let sq = arrow_len * 0.15
             emit debug.DrawDebugLine2D:
                 start = center
@@ -516,7 +516,7 @@ rule EditorPlace3D:
             return
         if not use_3d:
             return
-        if mode != 4:
+        if mode != GizmoMode.Place:
             return
         if not input.pressed(EditorSelectClick):
             return
@@ -554,7 +554,7 @@ rule EditorGizmoRenderer3D:
             size = vec3(1.0, 1.0, 1.0)
             color = #00FF00FF
 
-        if mode == 1 or mode == 3:
+        if mode == GizmoMode.Translate or mode == GizmoMode.Scale:
             emit debug.DrawDebugLine3D:
                 start = origin
                 end = vec3(origin.x + axis_len, origin.y, origin.z)
@@ -568,14 +568,14 @@ rule EditorGizmoRenderer3D:
                 end = vec3(origin.x, origin.y, origin.z + axis_len)
                 color = #0079F1FF
 
-        if mode == 2:
+        if mode == GizmoMode.Rotate:
             emit debug.DrawDebugCircle3D:
                 center = origin
                 radius = axis_len
                 normal = vec3(1.0, 0.0, 0.0)
                 color = #66BFFFFF
 
-        if mode == 3:
+        if mode == GizmoMode.Scale:
             let tip = axis_len * 0.15
             emit debug.DrawDebugCube3D:
                 center = vec3(origin.x + axis_len, origin.y, origin.z)
@@ -626,7 +626,7 @@ rule EditorTemplatePalette:
 
             if click_pos.x >= x and click_pos.x <= x + 140.0 and click_pos.y >= y and click_pos.y <= y + 26.0:
                 active_template = name
-                mode = 4
+                mode = GizmoMode.Place
                 input.consume(EditorSelectClick)
 
     on render:

@@ -478,6 +478,35 @@ TEST_CASE("Codegen EnTT: CollisionEnter event supports entity and vector payload
     CHECK(code.find("Vector2 overlap;") != std::string::npos);
 }
 
+// event field type resolution previously matched field.type.name against a hardcoded
+// primitive list plus program.structs, with no program.enums branch — an enum-typed event
+// field silently fell through to the int fallback instead of resolving to its (possibly
+// module-prefixed) generated enum class type. Module name is set explicitly here so the
+// expected type is prefixed ("std_editor__GizmoMode"), which a naive bare-name fallback
+// (no program.enums lookup) would not produce.
+TEST_CASE("Codegen EnTT: enum-typed event field resolves to its generated enum class type",
+          "[codegen-entt][events][enum]") {
+    ResolvedEnum gizmo_mode;
+    gizmo_mode.name        = "GizmoMode";
+    gizmo_mode.module_name = "std.editor";
+    gizmo_mode.variants    = {"Select", "Translate", "Rotate", "Scale", "Place"};
+
+    DecoratedProgram program;
+    program.enums["GizmoMode"] = gizmo_mode;
+
+    EventNode event;
+    event.name        = "EditorModeChanged";
+    event.module_name = "std.editor";
+    event.fields.push_back({.name = "previous_mode", .type = {.name = "GizmoMode"}});
+    event.fields.push_back({.name = "current_mode", .type = {.name = "GizmoMode"}});
+
+    const auto code = EnttEventEmitter::emit_event(event, program);
+    CHECK(code.find("std_editor__GizmoMode previous_mode;") != std::string::npos);
+    CHECK(code.find("std_editor__GizmoMode current_mode;") != std::string::npos);
+    CHECK(code.find("int previous_mode;") == std::string::npos);
+    CHECK(code.find("int current_mode;") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -3036,7 +3065,7 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
         "    Place\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "    var selected: entity_id\n"
         "    var active_template: string = \"\"\n"
         "    var focused_trait: string = \"\"\n"
@@ -3084,19 +3113,26 @@ TEST_CASE("Codegen EnTT: editor.cactus module generates EditorState component, E
     // HexColor for #00FF00FF is not in this test, but HexColor conversion path should exist
 }
 
+// EditorActiveModeImpl (runtime.hpp) is a fixed std::function<int(entt::registry&)> —
+// program-independent, so it can't name a per-program generated enum type (same reasoning as
+// the active_mode()/mode_label() call-site bridging below). The registered impl lambda's body
+// must cast EditorState.mode (GizmoMode-typed) back to int to match that fixed signature.
 TEST_CASE("Codegen EnTT: editor active_mode() reads the singleton EditorState.mode via a registered impl",
-          "[codegen-entt][stdlib][editor]") {
+          "[codegen-entt][stdlib][editor][enum]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "module std.editor\n"
         "use std.editor\n"
         "pub event tick\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "pub entity Editor:\n"
         "    EditorState\n"
-        "pub extern func active_mode() int\n",
+        "pub extern func active_mode() GizmoMode\n",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
@@ -3105,7 +3141,8 @@ TEST_CASE("Codegen EnTT: editor active_mode() reads the singleton EditorState.mo
     const auto init = generated_function(code, "void generated_init_project");
     CHECK(init.find("register_editor_active_mode_impl(") != std::string::npos);
     CHECK(init.find("reg.view<EditorState>()") != std::string::npos);
-    CHECK(init.find(".mode;") != std::string::npos);
+    CHECK(init.find("-> int {") != std::string::npos);
+    CHECK(init.find("static_cast<int>(view.get<EditorState>(entity).mode)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: editor template_names()/template_index() expose a declaration-ordered companion list",
@@ -3152,12 +3189,15 @@ TEST_CASE(
     ProgramNode program;
     auto decorated = full_pipeline(
         "pub event tick\n"
-        "pub extern func active_mode() int\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "pub extern func active_mode() GizmoMode\n"
         "pub extern func template_names() list[string]\n"
         "pub extern func template_index(name: string) int\n"
         "pub extern func screen_size() vec2\n"
         "trait Probe:\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "    var idx: int = 0\n"
         "    var sz: vec2 = vec2(0.0, 0.0)\n"
         "rule ProbeTest:\n"
@@ -3185,6 +3225,68 @@ TEST_CASE(
     CHECK(rule.find("editor_screen_size(registry)") == std::string::npos);
 }
 
+// runtime.hpp's editor_active_mode/editor_mode_label stay int-based (program-independent,
+// precompiled — see editor-gizmo-mode-enum's design.md decision 1), so a GizmoMode-typed
+// active_mode()/mode_label() call must bridge with a static_cast at the codegen call site
+// rather than changing the runtime functions themselves.
+TEST_CASE("Codegen EnTT: active_mode() lowers to a static_cast from the runtime's int accessor to GizmoMode",
+          "[codegen-entt][editor][stdlib][enum]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "pub extern func active_mode() GizmoMode\n"
+        "trait Probe:\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
+        "rule ProbeTest:\n"
+        "    filter:\n"
+        "        Probe\n"
+        "    on tick:\n"
+        "        mode = active_mode()\n",
+        program);
+
+    for (const auto* name : {"active_mode"}) {
+        decorated.funcs[name].is_stdlib   = true;
+        decorated.funcs[name].module_name = "std.editor";
+    }
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto rule = generated_function(code, "void probe_test_tick");
+    CHECK(rule.find("static_cast<GizmoMode>(cactus::runtime::entt_backend::editor_active_mode(registry))") !=
+          std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: mode_label(mode) lowers to a static_cast from GizmoMode to the runtime's int parameter",
+          "[codegen-entt][editor][stdlib][enum]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub event tick\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "pub extern func mode_label(mode: GizmoMode) string\n"
+        "trait Probe:\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
+        "    var label: string = \"\"\n"
+        "rule ProbeTest:\n"
+        "    filter:\n"
+        "        Probe\n"
+        "    on tick:\n"
+        "        label = mode_label(mode)\n",
+        program);
+
+    for (const auto* name : {"mode_label"}) {
+        decorated.funcs[name].is_stdlib   = true;
+        decorated.funcs[name].module_name = "std.editor";
+    }
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto rule = generated_function(code, "void probe_test_tick");
+    CHECK(rule.find("cactus::runtime::entt_backend::editor_mode_label(static_cast<int>(") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emits mode-specific debug-draw events",
           "[codegen-entt][stdlib][editor][debug-draw]") {
     ProgramNode program;
@@ -3193,14 +3295,18 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emi
         "use std.editor\n"
         "use std.debug as debug\n"
         "pub event render\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "    Rotate\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "pub entity Editor:\n"
         "    EditorState\n"
         "pub trait EditorSelected\n"
         "pub trait EditorGizmo2D:\n"
-        "    var mode: int = 1\n"
+        "    var mode: GizmoMode = GizmoMode.Translate\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "trait WorldTransform:\n"
@@ -3227,7 +3333,7 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emi
         "    size: vec2\n"
         "    thickness: float\n"
         "    color: color\n"
-        "pub extern func active_mode() int\n"
+        "pub extern func active_mode() GizmoMode\n"
         "pub extern func is_editor_active() bool\n"
         "rule EditorGizmoRenderer2D:\n"
         "    filter:\n"
@@ -3247,7 +3353,7 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emi
         "            size = vec2(1.0, 1.0)\n"
         "            thickness = 0.05\n"
         "            color = #00FF00FF\n"
-        "        if mode == 1:\n"
+        "        if mode == GizmoMode.Translate:\n"
         "            emit DrawDebugLine2D:\n"
         "                start = center\n"
         "                end = vec2(center.x + 1.0, center.y)\n"
@@ -3258,7 +3364,7 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emi
         "                b = center\n"
         "                c = center\n"
         "                color = #E62937FF\n"
-        "        if mode == 2:\n"
+        "        if mode == GizmoMode.Rotate:\n"
         "            emit DrawDebugRingOutline2D:\n"
         "                center = center\n"
         "                inner_radius = 0.8\n"
@@ -3277,10 +3383,10 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer2D gates on is_editor_active and emi
     CHECK(tick.find(".mode = mode;") != std::string::npos);
     // Always-drawn AABB outline, independent of mode.
     CHECK(tick.find("DrawDebugRectOutline2DEvent_buffer.push_back(") != std::string::npos);
-    // Translate handles only inside the mode == 1 branch.
-    const auto mode1 = tick.find("if (mode == 1) {");
+    // Translate handles only inside the mode == GizmoMode::Translate branch.
+    const auto mode1 = tick.find("if (mode == GizmoMode::Translate) {");
     REQUIRE(mode1 != std::string::npos);
-    const auto mode2 = tick.find("if (mode == 2) {");
+    const auto mode2 = tick.find("if (mode == GizmoMode::Rotate) {");
     REQUIRE(mode2 != std::string::npos);
     CHECK(tick.find("DrawDebugLine2DEvent_buffer.push_back(", mode1) < mode2);
     CHECK(tick.find("DrawDebugRingOutline2DEvent_buffer.push_back(", mode2) != std::string::npos);
@@ -3295,9 +3401,12 @@ TEST_CASE(
         "module std.editor\n"
         "use std.editor\n"
         "pub event render\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Place\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "    var active_template: string = \"\"\n"
         "pub entity Editor:\n"
         "    EditorState\n"
@@ -3354,7 +3463,7 @@ TEST_CASE(
         "            if x >= 0.0:\n"
         "                if y >= 0.0:\n"
         "                    active_template = name\n"
-        "                    mode = 4\n",
+        "                    mode = GizmoMode.Place\n",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
@@ -3372,7 +3481,7 @@ TEST_CASE(
     // Click hit-testing and the EditorState writes happen directly in this rule (self bound to
     // EditorState), writing the real component fields, not a generic renderer.
     CHECK(tick.find(".active_template = name;") != std::string::npos);
-    CHECK((tick.find(".mode = 4;") != std::string::npos || tick.find(".mode = 4.0F;") != std::string::npos));
+    CHECK(tick.find(".mode = GizmoMode::Place;") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: EditorHUDOverlay draws a screen border and mode-text label only while active",
@@ -3382,9 +3491,11 @@ TEST_CASE("Codegen EnTT: EditorHUDOverlay draws a screen border and mode-text la
         "module std.editor\n"
         "use std.editor\n"
         "pub event render\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "pub trait ScreenLabel:\n"
         "    var text: string = \"\"\n"
         "    var position: vec2\n"
@@ -3406,7 +3517,7 @@ TEST_CASE("Codegen EnTT: EditorHUDOverlay draws a screen border and mode-text la
         "    filled: bool\n"
         "    thickness: float\n"
         "pub extern func screen_size() vec2\n"
-        "pub extern func mode_label(mode: int) string\n"
+        "pub extern func mode_label(mode: GizmoMode) string\n"
         "rule EditorHUDOverlay:\n"
         "    filter:\n"
         "        EditorState\n"
@@ -3454,12 +3565,15 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
         "module std.editor\n"
         "pub event tick:\n"
         "    dt: float\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
         "pub trait EditorGizmo2D:\n"
-        "    var mode: int = 1\n"
+        "    var mode: GizmoMode = GizmoMode.Translate\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "pub trait EditorGizmo3D:\n"
-        "    var mode: int = 1\n"
+        "    var mode: GizmoMode = GizmoMode.Translate\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "rule Gizmo2D:\n"
@@ -3467,11 +3581,11 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
         "        EditorGizmo2D\n"
         "    on tick:\n"
         "        project EditorGizmo2D:\n"
-        "            mode = 1\n"
+        "            mode = GizmoMode.Translate\n"
         "            color = #00FF00FF\n"
         "            size = 1.0\n"
         "        project EditorGizmo3D:\n"
-        "            mode = 1\n"
+        "            mode = GizmoMode.Translate\n"
         "            color = #00FF00FF\n"
         "            size = 1.0\n",
         program);
@@ -3499,9 +3613,11 @@ TEST_CASE("Codegen EnTT: editor extern rules generate correct dispatch calls",
         "module std.editor\n"
         "pub event tick:\n"
         "    dt: float\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "pub extern rule EditorPropertyPanel:\n"
         "    filter:\n"
         "        EditorState\n"
@@ -3530,14 +3646,19 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emi
         "use std.editor\n"
         "use std.debug as debug\n"
         "pub event render\n"
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "    Rotate\n"
+        "    Scale\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "pub entity Editor:\n"
         "    EditorState\n"
         "pub trait EditorSelected\n"
         "pub trait EditorGizmo3D:\n"
-        "    var mode: int = 1\n"
+        "    var mode: GizmoMode = GizmoMode.Translate\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "trait WorldTransform:\n"
@@ -3557,7 +3678,7 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emi
         "    radius: float\n"
         "    normal: vec3\n"
         "    color: color\n"
-        "pub extern func active_mode() int\n"
+        "pub extern func active_mode() GizmoMode\n"
         "pub extern func is_editor_active() bool\n"
         "rule EditorGizmoRenderer3D:\n"
         "    filter:\n"
@@ -3576,12 +3697,12 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emi
         "            center = origin\n"
         "            size = vec3(1.0, 1.0, 1.0)\n"
         "            color = #00FF00FF\n"
-        "        if mode == 1 or mode == 3:\n"
+        "        if mode == GizmoMode.Translate or mode == GizmoMode.Scale:\n"
         "            emit DrawDebugLine3D:\n"
         "                start = origin\n"
         "                end = vec3(origin.x + 1.0, origin.y, origin.z)\n"
         "                color = #E62937FF\n"
-        "        if mode == 2:\n"
+        "        if mode == GizmoMode.Rotate:\n"
         "            emit DrawDebugCircle3D:\n"
         "                center = origin\n"
         "                radius = 1.0\n"
@@ -3600,11 +3721,11 @@ TEST_CASE("Codegen EnTT: EditorGizmoRenderer3D gates on is_editor_active and emi
     CHECK(tick.find(".mode = mode;") != std::string::npos);
     // Always-drawn wire box, independent of mode.
     CHECK(tick.find("DrawDebugWireBox3DEvent_buffer.push_back(") != std::string::npos);
-    // Translate/scale axis line only inside the (mode == 1 || mode == 3) branch; circle only
-    // inside mode == 2.
-    const auto translate_branch = tick.find("mode == 1");
+    // Translate/scale axis line only inside the (mode == Translate || mode == Scale) branch;
+    // circle only inside mode == Rotate.
+    const auto translate_branch = tick.find("mode == GizmoMode::Translate");
     REQUIRE(translate_branch != std::string::npos);
-    const auto rotate_branch = tick.find("if (mode == 2) {");
+    const auto rotate_branch = tick.find("if (mode == GizmoMode::Rotate) {");
     REQUIRE(rotate_branch != std::string::npos);
     CHECK(tick.find("DrawDebugLine3DEvent_buffer.push_back(", translate_branch) < rotate_branch);
     CHECK(tick.find("DrawDebugCircle3DEvent_buffer.push_back(", rotate_branch) != std::string::npos);

@@ -830,7 +830,7 @@ TEST_CASE("Semantic: EditorState trait fields have correct types and defaults", 
         "    Place\n"
         "pub trait EditorState:\n"
         "    var active: bool = true\n"
-        "    var mode: int = 0\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n"
         "    var selected: entity_id\n"
         "    var active_template: string = \"\"\n"
         "    var focused_trait: string = \"\"\n"
@@ -850,7 +850,7 @@ TEST_CASE("Semantic: EditorState trait fields have correct types and defaults", 
     CHECK(editor_state->fields[0].name == "active");
     CHECK(editor_state->fields[0].type.name == "bool");
     CHECK(editor_state->fields[1].name == "mode");
-    CHECK(editor_state->fields[1].type.name == "int");
+    CHECK(editor_state->fields[1].type.name == "GizmoMode");
     CHECK(editor_state->fields[2].name == "selected");
     CHECK(editor_state->fields[2].type.name == "entity_id");
     CHECK(editor_state->fields[3].name == "active_template");
@@ -859,9 +859,11 @@ TEST_CASE("Semantic: EditorState trait fields have correct types and defaults", 
 
 TEST_CASE("Semantic: Editor entity with EditorState trait is valid", "[semantic][stdlib][editor]") {
     CHECK_FALSE(
-        analyze_errors("pub trait EditorState:\n"
+        analyze_errors("pub enum GizmoMode:\n"
+                       "    Select\n"
+                       "pub trait EditorState:\n"
                        "    var active: bool = true\n"
-                       "    var mode: int = 0\n"
+                       "    var mode: GizmoMode = GizmoMode.Select\n"
                        "    var selected: entity_id\n"
                        "pub entity Editor:\n"
                        "    EditorState\n"));
@@ -870,12 +872,15 @@ TEST_CASE("Semantic: Editor entity with EditorState trait is valid", "[semantic]
 TEST_CASE("Semantic: EditorGizmo2D and EditorGizmo3D traits are valid for projection", "[semantic][stdlib][editor]") {
     // Projection traits must be valid (have fields, can be projected)
     auto prog = analyze_ast(
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
         "pub trait EditorGizmo2D:\n"
-        "    var mode: int = 1\n"
+        "    var mode: GizmoMode = GizmoMode.Translate\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "pub trait EditorGizmo3D:\n"
-        "    var mode: int = 1\n"
+        "    var mode: GizmoMode = GizmoMode.Translate\n"
         "    var color: color = #00FF00FF\n"
         "    var size: float = 1.0\n"
         "rule Gizmo2D:\n"
@@ -903,12 +908,14 @@ TEST_CASE("Semantic: EditorGizmo2D and EditorGizmo3D traits are valid for projec
 TEST_CASE("Semantic: EditorSelectionChanged and EditorModeChanged events are valid", "[semantic][stdlib][editor]") {
     // Both events should pass semantic validation
     auto prog = analyze_ast(
+        "pub enum GizmoMode:\n"
+        "    Select\n"
         "pub event EditorSelectionChanged:\n"
         "    previous: entity_id\n"
         "    current: entity_id\n"
         "pub event EditorModeChanged:\n"
-        "    previous_mode: int\n"
-        "    current_mode: int\n"
+        "    previous_mode: GizmoMode\n"
+        "    current_mode: GizmoMode\n"
         "rule EventHandler:\n"
         "    on EditorSelectionChanged as e:\n"
         "        pass\n"

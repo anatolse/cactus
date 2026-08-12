@@ -93,14 +93,14 @@ The `std.editor` module SHALL declare the following `pub extern func` declaratio
 - `editor_mouse_delta_2d() vec2`
 - `editor_plane_project_3d(screen: vec2, plane_origin: vec3, plane_normal: vec3) vec3`
 - `editor_mouse_delta_3d() vec3`
-- `active_mode() int` — returns the current `EditorState.mode` of the singleton `Editor` entity, for use by rules (such as the gizmo renderers) that are not filtered on `EditorState` itself and therefore have no other way to read it.
+- `active_mode() GizmoMode` — returns the current `EditorState.mode` of the singleton `Editor` entity, for use by rules (such as the gizmo renderers) that are not filtered on `EditorState` itself and therefore have no other way to read it.
 - `is_editor_active() bool` — returns the current `EditorState.active` of the singleton `Editor` entity, same narrow-accessor idiom as `active_mode()`. Needed because `EditorSelected` persists across an editor deactivate (only a selection change clears it), so a rule filtered on `EditorSelected` but not `EditorState` — such as the gizmo renderers — has no other way to detect "editor is off" and stop drawing.
 - `template_names() list[string]` — returns the registered `pub template` names in declaration order, per `editor-template-registry`.
 - `template_index(name: string) int` — returns `name`'s zero-based position in the same order `template_names()` returns (or `-1` if unregistered), per `editor-template-registry`. Used to obtain a per-item index for layout/tint without relying on loop-local mutation inside `for`, which bounded `foreach` does not support (see `editor-declarative-rendering` design notes).
 - `screen_size() vec2` — returns the current window/render-target size in screen pixels.
 - `palette_label_slot(index: int) entity_id` — returns the entity handle for the `index`'th pre-spawned palette-button label slot from a small fixed pool (or an invalid `entity_id` past the pool size), so `EditorTemplatePalette` has a stable per-index entity to `project ScreenLabel to` each frame. `ScreenLabel` is entity-attached, not an event, and there is no DSL mechanism to spawn or discover entities indexed by an arbitrary per-frame count (see `editor-declarative-rendering` design notes, decision 9).
 - `palette_color(index: int) color` — cycles a small fixed 6-color palette by `index % 6`, for index-based palette button tinting. Backend-computed rather than a DSL if-chain assigning into a `let`-bound local, since `VarAssign` to a plain local inside a nested `if`/`for` block always redeclares with `auto` instead of mutating the outer binding (the same root-cause codegen limitation as the `foreach`-mutation finding in `editor-declarative-rendering`'s design notes, confirmed also reachable via `if`).
-- `mode_label(mode: int) string` — returns the `GizmoMode` name (`SELECT`/`TRANSLATE`/`ROTATE`/`SCALE`/`PLACE`) for the HUD overlay's mode text. Same backend-accessor rationale as `palette_color`.
+- `mode_label(mode: GizmoMode) string` — returns the `GizmoMode` name (`SELECT`/`TRANSLATE`/`ROTATE`/`SCALE`/`PLACE`) for the HUD overlay's mode text. Same backend-accessor rationale as `palette_color`.
 - `palette_button_y(index: int) float` — returns the Y screen position (pixels) for the `index`'th palette button (`40 + index * 30`, matching the 140×26px buttons with a 4px gap). Backend-computed because the DSL has no explicit int-to-float cast, so `40.0 + (idx * 30.0)` promotes `idx` implicitly, which this project's `clang-tidy` narrowing-conversion check (run with `--warnings-as-errors=*` on every curated example) flags.
 
 #### Scenario: editor_spawn_template declared with correct signature
@@ -118,6 +118,10 @@ The `std.editor` module SHALL declare the following `pub extern func` declaratio
 #### Scenario: active_mode reflects the live EditorState.mode
 - **WHEN** `EditorState.mode` is `GizmoMode.Rotate` on the singleton `Editor` entity
 - **THEN** `active_mode()` called from any rule returns `GizmoMode.Rotate`
+
+#### Scenario: mode_label accepts a GizmoMode argument
+- **WHEN** a rule calls `mode_label(GizmoMode.Scale)`
+- **THEN** the call type-checks against a `GizmoMode` parameter and returns `"SCALE"`
 
 #### Scenario: is_editor_active reflects the live EditorState.active
 - **WHEN** `EditorState.active` is `false` on the singleton `Editor` entity

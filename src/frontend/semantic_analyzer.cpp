@@ -2079,6 +2079,13 @@ void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
                                 for (const auto& el : e.elements) {
                                     check_const(*el);
                                 }
+                            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                                // A resolved enum-qualified literal (e.g. `GizmoMode.Select`) is
+                                // constant; resolve_enum_member_expr already validated it names a
+                                // real variant. Any other member access is not.
+                                if (!e.resolved_enum_member.has_value()) {
+                                    constant_ok = false;
+                                }
                             } else {
                                 constant_ok = false;
                             }

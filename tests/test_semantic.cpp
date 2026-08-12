@@ -642,6 +642,41 @@ TEST_CASE("Semantic: vec2/vec3 constructors resolve to real types outside trait 
                                                     "        p.Position.pos = origin\n"));
 }
 
+// An enum-qualified literal (`GizmoMode.Select`) is resolved against its enum declaration
+// by an earlier pass (resolve_enum_member_expr, populating MemberExpr::resolved_enum_member)
+// before trait-default validation runs, so it's already known to be a legitimate variant
+// reference here — not an arbitrary runtime member access. check_const's exhaustive
+// ExprNode dispatch previously had no MemberExpr case at all, so it fell to the catch-all
+// "not constant" branch regardless.
+TEST_CASE("Semantic: enum-qualified literal is a valid trait field default", "[semantic][enum]") {
+    CHECK_FALSE(analyze_has_errors("pub enum GizmoMode:\n"
+                                   "    Select\n"
+                                   "    Translate\n"
+                                   "trait EditorState:\n"
+                                   "    var mode: GizmoMode = GizmoMode.Select\n"));
+}
+
+TEST_CASE("Semantic: enum-qualified literal trait field default resolves to the enum type",
+          "[semantic][enum]") {
+    auto result = analyze("pub enum GizmoMode:\n"
+                          "    Select\n"
+                          "    Translate\n"
+                          "trait EditorState:\n"
+                          "    var mode: GizmoMode = GizmoMode.Select\n");
+    REQUIRE(result.traits.count("EditorState"));
+    auto& trait = result.traits["EditorState"];
+    REQUIRE(trait.fields.size() == 1);
+    CHECK(trait.fields[0].type.kind == TypeKind::Enum);
+}
+
+TEST_CASE("Semantic: enum-qualified literal naming an unknown variant rejected as trait default",
+          "[semantic][enum]") {
+    CHECK(analyze_has_errors("pub enum GizmoMode:\n"
+                             "    Select\n"
+                             "trait EditorState:\n"
+                             "    var mode: GizmoMode = GizmoMode.Translate\n"));
+}
+
 static const std::string VECTOR_MATRIX_STDLIB =
     "trait Position:\n"
     "    var pos2: vec2\n"

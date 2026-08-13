@@ -1129,16 +1129,20 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
                         return found->second;
                     }
                 }
-                // Module-level `const:` block declarations (e.g. `PARTICLE_COUNT`) aren't
-                // trait fields or lexical locals; resolve their kind from their own
-                // declared value expression so mixed int/float arithmetic involving a
-                // const (e.g. a range loop variable times a const-derived angle step)
-                // still gets the right static_cast.
-                if (const auto* const_value = find_const_value_expr(e.name, program)) {
-                    return infer_numeric_kind(*const_value, trait_names, program, local_kinds);
-                }
+                // Trait fields take priority, matching rewrite_expr's own IdentExpr
+                // precedence (a known trait field is qualified as `comp.field`; anything
+                // else, including a const, is emitted as a bare name) — checking fields
+                // first here keeps this resolution order consistent with that one.
                 const auto comp = find_comp_for_field(e.name, trait_names, program);
                 if (comp.empty()) {
+                    // Module-level `const:` block declarations (e.g. `PARTICLE_COUNT`) aren't
+                    // trait fields or lexical locals; resolve their kind from their own
+                    // declared value expression so mixed int/float arithmetic involving a
+                    // const (e.g. a range loop variable times a const-derived angle step)
+                    // still gets the right static_cast.
+                    if (const auto* const_value = find_const_value_expr(e.name, program)) {
+                        return infer_numeric_kind(*const_value, trait_names, program, local_kinds);
+                    }
                     return NumericKind::Unknown;
                 }
                 const auto* trait = EnttCodegenUtils::find_trait(program, comp);
@@ -1206,26 +1210,6 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
         expr.expr);
 }
 
-// vec2/vec3 constructor arguments accept `int`, promoted to `float` via the
-// same infer_numeric_kind machinery mixed int/float binary arithmetic already
-// uses (dsl-vector-expressions). Two codegen sites construct vec2/vec3
-// argument lists this way — this generic CallExpr fallback (in rewrite_expr
-// below) and the VarAssign-specific vec2 pretty-printer (in rewrite_stmt) —
-// each independently calling this helper; keep both in sync if a third site
-// is added.
-static std::string cast_vec_arg_if_int(std::string text,
-                                       const ExprNode& arg,
-                                       const std::vector<std::string>& trait_names,
-                                       const DecoratedProgram& program,
-                                       const LocalNumericKinds* local_kinds) {
-    if (infer_numeric_kind(arg, trait_names, program, local_kinds) == NumericKind::Int) {
-        return "static_cast<float>(" + text + ")";
-    }
-    return text;
-}
-
-// ── Rewrite expression: replace bare field names with comp.field ─────────────
-
 static std::string rewrite_expr(const ExprNode& expr,
                                 const std::vector<std::string>& trait_names,
                                 const DecoratedProgram& program,
@@ -1233,6 +1217,28 @@ static std::string rewrite_expr(const ExprNode& expr,
                                 const std::unordered_map<std::string, std::string>& cpp_overrides = {},
                                 const PairCodegenScope* pair_scope                                = nullptr,
                                 const LocalNumericKinds* local_kinds                              = nullptr);
+
+// Rewrites a vec2/vec3 constructor argument, promoting an `int`-kind result
+// to `float` via the same infer_numeric_kind machinery mixed int/float binary
+// arithmetic already uses (dsl-vector-expressions). Shared by the generic
+// CallExpr fallback (in rewrite_expr below) and the VarAssign-specific vec2
+// pretty-printer (in rewrite_stmt) — the two codegen sites that construct
+// vec2/vec3 argument lists.
+static std::string rewrite_vec_arg(const ExprNode& arg,
+                                   const std::vector<std::string>& trait_names,
+                                   const DecoratedProgram& program,
+                                   const std::unordered_set<std::string>& pointer_aliases,
+                                   const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                   const PairCodegenScope* pair_scope,
+                                   const LocalNumericKinds* local_kinds) {
+    auto text = rewrite_expr(arg, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+    if (infer_numeric_kind(arg, trait_names, program, local_kinds) == NumericKind::Int) {
+        return "static_cast<float>(" + text + ")";
+    }
+    return text;
+}
+
+// ── Rewrite expression: replace bare field names with comp.field ─────────────
 
 // Comma-joined rewrite_expr(*args[i], ...) for a call/list argument list.
 static std::string join_rewritten_args(const std::vector<std::unique_ptr<ExprNode>>& args,
@@ -2137,15 +2143,8 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                         if (i > 0) {
                             args += ", ";
                         }
-                        auto arg_text = rewrite_expr(*e.args[i],
-                                                     trait_names,
-                                                     program,
-                                                     pointer_aliases,
-                                                     cpp_overrides,
-                                                     pair_scope,
-                                                     local_kinds);
-                        args += cast_vec_arg_if_int(
-                            std::move(arg_text), *e.args[i], trait_names, program, local_kinds);
+                        args += rewrite_vec_arg(
+                            *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                     }
                     return ident->name + "(" + args + ")";
                 }
@@ -2752,29 +2751,22 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         ident != nullptr && ident->name == "vec2" && call->args.size() == 2) {
                         const std::string prefix = ind + lhs + " " + s.op + " vec2(";
                         const std::string continuation(prefix.size(), ' ');
-                        // vec2/vec3 int-argument promotion — see cast_vec_arg_if_int's
-                        // comment for why this duplicates the generic CallExpr fallback's
-                        // own casting instead of sharing a call site.
-                        auto arg0_text = rewrite_expr(*call->args[0],
-                                                      trait_names,
-                                                      program,
-                                                      pointer_aliases,
-                                                      cpp_overrides,
-                                                      pair_scope,
-                                                      local_kinds);
-                        auto arg1_text = rewrite_expr(*call->args[1],
-                                                      trait_names,
-                                                      program,
-                                                      pointer_aliases,
-                                                      cpp_overrides,
-                                                      pair_scope,
-                                                      local_kinds);
                         return prefix +
-                               cast_vec_arg_if_int(
-                                   std::move(arg0_text), *call->args[0], trait_names, program, local_kinds) +
+                               rewrite_vec_arg(*call->args[0],
+                                               trait_names,
+                                               program,
+                                               pointer_aliases,
+                                               cpp_overrides,
+                                               pair_scope,
+                                               local_kinds) +
                                ",\n" + continuation +
-                               cast_vec_arg_if_int(
-                                   std::move(arg1_text), *call->args[1], trait_names, program, local_kinds) +
+                               rewrite_vec_arg(*call->args[1],
+                                               trait_names,
+                                               program,
+                                               pointer_aliases,
+                                               cpp_overrides,
+                                               pair_scope,
+                                               local_kinds) +
                                ");\n";
                     }
                 }

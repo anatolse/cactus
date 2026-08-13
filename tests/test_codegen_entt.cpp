@@ -237,14 +237,14 @@ extern rule Monitor:
 
     const auto generated = CppEnttCodegen::generate(program);
 
-    CHECK(generated.find("struct CactusCapabilities__game__Integrate__on__game__simulate") != std::string::npos);
+    CHECK(generated.find("struct Capabilities__game__Integrate__on__game__simulate") != std::string::npos);
     CHECK(generated.find("void emit_game__Contact(ContactEvent occurrence) const") != std::string::npos);
     CHECK(generated.find("[[nodiscard]] entt::entity command_spawn_game__Particle() const") != std::string::npos);
     CHECK(generated.find("void command_destroy(entt::entity target) const") != std::string::npos);
     CHECK(generated.find("void command_add_game__Disabled(entt::entity target, game__Disabled value = {}) const") !=
           std::string::npos);
     CHECK(generated.find("void command_remove_game__Disabled(entt::entity target) const") != std::string::npos);
-    CHECK(generated.find("CactusEffectService effect_physics() const noexcept") != std::string::npos);
+    CHECK(generated.find("EffectService effect_physics() const noexcept") != std::string::npos);
     CHECK(generated.find("[[nodiscard]] game__Position* project_game__Position(entt::entity target) const") !=
           std::string::npos);
     CHECK(generated.find("if (!registry.valid(target)) { return nullptr; }") != std::string::npos);
@@ -256,10 +256,9 @@ extern rule Monitor:
     CHECK(generated.find("for (const auto entity : registry.view<game__Position, game__Velocity>())") !=
           std::string::npos);
     CHECK(generated.find("::cactus_external__game__Integrate__on__game__simulate(") != std::string::npos);
-    CHECK(generated.find("CactusCapabilities__game__Integrate__on__game__simulate{registry}") != std::string::npos);
+    CHECK(generated.find("Capabilities__game__Integrate__on__game__simulate{registry}") != std::string::npos);
 
-    const auto integrate_capabilities =
-        generated.find("struct CactusCapabilities__game__Integrate__on__game__simulate");
+    const auto integrate_capabilities = generated.find("struct Capabilities__game__Integrate__on__game__simulate");
     REQUIRE(integrate_capabilities != std::string::npos);
     const auto integrate_capabilities_end = generated.find("\n};\n\n", integrate_capabilities);
     REQUIRE(integrate_capabilities_end != std::string::npos);
@@ -273,7 +272,7 @@ extern rule Monitor:
 
     CHECK(generated.find("void cactus_external__game__Monitor__on__game__simulate(") != std::string::npos);
     CHECK(generated.find("::cactus_external__game__Monitor__on__game__simulate(") != std::string::npos);
-    const auto monitor_capabilities = generated.find("struct CactusCapabilities__game__Monitor__on__game__simulate");
+    const auto monitor_capabilities = generated.find("struct Capabilities__game__Monitor__on__game__simulate");
     REQUIRE(monitor_capabilities != std::string::npos);
     const auto monitor_capabilities_end = generated.find("\n};\n\n", monitor_capabilities);
     REQUIRE(monitor_capabilities_end != std::string::npos);
@@ -327,14 +326,13 @@ TEST_CASE("Codegen EnTT: component struct field defaults come from the trait's o
     const auto int_element = std::make_shared<TypeInfo>(TypeInfo{.kind = TypeKind::Int, .name = "int"});
     defaults.fields.push_back(
         {.name = "items", .type = {.kind = TypeKind::List, .name = "list", .element = int_element}, .is_var = true});
-    defaults.fields.push_back({.name       = "empty_items",
-                               .type       = {.kind = TypeKind::List, .name = "list", .element = int_element},
-                               .is_var     = true});
+    defaults.fields.push_back({.name   = "empty_items",
+                               .type   = {.kind = TypeKind::List, .name = "list", .element = int_element},
+                               .is_var = true});
     defaults.fields.push_back({.name = "s", .type = {.kind = TypeKind::String, .name = "string"}, .is_var = true});
     defaults.fields.push_back(
         {.name = "empty_s", .type = {.kind = TypeKind::String, .name = "string"}, .is_var = true});
-    defaults.fields.push_back(
-        {.name = "required", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
+    defaults.fields.push_back({.name = "required", .type = {.kind = TypeKind::Float, .name = "float"}, .is_var = true});
 
     const auto code = EnttComponentEmitter::emit_component(defaults, decorated);
     CHECK(code.find("float f = 1.5F;") != std::string::npos);
@@ -1585,9 +1583,9 @@ TEST_CASE("Codegen EnTT: commit emits a spawn notification only when an on spawn
     // codegen without also emitting destroy-notification codegen.
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
     CHECK(commit_fn.find("while (!activation.commands.empty())") != std::string::npos);
-    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Spawn") != std::string::npos);
+    CHECK(commit_fn.find("StructuralCommand::Kind::Spawn") != std::string::npos);
     CHECK(commit_fn.find("generated_emit_event(spawnEvent{});") != std::string::npos);
-    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Destroy") == std::string::npos);
+    CHECK(commit_fn.find("StructuralCommand::Kind::Destroy") == std::string::npos);
     CHECK(commit_fn.find("generated_drain_event_cascade(registry);") != std::string::npos);
 }
 
@@ -1615,9 +1613,9 @@ TEST_CASE("Codegen EnTT: commit emits a destroy notification only when an on des
 
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
     CHECK(commit_fn.find("while (!activation.commands.empty())") != std::string::npos);
-    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Destroy") != std::string::npos);
+    CHECK(commit_fn.find("StructuralCommand::Kind::Destroy") != std::string::npos);
     CHECK(commit_fn.find("generated_emit_event(destroyEvent{});") != std::string::npos);
-    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Spawn") == std::string::npos);
+    CHECK(commit_fn.find("StructuralCommand::Kind::Spawn") == std::string::npos);
     CHECK(commit_fn.find("generated_drain_event_cascade(registry);") != std::string::npos);
 }
 
@@ -1645,8 +1643,8 @@ TEST_CASE("Codegen EnTT: programs without spawn/destroy handlers emit no commit 
 
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
     CHECK(commit_fn.find("while (!activation.commands.empty())") == std::string::npos);
-    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Spawn") == std::string::npos);
-    CHECK(commit_fn.find("CactusStructuralCommand::Kind::Destroy") == std::string::npos);
+    CHECK(commit_fn.find("StructuralCommand::Kind::Spawn") == std::string::npos);
+    CHECK(commit_fn.find("StructuralCommand::Kind::Destroy") == std::string::npos);
     CHECK(commit_fn.find("generated_drain_event_cascade(registry);") == std::string::npos);
     CHECK(commit_fn.find("for (auto& command : commands) {") != std::string::npos);
     // The events are still declared (as they would be via a real `use
@@ -1678,7 +1676,7 @@ TEST_CASE("Codegen EnTT: spawn notification emission reuses the existing cascade
     const auto code = CppEnttCodegen::generate(decorated);
 
     // Commit routes the spawn notification through generated_emit_event — the
-    // same cascade-depth-bounded path (kCactusMaxEventCascadeDepth) already
+    // same cascade-depth-bounded path (kMaxEventCascadeDepth) already
     // used for ordinary handler-emitted events — rather than pushing directly
     // onto the event queue via a new/uncapped path.
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
@@ -1687,8 +1685,8 @@ TEST_CASE("Codegen EnTT: spawn notification emission reuses the existing cascade
 
     // Exactly one cascade-depth cap is declared for the whole program — no
     // second/independent depth-limiting mechanism was introduced.
-    CHECK(count_occurrences(code, "kCactusMaxEventCascadeDepth = 64;") == 1);
-    CHECK(code.find("if (next_depth > kCactusMaxEventCascadeDepth)") != std::string::npos);
+    CHECK(count_occurrences(code, "kMaxEventCascadeDepth = 64;") == 1);
+    CHECK(code.find("if (next_depth > kMaxEventCascadeDepth)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {
@@ -2204,8 +2202,7 @@ TEST_CASE("Codegen EnTT: trait match without wildcard emits no else", "[codegen-
 // this compiles to doubly-braced `else { if (...) {...} else {...} }`
 // rather than a flat `else if` cascade. Section 5 checks a fresh `else if`
 // chain compiles to equivalent behavior against this capture.
-TEST_CASE("Codegen EnTT: legacy nested else+if compiles to doubly-braced else { if }",
-          "[codegen-entt][control-flow]") {
+TEST_CASE("Codegen EnTT: legacy nested else+if compiles to doubly-braced else { if }", "[codegen-entt][control-flow]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
@@ -2254,8 +2251,7 @@ TEST_CASE("Codegen EnTT: legacy nested else+if compiles to doubly-braced else { 
 // combination of hp values. Before section 5.2 extends the IfStmt lowering to
 // walk else_if_branches, the emitter silently drops the middle branch — this
 // is expected to fail until that lowering lands.
-TEST_CASE("Codegen EnTT: else-if chain compiles equivalent to legacy nested else+if",
-          "[codegen-entt][control-flow]") {
+TEST_CASE("Codegen EnTT: else-if chain compiles equivalent to legacy nested else+if", "[codegen-entt][control-flow]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
@@ -4039,8 +4035,7 @@ TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child
           std::string::npos);
     CHECK(code.find("registry.view<Parent, Node>(entt::exclude<Hidden>)") != std::string::npos);
     CHECK(code.find("registry.get<Parent>(e).parent == " + requested_parent) != std::string::npos);
-    CHECK(code.find("registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(e).value") !=
-          std::string::npos);
+    CHECK(code.find("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(e).value") != std::string::npos);
     CHECK(code.find("std::ranges::sort(ordered)") != std::string::npos);
     CHECK(code.find("std::vector<entt::entity> result; result.reserve(ordered.size())") != std::string::npos);
     CHECK(code.find("result.push_back(e)") != std::string::npos);
@@ -4893,15 +4888,15 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     CHECK(code.find("#include <deque>") != std::string::npos);
     CHECK(code.find("#include <functional>") != std::string::npos);
     CHECK(code.find("#include <variant>") != std::string::npos);
-    CHECK(code.find("using CactusEventOccurrence = std::variant<ContactEvent, frameEvent>;") != std::string::npos);
-    CHECK(code.find("CactusEventOccurrence occurrence;") != std::string::npos);
+    CHECK(code.find("using EventOccurrence = std::variant<ContactEvent, frameEvent>;") != std::string::npos);
+    CHECK(code.find("EventOccurrence occurrence;") != std::string::npos);
     CHECK(code.find("void generated_inject_external_event(frameEvent occurrence)") != std::string::npos);
     CHECK(code.find("void generated_inject_external_event(ContactEvent occurrence)") == std::string::npos);
 
-    CHECK(code.find("std::deque<CactusQueuedEvent> event_queue;") != std::string::npos);
-    CHECK(code.find("std::deque<CactusQueuedEvent> deferred_events;") != std::string::npos);
+    CHECK(code.find("std::deque<QueuedEvent> event_queue;") != std::string::npos);
+    CHECK(code.find("std::deque<QueuedEvent> deferred_events;") != std::string::npos);
     CHECK(code.find("enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };") != std::string::npos);
-    CHECK(code.find("std::vector<CactusStructuralCommand> commands;") != std::string::npos);
+    CHECK(code.find("std::vector<StructuralCommand> commands;") != std::string::npos);
 
     CHECK(code.find("struct game_scheduler__inputPhaseRuntimeState") != std::string::npos);
     CHECK(code.find("struct game_scheduler__fixed_tickPhaseRuntimeState") != std::string::npos);
@@ -5008,7 +5003,7 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
         legacy_program);
     const auto legacy_code = CppEnttCodegen::generate(legacy);
     CHECK(legacy_code.find("Graph Activation Runtime State") == std::string::npos);
-    CHECK(legacy_code.find("CactusSchedulerState") == std::string::npos);
+    CHECK(legacy_code.find("SchedulerState") == std::string::npos);
     CHECK(legacy_code.find("#include <variant>") == std::string::npos);
     const auto legacy_main_start = legacy_code.find("int main()");
     const auto legacy_main_end   = legacy_code.find("#endif  // CACTUS_GENERATED_NO_MAIN", legacy_main_start);
@@ -5202,9 +5197,9 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::deque<CactusQueuedEvent> root_event_queue;") != std::string::npos);
+    CHECK(code.find("std::deque<QueuedEvent> root_event_queue;") != std::string::npos);
     CHECK(code.find("const auto next_depth = activation.current_cascade_depth + 1;") != std::string::npos);
-    CHECK(code.find("if (next_depth > kCactusMaxEventCascadeDepth)") != std::string::npos);
+    CHECK(code.find("if (next_depth > kMaxEventCascadeDepth)") != std::string::npos);
     CHECK(code.find("activation.deferred_events.push_back(std::move(queued));") != std::string::npos);
     CHECK(code.find("generated_emit_event(ContactEvent{.amount = 1});") != std::string::npos);
     CHECK(code.find("generated_emit_event(ReactionEvent{.amount = Contact.amount});") != std::string::npos);
@@ -5264,10 +5259,10 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
           std::string::npos);
     CHECK(code.find("create_particle_at(registry, " + spawned_name + ");") != std::string::npos);
     CHECK(code.find("generated_queue_structural_command(") != std::string::npos);
-    CHECK(code.find("CactusStructuralCommand::Kind::Spawn") != std::string::npos);
-    CHECK(code.find("CactusStructuralCommand::Kind::Add") != std::string::npos);
-    CHECK(code.find("CactusStructuralCommand::Kind::Remove") != std::string::npos);
-    CHECK(code.find("CactusStructuralCommand::Kind::Destroy") != std::string::npos);
+    CHECK(code.find("StructuralCommand::Kind::Spawn") != std::string::npos);
+    CHECK(code.find("StructuralCommand::Kind::Add") != std::string::npos);
+    CHECK(code.find("StructuralCommand::Kind::Remove") != std::string::npos);
+    CHECK(code.find("StructuralCommand::Kind::Destroy") != std::string::npos);
 
     const auto fixed_batch = code.find("void generated_run_phase_batch_game_commands__fixed_tick");
     REQUIRE(fixed_batch != std::string::npos);
@@ -5432,7 +5427,7 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
             CHECK(code.find("registry.view<Solid, Collider>()") != std::string::npos);
             // Sorted by creation ordinal for deterministic tuple order, reading
             // each entity's ordinal exactly once rather than per comparison.
-            CHECK(code.find("registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(pair_entity).value,") !=
+            CHECK(code.find("registry.get<cactus::runtime::entt_backend::CreationOrdinal>(pair_entity).value,") !=
                   std::string::npos);
             CHECK(code.find("std::ranges::sort(body_ordered);") != std::string::npos);
             // Left-binding-major nested iteration over the snapshots, in the
@@ -5578,7 +5573,7 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
 
     const auto code = CppEnttCodegen::generate(decorated);
     // Creation ordinal scaffolding is emitted and assigned at entity creation.
-    CHECK(code.find("struct CactusCreationOrdinal {") != std::string::npos);
+    CHECK(code.find("struct CreationOrdinal {") != std::string::npos);
     CHECK(code.find("generated_next_creation_ordinal()") != std::string::npos);
     // Targeted emit resolves `body` to the per-tuple loop variable, evaluates
     // it once, and carries it into the queued occurrence via the targeted
@@ -5868,8 +5863,7 @@ TEST_CASE("Codegen EnTT: range() descending iteration counts down", "[codegen-en
     }
 }
 
-TEST_CASE("Codegen EnTT: range() begin/end/step expressions are each emitted exactly once",
-          "[codegen-entt][range]") {
+TEST_CASE("Codegen EnTT: range() begin/end/step expressions are each emitted exactly once", "[codegen-entt][range]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
@@ -5895,8 +5889,7 @@ TEST_CASE("Codegen EnTT: range() begin/end/step expressions are each emitted exa
     }
 }
 
-TEST_CASE("Codegen EnTT: range() default step omits a third argument but still emits step 1",
-          "[codegen-entt][range]") {
+TEST_CASE("Codegen EnTT: range() default step omits a third argument but still emits step 1", "[codegen-entt][range]") {
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
@@ -5915,7 +5908,7 @@ TEST_CASE("Codegen EnTT: range() default step omits a third argument but still e
         if (sys == nullptr || sys->name != "DefaultStep") {
             continue;
         }
-        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        auto code            = EnttSystemEmitter::emit_system(*sys, decorated);
         const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
         REQUIRE_FALSE(step_name.empty());
         CHECK(code.find("const int " + step_name + " = 1;") != std::string::npos);
@@ -5952,7 +5945,7 @@ TEST_CASE("Codegen EnTT: range() with a non-literal step has no unconditional fa
         if (sys == nullptr || sys->name != "CountVariableStep") {
             continue;
         }
-        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        auto code            = EnttSystemEmitter::emit_system(*sys, decorated);
         const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
         REQUIRE_FALSE(step_name.empty());
 

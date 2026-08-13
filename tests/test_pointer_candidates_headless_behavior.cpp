@@ -14,15 +14,15 @@
 
 namespace {
 
-using CreationOrdinal = cactus::runtime::entt_backend::CactusCreationOrdinal;
+using CreationOrdinal = cactus::runtime::entt_backend::CreationOrdinal;
 
 entt::entity make_window_target(entt::registry& registry,
                                 const Vector2 position,
                                 const Vector2 size,
                                 const int draw_order,
-                                const bool enabled       = true,
-                                const bool blocks_lower  = true,
-                                const bool visible       = true) {
+                                const bool enabled      = true,
+                                const bool blocks_lower = true,
+                                const bool visible      = true) {
     const auto entity = registry.create();
     registry.emplace<CreationOrdinal>(
         entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
@@ -44,7 +44,8 @@ entt::entity make_flat_box_target(entt::registry& registry, const Vector2 positi
     const auto entity = registry.create();
     registry.emplace<CreationOrdinal>(
         entity, CreationOrdinal{.value = cactus::runtime::entt_backend::generated_next_creation_ordinal()});
-    registry.emplace<std_transform_flat__WorldTransform>(entity, std_transform_flat__WorldTransform{.position = position});
+    registry.emplace<std_transform_flat__WorldTransform>(entity,
+                                                         std_transform_flat__WorldTransform{.position = position});
     registry.emplace<std_physics_flat__Collider>(entity);
     registry.emplace<std_physics_flat__BoxCollider>(entity, std_physics_flat__BoxCollider{.size = size});
     registry.emplace<std_pointer__PointerTarget>(entity,
@@ -80,7 +81,7 @@ TEST_CASE("std.pointer.top_target follows reverse painter order among overlappin
     cactus::runtime::entt_backend::generated_load_project(registry);
 
     const auto behind = make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 100.0F, .y = 100.0F}, 0);
-    const auto front   = make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 100.0F, .y = 100.0F}, 5);
+    const auto front  = make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 100.0F, .y = 100.0F}, 5);
     (void)behind;
 
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
@@ -127,16 +128,14 @@ TEST_CASE("std.pointer.top_target respects disabled-blocking and nonblocking pas
     }
 }
 
-TEST_CASE("std.pointer.top_target ignores invisible and clipped-out window candidates",
-          "[runtime][stdlib][pointer]") {
+TEST_CASE("std.pointer.top_target ignores invisible and clipped-out window candidates", "[runtime][stdlib][pointer]") {
     cactus_raylib_fake::reset();
 
     entt::registry registry;
     cactus::runtime::entt_backend::generated_init_project(registry);
     cactus::runtime::entt_backend::generated_load_project(registry);
 
-    make_window_target(
-        registry, {.x = 0.0F, .y = 0.0F}, {.x = 100.0F, .y = 100.0F}, 0, true, true, /*visible=*/false);
+    make_window_target(registry, {.x = 0.0F, .y = 0.0F}, {.x = 100.0F, .y = 100.0F}, 0, true, true, /*visible=*/false);
 
     cactus_raylib_fake::set_mouse_position(Vector2{.x = 10.0F, .y = 10.0F});
     CHECK(cactus::runtime::entt_backend::pointer_top_target(registry) == entt::entity{entt::null});

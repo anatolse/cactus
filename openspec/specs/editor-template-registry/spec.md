@@ -4,7 +4,7 @@ Define the codegen-emitted template registry that maps `pub template` names to f
 ## Requirements
 
 ### Requirement: Codegen emits a template registry for pub template declarations
-After emitting all `create_X` factory functions, the codegen SHALL emit a static `cactus_template_registry` map. The map type SHALL be `std::unordered_map<std::string, CactusTemplateFactory>` where `CactusTemplateFactory` is `entt::entity(*)(entt::registry&)`. Each `pub template` declaration in the module SHALL have an entry mapping its name (as a string literal) to its `create_<snake_case_name>` factory function. Private templates (no `pub` modifier) SHALL NOT be registered.
+After emitting all `create_X` factory functions, the codegen SHALL emit a static `cactus_template_registry` map. The map type SHALL be `std::unordered_map<std::string, TemplateFactory>` where `TemplateFactory` is `entt::entity(*)(entt::registry&)`. Each `pub template` declaration in the module SHALL have an entry mapping its name (as a string literal) to its `create_<snake_case_name>` factory function. Private templates (no `pub` modifier) SHALL NOT be registered.
 
 #### Scenario: Registry contains pub templates only
 - **WHEN** a module declares `pub template Box` and `template InternalBase` (no pub)

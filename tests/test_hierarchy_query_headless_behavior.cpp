@@ -16,7 +16,7 @@
 
 namespace {
 
-using CreationOrdinal = cactus::runtime::entt_backend::CactusCreationOrdinal;
+using CreationOrdinal = cactus::runtime::entt_backend::CreationOrdinal;
 
 entt::entity create_runtime_entity(entt::registry& registry) {
     const auto entity = registry.create();

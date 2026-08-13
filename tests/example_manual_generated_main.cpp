@@ -13,7 +13,7 @@ void cactus_external__external_handler_linking__NativeMovement__on__external_han
     const external_handler_linking__Position& read_external_handler_linking__Position,
     external_handler_linking__Velocity& write_external_handler_linking__Velocity,
     const cactus::runtime::entt_backend::
-        CactusCapabilities__external_handler_linking__NativeMovement__on__external_handler_linking__fixed_tick&
+        Capabilities__external_handler_linking__NativeMovement__on__external_handler_linking__fixed_tick&
             capabilities) {
     (void)entity;
     (void)capabilities;
@@ -27,8 +27,7 @@ void cactus_external__external_handler_linking__NativeMovement__on__external_han
     const external_handler_linking__Velocity& read_external_handler_linking__Velocity,
     external_handler_linking__Position& write_external_handler_linking__Position,
     const cactus::runtime::entt_backend::
-        CactusCapabilities__external_handler_linking__NativeMovement__on__external_handler_linking__Reset&
-            capabilities) {
+        Capabilities__external_handler_linking__NativeMovement__on__external_handler_linking__Reset& capabilities) {
     (void)entity;
     (void)capabilities;
     write_external_handler_linking__Position.value =

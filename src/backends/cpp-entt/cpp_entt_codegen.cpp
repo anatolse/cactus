@@ -118,7 +118,7 @@ std::vector<std::string> sorted_strings(const std::unordered_set<std::string>& s
 }
 
 std::string external_handler_capability_name(const HandlerIdentity& identity) {
-    return "CactusCapabilities__" + canonical_to_cpp_name(identity.rule) + "__on__" +
+    return "Capabilities__" + canonical_to_cpp_name(identity.rule) + "__on__" +
            canonical_to_cpp_name(identity.trigger.symbol);
 }
 
@@ -248,7 +248,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
     std::ostringstream out;
     out << "// ── Contract-Shaped External Handler ABI ────────────────────────────\n\n";
     out << "namespace cactus::runtime::entt_backend {\n\n";
-    out << "struct CactusEffectService {\n";
+    out << "struct EffectService {\n";
     out << "    std::string_view domain;\n";
     out << "};\n\n";
     for (const auto& node : program.execution_graph.handlers) {
@@ -305,7 +305,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                     const auto factory = archetype_create_at_function_name(program.module_name, template_node->name);
                     out << "    [[nodiscard]] entt::entity " << method_name << "() const {\n";
                     out << "        const auto entity = generated_reserve_entity(registry);\n";
-                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Spawn,\n";
+                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Spawn,\n";
                     out << "            [entity](entt::registry& registry) { (void)::" << factory
                         << "(registry, entity); });\n";
                     out << "        return entity;\n";
@@ -314,7 +314,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                 }
                 case HandlerCommandKind::Destroy: {
                     out << "    void " << method_name << "(entt::entity target) const {\n";
-                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Destroy,\n";
+                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Destroy,\n";
                     out << "            [target](entt::registry& registry) {\n";
                     out << "                if (!registry.valid(target)) { return; }\n";
                     if (EnttCodegenUtils::find_trait(program, "Parent") != nullptr) {
@@ -332,7 +332,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                     }
                     const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
                     out << "    void " << method_name << "(entt::entity target, " << type << " value = {}) const {\n";
-                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Add,\n";
+                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Add,\n";
                     out << "            [target, value = std::move(value)](entt::registry& registry) mutable {\n";
                     out << "                if (!registry.valid(target)) { return; }\n";
                     out << "                ::cancel_projected_" << type << "(target);\n";
@@ -347,7 +347,7 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                     }
                     const auto type = EnttCodegenUtils::trait_cpp_name(*command.target);
                     out << "    void " << method_name << "(entt::entity target) const {\n";
-                    out << "        generated_queue_structural_command(CactusStructuralCommand::Kind::Remove,\n";
+                    out << "        generated_queue_structural_command(StructuralCommand::Kind::Remove,\n";
                     out << "            [target](entt::registry& registry) {\n";
                     out << "                if (!registry.valid(target)) { return; }\n";
                     out << "                ::cancel_projected_" << type << "(target);\n";
@@ -360,9 +360,9 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
             }
         }
         for (const auto& effect : sorted_strings(node.contract.effects)) {
-            out << "    [[nodiscard]] CactusEffectService " << external_handler_effect_method_name(effect)
+            out << "    [[nodiscard]] EffectService " << external_handler_effect_method_name(effect)
                 << "() const noexcept {\n";
-            out << "        return CactusEffectService{.domain = \"" << effect << "\"};\n";
+            out << "        return EffectService{.domain = \"" << effect << "\"};\n";
             out << "    }\n";
         }
         out << "};\n\n";
@@ -577,31 +577,31 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     std::ostringstream out;
     out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
     out << "namespace cactus::runtime::entt_backend {\n\n";
-    out << "inline constexpr std::size_t kCactusMaxEventCascadeDepth = 64;\n\n";
+    out << "inline constexpr std::size_t kMaxEventCascadeDepth = 64;\n\n";
     if (all_events.empty()) {
-        out << "using CactusEventOccurrence = std::variant<std::monostate>;\n";
+        out << "using EventOccurrence = std::variant<std::monostate>;\n";
     } else {
-        out << "using CactusEventOccurrence = std::variant<";
+        out << "using EventOccurrence = std::variant<";
         for (std::size_t index = 0; index < all_events.size(); ++index) {
             out << (index == 0 ? "" : ", ") << event_runtime_cpp_type(program, *all_events[index]->symbol_id);
         }
         out << ">;\n";
     }
-    out << "struct CactusQueuedEvent {\n";
-    out << "    CactusEventOccurrence occurrence;\n";
+    out << "struct QueuedEvent {\n";
+    out << "    EventOccurrence occurrence;\n";
     out << "    std::size_t cascade_depth{};\n";
     out << "    std::optional<entt::entity> target;\n";
     out << "};\n\n";
-    out << "struct CactusStructuralCommand {\n";
+    out << "struct StructuralCommand {\n";
     out << "    enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };\n";
     out << "    Kind kind{};\n";
     out << "    std::function<void(entt::registry&)> apply;\n";
     out << "};\n\n";
-    out << "struct CactusActivationRuntime {\n";
-    out << "    std::deque<CactusQueuedEvent> root_event_queue;\n";
-    out << "    std::deque<CactusQueuedEvent> event_queue;\n";
-    out << "    std::deque<CactusQueuedEvent> deferred_events;\n";
-    out << "    std::vector<CactusStructuralCommand> commands;\n";
+    out << "struct ActivationRuntime {\n";
+    out << "    std::deque<QueuedEvent> root_event_queue;\n";
+    out << "    std::deque<QueuedEvent> event_queue;\n";
+    out << "    std::deque<QueuedEvent> deferred_events;\n";
+    out << "    std::vector<StructuralCommand> commands;\n";
     out << "    std::size_t current_cascade_depth{};\n";
     out << "    entt::entt_traits<entt::entity>::entity_type next_reserved_entity =\n";
     out << "        entt::entt_traits<entt::entity>::entity_mask - 1U;\n";
@@ -625,15 +625,15 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << "};\n\n";
     }
 
-    out << "struct CactusSchedulerState {\n";
-    out << "    CactusActivationRuntime activation;\n";
+    out << "struct SchedulerState {\n";
+    out << "    ActivationRuntime activation;\n";
     for (const auto& phase : program.execution_graph.phases) {
         const auto phase_name = canonical_to_cpp_name(phase.phase);
         out << "    " << phase_name << "PhaseRuntimeState " << phase_name << ";\n";
     }
     out << "};\n\n";
-    out << "CactusSchedulerState& generated_scheduler_state() {\n";
-    out << "    static CactusSchedulerState state;\n";
+    out << "SchedulerState& generated_scheduler_state() {\n";
+    out << "    static SchedulerState state;\n";
     out << "    return state;\n";
     out << "}\n\n";
 
@@ -649,13 +649,13 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "    throw std::runtime_error(\"cactus deferred entity identifier space exhausted\");\n";
     out << "}\n\n";
 
-    out << "void generated_queue_structural_command(CactusStructuralCommand::Kind kind,\n";
+    out << "void generated_queue_structural_command(StructuralCommand::Kind kind,\n";
     out << "                                        std::function<void(entt::registry&)> apply) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     out << "    if (!activation.active) {\n";
     out << "        throw std::runtime_error(\"cactus structural command queued outside an activation\");\n";
     out << "    }\n";
-    out << "    activation.commands.push_back(CactusStructuralCommand{.kind = kind, .apply = std::move(apply)});\n";
+    out << "    activation.commands.push_back(StructuralCommand{.kind = kind, .apply = std::move(apply)});\n";
     out << "}\n\n";
 
     // generated_emit_event and the generated_drain_event_cascade forward
@@ -667,8 +667,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "void generated_emit_event(Occurrence occurrence) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     out << "    const auto next_depth = activation.current_cascade_depth + 1;\n";
-    out << "    auto queued = CactusQueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = next_depth};\n";
-    out << "    if (next_depth > kCactusMaxEventCascadeDepth) {\n";
+    out << "    auto queued = QueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = next_depth};\n";
+    out << "    if (next_depth > kMaxEventCascadeDepth) {\n";
     out << "        queued.cascade_depth = 0;\n";
     out << "        activation.deferred_events.push_back(std::move(queued));\n";
     out << "        return;\n";
@@ -686,9 +686,9 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     out << "    const auto next_depth = activation.current_cascade_depth + 1;\n";
-    out << "    auto queued = CactusQueuedEvent{\n";
+    out << "    auto queued = QueuedEvent{\n";
     out << "        .occurrence = std::move(occurrence), .cascade_depth = next_depth, .target = target};\n";
-    out << "    if (next_depth > kCactusMaxEventCascadeDepth) {\n";
+    out << "    if (next_depth > kMaxEventCascadeDepth) {\n";
     out << "        queued.cascade_depth = 0;\n";
     out << "        activation.deferred_events.push_back(std::move(queued));\n";
     out << "        return;\n";
@@ -712,7 +712,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         // Looping until no new commands were queued lets an `on spawn`/`on
         // destroy` handler that issues further spawn/destroy commands have
         // those commands applied within the same activation, bounded by the
-        // existing kCactusMaxEventCascadeDepth cap (generated_emit_event
+        // existing kMaxEventCascadeDepth cap (generated_emit_event
         // defers instead of enqueuing once the cascade depth is exceeded, so
         // no new commands get queued from a deferred notification and this
         // loop terminates).
@@ -722,12 +722,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << "        for (auto& command : commands) {\n";
         out << "            command.apply(registry);\n";
         if (has_spawn_handler) {
-            out << "            if (command.kind == CactusStructuralCommand::Kind::Spawn) {\n";
+            out << "            if (command.kind == StructuralCommand::Kind::Spawn) {\n";
             out << "                generated_emit_event(" << spawn_type << "{});\n";
             out << "            }\n";
         }
         if (has_destroy_handler) {
-            out << "            if (command.kind == CactusStructuralCommand::Kind::Destroy) {\n";
+            out << "            if (command.kind == StructuralCommand::Kind::Destroy) {\n";
             out << "                generated_emit_event(" << destroy_type << "{});\n";
             out << "            }\n";
         }
@@ -741,19 +741,19 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         const auto type = event_runtime_cpp_type(program, *event->symbol_id);
         out << "void generated_inject_external_event(" << type << " occurrence) {\n";
         out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
-        out << "        CactusQueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
+        out << "        QueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
         out << "}\n\n";
     }
 
     out << "template <typename Occurrence>\n";
     out << "void generated_dispatch_event(entt::registry&, const Occurrence&) {}\n\n";
 
-    out << "struct CactusStableHandlerDispatch {\n";
+    out << "struct StableHandlerDispatch {\n";
     out << "    std::string_view canonical_id;\n";
     out << "    bool selectionless;\n";
     out << "};\n";
-    out << "inline constexpr std::array<CactusStableHandlerDispatch, "
-        << program.execution_graph.stable_topological_order.size() << "> kCactusStableHandlerDispatch = {{\n";
+    out << "inline constexpr std::array<StableHandlerDispatch, "
+        << program.execution_graph.stable_topological_order.size() << "> kStableHandlerDispatch = {{\n";
     for (const auto& identity : program.execution_graph.stable_topological_order) {
         const auto found = std::ranges::find_if(program.execution_graph.handlers,
                                                 [&](const auto& handler) { return handler.identity == identity; });
@@ -1454,7 +1454,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
 
     if (has_axis_input) {
         out << "using InputAxis = std::uint8_t;\n";
-        out << "enum class CactusInputAxisTag : std::uint8_t { ";
+        out << "enum class InputAxisTag : std::uint8_t { ";
         bool first = true;
         for (const auto& decl : program.ast->declarations) {
             if (const auto* input = std::get_if<InputDeclNode>(&decl)) {
@@ -1473,7 +1473,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
                     continue;
                 }
                 out << "[[maybe_unused]] constexpr InputAxis " << input_action_constant_name(input->name)
-                    << " = static_cast<InputAxis>(CactusInputAxisTag::" << input->name << ");\n";
+                    << " = static_cast<InputAxis>(InputAxisTag::" << input->name << ");\n";
             }
         }
         out << "\n";
@@ -1513,7 +1513,7 @@ std::string emit_input_constants(const DecoratedProgram& program) {
                         }
                     }
                 }
-                out << "        case static_cast<InputAxis>(CactusInputAxisTag::" << input->name << "):\n";
+                out << "        case static_cast<InputAxis>(InputAxisTag::" << input->name << "):\n";
                 out << "            return " << positive << " - " << negative << ";\n";
             }
         }
@@ -1620,11 +1620,11 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
     // assigning the creation ordinal here covers all three. A small number of
     // engine-internal entities are created outside the DSL entirely (e.g. the
     // editor camera rig in emit_camera_rig_activation/-exit below) and must
-    // independently emplace CactusCreationOrdinal at their own reg.create()
+    // independently emplace CreationOrdinal at their own reg.create()
     // site, since any pairs: rule binding on a trait such an entity also
     // carries could otherwise match it in emit_pair_binding_snapshot's view.
-    out << ind << "registry.emplace<cactus::runtime::entt_backend::CactusCreationOrdinal>(" << entity_name
-        << ", cactus::runtime::entt_backend::CactusCreationOrdinal{.value = "
+    out << ind << "registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(" << entity_name
+        << ", cactus::runtime::entt_backend::CreationOrdinal{.value = "
            "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
     for (const auto& trait : traits) {
         const std::string cpp_name =
@@ -1958,7 +1958,7 @@ std::string emit_flat_collision_helpers(const DecoratedProgram& program) {
 
 namespace {
 
-struct CactusFlatColliderRef {
+struct FlatColliderRef {
     entt::entity entity{entt::null};
     Vector2 position{};
     Collider collider{};
@@ -1969,7 +1969,7 @@ bool cactus_collision_masks_allow(const Collider& lhs, const Collider& rhs) noex
     return ((lhs.mask & rhs.layer) != 0) && ((rhs.mask & lhs.layer) != 0);
 }
 
-Vector2 cactus_flat_box_overlap(const CactusFlatColliderRef& lhs, const CactusFlatColliderRef& rhs) noexcept {
+Vector2 cactus_flat_box_overlap(const FlatColliderRef& lhs, const FlatColliderRef& rhs) noexcept {
     const float lhs_center_x = lhs.position.x + lhs.half_extents.x;
     const float lhs_center_y = lhs.position.y + lhs.half_extents.y;
     const float rhs_center_x = rhs.position.x + rhs.half_extents.x;
@@ -1987,13 +1987,13 @@ Vector2 cactus_flat_box_overlap(const CactusFlatColliderRef& lhs, const CactusFl
     return Vector2{.x = 0.0F, .y = delta_y < 0.0F ? -overlap_y : overlap_y};
 }
 
-void cactus_collect_flat_colliders(entt::registry& registry, std::vector<CactusFlatColliderRef>& colliders) {
+void cactus_collect_flat_colliders(entt::registry& registry, std::vector<FlatColliderRef>& colliders) {
     auto boxes = registry.view<WorldTransform, Collider, BoxCollider>();
     boxes.each([&](entt::entity entity,
                    const WorldTransform& transform,
                    const Collider& collider,
                    const BoxCollider& box) {
-        colliders.push_back(CactusFlatColliderRef{.entity       = entity,
+        colliders.push_back(FlatColliderRef{.entity       = entity,
                                                   .position     = transform.position,
                                                   .collider     = collider,
                                                   .half_extents = Vector2{.x = box.size.x * 0.5F,
@@ -2004,7 +2004,7 @@ void cactus_collect_flat_colliders(entt::registry& registry, std::vector<CactusF
                      const WorldTransform& transform,
                      const Collider& collider,
                      const CircleCollider& circle) {
-        colliders.push_back(CactusFlatColliderRef{.entity       = entity,
+        colliders.push_back(FlatColliderRef{.entity       = entity,
                                                   .position     = Vector2{.x = transform.position.x - circle.radius,
                                                                           .y = transform.position.y - circle.radius},
                                                   .collider     = collider,
@@ -2016,7 +2016,7 @@ void cactus_collect_flat_colliders(entt::registry& registry, std::vector<CactusF
                       const WorldTransform& transform,
                       const Collider& collider,
                       const CapsuleCollider& capsule) {
-        colliders.push_back(CactusFlatColliderRef{.entity       = entity,
+        colliders.push_back(FlatColliderRef{.entity       = entity,
                                                   .position     = Vector2{.x = transform.position.x - capsule.radius,
                                                                           .y = transform.position.y - (capsule.height * 0.5F)},
                                                   .collider     = collider,
@@ -2055,12 +2055,12 @@ QueryResult2D cactus_hit_query_result(QueryContact2D contact) noexcept {
     return QueryResult2D{.kind = QueryResultKind::Hit, .contact = contact};
 }
 
-bool cactus_query_mask_allows(const CactusFlatColliderRef& candidate, int mask) noexcept {
+bool cactus_query_mask_allows(const FlatColliderRef& candidate, int mask) noexcept {
     return (candidate.collider.layer & mask) != 0;
 }
 
-bool cactus_find_flat_collider(entt::registry& registry, entt::entity entity, CactusFlatColliderRef& result) {
-    std::vector<CactusFlatColliderRef> colliders;
+bool cactus_find_flat_collider(entt::registry& registry, entt::entity entity, FlatColliderRef& result) {
+    std::vector<FlatColliderRef> colliders;
     cactus_collect_flat_colliders(registry, colliders);
     for (const auto& collider : colliders) {
         if (collider.entity == entity) {
@@ -2071,8 +2071,8 @@ bool cactus_find_flat_collider(entt::registry& registry, entt::entity entity, Ca
     return false;
 }
 
-std::optional<QueryContact2D> cactus_flat_overlap_contact(const CactusFlatColliderRef& subject,
-                                                          const CactusFlatColliderRef& candidate) noexcept {
+std::optional<QueryContact2D> cactus_flat_overlap_contact(const FlatColliderRef& subject,
+                                                          const FlatColliderRef& candidate) noexcept {
     const auto overlap = cactus_flat_box_overlap(candidate, subject);
     if (overlap.x == 0.0F && overlap.y == 0.0F) {
         return std::nullopt;
@@ -2080,8 +2080,8 @@ std::optional<QueryContact2D> cactus_flat_overlap_contact(const CactusFlatCollid
     return cactus_flat_contact(candidate.entity, cactus_flat_overlap_normal(overlap), 0.0F, overlap);
 }
 
-std::optional<QueryContact2D> cactus_flat_cast_contact(const CactusFlatColliderRef& subject,
-                                                       const CactusFlatColliderRef& candidate,
+std::optional<QueryContact2D> cactus_flat_cast_contact(const FlatColliderRef& subject,
+                                                       const FlatColliderRef& candidate,
                                                        Vector2 delta) noexcept {
     if (auto overlap = cactus_flat_overlap_contact(subject, candidate)) {
         return overlap;
@@ -2149,12 +2149,12 @@ QueryResult2D cactus_query_cast_nearest(entt::registry& registry,
         return cactus_empty_query_result();
     }
 
-    CactusFlatColliderRef subject;
+    FlatColliderRef subject;
     if (!cactus_find_flat_collider(registry, subject_entity, subject)) {
         return cactus_empty_query_result();
     }
 
-    std::vector<CactusFlatColliderRef> colliders;
+    std::vector<FlatColliderRef> colliders;
     cactus_collect_flat_colliders(registry, colliders);
     std::optional<QueryContact2D> nearest;
     for (const auto& candidate : colliders) {
@@ -2176,12 +2176,12 @@ QueryResult2D cactus_query_overlap_deepest(entt::registry& registry,
                                            entt::entity subject_entity,
                                            int mask,
                                            entt::entity exclude) {
-    CactusFlatColliderRef subject;
+    FlatColliderRef subject;
     if (!cactus_find_flat_collider(registry, subject_entity, subject)) {
         return cactus_empty_query_result();
     }
 
-    std::vector<CactusFlatColliderRef> colliders;
+    std::vector<FlatColliderRef> colliders;
     cactus_collect_flat_colliders(registry, colliders);
     std::optional<QueryContact2D> deepest;
     float deepest_amount = 0.0F;
@@ -2206,12 +2206,12 @@ std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry,
                                                      entt::entity subject_entity,
                                                      int mask,
                                                      entt::entity exclude) {
-    CactusFlatColliderRef subject;
+    FlatColliderRef subject;
     if (!cactus_find_flat_collider(registry, subject_entity, subject)) {
         return {};
     }
 
-    std::vector<CactusFlatColliderRef> colliders;
+    std::vector<FlatColliderRef> colliders;
     cactus_collect_flat_colliders(registry, colliders);
     std::vector<QueryContact2D> contacts;
     for (const auto& candidate : colliders) {
@@ -2226,7 +2226,7 @@ std::vector<QueryContact2D> cactus_query_overlap_all(entt::registry& registry,
 }
 
 void cactus_dispatch_stdlib_flat_collisions(entt::registry& registry, entt::dispatcher& dispatcher) {
-    std::vector<CactusFlatColliderRef> colliders;
+    std::vector<FlatColliderRef> colliders;
     cactus_collect_flat_colliders(registry, colliders);
     for (std::size_t i = 0; i < colliders.size(); ++i) {
         for (std::size_t j = i + 1; j < colliders.size(); ++j) {
@@ -2285,7 +2285,7 @@ std::string emit_volume_collision_helpers(const DecoratedProgram& program) {
 
 namespace {
 
-struct CactusVolumeColliderRef {
+struct VolumeColliderRef {
     entt::entity entity{entt::null};
     Vector3 position{};
     Collider collider{};
@@ -2296,7 +2296,7 @@ bool cactus_collision_masks_allow(const Collider& lhs, const Collider& rhs) noex
     return ((lhs.mask & rhs.layer) != 0) && ((rhs.mask & lhs.layer) != 0);
 }
 
-Vector3 cactus_volume_box_overlap(const CactusVolumeColliderRef& lhs, const CactusVolumeColliderRef& rhs) noexcept {
+Vector3 cactus_volume_box_overlap(const VolumeColliderRef& lhs, const VolumeColliderRef& rhs) noexcept {
     const float lhs_center_x = lhs.position.x + lhs.half_extents.x;
     const float lhs_center_y = lhs.position.y + lhs.half_extents.y;
     const float lhs_center_z = lhs.position.z + lhs.half_extents.z;
@@ -2331,13 +2331,13 @@ Vector3 cactus_volume_normal(Vector3 overlap) noexcept {
     return Vector3{.x = 0.0F, .y = 0.0F, .z = overlap.z < 0.0F ? -1.0F : 1.0F};
 }
 
-void cactus_collect_volume_colliders(entt::registry& registry, std::vector<CactusVolumeColliderRef>& colliders) {
+void cactus_collect_volume_colliders(entt::registry& registry, std::vector<VolumeColliderRef>& colliders) {
     auto boxes = registry.view<WorldTransform, Collider, BoxCollider>();
     boxes.each([&](entt::entity entity,
                    const WorldTransform& transform,
                    const Collider& collider,
                    const BoxCollider& box) {
-        colliders.push_back(CactusVolumeColliderRef{.entity       = entity,
+        colliders.push_back(VolumeColliderRef{.entity       = entity,
                                                     .position     = transform.position,
                                                     .collider     = collider,
                                                     .half_extents = Vector3{.x = box.size.x * 0.5F,
@@ -2349,7 +2349,7 @@ void cactus_collect_volume_colliders(entt::registry& registry, std::vector<Cactu
                      const WorldTransform& transform,
                      const Collider& collider,
                      const SphereCollider& sphere) {
-        colliders.push_back(CactusVolumeColliderRef{.entity   = entity,
+        colliders.push_back(VolumeColliderRef{.entity   = entity,
                                                     .position = Vector3{.x = transform.position.x - sphere.radius,
                                                                         .y = transform.position.y - sphere.radius,
                                                                         .z = transform.position.z - sphere.radius},
@@ -2363,7 +2363,7 @@ void cactus_collect_volume_colliders(entt::registry& registry, std::vector<Cactu
                       const WorldTransform& transform,
                       const Collider& collider,
                       const CapsuleCollider& capsule) {
-        colliders.push_back(CactusVolumeColliderRef{.entity   = entity,
+        colliders.push_back(VolumeColliderRef{.entity   = entity,
                                                     .position = Vector3{.x = transform.position.x - capsule.radius,
                                                                         .y = transform.position.y - (capsule.height * 0.5F),
                                                                         .z = transform.position.z - capsule.radius},
@@ -2377,7 +2377,7 @@ void cactus_collect_volume_colliders(entt::registry& registry, std::vector<Cactu
 }  // namespace
 
 void cactus_dispatch_stdlib_volume_collisions(entt::registry& registry, entt::dispatcher& dispatcher) {
-    std::vector<CactusVolumeColliderRef> colliders;
+    std::vector<VolumeColliderRef> colliders;
     cactus_collect_volume_colliders(registry, colliders);
     for (std::size_t i = 0; i < colliders.size(); ++i) {
         for (std::size_t j = i + 1; j < colliders.size(); ++j) {
@@ -2732,7 +2732,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // elsewhere) since a pairs: rule can exist in a program with no phase
     // declarations, driven only by bare events.
     out << "namespace cactus::runtime::entt_backend {\n\n";
-    out << "struct CactusCreationOrdinal {\n";
+    out << "struct CreationOrdinal {\n";
     out << "    std::uint64_t value{};\n";
     out << "};\n\n";
     out << "inline std::uint64_t generated_next_creation_ordinal() {\n";
@@ -2890,8 +2890,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
 
         out << "// ── Template Registry ───────────────────────────────────────────────\n\n";
-        out << "using CactusTemplateFactory = entt::entity(*)(entt::registry&);\n";
-        out << "static const std::unordered_map<std::string, CactusTemplateFactory> cactus_template_registry = {\n";
+        out << "using TemplateFactory = entt::entity(*)(entt::registry&);\n";
+        out << "static const std::unordered_map<std::string, TemplateFactory> cactus_template_registry = {\n";
         for (const auto& decl : program.ast->declarations) {
             if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
                 if (tmpl->is_pub) {
@@ -3206,9 +3206,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 // emit_archetype_trait_initializers, so it must independently receive a creation
                 // ordinal: any pairs: rule binding on a trait this rig also carries (e.g.
                 // Viewport) would otherwise match it in emit_pair_binding_snapshot's view and
-                // read a CactusCreationOrdinal component that was never emplaced (UB).
-                out << "                reg.emplace<cactus::runtime::entt_backend::CactusCreationOrdinal>(__rig, "
-                       "cactus::runtime::entt_backend::CactusCreationOrdinal{.value = "
+                // read a CreationOrdinal component that was never emplaced (UB).
+                out << "                reg.emplace<cactus::runtime::entt_backend::CreationOrdinal>(__rig, "
+                       "cactus::runtime::entt_backend::CreationOrdinal{.value = "
                        "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
                 out << "                reg.emplace<" << ec2d_cpp_rig << ">(__rig, " << ec2d_cpp_rig
                     << "{.view_center = __cam2d.target, .zoom = __cam2d.zoom, .pan_speed = 1.0F, .zoom_speed = 0.1F, "
@@ -3265,8 +3265,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                auto __rig = reg.create();\n";
                 // See the matching comment in the 2D branch above: this rig is created outside
                 // the archetype/spawn choke point and must independently receive an ordinal.
-                out << "                reg.emplace<cactus::runtime::entt_backend::CactusCreationOrdinal>(__rig, "
-                       "cactus::runtime::entt_backend::CactusCreationOrdinal{.value = "
+                out << "                reg.emplace<cactus::runtime::entt_backend::CreationOrdinal>(__rig, "
+                       "cactus::runtime::entt_backend::CreationOrdinal{.value = "
                        "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
                 out << "                reg.emplace<" << ec3d_cpp_rig << ">(__rig, " << ec3d_cpp_rig
                     << "{.focus = __tgt, .yaw = __yaw, .pitch = __pitch, .distance = __distance, .orbit_speed = "
@@ -3394,7 +3394,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
                 out << "                        .creation_ordinal = "
-                       "reg.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(entity).value});\n";
+                       "reg.get<cactus::runtime::entt_backend::CreationOrdinal>(entity).value});\n";
                 out << "                }\n";
                 out << "            }\n";
             }
@@ -3414,7 +3414,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 out << "                        .entity = entity, .enabled = target.enabled,\n";
                 out << "                        .blocks_lower = target.blocks_lower, .priority = target.priority,\n";
                 out << "                        .creation_ordinal = "
-                       "reg.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(entity).value});\n";
+                       "reg.get<cactus::runtime::entt_backend::CreationOrdinal>(entity).value});\n";
                 out << "                }\n";
                 out << "            }\n";
             }

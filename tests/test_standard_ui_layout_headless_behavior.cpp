@@ -13,7 +13,7 @@
 
 namespace {
 
-using CreationOrdinal = cactus::runtime::entt_backend::CactusCreationOrdinal;
+using CreationOrdinal = cactus::runtime::entt_backend::CreationOrdinal;
 
 entt::entity create_node(entt::registry& registry) {
     const auto entity = registry.create();
@@ -211,10 +211,10 @@ TEST_CASE("Standard UI measures bottom-up and arranges top-down across edge-case
     const auto reorder_first = create_node(registry);
     set_parent(registry, reorder_first, reorder_root);
     registry.get<std_ui__Node>(reorder_first).z_index = 5;
-    const auto reorder_second = create_node(registry);
+    const auto reorder_second                         = create_node(registry);
     set_parent(registry, reorder_second, reorder_root);
     registry.get<std_ui__Node>(reorder_second).z_index = 0;
-    const auto reorder_tie_a = create_node(registry);
+    const auto reorder_tie_a                           = create_node(registry);
     set_parent(registry, reorder_tie_a, reorder_root);
     const auto reorder_tie_b = create_node(registry);
     set_parent(registry, reorder_tie_b, reorder_root);

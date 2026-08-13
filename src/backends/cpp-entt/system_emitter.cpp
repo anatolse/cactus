@@ -621,7 +621,7 @@ void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodege
     out << ind << "    std::vector<std::pair<std::uint64_t, entt::entity>> " << name << "_ordered;\n";
     out << ind << "    for (auto pair_entity : " << name << "_view) {\n";
     out << ind << "        " << name
-        << "_ordered.emplace_back(registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(pair_entity)"
+        << "_ordered.emplace_back(registry.get<cactus::runtime::entt_backend::CreationOrdinal>(pair_entity)"
            ".value,\n";
     out << ind << "                               pair_entity);\n";
     out << ind << "    }\n";
@@ -1533,7 +1533,7 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     if (graph_runtime) {
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-        out << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
+        out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            auto " << committed_name << " = "
             << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, "
@@ -1592,7 +1592,7 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
     if (!program.execution_graph.phases.empty()) {
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-        out << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
+        out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, " << spawned_name
             << ");\n";
@@ -1692,7 +1692,7 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
                "std::vector<std::pair<std::uint64_t, entt::entity>> ordered; for (auto e : " +
                child_view + ") { if (registry.get<" + parent_cpp + ">(e).parent == " + requested_parent +
                ") ordered.emplace_back(registry.get<"
-               "cactus::runtime::entt_backend::CactusCreationOrdinal>(e).value, e); } std::ranges::sort(ordered); "
+               "cactus::runtime::entt_backend::CreationOrdinal>(e).value, e); } std::ranges::sort(ordered); "
                "std::vector<entt::entity> result; result.reserve(ordered.size()); for (const auto& [ordinal, e] : "
                "ordered) { (void)ordinal; result.push_back(e); } return result; }()";
     }
@@ -1701,7 +1701,7 @@ static std::string lower_ecs_query_call(const QueryCallExpr& qcall,
         const bool postorder         = func_name == "hierarchy_postorder";
         return "[&]{ std::vector<std::pair<std::uint64_t, entt::entity>> ordered; for (auto e : " + view +
                ") ordered.emplace_back(registry.get<"
-               "cactus::runtime::entt_backend::CactusCreationOrdinal>(e).value, e); std::ranges::sort(ordered); "
+               "cactus::runtime::entt_backend::CreationOrdinal>(e).value, e); std::ranges::sort(ordered); "
                "std::unordered_set<entt::entity> matching; matching.reserve(ordered.size()); for (const auto& "
                "[ordinal, e] : ordered) { (void)ordinal; matching.insert(e); } "
                "std::unordered_map<entt::entity, std::vector<entt::entity>> children; "
@@ -1820,7 +1820,7 @@ static std::string lower_ui_query_call(const QueryCallExpr& qcall,
                "registry.view<" +
                node_cpp +
                ">()) creation_ordered.emplace_back(registry.get<"
-               "cactus::runtime::entt_backend::CactusCreationOrdinal>(e).value, e); "
+               "cactus::runtime::entt_backend::CreationOrdinal>(e).value, e); "
                "std::ranges::sort(creation_ordered); std::unordered_set<entt::entity> matching; "
                "matching.reserve(creation_ordered.size()); for (const auto& [ordinal, e] : creation_ordered) { "
                "(void)ordinal; matching.insert(e); } std::unordered_map<entt::entity, std::vector<entt::entity>> "
@@ -1834,8 +1834,8 @@ static std::string lower_ui_query_call(const QueryCallExpr& qcall,
                "registry.get<" +
                node_cpp + ">(left).z_index; const auto right_z = registry.get<" + node_cpp +
                ">(right).z_index; if (left_z != right_z) return left_z < right_z; return "
-               "registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(left).value < "
-               "registry.get<cactus::runtime::entt_backend::CactusCreationOrdinal>(right).value; }); } "
+               "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(left).value < "
+               "registry.get<cactus::runtime::entt_backend::CreationOrdinal>(right).value; }); } "
                "std::vector<entt::entity> order; order.reserve(creation_ordered.size()); "
                "std::unordered_set<entt::entity> visited; visited.reserve(creation_ordered.size()); auto visit = "
                "[&](auto&& self, entt::entity e) -> void { if (!visited.insert(e).second) return; "
@@ -2421,7 +2421,7 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
         result << ind << "    auto " << spawned_name
                << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-        result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Spawn,\n";
+        result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
         result << ind << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, "
                << spawned_name << ");\n";
@@ -2463,7 +2463,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
         result << ind << "{\n";
         result << ind << "    const auto " << target_name << " = " << target << ";\n";
         result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
-        result << ind << "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Add,\n";
+        result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
         result << ind << "            if (!registry.valid(" << target_name << ")) { return; }\n";
         result << ind << "            cancel_projected_" << cpp << "(" << target_name << ");\n";
@@ -2536,7 +2536,7 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
         const std::string target_name = gen_temp_name("target", s.location);
         return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
                "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
-               "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Remove,\n" + ind +
+               "        cactus::runtime::entt_backend::StructuralCommand::Kind::Remove,\n" + ind +
                "        [=](entt::registry& registry) {\n" + ind + "            if (!registry.valid(" + target_name +
                ")) { return; }\n" + ind + "            cancel_projected_" + cpp + "(" + target_name + ");\n" + ind +
                "            if (registry.all_of<" + cpp + ">(" + target_name + ")) {\n" + ind +
@@ -2621,15 +2621,11 @@ static std::string emit_range_foreach_stmt(const ForeachStmt& s,
         *range_call.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
     const auto end_text = rewrite_expr(
         *range_call.args[1], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
-    const auto step_text = range_call.args.size() == 3
-                                ? rewrite_expr(*range_call.args[2],
-                                              trait_names,
-                                              program,
-                                              pointer_aliases,
-                                              cpp_overrides,
-                                              pair_scope,
-                                              local_kinds)
-                                : "1";
+    const auto step_text =
+        range_call.args.size() == 3
+            ? rewrite_expr(
+                  *range_call.args[2], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds)
+            : "1";
 
     std::string result = ind + "{\n";
     result += ind1 + "const int " + begin_name + " = " + begin_text + ";\n";
@@ -2638,11 +2634,11 @@ static std::string emit_range_foreach_stmt(const ForeachStmt& s,
 
     const auto emit_direction = [&](const std::string& compare_op) {
         auto range_locals = clone_or_empty(lexical_locals);
-        auto range_kinds   = clone_or_empty(local_kinds);
+        auto range_kinds  = clone_or_empty(local_kinds);
         range_locals.insert(s.var_name);
         range_kinds[s.var_name] = NumericKind::Int;
-        std::string branch = ind2 + "for (int " + s.var_name + " = " + begin_name + "; " + s.var_name + " " +
-                             compare_op + " " + end_name + "; " + s.var_name + " += " + step_name + ") {\n";
+        std::string branch      = ind2 + "for (int " + s.var_name + " = " + begin_name + "; " + s.var_name + " " +
+                                  compare_op + " " + end_name + "; " + s.var_name + " += " + step_name + ") {\n";
         branch += rewrite_stmt_block(s.body,
                                      indent + 3,
                                      trait_names,
@@ -2800,7 +2796,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     const std::string target_name = gen_temp_name("target", s.location);
                     return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
                            "    cactus::runtime::entt_backend::generated_queue_structural_command(\n" + ind +
-                           "        cactus::runtime::entt_backend::CactusStructuralCommand::Kind::Destroy,\n" + ind +
+                           "        cactus::runtime::entt_backend::StructuralCommand::Kind::Destroy,\n" + ind +
                            "        [=](entt::registry& registry) {\n" + ind + "            if (registry.valid(" +
                            target_name + ")) {\n" + ind + "                cactus_destroy_entity_recursive(registry, " +
                            target_name + ");\n" + ind + "            }\n" + ind + "        });\n" + ind + "}\n";
@@ -2840,8 +2836,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 const auto condition = rewrite_expr(
                     *s.condition, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
                 std::string result = ind + "if " + parenthesize_condition(condition) + " {\n";
-                auto then_locals = clone_or_empty(lexical_locals);
-                auto then_kinds  = clone_or_empty(local_kinds);
+                auto then_locals   = clone_or_empty(lexical_locals);
+                auto then_kinds    = clone_or_empty(local_kinds);
                 result += rewrite_stmt_block(s.then_body,
                                              indent + 1,
                                              trait_names,
@@ -2855,12 +2851,12 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 result += ind + "}";
                 for (const auto& branch : s.else_if_branches) {
                     const auto branch_condition = rewrite_expr(*branch.condition,
-                                                                trait_names,
-                                                                program,
-                                                                pointer_aliases,
-                                                                cpp_overrides,
-                                                                pair_scope,
-                                                                local_kinds);
+                                                               trait_names,
+                                                               program,
+                                                               pointer_aliases,
+                                                               cpp_overrides,
+                                                               pair_scope,
+                                                               local_kinds);
                     result += " else if " + parenthesize_condition(branch_condition) + " {\n";
                     auto branch_locals = clone_or_empty(lexical_locals);
                     auto branch_kinds  = clone_or_empty(local_kinds);

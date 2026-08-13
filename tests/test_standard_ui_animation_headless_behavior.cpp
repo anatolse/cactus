@@ -15,7 +15,7 @@
 
 namespace {
 
-using CreationOrdinal = cactus::runtime::entt_backend::CactusCreationOrdinal;
+using CreationOrdinal = cactus::runtime::entt_backend::CreationOrdinal;
 
 entt::entity create_node(entt::registry& registry) {
     const auto entity = registry.create();
@@ -66,9 +66,9 @@ TEST_CASE("AnimateUiFrames advances frame deterministically and leaves paused/in
         zero_fps, std_ui__FrameAnimation{.frame_count = 4, .fps = 0.0F, .frame = 1, .elapsed = 0.0F, .playing = true});
 
     const auto invalid_count = create_node(registry);
-    registry.emplace<std_ui__FrameAnimation>(invalid_count,
-                                             std_ui__FrameAnimation{
-                                                 .frame_count = 0, .fps = 10.0F, .frame = 0, .elapsed = 0.0F, .playing = true});
+    registry.emplace<std_ui__FrameAnimation>(
+        invalid_count,
+        std_ui__FrameAnimation{.frame_count = 0, .fps = 10.0F, .frame = 0, .elapsed = 0.0F, .playing = true});
 
     const cactus::runtime::entt_backend::std_core__tickPhaseRuntimeState tick_phase{.dt = 1.0F / 60.0F};
     // 10 fps: one whole frame every 0.1s. 0.25s of ticks -> floor(0.25 * 10) = 2 frames advanced.
@@ -77,8 +77,8 @@ TEST_CASE("AnimateUiFrames advances frame deterministically and leaves paused/in
     }
 
     CHECK(registry.get<std_ui__FrameAnimation>(playing).frame == 2);
-    CHECK(registry.get<std_ui__FrameAnimation>(paused).frame == 2);        // unchanged: not playing
-    CHECK(registry.get<std_ui__FrameAnimation>(zero_fps).frame == 1);      // unchanged: fps <= 0
+    CHECK(registry.get<std_ui__FrameAnimation>(paused).frame == 2);         // unchanged: not playing
+    CHECK(registry.get<std_ui__FrameAnimation>(zero_fps).frame == 1);       // unchanged: fps <= 0
     CHECK(registry.get<std_ui__FrameAnimation>(invalid_count).frame == 0);  // clamps to a 1-frame cycle: always 0
 }
 
@@ -108,17 +108,21 @@ TEST_CASE("StartBump restarts the bump on its targeted recipient only", "[runtim
 
     const auto targeted = create_node(registry);
     registry.emplace<std_ui__Visual>(targeted, std_ui__Visual{.scale = {.x = 1.0F, .y = 1.0F}, .opacity = 1.0F});
-    registry.emplace<std_ui__BumpAnimation>(
-        targeted,
-        std_ui__BumpAnimation{
-            .from_scale = {.x = 0.5F, .y = 0.5F}, .to_scale = {.x = 1.0F, .y = 1.0F}, .duration = 1.0F, .elapsed = 5.0F, .playing = false});
+    registry.emplace<std_ui__BumpAnimation>(targeted,
+                                            std_ui__BumpAnimation{.from_scale = {.x = 0.5F, .y = 0.5F},
+                                                                  .to_scale   = {.x = 1.0F, .y = 1.0F},
+                                                                  .duration   = 1.0F,
+                                                                  .elapsed    = 5.0F,
+                                                                  .playing    = false});
 
     const auto bystander = create_node(registry);
     registry.emplace<std_ui__Visual>(bystander, std_ui__Visual{.scale = {.x = 1.0F, .y = 1.0F}, .opacity = 1.0F});
-    registry.emplace<std_ui__BumpAnimation>(
-        bystander,
-        std_ui__BumpAnimation{
-            .from_scale = {.x = 0.5F, .y = 0.5F}, .to_scale = {.x = 1.0F, .y = 1.0F}, .duration = 1.0F, .elapsed = 5.0F, .playing = false});
+    registry.emplace<std_ui__BumpAnimation>(bystander,
+                                            std_ui__BumpAnimation{.from_scale = {.x = 0.5F, .y = 0.5F},
+                                                                  .to_scale   = {.x = 1.0F, .y = 1.0F},
+                                                                  .duration   = 1.0F,
+                                                                  .elapsed    = 5.0F,
+                                                                  .playing    = false});
 
     emit_targeted(registry, targeted);
 
@@ -138,10 +142,12 @@ TEST_CASE("AnimateUiBump's StartBump and tick handlers are independently trigger
 
     const auto entity = create_node(registry);
     registry.emplace<std_ui__Visual>(entity, std_ui__Visual{.scale = {.x = 1.0F, .y = 1.0F}, .opacity = 1.0F});
-    registry.emplace<std_ui__BumpAnimation>(
-        entity,
-        std_ui__BumpAnimation{
-            .from_scale = {.x = 0.5F, .y = 0.5F}, .to_scale = {.x = 1.0F, .y = 1.0F}, .duration = 1.0F, .elapsed = 0.0F, .playing = false});
+    registry.emplace<std_ui__BumpAnimation>(entity,
+                                            std_ui__BumpAnimation{.from_scale = {.x = 0.5F, .y = 0.5F},
+                                                                  .to_scale   = {.x = 1.0F, .y = 1.0F},
+                                                                  .duration   = 1.0F,
+                                                                  .elapsed    = 0.0F,
+                                                                  .playing    = false});
 
     // The tick handler alone, with playing == false, never resets elapsed or
     // touches scale -- proving it does not implicitly fold in StartBump's
@@ -185,10 +191,12 @@ TEST_CASE("A tick-phase bump changes render presentation the same frame without 
     registry.emplace<std_ui__Visual>(entity, std_ui__Visual{.scale = {.x = 1.0F, .y = 1.0F}, .opacity = 1.0F});
     registry.emplace<std_ui__Panel>(entity, std_ui__Panel{.background = RED});
     // Already mid-flight so a single driven frame visibly interpolates scale.
-    registry.emplace<std_ui__BumpAnimation>(
-        entity,
-        std_ui__BumpAnimation{
-            .from_scale = {.x = 0.0F, .y = 0.0F}, .to_scale = {.x = 2.0F, .y = 2.0F}, .duration = 1.0F, .elapsed = 0.5F, .playing = true});
+    registry.emplace<std_ui__BumpAnimation>(entity,
+                                            std_ui__BumpAnimation{.from_scale = {.x = 0.0F, .y = 0.0F},
+                                                                  .to_scale   = {.x = 2.0F, .y = 2.0F},
+                                                                  .duration   = 1.0F,
+                                                                  .elapsed    = 0.5F,
+                                                                  .playing    = true});
 
     // Drives input -> tick -> late_tick -> render directly by phase function,
     // like test_standard_ui_layout_headless_behavior.cpp, rather than through
@@ -217,8 +225,8 @@ TEST_CASE("A tick-phase bump changes render presentation the same frame without 
 
     // But the render pass this same frame reflects the interpolated
     // (larger, mid-bump) presentation scale, not the logical size.
-    const auto* draw = cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(
-        cactus_raylib_fake::call_log());
+    const auto* draw =
+        cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(cactus_raylib_fake::call_log());
     REQUIRE(draw != nullptr);
     CHECK(draw->rec.width > 40.0F);
     CHECK(draw->rec.height > 40.0F);

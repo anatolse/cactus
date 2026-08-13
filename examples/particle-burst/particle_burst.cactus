@@ -1,0 +1,92 @@
+module particle_burst
+
+use std.input as inp
+use std.render.shapes as shapes
+use std.transform.flat as tf
+
+const:
+    GRAVITY = 300.0
+    PARTICLE_LIFETIME = 0.9
+
+input EmitParticles: button
+    mouse = inp.MouseButton.Left
+
+trait Particle:
+    var velocity: vec2
+    var lifetime: float
+
+template ParticleTemplate:
+    tf.WorldTransform:
+        position = vec2(0.0, 0.0)
+    shapes.Shape:
+        type = shapes.ShapeType.Circle
+        size = vec2(10.0, 10.0)
+        color = #FF6B6BFF
+    Particle:
+        lifetime = PARTICLE_LIFETIME
+
+rule EmitParticleBurst:
+    on input:
+        if not input.pressed(EmitParticles):
+            return
+        let mouse_pos = input.mouse_position()
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(150.0, 0.0)
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(106.1, -106.1)
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(0.0, -150.0)
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(-106.1, -106.1)
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(-150.0, 0.0)
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(-106.1, 106.1)
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(0.0, 150.0)
+
+        spawn ParticleTemplate:
+            tf.WorldTransform:
+                position = mouse_pos
+            Particle:
+                velocity = vec2(106.1, 106.1)
+
+rule SimulateParticles:
+    filter:
+        tf.WorldTransform as xf
+        Particle as particle
+
+    on fixed_tick:
+        particle.velocity = vec2(particle.velocity.x, particle.velocity.y + GRAVITY * fixed_tick.dt)
+        xf.position = xf.position + particle.velocity * fixed_tick.dt
+        particle.lifetime = particle.lifetime - fixed_tick.dt
+        if particle.lifetime <= 0.0:
+            destroy

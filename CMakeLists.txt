@@ -328,6 +328,7 @@ set(SPLIT_SCREEN_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/split-screen.ge
 set(SPLIT_SCREEN_FOREST_BOMBS_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/split-screen-forest-bombs.generated.cpp")
 set(STANDARD_UI_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/standard-ui.generated.cpp")
 set(EXTERNAL_HANDLER_LINK_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/external-handler-link.generated.cpp")
+set(PARTICLE_BURST_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/particle-burst.generated.cpp")
 
 add_custom_command(
     OUTPUT "${EXTERNAL_HANDLER_LINK_GENERATED_CPP}"
@@ -470,6 +471,12 @@ cactus_add_example(example_standard_ui_generated
     BACKEND "cpp-entt"
     OUTPUT "${STANDARD_UI_GENERATED_CPP}"
     EXCLUDE_FROM_ALL
+)
+
+cactus_add_example(example_particle_burst_generated
+    SOURCE "examples/particle-burst/particle_burst.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${PARTICLE_BURST_GENERATED_CPP}"
 )
 
 # ── Tests ───────────────────────────────────────────────────────────────────────

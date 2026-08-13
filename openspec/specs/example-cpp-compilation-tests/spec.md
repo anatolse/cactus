@@ -150,3 +150,18 @@ After template-backed entity support is implemented, curated example compilation
 #### Scenario: Template-backed entity example compiles through backend
 - **WHEN** a supported example uses `entity Gem1 from BlueGem:` and targets cpp-entt
 - **THEN** curated example compilation coverage generates and compiles backend output for the template-backed entity setup
+
+### Requirement: Particle burst example is curated for cpp-entt compilation
+
+Automated example-compilation integration coverage SHALL include the particle burst example as a
+named curated `cpp-entt` case.
+
+#### Scenario: Curated example list includes particle burst
+
+- **WHEN** `ExampleCppCompilationTests` enumerates curated examples
+- **THEN** it includes a case named `particle-burst` with source `examples/particle-burst/particle_burst.cactus` and backend `cpp-entt`
+
+#### Scenario: Particle burst generated output is compiled
+
+- **WHEN** the curated example compilation test runs the `particle-burst` case
+- **THEN** it invokes the compiler for the example, verifies the generated C++ exists, builds the registered example target, and runs the standard formatting and tidy validation steps

@@ -249,6 +249,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_STANDARD_UI_GENERATED_CPP="${STANDARD_UI_GENERATED_CPP}"
     CACTUS_EXAMPLE_STANDARD_UI_TARGET="example_standard_ui_generated"
 
+    CACTUS_EXAMPLE_PARTICLE_BURST_SOURCE="examples/particle-burst/particle_burst.cactus"
+    CACTUS_EXAMPLE_PARTICLE_BURST_GENERATED_CPP="${PARTICLE_BURST_GENERATED_CPP}"
+    CACTUS_EXAMPLE_PARTICLE_BURST_TARGET="example_particle_burst_generated"
+
     CACTUS_EXTERNAL_HANDLER_LINK_TARGET="example_external_handler_user_library"
     CACTUS_EXTERNAL_HANDLER_MISSING_TARGET="example_external_handler_missing_implementations"
 )

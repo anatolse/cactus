@@ -221,6 +221,13 @@ std::vector<ExampleCase> curated_examples() {
             .generated_cpp  = {CACTUS_EXAMPLE_STANDARD_UI_GENERATED_CPP},
             .compile_target = CACTUS_EXAMPLE_STANDARD_UI_TARGET,
         },
+        ExampleCase{
+            .name           = "particle-burst",
+            .source_file    = repo_root() / CACTUS_EXAMPLE_PARTICLE_BURST_SOURCE,
+            .backend        = "cpp-entt",
+            .generated_cpp  = {CACTUS_EXAMPLE_PARTICLE_BURST_GENERATED_CPP},
+            .compile_target = CACTUS_EXAMPLE_PARTICLE_BURST_TARGET,
+        },
     };
 }
 

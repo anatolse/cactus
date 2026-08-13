@@ -3029,8 +3029,19 @@ static void emit_pair_handler_body(std::ostringstream& out,
         pair_locals.insert(binding.scope.binding_name);
     }
     LocalNumericKinds pair_kinds;
+    // Rendered one level deeper (5) than the innermost loop body (4) because
+    // every call site below wraps it in a per-invocation lambda: a bare
+    // `return` spliced directly into a raw loop body would exit this whole
+    // generated function on the first tuple that hits it (see
+    // dsl-pair-relations, "Early return rejects only the current tuple")
+    // instead of ending just that tuple's invocation.
     const auto pair_body =
-        rewrite_stmt_block(handler.body, 4, {}, program, {}, false, {}, &pair_codegen_scope, pair_locals, pair_kinds);
+        rewrite_stmt_block(handler.body, 5, {}, program, {}, false, {}, &pair_codegen_scope, pair_locals, pair_kinds);
+    const auto emit_tuple_invocation = [&out, &pair_body]() {
+        out << "                [&]() {\n";
+        out << pair_body;
+        out << "                }();\n";
+    };
     // Recipient-targeted delivery: only tuples incident to the
     // recipient run (targeted-event-delivery, "Pair target routes to
     // incident tuples"). A tuple where both bindings equal the
@@ -3049,7 +3060,7 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "            auto " << left.scope.binding_name << " = target;\n";
     out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
         << "_snapshot) {\n";
-    out << pair_body;
+    emit_tuple_invocation();
     out << "            }\n";
     out << "        }\n";
     out << "        if (registry.all_of<";
@@ -3060,14 +3071,14 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "            for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
     out << "                if (" << left.scope.binding_name << " == target) { continue; }\n";
     out << "                auto " << right.scope.binding_name << " = target;\n";
-    out << pair_body;
+    emit_tuple_invocation();
     out << "            }\n";
     out << "        }\n";
     out << "    } else {\n";
     out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
     out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
         << "_snapshot) {\n";
-    out << pair_body;
+    emit_tuple_invocation();
     out << "            }\n";
     out << "        }\n";
     out << "    }\n";
@@ -3147,8 +3158,14 @@ static void emit_fallback_handler_body(std::ostringstream& out,
     emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
     auto lexical_locals = handler_lexical_locals(handler);
     LocalNumericKinds local_kinds;
+    // Wrapped in a per-invocation lambda for the same reason as
+    // emit_pair_handler_body's tuple bodies: a bare `return` spliced
+    // directly into this raw loop would exit the whole generated function
+    // on the first matching entity instead of ending just that invocation.
+    out << "        [&]() {\n";
     out << rewrite_stmt_block(
-        handler.body, 2, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
+        handler.body, 3, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
+    out << "        }();\n";
     out << "    }\n";
 }
 

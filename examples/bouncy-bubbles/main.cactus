@@ -89,28 +89,36 @@ rule DetectBubbleContact:
             tf.WorldTransform
 
     on tick:
-        if a != b:
-            let pos_a = a.tf.WorldTransform.position
-            let pos_b = b.tf.WorldTransform.position
-            let radius_a = a.Bubble.radius
-            let radius_b = b.Bubble.radius
-            let delta_pos = pos_b - pos_a
-            let dist = math.sqrt(delta_pos.x * delta_pos.x + delta_pos.y * delta_pos.y)
-            if dist < radius_a + radius_b:
-                let normal = delta_pos / dist
-                let vel_a = a.Bubble.velocity
-                let vel_b = b.Bubble.velocity
-                let closing = (vel_a.x - vel_b.x) * normal.x + (vel_a.y - vel_b.y) * normal.y
-                if closing > 0.0:
-                    let mass_a = radius_a * radius_a
-                    let mass_b = radius_b * radius_b
-                    let v1n = vel_a.x * normal.x + vel_a.y * normal.y
-                    let v2n = vel_b.x * normal.x + vel_b.y * normal.y
-                    let v1n_prime = ((mass_a - mass_b) * v1n + 2.0 * mass_b * v2n) / (mass_a + mass_b)
-                    let delta = v1n_prime - v1n
-                    let new_velocity = vel_a + normal * delta
-                    emit BubbleBounce to a:
-                        new_velocity = new_velocity
+        if a == b:
+            return
+
+        let pos_a = a.tf.WorldTransform.position
+        let pos_b = b.tf.WorldTransform.position
+        let radius_a = a.Bubble.radius
+        let radius_b = b.Bubble.radius
+        let delta_pos = pos_b - pos_a
+        let dist = math.sqrt(delta_pos.x * delta_pos.x + delta_pos.y * delta_pos.y)
+        
+        if dist >= radius_a + radius_b:
+            return
+        
+        let normal = delta_pos / dist
+        let vel_a = a.Bubble.velocity
+        let vel_b = b.Bubble.velocity
+        let closing = (vel_a.x - vel_b.x) * normal.x + (vel_a.y - vel_b.y) * normal.y
+
+        if closing <= 0.0:
+            return
+
+        let mass_a = radius_a * radius_a
+        let mass_b = radius_b * radius_b
+        let v1n = vel_a.x * normal.x + vel_a.y * normal.y
+        let v2n = vel_b.x * normal.x + vel_b.y * normal.y
+        let v1n_prime = ((mass_a - mass_b) * v1n + 2.0 * mass_b * v2n) / (mass_a + mass_b)
+        let delta = v1n_prime - v1n
+        let new_velocity = vel_a + normal * delta
+        emit BubbleBounce to a:
+            new_velocity = new_velocity
 
 # ResolveBubbleBounce: unary consumer. Applies the resolved post-collision
 # velocity computed by DetectBubbleContact directly.
@@ -131,47 +139,37 @@ rule ResolveBubbleBounce:
 entity TopWall:
     tf.WorldTransform:
         position = vec2(400.0, 40.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Wall:
         normal = vec2(0.0, -1.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(540.0, 20.0)
         color = #444444FF
-        visible = true
+
 
 entity BottomWall:
     tf.WorldTransform:
         position = vec2(400.0, 560.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Wall:
         normal = vec2(0.0, 1.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(540.0, 20.0)
         color = #444444FF
-        visible = true
 
 entity LeftWall:
     tf.WorldTransform:
         position = vec2(140.0, 300.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Wall:
         normal = vec2(-1.0, 0.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(20.0, 540.0)
         color = #444444FF
-        visible = true
 
 entity RightWall:
     tf.WorldTransform:
         position = vec2(660.0, 300.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Wall:
         normal = vec2(1.0, 0.0)
     shapes.Shape:
@@ -189,8 +187,6 @@ entity RightWall:
 entity Bubble1:
     tf.WorldTransform:
         position = vec2(250.0, 200.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Bubble:
         velocity = vec2(120.0, 90.0)
         radius = 12.0
@@ -217,8 +213,6 @@ entity Bubble2:
 entity Bubble3:
     tf.WorldTransform:
         position = vec2(550.0, 200.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Bubble:
         velocity = vec2(90.0, -110.0)
         radius = 20.0
@@ -226,7 +220,6 @@ entity Bubble3:
         type = shapes.ShapeType.Circle
         size = vec2(40.0, 40.0)
         color = #FFD93DFF
-        visible = true
 
 entity Bubble4:
     tf.WorldTransform:
@@ -259,8 +252,6 @@ entity Bubble5:
 entity Bubble6:
     tf.WorldTransform:
         position = vec2(550.0, 400.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Bubble:
         velocity = vec2(-90.0, -120.0)
         radius = 32.0
@@ -268,4 +259,3 @@ entity Bubble6:
         type = shapes.ShapeType.Circle
         size = vec2(64.0, 64.0)
         color = #B388FFFF
-        visible = true

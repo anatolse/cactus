@@ -1,0 +1,47 @@
+module pair_handler_return_runtime
+
+use std.core
+
+# Minimal reproduction of the DetectBubbleContact shape (see
+# examples/bouncy-bubbles): a same-domain pair rule that rejects self-pairs
+# with an early `return` instead of a nested `if`. With 3 Ball entities, the
+# broadcast pass has 9 directed tuples, 3 of which are self-pairs. If `return`
+# escaped the current tuple's invocation instead of ending only that tuple,
+# the very first self-pair encountered (left-binding-major order puts
+# (Ball1, Ball1) first) would abort the whole pass and every ball would end
+# the frame with hits == 0.
+
+trait Ball:
+    var hits: int = 0
+
+event Hit:
+    dummy: int
+
+rule DetectBallContact:
+    pairs:
+        a:
+            Ball
+        b:
+            Ball
+
+    on tick:
+        if a == b:
+            return
+        emit Hit to a:
+            dummy = 1
+
+rule ResolveHit:
+    filter:
+        Ball
+
+    on Hit:
+        hits += 1
+
+entity Ball1:
+    Ball
+
+entity Ball2:
+    Ball
+
+entity Ball3:
+    Ball

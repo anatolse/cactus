@@ -5455,6 +5455,118 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
     }
 }
 
+TEST_CASE("Codegen EnTT: pair handler wraps the broadcast tuple body in a per-invocation lambda so "
+          "`return` skips only the current tuple",
+          "[codegen-entt][pair-relations]") {
+    // Regression test: DetectBubbleContact in examples/bouncy-bubbles rejects
+    // self-pairs with `if a == b: return`. Both bindings snapshot the same
+    // entity set in the same order, so the very first tuple the broadcast
+    // double loop produces is always a self-pair — if `return` were a bare
+    // C++ `return;` spliced directly into the loop body (no lambda), it
+    // would exit the whole generated handler function on that first tuple
+    // and no other pair would ever be evaluated.
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "rule DetectBubbleContact:\n"
+            "    pairs:\n"
+            "        a:\n"
+            "            Collider\n"
+            "        b:\n"
+            "            Collider\n"
+            "    on tick:\n"
+            "        if a == b:\n"
+            "            return\n"
+            "        emit Contact:\n"
+            "            other = b\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            const auto broadcast_branch = code.find("} else {");
+            REQUIRE(broadcast_branch != std::string::npos);
+            const auto a_loop = code.find("for (auto a : a_snapshot)", broadcast_branch);
+            const auto b_loop = code.find("for (auto b : b_snapshot)", broadcast_branch);
+            REQUIRE(a_loop != std::string::npos);
+            REQUIRE(b_loop != std::string::npos);
+            CHECK(a_loop < b_loop);
+            const auto lambda_open = code.find("[&]() {", b_loop);
+            const auto return_stmt = code.find("return;", b_loop);
+            REQUIRE(lambda_open != std::string::npos);
+            REQUIRE(return_stmt != std::string::npos);
+            // The tuple body must execute inside its own per-invocation lambda so
+            // `return` ends only the current tuple instead of the enclosing
+            // generated function.
+            CHECK(lambda_open < return_stmt);
+            const auto lambda_close = code.find("}();", return_stmt);
+            CHECK(lambda_close != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: pair handler wraps both recipient-targeted tuple bodies in a per-invocation "
+          "lambda",
+          "[codegen-entt][pair-relations]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "rule DetectBubbleContact:\n"
+            "    pairs:\n"
+            "        a:\n"
+            "            Collider\n"
+            "        b:\n"
+            "            Collider\n"
+            "    on tick:\n"
+            "        if a == b:\n"
+            "            return\n"
+            "        emit Contact:\n"
+            "            other = b\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            const auto recipient_branch = code.find("if (cactus_recipient.has_value()) {");
+            REQUIRE(recipient_branch != std::string::npos);
+            const auto broadcast_branch = code.find("} else {", recipient_branch);
+            REQUIRE(broadcast_branch != std::string::npos);
+
+            // Recipient-as-left: `a` fixed to the target, looping over `b`.
+            const auto left_loop = code.find("for (auto b : b_snapshot)", recipient_branch);
+            REQUIRE(left_loop != std::string::npos);
+            CHECK(left_loop < broadcast_branch);
+            const auto left_lambda = code.find("[&]() {", left_loop);
+            const auto left_return = code.find("return;", left_loop);
+            REQUIRE(left_lambda != std::string::npos);
+            REQUIRE(left_return != std::string::npos);
+            CHECK(left_lambda < left_return);
+            CHECK(left_return < broadcast_branch);
+            const auto left_close = code.find("}();", left_return);
+            REQUIRE(left_close != std::string::npos);
+            CHECK(left_close < broadcast_branch);
+
+            // Recipient-as-right: `b` fixed to the target, looping over `a`.
+            const auto right_loop = code.find("for (auto a : a_snapshot)", left_loop);
+            REQUIRE(right_loop != std::string::npos);
+            CHECK(right_loop < broadcast_branch);
+            const auto right_lambda = code.find("[&]() {", right_loop);
+            const auto right_return = code.find("return;", right_loop);
+            REQUIRE(right_lambda != std::string::npos);
+            REQUIRE(right_return != std::string::npos);
+            CHECK(right_lambda < right_return);
+            CHECK(right_return < broadcast_branch);
+            const auto right_close = code.find("}();", right_return);
+            REQUIRE(right_close != std::string::npos);
+            CHECK(right_close < broadcast_branch);
+        }
+    }
+}
+
 TEST_CASE("Codegen EnTT: pair binding selecting the same trait as the other binding gets distinct access",
           "[codegen-entt][pair-relations]") {
     ProgramNode program;

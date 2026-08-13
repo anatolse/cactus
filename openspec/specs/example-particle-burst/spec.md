@@ -26,9 +26,10 @@ SHALL declare a `Particle` trait with `velocity: vec2` and `lifetime: float` fie
 
 The example SHALL declare an `input` binding for the left mouse button and a rule triggered
 `on input:` that, when that input is pressed, spawns a fixed, compile-time-known number of
-particle entities at the current mouse position. Each burst member SHALL be created by its own
-`spawn` statement with a distinct initial velocity; the example SHALL NOT use a numeric loop or
-list iteration to produce the burst, since the language provides neither.
+particle entities at the current mouse position. The burst SHALL be produced by a single `spawn`
+statement inside a `for k in range(0, PARTICLE_COUNT):` loop, with each particle's initial
+velocity computed from the loop index `k` so that no two members of the same burst share the same
+initial velocity.
 
 #### Scenario: Burst spawns a fixed count of particles at the cursor
 
@@ -42,6 +43,12 @@ list iteration to produce the burst, since the language provides neither.
 - **WHEN** the bound mouse button is pressed again while particles from an earlier burst are still alive
 - **THEN** a new set of particle entities is spawned in addition to the still-alive particles
 - **AND** the example enforces no cap on the number of concurrently alive particle entities
+
+#### Scenario: Particle velocities are evenly distributed around a circle
+
+- **WHEN** the burst rule spawns its fixed count of particles
+- **THEN** each particle's initial velocity direction is computed as an angle proportional to its
+  loop index, so the burst's velocities are evenly spaced around a full circle
 
 ### Requirement: Particles fall under gravity and expire after their lifetime
 

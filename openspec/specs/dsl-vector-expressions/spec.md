@@ -12,9 +12,11 @@ component-by-component (`.x`/`.y`/`.z`) arithmetic.
 `vec2(float)` SHALL construct a `vec2` with both components set to the given scalar.
 `vec3(float)` SHALL construct a `vec3` with all three components set to the given
 scalar. The existing two-argument `vec2(float, float)` and three-argument
-`vec3(float, float, float)` component constructors remain valid and unchanged. Any
-other argument count for `vec2(...)`/`vec3(...)`, or an argument whose type is not
-`float`-compatible, SHALL be a compile-time error.
+`vec3(float, float, float)` component constructors remain valid and unchanged. An
+`int` argument SHALL be accepted and promoted to `float`, identically to how mixed
+`int`/`float` binary arithmetic already promotes. Any other argument count for
+`vec2(...)`/`vec3(...)`, or an argument whose type is neither `float`- nor
+`int`-compatible, SHALL be a compile-time error.
 
 #### Scenario: vec2 scalar splat
 - **WHEN** source contains `vec2(0.0)`
@@ -32,6 +34,11 @@ other argument count for `vec2(...)`/`vec3(...)`, or an argument whose type is n
 - **WHEN** source contains `vec2(1.0, 2.0, 3.0)`
 - **THEN** the semantic analyzer reports a compile-time error naming `vec2` and the
   provided argument count
+
+#### Scenario: Int argument promoted to float
+- **WHEN** source contains `vec2(k, 0)` where `k` is an `int`
+- **THEN** the expression is accepted, has type `vec2`, and the generated code
+  converts each `int` argument to `float` before construction
 
 #### Scenario: Non-float constructor argument rejected
 - **WHEN** source contains `vec2("0", "0")`

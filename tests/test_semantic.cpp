@@ -624,6 +624,32 @@ TEST_CASE("Semantic: vec2 non-float constructor argument rejected", "[semantic][
     CHECK(message.find("string") != std::string::npos);
 }
 
+TEST_CASE("Semantic: vec2/vec3 constructors accept int arguments, promoted to float",
+          "[semantic][vector-expressions]") {
+    auto result = analyze(
+        "trait Position:\n"
+        "    var pos2: vec2 = vec2(1, 0)\n"
+        "    var pos3: vec3 = vec3(1, 0, 0)\n");
+    REQUIRE(result.traits.count("Position"));
+    auto& trait = result.traits["Position"];
+    REQUIRE(trait.fields.size() == 2);
+    CHECK(trait.fields[0].type.kind == TypeKind::Vec2);
+    CHECK(trait.fields[1].type.kind == TypeKind::Vec3);
+
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule IntArgs:\n"
+                                                   "    on tick:\n"
+                                                   "        for k in range(0, 1):\n"
+                                                   "            let a = vec2(k, 0)\n"
+                                                   "            let b = vec3(k, 0, 0)\n"));
+}
+
+TEST_CASE("Semantic: vec2 non-numeric constructor argument still rejected alongside int promotion",
+          "[semantic][vector-expressions]") {
+    auto message = analyze_first_error("trait Position:\n"
+                                       "    var pos: vec2 = vec2(\"0\", \"0\")\n");
+    CHECK(message.find("string") != std::string::npos);
+}
+
 TEST_CASE("Semantic: vec2 splat constructor default mismatched against vec3 field rejected",
           "[semantic][vector-expressions]") {
     CHECK(analyze_has_errors("trait Position:\n"
@@ -1090,6 +1116,84 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
                                               "        for value in values:\n"
                                               "            value = 2\n") ==
           "foreach loop variable 'value' is read-only");
+}
+
+TEST_CASE("Semantic: range() intrinsic types the loop variable as int", "[semantic][foreach][range]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule CountUp:\n"
+                                                   "    on tick:\n"
+                                                   "        for k in range(0, 5):\n"
+                                                   "            let doubled = k * 2\n"));
+
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule CountDown:\n"
+                                                   "    on tick:\n"
+                                                   "        for k in range(5, 0, -1):\n"
+                                                   "            let doubled = k * 2\n"));
+
+    // Omitted step type-checks identically to an explicit step of 1.
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule DefaultStep:\n"
+                                                   "    on tick:\n"
+                                                   "        for k in range(0, 3):\n"
+                                                   "            let doubled = k * 2\n"));
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule ExplicitStep:\n"
+                                                   "    on tick:\n"
+                                                   "        for k in range(0, 3, 1):\n"
+                                                   "            let doubled = k * 2\n"));
+}
+
+TEST_CASE("Semantic: range() rejected outside a for-loop iterable position", "[semantic][foreach][range]") {
+    CHECK(analyze_first_error(STDLIB_EVENTS + "rule BadRangeLet:\n"
+                                              "    on tick:\n"
+                                              "        let r = range(0, 10)\n") ==
+          "`range()` is only valid as the iterable of a `for` statement");
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "rule BadRangeArg:\n"
+                                              "    on tick:\n"
+                                              "        let v = vec2(range(0, 3), 0)\n") ==
+          "`range()` is only valid as the iterable of a `for` statement");
+}
+
+TEST_CASE("Semantic: range() validates argument count and int-typed arguments",
+          "[semantic][foreach][range]") {
+    CHECK(analyze_first_error(STDLIB_EVENTS + "rule TooFewArgs:\n"
+                                              "    on tick:\n"
+                                              "        for k in range(0):\n"
+                                              "            let x = k\n")
+              .find("'range'") != std::string::npos);
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "rule TooManyArgs:\n"
+                                              "    on tick:\n"
+                                              "        for k in range(0, 1, 2, 3):\n"
+                                              "            let x = k\n")
+              .find("'range'") != std::string::npos);
+
+    CHECK(analyze_first_error(STDLIB_EVENTS + "rule NonIntArg:\n"
+                                              "    on tick:\n"
+                                              "        for k in range(0, 3.0):\n"
+                                              "            let x = k\n")
+              .find("'range'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: C-style numeric for, while, and break/continue remain unsupported",
+          "[semantic][foreach]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "rule NumericFor:\n"
+                                             "    on tick:\n"
+                                             "        for i = 0; i < 10; i += 1:\n"
+                                             "            let x = i\n"));
+
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "rule WhileLoop:\n"
+                                             "    on tick:\n"
+                                             "        while true:\n"
+                                             "            let x = 1\n"));
+
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "rule BreakStmt:\n"
+                                             "    on tick:\n"
+                                             "        for k in range(0, 3):\n"
+                                             "            break\n"));
+
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "rule ContinueStmt:\n"
+                                             "    on tick:\n"
+                                             "        for k in range(0, 3):\n"
+                                             "            continue\n"));
 }
 
 TEST_CASE("Semantic: project validates trait fields target and transient restrictions", "[semantic][project]") {

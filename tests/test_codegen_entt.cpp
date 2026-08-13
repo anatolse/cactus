@@ -5804,4 +5804,262 @@ TEST_CASE("Codegen EnTT: dotted assignment through a filter alias writes the fie
     }
 }
 
+TEST_CASE("Codegen EnTT: range() lowers to a zero-allocation ascending/descending counting loop",
+          "[codegen-entt][range]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "event Tally:\n"
+        "    n: int\n"
+        "rule CountUp:\n"
+        "    on tick:\n"
+        "        for k in range(0, 5):\n"
+        "            emit Tally:\n"
+        "                n = k\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "CountUp") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+
+        // No list[T] snapshot (std::vector, or the generic foreach_snapshot_
+        // temp) is constructed for the range itself.
+        CHECK(code.find("std::vector") == std::string::npos);
+        CHECK(code.find("foreach_snapshot_") == std::string::npos);
+
+        const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
+        REQUIRE_FALSE(step_name.empty());
+        CHECK(code.find("if (" + step_name + " > 0) {") != std::string::npos);
+        CHECK(code.find("} else if (" + step_name + " < 0) {") != std::string::npos);
+        // No unconditional trailing branch: a step of 0 falls through both
+        // arms and executes the loop body zero times.
+        CHECK(code.find("} else {\n") == std::string::npos);
+        CHECK(code.find("for (int k = ") != std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: range() descending iteration counts down", "[codegen-entt][range]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "event Tally:\n"
+        "    n: int\n"
+        "rule CountDown:\n"
+        "    on tick:\n"
+        "        for k in range(5, 0, -1):\n"
+        "            emit Tally:\n"
+        "                n = k\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "CountDown") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("k < ") != std::string::npos);
+        CHECK(code.find("k > ") != std::string::npos);
+        CHECK(code.find("k += ") != std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: range() begin/end/step expressions are each emitted exactly once",
+          "[codegen-entt][range]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "event Tally:\n"
+        "    n: int\n"
+        "rule CountRange:\n"
+        "    on tick:\n"
+        "        for k in range(111 + 0, 222 + 0, 333 + 0):\n"
+        "            emit Tally:\n"
+        "                n = k\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "CountRange") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(count_occurrences(code, "111") == 1);
+        CHECK(count_occurrences(code, "222") == 1);
+        CHECK(count_occurrences(code, "333") == 1);
+    }
+}
+
+TEST_CASE("Codegen EnTT: range() default step omits a third argument but still emits step 1",
+          "[codegen-entt][range]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "event Tally:\n"
+        "    n: int\n"
+        "rule DefaultStep:\n"
+        "    on tick:\n"
+        "        for k in range(0, 3):\n"
+        "            emit Tally:\n"
+        "                n = k\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "DefaultStep") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
+        REQUIRE_FALSE(step_name.empty());
+        CHECK(code.find("const int " + step_name + " = 1;") != std::string::npos);
+    }
+}
+
+// range()'s step need not be a compile-time literal — an author-supplied
+// trait field could describe a zero or direction-mismatched span. Confirms
+// no unconditional/default branch exists that would run the loop body
+// regardless of step, since a non-literal step can't be checked at
+// compile time.
+TEST_CASE("Codegen EnTT: range() with a non-literal step has no unconditional fallback branch",
+          "[codegen-entt][range]") {
+    ProgramNode program;
+    // A brace-free loop body (`let x = k`, unlike e.g. an `emit` statement's
+    // `push_back({.n = k})`) so the only braces between the descending
+    // for-loop's increment and end-of-block are the loop's own structural
+    // closes, making the brace-counting check below unambiguous.
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "trait Source:\n"
+        "    var step_value: int\n"
+        "rule CountVariableStep:\n"
+        "    filter:\n"
+        "        Source\n"
+        "    on tick:\n"
+        "        for k in range(0, 10, step_value):\n"
+        "            let x = k\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "CountVariableStep") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        const auto step_name = extract_temp_name(code, "cactus_gen_range_step_");
+        REQUIRE_FALSE(step_name.empty());
+
+        const std::string else_if_text = "} else if (" + step_name + " < 0) {";
+        const auto else_if_pos         = code.find(else_if_text);
+        REQUIRE(else_if_pos != std::string::npos);
+        // The descending for-loop's own increment (its last use of the step
+        // temp), after the condition matched above.
+        const auto increment_pos = code.find(step_name, else_if_pos + else_if_text.size());
+        REQUIRE(increment_pos != std::string::npos);
+
+        // From the increment, the next 3 closing braces are exactly this
+        // range's own structural closes: the for-loop, the if/else-if chain,
+        // and the enclosing block — with no further branch. Confirms a
+        // runtime step of 0 (falling through both `if`/`else if` arms) has no
+        // unconditional fallback that would run the loop body anyway.
+        auto brace_pos = increment_pos;
+        for (int i = 0; i < 3; ++i) {
+            brace_pos = code.find('}', brace_pos + 1);
+            REQUIRE(brace_pos != std::string::npos);
+        }
+        const auto own_closes = code.substr(increment_pos, brace_pos + 1 - increment_pos);
+        CHECK(own_closes.find("else") == std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: vec2/vec3 int arguments are wrapped in static_cast<float> (generic call fallback)",
+          "[codegen-entt][range][vector-expressions]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "rule Demo:\n"
+        "    on tick:\n"
+        "        for k in range(0, 1):\n"
+        "            let a = vec2(k, 0.0)\n"
+        "            let b = vec3(k, 0, 0.0)\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "Demo") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        // int-kind arguments (the loop variable `k`, and the bare int
+        // literal `0`) are cast; the already-float argument `0.0` is not
+        // redundantly wrapped.
+        CHECK(code.find("vec2(static_cast<float>(k), 0.0F)") != std::string::npos);
+        CHECK(code.find("vec3(static_cast<float>(k), static_cast<float>(0), 0.0F)") != std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: vec2 int arguments are wrapped in static_cast<float> (VarAssign pretty-printer)",
+          "[codegen-entt][range][vector-expressions]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "rule Demo:\n"
+        "    on tick:\n"
+        "        for k in range(0, 1):\n"
+        "            v = vec2(k, 0.0)\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "Demo") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("static_cast<float>(k)") != std::string::npos);
+        CHECK(code.find("0.0F") != std::string::npos);
+        // The already-float argument isn't redundantly wrapped.
+        CHECK(code.find("static_cast<float>(0.0F)") == std::string::npos);
+    }
+}
+
+// infer_numeric_kind previously only resolved lexical locals and trait
+// fields, so a module-level `const:` identifier (e.g. `PARTICLE_COUNT`)
+// mixed with a range loop variable in float arithmetic (the particle-burst
+// example's `k * (TAU / PARTICLE_COUNT)` angle-step pattern) produced an
+// uncast `int * float` multiplication in generated code — a narrowing
+// conversion clang-tidy's bugprone-narrowing-conversions rejects.
+TEST_CASE("Codegen EnTT: binary arithmetic mixing a range loop variable with a const casts correctly",
+          "[codegen-entt][range]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "const:\n"
+        "    TAU = 6.283185307\n"
+        "    PARTICLE_COUNT = 8\n"
+        "rule Demo:\n"
+        "    on tick:\n"
+        "        for k in range(0, PARTICLE_COUNT):\n"
+        "            let angle = k * (TAU / PARTICLE_COUNT)\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "Demo") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("static_cast<float>(k) * (TAU / static_cast<float>(PARTICLE_COUNT))") != std::string::npos);
+    }
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

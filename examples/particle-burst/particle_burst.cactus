@@ -1,12 +1,16 @@
 module particle_burst
 
 use std.input as inp
+use std.math as math
 use std.render.shapes as shapes
 use std.transform.flat as tf
 
 const:
     GRAVITY = 300.0
     PARTICLE_LIFETIME = 0.9
+    PARTICLE_COUNT = 8
+    PARTICLE_SPEED = 150.0
+    TAU = 6.283185307
 
 input EmitParticles: button
     mouse = inp.MouseButton.Left
@@ -31,53 +35,13 @@ rule EmitParticleBurst:
             return
         let mouse_pos = input.mouse_position()
 
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(150.0, 0.0)
-
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(106.1, -106.1)
-
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(0.0, -150.0)
-
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(-106.1, -106.1)
-
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(-150.0, 0.0)
-
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(-106.1, 106.1)
-
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(0.0, 150.0)
-
-        spawn ParticleTemplate:
-            tf.WorldTransform:
-                position = mouse_pos
-            Particle:
-                velocity = vec2(106.1, 106.1)
+        for k in range(0, PARTICLE_COUNT):
+            let angle = k * (TAU / PARTICLE_COUNT)
+            spawn ParticleTemplate:
+                tf.WorldTransform:
+                    position = mouse_pos
+                Particle:
+                    velocity = vec2(math.cos(angle), math.sin(angle)) * PARTICLE_SPEED
 
 rule SimulateParticles:
     filter:

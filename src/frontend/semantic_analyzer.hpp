@@ -616,6 +616,19 @@ private:
         const ResolvedStruct* handler_event,
         const PairScope* pair_scope) const;
 
+    // Recognizes a ForeachStmt::iterable that is the range(begin, end, step=1)
+    // intrinsic: a bare-identifier call, never a real function. When it matches,
+    // validates the argument count (2 or 3) and that each argument is int-typed,
+    // then returns true so the caller types the loop variable as int directly
+    // instead of taking the generic list[T] iterable path. Returns false (no
+    // validation performed) when iterable isn't a range(...) call, so the caller
+    // falls through to the existing list[T] handling.
+    bool validate_range_iterable(const ExprNode& iterable,
+                                 const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                 const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                 const ResolvedStruct* handler_event,
+                                 const PairScope* pair_scope) const;
+
     /// Shared by validate_event_stmts's 4 command lambdas and
     /// validate_context_stmts's 3 command arms: if target_expr is present,
     /// infers its type and reports wrong_type_message unless it's entity_id

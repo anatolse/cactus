@@ -1060,6 +1060,28 @@ static std::string find_comp_for_field(const std::string& field_name,
     return "";
 }
 
+// A module-level `const:` block declaration's own value expression, or
+// nullptr if no const with this name exists. Mirrors find_comp_for_field's
+// shape for resolving a bare identifier's meaning outside local/trait-field
+// scope.
+static const ExprNode* find_const_value_expr(const std::string& name, const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return nullptr;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        const auto* const_block = std::get_if<ConstBlockNode>(&decl);
+        if (const_block == nullptr) {
+            continue;
+        }
+        for (const auto& assignment : const_block->assignments) {
+            if (assignment.name == name) {
+                return assignment.value.get();
+            }
+        }
+    }
+    return nullptr;
+}
+
 // ── Helper: collect all field names from filter traits ───────────────────────
 
 static std::unordered_set<std::string> collect_trait_fields(const std::vector<std::string>& trait_names,
@@ -1106,6 +1128,14 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
                     if (const auto found = local_kinds->find(e.name); found != local_kinds->end()) {
                         return found->second;
                     }
+                }
+                // Module-level `const:` block declarations (e.g. `PARTICLE_COUNT`) aren't
+                // trait fields or lexical locals; resolve their kind from their own
+                // declared value expression so mixed int/float arithmetic involving a
+                // const (e.g. a range loop variable times a const-derived angle step)
+                // still gets the right static_cast.
+                if (const auto* const_value = find_const_value_expr(e.name, program)) {
+                    return infer_numeric_kind(*const_value, trait_names, program, local_kinds);
                 }
                 const auto comp = find_comp_for_field(e.name, trait_names, program);
                 if (comp.empty()) {
@@ -1174,6 +1204,24 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
             }
         },
         expr.expr);
+}
+
+// vec2/vec3 constructor arguments accept `int`, promoted to `float` via the
+// same infer_numeric_kind machinery mixed int/float binary arithmetic already
+// uses (dsl-vector-expressions). Two codegen sites construct vec2/vec3
+// argument lists this way — this generic CallExpr fallback (in rewrite_expr
+// below) and the VarAssign-specific vec2 pretty-printer (in rewrite_stmt) —
+// each independently calling this helper; keep both in sync if a third site
+// is added.
+static std::string cast_vec_arg_if_int(std::string text,
+                                       const ExprNode& arg,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const LocalNumericKinds* local_kinds) {
+    if (infer_numeric_kind(arg, trait_names, program, local_kinds) == NumericKind::Int) {
+        return "static_cast<float>(" + text + ")";
+    }
+    return text;
 }
 
 // ── Rewrite expression: replace bare field names with comp.field ─────────────
@@ -2082,6 +2130,25 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                         }
                     }
                 }
+                if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
+                    ident != nullptr && (ident->name == "vec2" || ident->name == "vec3")) {
+                    std::string args;
+                    for (size_t i = 0; i < e.args.size(); ++i) {
+                        if (i > 0) {
+                            args += ", ";
+                        }
+                        auto arg_text = rewrite_expr(*e.args[i],
+                                                     trait_names,
+                                                     program,
+                                                     pointer_aliases,
+                                                     cpp_overrides,
+                                                     pair_scope,
+                                                     local_kinds);
+                        args += cast_vec_arg_if_int(
+                            std::move(arg_text), *e.args[i], trait_names, program, local_kinds);
+                    }
+                    return ident->name + "(" + args + ")";
+                }
                 return rewrite_expr(
                            *e.callee, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                        "(" +
@@ -2523,6 +2590,83 @@ static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,
     return result.str();
 }
 
+// range(begin, end, step=1): the sole sanctioned counted-iteration form
+// (dsl-bounded-foreach). Lowers to a native counting loop instead of the
+// generic ForeachStmt path's `auto temp = <iterable>; for (const auto& v :
+// temp)` — no list[T]/std::vector snapshot is constructed. begin/end/step are
+// each emitted into a `const` local exactly once, giving "evaluated once" for
+// free from ordinary C++ scoping. The `if (step > 0) {...} else if (step < 0)
+// {...}` shape (no unconditional trailing branch) makes a runtime step of 0
+// total: it falls through both arms and the loop body runs zero times,
+// regardless of begin/end, rather than hanging or needing a separate
+// zero-step check.
+static std::string emit_range_foreach_stmt(const ForeachStmt& s,
+                                           const CallExpr& range_call,
+                                           int indent,
+                                           const std::vector<std::string>& trait_names,
+                                           const DecoratedProgram& program,
+                                           const std::unordered_set<std::string>& pointer_aliases,
+                                           bool dispatcher_available,
+                                           const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                           const PairCodegenScope* pair_scope,
+                                           LexicalLocalBindings* lexical_locals,
+                                           LocalNumericKinds* local_kinds) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const std::string ind1(static_cast<size_t>(indent + 1) * 4, ' ');
+    const std::string ind2(static_cast<size_t>(indent + 2) * 4, ' ');
+
+    const auto begin_name = gen_temp_name("range_begin", s.location);
+    const auto end_name   = gen_temp_name("range_end", s.location);
+    const auto step_name  = gen_temp_name("range_step", s.location);
+    const auto begin_text = rewrite_expr(
+        *range_call.args[0], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+    const auto end_text = rewrite_expr(
+        *range_call.args[1], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+    const auto step_text = range_call.args.size() == 3
+                                ? rewrite_expr(*range_call.args[2],
+                                              trait_names,
+                                              program,
+                                              pointer_aliases,
+                                              cpp_overrides,
+                                              pair_scope,
+                                              local_kinds)
+                                : "1";
+
+    std::string result = ind + "{\n";
+    result += ind1 + "const int " + begin_name + " = " + begin_text + ";\n";
+    result += ind1 + "const int " + end_name + " = " + end_text + ";\n";
+    result += ind1 + "const int " + step_name + " = " + step_text + ";\n";
+
+    const auto emit_direction = [&](const std::string& compare_op) {
+        auto range_locals = clone_or_empty(lexical_locals);
+        auto range_kinds   = clone_or_empty(local_kinds);
+        range_locals.insert(s.var_name);
+        range_kinds[s.var_name] = NumericKind::Int;
+        std::string branch = ind2 + "for (int " + s.var_name + " = " + begin_name + "; " + s.var_name + " " +
+                             compare_op + " " + end_name + "; " + s.var_name + " += " + step_name + ") {\n";
+        branch += rewrite_stmt_block(s.body,
+                                     indent + 3,
+                                     trait_names,
+                                     program,
+                                     pointer_aliases,
+                                     dispatcher_available,
+                                     cpp_overrides,
+                                     pair_scope,
+                                     range_locals,
+                                     range_kinds);
+        branch += ind2 + "}\n";
+        return branch;
+    };
+
+    result += ind1 + "if (" + step_name + " > 0) {\n";
+    result += emit_direction("<");
+    result += ind1 + "} else if (" + step_name + " < 0) {\n";
+    result += emit_direction(">");
+    result += ind1 + "}\n";
+    result += ind + "}\n";
+    return result;
+}
+
 // Still 73 after extracting emit_emit_stmt/emit_spawn_stmt/emit_add_trait_stmt/
 // emit_remove_trait_stmt/emit_project_trait_stmt (task 6.7); the visit lambda's
 // own nesting is counted into the enclosing function too.
@@ -2608,22 +2752,29 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                         ident != nullptr && ident->name == "vec2" && call->args.size() == 2) {
                         const std::string prefix = ind + lhs + " " + s.op + " vec2(";
                         const std::string continuation(prefix.size(), ' ');
+                        // vec2/vec3 int-argument promotion — see cast_vec_arg_if_int's
+                        // comment for why this duplicates the generic CallExpr fallback's
+                        // own casting instead of sharing a call site.
+                        auto arg0_text = rewrite_expr(*call->args[0],
+                                                      trait_names,
+                                                      program,
+                                                      pointer_aliases,
+                                                      cpp_overrides,
+                                                      pair_scope,
+                                                      local_kinds);
+                        auto arg1_text = rewrite_expr(*call->args[1],
+                                                      trait_names,
+                                                      program,
+                                                      pointer_aliases,
+                                                      cpp_overrides,
+                                                      pair_scope,
+                                                      local_kinds);
                         return prefix +
-                               rewrite_expr(*call->args[0],
-                                            trait_names,
-                                            program,
-                                            pointer_aliases,
-                                            cpp_overrides,
-                                            pair_scope,
-                                            local_kinds) +
+                               cast_vec_arg_if_int(
+                                   std::move(arg0_text), *call->args[0], trait_names, program, local_kinds) +
                                ",\n" + continuation +
-                               rewrite_expr(*call->args[1],
-                                            trait_names,
-                                            program,
-                                            pointer_aliases,
-                                            cpp_overrides,
-                                            pair_scope,
-                                            local_kinds) +
+                               cast_vec_arg_if_int(
+                                   std::move(arg1_text), *call->args[1], trait_names, program, local_kinds) +
                                ");\n";
                     }
                 }
@@ -2762,6 +2913,23 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                                              clone_or_empty(lexical_locals),
                                              clone_or_empty(local_kinds));
             } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                if (const auto* range_call = std::get_if<CallExpr>(&s.iterable->expr)) {
+                    const auto* range_ident = std::get_if<IdentExpr>(&range_call->callee->expr);
+                    if (range_ident != nullptr && range_ident->name == "range" &&
+                        (range_call->args.size() == 2 || range_call->args.size() == 3)) {
+                        return emit_range_foreach_stmt(s,
+                                                       *range_call,
+                                                       indent,
+                                                       trait_names,
+                                                       program,
+                                                       pointer_aliases,
+                                                       dispatcher_available,
+                                                       cpp_overrides,
+                                                       pair_scope,
+                                                       lexical_locals,
+                                                       local_kinds);
+                    }
+                }
                 const auto temp = foreach_temp_name(s);
                 std::string result =
                     ind + "auto " + temp + " = " +

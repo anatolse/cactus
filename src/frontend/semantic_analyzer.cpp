@@ -3381,6 +3381,16 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             continue;
         }
         if (const auto* foreach_stmt = std::get_if<ForeachStmt>(&stmt->stmt)) {
+            if (validate_range_iterable(*foreach_stmt->iterable, filter_bindings, locals, handler_event, pair_scope)) {
+                auto range_locals    = locals;
+                TypeInfo element_type = make_int_type();
+                element_type.is_let   = true;
+                range_locals[foreach_stmt->var_name] = std::move(element_type);
+                validate_event_stmts(
+                    foreach_stmt->body, filter_bindings, range_locals, handler_event, rule_name, pair_scope);
+                continue;
+            }
+
             auto iterable_type =
                 infer_expr_type(*foreach_stmt->iterable, filter_bindings, locals, handler_event, pair_scope);
             if (iterable_type.kind != TypeKind::List && iterable_type.kind != TypeKind::Unknown) {
@@ -5231,6 +5241,10 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     }
     if (entity_names_.contains(ident.name)) {
         errors_.error(location, "entity '" + ident.name + "' is not an entity_id expression");
+        return make_unknown_type();
+    }
+    if (ident.name == "break" || ident.name == "continue") {
+        errors_.error(location, "`break`/`continue` are not supported");
     }
     return make_unknown_type();
 }
@@ -5404,12 +5418,43 @@ std::optional<TypeInfo> SemanticAnalyzer::infer_vector_constructor_call_type(
 
     for (const auto& arg : call.args) {
         auto arg_type = infer_expr_type(*arg, filter_bindings, local_bindings, handler_event, pair_scope);
-        if (arg_type.kind != TypeKind::Float && arg_type.kind != TypeKind::Unknown) {
+        if (arg_type.kind != TypeKind::Float && arg_type.kind != TypeKind::Int && arg_type.kind != TypeKind::Unknown) {
             errors_.error(location,
                           "'" + ident->name + "' argument must be of type 'float', got '" + arg_type.name + "'");
         }
     }
     return result_type;
+}
+
+bool SemanticAnalyzer::validate_range_iterable(
+    const ExprNode& iterable,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    const auto* call = std::get_if<CallExpr>(&iterable.expr);
+    if (call == nullptr) {
+        return false;
+    }
+    const auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
+    if (ident == nullptr || ident->name != "range") {
+        return false;
+    }
+
+    if (call->args.size() != 2 && call->args.size() != 3) {
+        errors_.error(iterable.location,
+                      "'range' expects 2 or 3 arguments, got " + std::to_string(call->args.size()));
+        return true;
+    }
+
+    for (const auto& arg : call->args) {
+        auto arg_type = infer_expr_type(*arg, filter_bindings, local_bindings, handler_event, pair_scope);
+        if (arg_type.kind != TypeKind::Int && arg_type.kind != TypeKind::Unknown) {
+            errors_.error(iterable.location,
+                          "'range' argument must be of type 'int', got '" + arg_type.name + "'");
+        }
+    }
+    return true;
 }
 
 // 84 after extracting infer_ident_expr_type/infer_member_expr_type (task
@@ -5503,6 +5548,10 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return make_unknown_type();
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr); ident != nullptr && ident->name == "range") {
+            errors_.error(expr.location, "`range()` is only valid as the iterable of a `for` statement");
+            return make_unknown_type();
+        }
         if (auto vector_type = infer_vector_constructor_call_type(*call, expr.location, filter_bindings,
                                                                    local_bindings, handler_event, pair_scope)) {
             return *vector_type;

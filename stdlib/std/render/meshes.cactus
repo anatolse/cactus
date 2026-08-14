@@ -11,11 +11,13 @@ use std.transform.volume as tv
 # material:    asset handle for the surface material (immutable after spawn)
 # visible:     set false to skip rendering without removing the trait
 # cast_shadow: whether this mesh contributes to shadow maps
+# color:       tint color; #FFFFFFFF = no tint
 pub trait Renderer:
     let mesh: mesh_id
     let material: material_id
     var visible: bool = true
     var cast_shadow: bool = true
+    var color: color = #FFFFFFFF
 
 # Renders a textured billboard (always faces the camera) in 3D space.
 # texture: asset handle for the billboard texture (immutable after spawn)

@@ -59,7 +59,7 @@ The `std.render.meshes` module SHALL expose the passive 3D render and light trai
 
 #### Scenario: Mesh renderer trait fields
 - **WHEN** `use std.render.meshes as mesh` is imported and a unit applies `mesh.Renderer`
-- **THEN** the entity has fields: `mesh: mesh_id` (let), `material: material_id` (let), `visible: bool`, `cast_shadow: bool`
+- **THEN** the entity has fields: `mesh: mesh_id` (let), `material: material_id` (let), `visible: bool`, `cast_shadow: bool`, `color: color`
 
 #### Scenario: Billboard renderer trait fields
 - **WHEN** `use std.render.meshes as mesh` is imported and a unit applies `mesh.BillboardRenderer`
@@ -72,6 +72,32 @@ The `std.render.meshes` module SHALL expose the passive 3D render and light trai
 #### Scenario: DirectionalLight trait fields
 - **WHEN** `use std.render.meshes as mesh` is imported and a unit applies `mesh.DirectionalLight`
 - **THEN** the entity has fields: `direction: vec3`, `color: color`, `intensity: float`, `enabled: bool`
+
+---
+
+### Requirement: std.render.meshes.Renderer color tints the resolved placeholder material
+`Renderer.color` SHALL act as a multiplicative tint on the mesh's resolved material color, identically to how `BillboardRenderer.color` already tints its texture: the default `#FFFFFFFF` applies no tint, and any other value multiplies the resolved material color.
+
+#### Scenario: Default color leaves the placeholder material color unchanged
+- **WHEN** a `Renderer`-mesh entity has `Renderer.color` left at its default `#FFFFFFFF`
+- **THEN** the backend renders that entity's mesh using the material's resolved color unmodified
+
+#### Scenario: Non-default color tints the placeholder material color
+- **WHEN** a `Renderer`-mesh entity has `Renderer.color` set to a non-default value
+- **THEN** the backend renders that entity's mesh using the material's resolved color multiplied by `Renderer.color`
+
+---
+
+### Requirement: Mesh asset placeholder resolution selects sphere or cube geometry by asset id
+When a `mesh` asset resolves to placeholder geometry, the backend SHALL select a placeholder sphere when the asset's declared path/id contains the substring `sphere`, and SHALL otherwise generate a placeholder cube (existing, unchanged default).
+
+#### Scenario: Asset id containing "sphere" resolves to sphere geometry
+- **WHEN** a `mesh` asset's declared path contains the substring `sphere` (for example `"models/sphere_lowpoly.mesh"`)
+- **THEN** the backend generates placeholder sphere geometry for that mesh instead of a cube
+
+#### Scenario: Asset id without "sphere" resolves to cube geometry
+- **WHEN** a `mesh` asset's declared path does not contain the substring `sphere`
+- **THEN** the backend generates placeholder cube geometry for that mesh, matching current behavior
 
 ---
 

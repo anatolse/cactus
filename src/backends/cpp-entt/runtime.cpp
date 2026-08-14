@@ -167,6 +167,10 @@ struct TextureResourceEntry {
 
 struct MeshResourceEntry {
     Mesh mesh{};
+    // Declared asset path/id, filled on first submission (mirrors
+    // ModelResourceEntry::path) so the lazy-load in ensure_mesh_resource can
+    // select placeholder geometry by keyword match.
+    std::string path;
     bool loaded{false};
     bool owned{false};
 };
@@ -276,6 +280,12 @@ std::unordered_set<std::uint64_t>& diagnosed_invalid_clips() noexcept {
 
 constexpr int kMaxMeshLights  = 4;
 constexpr int kPointLightType = 1;
+
+// Fixed tessellation for placeholder sphere geometry (design.md risk
+// mitigation: a shared default for every sphere-shaped mesh asset, not
+// per-entity-tunable, matching GenMeshCube's fixed 1x1x1 unit size).
+constexpr int kPlaceholderSphereRings  = 16;
+constexpr int kPlaceholderSphereSlices = 16;
 
 // Maximum bones the skinned shader supports; must match MAX_BONES in the
 // skinned vertex shader (128 mat4 = 512 vec4 uniform components, within the
@@ -756,6 +766,17 @@ Color placeholder_material_color(const std::string_view asset_id) noexcept {
     return WHITE;
 }
 
+}  // namespace
+
+MeshPlaceholderShape placeholder_mesh_shape(const std::string_view asset_id) noexcept {
+    if (asset_id.contains("sphere")) {
+        return MeshPlaceholderShape::Sphere;
+    }
+    return MeshPlaceholderShape::Cube;
+}
+
+namespace {
+
 void clear_texture_store() noexcept {
     for (auto& [runtime_id, entry] : textures()) {
         (void)runtime_id;
@@ -845,8 +866,11 @@ Mesh* ensure_mesh_resource(const int runtime_id) {
         // is (fake-)ready.
         entry.mesh = Mesh{};
 #else
-        entry.mesh = GenMeshCube(1.0F, 1.0F, 1.0F);
-        UploadMesh(&entry.mesh, false);
+        // Both generators upload to the GPU internally; no separate
+        // UploadMesh call is needed (or safe to skip re-triggering) here.
+        entry.mesh = placeholder_mesh_shape(entry.path) == MeshPlaceholderShape::Sphere
+                         ? GenMeshSphere(1.0F, kPlaceholderSphereRings, kPlaceholderSphereSlices)
+                         : GenMeshCube(1.0F, 1.0F, 1.0F);
 #endif
         entry.loaded = true;
         entry.owned  = true;
@@ -1447,6 +1471,7 @@ void begin_render_frame() noexcept {
     render_debug_state_storage().active_point_lights    = 0;
     render_debug_state_storage().used_lit_mesh_shader   = false;
     render_debug_state_storage().drawn_sprite_layers.clear();
+    render_debug_state_storage().submitted_mesh_colors.clear();
     render_debug_state_storage().animated_model_submissions.clear();
 }
 
@@ -1528,7 +1553,8 @@ void submit_mesh(const Vector3 position,
                  const AssetHandle mesh,
                  const AssetHandle material,
                  const bool visible,
-                 const bool /*cast_shadow*/) noexcept {
+                 const bool /*cast_shadow*/,
+                 const Color tint) noexcept {
     if (!visible) {
         return;
     }
@@ -1538,19 +1564,29 @@ void submit_mesh(const Vector3 position,
         note_missing_asset();
         return;
     }
+    auto& mesh_entry = meshes()[mesh_resolved.runtime_id];
+    if (mesh_entry.path.empty()) {
+        mesh_entry.path = std::string{mesh_resolved.asset_id};
+    }
     auto& mat_entry = materials()[material_resolved.runtime_id];
     if (!mat_entry.diffuse_color_set) {
         mat_entry.diffuse_color     = placeholder_material_color(material_resolved.asset_id);
         mat_entry.diffuse_color_set = true;
     }
+    // Renderer.color is a per-entity multiplicative tint on the shared
+    // material's resolved placeholder color (design.md: mirrors
+    // BillboardRenderer.color's existing "#FFFFFFFF = no tint" contract), so
+    // it's applied here per-submission rather than cached on mat_entry.
+    const Color resolved_color = ColorTint(mat_entry.diffuse_color, tint);
     mesh_queue().push_back(MeshSubmission{
         .position            = position,
         .rotation            = rotation,
         .scale               = scale,
         .mesh_runtime_id     = mesh_resolved.runtime_id,
         .material_runtime_id = material_resolved.runtime_id,
-        .diffuse_color       = mat_entry.diffuse_color,
+        .diffuse_color       = resolved_color,
     });
+    render_debug_state_storage().submitted_mesh_colors.push_back(resolved_color);
     ++render_debug_state_storage().submitted_meshes;
 }
 

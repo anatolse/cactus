@@ -657,7 +657,8 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
                                                21U,
                                                22U,
                                                true,
-                                               true);
+                                               true,
+                                               WHITE);
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
 
     cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 1.0F, .y = 2.0F, .z = 3.0F},
@@ -666,7 +667,8 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
                                                21U,
                                                22U,
                                                false,
-                                               true);
+                                               true,
+                                               WHITE);
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
 
     cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
@@ -675,7 +677,8 @@ TEST_CASE("Runtime stdlib: EnTT mesh submission respects visibility and missing 
                                                999U,
                                                22U,
                                                true,
-                                               true);
+                                               true,
+                                               WHITE);
     CHECK(cactus::runtime::entt_backend::render_debug_state().missing_assets >= 1);
 }
 
@@ -977,7 +980,8 @@ TEST_CASE("Runtime stdlib: EnTT render frame marks default 3D camera for queued 
                                                41U,
                                                42U,
                                                true,
-                                               true);
+                                               true,
+                                               WHITE);
     cactus::runtime::entt_backend::end_render_frame();
 
     CHECK(cactus::runtime::entt_backend::render_debug_state().submitted_meshes == 1);
@@ -998,7 +1002,8 @@ TEST_CASE("Runtime stdlib: EnTT point lights participate in lit mesh frame state
                                                51U,
                                                52U,
                                                true,
-                                               true);
+                                               true,
+                                               WHITE);
     cactus::runtime::entt_backend::register_point_light(
         Vector3{.x = -2.0F, .y = 1.0F, .z = 2.0F}, ORANGE, 1.4F, 8.0F, true);
     cactus::runtime::entt_backend::register_point_light(
@@ -1011,6 +1016,72 @@ TEST_CASE("Runtime stdlib: EnTT point lights participate in lit mesh frame state
     CHECK(cactus::runtime::entt_backend::render_debug_state().active_point_lights == 2);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_lit_mesh_shader);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_3d_camera);
+}
+
+TEST_CASE("Runtime stdlib: mesh asset id containing \"sphere\" resolves to sphere placeholder shape",
+          "[runtime][assets][entt][render]") {
+    using cactus::runtime::entt_backend::MeshPlaceholderShape;
+    using cactus::runtime::entt_backend::placeholder_mesh_shape;
+
+    CHECK(placeholder_mesh_shape("models/sphere_lowpoly.mesh") == MeshPlaceholderShape::Sphere);
+    CHECK(placeholder_mesh_shape("art/crate.mesh") == MeshPlaceholderShape::Cube);
+    // Both raylib's GenMeshCube and GenMeshSphere upload to the GPU
+    // internally, so neither is safe to call directly in this headless
+    // (no-window) test binary; the shape distinction is exercised at the
+    // ensure_mesh_resource level instead, which only reaches those
+    // generators once a real window exists (see runtime.cpp).
+}
+
+TEST_CASE("Runtime stdlib: Renderer.color tints the resolved placeholder material color",
+          "[runtime][assets][entt][render]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_mesh(61U, "sphere_lowpoly", 61);
+    registry.register_material(62U, "blue_material", 62);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                               stdlib::math::quat::identity(),
+                                               Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+                                               61U,
+                                               62U,
+                                               true,
+                                               true,
+                                               WHITE);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    // Default color (#FFFFFFFF) leaves the resolved placeholder color unchanged.
+    REQUIRE(cactus::runtime::entt_backend::render_debug_state().submitted_mesh_colors.size() == 1);
+    const Color untinted = cactus::runtime::entt_backend::render_debug_state().submitted_mesh_colors[0];
+    const Color blue_placeholder{.r = 66, .g = 139, .b = 255, .a = 255};
+    CHECK(untinted.r == blue_placeholder.r);
+    CHECK(untinted.g == blue_placeholder.g);
+    CHECK(untinted.b == blue_placeholder.b);
+    CHECK(untinted.a == blue_placeholder.a);
+
+    // A non-default color multiplies the resolved placeholder color.
+    cactus::runtime::entt_backend::begin_render_frame();
+    const Color tint{.r = 128, .g = 64, .b = 32, .a = 255};
+    cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                               stdlib::math::quat::identity(),
+                                               Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+                                               61U,
+                                               62U,
+                                               true,
+                                               true,
+                                               tint);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    REQUIRE(cactus::runtime::entt_backend::render_debug_state().submitted_mesh_colors.size() == 1);
+    const Color tinted   = cactus::runtime::entt_backend::render_debug_state().submitted_mesh_colors[0];
+    const Color expected = ColorTint(blue_placeholder, tint);
+    CHECK(tinted.r == expected.r);
+    CHECK(tinted.g == expected.g);
+    CHECK(tinted.b == expected.b);
+    CHECK(tinted.a == expected.a);
+    // Sanity: the tint actually changed something (not silently a no-op).
+    CHECK(tinted.r != untinted.r);
 }
 
 // ── std.random tests ──────────────────────────────────────────────────────────

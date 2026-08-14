@@ -894,6 +894,7 @@ TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime with
         "    let material: material_id\n"
         "    var visible: bool\n"
         "    var cast_shadow: bool\n"
+        "    var color: color\n"
         "event run\n"
         "extern rule MeshRenderer:\n"
         "    filter:\n"
@@ -907,6 +908,7 @@ TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime with
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("cactus::runtime::entt_backend::submit_mesh(") != std::string::npos);
+    CHECK(code.find("Renderer_comp.color") != std::string::npos);
     CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
 }
 

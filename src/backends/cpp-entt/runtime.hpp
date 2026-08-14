@@ -11,6 +11,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cactus::runtime::entt_backend {
@@ -69,6 +70,11 @@ struct RenderDebugState {
     bool used_default_3d_camera{false};
     bool used_lit_mesh_shader{false};
     std::vector<int> drawn_sprite_layers;
+    // Resolved (material-placeholder color × Renderer.color tint) for each
+    // mesh submission this frame, in submission order — mirrors
+    // drawn_sprite_layers as the observable-without-a-window channel for
+    // std.render.meshes.Renderer's color tint.
+    std::vector<Color> submitted_mesh_colors;
     // (clip, time) of each animated model submission this frame, in submission
     // order — the per-entity poses observable without a GPU.
     std::vector<AnimatedModelSubmission> animated_model_submissions;
@@ -108,7 +114,17 @@ void submit_mesh(Vector3 position,
                  AssetHandle mesh,
                  AssetHandle material,
                  bool visible,
-                 bool cast_shadow) noexcept;
+                 bool cast_shadow,
+                 Color tint) noexcept;
+
+// ── Mesh placeholder geometry (std.render.meshes.Renderer) ────────────────
+// Placeholder mesh assets have no real geometry file backing them (like the
+// material color heuristic they sit beside in runtime.cpp); shape is
+// inferred from the asset's declared path/id by substring match. Exposed
+// standalone (like compute_image_draw_rects below) so this pure selection
+// logic is unit-testable without a raylib window.
+enum class MeshPlaceholderShape : std::uint8_t { Cube, Sphere };
+[[nodiscard]] MeshPlaceholderShape placeholder_mesh_shape(std::string_view asset_id) noexcept;
 void submit_model(Vector3 position,
                   Quat rotation,
                   Vector3 scale,

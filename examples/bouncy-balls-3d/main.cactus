@@ -1,0 +1,386 @@
+module main
+
+use std.transform.volume as tv
+use std.render.meshes as meshes
+use std.math.vec3 as v3m
+use std.math.quat as quat
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
+
+# ── Assets ────────────────────────────────────────────────────────────────────
+# Placeholder mesh geometry only (dsl-model-assets' `mesh`/material system,
+# not real files): SphereMesh's path contains "sphere" so the backend
+# resolves it to a placeholder sphere; BoxMesh does not, so it resolves to
+# the default placeholder cube. Neither material path matches a keyword
+# bucket in the backend's placeholder-color heuristic, so both resolve to
+# white — every ball's authored Renderer.color multiplies white unchanged.
+
+asset SphereMesh: mesh = "models/sphere_lowpoly.mesh"
+asset BallMaterial: material = "materials/ball.mat"
+asset BoxMesh: mesh = "models/box.mesh"
+asset WallMaterial: material = "materials/wall.mat"
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+trait Ball:
+    var velocity: vec3
+
+trait SphereCollider:
+    var radius: float
+
+trait Wall
+
+trait BoxCollider:
+    var size: vec3
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+event WallBounce:
+    normal: vec3
+
+event BallBounce:
+    new_velocity: vec3
+
+# ── Rules ─────────────────────────────────────────────────────────────────────
+
+# MoveBalls: integrates every ball's position from its current velocity. No
+# gravity term — balls drift at constant speed between collisions.
+rule MoveBalls:
+    filter:
+        Ball
+        tv.WorldTransform
+
+    on tick:
+        position += velocity * tick.dt
+
+# DetectWallContact: cross-domain pair producer (Ball x Wall), generalized
+# from bouncy-bubbles' 2D DetectWallContact to vec3/quat. The wall's contact
+# normal is not authored — it's derived each tick by rotating the fixed
+# local outward direction (0, 1, 0) by the wall's current
+# WorldTransform.rotation, so it always matches the wall's actual
+# orientation. Overlap is a single oriented-box-vs-sphere test: the ball's
+# position is rotated into the wall's local space via the inverse rotation,
+# clamped to +/-size/2 there, then rotated back to world space to find the
+# closest point on the box. This one code path handles every wall,
+# axis-aligned or tilted, with no special-casing. Gated by a closing-speed
+# check along the derived normal so a resting/sliding ball doesn't
+# re-trigger every tick. Emits a targeted WallBounce to the ball side only.
+rule DetectWallContact:
+    pairs:
+        ball:
+            Ball
+            SphereCollider
+            tv.WorldTransform
+        wall:
+            Wall
+            BoxCollider
+            tv.WorldTransform
+
+    on tick:
+        let ball_pos = ball.tv.WorldTransform.position
+        let wall_pos = wall.tv.WorldTransform.position
+        let wall_rotation = wall.tv.WorldTransform.rotation
+        let half_size = wall.BoxCollider.size / 2.0
+        let local_pos = quat.rotate(quat.inverse(wall_rotation), ball_pos - wall_pos)
+        let clamped_local = v3m.clamp(local_pos, half_size * -1.0, half_size)
+        let closest_point = wall_pos + quat.rotate(wall_rotation, clamped_local)
+        let normal = quat.rotate(wall_rotation, vec3(0.0, 1.0, 0.0))
+        let overlapping = v3m.distance(ball_pos, closest_point) < ball.SphereCollider.radius
+        let closing = v3m.dot(ball.Ball.velocity, normal) > 0.0
+        if overlapping and closing:
+            emit WallBounce to ball:
+                normal = normal
+
+# ResolveWallBounce: unary consumer. Reflects the ball's own velocity across
+# the wall normal carried by the event (elastic reflection, speed-preserving).
+rule ResolveWallBounce:
+    filter:
+        Ball
+
+    on WallBounce as bounce:
+        velocity = v3m.reflect(velocity, bounce.normal)
+
+# DetectBallContact: same-domain pair producer (Ball x Ball), generalized
+# from bouncy-bubbles' DetectBubbleContact. Per dsl-pair-relations this
+# iterates the full directed product, including self-pairs, which the
+# `a == b` guard rejects. For every overlapping, approaching directed tuple
+# it computes `a`'s post-collision velocity via the standard mass-weighted
+# (radius^2) 1D-along-normal elastic solve, reading both sides' current
+# velocity — legal under the pair read-only rule since it's a pure read. The
+# reverse tuple (b, a) independently computes and emits b's half from the
+# same unmutated pre-collision state.
+rule DetectBallContact:
+    pairs:
+        a:
+            Ball
+            SphereCollider
+            tv.WorldTransform
+        b:
+            Ball
+            SphereCollider
+            tv.WorldTransform
+
+    on tick:
+        if a == b:
+            return
+
+        let pos_a = a.tv.WorldTransform.position
+        let pos_b = b.tv.WorldTransform.position
+        let radius_a = a.SphereCollider.radius
+        let radius_b = b.SphereCollider.radius
+        let dist = v3m.distance(pos_a, pos_b)
+
+        if dist >= radius_a + radius_b:
+            return
+
+        let normal = (pos_b - pos_a) / dist
+        let vel_a = a.Ball.velocity
+        let vel_b = b.Ball.velocity
+        let closing = v3m.dot(vel_a - vel_b, normal)
+
+        if closing <= 0.0:
+            return
+
+        let mass_a = radius_a * radius_a
+        let mass_b = radius_b * radius_b
+        let v1n = v3m.dot(vel_a, normal)
+        let v2n = v3m.dot(vel_b, normal)
+        let v1n_prime = ((mass_a - mass_b) * v1n + 2.0 * mass_b * v2n) / (mass_a + mass_b)
+        let delta = v1n_prime - v1n
+        let new_velocity = vel_a + normal * delta
+        emit BallBounce to a:
+            new_velocity = new_velocity
+
+# ResolveBallBounce: unary consumer. Applies the resolved post-collision
+# velocity computed by DetectBallContact directly.
+rule ResolveBallBounce:
+    filter:
+        Ball
+
+    on BallBounce as bounce:
+        velocity = bounce.new_velocity
+
+# ── Templates ────────────────────────────────────────────────────────────────
+
+# WallColliderTemplate / WallTemplate: shared collider defaults for every box
+# face, split into two tiers because a template-backed entity may only
+# override a trait its template already declares — it cannot omit or add
+# one. WallColliderTemplate is the collider-only base (used directly by the
+# camera-facing wall, which stays un-rendered); WallTemplate composes it and
+# adds meshes.Renderer for the other 5 walls. All 6 faces are the same
+# canonical thin slab (a 6x6 square, 0.3 thick along the wall's own local
+# outward axis) — only WorldTransform.position/rotation vary per wall,
+# deciding which world face a given wall instance represents (see
+# DetectWallContact for how the outward normal falls out of rotation alone).
+template WallColliderTemplate:
+    tv.WorldTransform:
+        scale = vec3(6.0, 0.3, 6.0)
+    Wall
+    BoxCollider:
+        size = vec3(6.0, 0.3, 6.0)
+
+template WallTemplate:
+    use WallColliderTemplate
+    meshes.Renderer:
+        mesh = BoxMesh
+        material = WallMaterial
+        visible = true
+        cast_shadow = true
+
+# BallTemplate: shared render-mesh defaults for every ball. Position,
+# velocity, collider radius, and render color vary per ball.
+template BallTemplate:
+    tv.WorldTransform
+    Ball
+    SphereCollider
+    meshes.Renderer:
+        mesh = SphereMesh
+        material = BallMaterial
+        visible = true
+        cast_shadow = true
+
+# ── Entities: box walls ──────────────────────────────────────────────────────
+# A 6x6x6 cube (world-unit bounds -3..3 on every axis) centered at the
+# origin, bounded by 6 thin static walls sharing WallTemplate's collider
+# defaults. Each wall's outward contact normal is derived from its
+# WorldTransform.rotation (see DetectWallContact) rather than authored.
+# RightWall is tilted an extra 3 degrees off its cardinal -90 degree
+# orientation to exercise the oriented-box collision path on a non-axis-
+# aligned wall, directly mirroring bouncy-bubbles' RightWall (93 degrees)
+# precedent lifted to quat. FrontWall (the +Z face, nearest the camera) has
+# no meshes.Renderer, so the camera looks straight through it into the box.
+
+entity TopWall from WallTemplate:
+    tv.WorldTransform:
+        position = vec3(0.0, 3.0, 0.0)
+        rotation = quat.identity()
+
+entity BottomWall from WallTemplate:
+    tv.WorldTransform:
+        position = vec3(0.0, -3.0, 0.0)
+        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), 3.14159265)  # 180 degrees
+
+entity LeftWall from WallTemplate:
+    tv.WorldTransform:
+        position = vec3(-3.0, 0.0, 0.0)
+        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), 1.57079633)  # 90 degrees
+
+entity RightWall from WallTemplate:
+    tv.WorldTransform:
+        position = vec3(3.0, 0.0, 0.0)
+        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), -1.51843645)  # -87 degrees: -90 + a 3-degree tilt
+
+entity BackWall from WallTemplate:
+    tv.WorldTransform:
+        position = vec3(0.0, 0.0, -3.0)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -1.57079633)  # -90 degrees
+
+# FrontWall is from the collider-only base template: no meshes.Renderer, so
+# this is the camera-facing open side of the box. Its Wall + BoxCollider
+# still participate in collision identically to the other 5.
+entity FrontWall from WallColliderTemplate:
+    tv.WorldTransform:
+        position = vec3(0.0, 0.0, 3.0)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), 1.57079633)  # 90 degrees
+
+# ── Entities: balls ──────────────────────────────────────────────────────────
+# 8 balls with distinct SphereCollider radii, spread on the 8 corners of a
+# smaller inner cube well inside the box (corner spacing exceeds any pair's
+# radius sum, so they start non-overlapping), each with a different initial
+# velocity so no two balls collide at t=0. Speeds are kept well under the
+# smallest radius per tick at ~60fps to avoid discrete-time tunneling through
+# the 0.3-thick walls.
+
+entity Ball1 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(-1.5, -1.2, -1.5)
+        scale = vec3(0.18, 0.18, 0.18)
+    Ball:
+        velocity = vec3(0.9, 0.7, 0.5)
+    SphereCollider:
+        radius = 0.18
+    meshes.Renderer:
+        color = #FF6B6BFF
+
+entity Ball2 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(1.5, -1.2, -1.5)
+        scale = vec3(0.22, 0.22, 0.22)
+    Ball:
+        velocity = vec3(-0.8, 0.6, 0.7)
+    SphereCollider:
+        radius = 0.22
+    meshes.Renderer:
+        color = #4ECDC4FF
+
+entity Ball3 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(-1.5, 1.2, -1.5)
+        scale = vec3(0.26, 0.26, 0.26)
+    Ball:
+        velocity = vec3(0.7, -0.5, 0.6)
+    SphereCollider:
+        radius = 0.26
+    meshes.Renderer:
+        color = #FFD93DFF
+
+entity Ball4 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(1.5, 1.2, -1.5)
+        scale = vec3(0.30, 0.30, 0.30)
+    Ball:
+        velocity = vec3(-0.6, -0.7, 0.8)
+    SphereCollider:
+        radius = 0.30
+    meshes.Renderer:
+        color = #6BCB77FF
+
+entity Ball5 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(-1.5, -1.2, 1.5)
+        scale = vec3(0.34, 0.34, 0.34)
+    Ball:
+        velocity = vec3(0.8, 0.5, -0.7)
+    SphereCollider:
+        radius = 0.34
+    meshes.Renderer:
+        color = #4D96FFFF
+
+entity Ball6 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(1.5, -1.2, 1.5)
+        scale = vec3(0.38, 0.38, 0.38)
+    Ball:
+        velocity = vec3(-0.7, 0.6, -0.6)
+    SphereCollider:
+        radius = 0.38
+    meshes.Renderer:
+        color = #B388FFFF
+
+entity Ball7 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(-1.5, 1.2, 1.5)
+        scale = vec3(0.15, 0.15, 0.15)
+    Ball:
+        velocity = vec3(0.6, -0.6, -0.5)
+    SphereCollider:
+        radius = 0.15
+    meshes.Renderer:
+        color = #FF922BFF
+
+entity Ball8 from BallTemplate:
+    tv.WorldTransform:
+        position = vec3(1.5, 1.2, 1.5)
+        scale = vec3(0.42, 0.42, 0.42)
+    Ball:
+        velocity = vec3(-0.5, -0.8, -0.9)
+    SphereCollider:
+        radius = 0.42
+    meshes.Renderer:
+        color = #F06595FF
+
+# ── Entities: lighting and camera ─────────────────────────────────────────────
+# Two point lights inside the box illuminate the balls and walls (same
+# PointLight pattern as examples/model-renderer); no shadow-casting work is
+# needed since cast_shadow is already a no-op in the renderer today. The
+# camera is a single static Camera + Viewport, positioned outside the box on
+# the open (FrontWall) side so nothing blocks its view of the interior.
+
+entity KeyLight:
+    tv.WorldTransform:
+        position = vec3(-2.5, 2.5, 2.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    meshes.PointLight:
+        color = #FFF4E0FF
+        intensity = 1.5
+        range = 12.0
+        enabled = true
+
+entity FillLight:
+    tv.WorldTransform:
+        position = vec3(2.5, -2.0, -2.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    meshes.PointLight:
+        color = #C0D8FFFF
+        intensity = 1.2
+        range = 12.0
+        enabled = true
+
+entity MainCamera:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.0, 8.0)
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -0.15)
+        scale = vec3(1.0, 1.0, 1.0)
+    cam3d.Camera:
+        fov_y = 60.0
+        near = 0.1
+        far = 100.0
+    vp.Viewport:
+        x = 0.0
+        y = 0.0
+        width = 1.0
+        height = 1.0
+        depth = 0
+        clear_color = #12121AFF

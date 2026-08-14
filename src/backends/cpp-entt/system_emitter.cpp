@@ -3269,7 +3269,8 @@ const std::array<SingleViewRendererSpec, 4>& single_view_renderer_specs() {
          .call_body =
              [](const std::string& t, const std::string& d) {
                  return "cactus::runtime::entt_backend::submit_mesh(" + t + ".position, " + t + ".rotation, " + t +
-                        ".scale, " + d + ".mesh, " + d + ".material, " + d + ".visible, " + d + ".cast_shadow)";
+                        ".scale, " + d + ".mesh, " + d + ".material, " + d + ".visible, " + d + ".cast_shadow, " + d +
+                        ".color)";
              }},
         {.matches         = is_billboard_renderer,
          .transform_trait = "std.transform.volume.WorldTransform",

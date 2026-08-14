@@ -305,6 +305,7 @@ struct Normal {
 [[nodiscard]] int sample_int(Rng rng, UniformInt dist) noexcept;
 [[nodiscard]] float sample_normal(Rng rng, Normal dist) noexcept;
 [[nodiscard]] bool chance(Rng rng, float p) noexcept;
+[[nodiscard]] Color palette_color(int index) noexcept;
 
 }  // namespace stdlib::random
 

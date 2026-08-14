@@ -2,10 +2,20 @@ module main
 
 use std.transform.volume as tv
 use std.render.meshes as meshes
+use std.math as math
 use std.math.vec3 as v3m
 use std.math.quat as quat
 use std.camera.volume as cam3d
 use std.camera.viewport as vp
+use std.input as inp
+use std.random as rand
+
+# std.math.PI is a stdlib module constant, not an extern func — imported
+# module constants don't currently lower through codegen (only extern funcs
+# do), so it's redeclared locally here rather than referenced as `math.PI`,
+# matching particle-burst's own local TAU constant for the same reason.
+const:
+    TWO_PI = 6.283185307
 
 # ── Assets ────────────────────────────────────────────────────────────────────
 # Placeholder mesh geometry only (dsl-model-assets' `mesh`/material system,
@@ -20,6 +30,11 @@ asset BallMaterial: material = "materials/ball.mat"
 asset BoxMesh: mesh = "models/box.mesh"
 asset WallMaterial: material = "materials/wall.mat"
 
+# ── Inputs ────────────────────────────────────────────────────────────────────
+
+input SpawnBall: button
+    mouse = inp.MouseButton.Left
+
 # ── Traits ────────────────────────────────────────────────────────────────────
 
 trait Ball:
@@ -32,6 +47,13 @@ trait Wall
 
 trait BoxCollider:
     var size: vec3
+
+# BallSpawner: the singleton bootstrap entity's own trait, holding the one
+# shared Rng both spawn rules below read-advance-write. Rng is functional
+# (advance returns new state rather than mutating in place), so it needs a
+# durable home outside any single ball - this is that home.
+trait BallSpawner:
+    var rng: rand.Rng
 
 # ── Events ────────────────────────────────────────────────────────────────────
 
@@ -50,8 +72,8 @@ rule MoveBalls:
         Ball
         tv.WorldTransform
 
-    on tick:
-        position += velocity * tick.dt
+    on fixed_tick:
+        position += velocity * fixed_tick.dt
 
 # DetectWallContact: cross-domain pair producer (Ball x Wall), generalized
 # from bouncy-bubbles' 2D DetectWallContact to vec3/quat. The wall's contact
@@ -76,7 +98,7 @@ rule DetectWallContact:
             BoxCollider
             tv.WorldTransform
 
-    on tick:
+    on fixed_tick:
         let ball_pos = ball.tv.WorldTransform.position
         let wall_pos = wall.tv.WorldTransform.position
         let wall_rotation = wall.tv.WorldTransform.rotation
@@ -120,7 +142,7 @@ rule DetectBallContact:
             SphereCollider
             tv.WorldTransform
 
-    on tick:
+    on fixed_tick:
         if a == b:
             return
 
@@ -243,101 +265,106 @@ entity FrontWall from WallColliderTemplate:
         position = vec3(0.0, 0.0, 3.0)
         rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), 1.57079633)  # 90 degrees
 
-# ── Entities: balls ──────────────────────────────────────────────────────────
-# 8 balls with distinct SphereCollider radii, spread on the 8 corners of a
-# smaller inner cube well inside the box (corner spacing exceeds any pair's
-# radius sum, so they start non-overlapping), each with a different initial
-# velocity so no two balls collide at t=0. Speeds are kept well under the
-# smallest radius per tick at ~60fps to avoid discrete-time tunneling through
-# the 0.3-thick walls.
+# ── Entities: ball spawner ───────────────────────────────────────────────────
+# Singleton holding the one shared Rng both ball-spawning rules below
+# read-advance-write. Not a Ball itself - just the durable RNG state.
 
-entity Ball1 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(-1.5, -1.2, -1.5)
-        scale = vec3(0.18, 0.18, 0.18)
-    Ball:
-        velocity = vec3(0.9, 0.7, 0.5)
-    SphereCollider:
-        radius = 0.18
-    meshes.Renderer:
-        color = #FF6B6BFF
+entity Spawner:
+    BallSpawner:
+        rng = rand.seeded(42)
 
-entity Ball2 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(1.5, -1.2, -1.5)
-        scale = vec3(0.22, 0.22, 0.22)
-    Ball:
-        velocity = vec3(-0.8, 0.6, 0.7)
-    SphereCollider:
-        radius = 0.22
-    meshes.Renderer:
-        color = #4ECDC4FF
+# ── Rules: ball spawning ─────────────────────────────────────────────────────
+# Replaces the previous 8 static Ball1..Ball8 declarations. SpawnInitialBalls
+# spawns the same 8 corner-position balls at load time, but with
+# radius/velocity/color drawn from std.random instead of hand-picked per
+# instance. SpawnBallOnClick adds one more ball per left-click, at the
+# mouse's position on the box's z=0 plane, with no cap on total ball count.
 
-entity Ball3 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(-1.5, 1.2, -1.5)
-        scale = vec3(0.26, 0.26, 0.26)
-    Ball:
-        velocity = vec3(0.7, -0.5, 0.6)
-    SphereCollider:
-        radius = 0.26
-    meshes.Renderer:
-        color = #FFD93DFF
+# SpawnInitialBalls: k (0..7), read as 3 bits, gives the per-axis corner sign
+# (bit0 -> x, bit1 -> y, bit2 -> z; 0 -> negative, 1 -> positive) - the same 8
+# corners as the original Ball1..Ball8, just derived instead of hard-coded. k
+# also doubles as the palette index, so the initial batch always gets 8
+# distinct colors (per-ball radius/direction/speed are still independently
+# sampled). Each draw advances the spawner's shared Rng first, so no two
+# balls in the batch repeat the same draw.
+rule SpawnInitialBalls:
+    filter:
+        BallSpawner
 
-entity Ball4 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(1.5, 1.2, -1.5)
-        scale = vec3(0.30, 0.30, 0.30)
-    Ball:
-        velocity = vec3(-0.6, -0.7, 0.8)
-    SphereCollider:
-        radius = 0.30
-    meshes.Renderer:
-        color = #6BCB77FF
+    on load:
+        for k in range(0, 8):
+            rng = rand.advance(rng)
+            let ball_radius = rand.sample(rng, rand.uniform(0.15, 0.42))
 
-entity Ball5 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(-1.5, -1.2, 1.5)
-        scale = vec3(0.34, 0.34, 0.34)
-    Ball:
-        velocity = vec3(0.8, 0.5, -0.7)
-    SphereCollider:
-        radius = 0.34
-    meshes.Renderer:
-        color = #4D96FFFF
+            rng = rand.advance(rng)
+            let z = rand.sample(rng, rand.uniform(-1.0, 1.0))
+            rng = rand.advance(rng)
+            let theta = rand.sample(rng, rand.uniform(0.0, TWO_PI))
+            let planar = math.sqrt(1.0 - z * z)
+            let dir = vec3(planar * math.cos(theta), planar * math.sin(theta), z)
 
-entity Ball6 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(1.5, -1.2, 1.5)
-        scale = vec3(0.38, 0.38, 0.38)
-    Ball:
-        velocity = vec3(-0.7, 0.6, -0.6)
-    SphereCollider:
-        radius = 0.38
-    meshes.Renderer:
-        color = #B388FFFF
+            rng = rand.advance(rng)
+            let speed = rand.sample(rng, rand.uniform(0.8, 1.6))
 
-entity Ball7 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(-1.5, 1.2, 1.5)
-        scale = vec3(0.15, 0.15, 0.15)
-    Ball:
-        velocity = vec3(0.6, -0.6, -0.5)
-    SphereCollider:
-        radius = 0.15
-    meshes.Renderer:
-        color = #FF922BFF
+            let x_sign = ((k % 2) * 2.0) - 1.0
+            let y_sign = (((k / 2) % 2) * 2.0) - 1.0
+            let z_sign = (((k / 4) % 2) * 2.0) - 1.0
 
-entity Ball8 from BallTemplate:
-    tv.WorldTransform:
-        position = vec3(1.5, 1.2, 1.5)
-        scale = vec3(0.42, 0.42, 0.42)
-    Ball:
-        velocity = vec3(-0.5, -0.8, -0.9)
-    SphereCollider:
-        radius = 0.42
-    meshes.Renderer:
-        color = #F06595FF
+            spawn BallTemplate:
+                tv.WorldTransform:
+                    position = vec3(x_sign * 1.5, y_sign * 1.2, z_sign * 1.5)
+                    scale = vec3(ball_radius, ball_radius, ball_radius)
+                Ball:
+                    velocity = dir * speed
+                SphereCollider:
+                    radius = ball_radius
+                meshes.Renderer:
+                    color = rand.palette_color(k)
+
+# SpawnBallOnClick: one ball per left-click press-edge, positioned at the
+# mouse's projection onto the box's z=0 plane. Radius is sampled first so the
+# wall-clearance clamp below can size its margin from this ball's own
+# radius - the wall's inner face sits at |axis| = 3.0 - 0.3 = 2.7 (matching
+# DetectWallContact's margin math), so clamping to +/-(2.7 - radius) keeps
+# the spawned sphere clear of the walls. No cap on total ball count.
+rule SpawnBallOnClick:
+    filter:
+        BallSpawner
+
+    on input:
+        if not input.pressed(SpawnBall):
+            return
+
+        let spawn_point = cam3d.screen_to_plane(input.mouse_position(), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0))
+
+        rng = rand.advance(rng)
+        let ball_radius = rand.sample(rng, rand.uniform(0.15, 0.42))
+        let margin = 2.7 - ball_radius
+        let clamped = v3m.clamp(spawn_point, vec3(margin * -1.0, margin * -1.0, 0.0), vec3(margin, margin, 0.0))
+
+        rng = rand.advance(rng)
+        let z = rand.sample(rng, rand.uniform(-1.0, 1.0))
+        rng = rand.advance(rng)
+        let theta = rand.sample(rng, rand.uniform(0.0, TWO_PI))
+        let planar = math.sqrt(1.0 - z * z)
+        let dir = vec3(planar * math.cos(theta), planar * math.sin(theta), z)
+
+        rng = rand.advance(rng)
+        let speed = rand.sample(rng, rand.uniform(0.8, 1.6))
+
+        rng = rand.advance(rng)
+        let color_index = rand.sample_int(rng, rand.uniform_int(0, 7))
+
+        spawn BallTemplate:
+            tv.WorldTransform:
+                position = clamped
+                scale = vec3(ball_radius, ball_radius, ball_radius)
+            Ball:
+                velocity = dir * speed
+            SphereCollider:
+                radius = ball_radius
+            meshes.Renderer:
+                color = rand.palette_color(color_index)
 
 # ── Entities: lighting and camera ─────────────────────────────────────────────
 # Two point lights inside the box illuminate the balls and walls (same
@@ -353,7 +380,7 @@ entity KeyLight:
         scale = vec3(1.0, 1.0, 1.0)
     meshes.PointLight:
         color = #FFF4E0FF
-        intensity = 1.5
+        intensity = 0.7
         range = 12.0
         enabled = true
 
@@ -364,7 +391,7 @@ entity FillLight:
         scale = vec3(1.0, 1.0, 1.0)
     meshes.PointLight:
         color = #C0D8FFFF
-        intensity = 1.2
+        intensity = 0.5
         range = 12.0
         enabled = true
 

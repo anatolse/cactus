@@ -36,3 +36,7 @@ pub extern func sample(rng: Rng, dist: Uniform) float
 pub extern func sample_int(rng: Rng, dist: UniformInt) int
 pub extern func sample_normal(rng: Rng, dist: Normal) float
 pub extern func chance(rng: Rng, p: float) bool
+
+# ── Palette lookup ─────────────────────────────────────────────────────────────
+
+pub extern func palette_color(index: int) color

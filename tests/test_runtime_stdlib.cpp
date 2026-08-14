@@ -1147,6 +1147,40 @@ TEST_CASE("Runtime stdlib: chance boundaries", "[runtime][stdlib][random]") {
     CHECK(stdlib::random::chance(rng, 1.0F) == true);
 }
 
+TEST_CASE("Runtime stdlib: palette_color is deterministic", "[runtime][stdlib][random]") {
+    const auto a = stdlib::random::palette_color(3);
+    const auto b = stdlib::random::palette_color(3);
+    CHECK(a.r == b.r);
+    CHECK(a.g == b.g);
+    CHECK(a.b == b.b);
+    CHECK(a.a == b.a);
+}
+
+TEST_CASE("Runtime stdlib: palette_color gives 8 distinct colors for indices 0..7", "[runtime][stdlib][random]") {
+    std::array<Color, 8> colors{};
+    for (int i = 0; i < 8; ++i) {
+        colors[static_cast<std::size_t>(i)] = stdlib::random::palette_color(i);
+    }
+    for (int i = 0; i < 8; ++i) {
+        for (int j = i + 1; j < 8; ++j) {
+            const Color& color_i = colors[static_cast<std::size_t>(i)];
+            const Color& color_j = colors[static_cast<std::size_t>(j)];
+            const bool distinct =
+                color_i.r != color_j.r || color_i.g != color_j.g || color_i.b != color_j.b || color_i.a != color_j.a;
+            CHECK(distinct);
+        }
+    }
+}
+
+TEST_CASE("Runtime stdlib: palette_color wraps out-of-range indices", "[runtime][stdlib][random]") {
+    const auto wrapped  = stdlib::random::palette_color(11);
+    const auto in_range = stdlib::random::palette_color(3);
+    CHECK(wrapped.r == in_range.r);
+    CHECK(wrapped.g == in_range.g);
+    CHECK(wrapped.b == in_range.b);
+    CHECK(wrapped.a == in_range.a);
+}
+
 TEST_CASE("Runtime stdlib: editor ray/plane intersection hits, rejects parallel and behind-origin rays",
           "[runtime][editor][entt]") {
     constexpr Vector3 kGroundOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};

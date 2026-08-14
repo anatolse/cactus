@@ -8,15 +8,15 @@ Define the bouncy-balls-3d Cactus example: a 3D evolution of bouncy-bubbles demo
 
 ### Requirement: Bouncy balls 3D Cactus module
 
-The example SHALL provide a single `examples/bouncy-balls-3d/main.cactus` file that is valid Cactus DSL. It SHALL declare a `Ball` trait with only a `velocity: vec3` field, a `SphereCollider` trait with a `radius: float` field, an empty `Wall` marker trait, and a `BoxCollider` trait with a `size: vec3` field. Collider traits SHALL be independent of `std.render.meshes.Renderer` and SHALL NOT duplicate their data onto `Ball` or `Wall`. The module SHALL declare 6 `Wall` entities forming a closed box boundary and 8 `Ball` entities with distinct `SphereCollider.radius` values and initial `velocity`.
+The example SHALL provide a single `examples/bouncy-balls-3d/main.cactus` file that is valid Cactus DSL. It SHALL declare a `Ball` trait with only a `velocity: vec3` field, a `SphereCollider` trait with a `radius: float` field, an empty `Wall` marker trait, and a `BoxCollider` trait with a `size: vec3` field. Collider traits SHALL be independent of `std.render.meshes.Renderer` and SHALL NOT duplicate their data onto `Ball` or `Wall`. The module SHALL declare 6 `Wall` entities forming a closed box boundary as static entity declarations. `Ball` entities SHALL NOT be declared statically; instead the module SHALL spawn them at runtime (see "Initial ball batch spawns at load time" and "Click spawns a randomized ball inside the box"), with each spawned ball's `SphereCollider.radius` and initial `velocity` drawn from `std.random` rather than hard-coded per instance.
 
 #### Scenario: Module compiles without errors
 - **WHEN** the compiler is invoked with `cactus examples/bouncy-balls-3d/main.cactus --backend cpp-entt -o bouncy-balls-3d.generated.h`
 - **THEN** the command exits with code 0 and produces valid generated C++ output
 
 #### Scenario: Eight balls with distinct radii
-- **WHEN** the module's entity declarations are inspected
-- **THEN** exactly 8 entities apply `Ball` and `SphereCollider`, and no two of them declare the same `SphereCollider.radius` value
+- **WHEN** the program has completed its initial `load` phase and no click has yet occurred
+- **THEN** exactly 8 live entities apply `Ball` and `SphereCollider`, each with a `SphereCollider.radius` drawn independently from the same continuous distribution (not a hard-coded per-entity constant), and no two of them declare the same `SphereCollider.radius` value
 
 #### Scenario: Six walls form a closed box boundary
 - **WHEN** the module's entity declarations are inspected
@@ -28,15 +28,63 @@ The example SHALL provide a single `examples/bouncy-balls-3d/main.cactus` file t
 
 ### Requirement: Wall and ball entities are template-backed
 
-The example SHALL declare a `template` archetype for walls and a `template` archetype for balls, each bundling the traits and default field values shared by every instance of that kind. Every `Wall` entity and every `Ball` entity in the module SHALL be declared as a template-backed entity (`entity Name from <Template>:`) rather than an inline `entity Name:` declaration, overriding only the fields that differ per instance.
+The example SHALL declare a `template` archetype for walls and a `template` archetype for balls, each bundling the traits and default field values shared by every instance of that kind. Every `Wall` entity SHALL be declared as a template-backed static entity (`entity Name from <Template>:`), overriding only the fields that differ per instance. Every `Ball` entity SHALL instead be instantiated via `spawn <BallTemplate>:` (never a static `entity ... from BallTemplate:` declaration), overriding at minimum `position`, `SphereCollider.radius`, `Ball.velocity`, and render color at each spawn site.
 
 #### Scenario: Wall entities share one template
 - **WHEN** the module's wall entity declarations are inspected
 - **THEN** all 6 wall entities are declared `from` the same wall template, each overriding only its `position` and `rotation` (and, for the one collider-only wall, omitting the rendering trait it would otherwise inherit)
 
 #### Scenario: Ball entities share one template
-- **WHEN** the module's ball entity declarations are inspected
-- **THEN** all 8 ball entities are declared `from` the same ball template, each overriding only the fields that vary per ball (at minimum `position`, `velocity`, `SphereCollider.radius`, and render color)
+- **WHEN** the module's ball-producing rules are inspected
+- **THEN** every `spawn` of a ball names the same ball template, and no `Ball` entity is produced via a static `entity ... from` declaration
+
+### Requirement: Initial ball batch spawns at load time
+
+The example SHALL declare a rule that spawns exactly 8 balls from `BallTemplate` in an `on load:` handler, looping over the same 8 corner positions used by the previous static entities. For each spawned ball in the loop, `SphereCollider.radius` SHALL be sampled from a continuous uniform distribution over the same `[0.15, 0.42]` range the previous hard-coded radii spanned, `Ball.velocity` SHALL be a uniformly random 3D direction scaled by an independently sampled speed, and `Renderer.color` SHALL be `std.random.palette_color(k)` where `k` is that ball's loop index (0 through 7) — a deterministic, not randomly sampled, index — so the 8 initial balls always get 8 distinct palette colors.
+
+#### Scenario: Load-time batch runs once at program start
+- **WHEN** the program starts (the initial load phase, per `dsl-scene-loading`)
+- **THEN** the load-time batch rule's handler executes exactly once and spawns exactly 8 `Ball` entities
+
+#### Scenario: Initial balls occupy the original corner layout
+- **WHEN** the 8 load-time-spawned balls' positions are inspected
+- **THEN** they match the 8 non-overlapping corner positions the example used before this change, so the starting layout is visually unchanged
+
+#### Scenario: Initial balls are not visually identical across runs
+- **WHEN** the shared `Rng` singleton is seeded differently between two runs
+- **THEN** the 8 initial balls' radii and velocities differ between those runs (they are sampled, not hard-coded per-entity constants)
+
+### Requirement: Click spawns a randomized ball inside the box
+
+The example SHALL declare an `input SpawnBall: button` bound to the left mouse button, and a rule with an `on input:` handler that, on each press-edge of `SpawnBall`, computes a world-space spawn point by projecting `std.input.mouse_position()` through `std.camera.volume.screen_to_plane` onto the box's `z = 0` plane (`plane_origin = vec3(0,0,0)`, `plane_normal = vec3(0,0,1)`), clamps that point's `x` and `y` components so the new ball's sphere (using its own sampled radius) stays clear of the box's interior wall faces, and spawns one `BallTemplate` there with an independently sampled radius, a uniformly random 3D direction scaled by an independently sampled speed, and a color from `std.random.palette_color` at a randomly sampled index. The example SHALL impose no upper bound on the number of balls spawned this way.
+
+#### Scenario: A single press spawns exactly one ball
+- **WHEN** `SpawnBall` transitions from not-pressed to pressed on a given frame
+- **THEN** exactly one new `Ball` entity is spawned that frame, positioned at the mouse's projected point on the `z = 0` plane
+
+#### Scenario: Holding the button does not spawn every frame
+- **WHEN** `SpawnBall` remains held down across multiple consecutive frames after its initial press
+- **THEN** no additional ball is spawned for those held-down frames
+
+#### Scenario: Spawn position is clamped clear of the walls
+- **WHEN** the mouse's projected point lies at or beyond a wall's inner face
+- **THEN** the spawned ball's position is clamped so its sphere does not start overlapping that wall
+
+#### Scenario: Ball count is unbounded
+- **WHEN** `SpawnBall` has already been pressed enough times that the total ball count exceeds the original 8
+- **THEN** the next press still spawns another ball; no existing ball is destroyed or spawn rejected to enforce a cap
+
+### Requirement: Spawned ball randomization draws from one shared, persistent RNG
+
+The example SHALL declare a singleton entity carrying a `var rng: std.random.Rng` field (seeded once via `std.random.seeded`). Every draw used to spawn a ball — whether from the load-time batch or a click — SHALL read this field, advance it via `std.random.advance`, sample from it, and write the advanced state back to the same field, so the generator state persists across both the load-time loop and every subsequent click.
+
+#### Scenario: Successive draws within the load-time loop differ
+- **WHEN** the load-time batch rule spawns its 8 balls in sequence
+- **THEN** each iteration's sampled values are drawn from a distinct `Rng` state (the state advanced by the previous iteration), not the same fixed draw repeated 8 times
+
+#### Scenario: RNG state carries from the load-time batch into click spawns
+- **WHEN** a click spawns a ball after the load-time batch has already run
+- **THEN** the click-spawn draw uses the `Rng` state as last advanced by the load-time batch, not a freshly re-seeded generator
 
 ### Requirement: Cross-domain pair rule detects ball-wall contact
 
@@ -122,15 +170,19 @@ The example SHALL integrate each ball's position from its current `velocity` alo
 
 ### Requirement: Balls render as spheres and walls render as boxes via std.render.meshes
 
-The example SHALL apply `std.render.meshes.Renderer` to each `Ball` entity, using a `mesh` asset whose declared path resolves to placeholder sphere geometry, and to 5 of the 6 `Wall` entities, using a `mesh` asset that resolves to placeholder box geometry. Each `Ball` entity SHALL set a distinct `Renderer.color`. Each entity's `tv.WorldTransform.scale` SHALL correspond to its own collider dimensions: a `Ball` entity's scale SHALL equal `vec3(radius, radius, radius)` where `radius` is that same entity's `SphereCollider.radius`, and a `Wall` entity's scale SHALL equal that same entity's `BoxCollider.size` exactly. The sixth `Wall` entity (the one the camera looks through) SHALL declare no `std.render.meshes.Renderer` (or any other rendering trait) at all.
+The example SHALL apply `std.render.meshes.Renderer` to each `Ball` entity, using a `mesh` asset whose declared path resolves to placeholder sphere geometry, and to 5 of the 6 `Wall` entities, using a `mesh` asset that resolves to placeholder box geometry. Each `Ball` entity's `Renderer.color` SHALL be set at spawn time via `std.random.palette_color`. Each entity's `tv.WorldTransform.scale` SHALL correspond to its own collider dimensions: a `Ball` entity's scale SHALL equal `vec3(radius, radius, radius)` where `radius` is that same entity's `SphereCollider.radius`, and a `Wall` entity's scale SHALL equal that same entity's `BoxCollider.size` exactly. The sixth `Wall` entity (the one the camera looks through) SHALL declare no `std.render.meshes.Renderer` (or any other rendering trait) at all.
 
 #### Scenario: Ball mesh asset resolves to sphere geometry
 - **WHEN** a `Ball` entity's `Renderer.mesh` asset declaration is inspected
 - **THEN** its declared path contains the substring `sphere`
 
 #### Scenario: Ball entities have distinct colors
-- **WHEN** the 8 `Ball` entities' `Renderer.color` values are inspected
-- **THEN** no two balls declare the same `Renderer.color` value
+- **WHEN** the 8 balls spawned by the load-time batch (see "Initial ball batch spawns at load time") are inspected immediately after the `load` phase
+- **THEN** no two of them declare the same `Renderer.color` value
+
+#### Scenario: Click-spawned balls are not guaranteed distinct from existing balls
+- **WHEN** a ball is spawned via a click after the initial batch
+- **THEN** its `Renderer.color` is drawn from the same fixed palette as every other ball via a randomly sampled index, and MAY coincide with an existing ball's color
 
 #### Scenario: Rendered wall has no sphere-shaped mesh asset
 - **WHEN** a rendered `Wall` entity's `Renderer.mesh` asset declaration is inspected
@@ -149,8 +201,8 @@ The example SHALL apply `std.render.meshes.Renderer` to each `Ball` entity, usin
 - **THEN** it equals that same entity's `BoxCollider.size` exactly
 
 #### Scenario: Distinct ball radii produce distinct render scales
-- **WHEN** the 8 `Ball` entities' `tv.WorldTransform.scale` values are inspected
-- **THEN** no two balls declare the same scale value, matching their already-distinct `SphereCollider.radius` values
+- **WHEN** the 8 balls spawned by the load-time batch have their `tv.WorldTransform.scale` values inspected
+- **THEN** no two of them declare the same scale value, matching their already-distinct `SphereCollider.radius` values
 
 ### Requirement: Scene lighting uses two point lights with no shadow casting
 

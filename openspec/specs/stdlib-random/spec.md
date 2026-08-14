@@ -95,13 +95,28 @@ The `std.random` module SHALL declare the following pure extern sampling functio
 
 ---
 
+### Requirement: std.random provides a fixed-palette color lookup
+The `std.random` module SHALL declare `pub extern func palette_color(index: int) color`, returning one of a fixed palette of at least 8 distinct, deterministically-ordered colors selected by `index`. The same `index` value SHALL always return the same color. An `index` outside the palette's own size SHALL be wrapped (e.g. via modulo by the palette size) rather than erroring, so any `int` — including the direct output of `sample_int`, or a plain loop counter — is a valid argument.
+
+#### Scenario: Palette lookup is deterministic
+- **WHEN** `rand.palette_color(3)` is called twice
+- **THEN** both calls return the same color
+
+#### Scenario: In-range indices give distinct colors
+- **WHEN** `rand.palette_color(i)` is called for each `i` in `0..7`
+- **THEN** all 8 returned colors are distinct
+
+#### Scenario: Out-of-range index wraps rather than erroring
+- **WHEN** `rand.palette_color(11)` is called against an 8-entry palette
+- **THEN** it returns the same color as `rand.palette_color(3)` (`11 mod 8 == 3`), and the call does not error
+
 ### Requirement: std.random functions are backend-backed and verified
-The `std.random` module extern functions SHALL have concrete implementations in the C++ backend runtime. The backend test suite SHALL include behavioral tests covering `seeded`, `advance`, `sample`, `sample_int`, `sample_normal`, and `chance`.
+The `std.random` module extern functions SHALL have concrete implementations in the C++ backend runtime. The backend test suite SHALL include behavioral tests covering `seeded`, `advance`, `sample`, `sample_int`, `sample_normal`, `chance`, and `palette_color`.
 
 #### Scenario: Sample extern functions are backed
-- **WHEN** authored code calls `rand.advance`, `rand.sample`, `rand.sample_int`, `rand.sample_normal`, or `rand.chance`
+- **WHEN** authored code calls `rand.advance`, `rand.sample`, `rand.sample_int`, `rand.sample_normal`, `rand.chance`, or `rand.palette_color`
 - **THEN** the active backend resolves the call through a concrete runtime implementation rather than a missing symbol
 
 #### Scenario: std.random extern coverage is behaviorally verified
 - **WHEN** the backend/runtime test suite runs
-- **THEN** it includes tests covering determinism of `seeded`, state progression of `advance`, range correctness of `sample`/`sample_int`, and boundary correctness of `chance`
+- **THEN** it includes tests covering determinism of `seeded`, state progression of `advance`, range correctness of `sample`/`sample_int`, boundary correctness of `chance`, and determinism/distinctness/wraparound of `palette_color`

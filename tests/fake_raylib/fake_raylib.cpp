@@ -219,8 +219,8 @@ void DrawTexturePro(Texture2D texture, Rectangle source, Rectangle dest, Vector2
         .texture = texture, .source = source, .dest = dest, .origin = origin, .rotation = rotation, .tint = tint});
 }
 
-void DrawRectangleV(Vector2 position, Vector2 size, Color color) noexcept {
-    record(RecordedDrawRectangleV{.position = position, .size = size, .color = color});
+void DrawRectanglePro(Rectangle rec, Vector2 origin, float rotation, Color color) noexcept {
+    record(RecordedDrawRectanglePro{.rec = rec, .origin = origin, .rotation = rotation, .color = color});
 }
 
 void DrawCircleV(Vector2 center, float radius, Color color) noexcept {

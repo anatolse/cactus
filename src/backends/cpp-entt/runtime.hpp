@@ -35,6 +35,14 @@ void set_active_camera_2d(Camera2D cam) noexcept;
 void set_active_camera_3d(Camera3D cam) noexcept;
 [[nodiscard]] Camera3D get_active_camera_3d() noexcept;
 
+// ── Shape rendering (std.render.shapes ShapeRenderer) ──────────────────────────
+// origin is the offset from position to the shape's un-rotated reference
+// point (top-left for a rectangle, center for a circle); rotation_rad pivots
+// a rectangle around position and is converted to degrees for raylib here so
+// generated code never carries that conversion.
+void draw_shape_rectangle(Vector2 position, Vector2 size, Vector2 origin, float rotation_rad, Color color) noexcept;
+void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, Color color) noexcept;
+
 struct RuntimeBinding {
     GeneratedProjectInfo project;
 };

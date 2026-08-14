@@ -29,6 +29,11 @@ constexpr auto kConstexprVec2Lerp =
     stdlib::math::vec2::lerp(Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 20.0F}, 0.25F);
 constexpr auto kConstexprVec3Cross =
     stdlib::math::vec3::cross(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
+constexpr auto kConstexprVec2Clamp =
+    stdlib::math::vec2::clamp(Vector2{.x = 15.0F, .y = -5.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F});
+constexpr auto kConstexprVec3Clamp = stdlib::math::vec3::clamp(Vector3{.x = 15.0F, .y = -5.0F, .z = 2.0F},
+                                                                Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                                Vector3{.x = 10.0F, .y = 10.0F, .z = 10.0F});
 constexpr auto kConstexprQuatIdentity = stdlib::math::quat::identity();
 constexpr auto kConstexprQuatMultiply = stdlib::math::quat::multiply(kConstexprQuatIdentity, kConstexprQuatIdentity);
 
@@ -36,14 +41,22 @@ static_assert(kConstexprScalarLerp == 5.0F);
 static_assert(kConstexprVec2Lerp.x == 2.5F);
 static_assert(kConstexprVec2Lerp.y == 5.0F);
 static_assert(kConstexprVec3Cross.z == 1.0F);
+static_assert(kConstexprVec2Clamp.x == 10.0F);
+static_assert(kConstexprVec2Clamp.y == 0.0F);
+static_assert(kConstexprVec3Clamp.z == 2.0F);
 static_assert(kConstexprQuatMultiply.w == 1.0F);
 static_assert(noexcept(stdlib::math::lerp(0.0F, 1.0F, 0.5F)));
 static_assert(noexcept(stdlib::math::clamp(0.0F, 0.0F, 1.0F)));
 static_assert(noexcept(stdlib::math::vec2::dot(Vector2{.x = 1.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 1.0F})));
+static_assert(noexcept(stdlib::math::vec2::clamp(Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 0.0F},
+                                                  Vector2{.x = 1.0F, .y = 1.0F})));
 static_assert(noexcept(stdlib::math::vec3::cross(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
                                                  Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F})));
 static_assert(noexcept(stdlib::math::vec3::reflect(Vector3{.x = 1.0F, .y = -1.0F, .z = 0.0F},
                                                    Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F})));
+static_assert(noexcept(stdlib::math::vec3::clamp(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                  Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                  Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F})));
 static_assert(noexcept(stdlib::math::quat::identity()));
 static_assert(noexcept(stdlib::math::quat::multiply(kConstexprQuatIdentity, kConstexprQuatIdentity)));
 
@@ -86,6 +99,13 @@ TEST_CASE("Runtime stdlib: scalar and vector math helpers behave correctly", "[r
     CHECK(lerp2.y == Catch::Approx(5.0F));
     CHECK(stdlib::math::vec2::distance(Vector2{1.0F, 2.0F}, Vector2{4.0F, 6.0F}) == Catch::Approx(5.0F));
     CHECK(stdlib::math::vec2::angle(Vector2{0.0F, 1.0F}) == Catch::Approx(1.5707963F));
+    const auto clamped2 =
+        stdlib::math::vec2::clamp(Vector2{.x = 15.0F, .y = -5.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F});
+    CHECK(clamped2.x == Catch::Approx(10.0F));
+    CHECK(clamped2.y == Catch::Approx(0.0F));
+    const auto rotated2 = stdlib::math::vec2::rotate(Vector2{.x = 1.0F, .y = 0.0F}, std::numbers::pi_v<float> / 2.0F);
+    CHECK(rotated2.x == Catch::Approx(0.0F).margin(1e-5));
+    CHECK(rotated2.y == Catch::Approx(1.0F));
 
     CHECK(stdlib::math::vec3::length(Vector3{1.0F, 2.0F, 2.0F}) == Catch::Approx(3.0F));
     const auto norm3 = stdlib::math::vec3::normalize(Vector3{.x = 0.0F, .y = 3.0F, .z = 4.0F});
@@ -103,6 +123,21 @@ TEST_CASE("Runtime stdlib: scalar and vector math helpers behave correctly", "[r
                                                        Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
     CHECK(reflected.x == Catch::Approx(1.0F));
     CHECK(reflected.y == Catch::Approx(1.0F));
+    const auto clamped3 = stdlib::math::vec3::clamp(
+        Vector3{.x = 15.0F, .y = -5.0F, .z = 2.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 10.0F, .y = 10.0F, .z = 10.0F});
+    CHECK(clamped3.x == Catch::Approx(10.0F));
+    CHECK(clamped3.y == Catch::Approx(0.0F));
+    CHECK(clamped3.z == Catch::Approx(2.0F));
+    const auto rotated3 = stdlib::math::vec3::rotate(
+        Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 1.0F}, std::numbers::pi_v<float> / 2.0F);
+    CHECK(rotated3.x == Catch::Approx(0.0F).margin(1e-5));
+    CHECK(rotated3.y == Catch::Approx(1.0F));
+    CHECK(rotated3.z == Catch::Approx(0.0F).margin(1e-5));
+    const auto rotated3_nonunit_axis = stdlib::math::vec3::rotate(
+        Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 5.0F}, std::numbers::pi_v<float> / 2.0F);
+    CHECK(rotated3_nonunit_axis.x == Catch::Approx(rotated3.x).margin(1e-5));
+    CHECK(rotated3_nonunit_axis.y == Catch::Approx(rotated3.y));
+    CHECK(rotated3_nonunit_axis.z == Catch::Approx(rotated3.z).margin(1e-5));
 }
 
 TEST_CASE("Runtime stdlib: global-namespace vec2/vec3 splat constructors match component form",
@@ -520,10 +555,15 @@ TEST_CASE("Runtime stdlib: allocation-free helper contracts stay constexpr and n
     CHECK(kConstexprVec2Lerp.x == Catch::Approx(2.5F));
     CHECK(kConstexprVec2Lerp.y == Catch::Approx(5.0F));
     CHECK(kConstexprVec3Cross.z == Catch::Approx(1.0F));
+    CHECK(kConstexprVec2Clamp.x == Catch::Approx(10.0F));
+    CHECK(kConstexprVec3Clamp.z == Catch::Approx(2.0F));
     CHECK(kConstexprQuatMultiply.w == Catch::Approx(1.0F));
     CHECK(noexcept(stdlib::math::lerp(0.0F, 1.0F, 0.5F)));
     CHECK(noexcept(stdlib::math::vec2::lerp(Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F}, 0.5F)));
+    CHECK(noexcept(stdlib::math::vec2::clamp(Vector2{0.0F, 0.0F}, Vector2{0.0F, 0.0F}, Vector2{1.0F, 1.0F})));
     CHECK(noexcept(stdlib::math::vec3::cross(Vector3{1.0F, 0.0F, 0.0F}, Vector3{0.0F, 1.0F, 0.0F})));
+    CHECK(noexcept(
+        stdlib::math::vec3::clamp(Vector3{0.0F, 0.0F, 0.0F}, Vector3{0.0F, 0.0F, 0.0F}, Vector3{1.0F, 1.0F, 1.0F})));
     CHECK(noexcept(stdlib::math::quat::identity()));
     CHECK(noexcept(stdlib::math::quat::multiply(stdlib::math::quat::identity(), stdlib::math::quat::identity())));
 }

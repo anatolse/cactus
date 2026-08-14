@@ -250,6 +250,12 @@ float angle(Vector2 v) noexcept {
     return std::atan2(v.y, v.x);
 }
 
+Vector2 rotate(Vector2 v, float angle) noexcept {
+    const float cos_a = stdlib::math::cos(angle);
+    const float sin_a = stdlib::math::sin(angle);
+    return Vector2{.x = (v.x * cos_a) - (v.y * sin_a), .y = (v.x * sin_a) + (v.y * cos_a)};
+}
+
 }  // namespace vec2
 
 namespace vec3 {
@@ -269,6 +275,10 @@ Vector3 normalize(Vector3 v) noexcept {
 
 float distance(Vector3 a, Vector3 b) noexcept {
     return length(Vector3{.x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z});
+}
+
+Vector3 rotate(Vector3 v, Vector3 axis, float angle) noexcept {
+    return quat::rotate(quat::from_axis_angle(axis, angle), v);
 }
 
 }  // namespace vec3

@@ -427,7 +427,7 @@ The EnTT backend SHALL recognize stdlib hierarchy extern rules for transform pro
 - **THEN** the backend emits registry-aware code that recursively destroys descendants of the removed entity
 
 ### Requirement: cpp-entt lowers pair domains to deterministic snapshot products
-The cpp-entt backend SHALL lower a pair handler to two typed EnTT membership passes, stable entity-creation-order snapshots, and left-binding-major nested iteration. It SHALL avoid materializing the complete Cartesian-product tuple list and SHALL bind selected component data as immutable access.
+The cpp-entt backend SHALL lower a pair handler to two typed EnTT membership passes, stable entity-creation-order snapshots, and left-binding-major nested iteration. It SHALL avoid materializing the complete Cartesian-product tuple list and SHALL bind selected component data as immutable access. Each tuple's handler body SHALL execute within its own per-invocation boundary so that a generated `return` statement ends only that tuple's invocation; iteration over the remaining snapshot product SHALL continue unaffected.
 
 #### Scenario: Same trait selected by both bindings has distinct generated access
 - **WHEN** both bindings require Collider
@@ -440,6 +440,10 @@ The cpp-entt backend SHALL lower a pair handler to two typed EnTT membership pas
 #### Scenario: Projected membership cannot change current product
 - **WHEN** a tuple projects a required trait onto another entity
 - **THEN** generated iteration continues over the snapshots created before the first tuple
+
+#### Scenario: return inside a tuple body skips only that tuple
+- **WHEN** a pair handler body contains `return` and the generated snapshot product includes a tuple that reaches it before the last tuple in the product
+- **THEN** the generated code continues iterating and executing the remaining tuples instead of returning from the enclosing handler function
 
 ### Requirement: cpp-entt maintains stable entity creation ordinals
 The generated cpp-entt runtime SHALL assign every load-time and spawned entity a monotonic, non-reused creation ordinal and SHALL use that ordinal to sort relation snapshots. Hierarchical load/spawn creation SHALL retain deterministic parent-first order, and committed spawns SHALL receive ordinals in command-commit order.

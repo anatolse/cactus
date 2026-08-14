@@ -46,9 +46,17 @@ The `std.math.vec2` module SHALL provide pure functions operating on `vec2` valu
 - **WHEN** `v2.lerp(vec2(0.0, 0.0), vec2(10.0, 10.0), 0.5)` is called
 - **THEN** it returns `vec2(5.0, 5.0)`
 
+#### Scenario: Component-wise clamp
+- **WHEN** `v2.clamp(vec2(15.0, -5.0), vec2(0.0, 0.0), vec2(10.0, 10.0))` is called
+- **THEN** it returns `vec2(10.0, 0.0)` (each component independently clamped to its own `[lo, hi]` range)
+
+#### Scenario: Rotate a vector
+- **WHEN** `v2.rotate(vec2(1.0, 0.0), math.PI / 2.0)` is called
+- **THEN** it returns approximately `vec2(0.0, 1.0)` (counter-clockwise rotation by the given angle in radians, consistent with the existing `WorldTransform.rotation` convention)
+
 #### Scenario: Vec2 extern coverage is behaviorally verified
 - **WHEN** the backend/runtime test suite runs
-- **THEN** it includes unit tests covering declared vec2 extern functions including `length`, `normalize`, `dot`, `lerp`, `distance`, and `angle`
+- **THEN** it includes unit tests covering declared vec2 extern functions including `length`, `normalize`, `dot`, `lerp`, `distance`, `angle`, `clamp`, and `rotate`
 
 ---
 
@@ -67,9 +75,21 @@ The `std.math.vec3` module SHALL provide pure functions operating on `vec3` valu
 - **WHEN** `v3.reflect(vec3(1.0, -1.0, 0.0), vec3(0.0, 1.0, 0.0))` is called
 - **THEN** it returns `vec3(1.0, 1.0, 0.0)` (reflected off Y-normal surface)
 
+#### Scenario: Component-wise clamp
+- **WHEN** `v3.clamp(vec3(15.0, -5.0, 2.0), vec3(0.0, 0.0, 0.0), vec3(10.0, 10.0, 10.0))` is called
+- **THEN** it returns `vec3(10.0, 0.0, 2.0)` (each component independently clamped to its own `[lo, hi]` range)
+
+#### Scenario: Rotate a vector around an axis
+- **WHEN** `v3.rotate(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), math.PI / 2.0)` is called
+- **THEN** it returns approximately `vec3(0.0, 1.0, 0.0)` (right-hand-rule rotation around the given axis by the given angle in radians)
+
+#### Scenario: Rotate normalizes a non-unit axis
+- **WHEN** `v3.rotate(v, axis, angle)` is called with an `axis` that is not unit length
+- **THEN** the axis is normalized before rotating, so the result matches rotating around the equivalent unit-length axis
+
 #### Scenario: Vec3 extern coverage is behaviorally verified
 - **WHEN** the backend/runtime test suite runs
-- **THEN** it includes unit tests covering declared vec3 extern functions including `length`, `normalize`, `dot`, `cross`, `lerp`, `distance`, and `reflect`
+- **THEN** it includes unit tests covering declared vec3 extern functions including `length`, `normalize`, `dot`, `cross`, `lerp`, `distance`, `reflect`, `clamp`, and `rotate`
 
 ---
 

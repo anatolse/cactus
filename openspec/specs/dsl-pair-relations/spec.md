@@ -36,7 +36,7 @@ Each pair binding SHALL have type `entity_id` and SHALL also namespace the trait
 - **THEN** `body.transform.position` resolves to that selected trait
 
 ### Requirement: Pair relation semantics are directed and finite
-For bindings A and B, a pair handler SHALL execute over the directed Cartesian product of the live entities satisfying A and the live entities satisfying B. Self-pairs and reverse-role tuples SHALL be included when membership permits. Handler `if` statements SHALL retain ordinary imperative semantics and SHALL be the authored mechanism for rejecting tuples.
+For bindings A and B, a pair handler SHALL execute over the directed Cartesian product of the live entities satisfying A and the live entities satisfying B. Self-pairs and reverse-role tuples SHALL be included when membership permits. Handler `if` statements SHALL retain ordinary imperative semantics and SHALL be the authored mechanism for rejecting tuples. A `return` statement SHALL be an equally valid authored rejection mechanism and SHALL end only the current tuple's invocation — it SHALL NOT abort the remaining tuples in the pass.
 
 #### Scenario: Same relation includes directed tuples
 - **WHEN** both bindings select the same two entities `a` and `b`
@@ -45,6 +45,10 @@ For bindings A and B, a pair handler SHALL execute over the directed Cartesian p
 #### Scenario: Imperative condition rejects a tuple
 - **WHEN** the handler begins with `if body != wall:`
 - **THEN** self-pair bodies do not execute while relation construction remains unchanged
+
+#### Scenario: Early return rejects only the current tuple
+- **WHEN** the handler begins with `if a == b: return` and the pass includes self-pairs interleaved with non-self-pairs
+- **THEN** each self-pair tuple's invocation ends at the `return` while every other tuple in the pass still executes its full body
 
 ### Requirement: Pair passes use deterministic membership snapshots
 Before executing tuple bodies, the runtime SHALL snapshot both binding memberships in stable entity-creation order and SHALL iterate their product left-binding-major. Membership SHALL remain fixed for the complete handler pass; component values need not be copied. Projected traits and buffered structural commands produced during the pass SHALL NOT add or remove tuples from that pass.

@@ -184,6 +184,12 @@ cactus_add_headless_behavior_test(test_pair_handler_return_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pair_handler_return_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_bouncy_bubbles_headless_behavior
+    CACTUS_SOURCE examples/bouncy-bubbles/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_bouncy_bubbles_headless_behavior.cpp
+)
+
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)
 add_dependencies(test_example_cpp_compilation cactus)

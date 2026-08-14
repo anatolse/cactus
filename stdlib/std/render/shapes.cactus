@@ -15,6 +15,14 @@ pub trait Shape:
     var size: vec2
     var color: color = #FFFFFFFF
     var visible: bool = true
+    # Offset from WorldTransform.position to the shape's un-rotated reference
+    # point — the top-left corner for Rectangle, the center for Circle.
+    # Default (0,0) means position itself is that reference point, matching
+    # this renderer's original position-is-top-left (Rectangle) /
+    # position-is-center (Circle) behavior. WorldTransform.rotation pivots
+    # a Rectangle around position; set origin = size / 2 to rotate around the
+    # rectangle's own center instead of its corner.
+    var origin: vec2 = vec2(0.0, 0.0)
 
 extern rule ShapeRenderer:
     filter:

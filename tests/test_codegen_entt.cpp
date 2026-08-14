@@ -910,7 +910,7 @@ TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime with
     CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via DrawCircleV alongside Rectangle",
+TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via draw_shape_circle alongside Rectangle",
           "[codegen-entt][render][shapes]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -927,6 +927,7 @@ TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via DrawCircleV alon
         "    var size: vec2\n"
         "    var color: color\n"
         "    var visible: bool\n"
+        "    var origin: vec2\n"
         "event render\n"
         "extern rule ShapeRenderer:\n"
         "    filter:\n"
@@ -941,13 +942,15 @@ TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via DrawCircleV alon
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    // Circle draws via DrawCircleV using size.x as diameter (radius = size.x / 2).
+    // Circle draws via draw_shape_circle, passing size.x as diameter and origin through.
     CHECK(code.find("case ShapeType::Circle:") != std::string::npos);
-    CHECK(code.find("DrawCircleV(WorldTransform_comp.position") != std::string::npos);
-    CHECK(code.find("Shape_comp.size.x / 2.0F") != std::string::npos);
-    // Rectangle emission remains unaffected.
+    CHECK(code.find("draw_shape_circle(WorldTransform_comp.position") != std::string::npos);
+    CHECK(code.find("Shape_comp.size.x,") != std::string::npos);
+    CHECK(code.find("Shape_comp.origin,") != std::string::npos);
+    // Rectangle draws via draw_shape_rectangle, passing origin and rotation through.
     CHECK(code.find("case ShapeType::Rectangle:") != std::string::npos);
-    CHECK(code.find("DrawRectangleV(WorldTransform_comp.position") != std::string::npos);
+    CHECK(code.find("draw_shape_rectangle(WorldTransform_comp.position") != std::string::npos);
+    CHECK(code.find("WorldTransform_comp.rotation,") != std::string::npos);
 }
 
 // editor-debug-draw: each std.debug event has exactly one generic, non-branching,

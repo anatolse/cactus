@@ -163,8 +163,20 @@ The `std.render.shapes` module SHALL expose `ShapeType.Circle` alongside the exi
 - **WHEN** an entity applies `shapes.Shape` with `type = shapes.ShapeType.Circle` and `size = vec2(d, anything)`
 - **THEN** the shape's effective diameter is `d`, and `size.y` has no effect on the drawn circle
 
+### Requirement: Shape exposes an origin field for its render pivot
+
+The `Shape` trait SHALL expose `var origin: vec2 = vec2(0.0, 0.0)`: the offset from `WorldTransform.position` to the shape's un-rotated reference point — the top-left corner for `ShapeType.Rectangle`, the center for `ShapeType.Circle`. The default `(0.0, 0.0)` SHALL reproduce this renderer's original position-is-top-left (`Rectangle`) / position-is-center (`Circle`) placement.
+
+#### Scenario: Default origin preserves the original reference point
+- **WHEN** a `Shape` entity does not set `origin`
+- **THEN** its effective origin is `(0.0, 0.0)`, and its render placement matches this renderer's behavior before `origin` existed
+
+#### Scenario: Non-default origin shifts the render placement
+- **WHEN** a `Shape` entity sets `origin = size / 2`
+- **THEN** a `Rectangle` shape's un-rotated top-left corner is `position - origin` (i.e. the rectangle is centered on `position`), and a `Circle` shape's center is `position - origin`
+
 ### Requirement: ShapeRenderer renders entities in world space using the active camera
-The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible). `ShapeRenderer` SHALL draw `ShapeType.Rectangle` shapes as axis-aligned rectangles and `ShapeType.Circle` shapes as circles centered on the entity's world position with diameter `size.x`.
+The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D(get_active_camera_2d())` / `EndMode2D()`. Entity positions (`WorldTransform.position`) and sizes (`Shape.size`) are in world-unit coordinates; the camera transform maps them to screen pixels. When the active camera is identity (zoom=1, no offset), the behavior is identical to pixel-space rendering (backwards-compatible). `ShapeRenderer` SHALL draw `ShapeType.Rectangle` shapes pivoted at `WorldTransform.position`, offset by `Shape.origin` and rotated by `WorldTransform.rotation`, and `ShapeType.Circle` shapes as circles centered at `WorldTransform.position - Shape.origin` with diameter `size.x` (circles are rotationally symmetric, so `WorldTransform.rotation` has no visible effect on them).
 
 #### Scenario: World-unit entity rendered at correct screen position
 - **WHEN** the active camera has zoom=64 and offset={400,300} (world origin at screen center)
@@ -173,16 +185,20 @@ The `ShapeRenderer` extern rule SHALL wrap its raylib draw calls in `BeginMode2D
 
 #### Scenario: Pixel-space module unaffected
 - **WHEN** no Camera entity exists (identity active camera, zoom=1)
-- **WHEN** an entity has `WorldTransform.position = {100.0, 200.0}` and `Shape.size = {32.0, 32.0}`
-- **THEN** a 32×32 pixel rectangle is drawn at screen position (100, 200) — same as before this change
+- **WHEN** an entity has `WorldTransform.position = {100.0, 200.0}`, `Shape.size = {32.0, 32.0}`, default `origin`, and `WorldTransform.rotation = 0.0`
+- **THEN** a 32×32 pixel rectangle is drawn at screen position (100, 200) — same as before `origin`/rotation-aware rendering existed
 
 #### Scenario: Hidden shape not drawn
 - **WHEN** a Shape entity has `visible = false`
 - **THEN** no rectangle is drawn for that entity (unchanged behavior)
 
+#### Scenario: Rectangle rotates around WorldTransform.position, offset by origin
+- **WHEN** an entity has `ShapeType.Rectangle`, `Shape.size = {40.0, 20.0}`, `Shape.origin = {20.0, 10.0}` (size/2), and a non-zero `WorldTransform.rotation`
+- **THEN** the rectangle is drawn rotated by that amount around `WorldTransform.position` — its own center, not its top-left corner
+
 #### Scenario: Circle shape rendered at correct screen position and size
 - **WHEN** no Camera entity exists (identity active camera, zoom=1)
-- **WHEN** an entity has `WorldTransform.position = {100.0, 200.0}`, `Shape.size = {32.0, 32.0}`, and `ShapeType.Circle`
+- **WHEN** an entity has `WorldTransform.position = {100.0, 200.0}`, `Shape.size = {32.0, 32.0}`, default `origin`, and `ShapeType.Circle`
 - **THEN** a circle of radius 16 pixels is drawn centered at screen position (100, 200)
 
 #### Scenario: Hidden circle shape not drawn

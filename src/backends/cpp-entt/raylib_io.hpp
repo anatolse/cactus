@@ -95,7 +95,8 @@ CACTUS_RL_WRAP_VOID(DrawTextPro, (Font font, const char* text, Vector2 position,
 CACTUS_RL_WRAP_VOID(DrawTexturePro, (Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin,
                                      float rotation, Color tint),
                     (texture, source, dest, origin, rotation, tint))
-CACTUS_RL_WRAP_VOID(DrawRectangleV, (Vector2 position, Vector2 size, Color color), (position, size, color))
+CACTUS_RL_WRAP_VOID(DrawRectanglePro, (Rectangle rec, Vector2 origin, float rotation, Color color),
+                    (rec, origin, rotation, color))
 CACTUS_RL_WRAP_VOID(DrawCircleV, (Vector2 center, float radius, Color color), (center, radius, color))
 CACTUS_RL_WRAP_VOID(DrawRectangleLinesEx, (Rectangle rec, float lineThick, Color color), (rec, lineThick, color))
 CACTUS_RL_WRAP_VOID(DrawRectangleRec, (Rectangle rec, Color color), (rec, color))

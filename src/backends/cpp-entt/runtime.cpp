@@ -1856,6 +1856,27 @@ Camera3D get_active_camera_3d() noexcept {
     return active_camera_3d_storage();
 }
 
+void draw_shape_rectangle(const Vector2 position,
+                          const Vector2 size,
+                          const Vector2 origin,
+                          const float rotation_rad,
+                          const Color color) noexcept {
+    constexpr float kRadToDeg = 180.0F / std::numbers::pi_v<float>;
+    cactus::runtime::raylib::DrawRectanglePro(
+        Rectangle{.x = position.x, .y = position.y, .width = size.x, .height = size.y},
+        origin,
+        rotation_rad * kRadToDeg,
+        color);
+}
+
+void draw_shape_circle(const Vector2 position,
+                       const float diameter,
+                       const Vector2 origin,
+                       const Color color) noexcept {
+    cactus::runtime::raylib::DrawCircleV(Vector2{.x = position.x - origin.x, .y = position.y - origin.y},
+                                         diameter / 2.0F, color);
+}
+
 // ── Editor extern func implementations (std.editor) ──────────────────────────
 
 void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept {

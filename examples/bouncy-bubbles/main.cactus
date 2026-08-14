@@ -2,17 +2,20 @@ module main
 
 use std.transform.flat as tf
 use std.render.shapes as shapes
-use std.math as math
 use std.math.vec2 as v2m
 
 # ── Traits ────────────────────────────────────────────────────────────────────
 
 trait Bubble:
     var velocity: vec2
+
+trait CircleCollider:
     var radius: float
 
-trait Wall:
-    var normal: vec2
+trait Wall
+
+trait SquareCollider:
+    var size: vec2
 
 # ── Events ────────────────────────────────────────────────────────────────────
 
@@ -33,32 +36,42 @@ rule MoveBubbles:
     on tick:
         position += velocity * tick.dt
 
-# DetectWallContact: cross-domain pair producer (Bubble x Wall). Circle-vs-box
-# overlap against the wall's authored size, gated by a closing-speed check
-# along the wall's fixed normal so a resting/sliding bubble doesn't re-trigger
-# every tick. Emits a targeted WallBounce to the bubble side only.
+# DetectWallContact: cross-domain pair producer (Bubble x Wall). The wall's
+# contact normal is not authored — it's derived each tick by rotating the
+# fixed local outward direction (0, -1) by the wall's current
+# WorldTransform.rotation, so it always matches the wall's actual orientation.
+# Overlap is a single oriented-box-vs-circle test: the bubble's position is
+# rotated into the wall's local space, clamped to +/-size/2 there, then
+# rotated back to world space to find the closest point on the box. This one
+# code path handles every wall, axis-aligned or tilted, with no
+# special-casing. Gated by a closing-speed check along the derived normal so
+# a resting/sliding bubble doesn't re-trigger every tick. Emits a targeted
+# WallBounce to the bubble side only.
 rule DetectWallContact:
     pairs:
         bubble:
             Bubble
+            CircleCollider
             tf.WorldTransform
         wall:
             Wall
+            SquareCollider
             tf.WorldTransform
-            shapes.Shape
 
     on tick:
         let bubble_pos = bubble.tf.WorldTransform.position
         let wall_pos = wall.tf.WorldTransform.position
-        let wall_size = wall.shapes.Shape.size
-        let closest_x = math.clamp(bubble_pos.x, wall_pos.x - wall_size.x / 2.0, wall_pos.x + wall_size.x / 2.0)
-        let closest_y = math.clamp(bubble_pos.y, wall_pos.y - wall_size.y / 2.0, wall_pos.y + wall_size.y / 2.0)
-        let closest_point = vec2(closest_x, closest_y)
-        let overlapping = v2m.distance(bubble_pos, closest_point) < bubble.Bubble.radius
-        let closing = v2m.dot(bubble.Bubble.velocity, wall.Wall.normal) > 0.0
+        let wall_rotation = wall.tf.WorldTransform.rotation
+        let half_size = wall.SquareCollider.size / 2.0
+        let local_pos = v2m.rotate(bubble_pos - wall_pos, -wall_rotation)
+        let clamped_local = v2m.clamp(local_pos, half_size * -1.0, half_size)
+        let closest_point = wall_pos + v2m.rotate(clamped_local, wall_rotation)
+        let normal = v2m.rotate(vec2(0.0, -1.0), wall_rotation)
+        let overlapping = v2m.distance(bubble_pos, closest_point) < bubble.CircleCollider.radius
+        let closing = v2m.dot(bubble.Bubble.velocity, normal) > 0.0
         if overlapping and closing:
             emit WallBounce to bubble:
-                normal = wall.Wall.normal
+                normal = normal
 
 # ResolveWallBounce: unary consumer. Reflects the bubble's own velocity across
 # the wall normal carried by the event (elastic reflection, speed-preserving).
@@ -67,7 +80,7 @@ rule ResolveWallBounce:
         Bubble
 
     on WallBounce as bounce:
-        let vn = velocity.x * bounce.normal.x + velocity.y * bounce.normal.y
+        let vn = v2m.dot(velocity, bounce.normal)
         let reflect_scale = 2.0 * vn
         velocity -= bounce.normal * reflect_scale
 
@@ -83,9 +96,11 @@ rule DetectBubbleContact:
     pairs:
         a:
             Bubble
+            CircleCollider
             tf.WorldTransform
         b:
             Bubble
+            CircleCollider
             tf.WorldTransform
 
     on tick:
@@ -94,26 +109,25 @@ rule DetectBubbleContact:
 
         let pos_a = a.tf.WorldTransform.position
         let pos_b = b.tf.WorldTransform.position
-        let radius_a = a.Bubble.radius
-        let radius_b = b.Bubble.radius
-        let delta_pos = pos_b - pos_a
-        let dist = math.sqrt(delta_pos.x * delta_pos.x + delta_pos.y * delta_pos.y)
-        
+        let radius_a = a.CircleCollider.radius
+        let radius_b = b.CircleCollider.radius
+        let dist = v2m.distance(pos_a, pos_b)
+
         if dist >= radius_a + radius_b:
             return
-        
-        let normal = delta_pos / dist
+
+        let normal = (pos_b - pos_a) / dist
         let vel_a = a.Bubble.velocity
         let vel_b = b.Bubble.velocity
-        let closing = (vel_a.x - vel_b.x) * normal.x + (vel_a.y - vel_b.y) * normal.y
+        let closing = v2m.dot(vel_a - vel_b, normal)
 
         if closing <= 0.0:
             return
 
         let mass_a = radius_a * radius_a
         let mass_b = radius_b * radius_b
-        let v1n = vel_a.x * normal.x + vel_a.y * normal.y
-        let v2n = vel_b.x * normal.x + vel_b.y * normal.y
+        let v1n = v2m.dot(vel_a, normal)
+        let v2n = v2m.dot(vel_b, normal)
         let v1n_prime = ((mass_a - mass_b) * v1n + 2.0 * mass_b * v2n) / (mass_a + mass_b)
         let delta = v1n_prime - v1n
         let new_velocity = vel_a + normal * delta
@@ -129,133 +143,136 @@ rule ResolveBubbleBounce:
     on BubbleBounce as bounce:
         velocity = bounce.new_velocity
 
-# ── Entities: arena walls ────────────────────────────────────────────────────
-# A 500x500 square arena (world-unit bounds x:[150,650] y:[50,550]) centered
-# in the default 800x600 window, bounded by 4 thin static walls. Each wall's
-# `normal` points outward (away from the arena interior, through the wall) —
-# the sign only matters for the closing-speed guard; elastic reflection is
-# invariant to normal sign.
-
-entity TopWall:
-    tf.WorldTransform:
-        position = vec2(400.0, 40.0)
-    Wall:
-        normal = vec2(0.0, -1.0)
+# ── Templates ────────────────────────────────────────────────────────────────
+# WallTemplate: shared collider/render defaults for every arena wall. Only
+# WorldTransform.position/rotation vary per wall — SquareCollider.size and
+# shapes.Shape.size are the same canonical local box (540x20) for every wall;
+# rotation alone decides whether a given wall reads as horizontal or vertical,
+# both for collision (see DetectWallContact) and for rendering, since
+# ShapeRenderer pivots a Rectangle around WorldTransform.position using
+# Shape.origin. origin = size / 2 makes that pivot the box's own center
+# (matching what SquareCollider already assumes) instead of raylib's default
+# top-left corner.
+template WallTemplate:
+    tf.WorldTransform
+    Wall
+    SquareCollider:
+        size = vec2(540.0, 20.0)
     shapes.Shape:
         type = shapes.ShapeType.Rectangle
         size = vec2(540.0, 20.0)
         color = #444444FF
+        origin = vec2(270.0, 10.0)  # size / 2: pivot at the box's center
 
-
-entity BottomWall:
-    tf.WorldTransform:
-        position = vec2(400.0, 560.0)
-    Wall:
-        normal = vec2(0.0, 1.0)
+# BubbleTemplate: shared render-shape defaults for every bubble. Position,
+# velocity, collider radius, render size, and color vary per bubble.
+template BubbleTemplate:
+    tf.WorldTransform
+    Bubble
+    CircleCollider
     shapes.Shape:
-        type = shapes.ShapeType.Rectangle
-        size = vec2(540.0, 20.0)
-        color = #444444FF
-
-entity LeftWall:
-    tf.WorldTransform:
-        position = vec2(140.0, 300.0)
-    Wall:
-        normal = vec2(-1.0, 0.0)
-    shapes.Shape:
-        type = shapes.ShapeType.Rectangle
-        size = vec2(20.0, 540.0)
-        color = #444444FF
-
-entity RightWall:
-    tf.WorldTransform:
-        position = vec2(660.0, 300.0)
-    Wall:
-        normal = vec2(1.0, 0.0)
-    shapes.Shape:
-        type = shapes.ShapeType.Rectangle
-        size = vec2(20.0, 540.0)
-        color = #444444FF
+        type = shapes.ShapeType.Circle
         visible = true
 
-# ── Entities: bubbles ────────────────────────────────────────────────────────
-# 6 bubbles with distinct radii, spread on a 3x2 grid well inside the arena
-# (spacing exceeds any pair's radius sum, so they start non-overlapping), each
-# with a different initial velocity. Speeds are kept well under the smallest
-# radius per tick at ~60fps to avoid discrete-time tunneling.
+# ── Entities: arena walls ────────────────────────────────────────────────────
+# A 500x500 square arena (world-unit bounds x:[150,650] y:[50,550]) centered
+# in the default 800x600 window, bounded by 4 thin static walls sharing
+# WallTemplate's collider/render defaults. Each wall's outward contact normal
+# is derived from its WorldTransform.rotation (see DetectWallContact) rather
+# than authored. RightWall is tilted an extra 3 degrees off its cardinal 90
+# degree orientation to exercise the oriented-box collision path on a
+# non-axis-aligned wall; at this angle the resulting corner gap (~14 world
+# units) stays safely under the smallest bubble's 24-unit diameter.
 
-entity Bubble1:
+entity TopWall from WallTemplate:
+    tf.WorldTransform:
+        position = vec2(400.0, 40.0)
+        rotation = 0.0
+
+entity BottomWall from WallTemplate:
+    tf.WorldTransform:
+        position = vec2(400.0, 560.0)
+        rotation = 3.14159265  # 180 degrees
+
+entity LeftWall from WallTemplate:
+    tf.WorldTransform:
+        position = vec2(140.0, 300.0)
+        rotation = 4.71238898  # 270 degrees
+
+entity RightWall from WallTemplate:
+    tf.WorldTransform:
+        position = vec2(660.0, 300.0)
+        rotation = 1.62315620  # 93 degrees: 90 + a 3-degree tilt
+
+# ── Entities: bubbles ────────────────────────────────────────────────────────
+# 6 bubbles with distinct CircleCollider radii, spread on a 3x2 grid well
+# inside the arena (spacing exceeds any pair's radius sum, so they start
+# non-overlapping), each with a different initial velocity. Speeds are kept
+# well under the smallest radius per tick at ~60fps to avoid discrete-time
+# tunneling.
+
+entity Bubble1 from BubbleTemplate:
     tf.WorldTransform:
         position = vec2(250.0, 200.0)
     Bubble:
         velocity = vec2(120.0, 90.0)
+    CircleCollider:
         radius = 12.0
     shapes.Shape:
-        type = shapes.ShapeType.Circle
         size = vec2(24.0, 24.0)
         color = #FF6B6BFF
-        visible = true
 
-entity Bubble2:
+entity Bubble2 from BubbleTemplate:
     tf.WorldTransform:
         position = vec2(400.0, 200.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Bubble:
         velocity = vec2(-100.0, 130.0)
+    CircleCollider:
         radius = 16.0
     shapes.Shape:
-        type = shapes.ShapeType.Circle
         size = vec2(32.0, 32.0)
         color = #4ECDC4FF
-        visible = true
 
-entity Bubble3:
+entity Bubble3 from BubbleTemplate:
     tf.WorldTransform:
         position = vec2(550.0, 200.0)
     Bubble:
         velocity = vec2(90.0, -110.0)
+    CircleCollider:
         radius = 20.0
     shapes.Shape:
-        type = shapes.ShapeType.Circle
         size = vec2(40.0, 40.0)
         color = #FFD93DFF
 
-entity Bubble4:
+entity Bubble4 from BubbleTemplate:
     tf.WorldTransform:
         position = vec2(250.0, 400.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Bubble:
         velocity = vec2(-130.0, -80.0)
+    CircleCollider:
         radius = 24.0
     shapes.Shape:
-        type = shapes.ShapeType.Circle
         size = vec2(48.0, 48.0)
         color = #6BCB77FF
-        visible = true
 
-entity Bubble5:
+entity Bubble5 from BubbleTemplate:
     tf.WorldTransform:
         position = vec2(400.0, 400.0)
-        rotation = 0.0
-        scale = vec2(1.0, 1.0)
     Bubble:
         velocity = vec2(110.0, 100.0)
+    CircleCollider:
         radius = 28.0
     shapes.Shape:
-        type = shapes.ShapeType.Circle
         size = vec2(56.0, 56.0)
         color = #4D96FFFF
-        visible = true
 
-entity Bubble6:
+entity Bubble6 from BubbleTemplate:
     tf.WorldTransform:
         position = vec2(550.0, 400.0)
     Bubble:
         velocity = vec2(-90.0, -120.0)
+    CircleCollider:
         radius = 32.0
     shapes.Shape:
-        type = shapes.ShapeType.Circle
         size = vec2(64.0, 64.0)
         color = #B388FFFF

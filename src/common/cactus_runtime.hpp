@@ -198,6 +198,10 @@ namespace vec2 {
 }
 [[nodiscard]] float distance(Vector2 a, Vector2 b) noexcept;
 [[nodiscard]] float angle(Vector2 v) noexcept;
+[[nodiscard]] constexpr Vector2 clamp(Vector2 v, Vector2 lo, Vector2 hi) noexcept {
+    return Vector2{.x = stdlib::math::clamp(v.x, lo.x, hi.x), .y = stdlib::math::clamp(v.y, lo.y, hi.y)};
+}
+[[nodiscard]] Vector2 rotate(Vector2 v, float angle) noexcept;
 }  // namespace vec2
 
 namespace vec3 {
@@ -229,6 +233,14 @@ namespace vec3 {
         .z = v.z - (scale * normal.z),
     };
 }
+[[nodiscard]] constexpr Vector3 clamp(Vector3 v, Vector3 lo, Vector3 hi) noexcept {
+    return Vector3{
+        .x = stdlib::math::clamp(v.x, lo.x, hi.x),
+        .y = stdlib::math::clamp(v.y, lo.y, hi.y),
+        .z = stdlib::math::clamp(v.z, lo.z, hi.z),
+    };
+}
+[[nodiscard]] Vector3 rotate(Vector3 v, Vector3 axis, float angle) noexcept;
 }  // namespace vec3
 
 namespace quat {

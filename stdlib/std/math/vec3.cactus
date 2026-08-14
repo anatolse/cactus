@@ -24,3 +24,9 @@ pub extern func distance(a: vec3, b: vec3) float
 
 # Reflect vector v about a surface with the given normal
 pub extern func reflect(v: vec3, normal: vec3) vec3
+
+# Component-wise clamp of a 3D vector to a [lo, hi] range per axis
+pub extern func clamp(v: vec3, lo: vec3, hi: vec3) vec3
+
+# Rotate a 3D vector around an axis by the given angle (radians), right-hand rule
+pub extern func rotate(v: vec3, axis: vec3, angle: float) vec3

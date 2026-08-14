@@ -21,3 +21,9 @@ pub extern func distance(a: vec2, b: vec2) float
 
 # Angle of a 2D vector from the positive X axis (radians)
 pub extern func angle(v: vec2) float
+
+# Component-wise clamp of a 2D vector to a [lo, hi] range per axis
+pub extern func clamp(v: vec2, lo: vec2, hi: vec2) vec2
+
+# Rotate a 2D vector counter-clockwise by the given angle (radians)
+pub extern func rotate(v: vec2, angle: float) vec2

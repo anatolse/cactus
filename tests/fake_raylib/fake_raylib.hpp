@@ -76,9 +76,10 @@ struct RecordedDrawTexturePro {
     float rotation;
     Color tint;
 };
-struct RecordedDrawRectangleV {
-    Vector2 position;
-    Vector2 size;
+struct RecordedDrawRectanglePro {
+    Rectangle rec;
+    Vector2 origin;
+    float rotation;
     Color color;
 };
 struct RecordedDrawCircleV {
@@ -157,7 +158,7 @@ using RecordedCall = std::variant<RecordedClearBackground,
                                   RecordedDrawTextEx,
                                   RecordedDrawTextPro,
                                   RecordedDrawTexturePro,
-                                  RecordedDrawRectangleV,
+                                  RecordedDrawRectanglePro,
                                   RecordedDrawCircleV,
                                   RecordedDrawRectangleLinesEx,
                                   RecordedDrawRectangleRec,
@@ -235,7 +236,7 @@ void DrawTextPro(Font font, const char* text, Vector2 position, Vector2 origin, 
                  float spacing, Color tint) noexcept;
 void DrawTexturePro(Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin, float rotation,
                     Color tint) noexcept;
-void DrawRectangleV(Vector2 position, Vector2 size, Color color) noexcept;
+void DrawRectanglePro(Rectangle rec, Vector2 origin, float rotation, Color color) noexcept;
 void DrawCircleV(Vector2 center, float radius, Color color) noexcept;
 void DrawRectangleLinesEx(Rectangle rec, float lineThick, Color color) noexcept;
 void DrawRectangleRec(Rectangle rec, Color color) noexcept;

@@ -653,6 +653,29 @@ The spelling `pairs` SHALL remain an ordinary identifier outside this rule-claus
 - **WHEN** an `extern rule` body contains `pairs:`
 - **THEN** parsing or semantic validation reports that pair domains are regular-rule-only
 
+### Requirement: Parser recognizes `where:` clause
+The parser SHALL accept an optional `where:` block on a regular rule, positioned after `filter:`/`exclude:`/`pairs:`/`order by:`/`after:`/`target:` and before its `on` handlers, containing one or more indented boolean expression lines. `where` SHALL be a contextual identifier keyword recognized only in this clause position, not a reserved word — an identifier named `where` elsewhere in source SHALL continue to parse as an ordinary identifier. The parser SHALL reject `where:` on `extern rule` declarations.
+
+#### Scenario: where: after filter: is parsed
+- **WHEN** a rule declares `filter:` followed by a `where:` block with one predicate line
+- **THEN** the rule's parsed domain includes that predicate
+
+#### Scenario: where: after pairs: is parsed
+- **WHEN** a rule declares `pairs:` followed by a `where:` block with one predicate line
+- **THEN** the rule's parsed domain includes that predicate
+
+#### Scenario: Multiple where: lines are parsed as a list
+- **WHEN** a `where:` block contains three indented expression lines
+- **THEN** the parser produces three predicate expressions in source order
+
+#### Scenario: where remains a contextual keyword
+- **WHEN** source declares a local variable or trait field named `where`
+- **THEN** it parses as an ordinary identifier outside clause position
+
+#### Scenario: where: on extern rule is rejected
+- **WHEN** an `extern rule` declaration includes a `where:` block
+- **THEN** the parser reports that `where:` is not valid on external rules
+
 ### Requirement: Statement-level `match` parsing
 The parser SHALL recognize `match expr ":"` at statement position as a `TraitMatchStmt`. This is distinct from the existing `MatchExpr` (expression-level). The trait match arms use `IDENTIFIER ["as" IDENTIFIER] "=>"` syntax; the wildcard arm uses `"_" "=>"`.
 

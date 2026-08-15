@@ -36,7 +36,7 @@ Each pair binding SHALL have type `entity_id` and SHALL also namespace the trait
 - **THEN** `body.transform.position` resolves to that selected trait
 
 ### Requirement: Pair relation semantics are directed and finite
-For bindings A and B, a pair handler SHALL execute over the directed Cartesian product of the live entities satisfying A and the live entities satisfying B. Self-pairs and reverse-role tuples SHALL be included when membership permits. Handler `if` statements SHALL retain ordinary imperative semantics and SHALL be the authored mechanism for rejecting tuples. A `return` statement SHALL be an equally valid authored rejection mechanism and SHALL end only the current tuple's invocation — it SHALL NOT abort the remaining tuples in the pass.
+For bindings A and B, a pair handler SHALL execute over the directed Cartesian product of the live entities satisfying A and the live entities satisfying B. Self-pairs and reverse-role tuples SHALL be included when membership permits, unless excluded by `where:` or by a handler `if`/`return`. Handler `if` statements SHALL retain ordinary imperative semantics and, together with `where:` predicates, SHALL be the authored mechanisms for rejecting tuples. A `return` statement SHALL be an equally valid authored rejection mechanism and SHALL end only the current tuple's invocation — it SHALL NOT abort the remaining tuples in the pass.
 
 #### Scenario: Same relation includes directed tuples
 - **WHEN** both bindings select the same two entities `a` and `b`
@@ -49,6 +49,21 @@ For bindings A and B, a pair handler SHALL execute over the directed Cartesian p
 #### Scenario: Early return rejects only the current tuple
 - **WHEN** the handler begins with `if a == b: return` and the pass includes self-pairs interleaved with non-self-pairs
 - **THEN** each self-pair tuple's invocation ends at the `return` while every other tuple in the pass still executes its full body
+
+#### Scenario: where: rejects a tuple before the handler body runs
+- **WHEN** a pair rule declares `where: a != b`
+- **THEN** self-pair tuples are absent from the pass and never begin their handler body invocation
+
+### Requirement: where: composes with the pair snapshot
+`where:` predicates on a pair rule SHALL be evaluated per tuple, after the pair membership snapshot is taken and before that tuple's handler body executes, against the bindings' already-snapshotted values. `where:` SHALL only remove tuples from the directed Cartesian product described above; it SHALL NOT add tuples, and it SHALL NOT be re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands performed by earlier tuples in the same pass. Left-binding-major tuple order is unaffected by which tuples `where:` subsequently rejects.
+
+#### Scenario: where: does not reorder the remaining tuples
+- **WHEN** a pair rule's `where:` predicate rejects some tuples from a left-binding-major snapshot ordering `(a,x), (a,y), (b,x), (b,y)`
+- **THEN** the tuples that remain still execute in that same relative order
+
+#### Scenario: where: cannot expand the pass
+- **WHEN** an earlier tuple's invocation performs a mutation that would make a later tuple newly satisfy a `where:` predicate it previously failed
+- **THEN** that later tuple's membership for the current pass is unaffected
 
 ### Requirement: Pair passes use deterministic membership snapshots
 Before executing tuple bodies, the runtime SHALL snapshot both binding memberships in stable entity-creation order and SHALL iterate their product left-binding-major. Membership SHALL remain fixed for the complete handler pass; component values need not be copied. Projected traits and buffered structural commands produced during the pass SHALL NOT add or remove tuples from that pass.

@@ -30,6 +30,17 @@ A pair handler contract SHALL record each trait read with its relation binding a
 - **WHEN** a pair handler reads Collider on both `body` and `wall`
 - **THEN** its precise contract contains two bound reads and its conservative read set contains Collider
 
+### Requirement: where: reads are folded into handler contracts
+Every trait read reachable from a handler's `where:` predicates SHALL be folded into that handler's contract with the same precision as reads reachable from the handler body: binding-qualified (`bound_reads`) for a pair handler, canonical for a unary handler, in both cases also contributing to the contract's conservative `reads` union. Scheduling SHALL see identical data dependencies whether a condition is expressed in `where:` or as a leading `if` in the handler body.
+
+#### Scenario: where: read is recorded like a body read
+- **WHEN** a unary handler's `where:` predicate reads `ball.velocity`
+- **THEN** the handler's contract records the canonical Ball trait in `reads`, identically to a body read of the same field
+
+#### Scenario: where: bound read distinguishes pair binding roles
+- **WHEN** a pair handler's `where:` predicate reads `Collider` through both the `body` and `wall` bindings
+- **THEN** its contract's `bound_reads` records two binding-qualified reads and its conservative `reads` set contains Collider once
+
 ### Requirement: Regular handler contracts are inferred
 The semantic analyzer SHALL infer a regular handler's contract from all reachable statements and expressions. Immutable trait field access SHALL add `reads`; mutation SHALL add `writes`; `writes` SHALL mean read/write access; event emission SHALL add `emits`; structural statements SHALL add the corresponding `commands`; and calls to effectful extern functions SHALL add their known effect domain or conservative `external` effect.
 

@@ -380,6 +380,51 @@ For a pair handler, semantic analysis SHALL infer the pair domain, binding-quali
 - **WHEN** a pair handler projects GroundContact to `body`
 - **THEN** GroundContact is recorded as a projected output and not as a durable pair-bound write
 
+### Requirement: Semantic analyzer type-checks where: predicates
+The semantic analyzer SHALL type-check every `where:` predicate expression and SHALL require type `bool`.
+
+#### Scenario: bool predicate accepted
+- **WHEN** a `where:` line is a boolean comparison or boolean-valued function call
+- **THEN** semantic analysis accepts it
+
+#### Scenario: non-bool predicate rejected
+- **WHEN** a `where:` line evaluates to `float`, `vec3`, or another non-`bool` type
+- **THEN** semantic analysis reports a type error identifying the offending predicate
+
+### Requirement: Semantic analyzer enforces where: purity
+The semantic analyzer SHALL reject a `where:` predicate whose expression contains `emit`, a world query, `spawn`, `destroy`, `add`, `remove`, `project`, a durable trait mutation, or a call whose complete call graph reaches any of the above or reaches an extern function without a proven-pure effect summary. The semantic analyzer SHALL accept literals, constants, filter/pair-binding reads, entity identity comparisons, arithmetic/boolean operators, and calls to functions proven pure by the same purity analysis used for `func` bodies.
+
+#### Scenario: Pure user function call accepted
+- **WHEN** a `where:` predicate calls a `func` whose complete call graph is pure
+- **THEN** semantic analysis accepts the predicate
+
+#### Scenario: Emit in where: rejected
+- **WHEN** a `where:` predicate's expression contains `emit`
+- **THEN** semantic analysis reports that `where:` predicates must be pure
+
+#### Scenario: World query in where: rejected
+- **WHEN** a `where:` predicate calls `query.first()` or another world query
+- **THEN** semantic analysis reports that `where:` predicates must be pure
+
+#### Scenario: Mutation in where: rejected
+- **WHEN** a `where:` predicate's expression assigns to a trait field
+- **THEN** semantic analysis reports that `where:` predicates must be pure
+
+#### Scenario: Structural command in where: rejected
+- **WHEN** a `where:` predicate's expression contains `spawn`, `destroy`, `add`, `remove`, or `project`
+- **THEN** semantic analysis reports that `where:` predicates must be pure
+
+#### Scenario: Call to a function without a proven-pure effect summary rejected
+- **WHEN** a `where:` predicate calls an extern function whose known effect summary is non-empty or unknown
+- **THEN** semantic analysis reports that `where:` predicates must be pure
+
+### Requirement: where: requires an existing unary or pair selection
+The semantic analyzer SHALL reject `where:` on a rule that declares neither `filter:` nor `pairs:`.
+
+#### Scenario: where: on selectionless rule rejected
+- **WHEN** a rule declares a `where:` block but no `filter:` and no `pairs:`
+- **THEN** semantic analysis reports that `where:` requires an existing unary or pair domain
+
 ### Requirement: `self` type-checks as `entity_id` in rule handlers
 The semantic analyzer SHALL type `self` as `entity_id` only inside unary entity-selected rule handler bodies. It SHALL reject `self` in selectionless and pair handler bodies because those domains have no unique current entity.
 

@@ -663,6 +663,17 @@ struct PairClause {
     SourceLocation location;
 };
 
+// ── Where Clause (dsl-where-clause) ─────────────────────────────────────────
+
+// `where:` block on a regular rule — one or more pure boolean predicate
+// expressions, in source order, forming an unordered logical conjunction.
+// Requires an existing `filter:` or `pairs:` domain; validated by semantic
+// analysis, not the parser.
+struct WhereClause {
+    std::vector<std::unique_ptr<ExprNode>> predicates;  // at least one; validated by the parser
+    SourceLocation location;
+};
+
 struct RuleNode {
     std::string name;
     bool is_stdlib = false;
@@ -671,6 +682,7 @@ struct RuleNode {
     FilterClause filter;                            // empty entries = no filter (match all)
     FilterClause exclude;                           // empty entries = no exclude
     std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
+    std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::vector<SortKey> order_by;
     std::vector<std::string> after_rules;  // explicit ordering: this rule runs after these
     std::optional<std::string> target;     // "cpu" or "gpu"

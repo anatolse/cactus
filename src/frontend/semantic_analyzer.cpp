@@ -1024,6 +1024,11 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 1: Collect all type declarations
     collect_types(program);
 
+    // dsl-where-clause: lower where: into leading handler-body guards before
+    // any pass resolves or inspects handler body shape (see
+    // desugar_where_clauses's doc comment).
+    desugar_where_clauses(program);
+
     // Phase 2: Resolve types in fields
     resolve_all_types(program);
     resolve_trait_references(program);
@@ -1034,6 +1039,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     check_no_recursion(program);
     check_persist_sync(program);
     validate_rule_filters(program);
+    validate_where_clauses(program);
     validate_phase_declarations(program);
     validate_external_handler_contracts(program);
     validate_event_usage(program);
@@ -1249,6 +1255,40 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                 }
             },
             decl);
+    }
+}
+
+// ── dsl-where-clause: guard desugaring ──────────────────────────────────────
+
+void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule == nullptr || !rule->where_clause.has_value() || rule->where_clause->predicates.empty()) {
+            continue;
+        }
+        const auto& predicates = rule->where_clause->predicates;
+        const auto& location   = rule->where_clause->location;
+
+        auto build_guard_condition = [&]() -> std::unique_ptr<ExprNode> {
+            auto combined = clone_expr(*predicates.front());
+            for (std::size_t i = 1; i < predicates.size(); ++i) {
+                BinaryExpr conjunction{
+                    .op = "and", .left = std::move(combined), .right = clone_expr(*predicates[i]), .location = location};
+                combined = std::make_unique<ExprNode>(ExprNode::Variant{std::move(conjunction)}, location);
+            }
+            UnaryExpr negated{.op = "not", .operand = std::move(combined), .location = location};
+            return std::make_unique<ExprNode>(ExprNode::Variant{std::move(negated)}, location);
+        };
+
+        for (auto& handler : rule->handlers) {
+            std::vector<std::unique_ptr<StmtNode>> guard_then;
+            guard_then.push_back(
+                std::make_unique<StmtNode>(StmtNode::Variant{ReturnStmt{.value = std::nullopt, .location = location}},
+                                           location));
+            IfStmt guard{.condition = build_guard_condition(), .then_body = std::move(guard_then), .location = location};
+            handler.body.insert(handler.body.begin(),
+                                std::make_unique<StmtNode>(StmtNode::Variant{std::move(guard)}, location));
+        }
     }
 }
 
@@ -1613,6 +1653,11 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                             for (auto& entry : binding.traits) {
                                 entry.resolved_trait_id = try_resolve_trait_ref_to_symbol(entry.qualified_name);
                             }
+                        }
+                    }
+                    if (node.where_clause.has_value()) {
+                        for (auto& predicate : node.where_clause->predicates) {
+                            resolve_expr(*predicate);
                         }
                     }
                     for (auto& handler : node.handlers) {
@@ -2741,6 +2786,120 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
         if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
             validate_filter_clause_traits(rule->filter, "extern rule '" + rule->name + "'");
             validateOrderByClause(*rule);
+        }
+    }
+}
+
+// ── Phase 3e: Where Clause Validation (dsl-where-clause) ───────────────────
+
+// Structurally identical to check_func_purity_expr's deny-list walk, applied
+// to a where: predicate expression instead of a func body statement. Unlike
+// func bodies, where: predicates are parsed as bare expressions, so the
+// statement-level impure forms (emit, destroy, add, remove, project, trait
+// mutation) cannot even appear here — the parser rejects them before this
+// runs. Only the two impure *expression* forms need an explicit check:
+// QueryCallExpr (world query) and SpawnExpr (structural command); CallExpr
+// purity comes from the callee's already-computed ResolvedFunc::effect_summary
+// (empty = pure, non-empty or unknown = impure), the same source contract
+// inference's add_call_effects already trusts.
+void SemanticAnalyzer::check_where_purity_expr(  // NOLINT(readability-function-cognitive-complexity) -- exhaustive
+                                                  // per-ExprNode-kind purity dispatch, the same shape as the
+                                                  // already-NOLINT'd resolve_expr/walk_handler_body::visit_expr
+    const ExprNode& expr) {
+    std::visit(
+        [this](auto& e) {  // NOLINT(readability-function-cognitive-complexity) -- see function-level NOLINT above
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, CallExpr>) {
+                check_where_purity_expr(*e.callee);
+                for (auto& arg : e.args) {
+                    check_where_purity_expr(*arg);
+                }
+                if (e.resolved_callee_id.has_value()) {
+                    const auto* function = find_resolved_func(*e.resolved_callee_id);
+                    if (function != nullptr &&
+                        (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
+                        errors_.error(e.location, "where: predicates must be pure");
+                    }
+                }
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                check_where_purity_expr(*e.left);
+                check_where_purity_expr(*e.right);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                check_where_purity_expr(*e.operand);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                check_where_purity_expr(*e.object);
+            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                check_where_purity_expr(*e.body);
+            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                check_where_purity_expr(*e.source);
+                for (auto& op : e.operations) {
+                    for (auto& arg : op.args) {
+                        check_where_purity_expr(*arg);
+                    }
+                }
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                check_where_purity_expr(*e.subject);
+                for (auto& arm : e.arms) {
+                    check_where_purity_expr(*arm.pattern);
+                    check_where_purity_expr(*arm.body);
+                }
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                check_where_purity_expr(*e.condition);
+                check_where_purity_expr(*e.then_expr);
+                check_where_purity_expr(*e.else_expr);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                for (auto& element : e.elements) {
+                    check_where_purity_expr(*element);
+                }
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                errors_.error(e.location, "where: predicates must be pure");
+                for (auto& trait : e.overrides) {
+                    for (auto& field : trait.assignments) {
+                        check_where_purity_expr(*field.value);
+                    }
+                }
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                errors_.error(e.location, "where: predicates must be pure");
+                for (auto& arg : e.named_args) {
+                    check_where_purity_expr(*arg.value);
+                }
+            }
+        },
+        expr.expr);
+}
+
+void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule == nullptr || !rule->where_clause.has_value()) {
+            continue;
+        }
+
+        if (rule->filter.entries.empty() && !rule->pairs.has_value()) {
+            errors_.error(rule->where_clause->location,
+                          "'where:' requires rule '" + rule->name + "' to declare an existing 'filter:' or 'pairs:'"
+                                                                    " domain");
+            continue;
+        }
+
+        auto filter_bindings = build_filter_bindings(rule->filter);
+        auto pair_scope       = rule->pairs.has_value() ? build_pair_scope(*rule->pairs) : PairScope{};
+        const PairScope* pair_scope_ptr = rule->pairs.has_value() ? &pair_scope : nullptr;
+
+        for (auto& predicate : rule->where_clause->predicates) {
+            // Purity first: an impure predicate is invalid regardless of its
+            // type, and letting infer_expr_type run first would surface its
+            // own diagnostics (e.g. a query's "requires world access") ahead
+            // of the more fundamental "must be pure" rejection.
+            const auto error_count_before = errors_.error_count();
+            check_where_purity_expr(*predicate);
+            if (errors_.error_count() > error_count_before) {
+                continue;
+            }
+            auto predicate_type = infer_expr_type(*predicate, filter_bindings, {}, nullptr, pair_scope_ptr);
+            if (predicate_type.kind != TypeKind::Bool && predicate_type.kind != TypeKind::Unknown) {
+                errors_.error(predicate->location, "where: predicate must be of type 'bool'");
+            }
         }
     }
 }

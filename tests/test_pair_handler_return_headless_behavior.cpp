@@ -44,4 +44,27 @@ TEST_CASE("pair handler return ends only the current tuple, not the remaining pa
     }
     REQUIRE(ball_count == 3);
 }
+
+TEST_CASE("where: a != b produces the same self-pair-rejection and per-tuple-only-rejection behavior as an "
+          "equivalent leading if/return",
+          "[runtime][codegen-entt][pair-relations][where-clause]") {
+    // dsl-where-clause: DetectBallContactWhere expresses the identical
+    // self-pair rejection as DetectBallContact above via `where: a != b`
+    // instead of `if a == b: return`. Both rules run over the same 3 Ball
+    // entities in the same frame, so this asserts the where:-desugared guard
+    // produces the same per-ball hit count (2) as the hand-written if/return.
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    drive_frame(registry);
+
+    const auto view = registry.view<pair_handler_return_runtime__Ball>();
+    std::size_t ball_count = 0;
+    for (auto entity : view) {
+        ++ball_count;
+        CHECK(registry.get<pair_handler_return_runtime__Ball>(entity).hits_where == 2);
+    }
+    REQUIRE(ball_count == 3);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

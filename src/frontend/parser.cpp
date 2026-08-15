@@ -1257,6 +1257,11 @@ RuleNode Parser::parse_rule() {
     node.after_rules = std::move(common.after_rules);
     node.target      = std::move(common.target);
 
+    skip_newlines();
+    if (at_where_clause()) {
+        node.where_clause = parse_where_clause();
+    }
+
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
@@ -1472,6 +1477,41 @@ PairClause Parser::parse_pairs_clause() {
 
     if (clause.bindings.size() != 2) {
         errors_.error(loc, "pairs: block must declare exactly two bindings");
+    }
+
+    return clause;
+}
+
+bool Parser::at_where_clause() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "where" && peek_next().type == TokenType::COLON;
+}
+
+WhereClause Parser::parse_where_clause() {
+    auto loc = peek().location;
+    advance();  // consume contextual 'where' identifier
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    expect_indent();
+
+    WhereClause clause;
+    clause.location = loc;
+
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        auto error_count_before = errors_.error_count();
+        clause.predicates.push_back(parse_expression());
+        expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+    expect_dedent();
+
+    if (clause.predicates.empty()) {
+        errors_.error(loc, "where: block must contain at least one predicate");
     }
 
     return clause;
@@ -2807,6 +2847,17 @@ ExternRuleNode Parser::parse_extern_rule() {
     node.order_by    = std::move(common.order_by);
     node.after_rules = std::move(common.after_rules);
     node.target      = std::move(common.target);
+
+    skip_newlines();
+    if (at_where_clause()) {
+        auto where_loc          = peek().location;
+        auto error_count_before = errors_.error_count();
+        parse_where_clause();  // parsed and discarded; where: is regular-rule-only
+        errors_.error(where_loc, "'where:' is not valid on external rules");
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();

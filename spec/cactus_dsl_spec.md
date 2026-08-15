@@ -365,6 +365,7 @@ Rules contain gameplay logic over filtered entities. A regular rule has exactly 
 rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   ( unary_domain | pairs_clause )
                   [ after_clause ]
+                  [ where_clause ]
                   { event_handler }
                   DEDENT ;
 
@@ -445,7 +446,7 @@ rule DetectContacts:
 
 Binding names and their aliases must be unambiguous within every handler scope on that rule.
 
-**The relation is a directed Cartesian product.** For bindings A and B, the handler executes once per pair `(a, b)` where `a` satisfies every trait A requires and `b` satisfies every trait B requires. The product is directed and finite: self-pairs (`a == b`, when one entity satisfies both bindings) and reverse-role tuples are included whenever membership permits. There is no relational `where:` surface — ordinary `if` statements are the authored mechanism for rejecting tuples, as with `if body != wall:` above.
+**The relation is a directed Cartesian product.** For bindings A and B, the handler executes once per pair `(a, b)` where `a` satisfies every trait A requires and `b` satisfies every trait B requires. The product is directed and finite: self-pairs (`a == b`, when one entity satisfies both bindings) and reverse-role tuples are included whenever membership permits, unless excluded by a `where:` clause (§3.8.2) or by an ordinary `if`/`return` in the handler body — both are equally valid authored mechanisms for rejecting tuples, as with `if body != wall:` above or `where: body != wall`.
 
 **Passes snapshot membership, not values.** Before executing any tuple body, the runtime records both bindings' live membership in stable, creation-order-sorted snapshots (a monotonic per-entity creation ordinal, assigned at load time and at spawn commit, defines this order independently of backend storage layout) and lazily iterates their product left-binding-major: for `left = [a, b]` and `right = [x, y]`, tuple order is `(a,x)`, `(a,y)`, `(b,x)`, `(b,y)`. Membership is fixed for the whole pass; component values are read live from storage when each tuple executes. Projected traits and buffered structural commands issued mid-pass cannot add or remove tuples from the pass already in progress — they become visible only in a later pass or at the next activation commit.
 
@@ -465,6 +466,47 @@ destroy wall
 Untargeted `emit` remains valid and is a broadcast occurrence (one per tuple, not privileged to any binding). `spawn` remains valid because it creates a new entity rather than acting on an implicit one.
 
 **One pair handler is one execution-graph node.** `DetectContacts.fixed_tick` is a single node in the handler execution graph regardless of how many tuples it processes at runtime; tuples are invocations inside that node, not graph nodes. The complete tuple pass finishes before the dispatcher advances to another node or drains events the pass emitted. Handler contracts record binding-qualified reads precisely (for diagnostics and future relation-aware scheduling) while still contributing to the same conservative canonical-trait conflict analysis used by unary handlers, so pair and unary/selectionless handlers touching the same traits are still ordered safely.
+
+#### 3.8.2 Where Clause
+
+`where:` declares a pure boolean predicate list that restricts an existing unary (`filter:`) or pair (`pairs:`) domain, independent of any particular execution strategy. `where` is recognized contextually at the rule-clause position (like `pairs`); it is not a reserved keyword elsewhere. `where:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations.
+
+```ebnf
+where_clause    = "where" ":" NEWLINE INDENT
+                  expression NEWLINE
+                  { expression NEWLINE }
+                  DEDENT ;
+```
+
+At least one predicate line is required. Multiple lines form an unordered logical conjunction: every line must evaluate to `true` for the entity or tuple to remain in the domain.
+
+```cactus
+rule DetectBallContact:
+    pairs:
+        a:
+            Ball
+            SphereCollider
+            tv.WorldTransform
+        b:
+            Ball
+            SphereCollider
+            tv.WorldTransform
+    where:
+        a != b
+        collision.spheres_overlap(a.tv.WorldTransform.position, a.SphereCollider.radius, b.tv.WorldTransform.position, b.SphereCollider.radius)
+
+    on fixed_tick:
+        # only overlapping, distinct pairs reach the handler body
+        ...
+```
+
+**Predicates must be pure and type-check as `bool`.** A `where:` predicate may contain literals and constants, filter/pair-binding reads, entity identity comparisons, arithmetic and boolean operators, and calls to functions whose complete call graph is proven pure (the same purity analysis applied to `func` bodies). It must not mutate traits, emit events, spawn or destroy entities, add, remove, or project traits, execute world queries, or call a function whose effects are opaque or unknown. Each predicate expression must have static type `bool`.
+
+**Evaluation order is unspecified.** Because every predicate is pure, the compiler is free to reorder, combine, inline, or otherwise replace the predicate list with an equivalent restriction; no observable short-circuit behavior is guaranteed.
+
+**`where:` evaluates once per pass, against the already-selected domain.** It runs once per entity or tuple, at the start of that entity's or tuple's handler invocation, against the membership `filter:`/`exclude:`/`pairs:` already snapshotted for the pass. It can only shrink that membership — never add to it — and is not re-evaluated mid-pass as a result of mutations, projections, or buffered structural commands from earlier invocations in the same pass. On a pair rule, rejected tuples never begin their handler body invocation, and the tuples that do remain keep the same left-binding-major relative order described in §3.8.1.
+
+`where:` and a leading `if`/`return` in the handler body are equally valid, freely interchangeable ways to reject an entity or tuple: `where: body != wall` and `if body == wall: return` (§3.8.1) admit the same tuples. `where:` exists to make that rejection declarative and analyzable — the reads it touches fold into the handler's contract with the same precision as an equivalent body read.
 
 ### 3.9 Event Handlers
 

@@ -9,6 +9,7 @@ use std.camera.volume as cam3d
 use std.camera.viewport as vp
 use std.input as inp
 use std.random as rand
+use std.collision.volume as collision
 
 # std.math.PI is a stdlib module constant, not an extern func — imported
 # module constants don't currently lower through codegen (only extern funcs
@@ -124,13 +125,19 @@ rule ResolveWallBounce:
 
 # DetectBallContact: same-domain pair producer (Ball x Ball), generalized
 # from bouncy-bubbles' DetectBubbleContact. Per dsl-pair-relations this
-# iterates the full directed product, including self-pairs, which the
-# `a == b` guard rejects. For every overlapping, approaching directed tuple
-# it computes `a`'s post-collision velocity via the standard mass-weighted
-# (radius^2) 1D-along-normal elastic solve, reading both sides' current
-# velocity — legal under the pair read-only rule since it's a pure read. The
-# reverse tuple (b, a) independently computes and emits b's half from the
-# same unmutated pre-collision state.
+# iterates the full directed product, including self-pairs; `where:` now
+# expresses the self-pair, overlap, and approach rejection declaratively
+# (dsl-where-clause) instead of leading `if ... return` statements — same
+# Cartesian-scan execution, same rejected tuples, no runtime behavior change.
+# The approach predicate drops the original body's `/ dist` normalization: for
+# a strict `> 0.0` sign test, dividing by the positive scalar `dist` never
+# flips the sign, so `dot(vel_a - vel_b, pos_b - pos_a) > 0.0` is equivalent
+# to the normalized form without needing `dist` inside `where:`. For every
+# tuple that remains, the handler computes `a`'s post-collision velocity via
+# the standard mass-weighted (radius^2) 1D-along-normal elastic solve,
+# reading both sides' current velocity — legal under the pair read-only rule
+# since it's a pure read. The reverse tuple (b, a) independently computes and
+# emits b's half from the same unmutated pre-collision state.
 rule DetectBallContact:
     pairs:
         a:
@@ -141,27 +148,21 @@ rule DetectBallContact:
             Ball
             SphereCollider
             tv.WorldTransform
+    where:
+        a != b
+        collision.spheres_overlap(a.tv.WorldTransform.position, a.SphereCollider.radius, b.tv.WorldTransform.position, b.SphereCollider.radius)
+        v3m.dot(a.Ball.velocity - b.Ball.velocity, b.tv.WorldTransform.position - a.tv.WorldTransform.position) > 0.0
 
     on fixed_tick:
-        if a == b:
-            return
-
         let pos_a = a.tv.WorldTransform.position
         let pos_b = b.tv.WorldTransform.position
         let radius_a = a.SphereCollider.radius
         let radius_b = b.SphereCollider.radius
         let dist = v3m.distance(pos_a, pos_b)
 
-        if dist >= radius_a + radius_b:
-            return
-
         let normal = (pos_b - pos_a) / dist
         let vel_a = a.Ball.velocity
         let vel_b = b.Ball.velocity
-        let closing = v3m.dot(vel_a - vel_b, normal)
-
-        if closing <= 0.0:
-            return
 
         let mass_a = radius_a * radius_a
         let mass_b = radius_b * radius_b

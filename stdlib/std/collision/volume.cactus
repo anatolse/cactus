@@ -1,0 +1,19 @@
+module std.collision.volume
+
+use std.math.vec3 as v3m
+
+# ── 3D Pure Collision Predicates (dsl-where-clause, stdlib-collision) ────────
+# Backend-independent, pure geometric overlap predicates that gameplay code —
+# including `where:` clauses — can call directly, without depending on any
+# particular collider trait or physics subsystem. Ordinary Cactus functions,
+# not backend intrinsics: distinct from std.physics.volume's SphereCollider,
+# which is a passive, backend-simulated collider trait.
+
+# Two spheres overlap when the squared distance between their centers is
+# strictly less than the square of their summed radii. Comparing squared
+# quantities avoids a sqrt call.
+pub func spheres_overlap(a_position: vec3, a_radius: float, b_position: vec3, b_radius: float) bool:
+    let delta = b_position - a_position
+    let dist_sq = v3m.dot(delta, delta)
+    let radius_sum = a_radius + b_radius
+    return dist_sq < radius_sum * radius_sum

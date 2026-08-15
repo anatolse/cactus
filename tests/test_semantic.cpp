@@ -2005,4 +2005,208 @@ TEST_CASE("Semantic: unary rules keep their existing domain and are unaffected b
     CHECK(contract.pair_bindings.empty());
     CHECK(contract.bound_reads.empty());
 }
+
+// ── Where clause (dsl-where-clause) ─────────────────────────────────────────
+
+TEST_CASE("Semantic: bool-typed where predicate is accepted", "[semantic][where-clause]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "rule Moving:\n"
+                                   "    filter:\n"
+                                   "        DynamicBody as body\n"
+                                   "    where:\n"
+                                   "        body.vx > 0.0\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: non-bool where predicate is rejected with a type error", "[semantic][where-clause]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule Moving:\n"
+                             "    filter:\n"
+                             "        DynamicBody as body\n"
+                             "    where:\n"
+                             "        body.vx\n"
+                             "    on tick:\n"
+                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: pure user func call in where is accepted", "[semantic][where-clause]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "func is_positive(v: float) bool:\n"
+                                   "    return v > 0.0\n"
+                                   "rule Moving:\n"
+                                   "    filter:\n"
+                                   "        DynamicBody as body\n"
+                                   "    where:\n"
+                                   "        is_positive(body.vx)\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: emit in where is rejected", "[semantic][where-clause]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule Moving:\n"
+                             "    filter:\n"
+                             "        DynamicBody as body\n"
+                             "    where:\n"
+                             "        emit Contact\n"
+                             "    on tick:\n"
+                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: world query in where is rejected", "[semantic][where-clause]") {
+    auto err = analyze_first_error("use std.query as query\n" + STDLIB_EVENTS + PAIR_TRAITS +
+                                   "rule Moving:\n"
+                                   "    filter:\n"
+                                   "        DynamicBody as body\n"
+                                   "    where:\n"
+                                   "        query.exists[Solid]()\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("must be pure") != std::string::npos);
+}
+
+TEST_CASE("Semantic: spawn in where is rejected", "[semantic][where-clause]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "template Marker:\n"
+                                   "    Solid:\n"
+                                   "        active = true\n"
+                                   "rule Moving:\n"
+                                   "    filter:\n"
+                                   "        DynamicBody as body\n"
+                                   "    where:\n"
+                                   "        spawn Marker:\n"
+                                   "            Solid:\n"
+                                   "                active = true\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("must be pure") != std::string::npos);
+}
+
+TEST_CASE("Semantic: destroy in where is rejected", "[semantic][where-clause]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule Moving:\n"
+                             "    filter:\n"
+                             "        DynamicBody as body\n"
+                             "    where:\n"
+                             "        destroy\n"
+                             "    on tick:\n"
+                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: add in where is rejected", "[semantic][where-clause]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule Moving:\n"
+                             "    filter:\n"
+                             "        DynamicBody as body\n"
+                             "    where:\n"
+                             "        add Solid\n"
+                             "    on tick:\n"
+                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: remove in where is rejected", "[semantic][where-clause]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule Moving:\n"
+                             "    filter:\n"
+                             "        DynamicBody as body\n"
+                             "    where:\n"
+                             "        remove Solid\n"
+                             "    on tick:\n"
+                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: project in where is rejected", "[semantic][where-clause]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule Moving:\n"
+                             "    filter:\n"
+                             "        DynamicBody as body\n"
+                             "    where:\n"
+                             "        project Solid\n"
+                             "    on tick:\n"
+                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: call to extern func without a proven-pure effect summary is rejected in where",
+          "[semantic][where-clause]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "pub extern func mystery(v: float) float\n"
+                                   "rule Moving:\n"
+                                   "    filter:\n"
+                                   "        DynamicBody as body\n"
+                                   "    where:\n"
+                                   "        mystery(body.vx) > 0.0\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("must be pure") != std::string::npos);
+}
+
+TEST_CASE("Semantic: where on rule with neither filter nor pairs is rejected", "[semantic][where-clause]") {
+    auto err = analyze_first_error(STDLIB_EVENTS +
+                                   "rule NoDomain:\n"
+                                   "    where:\n"
+                                   "        true\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("where:") != std::string::npos);
+    CHECK(err.find("filter") != std::string::npos);
+}
+
+TEST_CASE("Semantic: unary handler contract from where matches equivalent leading if guard",
+          "[semantic][where-clause][handler-contracts]") {
+    auto where_result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                                "rule MovingWhere:\n"
+                                "    filter:\n"
+                                "        DynamicBody as body\n"
+                                "    where:\n"
+                                "        body.vx > 0.0\n"
+                                "    on tick:\n"
+                                "        let x = 1\n");
+    auto if_result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule MovingIf:\n"
+                             "    filter:\n"
+                             "        DynamicBody as body\n"
+                             "    on tick:\n"
+                             "        if body.vx <= 0.0:\n"
+                             "            return\n"
+                             "        let x = 1\n");
+
+    REQUIRE(where_result.handler_contracts.size() == 1);
+    REQUIRE(if_result.handler_contracts.size() == 1);
+    CHECK(where_result.handler_contracts[0].reads == if_result.handler_contracts[0].reads);
+    CHECK(where_result.handler_contracts[0].bound_reads == if_result.handler_contracts[0].bound_reads);
+}
+
+TEST_CASE("Semantic: pair handler contract from where matches equivalent leading if guard",
+          "[semantic][where-clause][handler-contracts]") {
+    auto where_result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                                "rule ContactWhere:\n"
+                                "    pairs:\n"
+                                "        a:\n"
+                                "            Transform\n"
+                                "        b:\n"
+                                "            Transform\n"
+                                "    where:\n"
+                                "        a.Transform.x > 0.0\n"
+                                "    on tick:\n"
+                                "        let x = 1\n");
+    auto if_result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                             "rule ContactIf:\n"
+                             "    pairs:\n"
+                             "        a:\n"
+                             "            Transform\n"
+                             "        b:\n"
+                             "            Transform\n"
+                             "    on tick:\n"
+                             "        if a.Transform.x <= 0.0:\n"
+                             "            return\n"
+                             "        let x = 1\n");
+
+    REQUIRE(where_result.handler_contracts.size() == 1);
+    REQUIRE(if_result.handler_contracts.size() == 1);
+    const auto& where_contract = where_result.handler_contracts[0];
+    const auto& if_contract    = if_result.handler_contracts[0];
+    CHECK(where_contract.reads == if_contract.reads);
+    CHECK(std::ranges::is_permutation(where_contract.bound_reads, if_contract.bound_reads));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

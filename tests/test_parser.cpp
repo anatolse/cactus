@@ -1932,6 +1932,105 @@ TEST_CASE("Parser: pairs clause on extern rule is rejected", "[parser][pair-rela
     REQUIRE(errors.has_errors());
 }
 
+// ── Where clause (dsl-where-clause) ─────────────────────────────────────────
+
+TEST_CASE("Parser: where clause after filter is parsed", "[parser][where-clause]") {
+    auto prog = parse(
+        "rule Moving:\n"
+        "    filter:\n"
+        "        Body as ball\n"
+        "    where:\n"
+        "        ball.velocity.x > 0.0\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.where_clause.has_value());
+    REQUIRE(sys.where_clause->predicates.size() == 1);
+    const auto* predicate = std::get_if<BinaryExpr>(&sys.where_clause->predicates[0]->expr);
+    REQUIRE(predicate != nullptr);
+    CHECK(predicate->op == ">");
+}
+
+TEST_CASE("Parser: where clause after pairs is parsed", "[parser][where-clause]") {
+    auto prog = parse(
+        "rule DetectContacts:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Ball\n"
+        "        b:\n"
+        "            Ball\n"
+        "    where:\n"
+        "        a != b\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.where_clause.has_value());
+    REQUIRE(sys.where_clause->predicates.size() == 1);
+    const auto* predicate = std::get_if<BinaryExpr>(&sys.where_clause->predicates[0]->expr);
+    REQUIRE(predicate != nullptr);
+    CHECK(predicate->op == "!=");
+}
+
+TEST_CASE("Parser: multiple where clause lines are parsed as a list in source order", "[parser][where-clause]") {
+    auto prog = parse(
+        "rule DetectContacts:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Ball\n"
+        "        b:\n"
+        "            Ball\n"
+        "    where:\n"
+        "        a != b\n"
+        "        a.radius > 0.0\n"
+        "        b.radius > 0.0\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.where_clause.has_value());
+    REQUIRE(sys.where_clause->predicates.size() == 3);
+    const auto* first = std::get_if<BinaryExpr>(&sys.where_clause->predicates[0]->expr);
+    REQUIRE(first != nullptr);
+    CHECK(first->op == "!=");
+    const auto* second = std::get_if<BinaryExpr>(&sys.where_clause->predicates[1]->expr);
+    REQUIRE(second != nullptr);
+    const auto* second_left = std::get_if<MemberExpr>(&second->left->expr);
+    REQUIRE(second_left != nullptr);
+    CHECK(second_left->member == "radius");
+    const auto* third = std::get_if<BinaryExpr>(&sys.where_clause->predicates[2]->expr);
+    REQUIRE(third != nullptr);
+    const auto* third_left = std::get_if<MemberExpr>(&third->left->expr);
+    REQUIRE(third_left != nullptr);
+    CHECK(third_left->member == "radius");
+}
+
+TEST_CASE("Parser: where remains a contextual identifier outside clause position", "[parser][where-clause]") {
+    auto prog = parse(
+        "rule UsesWhereLocal:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on tick:\n"
+        "        let where = 1\n"
+        "        x = where\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    CHECK_FALSE(sys.where_clause.has_value());
+    REQUIRE(sys.handlers.size() == 1);
+    REQUIRE(sys.handlers[0].body.size() == 2);
+}
+
+TEST_CASE("Parser: where clause on extern rule is rejected", "[parser][where-clause]") {
+    auto errors = parse_expect_errors(
+        "extern rule Bad:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    where:\n"
+        "        true\n"
+        "    target: cpu\n");
+    REQUIRE(errors.has_errors());
+}
+
 TEST_CASE("Parser: extern rule rejects executable handler statements", "[parser][extern-rule]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"

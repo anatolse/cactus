@@ -460,6 +460,15 @@ private:
     void collect_types(ProgramNode& program);
     bool declare_module_scope_symbol(SymbolKind kind, const std::string& name, const SourceLocation& loc);
 
+    // dsl-where-clause: runs before type/trait resolution. Desugars each
+    // where:-bearing rule's predicate list into an equivalent
+    // `if not (pred_1 and pred_2 and ...): return` guard, cloned and
+    // prepended to every one of that rule's handler bodies. This is the only
+    // place where: is lowered — codegen and contract inference never learn
+    // it exists; they see an ordinary leading guard statement, identical to
+    // one an author could have written by hand (see design.md).
+    static void desugar_where_clauses(ProgramNode& program);
+
     // Phase 2: Resolve types in fields
     void resolve_all_types(ProgramNode& program);
     TypeInfo resolve_type_ref(const TypeRef& ref);
@@ -496,6 +505,12 @@ private:
     void validate_rule_filters(ProgramNode& program);
     void validate_pair_bindings(RuleNode& rule);
     [[nodiscard]] static PairScope build_pair_scope(const PairClause& pairs);
+    // dsl-where-clause: requires an existing filter:/pairs: domain, type-checks
+    // every predicate as bool, and enforces purity via check_where_purity_expr
+    // — the same recursive deny-list shape as check_func_purity_expr, reused
+    // for a predicate-expression list rather than a func's statement body.
+    void validate_where_clauses(ProgramNode& program);
+    void check_where_purity_expr(const ExprNode& expr);
     void validate_external_handler_contracts(ProgramNode& program);
     void validateOrderByClause(const RuleNode& rule);
     void validateOrderByClause(const ExternRuleNode& rule);

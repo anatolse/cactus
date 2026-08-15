@@ -284,8 +284,12 @@ constexpr int kPointLightType = 1;
 // Fixed tessellation for placeholder sphere geometry (design.md risk
 // mitigation: a shared default for every sphere-shaped mesh asset, not
 // per-entity-tunable, matching GenMeshCube's fixed 1x1x1 unit size).
+// Only used by the real (non-fake) GenMeshSphere call below; the
+// CACTUS_RAYLIB_FAKE headless build never reaches it.
+#ifndef CACTUS_RAYLIB_FAKE
 constexpr int kPlaceholderSphereRings  = 16;
 constexpr int kPlaceholderSphereSlices = 16;
+#endif
 
 // Maximum bones the skinned shader supports; must match MAX_BONES in the
 // skinned vertex shader (128 mat4 = 512 vec4 uniform components, within the
@@ -748,19 +752,19 @@ void note_missing_asset() noexcept {
 }
 
 Color placeholder_material_color(const std::string_view asset_id) noexcept {
-    if (asset_id.find("ground") != std::string_view::npos) {
+    if (asset_id.contains("ground")) {
         return Color{.r = 76, .g = 154, .b = 74, .a = 255};
     }
-    if (asset_id.find("bomb") != std::string_view::npos || asset_id.find("orange") != std::string_view::npos) {
+    if (asset_id.contains("bomb") || asset_id.contains("orange")) {
         return Color{.r = 255, .g = 149, .b = 32, .a = 255};
     }
-    if (asset_id.find("trunk") != std::string_view::npos || asset_id.find("brown") != std::string_view::npos) {
+    if (asset_id.contains("trunk") || asset_id.contains("brown")) {
         return Color{.r = 129, .g = 82, .b = 45, .a = 255};
     }
-    if (asset_id.find("crown") != std::string_view::npos || asset_id.find("green") != std::string_view::npos) {
+    if (asset_id.contains("crown") || asset_id.contains("green")) {
         return Color{.r = 50, .g = 180, .b = 75, .a = 255};
     }
-    if (asset_id.find("player") != std::string_view::npos || asset_id.find("blue") != std::string_view::npos) {
+    if (asset_id.contains("player") || asset_id.contains("blue")) {
         return Color{.r = 66, .g = 139, .b = 255, .a = 255};
     }
     return WHITE;

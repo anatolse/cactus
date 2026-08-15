@@ -13,8 +13,12 @@ use std.core
 
 trait Ball:
     var hits: int = 0
+    var hits_where: int = 0
 
 event Hit:
+    dummy: int
+
+event HitWhere:
     dummy: int
 
 rule DetectBallContact:
@@ -30,12 +34,36 @@ rule DetectBallContact:
         emit Hit to a:
             dummy = 1
 
+# dsl-where-clause: same self-pair-rejection and per-tuple-only-rejection
+# shape as DetectBallContact above, expressed as `where: a != b` instead of a
+# leading `if ... return`. Proves the two mechanisms are behaviorally
+# identical (see test_pair_handler_return_headless_behavior.cpp).
+rule DetectBallContactWhere:
+    pairs:
+        a:
+            Ball
+        b:
+            Ball
+    where:
+        a != b
+
+    on tick:
+        emit HitWhere to a:
+            dummy = 1
+
 rule ResolveHit:
     filter:
         Ball
 
     on Hit:
         hits += 1
+
+rule ResolveHitWhere:
+    filter:
+        Ball
+
+    on HitWhere:
+        hits_where += 1
 
 entity Ball1:
     Ball

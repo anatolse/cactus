@@ -508,6 +508,8 @@ rule DetectBallContact:
 
 `where:` and a leading `if`/`return` in the handler body are equally valid, freely interchangeable ways to reject an entity or tuple: `where: body != wall` and `if body == wall: return` (§3.8.1) admit the same tuples. `where:` exists to make that rejection declarative and analyzable — the reads it touches fold into the handler's contract with the same precision as an equivalent body read.
 
+**Recognized spatial predicates may be backend-accelerated.** A pair rule's `where:` predicate that is a direct, unwrapped call to a recognized spatial-overlap function (`std.collision.flat.circles_overlap`, `std.collision.volume.spheres_overlap`), with every argument a member-chain rooted at one of the rule's two pair bindings resolving to that binding's position/radius fields, is eligible for broad-phase acceleration by a conforming backend when both bindings also require identical trait sets — recognition is by resolved canonical identity, so an aliased import (`use std.collision.volume as foo`) is recognized the same as an unaliased call. This is purely an optimization: it never changes which entities or tuples satisfy the rule, and every other shape — wrapped in `not`, combined with `or`, a computed (non-member-chain) argument, cross-domain bindings, or a call to any other function — remains fully supported as an ordinary predicate, evaluated exactly as it is today. No backend is required to implement this acceleration, and its absence is never a compile error or a behavior difference.
+
 ### 3.9 Event Handlers
 
 Handlers are parameter-free in the current profile. Handler-local phase/event data is accessed through the trigger binding itself or through an explicit alias.

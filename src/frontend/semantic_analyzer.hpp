@@ -186,11 +186,59 @@ struct BoundTraitAccess {
     friend bool operator==(const BoundTraitAccess&, const BoundTraitAccess&) = default;
 };
 
+// ── Spatial join recognition (spatial-broadphase-runtime, dsl-where-clause) ──
+
+enum class SpatialJoinDimension : std::uint8_t { Flat2D, Volume3D };
+
+// Where a pair binding's position/radius value lives: the trait it was read
+// through, plus any remaining field segments after that trait access (e.g.
+// `a.transform.position` -> trait `WorldTransform`, field path ["position"]).
+struct SpatialJoinAccess {
+    SymbolId trait;
+    std::vector<std::string> field_path;
+
+    friend bool operator==(const SpatialJoinAccess&, const SpatialJoinAccess&) = default;
+};
+
+// One pair binding's role in a recognized spatial predicate.
+struct SpatialJoinBinding {
+    std::size_t binding_index = 0;
+    SpatialJoinAccess position;
+    SpatialJoinAccess radius;
+
+    friend bool operator==(const SpatialJoinBinding&, const SpatialJoinBinding&) = default;
+};
+
+// Populated only when semantic analysis recognizes a pair rule's `where:`
+// predicate list as containing a direct, unwrapped call to
+// std.collision.flat.circles_overlap / std.collision.volume.spheres_overlap
+// with binding-rooted position/radius arguments, and both pair bindings
+// require identical trait sets (spatial-broadphase-runtime, dsl-where-clause).
+// `left` supplies the call's first two arguments, `right` its last two —
+// codegen resolves which of `HandlerContract::pair_bindings` each refers to
+// via `binding_index`, independent of the bindings' declaration order.
+struct SpatialJoinPlan {
+    SpatialJoinDimension dimension = SpatialJoinDimension::Flat2D;
+    SpatialJoinBinding left;
+    SpatialJoinBinding right;
+    // Index into the owning rule's `where_clause->predicates` naming the
+    // recognized call, so codegen can exclude it from the generic residual
+    // guard it synthesizes for every other predicate (it is instead
+    // re-verified directly against SAP's candidates, since broad-phase
+    // overlap is conservative and not itself proof of exact overlap).
+    std::size_t matched_predicate_index = 0;
+
+    friend bool operator==(const SpatialJoinPlan&, const SpatialJoinPlan&) = default;
+};
+
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
     std::vector<SymbolId> selection;             // Unary domain: positive traits
     std::vector<SymbolId> exclusion;             // Unary domain: excluded traits
     std::vector<RelationBinding> pair_bindings;  // Pair domain: exactly two, source order
+    // Pair domain only: set when a recognized, SAP-eligible spatial predicate
+    // was found in the rule's `where:` clause (spatial-broadphase-runtime).
+    std::optional<SpatialJoinPlan> spatial_join;
 
     [[nodiscard]] bool is_selectionless() const {
         return domain_kind == HandlerDomainKind::Selectionless;
@@ -687,6 +735,38 @@ private:
     InferredHandlerContract infer_pair_handler_contract(const RuleNode& rule,
                                                         const EventHandlerNode& handler,
                                                         const PairScope& pair_scope) const;
+    // dsl-where-clause / spatial-broadphase-runtime: read-only pattern-match
+    // over an already-validated `where:` predicate list for a direct,
+    // unwrapped circles_overlap/spheres_overlap call with binding-rooted
+    // position/radius arguments, eligible only when both pair bindings
+    // require identical trait sets. Never reports a diagnostic of its own —
+    // every non-matching shape simply yields nullopt (the predicate remains
+    // an ordinary residual predicate).
+    [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_spatial_join(const RuleNode& rule,
+                                                                                const PairScope& pair_scope);
+
+    // A resolved spatial-predicate argument: the pair binding it's rooted at
+    // (for the same-binding/distinct-bindings checks in
+    // try_recognize_spatial_predicate below), plus where within that
+    // binding's trait namespace the value lives.
+    struct SpatialJoinResolvedArg {
+        std::string binding_name;
+        SpatialJoinAccess access;
+        std::size_t binding_index = 0;
+    };
+    [[nodiscard]] static std::optional<SpatialJoinResolvedArg> resolve_spatial_join_arg(const ExprNode& arg,
+                                                                                        const PairScope& pair_scope);
+    // One `where:` predicate's recognition attempt: matches recognize_spatial_join's
+    // shape/eligibility checks against a single call, independent of its
+    // position in the predicate list (recognize_spatial_join fills in
+    // matched_predicate_index once a match is found).
+    struct SpatialJoinMatch {
+        SpatialJoinDimension dimension = SpatialJoinDimension::Flat2D;
+        SpatialJoinBinding left;
+        SpatialJoinBinding right;
+    };
+    [[nodiscard]] static std::optional<SpatialJoinMatch> try_recognize_spatial_predicate(const CallExpr& call,
+                                                                                         const PairScope& pair_scope);
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);

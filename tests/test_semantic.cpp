@@ -50,6 +50,21 @@ static DecoratedProgram analyze(const std::string& source) {
     return result;
 }
 
+static DecoratedProgram analyze_with_imports(const std::string& source, const ModuleImports& imports) {
+    const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
+    ErrorReporter errors;
+    Lexer lexer(src, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    REQUIRE_FALSE(errors.has_errors());
+    Parser parser(std::move(tokens), errors);
+    auto program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    auto result = analyzer.analyze(program, imports);
+    REQUIRE_FALSE(errors.has_errors());
+    return result;
+}
+
 static bool analyze_has_errors(const std::string& source) {
     const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;
@@ -2208,5 +2223,236 @@ TEST_CASE("Semantic: pair handler contract from where matches equivalent leading
     const auto& if_contract    = if_result.handler_contracts[0];
     CHECK(where_contract.reads == if_contract.reads);
     CHECK(std::ranges::is_permutation(where_contract.bound_reads, if_contract.bound_reads));
+}
+
+// ── Spatial join recognition (spatial-broadphase-runtime, dsl-where-clause) ──
+//
+// circles_overlap/spheres_overlap are declared locally within a module
+// literally named "std.collision.flat"/"std.collision.volume" so their
+// canonical id matches the recognized target exactly, without needing a real
+// cross-module compile — recognition only ever inspects resolved_callee_id's
+// canonical identity, never the declaring module's actual provenance.
+
+static ImportedSymbols make_spheres_overlap_import() {
+    ImportedSymbols syms;
+    syms.module_name = "std.collision.volume";
+
+    TypeInfo vec3_type;
+    vec3_type.kind = TypeKind::Vec3;
+    TypeInfo float_type;
+    float_type.kind = TypeKind::Float;
+    TypeInfo bool_type;
+    bool_type.kind = TypeKind::Bool;
+
+    ResolvedFunc func;
+    func.name         = "spheres_overlap";
+    func.module_name  = "std.collision.volume";
+    func.is_pub       = true;
+    func.effect_summary = std::unordered_set<std::string>{};  // proven pure: allowed in where:
+    func.params       = {
+        ResolvedParam{.name = "a_position", .type = vec3_type},
+        ResolvedParam{.name = "a_radius", .type = float_type},
+        ResolvedParam{.name = "b_position", .type = vec3_type},
+        ResolvedParam{.name = "b_radius", .type = float_type},
+    };
+    func.return_type  = bool_type;
+    const auto symbol  = make_symbol_id(SymbolKind::Func, "std.collision.volume", "spheres_overlap");
+    func.symbol_id    = symbol;
+    func.canonical_id = make_canonical_id(symbol);
+
+    syms.funcs["spheres_overlap"] = std::move(func);
+    return syms;
+}
+
+TEST_CASE("Semantic: direct spatial call with same-domain bindings is recognized and eligible",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.collision.flat\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, "
+                          "b_radius: float) bool:\n"
+                          "    return a_radius + b_radius >= 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    REQUIRE(contract.spatial_join.has_value());
+    const auto& plan = *contract.spatial_join;
+    CHECK(plan.dimension == SpatialJoinDimension::Flat2D);
+
+    const auto transform_id = make_symbol_id(SymbolKind::Trait, "std.collision.flat", "Transform");
+    const auto collider_id  = make_symbol_id(SymbolKind::Trait, "std.collision.flat", "Collider");
+    CHECK(plan.left.binding_index == 0);
+    CHECK(plan.left.position.trait == transform_id);
+    CHECK(plan.left.position.field_path == std::vector<std::string>{"position"});
+    CHECK(plan.left.radius.trait == collider_id);
+    CHECK(plan.left.radius.field_path == std::vector<std::string>{"radius"});
+    CHECK(plan.right.binding_index == 1);
+    CHECK(plan.right.position.trait == transform_id);
+    CHECK(plan.right.radius.trait == collider_id);
+    CHECK(plan.matched_predicate_index == 0);
+}
+
+TEST_CASE("Semantic: matched predicate index reflects its position among multiple where: predicates",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.collision.flat\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, "
+                          "b_radius: float) bool:\n"
+                          "    return a_radius + b_radius >= 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        a != b\n"
+                          "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    REQUIRE(contract.spatial_join.has_value());
+    CHECK(contract.spatial_join->matched_predicate_index == 1);
+}
+
+TEST_CASE("Semantic: spatial call recognition succeeds through a renamed import alias",
+          "[semantic][where-clause][spatial-join]") {
+    ModuleImports imports;
+    imports.modules["foo"] = make_spheres_overlap_import();
+
+    auto result = analyze_with_imports(STDLIB_EVENTS +
+                                       "trait Transform:\n"
+                                       "    var position: vec3\n"
+                                       "trait Collider:\n"
+                                       "    var radius: float\n"
+                                       "rule DetectContact:\n"
+                                       "    pairs:\n"
+                                       "        a:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "        b:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "    where:\n"
+                                       "        foo.spheres_overlap(a.Transform.position, a.Collider.radius, "
+                                       "b.Transform.position, b.Collider.radius)\n"
+                                       "    on tick:\n"
+                                       "        let x = 1\n",
+                                       imports);
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    REQUIRE(contract.spatial_join.has_value());
+    CHECK(contract.spatial_join->dimension == SpatialJoinDimension::Volume3D);
+}
+
+TEST_CASE("Semantic: negated spatial call remains an ordinary residual predicate",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.collision.flat\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, "
+                          "b_radius: float) bool:\n"
+                          "    return a_radius + b_radius >= 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        not circles_overlap(a.Transform.position, a.Collider.radius, "
+                          "b.Transform.position, b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+}
+
+TEST_CASE("Semantic: computed radius argument remains an ordinary residual predicate",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.collision.flat\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, "
+                          "b_radius: float) bool:\n"
+                          "    return a_radius + b_radius >= 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        circles_overlap(a.Transform.position, a.Collider.radius * 2.0, "
+                          "b.Transform.position, b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+}
+
+TEST_CASE("Semantic: cross-domain pair rule is never eligible even with a recognized-shape call",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.collision.flat\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "trait Wall:\n"
+                          "    var active: bool = true\n"
+                          "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, "
+                          "b_radius: float) bool:\n"
+                          "    return a_radius + b_radius >= 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "            Wall\n"
+                          "    where:\n"
+                          "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

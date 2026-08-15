@@ -633,6 +633,66 @@ void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodege
     out << ind << "}\n";
 }
 
+// spatial-broadphase-runtime: turn a resolved position/radius access (a
+// trait plus the remaining field path after it, already resolved by
+// recognize_spatial_join) into the same `registry.get<const Trait>(entity)
+// .field...` shape rewrite_expr already emits for ordinary pair-bound member
+// chains, for an arbitrary entity-valued C++ expression rather than a source
+// binding name.
+std::string emit_spatial_join_access(const SpatialJoinAccess& access, const std::string& entity_expr) {
+    std::string result = "registry.get<const " + EnttCodegenUtils::trait_cpp_name(access.trait) + ">(" + entity_expr + ")";
+    for (const auto& segment : access.field_path) {
+        result += "." + segment;
+    }
+    return result;
+}
+
+// SAP-eligible pair-rule activation (spatial-broadphase-runtime): builds one
+// proxy per live entity from the recognized spatial predicate's position/
+// radius access paths, syncs the runtime broad phase, and drives every
+// resulting tuple through the runtime's self-tuple-merge/directed-expansion/
+// ordinal-resort helper — codegen contributes no sorting, sweeping, or
+// candidate-generation logic of its own. `pair_body` is the exact same
+// already-lowered handler body text the Cartesian path invokes per tuple
+// (add-where-clause-pair-predicates' synthesized-guard/body-emission
+// machinery, unchanged): the recognized predicate is still re-verified there
+// exactly, since SAP's candidates are a conservative superset.
+void emit_sap_pair_activation(std::ostringstream& out,
+                              const SpatialJoinPlan& plan,
+                              const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                              const std::string& pair_body) {
+    const auto& proxy_source = pair_binding_codegens[plan.left.binding_index];
+    const auto& left         = pair_binding_codegens[plan.left.binding_index];
+    const auto& right        = pair_binding_codegens[plan.right.binding_index];
+    const std::string proxy_type = plan.dimension == SpatialJoinDimension::Flat2D ? "Proxy2D" : "Proxy3D";
+    const std::string sap_type   = plan.dimension == SpatialJoinDimension::Flat2D ? "SapBroadPhase2D" : "SapBroadPhase3D";
+    const std::string ns         = "cactus::runtime::entt_backend::";
+
+    out << "        {\n";
+    out << "            std::vector<" << ns << proxy_type << "> __sap_proxies;\n";
+    out << "            __sap_proxies.reserve(" << proxy_source.scope.binding_name << "_snapshot.size());\n";
+    out << "            for (std::size_t __sap_i = 0; __sap_i < " << proxy_source.scope.binding_name
+        << "_snapshot.size(); ++__sap_i) {\n";
+    out << "                const auto __sap_entity = " << proxy_source.scope.binding_name << "_snapshot[__sap_i];\n";
+    out << "                __sap_proxies.push_back(" << ns << proxy_type << "{\n";
+    out << "                    .entity = __sap_entity,\n";
+    out << "                    .ordinal = __sap_i,\n";
+    out << "                    .center = " << emit_spatial_join_access(plan.left.position, "__sap_entity") << ",\n";
+    out << "                    .radius = " << emit_spatial_join_access(plan.left.radius, "__sap_entity") << ",\n";
+    out << "                });\n";
+    out << "            }\n";
+    out << "            " << ns << sap_type << " __sap;\n";
+    out << "            __sap.sync(__sap_proxies);\n";
+    out << "            " << ns << "sap_execute_pair_tuples(\n";
+    out << "                std::span<const " << ns << proxy_type << ">(__sap_proxies),\n";
+    out << "                __sap.candidate_pairs(),\n";
+    out << "                [&](entt::entity " << left.scope.binding_name << ", entt::entity "
+        << right.scope.binding_name << ") {\n";
+    out << pair_body;
+    out << "                });\n";
+    out << "        }\n";
+}
+
 bool is_flat_transform_propagation(const ExternRuleNode& sys, const DecoratedProgram& program) {
     // When std.editor is used it transitively imports both transform modules,
     // so both flat and volume TransformPropagation can appear in the merged AST.
@@ -3018,7 +3078,8 @@ static void emit_pair_handler_body(std::ostringstream& out,
                                    const EventHandlerNode& handler,
                                    const std::vector<PairBindingCodegen>& pair_binding_codegens,
                                    const PairCodegenScope& pair_codegen_scope,
-                                   const DecoratedProgram& program) {
+                                   const DecoratedProgram& program,
+                                   const HandlerContract* contract) {
     for (const auto& binding : pair_binding_codegens) {
         emit_pair_binding_snapshot(out, binding, 1);
     }
@@ -3075,12 +3136,17 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "            }\n";
     out << "        }\n";
     out << "    } else {\n";
-    out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
-    out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
-        << "_snapshot) {\n";
-    emit_tuple_invocation();
-    out << "            }\n";
-    out << "        }\n";
+    if (contract != nullptr && contract->spatial_join.has_value()) {
+        emit_sap_pair_activation(out, *contract->spatial_join, pair_binding_codegens, pair_body);
+    } else {
+        out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name
+            << "_snapshot) {\n";
+        out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
+            << "_snapshot) {\n";
+        emit_tuple_invocation();
+        out << "            }\n";
+        out << "        }\n";
+    }
     out << "    }\n";
 }
 
@@ -3214,7 +3280,7 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         out << "    (void)cactus_recipient;\n";
 
         if (is_pair) {
-            emit_pair_handler_body(out, handler, pair_binding_codegens, pair_codegen_scope, program);
+            emit_pair_handler_body(out, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
         } else if (selectionless) {
             emit_selectionless_handler_body(out, handler, filter_traits, program, filter_cpp_overrides);
         } else if (!filter_traits.empty()) {

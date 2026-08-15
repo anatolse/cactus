@@ -3669,6 +3669,10 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
 
     std::vector<ResolvedHandlerTrigger> declared_triggers;
     const auto pair_scope = rule.pairs.has_value() ? build_pair_scope(*rule.pairs) : PairScope{};
+    // Rule-level, not per-handler: every handler on this rule shares the same
+    // `pairs:`/`where:` domain, so eligibility is identical for each of them.
+    const auto spatial_join =
+        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope) : std::nullopt;
     for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
         const auto& handler = rule.handlers[handler_index];
         collect_rule_deps(handler.body, dep);
@@ -3683,6 +3687,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
 
             auto inferred = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
                                                    : infer_regular_handler_contract(rule, handler);
+            inferred.spatial_join = spatial_join;
             result_.handler_contracts.push_back(inferred);
 
             HandlerNode node;
@@ -4193,6 +4198,110 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     walk_handler_body(
         handler.body, std::move(handler_locals), contract, resolve_read, handle_var_assign, on_project_trait);
     return contract;
+}
+
+std::optional<SemanticAnalyzer::SpatialJoinResolvedArg> SemanticAnalyzer::resolve_spatial_join_arg(
+    const ExprNode& arg, const PairScope& pair_scope) {
+    const auto* member = std::get_if<MemberExpr>(&arg.expr);
+    if (member == nullptr) {
+        return std::nullopt;
+    }
+    auto chain = member_chain_segments(*member);
+    if (!chain.has_value() || chain->size() < 2) {
+        return std::nullopt;
+    }
+    const std::string& root_name = chain->front();
+    std::vector<std::string> segments(chain->begin() + 1, chain->end());
+    auto resolved = resolve_pair_member_chain(root_name, segments, pair_scope);
+    if (!resolved.has_value()) {
+        return std::nullopt;
+    }
+    std::vector<std::string> field_path(
+        segments.begin() + static_cast<std::ptrdiff_t>(resolved->consumed_segments), segments.end());
+    return SpatialJoinResolvedArg{
+        .binding_name  = root_name,
+        .access        = SpatialJoinAccess{.trait = resolved->trait_id, .field_path = std::move(field_path)},
+        .binding_index = resolved->binding_index};
+}
+
+std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recognize_spatial_predicate(
+    const CallExpr& call, const PairScope& pair_scope) {
+    if (!call.resolved_callee_id.has_value() || call.args.size() != 4) {
+        return std::nullopt;
+    }
+    const auto canonical = make_canonical_id(*call.resolved_callee_id);
+    SpatialJoinDimension dimension{};
+    if (canonical == "std.collision.flat.circles_overlap") {
+        dimension = SpatialJoinDimension::Flat2D;
+    } else if (canonical == "std.collision.volume.spheres_overlap") {
+        dimension = SpatialJoinDimension::Volume3D;
+    } else {
+        return std::nullopt;
+    }
+
+    const auto left_position  = resolve_spatial_join_arg(*call.args[0], pair_scope);
+    const auto left_radius    = resolve_spatial_join_arg(*call.args[1], pair_scope);
+    const auto right_position = resolve_spatial_join_arg(*call.args[2], pair_scope);
+    const auto right_radius   = resolve_spatial_join_arg(*call.args[3], pair_scope);
+    if (!left_position.has_value() || !left_radius.has_value() || !right_position.has_value() ||
+        !right_radius.has_value()) {
+        return std::nullopt;
+    }
+    if (left_position->binding_name != left_radius->binding_name ||
+        right_position->binding_name != right_radius->binding_name ||
+        left_position->binding_name == right_position->binding_name) {
+        return std::nullopt;
+    }
+
+    return SpatialJoinMatch{
+        .dimension = dimension,
+        .left      = SpatialJoinBinding{.binding_index = left_position->binding_index,
+                                        .position      = left_position->access,
+                                        .radius        = left_radius->access},
+        .right     = SpatialJoinBinding{.binding_index = right_position->binding_index,
+                                        .position      = right_position->access,
+                                        .radius        = right_radius->access},
+    };
+}
+
+std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const RuleNode& rule,
+                                                                        const PairScope& pair_scope) {
+    if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2 || !rule.where_clause.has_value()) {
+        return std::nullopt;
+    }
+
+    // Broad-phase eligibility requires matching pair-binding domains
+    // (dsl-where-clause), independent of predicate shape, so this never
+    // varies per-predicate below -- check it once up front.
+    const auto required_traits = [](const PairBindingNode& binding) {
+        std::unordered_set<SymbolId, SymbolIdHash> traits;
+        for (const auto& entry : binding.traits) {
+            if (entry.resolved_trait_id.has_value()) {
+                traits.insert(*entry.resolved_trait_id);
+            }
+        }
+        return traits;
+    };
+    if (required_traits(rule.pairs->bindings[0]) != required_traits(rule.pairs->bindings[1])) {
+        return std::nullopt;
+    }
+
+    const auto& predicates = rule.where_clause->predicates;
+    for (std::size_t predicate_index = 0; predicate_index < predicates.size(); ++predicate_index) {
+        const auto* call = std::get_if<CallExpr>(&predicates[predicate_index]->expr);
+        if (call == nullptr) {
+            continue;
+        }
+        auto match = try_recognize_spatial_predicate(*call, pair_scope);
+        if (!match.has_value()) {
+            continue;
+        }
+        return SpatialJoinPlan{.dimension               = match->dimension,
+                               .left                     = match->left,
+                               .right                    = match->right,
+                               .matched_predicate_index = predicate_index};
+    }
+    return std::nullopt;
 }
 
 void SemanticAnalyzer::collect_rule_deps(const std::vector<std::unique_ptr<StmtNode>>& stmts, RuleDependency& dep) {

@@ -6172,4 +6172,114 @@ TEST_CASE("Codegen EnTT: binary arithmetic mixing a range loop variable with a c
     }
 }
 
+// ── SAP-eligible pair rules (spatial-broadphase-runtime) ────────────────────
+//
+// circles_overlap is declared locally within a module literally named
+// "std.collision.flat" so its canonical id matches the recognized target
+// exactly, mirroring test_semantic.cpp's spatial-join recognition tests —
+// recognition only ever inspects resolved_callee_id's canonical identity,
+// never the declaring module's actual provenance.
+
+static const std::string SPATIAL_JOIN_TRAITS =
+    "trait Transform:\n"
+    "    var position: vec2\n"
+    "trait Collider:\n"
+    "    var radius: float\n"
+    "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, b_radius: float) bool:\n"
+    "    return a_radius + b_radius >= 0.0\n"
+    "event tick:\n"
+    "    dt: float\n"
+    "event Contact:\n"
+    "    other: entity_id\n";
+
+TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase instead of a hand-rolled sweep",
+          "[codegen-entt][spatial-join]") {
+    ProgramNode program;
+    auto decorated = full_pipeline("module std.collision.flat\n" + SPATIAL_JOIN_TRAITS +
+                                   "rule DetectContact:\n"
+                                   "    pairs:\n"
+                                   "        a:\n"
+                                   "            Transform\n"
+                                   "            Collider\n"
+                                   "        b:\n"
+                                   "            Transform\n"
+                                   "            Collider\n"
+                                   "    where:\n"
+                                   "        circles_overlap(a.Transform.position, a.Collider.radius, "
+                                   "b.Transform.position, b.Collider.radius)\n"
+                                   "    on tick:\n"
+                                   "        emit Contact:\n"
+                                   "            other = b\n",
+                                   program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "DetectContact") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        // Runtime-owned SAP API called with the same ordinal-sorted snapshot
+        // machinery every pair rule already builds.
+        CHECK(code.find("cactus::runtime::entt_backend::Proxy2D") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
+        CHECK(code.find(".sync(__sap_proxies)") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::sap_execute_pair_tuples(") != std::string::npos);
+        CHECK(code.find("__sap.candidate_pairs()") != std::string::npos);
+        // The recognized predicate is still re-verified per tuple (SAP's
+        // candidates are a conservative superset), via the exact same
+        // synthesized-guard/body-emission machinery as before.
+        CHECK(code.find("std_collision_flat__circles_overlap(") != std::string::npos);
+        // No hand-rolled sort/sweep/candidate-generation loop of its own: the
+        // untargeted (broadcast) branch no longer contains the plain nested
+        // Cartesian double-loop. The recipient-targeted branch precedes it and
+        // keeps its own (unrelated, already-cheap) incident-tuple loop shapes.
+        const auto broadcast_branch = code.find("} else {");
+        REQUIRE(broadcast_branch != std::string::npos);
+        CHECK(code.find("for (auto a : a_snapshot)", broadcast_branch) == std::string::npos);
+        CHECK(code.find("for (auto b : b_snapshot)", broadcast_branch) == std::string::npos);
+        CHECK(code.find("std::ranges::sort", broadcast_branch) == std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call keeps the Cartesian loop unchanged",
+          "[codegen-entt][spatial-join]") {
+    ProgramNode program;
+    auto decorated = full_pipeline("module std.collision.flat\n" + SPATIAL_JOIN_TRAITS +
+                                   "trait Wall:\n"
+                                   "    var active: bool = true\n"
+                                   "rule DetectContact:\n"
+                                   "    pairs:\n"
+                                   "        a:\n"
+                                   "            Transform\n"
+                                   "            Collider\n"
+                                   "        b:\n"
+                                   "            Transform\n"
+                                   "            Collider\n"
+                                   "            Wall\n"
+                                   "    where:\n"
+                                   "        circles_overlap(a.Transform.position, a.Collider.radius, "
+                                   "b.Transform.position, b.Collider.radius)\n"
+                                   "    on tick:\n"
+                                   "        emit Contact:\n"
+                                   "            other = b\n",
+                                   program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "DetectContact") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("SapBroadPhase") == std::string::npos);
+        CHECK(code.find("sap_execute_pair_tuples") == std::string::npos);
+        const auto broadcast_branch = code.find("} else {");
+        REQUIRE(broadcast_branch != std::string::npos);
+        const auto a_loop = code.find("for (auto a : a_snapshot)", broadcast_branch);
+        const auto b_loop = code.find("for (auto b : b_snapshot)", broadcast_branch);
+        REQUIRE(a_loop != std::string::npos);
+        REQUIRE(b_loop != std::string::npos);
+        CHECK(a_loop < b_loop);
+    }
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

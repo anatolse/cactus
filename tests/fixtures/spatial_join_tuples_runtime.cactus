@@ -1,0 +1,67 @@
+module spatial_join_tuples_runtime
+
+use std.core
+use std.collision.flat as collision
+
+# Minimal SAP-eligible pair rule (spatial-broadphase-runtime): both bindings
+# require only Body, and the where: clause is a direct, unwrapped call to
+# std.collision.flat.circles_overlap through a renamed import alias, so
+# DetectOverlap is recognized and executed via the runtime SAP path.
+#
+# All three bodies sit at the same position with a generous radius, so every
+# ordered pair (self-pairs included, since there is no `a != b` filter here)
+# satisfies circles_overlap. RecordTuple encodes each observed tuple as a
+# single digit (a.tag * 3 + b.tag, tags are 0/1/2) and rolls it into
+# Recorder's sequence field, so the final value is a direct fingerprint of
+# both which tuples were observed and the order they arrived in.
+
+trait Body:
+    var pos: vec2
+    var radius: float
+    var tag: int
+
+trait Recorder:
+    var sequence: int = 0
+
+event TupleObserved:
+    code: int
+
+rule DetectOverlap:
+    pairs:
+        a:
+            Body
+        b:
+            Body
+    where:
+        collision.circles_overlap(a.Body.pos, a.Body.radius, b.Body.pos, b.Body.radius)
+    on tick:
+        emit TupleObserved:
+            code = (a.Body.tag * 3) + b.Body.tag
+
+rule RecordTuple:
+    filter:
+        Recorder
+
+    on TupleObserved as obs:
+        sequence = (sequence * 10) + obs.code
+
+entity Body0:
+    Body:
+        pos = vec2(0.0, 0.0)
+        radius = 10.0
+        tag = 0
+
+entity Body1:
+    Body:
+        pos = vec2(0.0, 0.0)
+        radius = 10.0
+        tag = 1
+
+entity Body2:
+    Body:
+        pos = vec2(0.0, 0.0)
+        radius = 10.0
+        tag = 2
+
+entity Recorder1:
+    Recorder

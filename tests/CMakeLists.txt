@@ -117,6 +117,11 @@ target_compile_definitions(test_runtime_stdlib PRIVATE
 )
 add_test(NAME RuntimeStdlibTests COMMAND test_runtime_stdlib)
 
+# Sweep-and-prune broad phase tests (add-sap-broadphase change)
+add_executable(test_runtime_sap_broadphase test_runtime_sap_broadphase.cpp)
+target_link_libraries(test_runtime_sap_broadphase PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeSapBroadphaseTests COMMAND test_runtime_sap_broadphase)
+
 # Headless behavioral tests (example-behavior-tests capability)
 cactus_add_headless_behavior_test(test_blue_square_headless_behavior
     CACTUS_SOURCE examples/blue-square/square.cactus
@@ -182,6 +187,12 @@ cactus_add_headless_behavior_test(test_pair_handler_return_headless_behavior
     CACTUS_SOURCE tests/fixtures/pair_handler_return_runtime.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pair_handler_return_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_spatial_join_tuples_headless_behavior
+    CACTUS_SOURCE tests/fixtures/spatial_join_tuples_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_spatial_join_tuples_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_collision_predicates_headless_behavior

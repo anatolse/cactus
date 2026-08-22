@@ -51,6 +51,44 @@
     return v * scalar;
 }
 
+// `color` component access/constructor/operator matrix (dsl-vector-expressions
+// "color"): declared here (not cactus::runtime) for the same ordinary-lookup
+// reason as vec2/vec3 above — Color is a plain raylib C struct with no
+// namespace, and generated call/operator text is unqualified. Defined out of
+// line in cactus_runtime.cpp (also at global scope there) since, unlike
+// vec2/vec3's trivial aggregate-literal constructors, it does real clamp/
+// quantize work worth keeping in exactly one compiled place.
+[[nodiscard]] Color color_from_components(float r, float g, float b, float a) noexcept;
+
+// Every color-constructing operator row (dsl-vector-expressions' fixed color
+// binary operator matrix) normalizes both operands to [0,1] float, combines,
+// and repacks through color_from_components — one clamp-then-quantize call
+// site per row, never inlined per codegen call site (CLAUDE.md "Avoid
+// duplication"; mirrors tint_with_opacity's now-shared implementation).
+[[nodiscard]] inline Color operator+(const Color a, const Color b) {
+    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
+    return color_from_components(ch(a.r) + ch(b.r), ch(a.g) + ch(b.g), ch(a.b) + ch(b.b), ch(a.a) + ch(b.a));
+}
+[[nodiscard]] inline Color operator-(const Color a, const Color b) {
+    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
+    return color_from_components(ch(a.r) - ch(b.r), ch(a.g) - ch(b.g), ch(a.b) - ch(b.b), ch(a.a) - ch(b.a));
+}
+[[nodiscard]] inline Color operator*(const Color a, const float scalar) {
+    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
+    return color_from_components(ch(a.r) * scalar, ch(a.g) * scalar, ch(a.b) * scalar, ch(a.a) * scalar);
+}
+[[nodiscard]] inline Color operator*(const float scalar, const Color a) {
+    return a * scalar;
+}
+[[nodiscard]] inline Color operator/(const Color a, const float scalar) {
+    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
+    return color_from_components(ch(a.r) / scalar, ch(a.g) / scalar, ch(a.b) / scalar, ch(a.a) / scalar);
+}
+[[nodiscard]] inline Color operator*(const Color a, const Color b) {
+    auto ch = [](const unsigned char v) { return static_cast<float>(v) / 255.0F; };
+    return color_from_components(ch(a.r) * ch(b.r), ch(a.g) * ch(b.g), ch(a.b) * ch(b.b), ch(a.a) * ch(b.a));
+}
+
 namespace cactus::runtime {
 
 using Quat        = Quaternion;

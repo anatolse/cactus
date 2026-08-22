@@ -6141,6 +6141,83 @@ TEST_CASE("Codegen EnTT: vec2 int arguments are wrapped in static_cast<float> (V
     }
 }
 
+TEST_CASE("Codegen EnTT: color(...) constructor routes through color_from_components",
+          "[codegen-entt][vector-expressions]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "rule Demo:\n"
+        "    on tick:\n"
+        "        let c = color(1.0, 0.0, 0.0, 1.0)\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "Demo") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("color_from_components(1.0F, 0.0F, 0.0F, 1.0F)") != std::string::npos);
+        // Never a raw `color(...)` call left un-rewritten.
+        CHECK(code.find(" color(1.0F") == std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: color(...) constructor int arguments are wrapped in static_cast<float>",
+          "[codegen-entt][range][vector-expressions]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "rule Demo:\n"
+        "    on tick:\n"
+        "        for k in range(0, 1):\n"
+        "            let c = color(k, 0, 0, 1.0)\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "Demo") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("color_from_components(static_cast<float>(k), static_cast<float>(0), "
+                        "static_cast<float>(0), 1.0F)") != std::string::npos);
+    }
+}
+
+TEST_CASE("Codegen EnTT: pair-bound color channel read normalizes the raw byte field",
+          "[codegen-entt][pair-relations][vector-expressions]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "trait Tint:\n"
+            "    var tint: color\n"
+            "rule DetectContacts:\n"
+            "    pairs:\n"
+            "        body:\n"
+            "            DynamicBody\n"
+            "            Tint\n"
+            "        wall:\n"
+            "            Solid\n"
+            "    on tick:\n"
+            "        if body != wall and body.Tint.tint.a > 0.5:\n"
+            "            emit Contact:\n"
+            "                other = wall\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            CHECK(code.find("static_cast<float>(registry.get<const Tint>(body).tint.a) / 255.0F") !=
+                  std::string::npos);
+        }
+    }
+}
+
 // infer_numeric_kind previously only resolved lexical locals and trait
 // fields, so a module-level `const:` identifier (e.g. `PARTICLE_COUNT`)
 // mixed with a range loop variable in float arithmetic (the particle-burst

@@ -1,10 +1,22 @@
 #include "common/cactus_runtime.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <random>
 #include <raymath.h>
 #include <sstream>
+
+// Global scope, matching the header declaration (cactus_runtime.hpp):
+// generated code calls this unqualified, the same ordinary-lookup reason
+// vec2/vec3's constructors and the Color operator matrix live at global
+// scope rather than in cactus::runtime.
+Color color_from_components(const float r, const float g, const float b, const float a) noexcept {
+    auto channel = [](const float v) {
+        return static_cast<unsigned char>(std::lround(std::clamp(v, 0.0F, 1.0F) * 255.0F));
+    };
+    return Color{.r = channel(r), .g = channel(g), .b = channel(b), .a = channel(a)};
+}
 
 namespace cactus::runtime {
 

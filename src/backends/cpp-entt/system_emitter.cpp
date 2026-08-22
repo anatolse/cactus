@@ -449,6 +449,12 @@ struct FilterBinding {
 struct PairCodegenTraitAccess {
     std::string cpp_type;
     bool is_marker = false;
+    // Resolved trait fields, needed only to detect a `color`-typed field
+    // ahead of a trailing `.r`/`.g`/`.b`/`.a` component-access segment
+    // (rewrite_expr's MemberExpr/pair_scope branch); null for a marker trait
+    // or one the linker couldn't resolve, in which case that special-casing
+    // simply doesn't fire and the segment is appended as plain text as before.
+    const ResolvedTrait* trait = nullptr;
 };
 
 struct PairCodegenBinding {
@@ -591,7 +597,7 @@ PairBindingCodegen build_pair_binding_codegen(const PairBindingNode& binding, co
         if (seen_cpp_types.insert(cpp_type_name).second) {
             result.cpp_types.push_back(cpp_type_name);
         }
-        const PairCodegenTraitAccess access{.cpp_type = cpp_type_name, .is_marker = is_marker};
+        const PairCodegenTraitAccess access{.cpp_type = cpp_type_name, .is_marker = is_marker, .trait = trait};
         result.scope.traits[entry.qualified_name] = access;
         if (entry.alias.has_value()) {
             result.scope.traits[*entry.alias] = access;
@@ -2208,6 +2214,22 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                     }
                     return ident->name + "(" + args + ")";
                 }
+                // color(...) constructor: route through the shared runtime
+                // clamp-then-quantize helper (design.md Decision 2) instead of
+                // a raw `color(...)` call; reuses rewrite_vec_arg's int->float
+                // promotion, same as the vec2/vec3 case above.
+                if (const auto* color_ident = std::get_if<IdentExpr>(&e.callee->expr);
+                    color_ident != nullptr && color_ident->name == "color") {
+                    std::string args;
+                    for (size_t i = 0; i < e.args.size(); ++i) {
+                        if (i > 0) {
+                            args += ", ";
+                        }
+                        args += rewrite_vec_arg(
+                            *e.args[i], trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+                    }
+                    return "color_from_components(" + args + ")";
+                }
                 return rewrite_expr(
                            *e.callee, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                        "(" +
@@ -2245,6 +2267,35 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                                 }
                                 std::string access =
                                     "registry.get<const " + found->second.cpp_type + ">(" + root->name + ")";
+                                // A `.<field>.r`/`.g`/`.b`/`.a` tail on a
+                                // color-typed field needs the same normalized-
+                                // float read every other color access uses
+                                // (dsl-vector-expressions "Color float
+                                // component access") instead of the raw byte
+                                // `.r` plain-text append below, which is
+                                // correct as-is for vec2/vec3's `.x`/`.y`/`.z`
+                                // (Vector2/Vector3's own field names already
+                                // match) but wrong for color.
+                                if (segments.size() - len == 2 && found->second.trait != nullptr) {
+                                    const auto& field_name = segments[len];
+                                    const auto& channel    = segments[len + 1];
+                                    const bool is_channel =
+                                        channel == "r" || channel == "g" || channel == "b" || channel == "a";
+                                    const auto field_it =
+                                        std::ranges::find_if(found->second.trait->fields,
+                                                             [&](const auto& f) { return f.name == field_name; });
+                                    if (is_channel && field_it != found->second.trait->fields.end() &&
+                                        field_it->type.kind == TypeKind::Color) {
+                                        std::string normalized_read = "static_cast<float>(";
+                                        normalized_read += access;
+                                        normalized_read += '.';
+                                        normalized_read += field_name;
+                                        normalized_read += '.';
+                                        normalized_read += channel;
+                                        normalized_read += ") / 255.0F";
+                                        return normalized_read;
+                                    }
+                                }
                                 for (std::size_t i = len; i < segments.size(); ++i) {
                                     access += "." + segments[i];
                                 }

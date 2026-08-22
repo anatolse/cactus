@@ -2395,10 +2395,10 @@ ImageDrawRects compute_image_draw_rects(const int fit,
 namespace {
 
 [[nodiscard]] Color tint_with_opacity(const Color color, const float opacity) noexcept {
-    return Color{.r = color.r,
-                .g = color.g,
-                .b = color.b,
-                .a = static_cast<unsigned char>(static_cast<float>(color.a) * opacity)};
+    return color_from_components(static_cast<float>(color.r) / 255.0F,
+                                 static_cast<float>(color.g) / 255.0F,
+                                 static_cast<float>(color.b) / 255.0F,
+                                 (static_cast<float>(color.a) / 255.0F) * opacity);
 }
 
 void draw_ui_label(const std::string& text,

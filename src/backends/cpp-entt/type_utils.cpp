@@ -273,7 +273,15 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 }
                 return op + emit_expr(*e.operand, ast);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
-                std::string result = emit_expr(*e.callee, ast) + "(";
+                // color(...) constructor (dsl-vector-expressions "Color
+                // constructor"): route through the shared runtime
+                // clamp-then-quantize helper rather than emitting a raw
+                // `color(...)` call, so every color-constructing call site
+                // funnels through one packing implementation (design.md
+                // Decision 2; CLAUDE.md "Avoid duplication").
+                const auto* callee_ident = std::get_if<IdentExpr>(&e.callee->expr);
+                const bool is_color_ctor = callee_ident != nullptr && callee_ident->name == "color";
+                std::string result       = (is_color_ctor ? std::string("color_from_components") : emit_expr(*e.callee, ast)) + "(";
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i > 0) {
                         result += ", ";
@@ -327,6 +335,13 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
         [&](auto& e) -> std::string {
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, CallExpr>) {
+                // color(...) constructor: see the ProgramNode overload above
+                // for why this routes through color_from_components instead
+                // of a raw `color(...)` call.
+                if (const auto* color_ident = std::get_if<IdentExpr>(&e.callee->expr);
+                    color_ident != nullptr && color_ident->name == "color") {
+                    return "color_from_components(" + EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
+                }
                 auto stdlib_prefix_for_module = [](const std::string& mod) -> std::string {
                     if (mod == "std.math") {
                         return "cactus::runtime::stdlib::math";

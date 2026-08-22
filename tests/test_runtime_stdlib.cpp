@@ -217,6 +217,84 @@ TEST_CASE("Runtime stdlib: vec2/vec3 add/subtract/divide and compound-assignment
     CHECK(sum3.z == Catch::Approx(2.0F));
 }
 
+TEST_CASE("Runtime stdlib: color_from_components matches the equivalent hex-literal byte struct",
+          "[runtime][stdlib][vector-expressions]") {
+    const Color red = color_from_components(1.0F, 0.0F, 0.0F, 1.0F);
+    CHECK(red.r == 255);
+    CHECK(red.g == 0);
+    CHECK(red.b == 0);
+    CHECK(red.a == 255);
+}
+
+TEST_CASE("Runtime stdlib: color_from_components clamps out-of-range channel inputs",
+          "[runtime][stdlib][vector-expressions]") {
+    const Color clamped = color_from_components(1.5F, -0.2F, 0.0F, 1.0F);
+    CHECK(clamped.r == 255);
+    CHECK(clamped.g == 0);
+    CHECK(clamped.b == 0);
+    CHECK(clamped.a == 255);
+}
+
+TEST_CASE("Runtime stdlib: color operator matrix add/subtract/scale/divide/component-multiply are reachable",
+          "[runtime][stdlib][vector-expressions]") {
+    // Byte-quantized round-tripping (float -> [0,255] channel -> float) loses
+    // precision, so compare against the arithmetic on normalized floats with
+    // one quantization step (1/255) of slack rather than a second,
+    // independently-rounded color_from_components call.
+    constexpr float kQuantizationStep = 1.0F / 255.0F;
+    auto normalized                   = [](const Color c) { return static_cast<float>(c.r) / 255.0F; };
+
+    const Color a = color_from_components(0.2F, 0.4F, 0.6F, 1.0F);
+    const Color b = color_from_components(0.1F, 0.1F, 0.1F, 0.5F);
+
+    const Color sum = a + b;
+    CHECK(normalized(sum) == Catch::Approx(0.3F).margin(kQuantizationStep));
+
+    const Color diff = a - b;
+    CHECK(normalized(diff) == Catch::Approx(0.1F).margin(kQuantizationStep));
+
+    const Color scaled_right = a * 0.5F;
+    const Color scaled_left  = 0.5F * a;
+    CHECK(scaled_right.r == scaled_left.r);
+    CHECK(scaled_right.g == scaled_left.g);
+    CHECK(scaled_right.b == scaled_left.b);
+
+    const Color divided = a / 2.0F;
+    CHECK(divided.r == scaled_right.r);
+    CHECK(divided.g == scaled_right.g);
+    CHECK(divided.b == scaled_right.b);
+
+    // Component-wise, not a dot product: each channel multiplies independently.
+    const Color product = a * b;
+    CHECK(normalized(product) == Catch::Approx(0.2F * 0.1F).margin(kQuantizationStep));
+}
+
+TEST_CASE("Runtime stdlib: color scalar multiply clamps an already-saturated channel",
+          "[runtime][stdlib][vector-expressions]") {
+    constexpr Color kSaturatedWhite{.r = 255, .g = 255, .b = 255, .a = 255};
+    const Color doubled = kSaturatedWhite * 2.0F;
+    CHECK(doubled.r == 255);
+    CHECK(doubled.g == 255);
+    CHECK(doubled.b == 255);
+    CHECK(doubled.a == 255);
+}
+
+// dsl-vector-expressions "Color arithmetic clamps at every step": chained
+// arithmetic re-clips at each intermediate result rather than applying the
+// combined scale factor to the original unclamped value - (tint * 2.0) clips
+// to opaque white *before* the second multiply, so the final result is white
+// scaled by 0.5, not tint scaled by 1.0 (which would stay saturated).
+TEST_CASE("Runtime stdlib: color chained arithmetic re-clips at each intermediate step",
+          "[runtime][stdlib][vector-expressions]") {
+    constexpr Color kSaturatedWhite{.r = 255, .g = 255, .b = 255, .a = 255};
+    const Color result = (kSaturatedWhite * 2.0F) * 0.5F;
+    CHECK(result.r == 128);
+    CHECK(result.g == 128);
+    CHECK(result.b == 128);
+    CHECK(result.a == 128);
+    CHECK(result.r != kSaturatedWhite.r);
+}
+
 TEST_CASE("Runtime stdlib: quaternion helpers behave correctly", "[runtime][stdlib][quat]") {
     const auto identity = stdlib::math::quat::identity();
     CHECK(identity.x == Catch::Approx(0.0F));

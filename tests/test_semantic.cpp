@@ -596,6 +596,36 @@ TEST_CASE("Semantic: order by invalid vec2 member errors", "[semantic][rule-orde
                                              "        let x = 1\n"));
 }
 
+TEST_CASE("Semantic: order by valid color channel", "[semantic][rule-order-by][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Tint:\n"
+                                                   "    var tint: color\n"
+                                                   "rule Render:\n"
+                                                   "    filter:\n"
+                                                   "        Tint as t\n"
+                                                   "    order by:\n"
+                                                   "        t.tint.a desc\n"
+                                                   "    on tick:\n"
+                                                   "        let x = 1\n"));
+}
+
+// Mirrors "order by invalid vec2 member errors" above: validate_order_by_key
+// reports the same generic "order by field '...' is not valid" diagnostic for
+// every unresolvable member-chain segment regardless of the preceding type,
+// so this checks rejection (and that the invalid member spelling reaches the
+// message via the field path) rather than a color-specific message shape.
+TEST_CASE("Semantic: order by invalid color member errors", "[semantic][rule-order-by][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + "trait Tint:\n"
+                                                        "    var tint: color\n"
+                                                        "rule Render:\n"
+                                                        "    filter:\n"
+                                                        "        Tint as t\n"
+                                                        "    order by:\n"
+                                                        "        t.tint.w asc\n"
+                                                        "    on tick:\n"
+                                                        "        let x = 1\n");
+    CHECK(message.find("t.tint.w") != std::string::npos);
+}
+
 TEST_CASE("Semantic: vec2/vec3 splat constructors type-check as trait field defaults", "[semantic][vector-expressions]") {
     auto result = analyze(
         "trait Position:\n"
@@ -669,6 +699,40 @@ TEST_CASE("Semantic: vec2 splat constructor default mismatched against vec3 fiel
           "[semantic][vector-expressions]") {
     CHECK(analyze_has_errors("trait Position:\n"
                              "    var pos: vec3 = vec2(0.0)\n"));
+}
+
+// color(...) isn't accepted as a trait field default (unlike vec2(...)/
+// vec3(...)) - it isn't in check_const's allowed-constructor list, so these
+// exercise the constructor through a handler body instead, same as the
+// "constructors resolve to real types outside trait defaults" case below.
+TEST_CASE("Semantic: color constructor with four channel arguments is accepted",
+          "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule Test:\n"
+                                                   "    on tick:\n"
+                                                   "        let c = color(1.0, 0.0, 0.0, 1.0)\n"));
+}
+
+TEST_CASE("Semantic: color wrong constructor arity rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + "rule Test:\n"
+                                                        "    on tick:\n"
+                                                        "        let c = color(1.0, 0.0, 0.0)\n");
+    CHECK(message.find("color") != std::string::npos);
+    CHECK(message.find('3') != std::string::npos);
+}
+
+TEST_CASE("Semantic: color non-numeric constructor argument rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + "rule Test:\n"
+                                                        "    on tick:\n"
+                                                        "        let c = color(\"0\", 0.0, 0.0, 1.0)\n");
+    CHECK(message.find("string") != std::string::npos);
+}
+
+TEST_CASE("Semantic: color constructor accepts int arguments, promoted to float",
+          "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule Test:\n"
+                                                   "    on tick:\n"
+                                                   "        for k in range(0, 1):\n"
+                                                   "            let c = color(k, 0, 0, 1)\n"));
 }
 
 TEST_CASE("Semantic: vec2/vec3 constructors resolve to real types outside trait defaults",
@@ -803,6 +867,76 @@ TEST_CASE("Semantic: vector plus bare scalar rejected", "[semantic][vector-expre
                              "        Position as p\n"
                              "    on tick:\n"
                              "        let bad = p.pos2 + tick.dt\n"));
+}
+
+static const std::string COLOR_MATRIX_STDLIB =
+    "trait Tint:\n"
+    "    var primary: color\n"
+    "    var secondary: color\n";
+
+TEST_CASE("Semantic: color component addition and subtraction typecheck", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + COLOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Tint as t\n"
+                                   "    on tick:\n"
+                                   "        let sum = t.primary + t.secondary\n"
+                                   "        let diff = t.primary - t.secondary\n"));
+}
+
+TEST_CASE("Semantic: color scalar multiply is commutative in both orders", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + COLOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Tint as t\n"
+                                   "    on tick:\n"
+                                   "        let a = t.primary * tick.dt\n"
+                                   "        let b = tick.dt * t.primary\n"));
+}
+
+TEST_CASE("Semantic: color divide by float typechecks", "[semantic][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + COLOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Tint as t\n"
+                                   "    on tick:\n"
+                                   "        let a = t.primary / tick.dt\n"));
+}
+
+TEST_CASE("Semantic: color component-wise multiply stays color-typed, not a dot product",
+          "[semantic][vector-expressions]") {
+    // Same reasoning as the vec2/vec3 case above: if `t.primary * t.secondary`
+    // inferred as some scalar, adding it to another color below would be
+    // rejected (no such row) - accepting it proves the result stayed `color`.
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + COLOR_MATRIX_STDLIB +
+                                   "rule Test:\n"
+                                   "    filter:\n"
+                                   "        Tint as t\n"
+                                   "    on tick:\n"
+                                   "        let component_product = t.primary * t.secondary + t.primary\n"));
+}
+
+TEST_CASE("Semantic: color plus bare scalar rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + COLOR_MATRIX_STDLIB +
+                                       "rule Test:\n"
+                                       "    filter:\n"
+                                       "        Tint as t\n"
+                                       "    on tick:\n"
+                                       "        let bad = t.primary + tick.dt\n");
+    CHECK(message.find("color") != std::string::npos);
+    CHECK(message.find("float") != std::string::npos);
+    CHECK(message.find('+') != std::string::npos);
+}
+
+TEST_CASE("Semantic: color-by-color division rejected", "[semantic][vector-expressions]") {
+    auto message = analyze_first_error(STDLIB_EVENTS + COLOR_MATRIX_STDLIB +
+                                       "rule Test:\n"
+                                       "    filter:\n"
+                                       "        Tint as t\n"
+                                       "    on tick:\n"
+                                       "        let bad = t.primary / t.secondary\n");
+    CHECK(message.find("color") != std::string::npos);
+    CHECK(message.find('/') != std::string::npos);
 }
 
 TEST_CASE("Semantic: vec2 addition compound assignment on a trait field", "[semantic][vector-expressions]") {
@@ -1749,6 +1883,24 @@ TEST_CASE("Semantic: pair binding trait field read is accepted and typed", "[sem
                                    "            Collider\n"
                                    "    on fixed_tick:\n"
                                    "        if body.Transform.x > 0.0 and wall.Collider.mask > 0:\n"
+                                   "            emit Contact:\n"
+                                   "                other = wall\n"));
+}
+
+TEST_CASE("Semantic: pair binding color channel read is accepted and typed",
+          "[semantic][pair-relations][vector-expressions]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + PAIR_TRAITS +
+                                   "trait Tint:\n"
+                                   "    var tint: color\n"
+                                   "rule DetectContacts:\n"
+                                   "    pairs:\n"
+                                   "        body:\n"
+                                   "            DynamicBody\n"
+                                   "            Tint\n"
+                                   "        wall:\n"
+                                   "            Solid\n"
+                                   "    on fixed_tick:\n"
+                                   "        if body.Tint.tint.a > 0.5:\n"
                                    "            emit Contact:\n"
                                    "                other = wall\n"));
 }

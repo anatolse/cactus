@@ -240,7 +240,7 @@ std::optional<TypeKind> lookup_vector_binary_op_result(TypeKind left, const std:
         TypeKind right;
         TypeKind result;
     };
-    static constexpr std::array<Row, 12> kRows{{
+    static constexpr std::array<Row, 18> kRows{{
         {.left = TypeKind::Vec2, .op = "+", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
         {.left = TypeKind::Vec3, .op = "+", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
         {.left = TypeKind::Vec2, .op = "-", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
@@ -253,6 +253,12 @@ std::optional<TypeKind> lookup_vector_binary_op_result(TypeKind left, const std:
         {.left = TypeKind::Vec3, .op = "/", .right = TypeKind::Float, .result = TypeKind::Vec3},
         {.left = TypeKind::Vec2, .op = "*", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
         {.left = TypeKind::Vec3, .op = "*", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
+        {.left = TypeKind::Color, .op = "+", .right = TypeKind::Color, .result = TypeKind::Color},
+        {.left = TypeKind::Color, .op = "-", .right = TypeKind::Color, .result = TypeKind::Color},
+        {.left = TypeKind::Color, .op = "*", .right = TypeKind::Float, .result = TypeKind::Color},
+        {.left = TypeKind::Float, .op = "*", .right = TypeKind::Color, .result = TypeKind::Color},
+        {.left = TypeKind::Color, .op = "/", .right = TypeKind::Float, .result = TypeKind::Color},
+        {.left = TypeKind::Color, .op = "*", .right = TypeKind::Color, .result = TypeKind::Color},
     }};
     for (const auto& row : kRows) {
         if (row.left == left && row.right == right && op == row.op) {
@@ -262,9 +268,15 @@ std::optional<TypeKind> lookup_vector_binary_op_result(TypeKind left, const std:
     return std::nullopt;
 }
 
-// Every row in lookup_vector_binary_op_result's table results in Vec2 or Vec3.
+// Every row in lookup_vector_binary_op_result's table results in Vec2, Vec3, or Color.
 TypeInfo vector_result_type_info(TypeKind kind) {
-    return kind == TypeKind::Vec2 ? make_vec2_type() : make_vec3_type();
+    if (kind == TypeKind::Vec2) {
+        return make_vec2_type();
+    }
+    if (kind == TypeKind::Vec3) {
+        return make_vec3_type();
+    }
+    return make_color_type();
 }
 
 /// Map AssetKind → TypeKind for the resulting opaque ID
@@ -2336,6 +2348,12 @@ void SemanticAnalyzer::validate_order_by_key(
             resolved_any = true;
         } else if (current.kind == TypeKind::Vec2 || current.kind == TypeKind::Vec3) {
             if (member == "x" || member == "y" || (current.kind == TypeKind::Vec3 && member == "z")) {
+                current = make_float_type();
+            } else {
+                current = make_unknown_type();
+            }
+        } else if (current.kind == TypeKind::Color) {
+            if (member == "r" || member == "g" || member == "b" || member == "a") {
                 current = make_float_type();
             } else {
                 current = make_unknown_type();
@@ -5562,6 +5580,12 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
                         } else {
                             return make_unknown_type();
                         }
+                    } else if (current.kind == TypeKind::Color) {
+                        if (seg == "r" || seg == "g" || seg == "b" || seg == "a") {
+                            current = make_float_type();
+                        } else {
+                            return make_unknown_type();
+                        }
                     } else {
                         return make_unknown_type();
                     }
@@ -5670,8 +5694,32 @@ std::optional<TypeInfo> SemanticAnalyzer::infer_vector_constructor_call_type(
     const ResolvedStruct* handler_event,
     const PairScope* pair_scope) const {
     const auto* ident = std::get_if<IdentExpr>(&call.callee->expr);
-    if (ident == nullptr || (ident->name != "vec2" && ident->name != "vec3")) {
+    if (ident == nullptr || (ident->name != "vec2" && ident->name != "vec3" && ident->name != "color")) {
         return std::nullopt;
+    }
+
+    auto check_numeric_args = [&] {
+        for (const auto& arg : call.args) {
+            auto arg_type = infer_expr_type(*arg, filter_bindings, local_bindings, handler_event, pair_scope);
+            if (arg_type.kind != TypeKind::Float && arg_type.kind != TypeKind::Int &&
+                arg_type.kind != TypeKind::Unknown) {
+                errors_.error(location,
+                              "'" + ident->name + "' argument must be of type 'float', got '" + arg_type.name + "'");
+            }
+        }
+    };
+
+    // color(r, g, b, a): exactly 4 channel arguments, no scalar-splat form
+    // (dsl-vector-expressions "Color constructor") - unlike vec2/vec3, a
+    // single-argument color(s) would be ambiguous between "splat" and "some
+    // other 1-arg color constructor", so it's simply not offered.
+    if (ident->name == "color") {
+        if (call.args.size() != 4) {
+            errors_.error(location, "'color' expects 4 arguments, got " + std::to_string(call.args.size()));
+            return make_color_type();
+        }
+        check_numeric_args();
+        return make_color_type();
     }
 
     const bool is_vec2                = ident->name == "vec2";
@@ -5684,13 +5732,7 @@ std::optional<TypeInfo> SemanticAnalyzer::infer_vector_constructor_call_type(
         return result_type;
     }
 
-    for (const auto& arg : call.args) {
-        auto arg_type = infer_expr_type(*arg, filter_bindings, local_bindings, handler_event, pair_scope);
-        if (arg_type.kind != TypeKind::Float && arg_type.kind != TypeKind::Int && arg_type.kind != TypeKind::Unknown) {
-            errors_.error(location,
-                          "'" + ident->name + "' argument must be of type 'float', got '" + arg_type.name + "'");
-        }
-    }
+    check_numeric_args();
     return result_type;
 }
 
@@ -5870,8 +5912,8 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             binary->op == ">=" || binary->op == "and" || binary->op == "or") {
             return make_bool_type();
         }
-        if ((left.kind == TypeKind::Vec2 || left.kind == TypeKind::Vec3 || right.kind == TypeKind::Vec2 ||
-             right.kind == TypeKind::Vec3) &&
+        if ((left.kind == TypeKind::Vec2 || left.kind == TypeKind::Vec3 || left.kind == TypeKind::Color ||
+             right.kind == TypeKind::Vec2 || right.kind == TypeKind::Vec3 || right.kind == TypeKind::Color) &&
             left.kind != TypeKind::Unknown && right.kind != TypeKind::Unknown) {
             if (auto result_kind = lookup_vector_binary_op_result(left.kind, binary->op, right.kind)) {
                 return vector_result_type_info(*result_kind);

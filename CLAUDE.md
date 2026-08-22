@@ -119,6 +119,16 @@ test first (TDD): write a failing Catch2 test in `tests/` that captures the inte
 behavior, watch it fail, then implement until it passes. Follow the existing
 `test_*.cpp` naming and structure in `tests/`.
 
+## Comments
+
+Brevity is the sister of talent. Default to no comment. Add one only when the code's WHY
+genuinely isn't obvious from reading it — a non-obvious constraint, a workaround for a
+specific bug, a subtle invariant — and keep it to one short line. Don't restate WHAT
+the code does; the code already says that. Don't reference a spec section, change
+name, task number, or issue in the comment — that context belongs in the commit
+message or change proposal, not the source, and goes stale once the codebase moves
+past it.
+
 ## Formatting
 
 `.clang-tidy`'s `FormatStyle: 'file'` couples `--fix` to `.clang-format` already —

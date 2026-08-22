@@ -37,6 +37,24 @@ Deliberately disabled in `.clang-tidy` — don't hand-apply the guidance below a
   required to convert.
 - `bugprone-easily-swappable-parameters` — adjacent same-type parameters allowed.
 
+## Avoid duplication
+
+Applies to the compiler's C++ (scope above) and to any `.cactus` source touched in
+this repo (`stdlib/`, `examples/`). Before adding a new function, helper, or block of
+logic, check whether equivalent behavior already exists — grep for likely names and
+scan `src/common` (C++) or the relevant `stdlib` module (Cactus) for something close
+before writing a fresh implementation.
+
+- If a suitable version already exists, call it — don't re-implement it locally, even
+  in a slightly different shape.
+- If what exists is almost-but-not-quite right, extract the shared part into a common
+  helper (`src/common` for logic used across frontend/backends; the nearest shared
+  Cactus module for stdlib-level logic) and update both call sites to use it, rather
+  than copy-pasting and tweaking.
+- Never leave two near-identical implementations of the same behavior in the tree
+  side by side — divergent copies are how one gets the next bug fix and the other
+  doesn't.
+
 ## Control-flow nesting — C++ and Cactus
 
 Applies to the compiler's C++ (scope above) and to any `.cactus` source touched in

@@ -1,3 +1,7 @@
+## Purpose
+
+Define the Cactus type system, including primitive and composite types, field modifier flags, expression type inference, string rvalue constraints, and built-in types such as asset opaque IDs, `InputButton`, and `InputAxis`.
+
 ## Requirements
 ### Requirement: Primitive type support
 The type system SHALL support the following primitive types: `int` (32-bit signed), `float` (64-bit), `bool`, `string` (UTF-8 immutable), `vec2`, `vec3`, `quat`, `color`, `entity_id`, `mesh_id`, `texture_id`, `sound_id`, `music_id`, `font_id`, `material_id`, `InputButton`, and `InputAxis`.

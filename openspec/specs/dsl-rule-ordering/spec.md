@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `after:` clause on rule declarations for expressing execution ordering, including rule-name resolution, cycle detection, and representation in the `DecoratedProgram` dependency graph.
+
 ## Requirements
 
 ### Requirement: `after:` clause on rule declarations

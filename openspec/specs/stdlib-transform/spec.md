@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `std.transform` stdlib module's 2D (`flat`) and 3D (`volume`) hierarchical transform traits, including their mutual exclusivity on a single entity.
+
 ## Requirements
 
 ### Requirement: std.transform.flat provides 2D hierarchical transform traits

@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `std.camera` stdlib module's 2D (`flat`) and 3D (`volume`) camera traits and helper rules, including current stubs pending an entity query mechanism.
+
 ## Requirements
 
 ### Requirement: std.camera.flat provides 2D camera traits

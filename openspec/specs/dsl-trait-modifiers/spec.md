@@ -1,3 +1,7 @@
+## Purpose
+
+Define trait declaration modifiers and rule matching qualifiers, including marker (empty-body) traits and the optional `filter:`/`exclude:` blocks that scope rule handlers to matching entities.
+
 ## Requirements
 
 ### Requirement: Marker (empty-body) traits

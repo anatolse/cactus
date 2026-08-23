@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `std.physics` stdlib module, including 2D (`flat`) and 3D (`volume`) kinematic physics traits, collider-backed cast/overlap world queries with stable contact semantics, and the trait-filtered query namespace — all driven passively without user-authored rules.
+
 ## Requirements
 
 ### Requirement: std.physics.flat provides 2D kinematic physics traits

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define the `input` declaration syntax for binding button and axis inputs, including valid property keys, `std.input` enum references, resulting `InputButton`/`InputAxis` types, and module-visibility rules.
+
+## Requirements
 
 ### Requirement: Input declaration syntax
 The parser SHALL accept `input` as a top-level declaration form. An `input` declaration binds a compile-time identifier to a logical input action of kind `button` or `axis`.

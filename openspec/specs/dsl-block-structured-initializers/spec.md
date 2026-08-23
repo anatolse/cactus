@@ -1,3 +1,7 @@
+## Purpose
+
+Define the nested block-structured initializer syntax used for archetype, `spawn`, and `emit` expressions.
+
 ## Requirements
 
 ### Requirement: Nested block initialization syntax for archetypes, spawn, and emit

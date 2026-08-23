@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `std.audio` stdlib module, including the fire-and-forget `PlaySound` event and the `AudioSource`, `MusicTrack`, and `AudioSettings` traits.
+
 ## Requirements
 
 ### Requirement: std.audio provides a PlaySound event for fire-and-forget sounds

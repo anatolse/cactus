@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `std.math` stdlib module's pure scalar, `vec2`, `vec3`, and `quat` functions, including independent importability, and the backend-backed `std.input` query extern functions.
+
 ## Requirements
 
 ### Requirement: std.math provides scalar math pure functions

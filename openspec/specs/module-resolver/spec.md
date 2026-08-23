@@ -1,3 +1,7 @@
+## Purpose
+
+Define module dependency resolution, including discovery from `use` declarations, module-name-to-file location, DAG construction with topological ordering, circular-dependency detection, and single-compilation guarantees.
+
 ## Requirements
 
 ### Requirement: Dependency discovery from use declarations

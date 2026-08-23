@@ -1,3 +1,7 @@
+## Purpose
+
+Define the lexical grammar of Cactus source, including indentation-sensitive tokenization, keyword recognition, literal tokenization (numeric, string, hex color), comment handling, and operator/punctuation tokens.
+
 ## Requirements
 
 ### Requirement: Indentation-sensitive tokenization

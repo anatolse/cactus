@@ -1,3 +1,7 @@
+## Purpose
+
+Define the parser's grammar for top-level declarations, including traits, entities with nested archetypes, templates, and rule `filter:`/`exclude:` clauses, along with rejection of legacy `unit` syntax.
+
 ## Requirements
 ### Requirement: Top-level declaration parsing
 The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. The first top-level declaration MUST be exactly one `module` declaration. Supported declarations after the module declaration are: `use`, `const`, `struct`, `enum`, `trait`, `entity`, `rule`, `event`, `func`, `extern func`, `template`, `asset`, and `input`.
@@ -590,13 +594,6 @@ The keyword `after` is added to the lexer keyword set with token type `AFTER`.
 - **WHEN** a rule body contains `after:` with an empty indented block
 - **THEN** the parser reports an error: "after: block must contain at least one rule name"
 
-### Requirement: Optional `as` alias in `apply:` entries of units and templates
-**Reason**: Archetype declarations no longer use `apply:` entries. Trait ownership is expressed structurally through nested trait blocks, so archetype-local aliases are unnecessary.
-**Migration**: Replace `apply:` entries and alias-qualified config keys with nested trait blocks under the trait name.
-
-### Requirement: Dotted key form in `config:` assignments and `spawn` override arguments
-**Reason**: `config:` blocks and flat parenthesized spawn override arguments are removed. Nested trait blocks make field ownership explicit without dotted keys.
-**Migration**: Move each field assignment under its owning trait block in the unit/template or spawn body.
 
 ### Requirement: `order by:` clause parsing in rule declarations
 The parser SHALL recognize an optional `order by:` block in rule declarations, positioned between the `filter:`/`exclude:` clauses and the event handler list. The `order by:` block contains one or more sort key lines, each consisting of a dotted alias-field expression followed by an optional direction keyword.

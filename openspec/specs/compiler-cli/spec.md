@@ -1,3 +1,7 @@
+## Purpose
+
+Define the behavior of the `cactus` command-line compiler driver, including argument parsing, end-to-end pipeline execution, source-located error reporting, and exit code conventions.
+
 ## Requirements
 ### Requirement: Command-line argument parsing
 The CLI SHALL accept the following arguments: input file path (positional, required), `--backend` flag (`cpp-entt`, default: `cpp-entt`), `--output` flag (output file path, optional, defaults to stdout), `--module-path` flag (repeatable, additional directories to search for module files), and `--help` flag.

@@ -1,3 +1,7 @@
+## Purpose
+
+Define linking of compiled `.cmod` module artifacts into a single resolved program, including symbol merging, duplicate-symbol detection, `pub` visibility enforcement, and deterministic declaration ordering for code generation.
+
 ## Requirements
 
 ### Requirement: Merge multiple DecoratedPrograms from .cmod artifacts

@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `self` keyword's meaning and scope, including its restriction to world-aware rule-handler contexts and its non-shadowable status.
+
 ## Requirements
 
 ### Requirement: `self` keyword denotes the current entity in rule handlers

@@ -1,3 +1,7 @@
+## Purpose
+
+Define the four-phase per-frame update model (`on input`, `fixed_tick`, `tick`, `late_tick`), including each phase's event-binding data and how rule filters apply across phases.
+
 ## Requirements
 
 ### Requirement: Four-phase per-frame update model

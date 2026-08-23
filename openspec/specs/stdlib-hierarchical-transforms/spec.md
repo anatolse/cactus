@@ -1,3 +1,7 @@
+## Purpose
+
+Define stdlib support for entity transform hierarchies, including the `parent` trait, local/world transform traits for `flat` and `volume` profiles, parent-chain propagation and recursive descendant deletion via backend-bound extern rules, and scratch-storage allocator discipline.
+
 ## Requirements
 
 ### Requirement: hierarchy relationships are represented by a parent trait

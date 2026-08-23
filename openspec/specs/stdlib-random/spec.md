@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `std.random` stdlib module, including the seeded generator type, distribution value types, pure sampling functions, and a fixed-palette color lookup, all backend-backed and verified.
+
 ## Requirements
 
 ### Requirement: std.random provides a seeded generator type

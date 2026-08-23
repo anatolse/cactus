@@ -1,3 +1,7 @@
+## Purpose
+
+Define the design philosophy and guiding principles behind the Cactus language, including its gameplay-core scope, predictability and total-semantics goals, ECS-centric model, declarative/imperative boundary, and the author/backend responsibility split.
+
 ## Requirements
 
 ### Requirement: Cactus language identity

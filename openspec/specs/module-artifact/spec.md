@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `.cmod` binary module artifact format, including serialization/deserialization of `DecoratedProgram`, public symbol extraction, versioning, and build-directory management.
+
 ## Requirements
 
 ### Requirement: Serialize DecoratedProgram to binary .cmod file

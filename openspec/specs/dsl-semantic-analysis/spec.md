@@ -1,3 +1,7 @@
+## Purpose
+
+Define the semantic analysis pass's validation responsibilities, including type resolution, const-string enforcement, func purity and recursion checks, `persist`/`sync` modifier validation, and rule filter/event validation.
+
 ## Requirements
 ### Requirement: Type resolution
 The semantic analyzer SHALL resolve all type references in the AST to concrete TypeInfo objects. Struct names, trait names, enum names, and parameterized types (`list[T]`) SHALL be resolved against declared types. Unresolved type references SHALL produce an error.
@@ -653,17 +657,6 @@ The semantic analyzer SHALL populate the `after_rules` field of each `RuleInfo` 
 - **WHEN** a rule has no `after:` clause
 - **THEN** `RuleInfo.after_rules` is an empty vector
 
-### Requirement: `apply:` alias uniqueness validation
-**Reason**: Archetype declarations no longer support `apply:` aliases.
-**Migration**: Replace alias-based archetype configuration with nested trait blocks.
-
-### Requirement: Qualified `config:` key resolution
-**Reason**: `config:` blocks are removed. Trait ownership is explicit in the nested syntax, so key qualification rules are unnecessary.
-**Migration**: Move field assignments into the owning trait block in the unit or template body.
-
-### Requirement: Qualified `spawn()` override argument key resolution
-**Reason**: `spawn` no longer uses flat override arguments. Nested trait override blocks replace prefixed key resolution.
-**Migration**: Move spawn override fields into the appropriate nested trait block under `spawn TemplateName:`.
 
 ### Requirement: `ResolvedFunc` produced in `DecoratedProgram`
 The semantic analyzer SHALL populate a `funcs` map in `DecoratedProgram` containing a `ResolvedFunc` entry for every `func` and `extern func` declaration in the analyzed program. The `ResolvedFunc` struct SHALL include: `name`, `is_pub`, `is_extern`, resolved parameter types, and resolved return type.

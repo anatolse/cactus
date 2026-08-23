@@ -1,3 +1,7 @@
+## Purpose
+
+Define how the language specs themselves are curated and organized, including scoping the normative surface to active gameplay features, separating deferred features, and keeping core language guidance distinct from stdlib and backend detail.
+
 ## Requirements
 
 ### Requirement: Normative DSL surface is curated to active gameplay features

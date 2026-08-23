@@ -1,3 +1,7 @@
+## Purpose
+
+Define scene loading and transition semantics, including the three-phase `load` statement, module-as-scene execution model, `on load()`/`on unload()` lifecycle handlers, and the `std.core` `Persistent`/`SceneCleanup` traits.
+
 ## Requirements
 
 ### Requirement: `load` statement performs a three-phase scene transition

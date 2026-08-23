@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `std.camera.viewport` stdlib module's `Viewport` trait and the per-viewport render-loop code generation it triggers when imported.
+
 ## Requirements
 
 ### Requirement: std.camera.viewport provides the Viewport trait

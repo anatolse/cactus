@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `extern func` declaration form for backend-implemented functions, including its body-less grammar, exemption from purity/recursion analysis, symbol export, and generated-code header inclusion.
+
 ## Requirements
 
 ### Requirement: `extern func` declaration syntax

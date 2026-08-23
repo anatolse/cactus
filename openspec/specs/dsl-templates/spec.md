@@ -1,3 +1,7 @@
+## Purpose
+
+Define the `template` declaration and its runtime counterparts, including composition semantics, the `spawn`/`destroy` statements, `on spawn()`/`on destroy()` lifecycle handlers, and load-time instantiation of template-backed entities.
+
 ## Requirements
 
 ### Requirement: Template declaration syntax

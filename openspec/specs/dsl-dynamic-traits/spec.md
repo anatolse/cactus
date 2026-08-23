@@ -1,3 +1,7 @@
+## Purpose
+
+Define runtime trait-set mutation via the `add` and `remove` statements, including cross-entity targeting with `to`/`from`, default field values, and the handler-only scope in which these statements are valid.
+
 ## Requirements
 
 ### Requirement: Runtime trait-set changes use `add` and `remove` as the canonical surface

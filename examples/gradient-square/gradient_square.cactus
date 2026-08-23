@@ -1,0 +1,40 @@
+module gradient_square
+
+use std.transform.flat as tf
+use std.render.passes as passes
+
+const:
+    SQUARE_SIZE = 200.0
+
+pub phase gradient_pass:
+    after:
+        render
+    pipeline: passes.Pass = passes.Pass.Quads
+    output: passes.Target = passes.Target.Screen
+
+pub entity GradientSquare:
+    tf.WorldTransform:
+        position = vec2(400.0, 300.0)
+
+rule SquareVertex:
+    filter:
+        tf.WorldTransform as xf
+
+    on gradient_pass.vertex as v:
+        let half = SQUARE_SIZE * 0.5
+        v.screen_position = vec2(xf.position.x + v.corner.x * half, xf.position.y + v.corner.y * half)
+        v.uv_out = v.uv
+        if v.corner.x < 0.0:
+            if v.corner.y < 0.0:
+                v.tint_out = #FF0000FF
+            else:
+                v.tint_out = #FFFF00FF
+        else:
+            if v.corner.y < 0.0:
+                v.tint_out = #00FF00FF
+            else:
+                v.tint_out = #0000FFFF
+
+rule SquareFragment:
+    on gradient_pass.fragment as f:
+        f.frag_color = f.tint

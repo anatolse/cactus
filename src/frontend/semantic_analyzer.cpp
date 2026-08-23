@@ -1,5 +1,7 @@
 #include "frontend/semantic_analyzer.hpp"
 
+#include "common/render_pass_builtin_fields.hpp"
+#include "common/render_pass_intrinsics.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -1036,6 +1038,14 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 1: Collect all type declarations
     collect_types(program);
 
+    // dsl-render-passes: recognize render-pass phases by descriptor field
+    // type now, right after field types are resolved (collect_types) and
+    // before resolve_all_types resolves ordinary handler triggers — a
+    // render-pass phase's derived `<phase>.vertex`/`<phase>.fragment`
+    // triggers must already be recognizable by the time rule handlers below
+    // resolve their own `on ...:` trigger.
+    recognize_render_pass_phases(program);
+
     // dsl-where-clause: lower where: into leading handler-body guards before
     // any pass resolves or inspects handler body shape (see
     // desugar_where_clauses's doc comment).
@@ -1053,6 +1063,14 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_rule_filters(program);
     validate_where_clauses(program);
     validate_phase_declarations(program);
+    // dsl-render-passes: descriptor-field *value* validation needs
+    // resolved_enum_member, populated by resolve_all_types above, so it runs
+    // as a separate step after validate_phase_declarations rather than
+    // inside validate_phase_field_initializers. Stage-handler cardinality and
+    // shape/body validation need every rule's handler trigger already
+    // resolved, which is also true by this point.
+    validate_render_pass_descriptor_fields(program);
+    validate_render_pass_stage_handlers(program);
     validate_external_handler_contracts(program);
     validate_event_usage(program);
     validate_text_format_calls(program);
@@ -2414,7 +2432,6 @@ void SemanticAnalyzer::validateOrderByClause(const ExternRuleNode& rule) {
     proxy.exclude     = rule.exclude;
     proxy.order_by    = rule.order_by;
     proxy.after_rules = rule.after_rules;
-    proxy.target      = rule.target;
     proxy.location    = rule.location;
     validateOrderByClause(proxy);
 }
@@ -2709,6 +2726,16 @@ void SemanticAnalyzer::validate_phase_field_initializers(const PhaseCollection& 
         };
 
         for (std::size_t index = 0; index < phase->fields.size(); ++index) {
+            // dsl-render-passes: a render-pass phase's Pass/Target descriptor
+            // fields are not upstream-activation reads at all — they're
+            // compile-time-constant enum literals, validated separately by
+            // validate_render_pass_descriptor_fields once resolved_enum_member
+            // is available (see analyze()'s ordering comment).
+            if (resolved_phase.render_pass.has_value() &&
+                (index == resolved_phase.render_pass->pass_field_index ||
+                 index == resolved_phase.render_pass->target_field_index)) {
+                continue;
+            }
             auto& field_node               = phase->fields[index];
             const auto* member_initializer = std::get_if<MemberExpr>(&field_node.initializer->expr);
             if (member_initializer == nullptr) {
@@ -2759,6 +2786,379 @@ void SemanticAnalyzer::validate_phase_declarations(ProgramNode& program) {
     validate_phase_field_initializers(phases);
 }
 
+// dsl-render-passes: a phase is recognized as a render-pass phase when one of
+// its fields resolves to canonical type std.render.passes.Pass (field name
+// insignificant — recognition is by resolved type identity). Runs right after
+// collect_types (see analyze()'s ordering comment) so field types are already
+// resolved but before resolve_all_types resolves ordinary handler triggers.
+void SemanticAnalyzer::recognize_render_pass_phases(ProgramNode& program) {
+    static const auto pass_enum_id   = make_symbol_id(SymbolKind::Enum, "std.render.passes", "Pass");
+    static const auto target_enum_id = make_symbol_id(SymbolKind::Enum, "std.render.passes", "Target");
+
+    for (auto& decl : program.declarations) {
+        auto* phase = std::get_if<PhaseNode>(&decl);
+        if (phase == nullptr) {
+            continue;
+        }
+        const auto phase_it = result_.phases.find(phase->name);
+        if (phase_it == result_.phases.end()) {
+            continue;
+        }
+        auto& resolved_phase = phase_it->second;
+
+        std::optional<std::size_t> pass_field_index;
+        std::optional<std::size_t> target_field_index;
+        for (std::size_t index = 0; index < resolved_phase.fields.size(); ++index) {
+            const auto& field_type = resolved_phase.fields[index].type;
+            if (field_type.kind != TypeKind::Enum || !field_type.symbol_id.has_value()) {
+                continue;
+            }
+            if (*field_type.symbol_id == pass_enum_id) {
+                pass_field_index = index;
+            } else if (*field_type.symbol_id == target_enum_id) {
+                target_field_index = index;
+            }
+        }
+        if (!pass_field_index.has_value()) {
+            continue;  // ordinary phase — no render-pass recognition
+        }
+        if (!target_field_index.has_value()) {
+            errors_.error(phase->location,
+                          "render-pass phase '" + phase->name +
+                              "' declares a std.render.passes.Pass field but no std.render.passes.Target field");
+            continue;
+        }
+
+        const auto& phase_symbol = *phase->resolved_phase_id;
+        RenderPassInfo info;
+        info.pass_field_index   = *pass_field_index;
+        info.target_field_index = *target_field_index;
+        info.pass_enum_id       = pass_enum_id;
+        info.target_enum_id     = target_enum_id;
+        info.vertex_trigger     = ResolvedHandlerTrigger{
+            .kind   = HandlerTriggerKind::RenderStage,
+            .symbol = make_symbol_id(SymbolKind::Phase, phase_symbol.module, phase_symbol.local_name + "__vertex")};
+        info.fragment_trigger = ResolvedHandlerTrigger{
+            .kind   = HandlerTriggerKind::RenderStage,
+            .symbol = make_symbol_id(SymbolKind::Phase, phase_symbol.module, phase_symbol.local_name + "__fragment")};
+        resolved_phase.render_pass = std::move(info);
+    }
+}
+
+// dsl-render-passes: validates that a render-pass phase's Pass/Target
+// descriptor fields are initialized with a compile-time-constant enum-variant
+// literal of the expected type. Runs after resolve_all_types (see analyze()'s
+// ordering comment) so MemberExpr::resolved_enum_member is already populated.
+void SemanticAnalyzer::validate_render_pass_descriptor_fields(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        auto* phase = std::get_if<PhaseNode>(&decl);
+        if (phase == nullptr) {
+            continue;
+        }
+        const auto phase_it = result_.phases.find(phase->name);
+        if (phase_it == result_.phases.end() || !phase_it->second.render_pass.has_value()) {
+            continue;
+        }
+        const auto& info = *phase_it->second.render_pass;
+
+        const auto validate_descriptor_field = [&](std::size_t field_index, const SymbolId& expected_enum) {
+            auto& field_node    = phase->fields[field_index];
+            const auto* member  = std::get_if<MemberExpr>(&field_node.initializer->expr);
+            const bool is_valid = member != nullptr && member->resolved_enum_member.has_value() &&
+                                  member->resolved_enum_member->enum_id == expected_enum;
+            if (!is_valid) {
+                errors_.error(field_node.location,
+                              "phase field '" + phase->name + "." + field_node.name +
+                                  "' must be initialized with a compile-time-constant '" +
+                                  make_canonical_id(expected_enum) + "' enum-variant literal");
+            }
+        };
+        validate_descriptor_field(info.pass_field_index, info.pass_enum_id);
+        validate_descriptor_field(info.target_field_index, info.target_enum_id);
+    }
+}
+
+void SemanticAnalyzer::validate_render_pass_stage_handler_shape(const RuleNode& rule,
+                                                                 const EventHandlerNode& handler,
+                                                                 bool is_vertex) const {
+    if (!handler.alias.has_value()) {
+        errors_.error(handler.location,
+                      "render-pass stage handler must bind an alias (e.g. 'as v') to access its built-in fields");
+    }
+    if (is_vertex) {
+        const bool has_filter = !rule.filter.entries.empty() || !rule.filter.trait_names.empty();
+        if (rule.pairs.has_value()) {
+            errors_.error(rule.location,
+                          "render-pass vertex-stage handler cannot use 'pairs:'; it requires a unary 'filter:'");
+        } else if (!has_filter) {
+            errors_.error(rule.location, "render-pass vertex-stage handler requires an instance domain ('filter:')");
+        }
+        return;
+    }
+    const bool has_filter  = !rule.filter.entries.empty() || !rule.filter.trait_names.empty();
+    const bool has_exclude = !rule.exclude.entries.empty() || !rule.exclude.trait_names.empty();
+    if (has_filter || has_exclude || rule.pairs.has_value() || rule.where_clause.has_value()) {
+        errors_.error(rule.location,
+                      "render-pass fragment-stage handler is selectionless: 'filter:'/'exclude:'/'pairs:'/'where:' "
+                      "are not allowed");
+    }
+}
+
+// dsl-render-passes: validates the restricted statement/expression subset a
+// stage handler body may use (design.md Decision 3): `let`, assignment to
+// invocation-local variables and the handler's own writable built-in output
+// fields, `if`/`else`, and calls to `func`/a registered-portable-GLSL `extern
+// func`. Everything else — spawn/destroy/add/remove/project/emit, world
+// queries, bounded `for`, trait-match, and writes to a filtered trait — is
+// rejected with a diagnostic naming the offending statement.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- single consolidated statement+expression walker
+void SemanticAnalyzer::validate_render_pass_stage_handler_body(
+    const std::vector<std::unique_ptr<StmtNode>>& body,
+    const std::string& alias,
+    const std::unordered_set<std::string>& filter_alias_names,
+    const std::unordered_set<std::string>& writable_output_fields,
+    const char* stage_desc) const {
+    std::function<void(const ExprNode&)> visit_expr;
+    std::function<void(const std::vector<std::unique_ptr<StmtNode>>&)> visit_stmts;
+
+    visit_expr = [&](const ExprNode& expr) {
+        std::visit(
+            [&](const auto& node) {
+                using E = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                    errors_.error(expr.location,
+                                  std::string("a world query is not allowed in a render-pass ") + stage_desc +
+                                      "-stage handler body");
+                } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                    errors_.error(expr.location,
+                                  std::string("'spawn' is not allowed in a render-pass ") + stage_desc +
+                                      "-stage handler body");
+                } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                    visit_expr(*node.left);
+                    visit_expr(*node.right);
+                } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                    visit_expr(*node.operand);
+                } else if constexpr (std::is_same_v<E, CallExpr>) {
+                    const auto* callee_ident = std::get_if<IdentExpr>(&node.callee->expr);
+                    const bool is_vector_ctor =
+                        callee_ident != nullptr &&
+                        (callee_ident->name == "vec2" || callee_ident->name == "vec3" || callee_ident->name == "color");
+                    if (!is_vector_ctor) {
+                        auto callee_symbol = resolve_callee_symbol(*node.callee);
+                        const auto* func    = callee_symbol.has_value() ? find_resolved_func(*callee_symbol) : nullptr;
+                        if (func != nullptr && func->is_extern &&
+                            !is_render_pass_portable_glsl_intrinsic(*callee_symbol)) {
+                            errors_.error(expr.location,
+                                          "extern func '" + make_canonical_id(*callee_symbol) +
+                                              "' has no registered portable GLSL translation for a render-pass "
+                                              "stage handler");
+                        }
+                    }
+                    for (const auto& arg : node.args) {
+                        visit_expr(*arg);
+                    }
+                } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                    visit_expr(*node.object);
+                } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                    visit_expr(*node.body);
+                } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                    visit_expr(*node.source);
+                    for (const auto& operation : node.operations) {
+                        for (const auto& arg : operation.args) {
+                            visit_expr(*arg);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                    visit_expr(*node.subject);
+                    for (const auto& arm : node.arms) {
+                        visit_expr(*arm.pattern);
+                        visit_expr(*arm.body);
+                    }
+                } else if constexpr (std::is_same_v<E, IfExpr>) {
+                    visit_expr(*node.condition);
+                    visit_expr(*node.then_expr);
+                    visit_expr(*node.else_expr);
+                } else if constexpr (std::is_same_v<E, ListExpr>) {
+                    for (const auto& element : node.elements) {
+                        visit_expr(*element);
+                    }
+                }
+                // LiteralExpr, IdentExpr, SelfExpr: no sub-expressions to visit.
+            },
+            expr.expr);
+    };
+
+    const auto forbid_statement = [&](const SourceLocation& loc, const char* keyword) {
+        errors_.error(loc,
+                      std::string("'") + keyword + "' is not allowed in a render-pass " + stage_desc +
+                          "-stage handler body");
+    };
+
+    visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts) {
+        for (const auto& stmt : stmts) {
+            std::visit(
+                [&](const auto& node) {
+                    using S = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<S, LetStmt>) {
+                        visit_expr(*node.value);
+                    } else if constexpr (std::is_same_v<S, VarAssign>) {
+                        visit_expr(*node.value);
+                        if (node.name == alias) {
+                            if (node.path.size() != 1 || !writable_output_fields.contains(node.path.front())) {
+                                errors_.error(node.location,
+                                              std::string("render-pass ") + stage_desc +
+                                                  "-stage handler may only assign to its own built-in output "
+                                                  "field(s)");
+                            }
+                        } else if (filter_alias_names.contains(node.name)) {
+                            errors_.error(node.location,
+                                          "only built-in stage-output fields are writable; '" + node.name +
+                                              "' is a filtered trait binding");
+                        }
+                    } else if constexpr (std::is_same_v<S, IfStmt>) {
+                        visit_expr(*node.condition);
+                        visit_stmts(node.then_body);
+                        for (const auto& branch : node.else_if_branches) {
+                            visit_expr(*branch.condition);
+                            visit_stmts(branch.body);
+                        }
+                        visit_stmts(node.else_body);
+                    } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                        visit_expr(*node.expr);
+                    } else if constexpr (std::is_same_v<S, EmitStmt>) {
+                        forbid_statement(node.location, "emit");
+                    } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                        forbid_statement(node.location, "spawn");
+                    } else if constexpr (std::is_same_v<S, DestroyStmt>) {
+                        forbid_statement(node.location, "destroy");
+                    } else if constexpr (std::is_same_v<S, LoadStmt>) {
+                        forbid_statement(node.location, "load");
+                    } else if constexpr (std::is_same_v<S, AddTraitStmt>) {
+                        forbid_statement(node.location, "add");
+                    } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
+                        forbid_statement(node.location, "remove");
+                    } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
+                        forbid_statement(node.location, "project");
+                    } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                        forbid_statement(node.location, "return");
+                    } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                        forbid_statement(node.location, "for");
+                    } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                        forbid_statement(node.location, "match");
+                    }
+                },
+                stmt->stmt);
+        }
+    };
+
+    visit_stmts(body);
+}
+
+// dsl-render-passes: finds each render-pass phase's vertex/fragment stage
+// handlers, validates cardinality (exactly one of each), and — for a phase
+// whose cardinality is valid — validates that handler's domain shape and body.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- cardinality scan plus per-stage validation dispatch
+void SemanticAnalyzer::validate_render_pass_stage_handlers(ProgramNode& program) {
+    using StageMatch = std::pair<RuleNode*, EventHandlerNode*>;
+
+    const auto validate_cardinality = [this](const PhaseNode& phase,
+                                             const char* stage,
+                                             const std::vector<StageMatch>& matches) -> const StageMatch* {
+        if (matches.empty()) {
+            errors_.error(phase.location,
+                          "render-pass phase '" + phase.name + "' has no '" + std::string(stage) + "' stage handler");
+            return nullptr;
+        }
+        if (matches.size() > 1) {
+            std::string names;
+            for (const auto& [rule, handler] : matches) {
+                if (!names.empty()) {
+                    names += ", ";
+                }
+                names += make_canonical_id(*rule->resolved_rule_id) + "/on " + phase.name + "." + stage;
+            }
+            errors_.error(matches.front().second->location,
+                          "render-pass phase '" + phase.name + "' has duplicate '" + std::string(stage) +
+                              "' stage handlers: " + names);
+            return nullptr;
+        }
+        return &matches.front();
+    };
+
+    for (auto& decl : program.declarations) {
+        auto* phase = std::get_if<PhaseNode>(&decl);
+        if (phase == nullptr) {
+            continue;
+        }
+        const auto phase_it = result_.phases.find(phase->name);
+        if (phase_it == result_.phases.end() || !phase_it->second.render_pass.has_value()) {
+            continue;
+        }
+        const auto& info = *phase_it->second.render_pass;
+
+        std::vector<StageMatch> vertex_matches;
+        std::vector<StageMatch> fragment_matches;
+        for (auto& other_decl : program.declarations) {
+            auto* rule = std::get_if<RuleNode>(&other_decl);
+            if (rule == nullptr) {
+                continue;
+            }
+            for (auto& handler : rule->handlers) {
+                if (!handler.resolved_trigger.has_value()) {
+                    continue;
+                }
+                if (*handler.resolved_trigger == info.vertex_trigger) {
+                    vertex_matches.emplace_back(rule, &handler);
+                } else if (*handler.resolved_trigger == info.fragment_trigger) {
+                    fragment_matches.emplace_back(rule, &handler);
+                }
+            }
+        }
+
+        static const std::unordered_set<std::string> kVertexOutputs   = {"screen_position", "uv_out", "tint_out"};
+        static const std::unordered_set<std::string> kFragmentOutputs = {"frag_color"};
+
+        const auto* vertex_match   = validate_cardinality(*phase, "vertex", vertex_matches);
+        const auto* fragment_match = validate_cardinality(*phase, "fragment", fragment_matches);
+        if (vertex_match != nullptr) {
+            const auto& [rule, handler] = *vertex_match;
+            validate_render_pass_stage_handler_shape(*rule, *handler, true);
+            if (handler->alias.has_value()) {
+                std::unordered_set<std::string> filter_alias_names;
+                for (const auto& entry : rule->filter.entries) {
+                    filter_alias_names.insert(entry.alias.value_or(
+                        entry.resolved_trait_id.has_value() ? entry.resolved_trait_id->local_name
+                                                            : entry.qualified_name));
+                }
+                filter_alias_names.insert(rule->filter.trait_names.begin(), rule->filter.trait_names.end());
+                validate_render_pass_stage_handler_body(
+                    handler->body, *handler->alias, filter_alias_names, kVertexOutputs, "vertex");
+            }
+        }
+        if (fragment_match != nullptr) {
+            const auto& [rule, handler] = *fragment_match;
+            validate_render_pass_stage_handler_shape(*rule, *handler, false);
+            if (handler->alias.has_value()) {
+                validate_render_pass_stage_handler_body(handler->body, *handler->alias, {}, kFragmentOutputs, "fragment");
+            }
+        }
+
+        // dsl-render-passes, "Render-pass synthetic pass-local edges": record
+        // the pass-local vertex/fragment relationship once both stage
+        // handlers are unambiguously identified, regardless of any further
+        // shape/body diagnostics above (codegen never runs on a program with
+        // errors, so a partially-valid entry here is harmless).
+        if (vertex_match != nullptr && fragment_match != nullptr) {
+            result_.execution_graph.render_passes.push_back(
+                RenderPassPlan{.phase           = *phase->resolved_phase_id,
+                               .vertex_handler   = HandlerIdentity{.rule    = *vertex_match->first->resolved_rule_id,
+                                                                  .trigger = info.vertex_trigger},
+                               .fragment_handler = HandlerIdentity{.rule = *fragment_match->first->resolved_rule_id,
+                                                                   .trigger = info.fragment_trigger}});
+        }
+    }
+}
+
 void SemanticAnalyzer::validate_filter_clause_traits(FilterClause& filter, const std::string& owner_desc) {
     if (!filter.entries.empty()) {
         // Rich filter entries (multi-module parser path)
@@ -2794,6 +3194,15 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
             bool has_filter = !rule->filter.entries.empty() || !rule->filter.trait_names.empty();
             if (!has_filter && !rule->pairs.has_value()) {
                 for (auto& handler : rule->handlers) {
+                    // dsl-render-passes: a fragment-stage handler is selectionless
+                    // (no filter:) by design, but legitimately accesses its own
+                    // built-in fields through its alias — validated separately by
+                    // validate_render_pass_stage_handler_body, not this generic
+                    // "no entity to access fields on" check.
+                    if (handler.resolved_trigger.has_value() &&
+                        handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
+                        continue;
+                    }
                     check_no_field_access(handler.body, rule->name);
                 }
             }
@@ -3167,10 +3576,10 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                     handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Event;
                 const bool phase_trigger =
                     handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Phase;
-                if (!event_trigger && !phase_trigger) {
-                    errors_.error(
-                        handler.location,
-                        "rule '" + rule->name + "' handles unknown event or phase '" + handler.event_name + "'");
+                const bool render_stage_trigger = handler.resolved_trigger.has_value() &&
+                                                  handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage;
+                if (!event_trigger && !phase_trigger && !render_stage_trigger) {
+                    diagnose_unresolved_handler_trigger("rule '" + rule->name + "'", handler.event_name, handler.location);
                 }
                 // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
                 if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
@@ -3199,6 +3608,14 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                         assign_canonical_identity(*phase_activation, phase_symbol);
                         handler_event = &*phase_activation;
                     }
+                }
+                if (render_stage_trigger) {
+                    // dsl-render-passes: exposes the stage's built-in input
+                    // (read) and output (write) fields under the handler's
+                    // own alias, through the same handler_event/local_bindings
+                    // mechanism ordinary phase completion data already uses.
+                    phase_activation = build_render_stage_activation_struct(handler.resolved_trigger->symbol);
+                    handler_event    = phase_activation.has_value() ? &*phase_activation : nullptr;
                 }
                 std::unordered_map<std::string, TypeInfo> local_bindings;
                 if (handler_event != nullptr) {
@@ -3752,10 +4169,17 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
         const auto& handler = rule.handlers[handler_index];
         if (!handler.resolved_trigger.has_value() || !rule.resolved_rule_id.has_value()) {
             if (!handler.resolved_trigger.has_value()) {
-                errors_.error(
-                    handler.trigger_location,
-                    "extern rule '" + rule.name + "' handles unknown event or phase '" + handler.trigger_name + "'");
+                diagnose_unresolved_handler_trigger(
+                    "extern rule '" + rule.name + "'", handler.trigger_name, handler.trigger_location);
             }
+            continue;
+        }
+        if (handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
+            // A render-pass stage handler's body is translated to GLSL
+            // (dsl-render-passes); an extern rule has no body to translate.
+            errors_.error(handler.trigger_location,
+                          "render-pass stage triggers are not valid on 'extern rule' declarations; use an ordinary "
+                          "'rule'");
             continue;
         }
         if (std::ranges::find(declared_triggers, *handler.resolved_trigger) != declared_triggers.end()) {
@@ -4659,11 +5083,87 @@ std::optional<SymbolId> SemanticAnalyzer::try_resolve_phase_ref_to_symbol(const 
 
 std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_handler_trigger(const std::string& ref) const {
     auto symbol = try_resolve_ref_of_kind(ref, {SymbolKind::Event, SymbolKind::Phase});
-    if (!symbol.has_value()) {
+    if (symbol.has_value()) {
+        const auto kind = symbol->kind == SymbolKind::Phase ? HandlerTriggerKind::Phase : HandlerTriggerKind::Event;
+        return ResolvedHandlerTrigger{.kind = kind, .symbol = *symbol};
+    }
+    return try_resolve_render_stage_trigger(ref);
+}
+
+// dsl-render-passes: resolves `<phase>.vertex`/`<phase>.fragment` — a dotted
+// reference whose head names a recognized render-pass phase and whose sole
+// remaining segment is a stage name — to that phase's derived trigger.
+// Cross-module render-pass phases are not supported yet: only a phase
+// declared in the current module can be recognized here.
+std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_render_stage_trigger(const std::string& ref) const {
+    auto resolved = resolve_name(dotted_segments(ref));
+    if (!resolved.has_value() || resolved->symbol.kind != SymbolKind::Phase || resolved->member_segments.size() != 1) {
         return std::nullopt;
     }
-    const auto kind = symbol->kind == SymbolKind::Phase ? HandlerTriggerKind::Phase : HandlerTriggerKind::Event;
-    return ResolvedHandlerTrigger{.kind = kind, .symbol = *symbol};
+    if (resolved->symbol.module != current_module_id_) {
+        return std::nullopt;
+    }
+    const auto phase_it = result_.phases.find(resolved->symbol.local_name);
+    if (phase_it == result_.phases.end() || !phase_it->second.render_pass.has_value()) {
+        return std::nullopt;
+    }
+    const auto& stage = resolved->member_segments.front();
+    if (stage == "vertex") {
+        return phase_it->second.render_pass->vertex_trigger;
+    }
+    if (stage == "fragment") {
+        return phase_it->second.render_pass->fragment_trigger;
+    }
+    return std::nullopt;
+}
+
+void SemanticAnalyzer::diagnose_unresolved_handler_trigger(const std::string& owner_desc,
+                                                            const std::string& event_name,
+                                                            const SourceLocation& loc) const {
+    auto resolved = resolve_name(dotted_segments(event_name));
+    if (resolved.has_value() && resolved->symbol.kind == SymbolKind::Phase && resolved->member_segments.size() == 1 &&
+        (resolved->member_segments.front() == "vertex" || resolved->member_segments.front() == "fragment")) {
+        errors_.error(loc,
+                      "phase '" + make_canonical_id(resolved->symbol) + "' exposes no such stage ('" +
+                          resolved->member_segments.front() + "'); it is not a render-pass phase");
+        return;
+    }
+    errors_.error(loc, owner_desc + " handles unknown event or phase '" + event_name + "'");
+}
+
+// dsl-render-passes: builds the synthetic struct exposing a Quads render-pass
+// stage's built-in input (read) and output (write) fields under the stage
+// handler's own alias, reusing the same handler_event/local_bindings
+// mechanism ordinary phase completion data already uses (validate_rule_filters).
+// The stage is identified by the derived trigger symbol's synthesized suffix
+// (see recognize_render_pass_phases) rather than by re-deriving it from the
+// owning phase, since only one Pass kind (and therefore one field table)
+// exists today.
+std::optional<ResolvedStruct> SemanticAnalyzer::build_render_stage_activation_struct(const SymbolId& symbol) const {
+    static const std::string kVertexSuffix   = "__vertex";
+    static const std::string kFragmentSuffix = "__fragment";
+
+    ResolvedStruct activation;
+    if (symbol.local_name.ends_with(kVertexSuffix)) {
+        for (const auto& field : quads_vertex_input_fields()) {
+            activation.fields.push_back(ResolvedField{.name = field.name, .type = field.type, .is_let = true});
+        }
+        for (const auto& field : quads_vertex_output_fields()) {
+            activation.fields.push_back(ResolvedField{.name = field.name, .type = field.type, .is_var = true});
+        }
+    } else if (symbol.local_name.ends_with(kFragmentSuffix)) {
+        for (const auto& field : quads_fragment_input_fields()) {
+            activation.fields.push_back(ResolvedField{.name = field.name, .type = field.type, .is_let = true});
+        }
+        for (const auto& field : quads_fragment_output_fields()) {
+            activation.fields.push_back(ResolvedField{.name = field.name, .type = field.type, .is_var = true});
+        }
+    } else {
+        return std::nullopt;
+    }
+    activation.name = symbol.local_name;
+    assign_canonical_identity(activation, symbol);
+    return activation;
 }
 
 bool SemanticAnalyzer::is_external_event(const SymbolId& symbol) const {

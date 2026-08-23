@@ -90,6 +90,18 @@ struct ResolvedEvent : CanonicalIdentity {
     bool is_external = false;
 };
 
+// Recognition + derived-trigger data for a render-pass phase
+// (dsl-render-passes). Present only when one of the phase's fields resolves
+// to the canonical stdlib type `std.render.passes.Pass`.
+struct RenderPassInfo {
+    std::size_t pass_field_index   = 0;  // index into ResolvedPhase::fields
+    std::size_t target_field_index = 0;  // index into ResolvedPhase::fields
+    SymbolId pass_enum_id;               // canonical std.render.passes.Pass symbol
+    SymbolId target_enum_id;             // canonical std.render.passes.Target symbol
+    ResolvedHandlerTrigger vertex_trigger;
+    ResolvedHandlerTrigger fragment_trigger;
+};
+
 struct ResolvedPhase : CanonicalIdentity {
     std::string name;
     std::vector<ResolvedField> fields;
@@ -99,6 +111,7 @@ struct ResolvedPhase : CanonicalIdentity {
     std::optional<SymbolId> runtime_root;
     std::optional<double> every_seconds;
     std::optional<std::int64_t> max_repetitions;
+    std::optional<RenderPassInfo> render_pass;
     bool is_pub    = false;
     bool has_every = false;
     bool has_max   = false;
@@ -333,9 +346,25 @@ struct DependencyLevel {
     std::vector<HandlerIdentity> handlers;
 };
 
+// dsl-render-passes, "Render-pass synthetic pass-local edges": represents the
+// backend-owned, non-authored rasterization step between a render-pass
+// phase's vertex- and fragment-stage handlers — vertex-handler node ->
+// synthetic rasterization node -> fragment-handler node -> the phase's own
+// node in the ordinary phase DAG (`phase`, already present in
+// ExecutionGraph::phases). Deliberately its own record rather than a
+// generic graph node/ScheduleEdge: the vertex->fragment relationship is a
+// fixed backend-mediated data flow, never a conflict the scheduler resolves,
+// so it needs no participation in schedule_edges/stable_topological_order.
+struct RenderPassPlan {
+    SymbolId phase;
+    HandlerIdentity vertex_handler;
+    HandlerIdentity fragment_handler;
+};
+
 struct ExecutionGraph {
     std::vector<PhasePlan> phases;
     std::vector<HandlerNode> handlers;
+    std::vector<RenderPassPlan> render_passes;
     std::vector<ScheduleEdge> schedule_edges;
     std::vector<PhaseBarrierEdge> phase_barriers;
     std::vector<EventFlowEdge> event_flows;
@@ -550,6 +579,32 @@ private:
     void synthesize_phase_periodic_fields(const PhaseCollection& phases);
     void validate_phase_field_initializers(const PhaseCollection& phases);
     void validate_phase_declarations(ProgramNode& program);
+
+    // dsl-render-passes: a phase is a render-pass phase when one of its
+    // fields resolves to canonical type std.render.passes.Pass. Recognition
+    // (by field type, populated by collect_types) runs before resolve_all_types
+    // so `<phase>.vertex`/`<phase>.fragment` already resolve as derived
+    // triggers by the time ordinary handler-trigger resolution runs; the
+    // descriptor fields' *value* (compile-time-constant enum literal) can only
+    // be checked once resolve_all_types has populated resolved_enum_member, so
+    // that validation runs later, after validate_phase_declarations.
+    void recognize_render_pass_phases(ProgramNode& program);
+    void validate_render_pass_descriptor_fields(ProgramNode& program);
+    void validate_render_pass_stage_handlers(ProgramNode& program);
+    [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_render_stage_trigger(const std::string& ref) const;
+    [[nodiscard]] std::optional<ResolvedStruct> build_render_stage_activation_struct(const SymbolId& symbol) const;
+    void diagnose_unresolved_handler_trigger(const std::string& owner_desc,
+                                             const std::string& event_name,
+                                             const SourceLocation& loc) const;
+    void validate_render_pass_stage_handler_shape(const RuleNode& rule,
+                                                  const EventHandlerNode& handler,
+                                                  bool is_vertex) const;
+    void validate_render_pass_stage_handler_body(const std::vector<std::unique_ptr<StmtNode>>& body,
+                                                 const std::string& alias,
+                                                 const std::unordered_set<std::string>& filter_alias_names,
+                                                 const std::unordered_set<std::string>& writable_output_fields,
+                                                 const char* stage_desc) const;
+
     void validate_rule_filters(ProgramNode& program);
     void validate_pair_bindings(RuleNode& rule);
     [[nodiscard]] static PairScope build_pair_scope(const PairClause& pairs);

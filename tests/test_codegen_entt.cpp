@@ -6359,4 +6359,68 @@ TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call kee
     }
 }
 
+// dsl-render-passes: a stage handler's `let`-bound local is an ordinary
+// Cactus identifier the author is free to choose without knowing anything
+// about GLSL — but GLSL reserves a set of words (e.g. `half`) whether or not
+// the corresponding feature is used, and headless test builds never actually
+// compile the embedded GLSL (CACTUS_RAYLIB_FAKE makes LoadShaderFromMemory a
+// no-op), so a collision like this has no path to failing any existing
+// automated test. This test locks in the fix directly against the generated
+// GLSL text instead: every `let` local must be emitted under a mangled name,
+// unconditionally, so no Cactus identifier can ever collide with a GLSL
+// keyword regardless of which one a future example happens to pick.
+TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to avoid GLSL reserved words",
+          "[codegen-entt][render-passes]") {
+    ImportedSymbols passes_syms;
+    passes_syms.module_name = "std.render.passes";
+    ResolvedEnum pass_enum;
+    pass_enum.name              = "Pass";
+    pass_enum.variants          = {"Quads"};
+    passes_syms.enums["Pass"]   = pass_enum;
+    ResolvedEnum target_enum;
+    target_enum.name             = "Target";
+    target_enum.variants         = {"Screen"};
+    passes_syms.enums["Target"]  = target_enum;
+    ModuleImports imports;
+    imports.add("passes", std::move(passes_syms));
+
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module render_pass_reserved_word\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n"
+        "rule MyVertex:\n"
+        "    filter:\n"
+        "        WorldTransform as xf\n"
+        "\n"
+        "    on my_pass.vertex as v:\n"
+        "        let half = 10.0\n"
+        "        v.screen_position = vec2(xf.position.x + v.corner.x * half, xf.position.y + v.corner.y * half)\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n"
+        "\n"
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        f.frag_color = f.tint\n",
+        program,
+        imports);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("let_half") != std::string::npos);
+    CHECK(code.find("float half") == std::string::npos);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

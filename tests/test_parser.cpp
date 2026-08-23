@@ -1570,8 +1570,7 @@ TEST_CASE("Parser: extern rule declaration with filter and order by", "[parser][
         "        r.layer asc\n"
         "        pos.pos.y desc\n"
         "    after:\n"
-        "        TransformUpdate\n"
-        "    target: cpu\n");
+        "        TransformUpdate\n");
 
     REQUIRE(prog.declarations.size() == 1);
     auto& decl = std::get<ExternRuleNode>(prog.declarations[0]);
@@ -1591,8 +1590,6 @@ TEST_CASE("Parser: extern rule declaration with filter and order by", "[parser][
     CHECK(decl.order_by[1].descending);
     REQUIRE(decl.after_rules.size() == 1);
     CHECK(decl.after_rules[0] == "TransformUpdate");
-    REQUIRE(decl.target.has_value());
-    CHECK(*decl.target == "cpu");
 }
 
 TEST_CASE("Parser: rule order by single and default asc", "[parser][rule-order-by]") {
@@ -1927,8 +1924,7 @@ TEST_CASE("Parser: pairs clause on extern rule is rejected", "[parser][pair-rela
         "        body:\n"
         "            DynamicBody\n"
         "        wall:\n"
-        "            Solid\n"
-        "    target: cpu\n");
+        "            Solid\n");
     REQUIRE(errors.has_errors());
 }
 
@@ -2026,8 +2022,7 @@ TEST_CASE("Parser: where clause on extern rule is rejected", "[parser][where-cla
         "    filter:\n"
         "        Position\n"
         "    where:\n"
-        "        true\n"
-        "    target: cpu\n");
+        "        true\n");
     REQUIRE(errors.has_errors());
 }
 

@@ -45,6 +45,35 @@ void set_active_camera_3d(Camera3D cam) noexcept;
 void draw_shape_rectangle(Vector2 position, Vector2 size, Vector2 origin, float rotation_rad, Color color) noexcept;
 void draw_shape_circle(Vector2 position, float diameter, Vector2 origin, Color color) noexcept;
 
+// ── Render-pass rendering (dsl-render-passes Quads pass kind) ──────────────────
+// Generic, program-independent shader load/cache plus the fixed 6-vertex quad
+// submission every Quads render-pass phase issues once per matching instance;
+// GLSL source text, uniform names/values, and the per-instance filter loop are
+// all program-specific and therefore generated, not part of this runtime.
+struct RenderPassShaderState {
+    Shader shader{};
+    bool loaded{false};
+    bool attempted{false};
+};
+
+// Compiles and caches `vertex_src`/`fragment_src` into `state` on first call;
+// returns the cached shader on every call once loaded, or nullptr if loading
+// was never attempted successfully (no real GL context, or a shader compile
+// error) — callers treat nullptr as "skip this render-pass phase's draw step
+// this frame," mirroring the lighting shader's ensure/nullptr contract.
+[[nodiscard]] Shader* ensure_render_pass_shader(RenderPassShaderState& state,
+                                                const char* vertex_src,
+                                                const char* fragment_src);
+
+// Submits one Quads instance's fixed 6-vertex quad (2 triangles) to whichever
+// shader is currently bound via BeginShaderMode. The generated render-pass
+// vertex shader derives `corner`/`uv` from gl_VertexID (Decision 2's fixed
+// corner table is baked into the shader itself) and reads per-instance data
+// from uniforms the caller sets before this call, so the vertex *positions*
+// submitted here are unused placeholders — this call exists only to advance
+// gl_VertexID six times per instance.
+void draw_render_pass_quad_instance() noexcept;
+
 struct RuntimeBinding {
     GeneratedProjectInfo project;
 };

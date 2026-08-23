@@ -2149,6 +2149,73 @@ void draw_shape_circle(const Vector2 position,
                                          diameter / 2.0F, color);
 }
 
+Shader* ensure_render_pass_shader(RenderPassShaderState& state, const char* vertex_src, const char* fragment_src) {
+    if (state.loaded) {
+        return &state.shader;
+    }
+    if (state.attempted) {
+        // Already tried and failed (compile error or no GL context yet) —
+        // don't retry every frame; mirrors the lighting shader's contract.
+        return nullptr;
+    }
+    state.attempted = true;
+#ifdef CACTUS_RAYLIB_FAKE
+    // LoadShaderFromMemory needs a real GL context, which headless behavioral
+    // tests never create — the render-pass phase's draw step simply never
+    // runs under the fake, same disclosed limitation as the lighting shader.
+    (void)vertex_src;
+    (void)fragment_src;
+    return nullptr;
+#else
+    if (!cactus::runtime::raylib::IsWindowReady()) {
+        return nullptr;
+    }
+    state.shader = LoadShaderFromMemory(vertex_src, fragment_src);
+    if (!IsShaderValid(state.shader)) {
+        state.shader = {};
+        return nullptr;
+    }
+    state.loaded = true;
+    return &state.shader;
+#endif
+}
+
+void draw_render_pass_quad_instance() noexcept {
+    // Corner/uv per vertex, matching render_pass_emitter.cpp's Quads layout.
+    // Fed through raylib's own vertexPosition/vertexTexCoord attributes
+    // (rlVertex2f/rlTexCoord2f), not gl_VertexID: rlgl is a batching
+    // renderer, so gl_VertexID reflects the shared batch's cumulative vertex
+    // offset, not a small per-instance index.
+    //
+    // RL_QUADS, not RL_TRIANGLES: empirically, this GL driver silently drops
+    // an RL_TRIANGLES batch whose vertices end up at a large on-screen
+    // position after the vertex shader's transform (reproduced with a
+    // screenshot-diffing probe harness — a bare RL_TRIANGLES draw through
+    // raylib's own default shader also went missing, while the identical
+    // geometry through RL_QUADS rendered correctly). RL_QUADS is also
+    // raylib's own preferred mode for this kind of untextured quad
+    // (DrawRectangleRec/DrawTriangle use it via SUPPORT_QUADS_DRAW_MODE).
+    constexpr std::array<Vector2, 4> kCorners = {
+        Vector2{.x = -1.0F, .y = -1.0F},
+        Vector2{.x = -1.0F, .y = 1.0F},
+        Vector2{.x = 1.0F, .y = 1.0F},
+        Vector2{.x = 1.0F, .y = -1.0F},
+    };
+    constexpr std::array<Vector2, 4> kUvs = {
+        Vector2{.x = 0.0F, .y = 0.0F},
+        Vector2{.x = 0.0F, .y = 1.0F},
+        Vector2{.x = 1.0F, .y = 1.0F},
+        Vector2{.x = 1.0F, .y = 0.0F},
+    };
+    rlBegin(RL_QUADS);
+    rlNormal3f(0.0F, 0.0F, 1.0F);
+    for (int i = 0; i < 4; ++i) {
+        rlTexCoord2f(kUvs.at(static_cast<std::size_t>(i)).x, kUvs.at(static_cast<std::size_t>(i)).y);
+        rlVertex2f(kCorners.at(static_cast<std::size_t>(i)).x, kCorners.at(static_cast<std::size_t>(i)).y);
+    }
+    rlEnd();
+}
+
 // ── Editor extern func implementations (std.editor) ──────────────────────────
 
 void register_editor_hit_test_impl(EditorHitTestImpl fn) noexcept {

@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <optional>
 #include <vector>
 
 namespace cactus {
@@ -58,13 +57,12 @@ private:
         FilterClause exclude;
         std::vector<SortKey> order_by;
         std::vector<std::string> after_rules;
-        std::optional<std::string> target;
     };
-    // Parses the filter:/exclude:/order by:/after:/target: clauses shared by
+    // Parses the filter:/exclude:/order by:/after: clauses shared by
     // `rule` and `extern rule` declarations, in that order. on_clause_parsed,
     // when set, is invoked with each of filter:/exclude:/order by:'s start
     // location and name right after that clause is parsed (before its own
-    // synchronize check) — never for after:/target:, which are compatible
+    // synchronize check) — never for after:, which is compatible
     // with `pairs:`. parse_rule uses this to reject a clause combined with
     // `pairs:` at the
     // same point in the sequence the un-extracted code did, rather than

@@ -484,7 +484,13 @@ using LexicalLocalBindings = std::unordered_set<std::string>;
 // tripping clang-tidy's bugprone-narrowing-conversions on the generated
 // output (see stdlib std.ui's Grid/Stack measurement formulas, the first DSL
 // code to mix a GridItem `int` field with `vec2` float components).
-enum class NumericKind : std::uint8_t { Unknown, Int, Float };
+// Color isn't numeric for arithmetic-promotion purposes (this classification's
+// original purpose) — it's tracked here too because it needs the same
+// per-local "what Cactus type is this identifier" lookup rewrite_expr's
+// MemberExpr case already threads through, to normalize a color-typed
+// local/parameter's `.r`/`.g`/`.b`/`.a` reads the same way every other color
+// access is normalized.
+enum class NumericKind : std::uint8_t { Unknown, Int, Float, Color };
 
 using LocalNumericKinds = std::unordered_map<std::string, NumericKind>;
 
@@ -2321,6 +2327,20 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                     if (pointer_aliases.contains(ident->name)) {
                         return ident->name + "->" + e.member;
                     }
+                    // A color-typed local/parameter's `.r`/`.g`/`.b`/`.a`
+                    // needs the same normalized-float read every other color
+                    // access uses (dsl-vector-expressions "Color float
+                    // component access") — the pair-bound-chain branch above
+                    // already handles this for a filter/pair trait access;
+                    // this is the same fix for a plain local value (e.g. a
+                    // `func`'s `color`-typed parameter).
+                    if (local_kinds != nullptr && (e.member == "r" || e.member == "g" || e.member == "b" ||
+                                                  e.member == "a")) {
+                        if (const auto found = local_kinds->find(ident->name);
+                            found != local_kinds->end() && found->second == NumericKind::Color) {
+                            return "(static_cast<float>(" + ident->name + "." + e.member + ") / 255.0F)";
+                        }
+                    }
                 }
                 return rewrite_expr(*e.object, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) + "." +
                        e.member;
@@ -3112,6 +3132,8 @@ std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedPr
             param_kinds[param.name] = NumericKind::Int;
         } else if (param.type.kind == TypeKind::Float) {
             param_kinds[param.name] = NumericKind::Float;
+        } else if (param.type.kind == TypeKind::Color) {
+            param_kinds[param.name] = NumericKind::Color;
         }
     }
     out << rewrite_stmt_block(func.body, 1, {}, program, {}, false, {}, nullptr, locals, param_kinds);
@@ -3314,6 +3336,14 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
     }
 
     for (const auto& handler : sys.handlers) {
+        if (handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
+            // dsl-render-passes: this handler's body is translated to GLSL by
+            // render_pass_emitter.cpp, not emitted as an ordinary C++ system
+            // function — it has no natural trigger C++ type (no phase
+            // struct, no event struct) for this generic per-handler
+            // emission to target.
+            continue;
+        }
         const auto* contract = graph_handler_contract(sys, handler, program);
         const bool is_pair = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
         const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();

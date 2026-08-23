@@ -213,6 +213,12 @@ cactus_add_headless_behavior_test(test_bouncy_bubbles_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_bouncy_bubbles_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_particle_burst_headless_behavior
+    CACTUS_SOURCE examples/particle-burst/particle_burst.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_particle_burst_headless_behavior.cpp
+)
+
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)
 add_dependencies(test_example_cpp_compilation cactus)
@@ -287,6 +293,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_PARTICLE_BURST_SOURCE="examples/particle-burst/particle_burst.cactus"
     CACTUS_EXAMPLE_PARTICLE_BURST_GENERATED_CPP="${PARTICLE_BURST_GENERATED_CPP}"
     CACTUS_EXAMPLE_PARTICLE_BURST_TARGET="example_particle_burst_generated"
+
+    CACTUS_EXAMPLE_GRADIENT_SQUARE_SOURCE="examples/gradient-square/gradient_square.cactus"
+    CACTUS_EXAMPLE_GRADIENT_SQUARE_GENERATED_CPP="${GRADIENT_SQUARE_GENERATED_CPP}"
+    CACTUS_EXAMPLE_GRADIENT_SQUARE_TARGET="example_gradient_square_generated"
 
     CACTUS_EXTERNAL_HANDLER_LINK_TARGET="example_external_handler_user_library"
     CACTUS_EXTERNAL_HANDLER_MISSING_TARGET="example_external_handler_missing_implementations"

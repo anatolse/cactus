@@ -14,6 +14,18 @@ namespace cactus {
 
 namespace {
 
+// dsl-vector-expressions "Color float component access": `.r/.g/.b/.a` are
+// the only member names this language ever resolves against a color-typed
+// expression (no other type has a field with any of these names, and
+// semantic analysis has already validated the program by the time codegen
+// runs) — the raw C++ field is a byte in [0,255] (raylib's Color), so every
+// such access must normalize to a float in [0,1] the same way regardless of
+// which emit_expr overload reaches it, mirroring rewrite_expr's handling of
+// the same access on a trait field (system_emitter.cpp).
+bool is_color_component_member(const std::string& member) {
+    return member == "r" || member == "g" || member == "b" || member == "a";
+}
+
 template <typename ResolvedDecl>
 std::string resolved_decl_cpp_name(const ResolvedDecl& decl) {
     // Prefer module_name: allows tests to override canonical identity after analysis.
@@ -295,6 +307,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                         return ident->name + "::" + e.member;
                     }
                 }
+                if (is_color_component_member(e.member)) {
+                    return "(static_cast<float>(" + emit_expr(*e.object, ast) + "." + e.member + ") / 255.0F)";
+                }
                 return emit_expr(*e.object, ast) + "." + e.member;
             } else if constexpr (std::is_same_v<E, ListExpr>) {
                 std::string result = "{";
@@ -402,6 +417,10 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
                         return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + e.member;
                     }
+                }
+                if (is_color_component_member(e.member)) {
+                    return "(static_cast<float>(" + EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member +
+                          ") / 255.0F)";
                 }
                 return EnttCodegenUtils::emit_expr(*e.object, program) + "." + e.member;
             } else {

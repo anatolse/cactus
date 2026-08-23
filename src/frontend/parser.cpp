@@ -1255,7 +1255,6 @@ RuleNode Parser::parse_rule() {
     node.exclude     = std::move(common.exclude);
     node.order_by    = std::move(common.order_by);
     node.after_rules = std::move(common.after_rules);
-    node.target      = std::move(common.target);
 
     skip_newlines();
     if (at_where_clause()) {
@@ -1362,14 +1361,6 @@ Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-com
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
-    }
-
-    skip_newlines();
-    if (check(TokenType::TARGET)) {
-        advance();
-        consume(TokenType::COLON, "expected ':'");
-        result.target = consume(TokenType::IDENTIFIER, "expected 'cpu' or 'gpu'").value;
-        expect_newline();
     }
 
     return result;
@@ -2846,7 +2837,6 @@ ExternRuleNode Parser::parse_extern_rule() {
     node.exclude     = std::move(common.exclude);
     node.order_by    = std::move(common.order_by);
     node.after_rules = std::move(common.after_rules);
-    node.target      = std::move(common.target);
 
     skip_newlines();
     if (at_where_clause()) {

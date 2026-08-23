@@ -2622,4 +2622,482 @@ TEST_CASE("handler graph separates phase barriers from cyclic event flow", "[sem
     CHECK(decorated.execution_graph.dependency_levels[2].handlers == std::vector<HandlerIdentity>{feedback_a});
     CHECK(decorated.execution_graph.dependency_levels[3].handlers == std::vector<HandlerIdentity>{feedback_b});
 }
+
+// ── dsl-render-passes: render-pass phase recognition and stage handlers ────────
+
+static ModuleImports make_render_passes_imports() {
+    ImportedSymbols syms;
+    syms.module_name = "std.render.passes";
+    ResolvedEnum pass_enum;
+    pass_enum.name        = "Pass";
+    pass_enum.variants    = {"Quads"};
+    syms.enums["Pass"]    = pass_enum;
+    ResolvedEnum target_enum;
+    target_enum.name       = "Target";
+    target_enum.variants   = {"Screen"};
+    syms.enums["Target"]   = target_enum;
+    ModuleImports imports;
+    imports.add("passes", std::move(syms));
+    return imports;
+}
+
+TEST_CASE("dsl-render-passes: phase with a Pass field is recognized regardless of field name",
+          "[semantic][render-passes][2.1]") {
+    auto [decorated, errors] = analyze_source(
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    shape: passes.Pass = passes.Pass.Quads\n"
+        "    surface: passes.Target = passes.Target.Screen\n"
+        "\n"
+        "rule MyVertex:\n"
+        "    filter:\n"
+        "        WorldTransform as xf\n"
+        "\n"
+        "    on my_pass.vertex as v:\n"
+        "        v.screen_position = xf.position\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n"
+        "\n"
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        f.frag_color = f.tint\n",
+        make_render_passes_imports());
+
+    CHECK_FALSE(has_diagnostic(errors, "shape"));
+    CHECK_FALSE(has_diagnostic(errors, "surface"));
+    REQUIRE(decorated.phases.contains("my_pass"));
+    CHECK(decorated.phases.at("my_pass").render_pass.has_value());
+    if (!errors.empty()) {
+        INFO(errors.front().message);
+    }
+    CHECK(errors.empty());
+}
+
+TEST_CASE("dsl-render-passes: ordinary phase is unaffected and stage suffixes are rejected",
+          "[semantic][render-passes][2.1][2.2]") {
+    auto [decorated, errors] = analyze_source(
+        "module test.render_passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "pub phase ordinary:\n"
+        "    from:\n"
+        "        Tick\n"
+        "\n"
+        "rule Bogus:\n"
+        "    on ordinary.vertex:\n"
+        "        let x = 1\n",
+        {});
+
+    REQUIRE(decorated.phases.contains("ordinary"));
+    CHECK_FALSE(decorated.phases.at("ordinary").render_pass.has_value());
+    CHECK(has_diagnostic(errors, "exposes no such stage"));
+}
+
+TEST_CASE("dsl-render-passes: missing Target field is diagnosed", "[semantic][render-passes][2.1]") {
+    auto [decorated, errors] = analyze_source(
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n",
+        make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "no std.render.passes.Target field"));
+}
+
+TEST_CASE("dsl-render-passes: non-constant/wrong-type descriptor expression is diagnosed at the field",
+          "[semantic][render-passes][2.1]") {
+    auto [decorated, errors] = analyze_source(
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Target.Screen\n"
+        "    output: passes.Target = passes.Target.Screen\n",
+        make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "must be initialized with a compile-time-constant"));
+    CHECK(has_diagnostic(errors, "std.render.passes.Pass"));
+}
+
+namespace {
+
+std::string render_pass_program_body(const std::string& vertex_handler, const std::string& fragment_handler) {
+    std::string source =
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n";
+    source += vertex_handler;
+    source += "\n";
+    source += fragment_handler;
+    return source;
+}
+
+constexpr const char* kOrdinaryVertexRule =
+    "rule MyVertex:\n"
+    "    filter:\n"
+    "        WorldTransform as xf\n"
+    "\n"
+    "    on my_pass.vertex as v:\n"
+    "        v.screen_position = xf.position\n"
+    "        v.uv_out = v.uv\n"
+    "        v.tint_out = #FFFFFFFF\n";
+
+constexpr const char* kOrdinaryFragmentRule =
+    "rule MyFragment:\n"
+    "    on my_pass.fragment as f:\n"
+    "        f.frag_color = f.tint\n";
+
+}  // namespace
+
+TEST_CASE("dsl-render-passes: vertex and fragment triggers resolve on a render-pass phase",
+          "[semantic][render-passes][2.2][2.3]") {
+    auto [decorated, errors] =
+        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+
+    if (!errors.empty()) {
+        INFO(errors.front().message);
+    }
+    CHECK(errors.empty());
+    const auto& info = decorated.phases.at("my_pass").render_pass;
+    REQUIRE(info.has_value());
+    CHECK(info->vertex_trigger.kind == HandlerTriggerKind::RenderStage);
+    CHECK(info->fragment_trigger.kind == HandlerTriggerKind::RenderStage);
+    CHECK(info->vertex_trigger.symbol != info->fragment_trigger.symbol);
+}
+
+TEST_CASE("dsl-render-passes: graph connects vertex and fragment handlers with no direct schedule edge",
+          "[semantic][render-passes][handler-graph][3.1][3.2]") {
+    auto [decorated, errors] =
+        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+
+    if (!errors.empty()) {
+        INFO(errors.front().message);
+    }
+    CHECK(errors.empty());
+
+    const auto vertex_rule   = make_symbol_id(SymbolKind::Rule, "test.render_passes", "MyVertex");
+    const auto fragment_rule = make_symbol_id(SymbolKind::Rule, "test.render_passes", "MyFragment");
+    const auto& info         = decorated.phases.at("my_pass").render_pass;
+    REQUIRE(info.has_value());
+    const HandlerIdentity vertex_identity{.rule = vertex_rule, .trigger = info->vertex_trigger};
+    const HandlerIdentity fragment_identity{.rule = fragment_rule, .trigger = info->fragment_trigger};
+
+    REQUIRE(decorated.execution_graph.render_passes.size() == 1);
+    const auto& plan = decorated.execution_graph.render_passes.front();
+    CHECK(plan.phase == *decorated.phases.at("my_pass").symbol_id);
+    CHECK(plan.vertex_handler == vertex_identity);
+    CHECK(plan.fragment_handler == fragment_identity);
+
+    // No direct handler-to-handler schedule edge between the two stage
+    // handlers — their relationship is mediated entirely by the
+    // RenderPassPlan entry above ("synthetic rasterization node"), not by
+    // the ordinary conflict-edge scheduling mechanism.
+    const bool has_direct_edge =
+        std::ranges::any_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
+            return (edge.before == vertex_identity && edge.after == fragment_identity) ||
+                   (edge.before == fragment_identity && edge.after == vertex_identity);
+        });
+    CHECK_FALSE(has_direct_edge);
+}
+
+TEST_CASE("dsl-render-passes: missing stage handler is diagnosed", "[semantic][render-passes][2.3]") {
+    auto [decorated, errors] =
+        analyze_source(render_pass_program_body(kOrdinaryVertexRule, ""), make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "has no 'fragment' stage handler"));
+}
+
+TEST_CASE("dsl-render-passes: duplicate stage handler is diagnosed", "[semantic][render-passes][2.3]") {
+    constexpr const char* kDuplicateVertexRule =
+        "rule MyOtherVertex:\n"
+        "    filter:\n"
+        "        WorldTransform as xf2\n"
+        "\n"
+        "    on my_pass.vertex as v2:\n"
+        "        v2.screen_position = xf2.position\n"
+        "        v2.uv_out = v2.uv\n"
+        "        v2.tint_out = #FFFFFFFF\n";
+    std::string source = render_pass_program_body(kOrdinaryVertexRule, kOrdinaryFragmentRule);
+    source += "\n";
+    source += kDuplicateVertexRule;
+
+    auto [decorated, errors] = analyze_source(source, make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "has duplicate 'vertex' stage handlers"));
+}
+
+TEST_CASE("dsl-render-passes: vertex handler without filter is diagnosed", "[semantic][render-passes][2.4]") {
+    constexpr const char* kFilterlessVertexRule =
+        "rule MyVertex:\n"
+        "    on my_pass.vertex as v:\n"
+        "        v.screen_position = v.corner\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n";
+
+    auto [decorated, errors] =
+        analyze_source(render_pass_program_body(kFilterlessVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "requires an instance domain"));
+}
+
+TEST_CASE("dsl-render-passes: fragment handler with a filter is diagnosed", "[semantic][render-passes][2.4]") {
+    constexpr const char* kFilteredFragmentRule =
+        "rule MyFragment:\n"
+        "    filter:\n"
+        "        WorldTransform as xf\n"
+        "\n"
+        "    on my_pass.fragment as f:\n"
+        "        f.frag_color = f.tint\n";
+
+    auto [decorated, errors] =
+        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kFilteredFragmentRule), make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "is selectionless"));
+}
+
+TEST_CASE("dsl-render-passes: forbidden statement in a stage handler is diagnosed", "[semantic][render-passes][2.5]") {
+    constexpr const char* kSpawningFragmentRule =
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        spawn Whatever:\n"
+        "            WorldTransform:\n"
+        "                position = vec2(0.0, 0.0)\n"
+        "        f.frag_color = f.tint\n";
+
+    auto [decorated, errors] =
+        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kSpawningFragmentRule), make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "'spawn' is not allowed in a render-pass fragment-stage handler body"));
+}
+
+TEST_CASE("dsl-render-passes: vertex handler may read a filtered trait but not write it",
+          "[semantic][render-passes][2.6]") {
+    constexpr const char* kWritingVertexRule =
+        "rule MyVertex:\n"
+        "    filter:\n"
+        "        WorldTransform as xf\n"
+        "\n"
+        "    on my_pass.vertex as v:\n"
+        "        xf.position = v.corner\n"
+        "        v.screen_position = xf.position\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n";
+
+    auto [decorated, errors] =
+        analyze_source(render_pass_program_body(kWritingVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "only built-in stage-output fields are writable"));
+}
+
+TEST_CASE("dsl-render-passes: extern func without a registered GLSL translation is rejected",
+          "[semantic][render-passes][2.7]") {
+    constexpr const char* kUnregisteredCallFragmentRule =
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        let y = something(1.0)\n"
+        "        f.frag_color = f.tint\n";
+
+    std::string source =
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "extern func something(x: float) float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n";
+    source += kOrdinaryVertexRule;
+    source += "\n";
+    source += kUnregisteredCallFragmentRule;
+
+    auto [decorated, errors] = analyze_source(source, make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "test.render_passes.something"));
+    CHECK(has_diagnostic(errors, "no registered portable GLSL translation"));
+}
+
+TEST_CASE("dsl-render-passes: registered intrinsic is callable from a stage handler",
+          "[semantic][render-passes][2.7][4.2]") {
+    constexpr const char* kIntrinsicCallFragmentRule =
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        let d = math.sqrt(1.0)\n"
+        "        if d > 0.0:\n"
+        "            f.frag_color = f.tint\n"
+        "        else:\n"
+        "            f.frag_color = f.tint\n";
+
+    std::string source =
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "use std.math as math\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n";
+    source += kOrdinaryVertexRule;
+    source += "\n";
+    source += kIntrinsicCallFragmentRule;
+
+    ImportedSymbols math_syms;
+    math_syms.module_name = "std.math";
+    ResolvedFunc sqrt_func;
+    sqrt_func.name        = "sqrt";
+    sqrt_func.is_extern   = true;
+    sqrt_func.params      = {ResolvedParam{.name = "v", .type = make_float_type()}};
+    sqrt_func.return_type = make_float_type();
+    math_syms.funcs["sqrt"] = sqrt_func;
+
+    auto imports = make_render_passes_imports();
+    imports.add("math", std::move(math_syms));
+
+    auto [decorated, errors] = analyze_source(source, imports);
+
+    (void)decorated;
+    CHECK_FALSE(has_diagnostic(errors, "no registered portable GLSL translation"));
+}
+
+TEST_CASE("dsl-render-passes: a plain func is always callable from a stage handler",
+          "[semantic][render-passes][2.7]") {
+    constexpr const char* kPlainFuncCallFragmentRule =
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        let d = double_it(1.0)\n"
+        "        if d > 0.0:\n"
+        "            f.frag_color = f.tint\n"
+        "        else:\n"
+        "            f.frag_color = f.tint\n";
+
+    std::string source =
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "func double_it(x: float) float:\n"
+        "    return x * 2.0\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n";
+    source += kOrdinaryVertexRule;
+    source += "\n";
+    source += kPlainFuncCallFragmentRule;
+
+    auto [decorated, errors] = analyze_source(source, make_render_passes_imports());
+
+    (void)decorated;
+    if (!errors.empty()) {
+        INFO(errors.front().message);
+    }
+    CHECK(errors.empty());
+}
+
+TEST_CASE("dsl-render-passes: render-pass stage triggers are rejected on extern rule declarations",
+          "[semantic][render-passes][2.2]") {
+    std::string source =
+        "module test.render_passes\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n"
+        "extern rule Bogus:\n"
+        "    filter:\n"
+        "        WorldTransform\n"
+        "    on my_pass.vertex:\n"
+        "        reads:\n"
+        "            WorldTransform\n";
+
+    auto [decorated, errors] = analyze_source(source, make_render_passes_imports());
+
+    (void)decorated;
+    CHECK(has_diagnostic(errors, "render-pass stage triggers are not valid on 'extern rule' declarations"));
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

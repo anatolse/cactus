@@ -2,7 +2,7 @@ module particle_burst
 
 use std.input as inp
 use std.math as math
-use std.render.shapes as shapes
+use std.render.passes as passes
 use std.transform.flat as tf
 
 const:
@@ -10,6 +10,8 @@ const:
     PARTICLE_LIFETIME = 0.9
     PARTICLE_COUNT = 8
     PARTICLE_SPEED = 150.0
+    PARTICLE_RADIUS = 5.0
+    PARTICLE_COLOR = #FF6B6BFF
     TAU = 6.283185307
 
 input EmitParticles: button
@@ -22,12 +24,14 @@ trait Particle:
 template ParticleTemplate:
     tf.WorldTransform:
         position = vec2(0.0, 0.0)
-    shapes.Shape:
-        type = shapes.ShapeType.Circle
-        size = vec2(10.0, 10.0)
-        color = #FF6B6BFF
     Particle:
         lifetime = PARTICLE_LIFETIME
+
+pub phase particle_pass:
+    after:
+        render
+    pipeline: passes.Pass = passes.Pass.Quads
+    output: passes.Target = passes.Target.Screen
 
 rule EmitParticleBurst:
     on input:
@@ -54,3 +58,26 @@ rule SimulateParticles:
         particle.lifetime = particle.lifetime - fixed_tick.dt
         if particle.lifetime <= 0.0:
             destroy
+
+rule ParticleVertex:
+    filter:
+        tf.WorldTransform as xf
+        Particle as particle
+
+    on particle_pass.vertex as v:
+        let half_size = PARTICLE_RADIUS
+        v.screen_position = vec2(xf.position.x + v.corner.x * half_size, xf.position.y + v.corner.y * half_size)
+        v.uv_out = v.uv
+        v.tint_out = PARTICLE_COLOR
+
+rule ParticleFragment:
+    on particle_pass.fragment as f:
+        let dx = f.uv.x - 0.5
+        let dy = f.uv.y - 0.5
+        let radius_squared = dx * dx + dy * dy
+
+        if radius_squared > 0.25:
+            f.frag_color = #00000000
+        else:
+            let alpha = 1.0 - math.sqrt(radius_squared) * 2.0
+            f.frag_color = passes.with_alpha(f.tint, alpha)

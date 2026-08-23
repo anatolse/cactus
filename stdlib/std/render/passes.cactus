@@ -1,0 +1,12 @@
+module std.render.passes
+
+use std.math as math
+
+pub enum Pass:
+    Quads
+
+pub enum Target:
+    Screen
+
+pub func with_alpha(base: color, alpha: float) color:
+    return color(base.r, base.g, base.b, base.a * math.clamp(alpha, 0.0, 1.0))

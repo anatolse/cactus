@@ -439,7 +439,12 @@ struct HandlerReferenceNode {
     }
 };
 
-enum class HandlerTriggerKind : std::uint8_t { Event, Phase };
+// RenderStage identifies a render-pass phase's derived `<phase>.vertex` /
+// `<phase>.fragment` trigger (dsl-render-passes) — distinct from Phase so the
+// ordinary per-phase handler-dispatch and effect-conflict machinery, which is
+// keyed on trigger kind, never mistakes a stage handler for one of the
+// phase's own ordinary handlers.
+enum class HandlerTriggerKind : std::uint8_t { Event, Phase, RenderStage };
 
 [[nodiscard]] inline const char* handler_trigger_kind_name(HandlerTriggerKind kind) {
     switch (kind) {
@@ -447,6 +452,8 @@ enum class HandlerTriggerKind : std::uint8_t { Event, Phase };
             return "event";
         case HandlerTriggerKind::Phase:
             return "phase";
+        case HandlerTriggerKind::RenderStage:
+            return "render stage";
     }
     return "unknown";
 }
@@ -685,7 +692,6 @@ struct RuleNode {
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::vector<SortKey> order_by;
     std::vector<std::string> after_rules;  // explicit ordering: this rule runs after these
-    std::optional<std::string> target;     // "cpu" or "gpu"
     std::vector<EventHandlerNode> handlers;
     SourceLocation location;
 };
@@ -699,7 +705,6 @@ struct ExternRuleNode {
     FilterClause exclude;
     std::vector<SortKey> order_by;
     std::vector<std::string> after_rules;
-    std::optional<std::string> target;
     std::vector<ExternHandlerNode> handlers;
     SourceLocation location;
 };

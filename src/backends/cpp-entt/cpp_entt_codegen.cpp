@@ -4,6 +4,7 @@
 
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
+#include "backends/cpp-entt/render_pass_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
@@ -941,6 +942,29 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     return out.str();
 }
 
+namespace {
+
+// program.phases is simple-name-keyed for a single-module compile but
+// re-keyed by canonical_id once ProgramLinker::merge_into runs (its
+// insert_key prefers canonical_id over the source map's simple-name key, the
+// same duality EnttCodegenUtils::find_trait already handles for traits) — so
+// a render-pass phase's ResolvedPhase entry must be found by resolved symbol
+// identity, not assumed to sit at the bare local-name key.
+const ResolvedPhase* find_resolved_phase(const DecoratedProgram& program, const SymbolId& phase_symbol) {
+    if (const auto it = program.phases.find(phase_symbol.local_name);
+        it != program.phases.end() && (!it->second.symbol_id.has_value() || *it->second.symbol_id == phase_symbol)) {
+        return &it->second;
+    }
+    for (const auto& [_, candidate] : program.phases) {
+        if (candidate.symbol_id.has_value() && *candidate.symbol_id == phase_symbol) {
+            return &candidate;
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
     if (program.execution_graph.phases.empty() || program.ast == nullptr) {
         return {};
@@ -953,6 +977,20 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
         out << "void generated_dispatch_phase_" << phase_name << "(entt::registry& registry, const " << phase_name
             << "PhaseRuntimeState& phase) {\n";
         out << "    (void)phase;\n";
+
+        // dsl-render-passes: a render-pass phase's derived vertex/fragment
+        // stage handlers use HandlerTriggerKind::RenderStage, not Phase, so
+        // the generic per-handler loop below finds nothing for them by
+        // design (their bodies are translated to GLSL, not C++) — substitute
+        // the render-pass draw step wholesale instead.
+        if (const auto* resolved_phase = find_resolved_phase(program, phase.phase);
+            resolved_phase != nullptr && resolved_phase->render_pass.has_value()) {
+            const auto render_pass_body = emit_render_pass_dispatch_body(program, *resolved_phase);
+            out << (render_pass_body.has_value() ? *render_pass_body : "    (void)registry;\n");
+            out << "}\n\n";
+            continue;
+        }
+
         bool emitted = false;
         for (const auto& identity : program.execution_graph.stable_topological_order) {
             if (identity.trigger.kind != HandlerTriggerKind::Phase || identity.trigger.symbol != phase.phase) {

@@ -2,6 +2,7 @@
 
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
+#include "common/vector_binary_ops.hpp"
 #include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/symbol_identity.hpp"
 
@@ -228,46 +229,6 @@ TypeKind type_kind_from_name(const std::string& name) {
         return TypeKind::InputAxis;
     }
     return TypeKind::Unknown;
-}
-
-// Closed (left TypeKind, operator, right TypeKind) -> result TypeKind matrix
-// for vec2/vec3 binary operators (dsl-vector-expressions spec). No ranking, no
-// ambiguity, no dot product on `*` - every accepted combination is an exact
-// row here. Shared by BinaryExpr type inference and compound-assignment
-// validation so the two stay consistent by construction.
-std::optional<TypeKind> lookup_vector_binary_op_result(TypeKind left, const std::string& op, TypeKind right) {
-    struct Row {
-        TypeKind left;
-        const char* op;
-        TypeKind right;
-        TypeKind result;
-    };
-    static constexpr std::array<Row, 18> kRows{{
-        {.left = TypeKind::Vec2, .op = "+", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
-        {.left = TypeKind::Vec3, .op = "+", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
-        {.left = TypeKind::Vec2, .op = "-", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
-        {.left = TypeKind::Vec3, .op = "-", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
-        {.left = TypeKind::Vec2, .op = "*", .right = TypeKind::Float, .result = TypeKind::Vec2},
-        {.left = TypeKind::Float, .op = "*", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
-        {.left = TypeKind::Vec3, .op = "*", .right = TypeKind::Float, .result = TypeKind::Vec3},
-        {.left = TypeKind::Float, .op = "*", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
-        {.left = TypeKind::Vec2, .op = "/", .right = TypeKind::Float, .result = TypeKind::Vec2},
-        {.left = TypeKind::Vec3, .op = "/", .right = TypeKind::Float, .result = TypeKind::Vec3},
-        {.left = TypeKind::Vec2, .op = "*", .right = TypeKind::Vec2, .result = TypeKind::Vec2},
-        {.left = TypeKind::Vec3, .op = "*", .right = TypeKind::Vec3, .result = TypeKind::Vec3},
-        {.left = TypeKind::Color, .op = "+", .right = TypeKind::Color, .result = TypeKind::Color},
-        {.left = TypeKind::Color, .op = "-", .right = TypeKind::Color, .result = TypeKind::Color},
-        {.left = TypeKind::Color, .op = "*", .right = TypeKind::Float, .result = TypeKind::Color},
-        {.left = TypeKind::Float, .op = "*", .right = TypeKind::Color, .result = TypeKind::Color},
-        {.left = TypeKind::Color, .op = "/", .right = TypeKind::Float, .result = TypeKind::Color},
-        {.left = TypeKind::Color, .op = "*", .right = TypeKind::Color, .result = TypeKind::Color},
-    }};
-    for (const auto& row : kRows) {
-        if (row.left == left && row.right == right && op == row.op) {
-            return row.result;
-        }
-    }
-    return std::nullopt;
 }
 
 // Every row in lookup_vector_binary_op_result's table results in Vec2, Vec3, or Color.
@@ -6147,7 +6108,20 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
                                   "phase completion field '" + make_canonical_id(symbol) + "." + member.member +
                                       "' is available only to downstream phases");
                 }
-                return field == nullptr ? make_unknown_type() : field->type;
+                if (field != nullptr) {
+                    return field->type;
+                }
+                // A render-pass stage handler's built-in-field alias (e.g.
+                // `v` in `on my_pass.vertex as v:`) is keyed under the
+                // phase's own derived trigger symbol ("my_pass__vertex"),
+                // which find_phase_fields (declared phase descriptor fields
+                // only) never sees — its real field table
+                // (build_render_stage_activation_struct's quads_*_fields())
+                // only exists on the call stack as `handler_event`.
+                if (handler_event != nullptr && local_type.name == handler_event->name) {
+                    return find_field_type_in(handler_event->fields, member.member);
+                }
+                return make_unknown_type();
             }
         }
 

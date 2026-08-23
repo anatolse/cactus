@@ -86,6 +86,7 @@ endif()
 add_library(cactus_common STATIC
     src/common/error_reporter.cpp
     src/common/string_pool.cpp
+    src/common/vector_binary_ops.cpp
 )
 target_include_directories(cactus_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -308,6 +309,91 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     # root, not ctest's default per-test working directory (the binary dir
     # where add_test was called, i.e. build/tests) — run from the source
     # root so any example needing real file-backed assets resolves them.
+    add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endfunction()
+
+# ── Real-GL Render-Pass Visual Test Executables ────────────────────────────
+# Parallel to cactus_add_headless_behavior_test, but links the REAL raylib
+# backend (no CACTUS_RAYLIB_FAKE) so LoadShaderFromMemory/BeginShaderMode
+# actually run against a live GL context — needed to catch render-pass bugs
+# (rlgl batching semantics, GLSL compile errors) that CACTUS_RAYLIB_FAKE
+# structurally can't reach: ensure_render_pass_shader() (runtime.cpp) returns
+# nullptr unconditionally under the fake, before ever calling
+# LoadShaderFromMemory. Needs a live display session to create a GL context;
+# on headless Linux CI that means wrapping the test invocation in e.g.
+# xvfb-run — a CI-runner concern, not something this function models.
+#
+# TEST_SOURCE must #include the generated file via the
+# CACTUS_VISUAL_GENERATED_CPP macro this function defines, mirroring
+# cactus_add_headless_behavior_test's CACTUS_HEADLESS_GENERATED_CPP.
+function(cactus_add_render_pass_visual_test TARGET_NAME)
+    set(oneValueArgs CACTUS_SOURCE BACKEND TEST_SOURCE)
+    cmake_parse_arguments(CACTUS_VISUAL_TEST
+        ""
+        "${oneValueArgs}"
+        ""
+        ${ARGN}
+    )
+
+    if(NOT CACTUS_VISUAL_TEST_CACTUS_SOURCE)
+        message(FATAL_ERROR "cactus_add_render_pass_visual_test(${TARGET_NAME}) requires CACTUS_SOURCE")
+    endif()
+    if(NOT CACTUS_VISUAL_TEST_BACKEND)
+        message(FATAL_ERROR "cactus_add_render_pass_visual_test(${TARGET_NAME}) requires BACKEND")
+    endif()
+    if(NOT CACTUS_VISUAL_TEST_TEST_SOURCE)
+        message(FATAL_ERROR "cactus_add_render_pass_visual_test(${TARGET_NAME}) requires TEST_SOURCE")
+    endif()
+
+    set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_VISUAL_TEST_CACTUS_SOURCE}")
+    set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.visual.generated.cpp")
+
+    add_custom_command(
+        OUTPUT "${generated_output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<SHELL_PATH:${CACTUS_GENERATED_EXAMPLES_DIR}>"
+        COMMAND $<TARGET_FILE:cactus>
+                "$<SHELL_PATH:${cactus_source}>"
+                --backend "${CACTUS_VISUAL_TEST_BACKEND}"
+                --output "$<SHELL_PATH:${generated_output}>"
+        DEPENDS cactus "${cactus_source}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Generating render-pass visual test fixture for ${TARGET_NAME} (${CACTUS_VISUAL_TEST_BACKEND})"
+        VERBATIM
+    )
+    set_source_files_properties("${generated_output}" PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE)
+
+    add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL
+        "${CACTUS_VISUAL_TEST_TEST_SOURCE}"
+        "${generated_output}"
+    )
+    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
+    target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
+    # TakeScreenshot()/ExportImage save relative to raylib's own
+    # CORE.Storage.basePath, which InitWindow sets to the process's working
+    # directory — ctest runs this target with WORKING_DIRECTORY
+    # CMAKE_SOURCE_DIR below, so the screenshot path must be relative to
+    # CMAKE_SOURCE_DIR too (an absolute path here would get double-prefixed
+    # into a broken path by raylib's own "basePath/fileName" concatenation).
+    file(RELATIVE_PATH cactus_visual_test_binary_dir_rel "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        CACTUS_VISUAL_GENERATED_CPP="${generated_output}"
+        CACTUS_VISUAL_TEST_OUTPUT_DIR="${cactus_visual_test_binary_dir_rel}"
+    )
+    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_CLANG_TIDY "")
+
+    if(CACTUS_VISUAL_TEST_BACKEND STREQUAL "cpp-entt")
+        target_link_libraries(${TARGET_NAME} PRIVATE
+            cactus_runtime_cpp_entt
+            raylib
+            EnTT::EnTT
+            Catch2::Catch2WithMain
+        )
+    else()
+        message(FATAL_ERROR
+            "Unsupported Cactus render-pass visual test backend '${CACTUS_VISUAL_TEST_BACKEND}' for target ${TARGET_NAME}")
+    endif()
+
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endfunction()
 

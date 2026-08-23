@@ -219,6 +219,16 @@ cactus_add_headless_behavior_test(test_particle_burst_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_particle_burst_headless_behavior.cpp
 )
 
+# Real-GL visual test (example-behavior-tests capability's render-pass
+# extension): proves per-instance rendering actually holds on a real GPU,
+# which CACTUS_RAYLIB_FAKE structurally cannot exercise (see
+# cactus_add_render_pass_visual_test above).
+cactus_add_render_pass_visual_test(test_particle_burst_visual
+    CACTUS_SOURCE examples/particle-burst/particle_burst.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_particle_burst_visual.cpp
+)
+
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)
 add_dependencies(test_example_cpp_compilation cactus)

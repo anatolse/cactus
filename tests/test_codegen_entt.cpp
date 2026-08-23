@@ -6423,4 +6423,127 @@ TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to
     CHECK(code.find("float half") == std::string::npos);
 }
 
+// dsl-render-passes: a stage handler body's binary-operator expressions must
+// accept exactly the operand-type combinations dsl-vector-expressions'
+// general table accepts (lookup_vector_binary_op_result) — `vec2 + vec2 *
+// float` already type-checks in an ordinary (non-stage) handler body, so it
+// must type-check identically here instead of being rejected by
+// render_pass_emitter.cpp's own narrower same-type-or-float-promotion rule.
+TEST_CASE("Codegen EnTT: render-pass stage handler accepts vec2 + vec2 * float, matching an ordinary handler body",
+          "[codegen-entt][render-passes]") {
+    ImportedSymbols passes_syms;
+    passes_syms.module_name = "std.render.passes";
+    ResolvedEnum pass_enum;
+    pass_enum.name              = "Pass";
+    pass_enum.variants          = {"Quads"};
+    passes_syms.enums["Pass"]   = pass_enum;
+    ResolvedEnum target_enum;
+    target_enum.name             = "Target";
+    target_enum.variants         = {"Screen"};
+    passes_syms.enums["Target"]  = target_enum;
+    ModuleImports imports;
+    imports.add("passes", std::move(passes_syms));
+
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module render_pass_vector_ops\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n"
+        "rule MyVertex:\n"
+        "    filter:\n"
+        "        WorldTransform as xf\n"
+        "\n"
+        "    on my_pass.vertex as v:\n"
+        "        let half_size = 5.0\n"
+        "        v.screen_position = xf.position + v.corner * half_size\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n"
+        "\n"
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        f.frag_color = f.tint\n",
+        program,
+        imports);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("screen_position = (u_xf_position + (corner * let_half_size));") != std::string::npos);
+}
+
+// dsl-render-passes: the shared operand-type table still rejects a genuinely
+// invalid combination identically to before — extending translate_binary to
+// consult lookup_vector_binary_op_result must not make it permissive. Vec2 +
+// Color is rejected during general semantic analysis itself (the same
+// lookup_vector_binary_op_result table an ordinary handler body's binary
+// expressions already go through), before render_pass_emitter.cpp's own
+// translation ever runs — so this deliberately doesn't use full_pipeline
+// (which hard-asserts a clean compile) or reach CppEnttCodegen::generate.
+TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", "[codegen-entt][render-passes]") {
+    ImportedSymbols passes_syms;
+    passes_syms.module_name = "std.render.passes";
+    ResolvedEnum pass_enum;
+    pass_enum.name              = "Pass";
+    pass_enum.variants          = {"Quads"};
+    passes_syms.enums["Pass"]   = pass_enum;
+    ResolvedEnum target_enum;
+    target_enum.name             = "Target";
+    target_enum.variants         = {"Screen"};
+    passes_syms.enums["Target"]  = target_enum;
+    ModuleImports imports;
+    imports.add("passes", std::move(passes_syms));
+
+    const std::string source =
+        "module render_pass_vector_ops_invalid\n"
+        "\n"
+        "use std.render.passes as passes\n"
+        "\n"
+        "extern event Tick:\n"
+        "    dt: float\n"
+        "\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "\n"
+        "pub phase my_pass:\n"
+        "    from:\n"
+        "        Tick\n"
+        "    pipeline: passes.Pass = passes.Pass.Quads\n"
+        "    output: passes.Target = passes.Target.Screen\n"
+        "\n"
+        "rule MyVertex:\n"
+        "    filter:\n"
+        "        WorldTransform as xf\n"
+        "\n"
+        "    on my_pass.vertex as v:\n"
+        "        v.screen_position = xf.position + v.tint_out\n"
+        "        v.uv_out = v.uv\n"
+        "        v.tint_out = #FFFFFFFF\n"
+        "\n"
+        "rule MyFragment:\n"
+        "    on my_pass.fragment as f:\n"
+        "        f.frag_color = f.tint\n";
+
+    ErrorReporter errors;
+    Lexer lexer(source, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    REQUIRE_FALSE(errors.has_errors());
+    Parser parser(std::move(tokens), errors);
+    ProgramNode program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    (void)analyzer.analyze(program, imports);
+    CHECK(errors.has_errors());
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

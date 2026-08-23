@@ -3,6 +3,7 @@
 #include "backends/cpp-entt/type_utils.hpp"
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
+#include "common/vector_binary_ops.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -105,6 +106,41 @@ TranslatedExpr promote_to(TranslatedExpr value, GlslType target) {
         throw std::runtime_error("render-pass GLSL codegen: cannot use a non-numeric value where a float is required");
     }
     return value;
+}
+
+// Total, lossless round-trip for exactly the four GlslType values this
+// domain admits (glsl_type_from already narrows every field/expression type
+// down to Float/Bool/Vec2/Color before any expression translation happens —
+// a Vec3 can never reach here), so translate_binary can consult the shared
+// dsl-vector-expressions operand-type table (lookup_vector_binary_op_result)
+// instead of its own narrower same-type-or-float-promotion rule.
+TypeKind glsl_type_to_type_kind(GlslType type) {
+    switch (type) {
+        case GlslType::Float:
+            return TypeKind::Float;
+        case GlslType::Bool:
+            return TypeKind::Bool;
+        case GlslType::Vec2:
+            return TypeKind::Vec2;
+        case GlslType::Color:
+            return TypeKind::Color;
+    }
+    std::unreachable();
+}
+
+GlslType type_kind_to_glsl_type(TypeKind kind) {
+    switch (kind) {
+        case TypeKind::Float:
+            return GlslType::Float;
+        case TypeKind::Bool:
+            return GlslType::Bool;
+        case TypeKind::Vec2:
+            return GlslType::Vec2;
+        case TypeKind::Color:
+            return GlslType::Color;
+        default:
+            throw std::runtime_error("render-pass GLSL codegen: vector-operator result type has no GLSL representation");
+    }
 }
 
 std::string hex_color_literal_to_glsl(const std::string& raw_hex) {
@@ -371,8 +407,18 @@ TranslatedExpr translate_binary(const BinaryExpr& binary, GlslCtx& ctx) {
     const bool is_comparison = binary.op == "<" || binary.op == ">" || binary.op == "<=" || binary.op == ">=" ||
                                binary.op == "==" || binary.op == "!=";
     if (left.type != right.type) {
-        left  = promote_to(std::move(left), GlslType::Float);
-        right = promote_to(std::move(right), GlslType::Float);
+        if (is_comparison) {
+            left  = promote_to(std::move(left), GlslType::Float);
+            right = promote_to(std::move(right), GlslType::Float);
+        } else if (auto result_kind = lookup_vector_binary_op_result(
+                       glsl_type_to_type_kind(left.type), binary.op, glsl_type_to_type_kind(right.type))) {
+            return {.text = "(" + left.text + " " + binary.op + " " + right.text + ")",
+                   .type = type_kind_to_glsl_type(*result_kind)};
+        } else {
+            throw std::runtime_error("render-pass GLSL codegen: no operator '" + binary.op + "' for operand types '" +
+                                     std::string(glsl_type_name(left.type)) + "' and '" +
+                                     std::string(glsl_type_name(right.type)) + "'");
+        }
     }
     return {.text = "(" + left.text + " " + binary.op + " " + right.text + ")",
            .type = is_comparison ? GlslType::Bool : left.type};

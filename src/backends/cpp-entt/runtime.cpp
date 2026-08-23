@@ -2214,6 +2214,14 @@ void draw_render_pass_quad_instance() noexcept {
         rlVertex2f(kCorners.at(static_cast<std::size_t>(i)).x, kCorners.at(static_cast<std::size_t>(i)).y);
     }
     rlEnd();
+    // Force this instance's quad to actually submit to the GPU now, before
+    // the caller uploads the next entity's uniform values. Without this,
+    // rlgl defers the draw call into a shared batch (same shader/draw mode
+    // across the whole dispatch loop never trips its auto-flush), so every
+    // queued instance ends up rendered with whichever uniform value was
+    // current at the batch's eventual flush — the *last* entity's, not its
+    // own.
+    rlDrawRenderBatchActive();
 }
 
 // ── Editor extern func implementations (std.editor) ──────────────────────────

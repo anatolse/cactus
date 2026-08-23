@@ -66,7 +66,7 @@ rule ParticleVertex:
 
     on particle_pass.vertex as v:
         let half_size = PARTICLE_RADIUS
-        v.screen_position = vec2(xf.position.x + v.corner.x * half_size, xf.position.y + v.corner.y * half_size)
+        v.screen_position = xf.position + v.corner * half_size
         v.uv_out = v.uv
         v.tint_out = PARTICLE_COLOR
 

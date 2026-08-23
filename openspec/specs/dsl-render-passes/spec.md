@@ -110,6 +110,15 @@ func` registered as having a portable GLSL translation. `spawn`, `destroy`, `add
 handler MUST be rejected during semantic analysis with a diagnostic naming the offending statement
 and this restriction.
 
+Within that statement subset, an expression's accepted operand-type combinations MUST match
+`dsl-vector-expressions`'s general operator table exactly — the same `vec2`/`vec3`/`color`
+arithmetic (component-wise `+`/`-`, `vec * float`/`float * vec`, `vec / float`, component-wise
+`vec * vec`) that type-checks in an ordinary handler body MUST type-check identically in a stage
+handler body, and MUST be rejected identically when it doesn't. Which backend a handler lowers to
+(ordinary C++ codegen vs. a stage handler's GLSL translation) MUST NOT change which operand-type
+combinations an author may write, per `language-philosophy`'s requirement that execution-target
+placement is a backend decision never surfaced to the author.
+
 #### Scenario: Forbidden statement in a stage handler is diagnosed
 
 - **WHEN** a vertex- or fragment-stage handler body contains a `spawn`, `destroy`, `emit`, or
@@ -132,3 +141,31 @@ and this restriction.
   translation
 - **THEN** compilation fails with a diagnostic naming the call and stating it has no portable
   translation for this backend
+
+#### Scenario: Vector arithmetic in a stage handler matches an ordinary handler body
+
+- **WHEN** a vertex-stage handler body writes `v.screen_position = xf.position + v.corner *
+  half_size` where `xf.position` and `v.corner` are `vec2`-typed and `half_size` is `float`-typed
+- **THEN** the expression type-checks and lowers to GLSL, exactly as the equivalent
+  `vec2 + vec2 * float` expression already type-checks in an ordinary (non-stage) handler body
+
+### Requirement: Instances drawn by a vertex-stage handler render independently
+
+When a vertex-stage handler's `filter:` selects more than one entity within the same draw, each
+selected entity MUST be rendered using its own per-instance values (its own filtered-trait field
+values and any values derived from them). One instance's values MUST NOT be observable when
+rendering another instance selected by the same handler in the same draw — in particular, the
+backend MUST NOT defer or batch per-instance state in a way that lets a later instance's values
+overwrite or bleed into an earlier instance's already-queued draw.
+
+#### Scenario: Multiple instances render at their own distinct positions
+
+- **WHEN** a vertex-stage handler's filter selects several entities with different
+  `WorldTransform.position` values in the same draw
+- **THEN** each entity's instance is rendered at its own `WorldTransform.position`, not at the
+  position of any other selected entity
+
+#### Scenario: Instance count matches filtered entity count
+
+- **WHEN** a vertex-stage handler's filter selects `N` entities
+- **THEN** the render pass produces `N` independently-positioned instances, not fewer

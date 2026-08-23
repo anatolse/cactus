@@ -12,15 +12,18 @@ pool, no device-placement inference, no new stdlib or rendering constructs.
 ### Requirement: Particle burst example Cactus module
 
 The example SHALL provide a single `examples/particle-burst/particle_burst.cactus` file that is
-valid Cactus DSL. It SHALL import `std.input`, `std.render.shapes`, and `std.transform.flat`. It
-SHALL declare a `Particle` trait with `velocity: vec2` and `lifetime: float` fields, and a
-`template` that combines `std.transform.flat.WorldTransform`, `std.render.shapes.Shape`, and
-`Particle` for use as the burst-member shape.
+valid Cactus DSL. It SHALL import `std.input`, `std.render.passes`, `std.math`, and
+`std.transform.flat`. It SHALL declare a `Particle` trait with `velocity: vec2` and `lifetime:
+float` fields, and a `template` that combines `std.transform.flat.WorldTransform` and `Particle`
+(no `std.render.shapes.Shape`) for use as the burst-member shape. It SHALL declare a render-pass
+phase (`particle_pass`, `after: render`, `pipeline: passes.Pass = passes.Pass.Quads`, `output:
+passes.Target = passes.Target.Screen`) and its vertex/fragment stage handlers.
 
 #### Scenario: Module compiles without errors
 
 - **WHEN** the compiler is invoked with `cactus examples/particle-burst/particle_burst.cactus --backend cpp-entt -o particle-burst.generated.h`
-- **THEN** the command exits with code 0 and produces valid generated C++ output
+- **THEN** the command exits with code 0 and produces valid generated C++ output, including the
+  generated GLSL shader pair for `particle_pass`
 
 ### Requirement: Left mouse click spawns a fixed-size burst of particles
 
@@ -69,15 +72,32 @@ particle's `lifetime` reaches zero or below, the rule SHALL `destroy` that entit
 - **WHEN** a live particle entity's `lifetime` reaches zero or below during a fixed-tick step
 - **THEN** that entity is destroyed and no longer receives further simulation or rendering
 
-### Requirement: Particles render as circles via existing shape rendering
+### Requirement: Particles render as soft circles via an authored render pass
 
-Every spawned particle entity SHALL carry `std.render.shapes.Shape` with `type = ShapeType.Circle`
-alongside its `std.transform.flat.WorldTransform`, so the existing, unmodified `ShapeRenderer`
-extern rule renders it. The example SHALL NOT introduce any new rendering trait, extern rule, or
-stdlib module.
+Every spawned particle entity SHALL be rendered by `particle_pass`, a `Quads`-kind render-pass
+phase declared in the example module. The vertex-stage handler SHALL filter on `WorldTransform`
+and `Particle`, compute each instance's screen-space quad corner from `WorldTransform.position`
+and a fixed particle radius, and pass through UV and a fixed tint. The fragment-stage handler
+SHALL produce a transparent color outside a centered radius of `0.5` in UV space and linearly fade
+alpha from center to edge inside it, using `std.render.passes.with_alpha`. The example SHALL NOT
+introduce any new rendering trait, extern rule, or stdlib module beyond `std.render.passes`
+(already added by `add-render-pass-phases`).
 
-#### Scenario: Spawned particle has a Circle shape
+#### Scenario: Spawned particle is instanced by the render pass
 
 - **WHEN** a particle entity is spawned by the burst rule
-- **THEN** its `Shape.type` is `ShapeType.Circle`
-- **AND** it carries a `WorldTransform` component with no `LocalTransform` or hierarchy propagation involved
+- **THEN** `particle_pass`'s vertex-stage handler selects it (via its `WorldTransform`+`Particle`
+  filter) and it is instanced as a quad
+
+#### Scenario: Fragment produces a soft circular falloff
+
+- **WHEN** `particle_pass`'s fragment-stage handler evaluates a sample at UV distance `d` from
+  the quad center
+- **THEN** the sample is fully transparent when `d > 0.5` and its alpha linearly decreases from
+  the center (`d = 0`) to the edge (`d = 0.5`) otherwise
+
+#### Scenario: Destroyed particles are no longer instanced
+
+- **WHEN** a particle entity is destroyed by the simulation rule (lifetime elapsed)
+- **THEN** it is no longer selected by the vertex handler's filter and no longer contributes an
+  instance to the render pass

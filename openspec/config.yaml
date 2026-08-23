@@ -8,6 +8,13 @@ schema: spec-driven
 #     Tech stack: TypeScript, React, Node.js
 #     We use conventional commits
 #     Domain: e-commerce platform
+context: |
+  Tech stack: C++23 compiler (src/common, src/frontend, src/backends), Cactus DSL
+  (stdlib/, examples/), Catch2 for tests.
+  TDD is required for all new code: write a failing test first, then implement.
+  DSL/stdlib semantics and grammar are normative in
+  openspec/specs/language-philosophy/spec.md and spec/cactus_dsl_spec.md; day-to-day
+  coding conventions and priorities are in CLAUDE.md.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.

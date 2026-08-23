@@ -1,9 +1,33 @@
-# Cactus compiler source — C++ authoring rules
+# Cactus — agent instructions
 
-Scope: `src/common`, `src/frontend`, `src/backends` (the compiler's own hand-written
-source, built as C++23). Does **not** apply to the cpp-entt backend's generated
-output or the 3 targets that compile it (examples, 2 test-runners) — those stay on
-C++20 and have clang-tidy disabled independently.
+A DSL for making games that compiles to native C++ (EnTT ECS + raylib) — see
+`README.md` for the project thesis. This file is layered: this preamble applies to
+every task in the repo; the named subsections below scope further guidance to their
+own area (compiler C++, Cactus DSL content, generated-code performance).
+
+## Before changing DSL grammar, stdlib API shape, or language semantics
+
+Check `openspec/specs/language-philosophy/spec.md` (identity, predictability, ECS
+boundary, declarative/imperative tiers) and `spec/cactus_dsl_spec.md` (grammar)
+first — they're the normative source. Don't restate or improvise around them here.
+
+## Testing
+
+All new code must be covered by unit tests — this applies to every change under
+`src/common`, `src/frontend`, `src/backends`, `stdlib/`, not just bug fixes. Prefer
+writing the test first (TDD): write a failing Catch2 test in `tests/` that captures
+the intended behavior, watch it fail, then implement until it passes. Follow the
+existing `test_*.cpp` naming and structure in `tests/`.
+
+A new DSL/stdlib feature additionally needs a `.cactus` sample fixture plus a failing
+headless-behavior Catch2 test written first, mirroring the existing
+`test_*_headless_behavior.cpp` + `examples/*.cactus` pairing already in `tests/`.
+
+## Compiler C++ authoring rules (`src/common`, `src/frontend`, `src/backends`)
+
+Built as C++23. Does **not** apply to the cpp-entt backend's generated output or the 3
+targets that compile it (examples, 2 test-runners) — those stay on C++20 and have
+clang-tidy disabled independently.
 
 ## Hard constraints
 
@@ -39,54 +63,55 @@ Deliberately disabled in `.clang-tidy` — don't hand-apply the guidance below a
 
 ## Avoid duplication
 
-Applies to the compiler's C++ (scope above) and to any `.cactus` source touched in
-this repo (`stdlib/`, `examples/`). Before adding a new function, helper, or block of
-logic, check whether equivalent behavior already exists — grep for likely names and
-scan `src/common` (C++) or the relevant `stdlib` module (Cactus) for something close
-before writing a fresh implementation.
+Before adding a new function, helper, or block of logic, check whether equivalent
+behavior already exists — grep for likely names and scan `src/common` for something
+close before writing a fresh implementation.
 
 - If a suitable version already exists, call it — don't re-implement it locally, even
   in a slightly different shape.
 - If what exists is almost-but-not-quite right, extract the shared part into a common
-  helper (`src/common` for logic used across frontend/backends; the nearest shared
-  Cactus module for stdlib-level logic) and update both call sites to use it, rather
-  than copy-pasting and tweaking.
+  helper in `src/common` (used across frontend/backends) and update both call sites to
+  use it, rather than copy-pasting and tweaking.
 - Never leave two near-identical implementations of the same behavior in the tree
   side by side — divergent copies are how one gets the next bug fix and the other
   doesn't.
 
-## Control-flow nesting — C++ and Cactus
+For `.cactus` source (`stdlib/`, `examples/`), see "Avoid duplication" under Cactus
+DSL authoring rules below — same stance, different module boundary.
 
-Applies to the compiler's C++ (scope above) and to any `.cactus` source touched in
-this repo (`stdlib/`, `examples/`). Avoid step/staircase nesting: each `if` stacked
-inside another `if` forces the reader to hold one more live runtime condition to
-understand the branch at the bottom. Flatten instead of stacking:
+## Control-flow nesting
 
-- Combine short, independent conditions with `&&`/`||` (C++) or `and`/`or` (Cactus)
-  into one guard instead of nesting them.
+Avoid step/staircase nesting: each `if` stacked inside another `if` forces the reader
+to hold one more live runtime condition to understand the branch at the bottom.
+Flatten instead of stacking:
+
+- Combine short, independent conditions with `&&`/`||` into one guard instead of
+  nesting them.
 - Prefer early return over nesting the happy path: gate on the negated condition and
   `return`/`continue` immediately, one gate per line, rather than wrapping the rest of
-  the function/handler body in an `if`.
-- Dispatch mutually exclusive cases with `switch`/variant `visit` (C++) or value
-  `match` (Cactus, where the arm form in use supports it) instead of an
+  the function body in an `if`.
+- Dispatch mutually exclusive cases with `switch`/variant `visit` instead of an
   `if`/`else if` chain.
 - Treat 3 levels of nested executable control flow as a warning sign and 4 as a
-  rewrite trigger, in both languages. Structural/declarative nesting (C++ namespaces
-  and data aggregates; Cactus `children:` blocks and declarations) isn't executable
-  control flow and isn't what this rule targets.
+  rewrite trigger. Structural/declarative nesting (C++ namespaces and data
+  aggregates) isn't executable control flow and isn't what this rule targets.
 
-C++ already has a backstop: `readability-*` includes
-`readability-function-cognitive-complexity`, which trends toward failing the build
-(`WarningsAsErrors: '*'`) as nesting piles up — this rule is the authoring discipline
-that keeps you from hitting it, not a new mechanism.
+`readability-*` includes `readability-function-cognitive-complexity`, which trends
+toward failing the build (`WarningsAsErrors: '*'`) as nesting piles up — this rule is
+the authoring discipline that keeps you from hitting it, not a new mechanism.
 
-Cactus has no automated nesting lint yet, so this is enforced by hand-review. One
-correctness trap when flattening Cactus handlers: `return` exits the *entire* handler
-invocation, not a loop iteration — there is no `continue`/`break` in bounded
-`for ... in ...:` (see dsl-bounded-foreach). Converting a nested `if` guard inside a
-`for` loop into an early `return` changes behavior (it abandons the remaining items)
-instead of preserving it; keep the guard nested as an `if` there, or restructure the
-loop body, rather than reflexively applying the early-return transform.
+For `.cactus` source (`stdlib/`, `examples/`), see "Control-flow nesting" under Cactus
+DSL authoring rules below — same principle, different syntax, plus a Cactus-specific
+correctness trap around `return` in bounded loops.
+
+## Evaluate as a compiler pass
+
+When reviewing or writing a frontend/backend change, weigh it the way you'd weigh any
+compiler pass: redundant tree walks over the same AST, lookup cost in symbol/scope
+resolution, and graceful error recovery (don't abort on the first diagnostic). Use
+`error_reporter.hpp` (diagnostic accumulation), `execution_graph_scheduler.hpp` (pass
+ordering/dependency resolution), and `symbol_identity.hpp` (identity/lookup) as
+reference shapes for these concerns rather than inventing new ones.
 
 ## C++23 idioms for this codebase
 
@@ -110,14 +135,6 @@ general C++23 feature survey.
   diagnostic-collector pattern, which accumulates multiple diagnostics across a whole
   compile pass rather than short-circuiting on the first error — keep using
   `ErrorReporter` for anything that reports to the user.
-
-## Testing
-
-All new code must be covered by unit tests — this applies to every change under
-`src/common`, `src/frontend`, `src/backends`, not just bug fixes. Prefer writing the
-test first (TDD): write a failing Catch2 test in `tests/` that captures the intended
-behavior, watch it fail, then implement until it passes. Follow the existing
-`test_*.cpp` naming and structure in `tests/`.
 
 ## Diagnosing rendering issues
 
@@ -149,3 +166,66 @@ past it.
 `.clang-tidy`'s `FormatStyle: 'file'` couples `--fix` to `.clang-format` already —
 formatting is mechanical and applied for you. Don't hand-apply indent/brace/column
 rules; if in doubt, match what's already in the surrounding file.
+
+## Cactus DSL authoring rules
+
+Scope: `.cactus` source in `stdlib/` and `examples/`.
+
+### Avoid duplication
+
+Before adding new Cactus logic, check whether equivalent behavior already exists in
+`stdlib/` — scan the relevant module for something close before writing a fresh
+implementation.
+
+- If a suitable version already exists, use it — don't re-implement it locally, even
+  in a slightly different shape.
+- If what exists is almost-but-not-quite right, extract the shared part into the
+  nearest shared `stdlib` module and update both call sites, rather than copy-pasting
+  and tweaking.
+- Never leave two near-identical implementations of the same behavior side by side —
+  divergent copies are how one gets the next bug fix and the other doesn't.
+
+### Control-flow nesting
+
+Avoid step/staircase nesting: each `if` stacked inside another `if` forces the reader
+to hold one more live runtime condition to understand the branch at the bottom.
+Flatten instead of stacking:
+
+- Combine short, independent conditions with `and`/`or` into one guard instead of
+  nesting them.
+- Prefer early return over nesting the happy path: gate on the negated condition and
+  `return` immediately, one gate per line, rather than wrapping the rest of the
+  handler body in an `if`.
+- Dispatch mutually exclusive cases with value `match` (where the arm form in use
+  supports it) instead of an `if`/`else if` chain.
+- Treat 3 levels of nested executable control flow as a warning sign and 4 as a
+  rewrite trigger. Structural/declarative nesting (`children:` blocks and
+  declarations) isn't executable control flow and isn't what this rule targets.
+
+Cactus has no automated nesting lint yet, so this is enforced by hand-review. One
+correctness trap when flattening Cactus handlers: `return` exits the *entire* handler
+invocation, not a loop iteration — there is no `continue`/`break` in bounded
+`for ... in ...:` (see dsl-bounded-foreach). Converting a nested `if` guard inside a
+`for` loop into an early `return` changes behavior (it abandons the remaining items)
+instead of preserving it; keep the guard nested as an `if` there, or restructure the
+loop body, rather than reflexively applying the early-return transform.
+
+### Game-dev simplicity bar
+
+New stdlib/example additions are evaluated against gameplay-core teachability: if it
+can't be explained to a beginner in a sentence, it likely belongs in a different
+layer. Prefer existing stdlib primitives (math/physics/transform/camera/render/ui)
+over hand-rolled logic in example or game code.
+
+## Generated code performance
+
+Generated output (the cpp-entt backend's emitted code and the 3 targets that compile
+it) stays exempt from lint/style rules — unchanged. But the backend's codegen
+*strategy* is judged on the runtime speed of the code it emits above all else.
+Priority order when a change trades one against another: generated-code runtime speed
+first, compiler-developer velocity second, the compiler's own compile time a distant
+third.
+
+Shared, program-independent logic (helpers, operators) belongs in
+`cactus_runtime.hpp`/`.cpp` rather than emitted text — codegen should call it, not
+duplicate it.

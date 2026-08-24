@@ -992,6 +992,18 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
         }
 
         bool emitted = false;
+        // Two distinct execution-graph nodes in this phase batch can resolve
+        // to the same underlying generated implementation (e.g.
+        // std.transform.flat.TransformPropagation and
+        // std.transform.volume.TransformPropagation both compiling to the
+        // same system_function_name when only one WorldTransform dimension
+        // is active). Track callee names already emitted for this phase
+        // batch and skip re-emitting the call for a repeat, while still
+        // treating the node as handled for the existing fallback bookkeeping
+        // below. Scoped per-phase (declared inside this loop) so a
+        // legitimate call to the same function in a different phase is
+        // unaffected.
+        std::unordered_set<std::string> emitted_callees;
         for (const auto& identity : program.execution_graph.stable_topological_order) {
             if (identity.trigger.kind != HandlerTriggerKind::Phase || identity.trigger.symbol != phase.phase) {
                 continue;
@@ -1002,15 +1014,20 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 continue;
             }
             if (is_user_external_handler(program, *graph_node)) {
-                emit_external_handler_call(out, *graph_node, "phase", "    ");
                 emitted = true;
+                if (emitted_callees.insert(external_handler_callback_name(graph_node->identity)).second) {
+                    emit_external_handler_call(out, *graph_node, "phase", "    ");
+                }
                 continue;
             }
             if (graph_node->implementation == HandlerImplementationKind::External) {
                 const auto* rule = find_external_rule(program, graph_node->identity.rule);
                 if (rule != nullptr && rule->is_stdlib) {
-                    out << "    ::" << system_function_name(program.module_name, rule->name, "tick") << "(registry);\n";
-                    emitted = true;
+                    const auto callee = system_function_name(program.module_name, rule->name, "tick");
+                    emitted           = true;
+                    if (emitted_callees.insert(callee).second) {
+                        out << "    ::" << callee << "(registry);\n";
+                    }
                 }
                 continue;
             }
@@ -1029,14 +1046,15 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                 if (handler == rule->handlers.end()) {
                     continue;
                 }
-                out << "    ::"
-                    << system_function_name(program.module_name,
-                                            rule->name,
-                                            !handler->event_name.contains('.')
-                                                ? handler->event_name
-                                                : canonical_to_cpp_name(identity.trigger.symbol))
-                    << "(registry, phase);\n";
+                const auto callee = system_function_name(program.module_name,
+                                                         rule->name,
+                                                         !handler->event_name.contains('.')
+                                                             ? handler->event_name
+                                                             : canonical_to_cpp_name(identity.trigger.symbol));
                 emitted = true;
+                if (emitted_callees.insert(callee).second) {
+                    out << "    ::" << callee << "(registry, phase);\n";
+                }
                 break;
             }
         }
@@ -1700,17 +1718,18 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
                                              const std::vector<ArchetypeTraitEntry>& traits,
                                              const DecoratedProgram& program) {
     std::ostringstream out;
-    out << "entt::entity " << archetype_create_at_function_name(program.module_name, archetype_name)
-        << "(entt::registry& registry, entt::entity hint) {\n";
+    const auto at_name     = archetype_create_at_function_name(program.module_name, archetype_name);
+    const auto create_name = archetype_create_function_name(program.module_name, archetype_name);
+    out << "entt::entity " << at_name << "(entt::registry& registry, entt::entity hint) {\n";
     out << "    auto entity = registry.create(hint);\n";
     emit_archetype_trait_initializers(out, traits, program, "entity", 1);
     out << "    return entity;\n";
     out << "}\n\n";
-    out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name)
-        << "(entt::registry& registry) {\n";
-    out << "    auto entity = registry.create();\n";
-    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
-    out << "    return entity;\n";
+    // Delegates rather than re-running emit_archetype_trait_initializers: the
+    // hinted function above already performs every field initialization; the
+    // only thing this one adds is an arbitrary (non-hinted) entity.
+    out << "entt::entity " << create_name << "(entt::registry& registry) {\n";
+    out << "    return " << at_name << "(registry, registry.create());\n";
     out << "}\n\n";
     return out.str();
 }
@@ -1795,18 +1814,17 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     std::ostringstream out;
     std::vector<std::string> role_path;
 
-    out << "static entt::entity "
-        << archetype_node_create_at_function_name(program.module_name, archetype_name, role_path)
-        << "(entt::registry& registry, entt::entity hint) {\n";
+    const auto node_at_name = archetype_node_create_at_function_name(program.module_name, archetype_name, role_path);
+    const auto node_name    = archetype_node_create_function_name(program.module_name, archetype_name, role_path);
+    out << "static entt::entity " << node_at_name << "(entt::registry& registry, entt::entity hint) {\n";
     out << "    auto entity = registry.create(hint);\n";
     emit_archetype_trait_initializers(out, traits, program, "entity", 1);
     out << "    return entity;\n";
     out << "}\n\n";
-    out << "static entt::entity " << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
-        << "(entt::registry& registry) {\n";
-    out << "    auto entity = registry.create();\n";
-    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
-    out << "    return entity;\n";
+    // Delegates rather than re-running emit_archetype_trait_initializers, same
+    // as the flat-archetype path in emit_archetype_creation_function.
+    out << "static entt::entity " << node_name << "(entt::registry& registry) {\n";
+    out << "    return " << node_at_name << "(registry, registry.create());\n";
     out << "}\n\n";
     emit_archetype_node_helpers(out, archetype_name, children, program, role_path);
 

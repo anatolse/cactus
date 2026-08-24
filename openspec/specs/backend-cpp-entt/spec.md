@@ -1174,3 +1174,86 @@ An `extern func` or stdlib `func` is only callable from a stage handler body if 
 - **WHEN** a stage handler body calls a stdlib or extern function with no registered GLSL translation
 - **THEN** compilation fails with a diagnostic naming the call (per `dsl-render-passes`, "Stage handler body is restricted...")
 
+### Requirement: Generated handler bodies are emitted once and dispatched into
+For a targeted or pair-domain event handler whose per-entity/per-tuple body is
+invoked from multiple generated dispatch sites (recipient-targeted delivery,
+broadcast iteration, and — for pair handlers — the spatial-broadphase
+activation path), the cpp-entt backend SHALL emit the rewritten handler
+statement block as a single local callable within the generated handler
+function and SHALL have every applicable dispatch site invoke that callable
+rather than re-emitting a copy of the statement text.
+
+This requirement governs generated-output shape only; observable runtime
+behavior (which entities/tuples execute the body, in what order, and how many
+times each executes) SHALL remain identical to the pre-existing per-site
+emission.
+
+#### Scenario: Targeted handler body appears once in generated output
+- **WHEN** a filtered (non-pair) event handler is compiled and both the
+  recipient-targeted branch and the broadcast `view.each` branch of its
+  generated dispatch function apply
+- **THEN** the rewritten handler body text appears exactly once in the
+  generated function, as the body of a single local callable invoked from
+  both branches
+
+#### Scenario: Pair handler body appears once in generated output
+- **WHEN** a pair-domain event handler is compiled and its generated dispatch
+  function contains a recipient-as-left branch, a recipient-as-right branch,
+  and a full-scan (or spatial-broadphase) branch
+- **THEN** the rewritten tuple body text appears exactly once in the generated
+  function, as the body of a single local callable invoked from all
+  applicable branches
+
+#### Scenario: Single-emission does not change dispatch behavior
+- **WHEN** a targeted or pair handler compiled under single-emission is
+  exercised by the existing per-example behavioral test suite
+- **THEN** observed entity/tuple selection, execution counts, and side effects
+  are unchanged from the pre-single-emission generated output
+
+### Requirement: Non-hinted entity-factory functions delegate to their hinted counterpart
+For every generated archetype (inline entity, template, or hierarchical
+archetype root) that produces both a hinted creation function (accepting an
+explicit `entt::entity hint`) and a non-hinted creation function, the cpp-entt
+backend SHALL generate the non-hinted function's body as a call to the hinted
+function with a freshly created entity (`registry.create()`) rather than
+duplicating the field-initialization statements.
+
+#### Scenario: Non-hinted factory delegates instead of duplicating initialization
+- **WHEN** an archetype `X` (flat or hierarchical-root) generates both
+  `create_X_at(registry, hint)` and `create_X(registry)`
+- **THEN** the generated body of `create_X(registry)` is
+  `return create_X_at(registry, registry.create());` and does not repeat
+  `create_X_at`'s field-initialization statements
+
+#### Scenario: Delegation preserves entity contents
+- **WHEN** `create_X(registry)` is called on a generated program
+- **THEN** the returned entity has the same components and field values as an
+  entity created by `create_X_at(registry, registry.create())` directly
+
+### Requirement: Phase-dispatch call emission deduplicates shared implementation functions
+When emitting the call sequence for one phase-dispatch batch, the cpp-entt
+backend SHALL invoke each distinct underlying generated implementation
+function at most once per activation, even when multiple execution-graph
+nodes scheduled in that phase resolve to the same underlying function.
+
+#### Scenario: Two rules resolving to the same implementation call it once
+- **WHEN** two distinct execution-graph nodes in the same phase batch (for
+  example `std.transform.flat.TransformPropagation` and
+  `std.transform.volume.TransformPropagation`) resolve to the same generated
+  implementation function
+- **THEN** the generated phase-dispatch function contains exactly one call to
+  that implementation function
+
+#### Scenario: Distinct implementation functions are unaffected
+- **WHEN** two execution-graph nodes in the same phase batch resolve to two
+  different generated implementation functions
+- **THEN** the generated phase-dispatch function calls each of them once, as
+  before
+
+#### Scenario: Runtime behavior unaffected by dedup
+- **WHEN** a program containing a phase-batch collision (such as
+  `waving-label-2d` or `waving-label-3d`) is run after the dedup fix
+- **THEN** the previously double-invoked implementation now executes once per
+  activation and observable transform/propagation results are unchanged,
+  since the duplicate call was idempotent
+

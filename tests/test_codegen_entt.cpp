@@ -443,6 +443,49 @@ TEST_CASE("Codegen EnTT: registry view rule", "[codegen-entt]") {
     }
 }
 
+TEST_CASE("Codegen EnTT: filtered handler body is emitted once and both dispatch sites call it", "[codegen-entt]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event step:\n"
+        "    dt: float\n"
+        "trait Pos:\n"
+        "    var x: float\n"
+        "    var y: float\n"
+        "rule Move:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on step:\n"
+        "        x = x + step.dt\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            // The rewritten handler body's distinguishing statement appears
+            // exactly once in the generated function, not once per dispatch site.
+            CHECK(count_occurrences(code, "Pos_comp.x = (Pos_comp.x + step.dt)") == 1);
+
+            const auto handler_body_name = extract_temp_name(code, "cactus_gen_handler_body_");
+            REQUIRE_FALSE(handler_body_name.empty());
+            CHECK(code.find("auto " + handler_body_name + " = [&](entt::entity entity") != std::string::npos);
+
+            const auto recipient_branch = code.find("if (cactus_recipient.has_value()) {");
+            REQUIRE(recipient_branch != std::string::npos);
+            const auto broadcast_branch = code.find("} else {", recipient_branch);
+            REQUIRE(broadcast_branch != std::string::npos);
+
+            // Both the recipient-targeted branch and the broadcast view.each
+            // branch invoke the shared lambda by call, not by re-splicing it.
+            const auto recipient_call = code.find(handler_body_name + "(entity", recipient_branch);
+            REQUIRE(recipient_call != std::string::npos);
+            CHECK(recipient_call < broadcast_branch);
+
+            const auto broadcast_call = code.find(handler_body_name + "(entity", broadcast_branch);
+            REQUIRE(broadcast_call != std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -2285,12 +2328,11 @@ TEST_CASE("Codegen EnTT: else-if chain compiles equivalent to legacy nested else
             CHECK(code.find("Health_comp.hp = 3;") != std::string::npos);
 
             // Flat cascade, not the doubly-braced legacy shape: exactly one
-            // `else if` per emitted handler body. emit_system emits the body
-            // twice (targeted-recipient path and broadcast view-iteration
-            // path), so 2 occurrences total is the flat-cascade signature —
-            // 4 would indicate the doubly-braced `else { if` shape leaking
-            // back in.
-            CHECK(count_occurrences(code, "else if (") == 2);
+            // `else if` in the shared handler-body lambda (dedupe-handler-
+            // dispatch-codegen: emitted once and invoked from both the
+            // targeted-recipient and broadcast dispatch sites). 2 would
+            // indicate the doubly-braced `else { if` shape leaking back in.
+            CHECK(count_occurrences(code, "else if (") == 1);
             CHECK(code.find("} else {\n") != std::string::npos);
         }
     }
@@ -3019,6 +3061,28 @@ TEST_CASE("Codegen EnTT: template-backed entity emits template components plus o
     CHECK(code.find("emplace<Shape>") != std::string::npos);
     CHECK(code.find("emplace<Collectible>") != std::string::npos);
     CHECK(code.find("emplace<WorldTransform>") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: flat archetype's non-hinted creation function delegates to its hinted counterpart",
+          "[codegen-entt][entity]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "trait Position:\n"
+        "    var x: float\n"
+        "template Particle:\n"
+        "    Position:\n"
+        "        x = 1.0\n",
+        program);
+
+    const auto code    = CppEnttCodegen::generate(decorated);
+    const auto wrapper = generated_function(code, "entt::entity create_particle(entt::registry& registry)");
+    CHECK(wrapper ==
+          "entt::entity create_particle(entt::registry& registry) {\n"
+          "    return create_particle_at(registry, registry.create());\n"
+          "}\n");
+    // Not a second copy of create_particle_at's field-initialization statements.
+    CHECK(wrapper.find("component") == std::string::npos);
+    CHECK(wrapper.find("registry.emplace<Position>") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: mixed entity creation order preserved", "[codegen-entt][entity]") {
@@ -4033,9 +4097,11 @@ TEST_CASE("Codegen EnTT: query.children lowers to a stable filtered direct-child
     const auto requested_parent = extract_temp_name(code, "cactus_gen_requested_parent_");
     REQUIRE_FALSE(requested_parent.empty());
     CHECK(code.find("const auto " + requested_parent + " = (Selection_comp.parent)") != std::string::npos);
-    // The handler body is emitted once for targeted delivery and once for broadcast delivery;
-    // each runtime path still evaluates the authored expression exactly once into its temporary.
-    CHECK(count_occurrences(code, "const auto " + requested_parent + " = (Selection_comp.parent)") == 2);
+    // The handler body lives in one shared lambda invoked from both the
+    // targeted-delivery and broadcast dispatch sites (dedupe-handler-
+    // dispatch-codegen), so the authored expression appears once in the
+    // generated function and is evaluated once per runtime invocation.
+    CHECK(count_occurrences(code, "const auto " + requested_parent + " = (Selection_comp.parent)") == 1);
     CHECK(code.find("if (!registry.valid(" + requested_parent + ")) return std::vector<entt::entity>{}") !=
           std::string::npos);
     CHECK(code.find("registry.view<Parent, Node>(entt::exclude<Hidden>)") != std::string::npos);
@@ -4296,6 +4362,24 @@ TEST_CASE("Codegen EnTT: hierarchical template emits per-node helpers and canoni
     const auto wrapper = generated_function(code, "entt::entity create_rig(entt::registry& registry)");
     CHECK(wrapper.find("auto entity = create_rig__node(registry);") != std::string::npos);
     CHECK(wrapper.find("return entity;") != std::string::npos);
+}
+
+TEST_CASE(
+    "Codegen EnTT: hierarchical-root archetype's non-hinted node function delegates to its hinted "
+    "counterpart",
+    "[codegen-entt][hierarchy]") {
+    ProgramNode program;
+    auto decorated  = full_pipeline(HIERARCHY_SOURCE_PREFIX, program);
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto wrapper = generated_function(code, "static entt::entity create_rig__node(entt::registry& registry)");
+    CHECK(wrapper ==
+          "static entt::entity create_rig__node(entt::registry& registry) {\n"
+          "    return create_rig__node_at(registry, registry.create());\n"
+          "}\n");
+    // Not a second copy of create_rig__node_at's field-initialization statements.
+    CHECK(wrapper.find("component") == std::string::npos);
+    CHECK(wrapper.find("registry.emplace<Tag>") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: hierarchical creation assigns Parent to the immediate parent", "[codegen-entt][hierarchy]") {
@@ -5376,6 +5460,12 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
     REQUIRE(first != std::string::npos);
     REQUIRE(second != std::string::npos);
     CHECK(first < second);
+    // Phase-dispatch call dedup only collapses genuine same-symbol
+    // collisions — two distinct nodes that resolve to two different
+    // underlying functions in the same phase batch still each get exactly
+    // one call.
+    CHECK(count_occurrences(dispatch, "::sprite_renderer_tick(registry);") == 1);
+    CHECK(count_occurrences(dispatch, "::sprite_animation_tick(registry);") == 1);
 
     CHECK(code.find("cactus_external__std_render_sprites__SpriteRenderer") == std::string::npos);
     CHECK(code.find("cactus_external__std_render_sprites__SpriteAnimation") == std::string::npos);
@@ -5385,6 +5475,87 @@ TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through 
     CHECK(update.find("sprite_animation_tick") == std::string::npos);
     CHECK(render.find("sprite_renderer_tick") == std::string::npos);
     CHECK(render.find("sprite_animation_tick") == std::string::npos);
+}
+
+TEST_CASE(
+    "Codegen EnTT: phase-dispatch call emission dedupes two execution-graph nodes that resolve to "
+    "the same underlying implementation function",
+    "[codegen-entt][phase-runtime]") {
+    // Mirrors the confirmed real-world collision (build/generated_examples/waving-label-2d.
+    // generated.cpp pre-fix): std.editor transitively imports both std.transform.flat and
+    // std.transform.volume, so the merged program schedules two distinct TransformPropagation
+    // execution-graph nodes (one per module) onto the same late_tick phase batch. Both resolve to
+    // the same emitted C++ function because system_function_name only encodes the *compiling
+    // program's* module name and the rule's simple name, not the rule's own defining module.
+    //
+    // Reproduced here by cloning a real, recognized std.transform.flat.TransformPropagation node
+    // (AST declaration + execution-graph handler + topological-order entry) and retargeting the
+    // clone's resolved identity to std.transform.volume, exactly as a second linked module would
+    // produce — full_pipeline only supports a single source module, so this stands in for the
+    // artifact linker's cross-module merge.
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.transform.flat\n"
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "trait Parent:\n"
+        "    var parent: entity_id\n"
+        "trait LocalTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "    var rotation: float\n"
+        "    var scale: vec2\n"
+        "phase late_tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "extern rule TransformPropagation:\n"
+        "    filter:\n"
+        "        Parent\n"
+        "        LocalTransform\n"
+        "        WorldTransform\n"
+        "    on late_tick:\n"
+        "        reads:\n"
+        "            Parent\n"
+        "            LocalTransform\n"
+        "        writes:\n"
+        "            WorldTransform\n",
+        program);
+
+    ExternRuleNode* flat_rule = nullptr;
+    for (auto& declaration : program.declarations) {
+        if (auto* rule = std::get_if<ExternRuleNode>(&declaration)) {
+            rule->is_stdlib = true;
+            flat_rule       = rule;
+        }
+    }
+    REQUIRE(flat_rule != nullptr);
+    REQUIRE(flat_rule->resolved_rule_id.has_value());
+
+    auto flat_node_it = std::ranges::find_if(decorated.execution_graph.handlers, [&](const auto& node) {
+        return node.identity.rule == *flat_rule->resolved_rule_id;
+    });
+    REQUIRE(flat_node_it != decorated.execution_graph.handlers.end());
+
+    ExternRuleNode volume_rule                = *flat_rule;
+    volume_rule.resolved_rule_id->module.name = "std.transform.volume";
+    program.declarations.emplace_back(volume_rule);
+
+    HandlerNode volume_node   = *flat_node_it;
+    volume_node.identity.rule = *volume_rule.resolved_rule_id;
+    decorated.execution_graph.handlers.push_back(volume_node);
+    decorated.execution_graph.stable_topological_order.push_back(volume_node.identity);
+
+    decorated.module_name = "waving_label_test";
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto dispatch =
+        generated_function(code,
+                           "void generated_dispatch_phase_std_transform_flat__late_tick(entt::registry& registry, "
+                           "const std_transform_flat__late_tickPhaseRuntimeState& phase)");
+    CHECK(count_occurrences(dispatch, "transform_propagation_tick(registry);") == 1);
 }
 
 // ── Pair relations (dsl-pair-relations, 5.5) ─────────────────────────────────
@@ -5460,16 +5631,19 @@ TEST_CASE("Codegen EnTT: pair handler snapshots both bindings and iterates their
     }
 }
 
-TEST_CASE("Codegen EnTT: pair handler wraps the broadcast tuple body in a per-invocation lambda so "
-          "`return` skips only the current tuple",
-          "[codegen-entt][pair-relations]") {
+TEST_CASE(
+    "Codegen EnTT: pair handler wraps the tuple body in a single shared per-invocation lambda so "
+    "`return` skips only the current tuple",
+    "[codegen-entt][pair-relations]") {
     // Regression test: DetectBubbleContact in examples/bouncy-bubbles rejects
     // self-pairs with `if a == b: return`. Both bindings snapshot the same
     // entity set in the same order, so the very first tuple the broadcast
     // double loop produces is always a self-pair — if `return` were a bare
     // C++ `return;` spliced directly into the loop body (no lambda), it
     // would exit the whole generated handler function on that first tuple
-    // and no other pair would ever be evaluated.
+    // and no other pair would ever be evaluated. dedupe-handler-dispatch-
+    // codegen: the body lives in one named lambda, defined once ahead of
+    // every dispatch branch, and each branch invokes it by name.
     ProgramNode program;
     auto decorated = full_pipeline(
         "event tick:\n"
@@ -5491,29 +5665,93 @@ TEST_CASE("Codegen EnTT: pair handler wraps the broadcast tuple body in a per-in
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            const auto broadcast_branch = code.find("} else {");
+            const auto pair_body_name = extract_temp_name(code, "cactus_gen_pair_body_");
+            REQUIRE_FALSE(pair_body_name.empty());
+
+            const auto lambda_def = code.find("auto " + pair_body_name + " = [&](entt::entity a, entt::entity b) {");
+            REQUIRE(lambda_def != std::string::npos);
+            const auto return_stmt = code.find("return;", lambda_def);
+            REQUIRE(return_stmt != std::string::npos);
+            const auto recipient_branch = code.find("if (cactus_recipient.has_value()) {");
+            REQUIRE(recipient_branch != std::string::npos);
+            // The lambda (and the `return` inside it) is defined once, ahead
+            // of every dispatch branch, so `return` ends only that call's
+            // tuple instead of the enclosing generated function.
+            CHECK(lambda_def < recipient_branch);
+            CHECK(return_stmt < recipient_branch);
+
+            const auto broadcast_branch = code.find("} else {", recipient_branch);
             REQUIRE(broadcast_branch != std::string::npos);
             const auto a_loop = code.find("for (auto a : a_snapshot)", broadcast_branch);
             const auto b_loop = code.find("for (auto b : b_snapshot)", broadcast_branch);
             REQUIRE(a_loop != std::string::npos);
             REQUIRE(b_loop != std::string::npos);
             CHECK(a_loop < b_loop);
-            const auto lambda_open = code.find("[&]() {", b_loop);
-            const auto return_stmt = code.find("return;", b_loop);
-            REQUIRE(lambda_open != std::string::npos);
-            REQUIRE(return_stmt != std::string::npos);
-            // The tuple body must execute inside its own per-invocation lambda so
-            // `return` ends only the current tuple instead of the enclosing
-            // generated function.
-            CHECK(lambda_open < return_stmt);
-            const auto lambda_close = code.find("}();", return_stmt);
-            CHECK(lambda_close != std::string::npos);
+            // The broadcast full scan dispatches into the shared lambda by call.
+            const auto broadcast_call = code.find(pair_body_name + "(a, b);", b_loop);
+            CHECK(broadcast_call != std::string::npos);
         }
     }
 }
 
-TEST_CASE("Codegen EnTT: pair handler wraps both recipient-targeted tuple bodies in a per-invocation "
-          "lambda",
+TEST_CASE(
+    "Codegen EnTT: pair handler dispatches both recipient-targeted branches into the shared "
+    "per-invocation lambda",
+    "[codegen-entt][pair-relations]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n" +
+            PAIR_CODEGEN_TRAITS +
+            "rule DetectBubbleContact:\n"
+            "    pairs:\n"
+            "        a:\n"
+            "            Collider\n"
+            "        b:\n"
+            "            Collider\n"
+            "    on tick:\n"
+            "        if a == b:\n"
+            "            return\n"
+            "        emit Contact:\n"
+            "            other = b\n",
+        program);
+
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl)) {
+            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            const auto pair_body_name = extract_temp_name(code, "cactus_gen_pair_body_");
+            REQUIRE_FALSE(pair_body_name.empty());
+            const auto lambda_def = code.find("auto " + pair_body_name + " = [&](entt::entity a, entt::entity b) {");
+            REQUIRE(lambda_def != std::string::npos);
+
+            const auto recipient_branch = code.find("if (cactus_recipient.has_value()) {");
+            REQUIRE(recipient_branch != std::string::npos);
+            CHECK(lambda_def < recipient_branch);
+            const auto broadcast_branch = code.find("} else {", recipient_branch);
+            REQUIRE(broadcast_branch != std::string::npos);
+
+            // Recipient-as-left: `a` fixed to the target, looping over `b`,
+            // dispatching into the shared lambda by call.
+            const auto left_loop = code.find("for (auto b : b_snapshot)", recipient_branch);
+            REQUIRE(left_loop != std::string::npos);
+            CHECK(left_loop < broadcast_branch);
+            const auto left_call = code.find(pair_body_name + "(a, b);", left_loop);
+            REQUIRE(left_call != std::string::npos);
+            CHECK(left_call < broadcast_branch);
+
+            // Recipient-as-right: `b` fixed to the target, looping over `a`,
+            // dispatching into the shared lambda by call.
+            const auto right_loop = code.find("for (auto a : a_snapshot)", left_call);
+            REQUIRE(right_loop != std::string::npos);
+            CHECK(right_loop < broadcast_branch);
+            const auto right_call = code.find(pair_body_name + "(a, b);", right_loop);
+            REQUIRE(right_call != std::string::npos);
+            CHECK(right_call < broadcast_branch);
+        }
+    }
+}
+
+TEST_CASE("Codegen EnTT: pair handler body text appears exactly once across all three dispatch sites",
           "[codegen-entt][pair-relations]") {
     ProgramNode program;
     auto decorated = full_pipeline(
@@ -5536,38 +5774,11 @@ TEST_CASE("Codegen EnTT: pair handler wraps both recipient-targeted tuple bodies
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            const auto recipient_branch = code.find("if (cactus_recipient.has_value()) {");
-            REQUIRE(recipient_branch != std::string::npos);
-            const auto broadcast_branch = code.find("} else {", recipient_branch);
-            REQUIRE(broadcast_branch != std::string::npos);
-
-            // Recipient-as-left: `a` fixed to the target, looping over `b`.
-            const auto left_loop = code.find("for (auto b : b_snapshot)", recipient_branch);
-            REQUIRE(left_loop != std::string::npos);
-            CHECK(left_loop < broadcast_branch);
-            const auto left_lambda = code.find("[&]() {", left_loop);
-            const auto left_return = code.find("return;", left_loop);
-            REQUIRE(left_lambda != std::string::npos);
-            REQUIRE(left_return != std::string::npos);
-            CHECK(left_lambda < left_return);
-            CHECK(left_return < broadcast_branch);
-            const auto left_close = code.find("}();", left_return);
-            REQUIRE(left_close != std::string::npos);
-            CHECK(left_close < broadcast_branch);
-
-            // Recipient-as-right: `b` fixed to the target, looping over `a`.
-            const auto right_loop = code.find("for (auto a : a_snapshot)", left_loop);
-            REQUIRE(right_loop != std::string::npos);
-            CHECK(right_loop < broadcast_branch);
-            const auto right_lambda = code.find("[&]() {", right_loop);
-            const auto right_return = code.find("return;", right_loop);
-            REQUIRE(right_lambda != std::string::npos);
-            REQUIRE(right_return != std::string::npos);
-            CHECK(right_lambda < right_return);
-            CHECK(right_return < broadcast_branch);
-            const auto right_close = code.find("}();", right_return);
-            REQUIRE(right_close != std::string::npos);
-            CHECK(right_close < broadcast_branch);
+            // Recipient-as-left, recipient-as-right, and the broadcast full
+            // scan all dispatch into one shared lambda, so the body's
+            // distinguishing `return;` statement is text-present exactly
+            // once in the generated function rather than once per site.
+            CHECK(count_occurrences(code, "return;") == 1);
         }
     }
 }

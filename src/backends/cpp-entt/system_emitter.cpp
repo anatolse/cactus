@@ -672,10 +672,8 @@ std::string emit_spatial_join_access(const SpatialJoinAccess& access, const std:
 void emit_sap_pair_activation(std::ostringstream& out,
                               const SpatialJoinPlan& plan,
                               const std::vector<PairBindingCodegen>& pair_binding_codegens,
-                              const std::string& pair_body) {
-    const auto& proxy_source = pair_binding_codegens[plan.left.binding_index];
-    const auto& left         = pair_binding_codegens[plan.left.binding_index];
-    const auto& right        = pair_binding_codegens[plan.right.binding_index];
+                              const std::string& pair_body_name) {
+    const auto& proxy_source     = pair_binding_codegens[plan.left.binding_index];
     const std::string proxy_type = plan.dimension == SpatialJoinDimension::Flat2D ? "Proxy2D" : "Proxy3D";
     const std::string sap_type   = plan.dimension == SpatialJoinDimension::Flat2D ? "SapBroadPhase2D" : "SapBroadPhase3D";
     const std::string ns         = "cactus::runtime::entt_backend::";
@@ -698,10 +696,7 @@ void emit_sap_pair_activation(std::ostringstream& out,
     out << "            " << ns << "sap_execute_pair_tuples(\n";
     out << "                std::span<const " << ns << proxy_type << ">(__sap_proxies),\n";
     out << "                __sap.candidate_pairs(),\n";
-    out << "                [&](entt::entity " << left.scope.binding_name << ", entt::entity "
-        << right.scope.binding_name << ") {\n";
-    out << pair_body;
-    out << "                });\n";
+    out << "                " << pair_body_name << ");\n";
     out << "        }\n";
 }
 
@@ -1028,6 +1023,29 @@ void emit_storage_filter_skip(std::ostringstream& out,
     }
 }
 
+// Distinct cpp_type_names among filter bindings, in first-seen order,
+// restricted to traits that carry field data. EnTT's view.each never passes
+// an empty (marker) component to its lambda, and there is nothing for
+// registry.get<> to bind either, so both binding emitters below (and the
+// shared handler-body lambda's parameter list) need this exact dedup-and-skip-
+// empty set.
+std::vector<std::string> filter_bindings_with_data_cpp_types(const std::vector<FilterBinding>& bindings,
+                                                             const DecoratedProgram& program) {
+    std::vector<std::string> result;
+    std::unordered_set<std::string> seen_cpp;
+    for (const auto& binding : bindings) {
+        if (!seen_cpp.insert(binding.cpp_type_name).second) {
+            continue;
+        }
+        const auto* trait   = EnttCodegenUtils::find_trait(program, binding.lookup_name);
+        const bool is_empty = trait == nullptr || trait->fields.empty();
+        if (!is_empty) {
+            result.push_back(binding.cpp_type_name);
+        }
+    }
+    return result;
+}
+
 // Equivalent of emit_view_each_header's component bindings, but fetched from a
 // single known-valid entity via registry.get<> instead of a view.each() lambda
 // parameter — used for recipient-targeted unary dispatch (targeted-event-delivery),
@@ -1038,17 +1056,9 @@ void emit_component_bindings_from_entity(std::ostringstream& out,
                                          int indent,
                                          const DecoratedProgram& program) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
-    std::unordered_set<std::string> seen_cpp;
-    for (const auto& binding : bindings) {
-        if (!seen_cpp.insert(binding.cpp_type_name).second) {
-            continue;
-        }
-        const auto* trait   = EnttCodegenUtils::find_trait(program, binding.lookup_name);
-        const bool is_empty = trait == nullptr || trait->fields.empty();
-        if (!is_empty) {
-            out << ind << "[[maybe_unused]] auto& " << binding.cpp_type_name << "_comp = registry.get<"
-                << binding.cpp_type_name << ">(" << entity_name << ");\n";
-        }
+    for (const auto& cpp_name : filter_bindings_with_data_cpp_types(bindings, program)) {
+        out << ind << "[[maybe_unused]] auto& " << cpp_name << "_comp = registry.get<" << cpp_name << ">("
+            << entity_name << ");\n";
     }
 }
 
@@ -1097,17 +1107,8 @@ void emit_view_each_header(std::ostringstream& out,
                            const DecoratedProgram& program) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     out << ind << "view.each([&](entt::entity entity";
-    std::unordered_set<std::string> seen_cpp;
-    for (const auto& binding : bindings) {
-        if (!seen_cpp.insert(binding.cpp_type_name).second) {
-            continue;
-        }
-        // EnTT does not pass empty (marker) components to view.each lambdas.
-        const auto* trait   = EnttCodegenUtils::find_trait(program, binding.lookup_name);
-        const bool is_empty = trait == nullptr || trait->fields.empty();
-        if (!is_empty) {
-            out << ", [[maybe_unused]] " << binding.cpp_type_name << "& " << binding.cpp_type_name << "_comp";
-        }
+    for (const auto& cpp_name : filter_bindings_with_data_cpp_types(bindings, program)) {
+        out << ", [[maybe_unused]] " << cpp_name << "& " << cpp_name << "_comp";
     }
     out << ") {\n";
 }
@@ -3164,17 +3165,27 @@ static void emit_pair_handler_body(std::ostringstream& out,
     }
     LocalNumericKinds pair_kinds;
     // Rendered one level deeper (5) than the innermost loop body (4) because
-    // every call site below wraps it in a per-invocation lambda: a bare
-    // `return` spliced directly into a raw loop body would exit this whole
-    // generated function on the first tuple that hits it (see
-    // dsl-pair-relations, "Early return rejects only the current tuple")
-    // instead of ending just that tuple's invocation.
+    // the body is wrapped in a per-invocation lambda: a bare `return`
+    // spliced directly into a raw loop body would exit this whole generated
+    // function on the first tuple that hits it (see dsl-pair-relations,
+    // "Early return rejects only the current tuple") instead of ending just
+    // that tuple's invocation.
     const auto pair_body =
         rewrite_stmt_block(handler.body, 5, {}, program, {}, false, {}, &pair_codegen_scope, pair_locals, pair_kinds);
-    const auto emit_tuple_invocation = [&out, &pair_body]() {
-        out << "                [&]() {\n";
-        out << pair_body;
-        out << "                }();\n";
+    const auto pair_body_name = gen_temp_name("pair_body", handler.location);
+    // The tuple body is defined once as a named lambda and every dispatch
+    // site below (and emit_sap_pair_activation, when spatial broadphase
+    // applies) calls it by name instead of re-splicing its own copy. Every
+    // call site already binds the pair to locals named exactly left/right's
+    // binding names, so the lambda's parameters are those same two names —
+    // no per-site parameter mapping is needed.
+    out << "    auto " << pair_body_name << " = [&](entt::entity " << left.scope.binding_name << ", entt::entity "
+        << right.scope.binding_name << ") {\n";
+    out << pair_body;
+    out << "    };\n";
+    const auto emit_tuple_invocation = [&out, &pair_body_name, &left, &right]() {
+        out << "                " << pair_body_name << "(" << left.scope.binding_name << ", "
+            << right.scope.binding_name << ");\n";
     };
     // Recipient-targeted delivery: only tuples incident to the
     // recipient run (targeted-event-delivery, "Pair target routes to
@@ -3210,7 +3221,7 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "        }\n";
     out << "    } else {\n";
     if (contract != nullptr && contract->spatial_join.has_value()) {
-        emit_sap_pair_activation(out, *contract->spatial_join, pair_binding_codegens, pair_body);
+        emit_sap_pair_activation(out, *contract->spatial_join, pair_binding_codegens, pair_body_name);
     } else {
         out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name
             << "_snapshot) {\n";
@@ -3248,6 +3259,25 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     LocalNumericKinds local_kinds;
     const auto filtered_body = rewrite_stmt_block(
         handler.body, 3, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
+    const auto data_cpp_types    = filter_bindings_with_data_cpp_types(filter_bindings_list, program);
+    const auto handler_body_name = gen_temp_name("handler_body", handler.location);
+    // The rewritten body is shared by the recipient-targeted branch and the
+    // broadcast view.each
+    // branch below via one local lambda, rather than being spliced into the
+    // generated output twice. Each distinct data-carrying filter trait
+    // becomes an explicit parameter because the two call sites bind their
+    // entity/*_comp locals in separate (sibling) scopes — a zero-parameter
+    // `[&]` capture defined once cannot see locals declared later at either
+    // call site.
+    out << "    auto " << handler_body_name << " = [&](entt::entity entity";
+    for (const auto& cpp_name : data_cpp_types) {
+        out << ", [[maybe_unused]] " << cpp_name << "& " << cpp_name << "_comp";
+    }
+    out << ") {\n";
+    out << "        (void)entity;\n";
+    emit_filter_alias_bindings(out, sys.filter, program, 2);
+    out << filtered_body;
+    out << "    };\n";
     // Recipient-targeted delivery: run at most once, for the
     // recipient, and only if it satisfies this handler's selection
     // (targeted-event-delivery, "Unary target ... only if it
@@ -3267,18 +3297,22 @@ static void emit_filtered_handler_body(std::ostringstream& out,
         out << ">(entity)";
     }
     out << ") {\n";
-    out << "            (void)entity;\n";
     emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
-    emit_filter_alias_bindings(out, sys.filter, program, 3);
-    out << filtered_body;
+    out << "            " << handler_body_name << "(entity";
+    for (const auto& cpp_name : data_cpp_types) {
+        out << ", " << cpp_name << "_comp";
+    }
+    out << ");\n";
     out << "        }\n";
     out << "    } else {\n";
     emit_sort_call(out, sys, 2);
     emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2);
     emit_view_each_header(out, filter_bindings_list, 2, program);
-    out << "        (void)entity;\n";
-    emit_filter_alias_bindings(out, sys.filter, program, 3);
-    out << filtered_body;
+    out << "        " << handler_body_name << "(entity";
+    for (const auto& cpp_name : data_cpp_types) {
+        out << ", " << cpp_name << "_comp";
+    }
+    out << ");\n";
     out << "        });\n";
     out << "    }\n";
 }

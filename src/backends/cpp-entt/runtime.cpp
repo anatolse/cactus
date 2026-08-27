@@ -1782,6 +1782,11 @@ void submit_text_3d(const uint32_t entity_id,
     });
 }
 
+std::uint64_t generated_next_creation_ordinal() noexcept {
+    static std::uint64_t next = 0;
+    return next++;
+}
+
 void propagate_hierarchy(entt::registry& registry,
                          const std::function<bool(entt::entity)>& has_local_world,
                          const std::function<entt::entity(entt::entity)>& get_parent,

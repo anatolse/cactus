@@ -578,7 +578,10 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     std::ostringstream out;
     out << "// ── Graph Activation Runtime State ──────────────────────────────────\n\n";
     out << "namespace cactus::runtime::entt_backend {\n\n";
-    out << "inline constexpr std::size_t kMaxEventCascadeDepth = 64;\n\n";
+    // kMaxEventCascadeDepth, QueuedEvent<Occurrence>, and ActivationRuntime<Occurrence>
+    // are runtime-hosted (backends/cpp-entt/runtime.hpp) — EventOccurrence
+    // (the program's concrete event-type list) is the one genuinely
+    // program-specific piece, so it stays generated.
     if (all_events.empty()) {
         out << "using EventOccurrence = std::variant<std::monostate>;\n";
     } else {
@@ -588,26 +591,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         }
         out << ">;\n";
     }
-    out << "struct QueuedEvent {\n";
-    out << "    EventOccurrence occurrence;\n";
-    out << "    std::size_t cascade_depth{};\n";
-    out << "    std::optional<entt::entity> target;\n";
-    out << "};\n\n";
-    out << "struct StructuralCommand {\n";
-    out << "    enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };\n";
-    out << "    Kind kind{};\n";
-    out << "    std::function<void(entt::registry&)> apply;\n";
-    out << "};\n\n";
-    out << "struct ActivationRuntime {\n";
-    out << "    std::deque<QueuedEvent> root_event_queue;\n";
-    out << "    std::deque<QueuedEvent> event_queue;\n";
-    out << "    std::deque<QueuedEvent> deferred_events;\n";
-    out << "    std::vector<StructuralCommand> commands;\n";
-    out << "    std::size_t current_cascade_depth{};\n";
-    out << "    entt::entt_traits<entt::entity>::entity_type next_reserved_entity =\n";
-    out << "        entt::entt_traits<entt::entity>::entity_mask - 1U;\n";
-    out << "    bool active{};\n";
-    out << "};\n\n";
+    out << "\n";
 
     for (const auto& phase : program.execution_graph.phases) {
         const auto phase_name = canonical_to_cpp_name(phase.phase);
@@ -627,7 +611,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     }
 
     out << "struct SchedulerState {\n";
-    out << "    ActivationRuntime activation;\n";
+    out << "    ActivationRuntime<EventOccurrence> activation;\n";
     for (const auto& phase : program.execution_graph.phases) {
         const auto phase_name = canonical_to_cpp_name(phase.phase);
         out << "    " << phase_name << "PhaseRuntimeState " << phase_name << ";\n";
@@ -639,24 +623,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "}\n\n";
 
     out << "entt::entity generated_reserve_entity(entt::registry& registry) {\n";
-    out << "    using Traits = entt::entt_traits<entt::entity>;\n";
-    out << "    auto& next = generated_scheduler_state().activation.next_reserved_entity;\n";
-    out << "    while (next != 0U) {\n";
-    out << "        const auto candidate = Traits::construct(next--, 0U);\n";
-    out << "        if (!registry.valid(candidate)) {\n";
-    out << "            return candidate;\n";
-    out << "        }\n";
-    out << "    }\n";
-    out << "    throw std::runtime_error(\"cactus deferred entity identifier space exhausted\");\n";
+    out << "    return reserve_entity(registry, generated_scheduler_state().activation);\n";
     out << "}\n\n";
 
     out << "void generated_queue_structural_command(StructuralCommand::Kind kind,\n";
     out << "                                        std::function<void(entt::registry&)> apply) {\n";
-    out << "    auto& activation = generated_scheduler_state().activation;\n";
-    out << "    if (!activation.active) {\n";
-    out << "        throw std::runtime_error(\"cactus structural command queued outside an activation\");\n";
-    out << "    }\n";
-    out << "    activation.commands.push_back(StructuralCommand{.kind = kind, .apply = std::move(apply)});\n";
+    out << "    queue_structural_command(generated_scheduler_state().activation, kind, std::move(apply));\n";
     out << "}\n\n";
 
     // generated_emit_event and the generated_drain_event_cascade forward
@@ -666,15 +638,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     // within generated_commit_activation's body.
     out << "template <typename Occurrence>\n";
     out << "void generated_emit_event(Occurrence occurrence) {\n";
-    out << "    auto& activation = generated_scheduler_state().activation;\n";
-    out << "    const auto next_depth = activation.current_cascade_depth + 1;\n";
-    out << "    auto queued = QueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = next_depth};\n";
-    out << "    if (next_depth > kMaxEventCascadeDepth) {\n";
-    out << "        queued.cascade_depth = 0;\n";
-    out << "        activation.deferred_events.push_back(std::move(queued));\n";
-    out << "        return;\n";
-    out << "    }\n";
-    out << "    activation.event_queue.push_back(std::move(queued));\n";
+    out << "    emit_event(generated_scheduler_state().activation, std::move(occurrence));\n";
     out << "}\n\n";
 
     // Targeted counterpart of generated_emit_event (targeted-event-delivery):
@@ -685,16 +649,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     // broadcast dispatch.
     out << "template <typename Occurrence>\n";
     out << "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target) {\n";
-    out << "    auto& activation = generated_scheduler_state().activation;\n";
-    out << "    const auto next_depth = activation.current_cascade_depth + 1;\n";
-    out << "    auto queued = QueuedEvent{\n";
-    out << "        .occurrence = std::move(occurrence), .cascade_depth = next_depth, .target = target};\n";
-    out << "    if (next_depth > kMaxEventCascadeDepth) {\n";
-    out << "        queued.cascade_depth = 0;\n";
-    out << "        activation.deferred_events.push_back(std::move(queued));\n";
-    out << "        return;\n";
-    out << "    }\n";
-    out << "    activation.event_queue.push_back(std::move(queued));\n";
+    out << "    emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);\n";
     out << "}\n\n";
 
     out << "void generated_drain_event_cascade(entt::registry& registry);\n\n";
@@ -702,39 +657,29 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "void generated_commit_activation(entt::registry& registry) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
     if (!has_spawn_handler && !has_destroy_handler) {
-        out << "    auto commands = std::move(activation.commands);\n";
-        out << "    activation.commands.clear();\n";
-        out << "    for (auto& command : commands) {\n";
-        out << "        command.apply(registry);\n";
-        out << "    }\n";
+        out << "    commit_activation(activation, registry, &generated_drain_event_cascade);\n";
     } else {
         const auto spawn_type   = has_spawn_handler ? event_runtime_cpp_type(program, *spawn_event->symbol_id) : "";
         const auto destroy_type = has_destroy_handler ? event_runtime_cpp_type(program, *destroy_event->symbol_id) : "";
         // Looping until no new commands were queued lets an `on spawn`/`on
         // destroy` handler that issues further spawn/destroy commands have
         // those commands applied within the same activation, bounded by the
-        // existing kMaxEventCascadeDepth cap (generated_emit_event
-        // defers instead of enqueuing once the cascade depth is exceeded, so
-        // no new commands get queued from a deferred notification and this
-        // loop terminates).
-        out << "    while (!activation.commands.empty()) {\n";
-        out << "        auto commands = std::move(activation.commands);\n";
-        out << "        activation.commands.clear();\n";
-        out << "        for (auto& command : commands) {\n";
-        out << "            command.apply(registry);\n";
+        // existing kMaxEventCascadeDepth cap (emit_event defers instead of
+        // enqueuing once the cascade depth is exceeded, so no new commands
+        // get queued from a deferred notification and commit_activation's
+        // internal loop terminates).
+        out << "    commit_activation(\n";
+        out << "        activation, registry, &generated_drain_event_cascade,\n";
         if (has_spawn_handler) {
-            out << "            if (command.kind == StructuralCommand::Kind::Spawn) {\n";
-            out << "                generated_emit_event(" << spawn_type << "{});\n";
-            out << "            }\n";
+            out << "        [](auto& act) { emit_event(act, " << spawn_type << "{}); },\n";
+        } else {
+            out << "        NoNotify{},\n";
         }
         if (has_destroy_handler) {
-            out << "            if (command.kind == StructuralCommand::Kind::Destroy) {\n";
-            out << "                generated_emit_event(" << destroy_type << "{});\n";
-            out << "            }\n";
+            out << "        [](auto& act) { emit_event(act, " << destroy_type << "{}); });\n";
+        } else {
+            out << "        NoNotify{});\n";
         }
-        out << "        }\n";
-        out << "        generated_drain_event_cascade(registry);\n";
-        out << "    }\n";
     }
     out << "}\n\n";
 
@@ -742,7 +687,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         const auto type = event_runtime_cpp_type(program, *event->symbol_id);
         out << "void generated_inject_external_event(" << type << " occurrence) {\n";
         out << "    generated_scheduler_state().activation.root_event_queue.push_back(\n";
-        out << "        QueuedEvent{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
+        out << "        QueuedEvent<EventOccurrence>{.occurrence = std::move(occurrence), .cascade_depth = 0});\n";
         out << "}\n\n";
     }
 
@@ -1146,20 +1091,11 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
     // here, not re-checked per consumer, so no handler/command/effect runs
     // for it.
     out << "void generated_drain_event_cascade(entt::registry& registry) {\n";
-    out << "    auto& activation = generated_scheduler_state().activation;\n";
-    out << "    while (!activation.event_queue.empty()) {\n";
-    out << "        auto queued = std::move(activation.event_queue.front());\n";
-    out << "        activation.event_queue.pop_front();\n";
-    out << "        activation.current_cascade_depth = queued.cascade_depth;\n";
-    out << "        if (queued.target.has_value() && !registry.valid(*queued.target)) {\n";
-    out << "            continue;\n";
-    out << "        }\n";
-    out << "        std::visit(\n";
-    out << "            [&](const auto& occurrence) { generated_dispatch_event(registry, occurrence, queued.target); "
-           "},\n";
-    out << "            queued.occurrence);\n";
-    out << "    }\n";
-    out << "    activation.current_cascade_depth = 0;\n";
+    out << "    drain_event_cascade(\n";
+    out << "        generated_scheduler_state().activation, registry,\n";
+    out << "        [](entt::registry& reg, const auto& occurrence, std::optional<entt::entity> target) {\n";
+    out << "            generated_dispatch_event(reg, occurrence, target);\n";
+    out << "        });\n";
     out << "}\n\n";
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();
@@ -1171,95 +1107,35 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
     out << "namespace {\n\n";
     for (const auto& [name, trait] : program.traits) {
         const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
-        out << "std::vector<entt::entity> projected_" << cpp_name
-            << "_entities;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n";
-        if (trait.fields.empty()) {
-            out << "std::unordered_map<entt::entity, bool> projected_" << cpp_name
-                << "_previous;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
-        } else {
-            out << "std::unordered_map<entt::entity, std::optional<" << cpp_name << ">> projected_" << cpp_name
-                << "_previous;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
-        }
-        out << "[[maybe_unused]] void remember_projected_" << cpp_name
-            << "(entt::registry& registry, entt::entity entity) {\n";
-        out << "    if (projected_" << cpp_name << "_previous.contains(entity)) {\n";
-        out << "        return;\n";
-        out << "    }\n";
-        out << "    projected_" << cpp_name << "_entities.push_back(entity);\n";
-        if (trait.fields.empty()) {
-            out << "    projected_" << cpp_name << "_previous.emplace(entity, registry.all_of<" << cpp_name
-                << ">(entity));\n";
-        } else {
-            out << "    if (auto* previous = registry.try_get<" << cpp_name << ">(entity); previous != nullptr) {\n";
-            out << "        projected_" << cpp_name << "_previous.emplace(entity, *previous);\n";
-            out << "    } else {\n";
-            out << "        projected_" << cpp_name << "_previous.emplace(entity, std::nullopt);\n";
-            out << "    }\n";
-        }
-        out << "}\n\n";
+        // Tracking storage/logic is runtime-hosted (ProjectedTraitTracker,
+        // backends/cpp-entt/runtime.hpp) — one instantiation per projected
+        // trait type, replacing the former per-type remember/project/cancel/
+        // clear quartet emitted as inline text. The instantiated variable
+        // keeps the pre-existing `projected_<cpp_name>` name and these thin
+        // wrappers keep the pre-existing `project_<cpp_name>`/
+        // `cancel_projected_<cpp_name>` call-site names so system_emitter.cpp
+        // needs no changes.
+        out << "cactus::runtime::entt_backend::ProjectedTraitTracker<" << cpp_name << "> projected_" << cpp_name
+            << ";  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)\n\n";
         if (trait.fields.empty()) {
             out << "[[maybe_unused]] void project_" << cpp_name
                 << "(entt::registry& registry, entt::entity entity) {\n";
-            out << "    remember_projected_" << cpp_name << "(registry, entity);\n";
-            out << "    registry.emplace_or_replace<" << cpp_name << ">(entity);\n";
+            out << "    projected_" << cpp_name << ".project(registry, entity);\n";
             out << "}\n\n";
         } else {
             out << "[[maybe_unused]] " << cpp_name << "& project_" << cpp_name
                 << "(entt::registry& registry, entt::entity entity) {\n";
-            out << "    remember_projected_" << cpp_name << "(registry, entity);\n";
-            out << "    if (auto* current = registry.try_get<" << cpp_name << ">(entity); current != nullptr) {\n";
-            out << "        return *current;\n";
-            out << "    }\n";
-            out << "    return registry.emplace<" << cpp_name << ">(entity);\n";
+            out << "    return projected_" << cpp_name << ".project(registry, entity);\n";
             out << "}\n\n";
         }
         out << "[[maybe_unused]] void cancel_projected_" << cpp_name << "(entt::entity entity) {\n";
-        out << "    projected_" << cpp_name << "_previous.erase(entity);\n";
-        out << "}\n\n";
-    }
-    // One function per trait (rather than one loop iteration inlined into a
-    // single dispatcher body) keeps every generated function under
-    // readability-function-size's statement threshold regardless of how many
-    // projected traits a program declares — a program-wide trait count is not
-    // bounded, so an inlined per-trait loop body eventually exceeds it (first
-    // observed via std.ui's DesiredSize/ComputedLayout pushing editor-3d over
-    // 800 statements).
-    std::vector<std::string> clear_fn_names;
-    clear_fn_names.reserve(program.traits.size());
-    for (const auto& [name, trait] : program.traits) {
-        const std::string cpp_name      = canonical_to_cpp_name(trait.module_name, trait.name);
-        const std::string clear_fn_name = "clear_projected_" + cpp_name;
-        clear_fn_names.push_back(clear_fn_name);
-        out << "void " << clear_fn_name << "(entt::registry& registry) {\n";
-        out << "    for (const auto entity : projected_" << cpp_name << "_entities) {\n";
-        out << "        auto previous_it = projected_" << cpp_name << "_previous.find(entity);\n";
-        out << "        if (previous_it == projected_" << cpp_name << "_previous.end()) {\n";
-        out << "            continue;\n";
-        out << "        }\n";
-        out << "        if (!registry.valid(entity)) {\n";
-        out << "            continue;\n";
-        out << "        }\n";
-        if (trait.fields.empty()) {
-            out << "        if (previous_it->second) {\n";
-            out << "            registry.emplace_or_replace<" << cpp_name << ">(entity);\n";
-            out << "        } else if (registry.all_of<" << cpp_name << ">(entity)) {\n";
-            out << "            registry.remove<" << cpp_name << ">(entity);\n";
-            out << "        }\n";
-        } else {
-            out << "        if (previous_it->second.has_value()) {\n";
-            out << "            registry.emplace_or_replace<" << cpp_name << ">(entity, *previous_it->second);\n";
-            out << "        } else if (registry.all_of<" << cpp_name << ">(entity)) {\n";
-            out << "            registry.remove<" << cpp_name << ">(entity);\n";
-            out << "        }\n";
-        }
-        out << "    }\n";
-        out << "    projected_" << cpp_name << "_entities.clear();\n";
-        out << "    projected_" << cpp_name << "_previous.clear();\n";
+        out << "    projected_" << cpp_name << ".cancel(entity);\n";
         out << "}\n\n";
     }
     out << "void clear_projected_traits(entt::registry& registry) {\n";
-    for (const auto& clear_fn_name : clear_fn_names) {
-        out << "    " << clear_fn_name << "(registry);\n";
+    for (const auto& [name, trait] : program.traits) {
+        const std::string cpp_name = canonical_to_cpp_name(trait.module_name, trait.name);
+        out << "    projected_" << cpp_name << ".clear(registry);\n";
     }
     out << "}\n\n";
     out << "}  // namespace\n\n";
@@ -2784,18 +2660,11 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // emitted-event order is deterministic and backend-independent. Assigned
     // once at every entity's creation site (load-time and committed spawn both
     // route through emit_archetype_trait_initializers), never reassigned.
-    // Emitted unconditionally (not gated on the graph-runtime/phases flag used
-    // elsewhere) since a pairs: rule can exist in a program with no phase
-    // declarations, driven only by bare events.
-    out << "namespace cactus::runtime::entt_backend {\n\n";
-    out << "struct CreationOrdinal {\n";
-    out << "    std::uint64_t value{};\n";
-    out << "};\n\n";
-    out << "inline std::uint64_t generated_next_creation_ordinal() {\n";
-    out << "    static std::uint64_t next = 0;\n";
-    out << "    return next++;\n";
-    out << "}\n\n";
-    out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    // Runtime-hosted (backends/cpp-entt/runtime.hpp): CreationOrdinal has no
+    // program-specific shape, so it isn't re-emitted here — a second
+    // definition of the same name in the same namespace would be a
+    // duplicate-definition compile error (runtime.hpp is always included by
+    // generated code).
 
     // ── Viewport camera-translate helpers ─────────────────────────────────────
     // Emitted once, early — after component structs exist, before the

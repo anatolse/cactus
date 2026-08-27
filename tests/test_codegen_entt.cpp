@@ -1627,14 +1627,16 @@ TEST_CASE("Codegen EnTT: commit emits a spawn notification only when an on spawn
 
     const auto code = CppEnttCodegen::generate(decorated);
 
-    // Gating is per-event: an `on spawn` handler emits spawn-notification
-    // codegen without also emitting destroy-notification codegen.
+    // Gating is per-event: an `on spawn` handler emits an emit_event(spawn)
+    // hook for the runtime commit_activation template's OnSpawn slot,
+    // without also emitting a destroy hook for its OnDestroy slot (the
+    // looping/notification logic itself now lives once in
+    // backends/cpp-entt/runtime.hpp — see test_runtime_activation_scheduler.cpp).
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("while (!activation.commands.empty())") != std::string::npos);
-    CHECK(commit_fn.find("StructuralCommand::Kind::Spawn") != std::string::npos);
-    CHECK(commit_fn.find("generated_emit_event(spawnEvent{});") != std::string::npos);
-    CHECK(commit_fn.find("StructuralCommand::Kind::Destroy") == std::string::npos);
-    CHECK(commit_fn.find("generated_drain_event_cascade(registry);") != std::string::npos);
+    CHECK(commit_fn.find("commit_activation(") != std::string::npos);
+    CHECK(commit_fn.find("&generated_drain_event_cascade") != std::string::npos);
+    CHECK(commit_fn.find("emit_event(act, spawnEvent{});") != std::string::npos);
+    CHECK(commit_fn.find("destroyEvent") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: commit emits a destroy notification only when an on destroy handler exists",
@@ -1660,11 +1662,10 @@ TEST_CASE("Codegen EnTT: commit emits a destroy notification only when an on des
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("while (!activation.commands.empty())") != std::string::npos);
-    CHECK(commit_fn.find("StructuralCommand::Kind::Destroy") != std::string::npos);
-    CHECK(commit_fn.find("generated_emit_event(destroyEvent{});") != std::string::npos);
-    CHECK(commit_fn.find("StructuralCommand::Kind::Spawn") == std::string::npos);
-    CHECK(commit_fn.find("generated_drain_event_cascade(registry);") != std::string::npos);
+    CHECK(commit_fn.find("commit_activation(") != std::string::npos);
+    CHECK(commit_fn.find("&generated_drain_event_cascade") != std::string::npos);
+    CHECK(commit_fn.find("emit_event(act, destroyEvent{});") != std::string::npos);
+    CHECK(commit_fn.find("spawnEvent") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: programs without spawn/destroy handlers emit no commit notification codegen",
@@ -1690,11 +1691,14 @@ TEST_CASE("Codegen EnTT: programs without spawn/destroy handlers emit no commit 
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("while (!activation.commands.empty())") == std::string::npos);
-    CHECK(commit_fn.find("StructuralCommand::Kind::Spawn") == std::string::npos);
-    CHECK(commit_fn.find("StructuralCommand::Kind::Destroy") == std::string::npos);
-    CHECK(commit_fn.find("generated_drain_event_cascade(registry);") == std::string::npos);
-    CHECK(commit_fn.find("for (auto& command : commands) {") != std::string::npos);
+    // No hook: a single call to the runtime's commit_activation with no
+    // OnSpawn/OnDestroy arguments (defaults to NoNotify, no notification
+    // branch instantiated at all — see test_runtime_activation_scheduler.cpp).
+    CHECK(commit_fn.find("commit_activation(activation, registry, &generated_drain_event_cascade);") !=
+          std::string::npos);
+    CHECK(commit_fn.find("spawnEvent") == std::string::npos);
+    CHECK(commit_fn.find("destroyEvent") == std::string::npos);
+    CHECK(commit_fn.find("NoNotify") == std::string::npos);
     // The events are still declared (as they would be via a real `use
     // std.core`) and still get struct + dispatch-overload codegen; only the
     // commit-side notification emission is gated on handler presence.
@@ -1723,18 +1727,19 @@ TEST_CASE("Codegen EnTT: spawn notification emission reuses the existing cascade
 
     const auto code = CppEnttCodegen::generate(decorated);
 
-    // Commit routes the spawn notification through generated_emit_event — the
-    // same cascade-depth-bounded path (kMaxEventCascadeDepth) already
+    // Commit routes the spawn notification through the runtime's emit_event —
+    // the same cascade-depth-bounded path (kMaxEventCascadeDepth) already
     // used for ordinary handler-emitted events — rather than pushing directly
     // onto the event queue via a new/uncapped path.
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("generated_emit_event(spawnEvent{});") != std::string::npos);
+    CHECK(commit_fn.find("emit_event(act, spawnEvent{});") != std::string::npos);
     CHECK(commit_fn.find("activation.event_queue.push_back") == std::string::npos);
 
-    // Exactly one cascade-depth cap is declared for the whole program — no
-    // second/independent depth-limiting mechanism was introduced.
-    CHECK(count_occurrences(code, "kMaxEventCascadeDepth = 64;") == 1);
-    CHECK(code.find("if (next_depth > kMaxEventCascadeDepth)") != std::string::npos);
+    // kMaxEventCascadeDepth and the depth-capping branch now live once in the
+    // shared runtime template (backends/cpp-entt/runtime.hpp) — not
+    // re-declared or re-checked per program, so the generated program
+    // contains no reference to the symbol at all.
+    CHECK(code.find("kMaxEventCascadeDepth") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {
@@ -2865,8 +2870,9 @@ TEST_CASE("Codegen EnTT: projected traits use registry components in filters and
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::vector<entt::entity> projected_DamageFlash_entities") != std::string::npos);
-    CHECK(code.find("std::unordered_map<entt::entity, std::optional<DamageFlash>> projected_DamageFlash_previous") !=
+    // Tracking storage is runtime-hosted (ProjectedTraitTracker,
+    // backends/cpp-entt/runtime.hpp) — codegen only instantiates the tracker.
+    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<DamageFlash> projected_DamageFlash;") !=
           std::string::npos);
     const auto projected_name = extract_temp_name(code, "cactus_gen_projected_");
     REQUIRE_FALSE(projected_name.empty());
@@ -2928,12 +2934,17 @@ TEST_CASE("Codegen EnTT: projected trait cleanup restores durable or removes pro
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("if (projected_Flash_previous.contains(entity))") != std::string::npos);
-    CHECK(code.find("projected_Flash_previous.emplace(entity, *previous)") != std::string::npos);
-    CHECK(code.find("projected_Flash_previous.emplace(entity, std::nullopt)") != std::string::npos);
-    CHECK(code.find("registry.emplace_or_replace<Flash>(entity, *previous_it->second)") != std::string::npos);
+    // Remember/restore-on-clear logic is runtime-hosted (ProjectedTraitTracker,
+    // backends/cpp-entt/runtime.hpp) and covered directly by
+    // test_runtime_projected_trait_tracker.cpp; this codegen-level test only
+    // checks the tracker is instantiated and the `remove Flash` statement
+    // (a separate, non-projected-trait code path) still lowers as before.
+    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<Flash> projected_Flash;") !=
+          std::string::npos);
+    CHECK(code.find("projected_Flash.project(registry, entity)") != std::string::npos);
     CHECK(code.find("registry.remove<Flash>(entity)") != std::string::npos);
     CHECK(code.find("cancel_projected_Flash(entity)") != std::string::npos);
+    CHECK(code.find("projected_Flash.cancel(entity)") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codegen-entt][project]") {
@@ -2951,8 +2962,10 @@ TEST_CASE("Codegen EnTT: projected marker traits avoid value snapshots", "[codeg
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::unordered_map<entt::entity, bool> projected_Grounded_previous") != std::string::npos);
-    CHECK(code.find("projected_Grounded_previous.emplace(entity, registry.all_of<Grounded>(entity))") !=
+    // Tag vs. data-bearing storage selection (std::is_empty_v branch) is
+    // runtime-hosted and covered by test_runtime_projected_trait_tracker.cpp;
+    // this codegen-level test only checks the tracker is instantiated.
+    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<Grounded> projected_Grounded;") !=
           std::string::npos);
     CHECK(code.find("void project_Grounded(entt::registry& registry, entt::entity entity)") != std::string::npos);
     CHECK(code.find("project_Grounded(registry, entity);") != std::string::npos);
@@ -3657,12 +3670,14 @@ TEST_CASE("Codegen EnTT: editor projected traits generate registry helpers", "[c
 
     auto code = CppEnttCodegen::generate(decorated);
 
-    // Should generate projected trait helper for EditorGizmo2D
+    // Should generate a projected trait tracker for EditorGizmo2D
     CHECK(code.find("project_EditorGizmo2D") != std::string::npos);
-    CHECK(code.find("registry.emplace<EditorGizmo2D>") != std::string::npos);
-    // Should generate projected trait helper for EditorGizmo3D
+    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<EditorGizmo2D> projected_EditorGizmo2D;") !=
+          std::string::npos);
+    // Should generate a projected trait tracker for EditorGizmo3D
     CHECK(code.find("project_EditorGizmo3D") != std::string::npos);
-    CHECK(code.find("registry.emplace<EditorGizmo3D>") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::ProjectedTraitTracker<EditorGizmo3D> projected_EditorGizmo3D;") !=
+          std::string::npos);
     // Should have the general projected trait cleanup call
     CHECK(code.find("clear_projected_traits(registry)") != std::string::npos);
 }
@@ -4978,14 +4993,18 @@ TEST_CASE("Codegen EnTT: graph scheduler state owns typed events phases commands
     CHECK(code.find("#include <functional>") != std::string::npos);
     CHECK(code.find("#include <variant>") != std::string::npos);
     CHECK(code.find("using EventOccurrence = std::variant<ContactEvent, frameEvent>;") != std::string::npos);
-    CHECK(code.find("EventOccurrence occurrence;") != std::string::npos);
     CHECK(code.find("void generated_inject_external_event(frameEvent occurrence)") != std::string::npos);
     CHECK(code.find("void generated_inject_external_event(ContactEvent occurrence)") == std::string::npos);
 
-    CHECK(code.find("std::deque<QueuedEvent> event_queue;") != std::string::npos);
-    CHECK(code.find("std::deque<QueuedEvent> deferred_events;") != std::string::npos);
-    CHECK(code.find("enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };") != std::string::npos);
-    CHECK(code.find("std::vector<StructuralCommand> commands;") != std::string::npos);
+    // QueuedEvent<Occurrence>/ActivationRuntime<Occurrence> are runtime-hosted
+    // (backends/cpp-entt/runtime.hpp, covered directly by
+    // test_runtime_activation_scheduler.cpp) — codegen only instantiates
+    // ActivationRuntime<EventOccurrence> as SchedulerState's activation field,
+    // it doesn't redefine either struct's body inline.
+    CHECK(code.find("struct QueuedEvent") == std::string::npos);
+    CHECK(code.find("struct ActivationRuntime") == std::string::npos);
+    CHECK(code.find("enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };") == std::string::npos);
+    CHECK(code.find("ActivationRuntime<EventOccurrence> activation;") != std::string::npos);
 
     CHECK(code.find("struct game_scheduler__inputPhaseRuntimeState") != std::string::npos);
     CHECK(code.find("struct game_scheduler__fixed_tickPhaseRuntimeState") != std::string::npos);
@@ -5286,14 +5305,16 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    CHECK(code.find("std::deque<QueuedEvent> root_event_queue;") != std::string::npos);
-    CHECK(code.find("const auto next_depth = activation.current_cascade_depth + 1;") != std::string::npos);
-    CHECK(code.find("if (next_depth > kMaxEventCascadeDepth)") != std::string::npos);
-    CHECK(code.find("activation.deferred_events.push_back(std::move(queued));") != std::string::npos);
+    // Cascade-depth capping/deferral is runtime-hosted (emit_event,
+    // backends/cpp-entt/runtime.hpp, covered directly by
+    // test_runtime_activation_scheduler.cpp); codegen only declares
+    // SchedulerState's ActivationRuntime<EventOccurrence> field and routes
+    // handler-emitted events through the runtime helper by call name.
+    CHECK(code.find("ActivationRuntime<EventOccurrence> activation;") != std::string::npos);
     CHECK(code.find("generated_emit_event(ContactEvent{.amount = 1});") != std::string::npos);
     CHECK(code.find("generated_emit_event(ReactionEvent{.amount = Contact.amount});") != std::string::npos);
     CHECK(code.find("generated_drain_event_cascade(registry);") != std::string::npos);
-    CHECK(code.find("generated_dispatch_event(registry, occurrence, queued.target)") != std::string::npos);
+    CHECK(code.find("generated_dispatch_event(reg, occurrence, target);") != std::string::npos);
 
     const auto contact_dispatch =
         code.find("void generated_dispatch_event(entt::registry& registry, const ContactEvent& occurrence,");
@@ -5369,11 +5390,13 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
 
     const auto commit_fn = code.find("void generated_commit_activation(entt::registry& registry)");
     REQUIRE(commit_fn != std::string::npos);
-    const auto move_commands  = code.find("auto commands = std::move(activation.commands);", commit_fn);
-    const auto apply_commands = code.find("command.apply(registry);", commit_fn);
-    REQUIRE(move_commands != std::string::npos);
-    REQUIRE(apply_commands != std::string::npos);
-    CHECK(move_commands < apply_commands);
+    // No `on spawn`/`on destroy` handler here, so commit routes through the
+    // runtime's commit_activation with no notification hooks — applying
+    // queued commands before draining is now a runtime-level invariant
+    // (test_runtime_activation_scheduler.cpp), not per-program text.
+    const auto commit_call =
+        code.find("commit_activation(activation, registry, &generated_drain_event_cascade);", commit_fn);
+    REQUIRE(commit_call != std::string::npos);
 
     ProgramNode legacy_program;
     const auto legacy = full_pipeline(
@@ -5900,9 +5923,10 @@ TEST_CASE("Codegen EnTT: pair handler under the graph runtime uses targeted emit
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    // Creation ordinal scaffolding is emitted and assigned at entity creation.
-    CHECK(code.find("struct CreationOrdinal {") != std::string::npos);
-    CHECK(code.find("generated_next_creation_ordinal()") != std::string::npos);
+    // CreationOrdinal is runtime-hosted (backends/cpp-entt/runtime.hpp);
+    // codegen must not redefine it inline (duplicate-definition error, since
+    // runtime.hpp is always included).
+    CHECK(code.find("struct CreationOrdinal {") == std::string::npos);
     // Targeted emit resolves `body` to the per-tuple loop variable, evaluates
     // it once, and carries it into the queued occurrence via the targeted
     // emit path (targeted-event-delivery) rather than a validity guard around
@@ -5970,20 +5994,18 @@ TEST_CASE("Codegen EnTT: drain_event_cascade drops a stale-recipient occurrence 
         program);
 
     const auto code = CppEnttCodegen::generate(decorated);
-    // The recipient is checked once, before generated_dispatch_event is
-    // called at all — a stale target drops the occurrence for every consumer,
-    // not just the ones that happen to check validity themselves.
+    // The stale-recipient guard ("checked once, before dispatch, drops the
+    // occurrence for every consumer") is runtime-hosted (drain_event_cascade,
+    // backends/cpp-entt/runtime.hpp) and covered directly by
+    // test_runtime_activation_scheduler.cpp; this codegen-level test only
+    // checks that generated_drain_event_cascade routes through it with a
+    // dispatch lambda wrapping generated_dispatch_event.
     // A forward declaration of this function precedes its definition, so the
     // search must include the opening brace to skip past it.
     const auto drain = generated_function(code, "void generated_drain_event_cascade(entt::registry& registry) {");
-    CHECK(drain.find("if (queued.target.has_value() && !registry.valid(*queued.target)) {") != std::string::npos);
-    const auto guard_pos    = drain.find("if (queued.target.has_value()");
-    const auto continue_pos = drain.find("continue;", guard_pos);
-    const auto dispatch_pos = drain.find("generated_dispatch_event(registry, occurrence, queued.target);");
-    REQUIRE(guard_pos != std::string::npos);
-    REQUIRE(continue_pos != std::string::npos);
-    REQUIRE(dispatch_pos != std::string::npos);
-    CHECK(continue_pos < dispatch_pos);
+    CHECK(drain.find("drain_event_cascade(") != std::string::npos);
+    CHECK(drain.find("generated_scheduler_state().activation, registry,") != std::string::npos);
+    CHECK(drain.find("generated_dispatch_event(reg, occurrence, target);") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's recipient",
@@ -6007,11 +6029,16 @@ TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's reci
     // generated_emit_targeted_event builds one `queued` envelope carrying the
     // target and pushes that same envelope to either the immediate queue or
     // deferred_events depending on cascade depth — there is no separate path
-    // that drops the target when deferring.
+    // that drops the target when deferring. That envelope construction is now
+    // runtime-hosted (emit_targeted_event, backends/cpp-entt/runtime.hpp) and
+    // covered directly by test_runtime_activation_scheduler.cpp; this
+    // codegen-level test only checks the generated wrapper forwards the
+    // target through to it.
     const auto targeted =
         generated_function(code, "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target)");
-    CHECK(targeted.find(".target = target};") != std::string::npos);
-    CHECK(targeted.find("activation.deferred_events.push_back(std::move(queued));") != std::string::npos);
+    CHECK(targeted.find(
+              "emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);") !=
+          std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an optional recipient",

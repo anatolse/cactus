@@ -122,6 +122,16 @@ add_executable(test_runtime_sap_broadphase test_runtime_sap_broadphase.cpp)
 target_link_libraries(test_runtime_sap_broadphase PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeSapBroadphaseTests COMMAND test_runtime_sap_broadphase)
 
+# Activation/event-scheduler runtime tests (extract-codegen-runtime-scaffolding change)
+add_executable(test_runtime_activation_scheduler test_runtime_activation_scheduler.cpp)
+target_link_libraries(test_runtime_activation_scheduler PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeActivationSchedulerTests COMMAND test_runtime_activation_scheduler)
+
+# Projected-trait tracker runtime tests (extract-codegen-runtime-scaffolding change)
+add_executable(test_runtime_projected_trait_tracker test_runtime_projected_trait_tracker.cpp)
+target_link_libraries(test_runtime_projected_trait_tracker PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeProjectedTraitTrackerTests COMMAND test_runtime_projected_trait_tracker)
+
 # Headless behavioral tests (example-behavior-tests capability)
 cactus_add_headless_behavior_test(test_blue_square_headless_behavior
     CACTUS_SOURCE examples/blue-square/square.cactus

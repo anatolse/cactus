@@ -8,11 +8,16 @@
 #include <entt/entt.hpp>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace cactus::runtime::entt_backend {
@@ -538,6 +543,341 @@ void editor_apply_camera_3d(entt::registry& registry, Vector3 position, Quat rot
                                                Vector2 delta,
                                                Vector3 plane_origin,
                                                Vector3 plane_normal) noexcept;
+
+// ── Per-entity creation ordering (dsl-pair-relations) ──────────────────────
+// Monotonic, non-reused per-entity creation order: pair handlers sort their
+// binding snapshots by this ordinal so tuple and emitted-event order is
+// deterministic and backend-independent. Assigned once at every entity's
+// creation site, never reassigned.
+struct CreationOrdinal {
+    std::uint64_t value{};
+};
+
+[[nodiscard]] std::uint64_t generated_next_creation_ordinal() noexcept;
+
+// ── Activation/event-scheduler machinery (extract-codegen-runtime-scaffolding)
+// Structural command queued during an activation (entity spawn/destroy,
+// trait add/remove) and applied once the activation commits. Has no
+// dependency on the program's EventOccurrence type, so it stays a plain,
+// non-template struct.
+struct StructuralCommand {
+    enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };
+    Kind kind{};
+    std::function<void(entt::registry&)> apply;
+};
+
+// Cascade-depth cap shared by emit_event/emit_targeted_event/drain_event_cascade
+// below; a queued event whose next depth would exceed this is deferred to the
+// next external-event drain instead of being processed within the current one.
+inline constexpr std::size_t kMaxEventCascadeDepth = 64;
+
+template <typename T>
+inline constexpr bool is_event_occurrence_variant_v = false;
+template <typename... Alternatives>
+inline constexpr bool is_event_occurrence_variant_v<std::variant<Alternatives...>> = true;
+
+// One event queued during an activation. `Occurrence` is the program's
+// generated `EventOccurrence` variant alias (every concrete event type the
+// program declares); `occurrence` itself stores whichever alternative was
+// emitted, implicitly converted into the variant at construction.
+template <typename Occurrence>
+struct QueuedEvent {
+    Occurrence occurrence;
+    std::size_t cascade_depth{};
+    std::optional<entt::entity> target;
+};
+
+// Placeholder hook type for commit_activation's optional OnSpawn/OnDestroy
+// notification parameters (see below) — never invoked, so a handler-less
+// program instantiates commit_activation with no spawn/destroy branch at
+// all, not just a dynamically-untaken one.
+struct NoNotify {};
+
+// Per-activation scheduler state: queued/deferred events, pending structural
+// commands, current cascade depth, and the deferred-entity reservation
+// cursor. `Occurrence` is the program's `EventOccurrence` variant; codegen
+// declares `SchedulerState : ActivationRuntime<EventOccurrence>` (plus its
+// own per-phase fields) rather than re-declaring this struct's body inline
+// per program.
+template <typename Occurrence>
+struct ActivationRuntime {
+    std::deque<QueuedEvent<Occurrence>> root_event_queue;
+    std::deque<QueuedEvent<Occurrence>> event_queue;
+    std::deque<QueuedEvent<Occurrence>> deferred_events;
+    std::vector<StructuralCommand> commands;
+    std::size_t current_cascade_depth{};
+    entt::entt_traits<entt::entity>::entity_type next_reserved_entity =
+        entt::entt_traits<entt::entity>::entity_mask - 1U;
+    bool active{};
+};
+
+// Reserves a not-yet-valid entity identifier for a deferred spawn (the real
+// entity is created only once its Spawn StructuralCommand applies at
+// commit). Counts down from the top of the identifier space so reserved
+// identifiers never collide with registry.create()'s bottom-up allocation.
+template <typename Occurrence>
+[[nodiscard]] entt::entity reserve_entity(entt::registry& registry, ActivationRuntime<Occurrence>& activation) {
+    static_assert(is_event_occurrence_variant_v<Occurrence>,
+                  "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
+                  "event types (the generated EventOccurrence alias)");
+    using Traits = entt::entt_traits<entt::entity>;
+    auto& next   = activation.next_reserved_entity;
+    while (next != 0U) {
+        const auto candidate = Traits::construct(next--, 0U);
+        if (!registry.valid(candidate)) {
+            return candidate;
+        }
+    }
+    throw std::runtime_error("cactus deferred entity identifier space exhausted");
+}
+
+// Queues a structural command (spawn/destroy/add/remove) to apply once the
+// current activation commits; throws if called outside an activation, which
+// would otherwise silently drop the command.
+template <typename Occurrence>
+void queue_structural_command(ActivationRuntime<Occurrence>& activation,
+                              StructuralCommand::Kind kind,
+                              std::function<void(entt::registry&)> apply) {
+    if (!activation.active) {
+        throw std::runtime_error("cactus structural command queued outside an activation");
+    }
+    activation.commands.push_back(StructuralCommand{.kind = kind, .apply = std::move(apply)});
+}
+
+// Enqueues `occurrence` (any type implicitly convertible to Occurrence, i.e.
+// any alternative of the program's EventOccurrence variant) for dispatch
+// within the current cascade, or defers it to the next external-event drain
+// once kMaxEventCascadeDepth would be exceeded.
+template <typename Occurrence, typename ConcreteEvent>
+void emit_event(ActivationRuntime<Occurrence>& activation, ConcreteEvent occurrence) {
+    const auto next_depth = activation.current_cascade_depth + 1;
+    auto queued            = QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .cascade_depth = next_depth};
+    if (next_depth > kMaxEventCascadeDepth) {
+        queued.cascade_depth = 0;
+        activation.deferred_events.push_back(std::move(queued));
+        return;
+    }
+    activation.event_queue.push_back(std::move(queued));
+}
+
+// Targeted counterpart of emit_event: the recipient is evaluated once by the
+// caller and carried in the queued envelope so it survives cascade deferral
+// unchanged.
+template <typename Occurrence, typename ConcreteEvent>
+void emit_targeted_event(ActivationRuntime<Occurrence>& activation, ConcreteEvent occurrence, entt::entity target) {
+    const auto next_depth = activation.current_cascade_depth + 1;
+    auto queued            = QueuedEvent<Occurrence>{
+        .occurrence = std::move(occurrence), .cascade_depth = next_depth, .target = target};
+    if (next_depth > kMaxEventCascadeDepth) {
+        queued.cascade_depth = 0;
+        activation.deferred_events.push_back(std::move(queued));
+        return;
+    }
+    activation.event_queue.push_back(std::move(queued));
+}
+
+// Drains activation.event_queue, dispatching each occurrence through
+// `dispatch(registry, concrete_occurrence, target)` via std::visit. A
+// targeted occurrence whose recipient is no longer valid is dropped before
+// dispatch. `Dispatch` is a template parameter (a codegen-emitted lambda
+// wrapping generated_dispatch_event's overload set), not a std::function
+// like propagate_hierarchy's callbacks, because this runs once per queued
+// event — potentially many times per frame in event-heavy programs — and
+// CLAUDE.md ranks generated-code runtime speed over the std::function
+// idiom's convenience here; see extract-codegen-runtime-scaffolding
+// design.md Decision 4 before "fixing" this back to std::function.
+template <typename Occurrence, typename Dispatch>
+void drain_event_cascade(ActivationRuntime<Occurrence>& activation, entt::registry& registry, Dispatch dispatch) {
+    static_assert(is_event_occurrence_variant_v<Occurrence>,
+                  "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
+                  "event types (the generated EventOccurrence alias)");
+    static_assert(std::is_invocable_v<Dispatch&,
+                                      entt::registry&,
+                                      const std::variant_alternative_t<0, Occurrence>&,
+                                      std::optional<entt::entity>>,
+                  "drain_event_cascade's Dispatch must be callable as dispatch(registry, occurrence, target) for "
+                  "every EventOccurrence alternative");
+    while (!activation.event_queue.empty()) {
+        auto queued = std::move(activation.event_queue.front());
+        activation.event_queue.pop_front();
+        activation.current_cascade_depth = queued.cascade_depth;
+        if (queued.target.has_value() && !registry.valid(*queued.target)) {
+            continue;
+        }
+        std::visit([&](const auto& occurrence) { dispatch(registry, occurrence, queued.target); }, queued.occurrence);
+    }
+    activation.current_cascade_depth = 0;
+}
+
+// Calls on_spawn/on_destroy for `command` when the corresponding hook isn't
+// NoNotify (extracted out of commit_activation's loop below purely to keep
+// that function's cognitive-complexity score under the project's clang-tidy
+// threshold; no behavior of its own beyond the two guarded calls).
+template <typename Occurrence, typename OnSpawn, typename OnDestroy>
+void notify_structural_command(ActivationRuntime<Occurrence>& activation,
+                               const StructuralCommand& command,
+                               OnSpawn& on_spawn,
+                               OnDestroy& on_destroy) {
+    if constexpr (!std::is_same_v<std::remove_cvref_t<OnSpawn>, NoNotify>) {
+        if (command.kind == StructuralCommand::Kind::Spawn) {
+            on_spawn(activation);
+        }
+    }
+    if constexpr (!std::is_same_v<std::remove_cvref_t<OnDestroy>, NoNotify>) {
+        if (command.kind == StructuralCommand::Kind::Destroy) {
+            on_destroy(activation);
+        }
+    }
+}
+
+// Applies every queued structural command, looping while an OnSpawn/OnDestroy
+// hook keeps producing more (bounded by kMaxEventCascadeDepth, same as
+// today's inline codegen: a deferred notification queues no new command, so
+// the loop terminates). `drain_cascade` is called once per command batch,
+// after the whole batch has applied — not per command — so an entire wave of
+// structural commands (e.g. every entity in one spawn burst) is fully
+// materialized before any spawn/destroy handler observes the registry,
+// matching the original inline behavior exactly. It takes a callable rather
+// than embedding drain_event_cascade directly so codegen can simply pass
+// `&generated_drain_event_cascade` (already forward-declared at the point
+// generated_commit_activation is emitted) instead of constructing a Dispatch
+// lambda that would need generated_dispatch_event's per-event-type overloads
+// visible before they're actually declared later in the same generated file.
+// OnSpawn/OnDestroy default to NoNotify so a handler-less program takes the
+// single-pass branch below with no notification code instantiated at all.
+template <typename Occurrence, typename DrainCascade, typename OnSpawn = NoNotify, typename OnDestroy = NoNotify>
+void commit_activation(ActivationRuntime<Occurrence>& activation,
+                       entt::registry& registry,
+                       DrainCascade drain_cascade,
+                       OnSpawn on_spawn     = {},
+                       OnDestroy on_destroy = {}) {
+    static_assert(is_event_occurrence_variant_v<Occurrence>,
+                  "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
+                  "event types (the generated EventOccurrence alias)");
+    static_assert(std::is_invocable_v<DrainCascade&, entt::registry&>,
+                  "commit_activation's DrainCascade must be callable as drain_cascade(registry)");
+    constexpr bool has_spawn_hook   = !std::is_same_v<OnSpawn, NoNotify>;
+    constexpr bool has_destroy_hook = !std::is_same_v<OnDestroy, NoNotify>;
+    if constexpr (!has_spawn_hook && !has_destroy_hook) {
+        auto commands = std::move(activation.commands);
+        activation.commands.clear();
+        for (auto& command : commands) {
+            command.apply(registry);
+        }
+    } else {
+        while (!activation.commands.empty()) {
+            auto commands = std::move(activation.commands);
+            activation.commands.clear();
+            for (auto& command : commands) {
+                command.apply(registry);
+                notify_structural_command(activation, command, on_spawn, on_destroy);
+            }
+            drain_cascade(registry);
+        }
+    }
+}
+
+// ── Projected-trait tracking (backend-cpp-entt registry-based projected traits)
+// One template instantiated per projected component type, replacing the
+// per-type remember/project/cancel/clear quartet codegen used to emit as
+// inline text. `remember`/`project` guard against a stale/non-live `entity`
+// internally (EnTT's registry::valid() is well-defined — "total" — on any
+// entity value, including a destroyed or never-created one), so this type is
+// safe to exercise directly, not only behind the `if (registry.valid(...))`
+// guard codegen's call sites also keep. Tag components (no fields) and
+// data-bearing components share the same template, selected via
+// `std::is_empty_v<Component>`.
+template <typename Component>
+class ProjectedTraitTracker {
+public:
+    // Records the entity's pre-projection state exactly once per frame — a
+    // repeated call for an already-tracked entity is a no-op, so a later
+    // `clear` restores the value that existed before the *first* projection
+    // (backend-cpp-entt "Repeated projection coalesces").
+    void remember(entt::registry& registry, entt::entity entity) {
+        if (!registry.valid(entity) || previous_.contains(entity)) {
+            return;
+        }
+        entities_.push_back(entity);
+        if constexpr (std::is_empty_v<Component>) {
+            previous_.emplace(entity, registry.all_of<Component>(entity));
+        } else {
+            if (const auto* existing = registry.try_get<Component>(entity); existing != nullptr) {
+                previous_.emplace(entity, *existing);
+            } else {
+                previous_.emplace(entity, std::nullopt);
+            }
+        }
+    }
+
+    // Materializes the projected value as a registry component. Tag
+    // components return void; data-bearing components return a mutable
+    // reference so callers can patch individual fields, mirroring the
+    // per-type `project_<T>` quartet codegen used to emit. A stale/non-live
+    // `entity` is a safe no-op; the data-bearing branch returns a scratch
+    // instance in that case so the call-site field-assignment shape stays
+    // uniform without ever touching the registry with an invalid handle.
+    decltype(auto) project(entt::registry& registry, entt::entity entity) {
+        if constexpr (std::is_empty_v<Component>) {
+            if (!registry.valid(entity)) {
+                return;
+            }
+            remember(registry, entity);
+            registry.emplace_or_replace<Component>(entity);
+        } else {
+            if (!registry.valid(entity)) {
+                static Component discarded{};
+                discarded = Component{};
+                return (discarded);  // parenthesized: decltype(auto) must deduce Component&, not Component
+            }
+            remember(registry, entity);
+            if (auto* current = registry.try_get<Component>(entity); current != nullptr) {
+                return *current;
+            }
+            return registry.emplace<Component>(entity);
+        }
+    }
+
+    // A durable write (AddTrait/RemoveTrait) to the same (entity, trait) now
+    // owns the component going forward: forget the projected-cleanup
+    // obligation without touching the registry.
+    void cancel(entt::entity entity) {
+        previous_.erase(entity);
+    }
+
+    // Restores or removes every tracked entity's component per the recorded
+    // pre-projection snapshot, then resets tracking for the next frame. An
+    // entity destroyed after being projected (no longer valid) is skipped,
+    // matching total entity_id semantics.
+    void clear(entt::registry& registry) {
+        for (const auto entity : entities_) {
+            const auto previous_it = previous_.find(entity);
+            if (previous_it == previous_.end() || !registry.valid(entity)) {
+                continue;
+            }
+            if constexpr (std::is_empty_v<Component>) {
+                if (previous_it->second) {
+                    registry.emplace_or_replace<Component>(entity);
+                } else if (registry.all_of<Component>(entity)) {
+                    registry.remove<Component>(entity);
+                }
+            } else {
+                if (previous_it->second.has_value()) {
+                    registry.emplace_or_replace<Component>(entity, *previous_it->second);
+                } else if (registry.all_of<Component>(entity)) {
+                    registry.remove<Component>(entity);
+                }
+            }
+        }
+        entities_.clear();
+        previous_.clear();
+    }
+
+private:
+    std::vector<entt::entity> entities_;
+    std::unordered_map<entt::entity, std::conditional_t<std::is_empty_v<Component>, bool, std::optional<Component>>>
+        previous_;
+};
 
 void propagate_hierarchy(entt::registry& registry,
                          const std::function<bool(entt::entity)>& has_local_world,

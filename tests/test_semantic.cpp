@@ -65,6 +65,21 @@ static DecoratedProgram analyze_with_imports(const std::string& source, const Mo
     return result;
 }
 
+static std::pair<DecoratedProgram, std::vector<Diagnostic>> analyze_with_diagnostics(const std::string& source) {
+    const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
+    ErrorReporter errors;
+    Lexer lexer(src, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    REQUIRE_FALSE(errors.has_errors());
+    Parser parser(std::move(tokens), errors);
+    auto program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    auto result = analyzer.analyze(program);
+    REQUIRE_FALSE(errors.has_errors());
+    return {std::move(result), errors.diagnostics()};
+}
+
 static bool analyze_has_errors(const std::string& source) {
     const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;
@@ -2606,5 +2621,465 @@ TEST_CASE("Semantic: cross-domain pair rule is never eligible even with a recogn
 
     REQUIRE(result.handler_contracts.size() == 1);
     CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+}
+
+// ── Manual squared-distance expression recognition (add-sap-broadphase) ─────
+//
+// `dot` is declared locally within a module literally named "std.math.vec2"
+// (or "std.math.vec3") so its canonical id matches the recognized target
+// exactly, mirroring the circles_overlap/spheres_overlap tests above —
+// recognition only ever inspects resolved_callee_id's canonical identity,
+// never the declaring module's actual provenance.
+
+static ImportedSymbols make_dot_import() {
+    ImportedSymbols syms;
+    syms.module_name = "std.math.vec2";
+
+    TypeInfo vec2_type;
+    vec2_type.kind = TypeKind::Vec2;
+    TypeInfo float_type;
+    float_type.kind = TypeKind::Float;
+
+    ResolvedFunc func;
+    func.name           = "dot";
+    func.module_name    = "std.math.vec2";
+    func.is_pub         = true;
+    func.effect_summary = std::unordered_set<std::string>{};  // proven pure: allowed in where:
+    func.params         = {
+        ResolvedParam{.name = "a", .type = vec2_type},
+        ResolvedParam{.name = "b", .type = vec2_type},
+    };
+    func.return_type  = float_type;
+    const auto symbol = make_symbol_id(SymbolKind::Func, "std.math.vec2", "dot");
+    func.symbol_id    = symbol;
+    func.canonical_id = make_canonical_id(symbol);
+
+    syms.funcs["dot"] = std::move(func);
+    return syms;
+}
+
+TEST_CASE("Semantic: manual squared-distance-via-dot where: expression is recognized as broad-phase eligible (2D)",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.math.vec2\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func dot(a: vec2, b: vec2) float:\n"
+                          "    return 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
+                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    REQUIRE(contract.spatial_join.has_value());
+    const auto& plan = *contract.spatial_join;
+    CHECK(plan.dimension == SpatialJoinDimension::Flat2D);
+    CHECK(plan.matched_predicate_index == 0);
+
+    const auto transform_id = make_symbol_id(SymbolKind::Trait, "std.math.vec2", "Transform");
+    const auto collider_id  = make_symbol_id(SymbolKind::Trait, "std.math.vec2", "Collider");
+    // The manual matcher pairs positions with radii by binding name, not by
+    // left/right call-argument order (unlike the direct-call matcher), so
+    // don't assume which of plan.left/plan.right is binding "a" vs "b".
+    const auto& a_side = plan.left.binding_index == 0 ? plan.left : plan.right;
+    const auto& b_side = plan.left.binding_index == 0 ? plan.right : plan.left;
+    CHECK(a_side.binding_index == 0);
+    CHECK(a_side.position.trait == transform_id);
+    CHECK(a_side.position.field_path == std::vector<std::string>{"position"});
+    CHECK(a_side.radius.trait == collider_id);
+    CHECK(a_side.radius.field_path == std::vector<std::string>{"radius"});
+    CHECK(b_side.binding_index == 1);
+    CHECK(b_side.position.trait == transform_id);
+    CHECK(b_side.radius.trait == collider_id);
+}
+
+TEST_CASE("Semantic: manual squared-distance-via-dot where: expression is recognized as broad-phase eligible (3D)",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.math.vec3\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec3\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func dot(a: vec3, b: vec3) float:\n"
+                          "    return 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
+                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    REQUIRE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(result.handler_contracts[0].spatial_join->dimension == SpatialJoinDimension::Volume3D);
+}
+
+TEST_CASE("Semantic: manual squared-distance-via-dot where: expression accepts <= as well as <",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.math.vec2\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func dot(a: vec2, b: vec2) float:\n"
+                          "    return 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
+                          "a.Transform.position) <= (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK(result.handler_contracts[0].spatial_join.has_value());
+}
+
+TEST_CASE("Semantic: manual dot-product recognition succeeds through a renamed import alias",
+          "[semantic][where-clause][spatial-join]") {
+    ModuleImports imports;
+    imports.modules["v2m"] = make_dot_import();
+
+    auto result = analyze_with_imports(STDLIB_EVENTS +
+                                       "trait Transform:\n"
+                                       "    var position: vec2\n"
+                                       "trait Collider:\n"
+                                       "    var radius: float\n"
+                                       "rule DetectContact:\n"
+                                       "    pairs:\n"
+                                       "        a:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "        b:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "    where:\n"
+                                       "        v2m.dot(b.Transform.position - a.Transform.position, "
+                                       "b.Transform.position - a.Transform.position) < (a.Collider.radius + "
+                                       "b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
+                                       "    on tick:\n"
+                                       "        let x = 1\n",
+                                       imports);
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    REQUIRE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(result.handler_contracts[0].spatial_join->dimension == SpatialJoinDimension::Flat2D);
+}
+
+TEST_CASE("Semantic: cross-domain pair rule with manual dot-product shape is never eligible",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.math.vec2\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "trait Wall:\n"
+                          "    var active: bool = true\n"
+                          "pub func dot(a: vec2, b: vec2) float:\n"
+                          "    return 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "            Wall\n"
+                          "    where:\n"
+                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
+                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+}
+
+TEST_CASE("Semantic: component-wise squared-distance arithmetic remains an ordinary residual predicate",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze(STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var x: float\n"
+                          "    var y: float\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        (b.Transform.x - a.Transform.x) * (b.Transform.x - a.Transform.x) + "
+                          "(b.Transform.y - a.Transform.y) * (b.Transform.y - a.Transform.y) < "
+                          "(a.Collider.radius + b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+}
+
+TEST_CASE("Semantic: distance check split across intermediate handler-body let bindings (no where: clause) "
+          "remains unrecognized",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.math.vec2\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func dot(a: vec2, b: vec2) float:\n"
+                          "    return 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    on tick:\n"
+                          "        let delta = b.Transform.position - a.Transform.position\n"
+                          "        let dist_sq = dot(delta, delta)\n"
+                          "        let radius_sum = a.Collider.radius + b.Collider.radius\n"
+                          "        if dist_sq >= radius_sum * radius_sum:\n"
+                          "            return\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+}
+
+TEST_CASE("Semantic: manual dot-product expression with a comparison operator outside {<, <=} is unrecognized",
+          "[semantic][where-clause][spatial-join]") {
+    auto result = analyze("module std.math.vec2\n" + STDLIB_EVENTS +
+                          "trait Transform:\n"
+                          "    var position: vec2\n"
+                          "trait Collider:\n"
+                          "    var radius: float\n"
+                          "pub func dot(a: vec2, b: vec2) float:\n"
+                          "    return 0.0\n"
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
+                          "a.Transform.position) == (a.Collider.radius + b.Collider.radius) * (a.Collider.radius + "
+                          "b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+}
+
+// ── Unaccelerated linear-distance warning diagnostic (add-sap-broadphase) ───
+
+static bool has_warning_containing(const std::vector<Diagnostic>& diagnostics, const std::string& needle) {
+    return std::ranges::any_of(diagnostics, [&needle](const Diagnostic& diagnostic) {
+        return diagnostic.level == DiagnosticLevel::Warning && diagnostic.message.find(needle) != std::string::npos;
+    });
+}
+
+TEST_CASE("Semantic: linear 2D distance-vs-radius-sum where: predicate is flagged with a warning",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(
+        "module std.math.vec2\n" + STDLIB_EVENTS +
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func distance(a: vec2, b: vec2) float:\n"
+        "    return 0.0\n"
+        "rule DetectContact:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "        b:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "    where:\n"
+        "        distance(a.Transform.position, b.Transform.position) < a.Collider.radius + b.Collider.radius\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(has_warning_containing(diagnostics, "circles_overlap"));
+}
+
+TEST_CASE("Semantic: linear 3D distance-vs-radius-sum where: predicate is flagged with a warning",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(
+        "module std.math.vec3\n" + STDLIB_EVENTS +
+        "trait Transform:\n"
+        "    var position: vec3\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func distance(a: vec3, b: vec3) float:\n"
+        "    return 0.0\n"
+        "rule DetectContact:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "        b:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "    where:\n"
+        "        distance(a.Transform.position, b.Transform.position) >= a.Collider.radius + b.Collider.radius\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(has_warning_containing(diagnostics, "spheres_overlap"));
+}
+
+TEST_CASE("Semantic: linear-distance where: predicate is flagged with > as well as >=/</<=",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(
+        "module std.math.vec2\n" + STDLIB_EVENTS +
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func distance(a: vec2, b: vec2) float:\n"
+        "    return 0.0\n"
+        "rule DetectContact:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "        b:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "    where:\n"
+        "        distance(a.Transform.position, b.Transform.position) > a.Collider.radius + b.Collider.radius\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK(has_warning_containing(diagnostics, "circles_overlap"));
+}
+
+TEST_CASE("Semantic: unrelated where: predicate produces no unaccelerated-distance warning",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(STDLIB_EVENTS +
+                                                          "trait Transform:\n"
+                                                          "    var position: vec2\n"
+                                                          "trait Collider:\n"
+                                                          "    var radius: float\n"
+                                                          "rule DetectContact:\n"
+                                                          "    pairs:\n"
+                                                          "        a:\n"
+                                                          "            Transform\n"
+                                                          "            Collider\n"
+                                                          "        b:\n"
+                                                          "            Transform\n"
+                                                          "            Collider\n"
+                                                          "    where:\n"
+                                                          "        a != b\n"
+                                                          "    on tick:\n"
+                                                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    CHECK(diagnostics.empty());
+}
+
+TEST_CASE("Semantic: direct-call recognized predicate produces no unaccelerated-distance warning",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(
+        "module std.collision.flat\n" + STDLIB_EVENTS +
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func circles_overlap(a_position: vec2, a_radius: float, b_position: vec2, b_radius: float) bool:\n"
+        "    return a_radius + b_radius >= 0.0\n"
+        "rule DetectContact:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "        b:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "    where:\n"
+        "        circles_overlap(a.Transform.position, a.Collider.radius, b.Transform.position, "
+        "b.Collider.radius)\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    REQUIRE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(diagnostics.empty());
+}
+
+TEST_CASE("Semantic: manual dot-product recognized predicate produces no unaccelerated-distance warning",
+          "[semantic][where-clause][spatial-join][diagnostics]") {
+    auto [result, diagnostics] = analyze_with_diagnostics(
+        "module std.math.vec2\n" + STDLIB_EVENTS +
+        "trait Transform:\n"
+        "    var position: vec2\n"
+        "trait Collider:\n"
+        "    var radius: float\n"
+        "pub func dot(a: vec2, b: vec2) float:\n"
+        "    return 0.0\n"
+        "rule DetectContact:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "        b:\n"
+        "            Transform\n"
+        "            Collider\n"
+        "    where:\n"
+        "        dot(b.Transform.position - a.Transform.position, b.Transform.position - a.Transform.position) < "
+        "(a.Collider.radius + b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    REQUIRE(result.handler_contracts[0].spatial_join.has_value());
+    CHECK(diagnostics.empty());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -3,6 +3,7 @@ module main
 use std.transform.flat as tf
 use std.render.shapes as shapes
 use std.math.vec2 as v2m
+use std.collision.flat as collision
 
 # ── Traits ────────────────────────────────────────────────────────────────────
 
@@ -86,12 +87,15 @@ rule ResolveWallBounce:
 
 # DetectBubbleContact: same-domain pair producer (Bubble x Bubble). Per
 # dsl-pair-relations this iterates the full directed product, including
-# self-pairs, which the `a != b` guard rejects. For every overlapping,
-# approaching directed tuple it computes `a`'s post-collision velocity via the
-# standard mass-weighted (radius^2) 1D-along-normal elastic solve, reading
-# both sides' current velocity — legal under the pair read-only rule since
-# it's a pure read. The reverse tuple (b, a) independently computes and emits
-# b's half from the same unmutated pre-collision state.
+# self-pairs; `where:` expresses the self-pair and overlap rejection
+# declaratively (dsl-where-clause) instead of leading `if ... return`
+# statements — same Cartesian-scan execution, same rejected tuples, no
+# runtime behavior change. For every overlapping, approaching directed tuple
+# it computes `a`'s post-collision velocity via the standard mass-weighted
+# (radius^2) 1D-along-normal elastic solve, reading both sides' current
+# velocity — legal under the pair read-only rule since it's a pure read. The
+# reverse tuple (b, a) independently computes and emits b's half from the
+# same unmutated pre-collision state.
 rule DetectBubbleContact:
     pairs:
         a:
@@ -103,18 +107,16 @@ rule DetectBubbleContact:
             CircleCollider
             tf.WorldTransform
 
-    on tick:
-        if a == b:
-            return
+    where:
+        a != b
+        collision.circles_overlap(a.tf.WorldTransform.position, a.CircleCollider.radius, b.tf.WorldTransform.position, b.CircleCollider.radius)
 
+    on tick:
         let pos_a = a.tf.WorldTransform.position
         let pos_b = b.tf.WorldTransform.position
         let radius_a = a.CircleCollider.radius
         let radius_b = b.CircleCollider.radius
         let dist = v2m.distance(pos_a, pos_b)
-
-        if dist >= radius_a + radius_b:
-            return
 
         let normal = (pos_b - pos_a) / dist
         let vel_a = a.Bubble.velocity

@@ -4068,7 +4068,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
     // Rule-level, not per-handler: every handler on this rule shares the same
     // `pairs:`/`where:` domain, so eligibility is identical for each of them.
     const auto spatial_join =
-        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope) : std::nullopt;
+        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_) : std::nullopt;
     for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
         const auto& handler = rule.handlers[handler_index];
         collect_rule_deps(handler.body, dep);
@@ -4667,8 +4667,156 @@ std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recogniz
     };
 }
 
+bool SemanticAnalyzer::spatial_join_resolved_args_equal(const SpatialJoinResolvedArg& lhs,
+                                                        const SpatialJoinResolvedArg& rhs) {
+    return lhs.binding_name == rhs.binding_name && lhs.binding_index == rhs.binding_index && lhs.access == rhs.access;
+}
+
+bool SemanticAnalyzer::spatial_join_operand_pairs_equal(const SpatialJoinOperandPair& lhs,
+                                                        const SpatialJoinOperandPair& rhs) {
+    return spatial_join_resolved_args_equal(lhs.first, rhs.first) && spatial_join_resolved_args_equal(lhs.second, rhs.second);
+}
+
+std::optional<SemanticAnalyzer::SpatialJoinOperandPair> SemanticAnalyzer::resolve_spatial_join_operand_pair(
+    const ExprNode& expr, const std::string& op, const PairScope& pair_scope) {
+    const auto* binary = std::get_if<BinaryExpr>(&expr.expr);
+    if (binary == nullptr || binary->op != op) {
+        return std::nullopt;
+    }
+    auto first  = resolve_spatial_join_arg(*binary->left, pair_scope);
+    auto second = resolve_spatial_join_arg(*binary->right, pair_scope);
+    if (!first.has_value() || !second.has_value()) {
+        return std::nullopt;
+    }
+    return SpatialJoinOperandPair{.first = std::move(*first), .second = std::move(*second)};
+}
+
+std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recognize_manual_distance_predicate(
+    const BinaryExpr& comparison, const PairScope& pair_scope) {
+    if (comparison.op != "<" && comparison.op != "<=") {
+        return std::nullopt;
+    }
+    const auto* dot_call = std::get_if<CallExpr>(&comparison.left->expr);
+    if (dot_call == nullptr || !dot_call->resolved_callee_id.has_value() || dot_call->args.size() != 2) {
+        return std::nullopt;
+    }
+    SpatialJoinDimension dimension{};
+    const auto canonical = make_canonical_id(*dot_call->resolved_callee_id);
+    if (canonical == "std.math.vec2.dot") {
+        dimension = SpatialJoinDimension::Flat2D;
+    } else if (canonical == "std.math.vec3.dot") {
+        dimension = SpatialJoinDimension::Volume3D;
+    } else {
+        return std::nullopt;
+    }
+
+    // dot(delta, delta): both call arguments must resolve to the exact same
+    // subtraction (same binding roots, same field paths, same operand order).
+    const auto delta_a = resolve_spatial_join_operand_pair(*dot_call->args[0], "-", pair_scope);
+    const auto delta_b = resolve_spatial_join_operand_pair(*dot_call->args[1], "-", pair_scope);
+    if (!delta_a.has_value() || !delta_b.has_value() || !spatial_join_operand_pairs_equal(*delta_a, *delta_b)) {
+        return std::nullopt;
+    }
+
+    // (radius_sum) * (radius_sum): the multiplication's two operands must be
+    // the exact same binding-rooted radius sum.
+    const auto* square = std::get_if<BinaryExpr>(&comparison.right->expr);
+    if (square == nullptr || square->op != "*") {
+        return std::nullopt;
+    }
+    const auto sum_left  = resolve_spatial_join_operand_pair(*square->left, "+", pair_scope);
+    const auto sum_right = resolve_spatial_join_operand_pair(*square->right, "+", pair_scope);
+    if (!sum_left.has_value() || !sum_right.has_value() || !spatial_join_operand_pairs_equal(*sum_left, *sum_right)) {
+        return std::nullopt;
+    }
+
+    const auto& position_first  = delta_a->first;
+    const auto& position_second = delta_a->second;
+    if (position_first.binding_name == position_second.binding_name) {
+        return std::nullopt;
+    }
+
+    // Positions and radii are matched by binding name, not by argument
+    // order -- the canonical shape's delta ("b - a") and radius sum
+    // ("a + b") don't share an operand order.
+    const auto& radius_first  = sum_left->first;
+    const auto& radius_second = sum_left->second;
+    const SpatialJoinResolvedArg* radius_for_first  = nullptr;
+    const SpatialJoinResolvedArg* radius_for_second = nullptr;
+    if (position_first.binding_name == radius_first.binding_name) {
+        radius_for_first = &radius_first;
+    } else if (position_first.binding_name == radius_second.binding_name) {
+        radius_for_first = &radius_second;
+    }
+    if (position_second.binding_name == radius_first.binding_name) {
+        radius_for_second = &radius_first;
+    } else if (position_second.binding_name == radius_second.binding_name) {
+        radius_for_second = &radius_second;
+    }
+    if (radius_for_first == nullptr || radius_for_second == nullptr) {
+        return std::nullopt;
+    }
+
+    return SpatialJoinMatch{
+        .dimension = dimension,
+        .left      = SpatialJoinBinding{.binding_index = position_first.binding_index,
+                                        .position      = position_first.access,
+                                        .radius        = radius_for_first->access},
+        .right     = SpatialJoinBinding{.binding_index = position_second.binding_index,
+                                        .position      = position_second.access,
+                                        .radius        = radius_for_second->access},
+    };
+}
+
+void SemanticAnalyzer::check_unaccelerated_distance_predicate(const ExprNode& predicate,
+                                                               const PairScope& pair_scope,
+                                                               ErrorReporter& errors) {
+    static const std::unordered_set<std::string> COMPARISON_OPS = {"<", "<=", ">", ">="};
+    const auto* comparison = std::get_if<BinaryExpr>(&predicate.expr);
+    if (comparison == nullptr || !COMPARISON_OPS.contains(comparison->op)) {
+        return;
+    }
+    const auto* distance_call = std::get_if<CallExpr>(&comparison->left->expr);
+    if (distance_call == nullptr || !distance_call->resolved_callee_id.has_value() || distance_call->args.size() != 2) {
+        return;
+    }
+    const char* recognized_alternative = nullptr;
+    const auto canonical = make_canonical_id(*distance_call->resolved_callee_id);
+    if (canonical == "std.math.vec2.distance") {
+        recognized_alternative = "circles_overlap";
+    } else if (canonical == "std.math.vec3.distance") {
+        recognized_alternative = "spheres_overlap";
+    } else {
+        return;
+    }
+
+    const auto position_a = resolve_spatial_join_arg(*distance_call->args[0], pair_scope);
+    const auto position_b = resolve_spatial_join_arg(*distance_call->args[1], pair_scope);
+    if (!position_a.has_value() || !position_b.has_value() || position_a->binding_name == position_b->binding_name) {
+        return;
+    }
+
+    const auto radius_sum = resolve_spatial_join_operand_pair(*comparison->right, "+", pair_scope);
+    if (!radius_sum.has_value()) {
+        return;
+    }
+    const bool bindings_match = (radius_sum->first.binding_name == position_a->binding_name &&
+                                 radius_sum->second.binding_name == position_b->binding_name) ||
+                                (radius_sum->first.binding_name == position_b->binding_name &&
+                                 radius_sum->second.binding_name == position_a->binding_name);
+    if (!bindings_match) {
+        return;
+    }
+
+    errors.warning(predicate.location,
+                   std::string("where: predicate compares an unaccelerated linear distance (") + canonical +
+                       ") against a binding-rooted radius sum; use " + recognized_alternative +
+                       "(...) or an equivalent squared-distance expression for broad-phase acceleration");
+}
+
 std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const RuleNode& rule,
-                                                                        const PairScope& pair_scope) {
+                                                                        const PairScope& pair_scope,
+                                                                        ErrorReporter& errors) {
     if (!rule.pairs.has_value() || rule.pairs->bindings.size() != 2 || !rule.where_clause.has_value()) {
         return std::nullopt;
     }
@@ -4691,12 +4839,18 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
 
     const auto& predicates = rule.where_clause->predicates;
     for (std::size_t predicate_index = 0; predicate_index < predicates.size(); ++predicate_index) {
-        const auto* call = std::get_if<CallExpr>(&predicates[predicate_index]->expr);
-        if (call == nullptr) {
-            continue;
+        const ExprNode& predicate = *predicates[predicate_index];
+        std::optional<SpatialJoinMatch> match;
+        if (const auto* call = std::get_if<CallExpr>(&predicate.expr); call != nullptr) {
+            match = try_recognize_spatial_predicate(*call, pair_scope);
         }
-        auto match = try_recognize_spatial_predicate(*call, pair_scope);
         if (!match.has_value()) {
+            if (const auto* comparison = std::get_if<BinaryExpr>(&predicate.expr); comparison != nullptr) {
+                match = try_recognize_manual_distance_predicate(*comparison, pair_scope);
+            }
+        }
+        if (!match.has_value()) {
+            check_unaccelerated_distance_predicate(predicate, pair_scope, errors);
             continue;
         }
         return SpatialJoinPlan{.dimension               = match->dimension,
@@ -5100,7 +5254,7 @@ void SemanticAnalyzer::diagnose_unresolved_handler_trigger(const std::string& ow
 // (see recognize_render_pass_phases) rather than by re-deriving it from the
 // owning phase, since only one Pass kind (and therefore one field table)
 // exists today.
-std::optional<ResolvedStruct> SemanticAnalyzer::build_render_stage_activation_struct(const SymbolId& symbol) const {
+std::optional<ResolvedStruct> SemanticAnalyzer::build_render_stage_activation_struct(const SymbolId& symbol) {
     static const std::string kVertexSuffix   = "__vertex";
     static const std::string kFragmentSuffix = "__fragment";
 

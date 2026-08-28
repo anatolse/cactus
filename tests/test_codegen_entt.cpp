@@ -6556,6 +6556,140 @@ TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase in
     }
 }
 
+// dot is declared locally within a module literally named "std.math.vec2" so
+// its canonical id matches the recognized target exactly, mirroring
+// SPATIAL_JOIN_TRAITS above.
+static const std::string MANUAL_DOT_SPATIAL_JOIN_TRAITS =
+    "trait Transform:\n"
+    "    var position: vec2\n"
+    "trait Collider:\n"
+    "    var radius: float\n"
+    "pub func dot(a: vec2, b: vec2) float:\n"
+    "    return 0.0\n"
+    "event tick:\n"
+    "    dt: float\n"
+    "event Contact:\n"
+    "    other: entity_id\n";
+
+TEST_CASE("Codegen EnTT: manual dot-product where: shape calls the runtime broad phase instead of a hand-rolled sweep",
+          "[codegen-entt][spatial-join]") {
+    ProgramNode program;
+    auto decorated = full_pipeline("module std.math.vec2\n" + MANUAL_DOT_SPATIAL_JOIN_TRAITS +
+                                   "rule DetectContact:\n"
+                                   "    pairs:\n"
+                                   "        a:\n"
+                                   "            Transform\n"
+                                   "            Collider\n"
+                                   "        b:\n"
+                                   "            Transform\n"
+                                   "            Collider\n"
+                                   "    where:\n"
+                                   "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
+                                   "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * "
+                                   "(a.Collider.radius + b.Collider.radius)\n"
+                                   "    on tick:\n"
+                                   "        emit Contact:\n"
+                                   "            other = b\n",
+                                   program);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "DetectContact") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("cactus::runtime::entt_backend::Proxy2D") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
+        CHECK(code.find(".sync(__sap_proxies)") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::sap_execute_pair_tuples(") != std::string::npos);
+        CHECK(code.find("__sap.candidate_pairs()") != std::string::npos);
+    }
+}
+
+// Registered under alias "collision", matching examples/bouncy-bubbles/main.cactus's
+// `use std.collision.flat as collision` and circles_overlap's real stdlib
+// signature (stdlib/std/collision/flat.cactus), so this fixture exercises the
+// same recognized-call shape that example now relies on for its
+// DetectBubbleContact rule (add-sap-broadphase).
+static ModuleImports bouncy_bubbles_collision_imports() {
+    ImportedSymbols syms;
+    syms.module_name = "std.collision.flat";
+
+    TypeInfo vec2_type;
+    vec2_type.kind = TypeKind::Vec2;
+    TypeInfo float_type;
+    float_type.kind = TypeKind::Float;
+    TypeInfo bool_type;
+    bool_type.kind = TypeKind::Bool;
+
+    ResolvedFunc func;
+    func.name           = "circles_overlap";
+    func.module_name    = "std.collision.flat";
+    func.is_pub         = true;
+    func.effect_summary = std::unordered_set<std::string>{};
+    func.params         = {
+        ResolvedParam{.name = "a_position", .type = vec2_type},
+        ResolvedParam{.name = "a_radius", .type = float_type},
+        ResolvedParam{.name = "b_position", .type = vec2_type},
+        ResolvedParam{.name = "b_radius", .type = float_type},
+    };
+    func.return_type  = bool_type;
+    const auto symbol = make_symbol_id(SymbolKind::Func, "std.collision.flat", "circles_overlap");
+    func.symbol_id    = symbol;
+    func.canonical_id = make_canonical_id(symbol);
+    syms.funcs["circles_overlap"] = std::move(func);
+
+    ModuleImports imports;
+    imports.modules["collision"] = std::move(syms);
+    return imports;
+}
+
+TEST_CASE("Codegen EnTT: bouncy-bubbles' migrated DetectBubbleContact where: shape calls the runtime broad phase",
+          "[codegen-entt][spatial-join]") {
+    ProgramNode program;
+    const auto imports = bouncy_bubbles_collision_imports();
+    auto decorated      = full_pipeline("trait Bubble:\n"
+                                   "    var velocity: vec2\n"
+                                   "trait CircleCollider:\n"
+                                   "    var radius: float\n"
+                                   "trait WorldTransform:\n"
+                                   "    var position: vec2\n"
+                                   "event tick:\n"
+                                   "    dt: float\n"
+                                   "event BubbleBounce:\n"
+                                   "    new_velocity: vec2\n"
+                                   "rule DetectBubbleContact:\n"
+                                   "    pairs:\n"
+                                   "        a:\n"
+                                   "            Bubble\n"
+                                   "            CircleCollider\n"
+                                   "            WorldTransform\n"
+                                   "        b:\n"
+                                   "            Bubble\n"
+                                   "            CircleCollider\n"
+                                   "            WorldTransform\n"
+                                   "    where:\n"
+                                   "        a != b\n"
+                                   "        collision.circles_overlap(a.WorldTransform.position, "
+                                   "a.CircleCollider.radius, b.WorldTransform.position, b.CircleCollider.radius)\n"
+                                   "    on tick:\n"
+                                   "        emit BubbleBounce to a:\n"
+                                   "            new_velocity = a.Bubble.velocity\n",
+                                   program,
+                                   imports);
+
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys == nullptr || sys->name != "DetectBubbleContact") {
+            continue;
+        }
+        auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+        CHECK(code.find("cactus::runtime::entt_backend::Proxy2D") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::SapBroadPhase2D") != std::string::npos);
+        CHECK(code.find("cactus::runtime::entt_backend::sap_execute_pair_tuples(") != std::string::npos);
+    }
+}
+
 TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call keeps the Cartesian loop unchanged",
           "[codegen-entt][spatial-join]") {
     ProgramNode program;

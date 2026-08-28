@@ -592,7 +592,7 @@ private:
     void validate_render_pass_descriptor_fields(ProgramNode& program);
     void validate_render_pass_stage_handlers(ProgramNode& program);
     [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_render_stage_trigger(const std::string& ref) const;
-    [[nodiscard]] std::optional<ResolvedStruct> build_render_stage_activation_struct(const SymbolId& symbol) const;
+    static [[nodiscard]] std::optional<ResolvedStruct> build_render_stage_activation_struct(const SymbolId& symbol);
     void diagnose_unresolved_handler_trigger(const std::string& owner_desc,
                                              const std::string& event_name,
                                              const SourceLocation& loc) const;
@@ -792,13 +792,17 @@ private:
                                                         const PairScope& pair_scope) const;
     // dsl-where-clause / spatial-broadphase-runtime: read-only pattern-match
     // over an already-validated `where:` predicate list for a direct,
-    // unwrapped circles_overlap/spheres_overlap call with binding-rooted
-    // position/radius arguments, eligible only when both pair bindings
-    // require identical trait sets. Never reports a diagnostic of its own —
-    // every non-matching shape simply yields nullopt (the predicate remains
-    // an ordinary residual predicate).
+    // unwrapped circles_overlap/spheres_overlap call, or an equivalent manual
+    // squared-distance-via-dot expression, with binding-rooted position/radius
+    // arguments, eligible only when both pair bindings require identical
+    // trait sets. Reports a warning (via `errors`) for a predicate that
+    // neither shape recognizes but that calls the unaccelerated linear-
+    // distance function between binding-rooted positions instead — every
+    // other non-matching shape simply yields nullopt with no diagnostic (the
+    // predicate remains an ordinary residual predicate).
     [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_spatial_join(const RuleNode& rule,
-                                                                                const PairScope& pair_scope);
+                                                                                const PairScope& pair_scope,
+                                                                                ErrorReporter& errors);
 
     // A resolved spatial-predicate argument: the pair binding it's rooted at
     // (for the same-binding/distinct-bindings checks in
@@ -822,6 +826,41 @@ private:
     };
     [[nodiscard]] static std::optional<SpatialJoinMatch> try_recognize_spatial_predicate(const CallExpr& call,
                                                                                          const PairScope& pair_scope);
+
+    // A resolved pair of a BinaryExpr's two operands (subtraction for a
+    // position delta, addition for a radius sum), each resolved the same way
+    // as an ordinary spatial-join argument (resolve_spatial_join_arg).
+    struct SpatialJoinOperandPair {
+        SpatialJoinResolvedArg first;
+        SpatialJoinResolvedArg second;
+    };
+    [[nodiscard]] static bool spatial_join_resolved_args_equal(const SpatialJoinResolvedArg& lhs,
+                                                                const SpatialJoinResolvedArg& rhs);
+    [[nodiscard]] static bool spatial_join_operand_pairs_equal(const SpatialJoinOperandPair& lhs,
+                                                                const SpatialJoinOperandPair& rhs);
+    // Resolves `expr` as a `BinaryExpr` with operator `op` whose two operands
+    // are each a pair-binding-rooted member chain. Shared by the manual
+    // dot-product matcher below (subtraction deltas, radius sums) and the
+    // unaccelerated-distance diagnostic (radius sums).
+    [[nodiscard]] static std::optional<SpatialJoinOperandPair> resolve_spatial_join_operand_pair(
+        const ExprNode& expr, const std::string& op, const PairScope& pair_scope);
+
+    // Manual-expression counterpart to try_recognize_spatial_predicate: a
+    // `<`/`<=` comparison of `dot(delta, delta)` against a squared,
+    // binding-rooted radius sum, built from the same dot/subtract/add/
+    // multiply primitives circles_overlap/spheres_overlap use internally.
+    [[nodiscard]] static std::optional<SpatialJoinMatch> try_recognize_manual_distance_predicate(
+        const BinaryExpr& comparison, const PairScope& pair_scope);
+
+    // Emits a warning diagnostic when `predicate` calls the unaccelerated
+    // linear-distance function (vec2/vec3 `distance`) between two
+    // pair-binding-rooted positions, compared against a binding-rooted radius
+    // sum -- the exact unrecognized shape that motivated this diagnostic.
+    // Meaningful only for a predicate that neither try_recognize_spatial_predicate
+    // nor try_recognize_manual_distance_predicate matched.
+    static void check_unaccelerated_distance_predicate(const ExprNode& predicate,
+                                                        const PairScope& pair_scope,
+                                                        ErrorReporter& errors);
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);

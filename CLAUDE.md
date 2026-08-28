@@ -5,6 +5,32 @@ A DSL for making games that compiles to native C++ (EnTT ECS + raylib) — see
 every task in the repo; the named subsections below scope further guidance to their
 own area (compiler C++, Cactus DSL content, generated-code performance).
 
+## Change lifecycle (mandatory for substantive changes)
+
+Applies to any change touching `src/common`, `src/frontend`, `src/backends`,
+`stdlib/`, or DSL/stdlib-visible behavior — the same scope as "Testing" below.
+Docs-only edits, build/config tweaks, and refactors with no observable behavior
+change are exempt and may be committed directly.
+
+A substantive change goes through, in order:
+
+1. **Explore** (`/opsx:explore`) — think through the problem, surface risks, decide
+   whether it's worth becoming a change.
+2. **Propose** (`/opsx:propose`) — generate proposal, design, specs, and tasks in
+   one step.
+3. **Apply** (`/opsx:apply`) — implement the tasks, TDD per "Testing" below.
+4. **Verify** (`/opsx:verify`) — confirm the implementation matches the change
+   artifacts before touching anything else.
+5. **Clean up** — run `/simplify`, then `/code-review high --fix`: simplify first
+   so review isn't spent on code that's about to be deleted or reshaped.
+6. **Verify again** (`/opsx:verify`) — confirm the cleanup pass didn't drift from
+   the artifacts or regress behavior.
+7. **Archive** (`/opsx:archive`) — sync specs and move the change into
+   `openspec/changes/archive/`.
+
+If either verify step surfaces findings, fix them (back to step 3) and re-verify
+before moving on — never archive with a known gap open.
+
 ## Before changing DSL grammar, stdlib API shape, or language semantics
 
 Check `openspec/specs/language-philosophy/spec.md` (identity, predictability, ECS

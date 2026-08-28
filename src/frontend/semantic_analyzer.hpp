@@ -592,7 +592,7 @@ private:
     void validate_render_pass_descriptor_fields(ProgramNode& program);
     void validate_render_pass_stage_handlers(ProgramNode& program);
     [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_render_stage_trigger(const std::string& ref) const;
-    static [[nodiscard]] std::optional<ResolvedStruct> build_render_stage_activation_struct(const SymbolId& symbol);
+    [[nodiscard]] static std::optional<ResolvedStruct> build_render_stage_activation_struct(const SymbolId& symbol);
     void diagnose_unresolved_handler_trigger(const std::string& owner_desc,
                                              const std::string& event_name,
                                              const SourceLocation& loc) const;
@@ -801,8 +801,8 @@ private:
     // other non-matching shape simply yields nullopt with no diagnostic (the
     // predicate remains an ordinary residual predicate).
     [[nodiscard]] static std::optional<SpatialJoinPlan> recognize_spatial_join(const RuleNode& rule,
-                                                                                const PairScope& pair_scope,
-                                                                                ErrorReporter& errors);
+                                                                               const PairScope& pair_scope,
+                                                                               ErrorReporter& errors);
 
     // A resolved spatial-predicate argument: the pair binding it's rooted at
     // (for the same-binding/distinct-bindings checks in
@@ -835,22 +835,23 @@ private:
         SpatialJoinResolvedArg second;
     };
     [[nodiscard]] static bool spatial_join_resolved_args_equal(const SpatialJoinResolvedArg& lhs,
-                                                                const SpatialJoinResolvedArg& rhs);
+                                                               const SpatialJoinResolvedArg& rhs);
     [[nodiscard]] static bool spatial_join_operand_pairs_equal(const SpatialJoinOperandPair& lhs,
-                                                                const SpatialJoinOperandPair& rhs);
+                                                               const SpatialJoinOperandPair& rhs);
     // Resolves `expr` as a `BinaryExpr` with operator `op` whose two operands
     // are each a pair-binding-rooted member chain. Shared by the manual
     // dot-product matcher below (subtraction deltas, radius sums) and the
     // unaccelerated-distance diagnostic (radius sums).
-    [[nodiscard]] static std::optional<SpatialJoinOperandPair> resolve_spatial_join_operand_pair(
-        const ExprNode& expr, const std::string& op, const PairScope& pair_scope);
+    [[nodiscard]] static std::optional<SpatialJoinOperandPair>
+    resolve_spatial_join_operand_pair(const ExprNode& expr, const std::string& op, const PairScope& pair_scope);
 
     // Manual-expression counterpart to try_recognize_spatial_predicate: a
     // `<`/`<=` comparison of `dot(delta, delta)` against a squared,
     // binding-rooted radius sum, built from the same dot/subtract/add/
     // multiply primitives circles_overlap/spheres_overlap use internally.
     [[nodiscard]] static std::optional<SpatialJoinMatch> try_recognize_manual_distance_predicate(
-        const BinaryExpr& comparison, const PairScope& pair_scope);
+        const BinaryExpr& comparison,
+        const PairScope& pair_scope);
 
     // Emits a warning diagnostic when `predicate` calls the unaccelerated
     // linear-distance function (vec2/vec3 `distance`) between two
@@ -859,8 +860,8 @@ private:
     // Meaningful only for a predicate that neither try_recognize_spatial_predicate
     // nor try_recognize_manual_distance_predicate matched.
     static void check_unaccelerated_distance_predicate(const ExprNode& predicate,
-                                                        const PairScope& pair_scope,
-                                                        ErrorReporter& errors);
+                                                       const PairScope& pair_scope,
+                                                       ErrorReporter& errors);
     void validate_spawn_stmts(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_exprs(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& context_name);
     void validate_spawn_expr(const SpawnExpr& spawn, const SourceLocation& location);

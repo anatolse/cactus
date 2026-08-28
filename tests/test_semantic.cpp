@@ -357,6 +357,18 @@ TEST_CASE("Semantic: extern func without return type has no return_type", "[sema
     CHECK_FALSE(result.funcs.at("init").return_type.has_value());
 }
 
+TEST_CASE("Semantic: cursor capture is a public bool-taking effect", "[semantic][extern-func][input]") {
+    auto result = analyze("pub extern func set_cursor_captured(captured: bool)\n");
+    REQUIRE(result.funcs.count("set_cursor_captured") == 1);
+    const auto& function = result.funcs.at("set_cursor_captured");
+    CHECK(function.is_pub);
+    CHECK(function.is_extern);
+    REQUIRE(function.params.size() == 1);
+    CHECK(function.params.front().name == "captured");
+    CHECK(function.params.front().type.kind == TypeKind::Bool);
+    CHECK_FALSE(function.return_type.has_value());
+}
+
 TEST_CASE("Semantic: extern func not flagged by purity check", "[semantic][extern-func]") {
     // extern func should not be checked for purity (it has no body)
     CHECK_FALSE(analyze_has_errors("pub extern func lerp(a: float, b: float, t: float) float\n"));
@@ -629,19 +641,21 @@ TEST_CASE("Semantic: order by valid color channel", "[semantic][rule-order-by][v
 // so this checks rejection (and that the invalid member spelling reaches the
 // message via the field path) rather than a color-specific message shape.
 TEST_CASE("Semantic: order by invalid color member errors", "[semantic][rule-order-by][vector-expressions]") {
-    auto message = analyze_first_error(STDLIB_EVENTS + "trait Tint:\n"
-                                                        "    var tint: color\n"
-                                                        "rule Render:\n"
-                                                        "    filter:\n"
-                                                        "        Tint as t\n"
-                                                        "    order by:\n"
-                                                        "        t.tint.w asc\n"
-                                                        "    on tick:\n"
-                                                        "        let x = 1\n");
+    auto message = analyze_first_error(STDLIB_EVENTS +
+                                       "trait Tint:\n"
+                                       "    var tint: color\n"
+                                       "rule Render:\n"
+                                       "    filter:\n"
+                                       "        Tint as t\n"
+                                       "    order by:\n"
+                                       "        t.tint.w asc\n"
+                                       "    on tick:\n"
+                                       "        let x = 1\n");
     CHECK(message.find("t.tint.w") != std::string::npos);
 }
 
-TEST_CASE("Semantic: vec2/vec3 splat constructors type-check as trait field defaults", "[semantic][vector-expressions]") {
+TEST_CASE("Semantic: vec2/vec3 splat constructors type-check as trait field defaults",
+          "[semantic][vector-expressions]") {
     auto result = analyze(
         "trait Position:\n"
         "    var pos2: vec2 = vec2(0.0)\n"
@@ -654,33 +668,38 @@ TEST_CASE("Semantic: vec2/vec3 splat constructors type-check as trait field defa
 }
 
 TEST_CASE("Semantic: vec2/vec3 component constructors remain valid", "[semantic][vector-expressions]") {
-    CHECK_FALSE(analyze_has_errors("trait Position:\n"
-                                   "    var pos2: vec2 = vec2(400.0, 40.0)\n"
-                                   "    var pos3: vec3 = vec3(1.0, 2.0, 3.0)\n"));
+    CHECK_FALSE(
+        analyze_has_errors("trait Position:\n"
+                           "    var pos2: vec2 = vec2(400.0, 40.0)\n"
+                           "    var pos3: vec3 = vec3(1.0, 2.0, 3.0)\n"));
 }
 
 TEST_CASE("Semantic: vec2 wrong constructor arity rejected", "[semantic][vector-expressions]") {
-    auto message = analyze_first_error("trait Position:\n"
-                                       "    var pos: vec2 = vec2(1.0, 2.0, 3.0)\n");
+    auto message = analyze_first_error(
+        "trait Position:\n"
+        "    var pos: vec2 = vec2(1.0, 2.0, 3.0)\n");
     CHECK(message.find("vec2") != std::string::npos);
     CHECK(message.find('3') != std::string::npos);
 }
 
 TEST_CASE("Semantic: vec3 wrong constructor arity rejected", "[semantic][vector-expressions]") {
-    auto message = analyze_first_error("trait Position:\n"
-                                       "    var pos: vec3 = vec3(1.0, 2.0)\n");
+    auto message = analyze_first_error(
+        "trait Position:\n"
+        "    var pos: vec3 = vec3(1.0, 2.0)\n");
     CHECK(message.find("vec3") != std::string::npos);
     CHECK(message.find('2') != std::string::npos);
 }
 
 TEST_CASE("Semantic: vec2 zero-argument constructor rejected", "[semantic][vector-expressions]") {
-    CHECK(analyze_has_errors("trait Position:\n"
-                             "    var pos: vec2 = vec2()\n"));
+    CHECK(
+        analyze_has_errors("trait Position:\n"
+                           "    var pos: vec2 = vec2()\n"));
 }
 
 TEST_CASE("Semantic: vec2 non-float constructor argument rejected", "[semantic][vector-expressions]") {
-    auto message = analyze_first_error("trait Position:\n"
-                                       "    var pos: vec2 = vec2(\"0\", \"0\")\n");
+    auto message = analyze_first_error(
+        "trait Position:\n"
+        "    var pos: vec2 = vec2(\"0\", \"0\")\n");
     CHECK(message.find("string") != std::string::npos);
 }
 
@@ -705,45 +724,47 @@ TEST_CASE("Semantic: vec2/vec3 constructors accept int arguments, promoted to fl
 
 TEST_CASE("Semantic: vec2 non-numeric constructor argument still rejected alongside int promotion",
           "[semantic][vector-expressions]") {
-    auto message = analyze_first_error("trait Position:\n"
-                                       "    var pos: vec2 = vec2(\"0\", \"0\")\n");
+    auto message = analyze_first_error(
+        "trait Position:\n"
+        "    var pos: vec2 = vec2(\"0\", \"0\")\n");
     CHECK(message.find("string") != std::string::npos);
 }
 
 TEST_CASE("Semantic: vec2 splat constructor default mismatched against vec3 field rejected",
           "[semantic][vector-expressions]") {
-    CHECK(analyze_has_errors("trait Position:\n"
-                             "    var pos: vec3 = vec2(0.0)\n"));
+    CHECK(
+        analyze_has_errors("trait Position:\n"
+                           "    var pos: vec3 = vec2(0.0)\n"));
 }
 
 // color(...) isn't accepted as a trait field default (unlike vec2(...)/
 // vec3(...)) - it isn't in check_const's allowed-constructor list, so these
 // exercise the constructor through a handler body instead, same as the
 // "constructors resolve to real types outside trait defaults" case below.
-TEST_CASE("Semantic: color constructor with four channel arguments is accepted",
-          "[semantic][vector-expressions]") {
+TEST_CASE("Semantic: color constructor with four channel arguments is accepted", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule Test:\n"
                                                    "    on tick:\n"
                                                    "        let c = color(1.0, 0.0, 0.0, 1.0)\n"));
 }
 
 TEST_CASE("Semantic: color wrong constructor arity rejected", "[semantic][vector-expressions]") {
-    auto message = analyze_first_error(STDLIB_EVENTS + "rule Test:\n"
-                                                        "    on tick:\n"
-                                                        "        let c = color(1.0, 0.0, 0.0)\n");
+    auto message = analyze_first_error(STDLIB_EVENTS +
+                                       "rule Test:\n"
+                                       "    on tick:\n"
+                                       "        let c = color(1.0, 0.0, 0.0)\n");
     CHECK(message.find("color") != std::string::npos);
     CHECK(message.find('3') != std::string::npos);
 }
 
 TEST_CASE("Semantic: color non-numeric constructor argument rejected", "[semantic][vector-expressions]") {
-    auto message = analyze_first_error(STDLIB_EVENTS + "rule Test:\n"
-                                                        "    on tick:\n"
-                                                        "        let c = color(\"0\", 0.0, 0.0, 1.0)\n");
+    auto message = analyze_first_error(STDLIB_EVENTS +
+                                       "rule Test:\n"
+                                       "    on tick:\n"
+                                       "        let c = color(\"0\", 0.0, 0.0, 1.0)\n");
     CHECK(message.find("string") != std::string::npos);
 }
 
-TEST_CASE("Semantic: color constructor accepts int arguments, promoted to float",
-          "[semantic][vector-expressions]") {
+TEST_CASE("Semantic: color constructor accepts int arguments, promoted to float", "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "rule Test:\n"
                                                    "    on tick:\n"
                                                    "        for k in range(0, 1):\n"
@@ -753,13 +774,13 @@ TEST_CASE("Semantic: color constructor accepts int arguments, promoted to float"
 TEST_CASE("Semantic: vec2/vec3 constructors resolve to real types outside trait defaults",
           "[semantic][vector-expressions]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
-                                                    "    var pos: vec2\n"
-                                                    "rule Move:\n"
-                                                    "    filter:\n"
-                                                    "        Position as p\n"
-                                                    "    on tick:\n"
-                                                    "        let origin = vec2(0.0)\n"
-                                                    "        p.Position.pos = origin\n"));
+                                                   "    var pos: vec2\n"
+                                                   "rule Move:\n"
+                                                   "    filter:\n"
+                                                   "        Position as p\n"
+                                                   "    on tick:\n"
+                                                   "        let origin = vec2(0.0)\n"
+                                                   "        p.Position.pos = origin\n"));
 }
 
 // An enum-qualified literal (`GizmoMode.Select`) is resolved against its enum declaration
@@ -769,32 +790,33 @@ TEST_CASE("Semantic: vec2/vec3 constructors resolve to real types outside trait 
 // ExprNode dispatch previously had no MemberExpr case at all, so it fell to the catch-all
 // "not constant" branch regardless.
 TEST_CASE("Semantic: enum-qualified literal is a valid trait field default", "[semantic][enum]") {
-    CHECK_FALSE(analyze_has_errors("pub enum GizmoMode:\n"
-                                   "    Select\n"
-                                   "    Translate\n"
-                                   "trait EditorState:\n"
-                                   "    var mode: GizmoMode = GizmoMode.Select\n"));
+    CHECK_FALSE(
+        analyze_has_errors("pub enum GizmoMode:\n"
+                           "    Select\n"
+                           "    Translate\n"
+                           "trait EditorState:\n"
+                           "    var mode: GizmoMode = GizmoMode.Select\n"));
 }
 
-TEST_CASE("Semantic: enum-qualified literal trait field default resolves to the enum type",
-          "[semantic][enum]") {
-    auto result = analyze("pub enum GizmoMode:\n"
-                          "    Select\n"
-                          "    Translate\n"
-                          "trait EditorState:\n"
-                          "    var mode: GizmoMode = GizmoMode.Select\n");
+TEST_CASE("Semantic: enum-qualified literal trait field default resolves to the enum type", "[semantic][enum]") {
+    auto result = analyze(
+        "pub enum GizmoMode:\n"
+        "    Select\n"
+        "    Translate\n"
+        "trait EditorState:\n"
+        "    var mode: GizmoMode = GizmoMode.Select\n");
     REQUIRE(result.traits.count("EditorState"));
     auto& trait = result.traits["EditorState"];
     REQUIRE(trait.fields.size() == 1);
     CHECK(trait.fields[0].type.kind == TypeKind::Enum);
 }
 
-TEST_CASE("Semantic: enum-qualified literal naming an unknown variant rejected as trait default",
-          "[semantic][enum]") {
-    CHECK(analyze_has_errors("pub enum GizmoMode:\n"
-                             "    Select\n"
-                             "trait EditorState:\n"
-                             "    var mode: GizmoMode = GizmoMode.Translate\n"));
+TEST_CASE("Semantic: enum-qualified literal naming an unknown variant rejected as trait default", "[semantic][enum]") {
+    CHECK(
+        analyze_has_errors("pub enum GizmoMode:\n"
+                           "    Select\n"
+                           "trait EditorState:\n"
+                           "    var mode: GizmoMode = GizmoMode.Translate\n"));
 }
 
 static const std::string VECTOR_MATRIX_STDLIB =
@@ -1014,8 +1036,7 @@ TEST_CASE("Semantic: incompatible vec2 compound-assignment operand rejected", "[
     CHECK(message.find("+=") != std::string::npos);
 }
 
-TEST_CASE("Semantic: compound-assignment diagnostic names target and source types",
-          "[semantic][vector-expressions]") {
+TEST_CASE("Semantic: compound-assignment diagnostic names target and source types", "[semantic][vector-expressions]") {
     auto message = analyze_first_error(STDLIB_EVENTS + VECTOR_MATRIX_STDLIB +
                                        "rule Test:\n"
                                        "    filter:\n"
@@ -1316,8 +1337,7 @@ TEST_CASE("Semantic: range() rejected outside a for-loop iterable position", "[s
           "`range()` is only valid as the iterable of a `for` statement");
 }
 
-TEST_CASE("Semantic: range() validates argument count and int-typed arguments",
-          "[semantic][foreach][range]") {
+TEST_CASE("Semantic: range() validates argument count and int-typed arguments", "[semantic][foreach][range]") {
     CHECK(analyze_first_error(STDLIB_EVENTS + "rule TooFewArgs:\n"
                                               "    on tick:\n"
                                               "        for k in range(0):\n"
@@ -1337,8 +1357,7 @@ TEST_CASE("Semantic: range() validates argument count and int-typed arguments",
               .find("'range'") != std::string::npos);
 }
 
-TEST_CASE("Semantic: C-style numeric for, while, and break/continue remain unsupported",
-          "[semantic][foreach]") {
+TEST_CASE("Semantic: C-style numeric for, while, and break/continue remain unsupported", "[semantic][foreach]") {
     CHECK(analyze_has_errors(STDLIB_EVENTS + "rule NumericFor:\n"
                                              "    on tick:\n"
                                              "        for i = 0; i < 10; i += 1:\n"
@@ -2344,14 +2363,14 @@ TEST_CASE("Semantic: unary handler contract from where matches equivalent leadin
                                 "        body.vx > 0.0\n"
                                 "    on tick:\n"
                                 "        let x = 1\n");
-    auto if_result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
-                             "rule MovingIf:\n"
-                             "    filter:\n"
-                             "        DynamicBody as body\n"
-                             "    on tick:\n"
-                             "        if body.vx <= 0.0:\n"
-                             "            return\n"
-                             "        let x = 1\n");
+    auto if_result    = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                                "rule MovingIf:\n"
+                                "    filter:\n"
+                                "        DynamicBody as body\n"
+                                "    on tick:\n"
+                                "        if body.vx <= 0.0:\n"
+                                "            return\n"
+                                "        let x = 1\n");
 
     REQUIRE(where_result.handler_contracts.size() == 1);
     REQUIRE(if_result.handler_contracts.size() == 1);
@@ -2372,17 +2391,17 @@ TEST_CASE("Semantic: pair handler contract from where matches equivalent leading
                                 "        a.Transform.x > 0.0\n"
                                 "    on tick:\n"
                                 "        let x = 1\n");
-    auto if_result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
-                             "rule ContactIf:\n"
-                             "    pairs:\n"
-                             "        a:\n"
-                             "            Transform\n"
-                             "        b:\n"
-                             "            Transform\n"
-                             "    on tick:\n"
-                             "        if a.Transform.x <= 0.0:\n"
-                             "            return\n"
-                             "        let x = 1\n");
+    auto if_result    = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                                "rule ContactIf:\n"
+                                "    pairs:\n"
+                                "        a:\n"
+                                "            Transform\n"
+                                "        b:\n"
+                                "            Transform\n"
+                                "    on tick:\n"
+                                "        if a.Transform.x <= 0.0:\n"
+                                "            return\n"
+                                "        let x = 1\n");
 
     REQUIRE(where_result.handler_contracts.size() == 1);
     REQUIRE(if_result.handler_contracts.size() == 1);
@@ -2412,18 +2431,18 @@ static ImportedSymbols make_spheres_overlap_import() {
     bool_type.kind = TypeKind::Bool;
 
     ResolvedFunc func;
-    func.name         = "spheres_overlap";
-    func.module_name  = "std.collision.volume";
-    func.is_pub       = true;
+    func.name           = "spheres_overlap";
+    func.module_name    = "std.collision.volume";
+    func.is_pub         = true;
     func.effect_summary = std::unordered_set<std::string>{};  // proven pure: allowed in where:
-    func.params       = {
+    func.params         = {
         ResolvedParam{.name = "a_position", .type = vec3_type},
         ResolvedParam{.name = "a_radius", .type = float_type},
         ResolvedParam{.name = "b_position", .type = vec3_type},
         ResolvedParam{.name = "b_radius", .type = float_type},
     };
     func.return_type  = bool_type;
-    const auto symbol  = make_symbol_id(SymbolKind::Func, "std.collision.volume", "spheres_overlap");
+    const auto symbol = make_symbol_id(SymbolKind::Func, "std.collision.volume", "spheres_overlap");
     func.symbol_id    = symbol;
     func.canonical_id = make_canonical_id(symbol);
 
@@ -2511,23 +2530,23 @@ TEST_CASE("Semantic: spatial call recognition succeeds through a renamed import 
     imports.modules["foo"] = make_spheres_overlap_import();
 
     auto result = analyze_with_imports(STDLIB_EVENTS +
-                                       "trait Transform:\n"
-                                       "    var position: vec3\n"
-                                       "trait Collider:\n"
-                                       "    var radius: float\n"
-                                       "rule DetectContact:\n"
-                                       "    pairs:\n"
-                                       "        a:\n"
-                                       "            Transform\n"
-                                       "            Collider\n"
-                                       "        b:\n"
-                                       "            Transform\n"
-                                       "            Collider\n"
-                                       "    where:\n"
-                                       "        foo.spheres_overlap(a.Transform.position, a.Collider.radius, "
-                                       "b.Transform.position, b.Collider.radius)\n"
-                                       "    on tick:\n"
-                                       "        let x = 1\n",
+                                           "trait Transform:\n"
+                                           "    var position: vec3\n"
+                                           "trait Collider:\n"
+                                           "    var radius: float\n"
+                                           "rule DetectContact:\n"
+                                           "    pairs:\n"
+                                           "        a:\n"
+                                           "            Transform\n"
+                                           "            Collider\n"
+                                           "        b:\n"
+                                           "            Transform\n"
+                                           "            Collider\n"
+                                           "    where:\n"
+                                           "        foo.spheres_overlap(a.Transform.position, a.Collider.radius, "
+                                           "b.Transform.position, b.Collider.radius)\n"
+                                           "    on tick:\n"
+                                           "        let x = 1\n",
                                        imports);
 
     REQUIRE(result.handler_contracts.size() == 1);
@@ -2769,24 +2788,24 @@ TEST_CASE("Semantic: manual dot-product recognition succeeds through a renamed i
     imports.modules["v2m"] = make_dot_import();
 
     auto result = analyze_with_imports(STDLIB_EVENTS +
-                                       "trait Transform:\n"
-                                       "    var position: vec2\n"
-                                       "trait Collider:\n"
-                                       "    var radius: float\n"
-                                       "rule DetectContact:\n"
-                                       "    pairs:\n"
-                                       "        a:\n"
-                                       "            Transform\n"
-                                       "            Collider\n"
-                                       "        b:\n"
-                                       "            Transform\n"
-                                       "            Collider\n"
-                                       "    where:\n"
-                                       "        v2m.dot(b.Transform.position - a.Transform.position, "
-                                       "b.Transform.position - a.Transform.position) < (a.Collider.radius + "
-                                       "b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
-                                       "    on tick:\n"
-                                       "        let x = 1\n",
+                                           "trait Transform:\n"
+                                           "    var position: vec2\n"
+                                           "trait Collider:\n"
+                                           "    var radius: float\n"
+                                           "rule DetectContact:\n"
+                                           "    pairs:\n"
+                                           "        a:\n"
+                                           "            Transform\n"
+                                           "            Collider\n"
+                                           "        b:\n"
+                                           "            Transform\n"
+                                           "            Collider\n"
+                                           "    where:\n"
+                                           "        v2m.dot(b.Transform.position - a.Transform.position, "
+                                           "b.Transform.position - a.Transform.position) < (a.Collider.radius + "
+                                           "b.Collider.radius) * (a.Collider.radius + b.Collider.radius)\n"
+                                           "    on tick:\n"
+                                           "        let x = 1\n",
                                        imports);
 
     REQUIRE(result.handler_contracts.size() == 1);
@@ -2852,9 +2871,10 @@ TEST_CASE("Semantic: component-wise squared-distance arithmetic remains an ordin
     CHECK_FALSE(result.handler_contracts[0].spatial_join.has_value());
 }
 
-TEST_CASE("Semantic: distance check split across intermediate handler-body let bindings (no where: clause) "
-          "remains unrecognized",
-          "[semantic][where-clause][spatial-join]") {
+TEST_CASE(
+    "Semantic: distance check split across intermediate handler-body let bindings (no where: clause) "
+    "remains unrecognized",
+    "[semantic][where-clause][spatial-join]") {
     auto result = analyze("module std.math.vec2\n" + STDLIB_EVENTS +
                           "trait Transform:\n"
                           "    var position: vec2\n"

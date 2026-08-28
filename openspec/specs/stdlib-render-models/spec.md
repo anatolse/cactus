@@ -5,15 +5,19 @@ Define the stdlib `std.render.models` capability: the `ModelRenderer` trait and 
 ## Requirements
 
 ### Requirement: Model rendering traits are provided by std.render.models
-The stdlib SHALL provide a module `std.render.models` containing a passive `pub trait ModelRenderer` with fields `let model: model_id`, `var visible: bool = true`, and `var cast_shadow: bool = true`, and an `extern rule ModelRender` filtered on `std.transform.volume.WorldTransform` and `ModelRenderer`. The trait SHALL NOT contain a material field; materials come from the model file.
+The stdlib SHALL provide a module `std.render.models` containing a passive `pub trait ModelRenderer` with fields `let model: model_id`, `var visible: bool = true`, `var cast_shadow: bool = true`, and `var color: color = #FFFFFFFF`, and an `extern rule ModelRender` filtered on `std.transform.volume.WorldTransform` and `ModelRenderer`. The trait SHALL NOT contain a material field; materials come from the model file.
 
 #### Scenario: Entity with WorldTransform and ModelRenderer is drawn
 - **WHEN** an entity has `std.transform.volume.WorldTransform` and `ModelRenderer` with a valid `model` handle and `visible = true`
-- **THEN** the backend render rule submits the model for drawing at the entity's world transform without any user-authored rule
+- **THEN** the backend render rule submits the model for drawing at the entity's world transform with its authored color tint
 
 #### Scenario: Invisible model is skipped
 - **WHEN** an entity's `ModelRenderer.visible` is `false`
 - **THEN** the model is not submitted for drawing, and the trait remains attached
+
+#### Scenario: Default model color preserves existing appearance
+- **WHEN** existing authored code omits ModelRenderer.color
+- **THEN** its default #FFFFFFFF tint leaves every embedded material color and alpha unchanged
 
 ### Requirement: All submeshes render with their embedded materials
 The runtime SHALL draw every submesh of a loaded model using the material bound to that submesh in the model file. Embedded material base color factors SHALL be applied, and loaded materials SHALL be shaded by the same lighting model (point and directional lights) as stdlib mesh rendering.
@@ -144,3 +148,27 @@ The `std.render.models` module SHALL provide `pub extern func bounds_size(m: mod
 #### Scenario: Skinned model reports bind-pose extents
 - **WHEN** `bounds_size` is called for a skinned model with animation clips
 - **THEN** the returned extents describe the bind pose, unaffected by any `ModelAnimator` state
+
+### Requirement: Model color multiplies embedded material color per entity
+For each submitted model instance, ModelRenderer.color SHALL multiply the red, green, blue, and alpha components of every embedded material base color. Tinting SHALL apply to both bind-pose and animated model submissions and SHALL NOT replace the model's embedded material assignments.
+
+#### Scenario: RGB tint preserves submesh material identity
+- **WHEN** a multi-submesh model is submitted with a non-white ModelRenderer.color
+- **THEN** every submesh retains its own embedded material
+- **AND** each material base color is multiplied by the same instance tint
+
+#### Scenario: Alpha tint fades a model
+- **WHEN** ModelRenderer.color has half alpha
+- **THEN** every submitted submesh uses one half of its embedded material alpha
+
+#### Scenario: Shared model instances tint independently
+- **WHEN** two entities share one model asset but have different ModelRenderer.color values
+- **THEN** each draw uses its own tint
+- **AND** drawing either entity does not mutate the persistent embedded material color observed by the other
+
+### Requirement: Model tint submissions are test-observable
+The cpp-entt model-rendering test surface SHALL expose enough per-submission color information for headless tests to distinguish independently tinted model entities without loading production assets.
+
+#### Scenario: Headless test observes submitted alpha
+- **WHEN** a visible model entity is submitted with non-opaque ModelRenderer.color
+- **THEN** the runtime test surface records the resolved submission tint including its alpha

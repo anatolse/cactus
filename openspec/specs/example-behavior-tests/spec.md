@@ -111,3 +111,32 @@ The `model-animation` curated example SHALL have a headless behavioral test that
 - **WHEN** the model-animation headless test drives one frame with the `Hud` screen label present
 - **THEN** the call log records the frame's `DrawMesh`/`BeginMode3D`/`EndMode3D` entries before the HUD's window-space text draw entry, as an ordered subsequence
 
+### Requirement: First-person arena has dedicated headless gameplay coverage
+The first-person arena SHALL have a dedicated fake-Raylib headless behavior test executable that compiles the real example-generated C++ and drives deterministic load, fixed-update, input, tick, and render activations without opening a window.
+
+#### Scenario: Initial and interval spawning are verified
+- **WHEN** the headless test commits the initial spawn and then advances ten active gameplay seconds
+- **THEN** it observes two robots and two knights in the initial wave
+- **AND** one additional assigned enemy from each of the four spawn points after the interval
+
+#### Scenario: Enemy seeking is verified
+- **WHEN** a live enemy has an unobstructed player target
+- **THEN** deterministic fixed updates reduce its horizontal distance to the player
+
+#### Scenario: Player wall collision and stair grounding are verified
+- **WHEN** scripted movement drives the player into a solid wall and across the exterior staircase
+- **THEN** the player does not penetrate the wall
+- **AND** successive reachable steps raise the player to the roof height
+
+#### Scenario: Projectile hit and death timeline are verified
+- **WHEN** scripted fire creates a bullet that hits a live enemy
+- **THEN** the bullet is consumed and the enemy enters its dying state
+- **AND** at the midpoint its fall rotation has advanced and model alpha is approximately one half
+- **AND** at one second the enemy no longer exists
+
+#### Scenario: Enemy contact freezes the game
+- **WHEN** a live enemy reaches the player's collider
+- **THEN** the game-over marker and label activate
+- **AND** later scripted movement, firing, enemy movement, and spawn intervals do not advance gameplay
+- **AND** cursor capture is released
+

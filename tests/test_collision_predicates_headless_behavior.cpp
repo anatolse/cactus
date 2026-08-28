@@ -7,6 +7,7 @@
 #define CACTUS_GENERATED_NO_MAIN
 #include CACTUS_HEADLESS_GENERATED_CPP
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
@@ -62,5 +63,47 @@ TEST_CASE("dsl-where-clause: spheres_overlap is usable as an ordinary pure where
             CHECK(body.overlap_hits == 1);  // BodyNear1 / BodyNear2
         }
     }
+}
+
+TEST_CASE("stdlib-collision: sphere_box_separation handles contact, penetration, inside ties, and rotation",
+          "[runtime][codegen-entt][stdlib-collision]") {
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    drive_frame(registry);
+
+    const auto view = registry.view<collision_predicates_runtime__Probe>();
+    REQUIRE(view.size() == 1);
+    const auto& probe = registry.get<collision_predicates_runtime__Probe>(*view.begin());
+
+    CHECK(probe.sphere_box_separate.x == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_separate.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_separate.z == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_touch.x == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_touch.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_touch.z == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_overlap.x == Catch::Approx(0.5F));
+    CHECK(probe.sphere_box_overlap.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_overlap.z == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_inside_tie.x == Catch::Approx(1.5F));
+    CHECK(probe.sphere_box_inside_tie.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_inside_tie.z == Catch::Approx(0.0F));
+    CHECK(probe.sphere_box_rotated.x == Catch::Approx(0.0F).margin(0.0001F));
+    CHECK(probe.sphere_box_rotated.y == Catch::Approx(0.5F).margin(0.0001F));
+    CHECK(probe.sphere_box_rotated.z == Catch::Approx(0.0F).margin(0.0001F));
+}
+
+TEST_CASE("stdlib-collision: sphere_box_separation remains usable in a pure where predicate",
+          "[runtime][codegen-entt][where-clause][stdlib-collision]") {
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    drive_frame(registry);
+
+    const auto view = registry.view<collision_predicates_runtime__SphereBoxCandidate>();
+    REQUIRE(view.size() == 1);
+    CHECK(registry.get<collision_predicates_runtime__SphereBoxCandidate>(*view.begin()).accepted);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

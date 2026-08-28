@@ -136,3 +136,18 @@ An `input` declaration without `pub` SHALL be module-private. A `pub input` decl
 #### Scenario: Pub input accessible to importer
 - **WHEN** module A declares `pub input Jump: button` and module B imports A
 - **THEN** `Jump` is available in module B with type `InputButton`
+
+### Requirement: std.input controls cursor capture
+The std.input module SHALL declare pub extern func set_cursor_captured(captured: bool). Calling it from a handler with true SHALL request captured relative-pointer mode for the active window; calling it with false SHALL release capture and restore the ordinary cursor. Repeating the current state SHALL be safe and idempotent.
+
+#### Scenario: Handler captures the cursor
+- **WHEN** authored code calls input.set_cursor_captured(true) from a handler after importing std.input
+- **THEN** semantic analysis accepts the call as an effectful void extern function with a bool argument
+
+#### Scenario: Handler releases the cursor
+- **WHEN** authored code calls input.set_cursor_captured(false)
+- **THEN** the active backend releases captured relative-pointer mode
+
+#### Scenario: Mouse delta remains available while captured
+- **WHEN** the cursor is captured and pointer movement occurs
+- **THEN** std.input.mouse_delta returns that relative movement through its existing vec2 surface

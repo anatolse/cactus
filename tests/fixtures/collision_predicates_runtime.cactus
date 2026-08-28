@@ -17,6 +17,11 @@ trait Probe:
     var sphere_overlap: bool = false
     var sphere_touch: bool = false
     var sphere_separate: bool = false
+    var sphere_box_separate: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_box_touch: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_box_overlap: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_box_inside_tie: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_box_rotated: vec3 = vec3(0.0, 0.0, 0.0)
 
 rule ComputeProbe:
     filter:
@@ -29,6 +34,11 @@ rule ComputeProbe:
         sphere_overlap = vol.spheres_overlap(vec3(0.0, 0.0, 0.0), 1.0, vec3(1.0, 0.0, 0.0), 1.0)
         sphere_touch = vol.spheres_overlap(vec3(0.0, 0.0, 0.0), 1.0, vec3(2.0, 0.0, 0.0), 1.0)
         sphere_separate = vol.spheres_overlap(vec3(0.0, 0.0, 0.0), 1.0, vec3(3.0, 0.0, 0.0), 1.0)
+        sphere_box_separate = vol.sphere_box_separation(vec3(3.0, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0), quat.identity())
+        sphere_box_touch = vol.sphere_box_separation(vec3(2.0, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0), quat.identity())
+        sphere_box_overlap = vol.sphere_box_separation(vec3(1.5, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0), quat.identity())
+        sphere_box_inside_tie = vol.sphere_box_separation(vec3(0.0, 0.0, 0.0), 0.5, vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0), quat.identity())
+        sphere_box_rotated = vol.sphere_box_separation(vec3(0.0, 1.5, 0.0), 1.0, vec3(0.0, 0.0, 0.0), vec3(2.0, 4.0, 2.0), quat.from_axis_angle(vec3(0.0, 0.0, 1.0), 1.57079633))
 
 entity ProbeEntity:
     Probe
@@ -85,3 +95,40 @@ entity BodyFar:
     Body:
         position = vec3(10.0, 0.0, 0.0)
         radius = 1.0
+
+trait SphereBoxCandidate:
+    let position: vec3 = vec3(1.5, 0.0, 0.0)
+    let radius: float = 1.0
+    var accepted: bool = false
+
+trait SeparationBox:
+    let position: vec3 = vec3(0.0, 0.0, 0.0)
+    let size: vec3 = vec3(2.0, 2.0, 2.0)
+    let rotation: quat = quat.identity()
+
+event SphereBoxAccepted
+
+rule DetectSphereBoxWhere:
+    pairs:
+        sphere:
+            SphereBoxCandidate
+        box:
+            SeparationBox
+    where:
+        v3m.length(vol.sphere_box_separation(sphere.SphereBoxCandidate.position, sphere.SphereBoxCandidate.radius, box.SeparationBox.position, box.SeparationBox.size, box.SeparationBox.rotation)) > 0.0
+
+    on tick:
+        emit SphereBoxAccepted to sphere
+
+rule RecordSphereBoxWhere:
+    filter:
+        SphereBoxCandidate
+
+    on SphereBoxAccepted:
+        accepted = true
+
+entity SphereBoxCandidateEntity:
+    SphereBoxCandidate
+
+entity SeparationBoxEntity:
+    SeparationBox

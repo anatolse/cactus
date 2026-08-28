@@ -3,7 +3,6 @@
 #include "backends/cpp-entt/raylib_io.hpp"
 
 #include <raylib.h>
-#include <rlgl.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +13,7 @@
 #include <numbers>
 #include <numeric>
 #include <raymath.h>
+#include <rlgl.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -111,6 +111,7 @@ struct ModelSubmission {
     Vector3 scale{};
     int model_runtime_id{-1};
     bool cast_shadow{true};
+    Color tint{WHITE};
     // Animated submissions carry the entity's ModelAnimator pose; the flush
     // re-poses the shared model per submission (dsl-model-animation D1).
     int clip{0};
@@ -378,9 +379,9 @@ void main()
         }
     }
 
-    vec4 finalColor = texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0));
-    finalColor += texelColor*(ambient/10.0)*colDiffuse;
-    gl_FragColor = pow(finalColor, vec4(1.0/2.2));
+    vec3 litColor = texelColor.rgb*((colDiffuse.rgb + specular)*lightDot);
+    litColor += texelColor.rgb*(ambient.rgb/10.0)*colDiffuse.rgb;
+    gl_FragColor = vec4(pow(litColor, vec3(1.0/2.2)), texelColor.a*colDiffuse.a);
 }
 )";
 
@@ -509,9 +510,9 @@ void main()
         }
     }
 
-    finalColor = texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0));
-    finalColor += texelColor*(ambient/10.0)*colDiffuse;
-    finalColor = pow(finalColor, vec4(1.0/2.2));
+    vec3 litColor = texelColor.rgb*((colDiffuse.rgb + specular)*lightDot);
+    litColor += texelColor.rgb*(ambient.rgb/10.0)*colDiffuse.rgb;
+    finalColor = vec4(pow(litColor, vec3(1.0/2.2)), texelColor.a*colDiffuse.a);
 }
 )";
 
@@ -681,10 +682,10 @@ Shader* ensure_skinned_lighting_shader() {
     }
     // Bone locations: the uniform-matrix upload reads BONETRANSFORMS, and
     // DrawMesh only binds the bone VBOs when the attrib locations are set.
-    auto& shader                                    = state.shader;
-    shader.locs[SHADER_LOC_MATRIX_BONETRANSFORMS]   = GetShaderLocation(shader, "boneMatrices");
-    shader.locs[SHADER_LOC_VERTEX_BONEIDS]          = GetShaderLocationAttrib(shader, "vertexBoneIndices");
-    shader.locs[SHADER_LOC_VERTEX_BONEWEIGHTS]      = GetShaderLocationAttrib(shader, "vertexBoneWeights");
+    auto& shader                                  = state.shader;
+    shader.locs[SHADER_LOC_MATRIX_BONETRANSFORMS] = GetShaderLocation(shader, "boneMatrices");
+    shader.locs[SHADER_LOC_VERTEX_BONEIDS]        = GetShaderLocationAttrib(shader, "vertexBoneIndices");
+    shader.locs[SHADER_LOC_VERTEX_BONEWEIGHTS]    = GetShaderLocationAttrib(shader, "vertexBoneWeights");
     return &state.shader;
 }
 
@@ -920,7 +921,7 @@ void record_model_load_failure(const std::string& message) {
 // upload_skinned_pose (which needs a real GL context too) no-ops.
 Model fake_model_resource() noexcept {
     static Mesh mesh{};
-    static MaterialMap material_maps[1]{};
+    static MaterialMap material_maps[1]{{.texture = {}, .color = WHITE, .value = 0.0F}};
     static Material material{.shader = {}, .maps = material_maps, .params = {}};
     static int mesh_material[1]{0};
 
@@ -1028,12 +1029,12 @@ const ModelAnimation* resolve_animation_clip(ModelResourceEntry& entry, const in
     if (clip >= 0 && clip < entry.animation_count) {
         return &entry.animations[clip];
     }
-    const std::uint64_t key = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(runtime_id)) << 32U) |
-                              static_cast<std::uint32_t>(clip);
+    const std::uint64_t key =
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(runtime_id)) << 32U) | static_cast<std::uint32_t>(clip);
     if (diagnosed_invalid_clips().insert(key).second) {
         render_debug_state_storage().model_diagnostics.push_back(
-            "invalid animation clip " + std::to_string(clip) + " (model has " +
-            std::to_string(entry.animation_count) + "): " + entry.path);
+            "invalid animation clip " + std::to_string(clip) + " (model has " + std::to_string(entry.animation_count) +
+            "): " + entry.path);
     }
     return nullptr;
 }
@@ -1067,8 +1068,8 @@ void upload_skinned_pose(Model& model, const ModelAnimation* clip_anim, const fl
     }
     if (Shader* skinned = ensure_skinned_lighting_shader(); skinned != nullptr) {
         rlEnableShader(skinned->id);
-        rlSetUniformMatrices(skinned->locs[SHADER_LOC_MATRIX_BONETRANSFORMS], model.boneMatrices,
-                             model.skeleton.boneCount);
+        rlSetUniformMatrices(
+            skinned->locs[SHADER_LOC_MATRIX_BONETRANSFORMS], model.boneMatrices, model.skeleton.boneCount);
     }
 }
 
@@ -1128,7 +1129,7 @@ void flush_model_queue() noexcept {
         cactus::runtime::raylib::BeginMode3D(camera);
     }
     for (const auto& submission : model_queue()) {
-        const auto it = models().find(submission.model_runtime_id);
+        const auto it             = models().find(submission.model_runtime_id);
         ModelResourceEntry* entry = it != models().end() ? &it->second : nullptr;
 
         // Clip validation runs headless too, so invalid-clip diagnostics stay
@@ -1140,9 +1141,8 @@ void flush_model_queue() noexcept {
 
         // Trigger lazy load only when the entry exists and hasn't failed; avoids
         // a redundant second map lookup on already-loaded models each frame.
-        Model* model = (entry != nullptr && !entry->failed)
-                           ? ensure_model_resource(submission.model_runtime_id)
-                           : nullptr;
+        Model* model =
+            (entry != nullptr && !entry->failed) ? ensure_model_resource(submission.model_runtime_id) : nullptr;
 
         if (model == nullptr || !window_ready) {
             continue;
@@ -1157,8 +1157,13 @@ void flush_model_queue() noexcept {
         }
         // Draw every submesh with the embedded material bound to it in the file.
         for (int i = 0; i < model->meshCount; ++i) {
-            const int material_index = model->meshMaterial[i];
-            cactus::runtime::raylib::DrawMesh(model->meshes[i], model->materials[material_index], xform);
+            const int material_index   = model->meshMaterial[i];
+            Material& material         = model->materials[material_index];
+            Color& diffuse_color       = material.maps[MATERIAL_MAP_DIFFUSE].color;
+            const Color embedded_color = diffuse_color;
+            diffuse_color              = ColorTint(embedded_color, submission.tint);
+            cactus::runtime::raylib::DrawMesh(model->meshes[i], material, xform);
+            diffuse_color = embedded_color;
         }
         ++render_debug_state_storage().drawn_models;
     }
@@ -1261,7 +1266,8 @@ void flush_text_2d_queue() noexcept {
         const auto fs      = static_cast<float>(sub.font_size);
         const Vector2 size = MeasureTextEx(font, sub.text.c_str(), fs, kSpacing);
         const Vector2 origin{.x = size.x * 0.5F, .y = size.y * 0.5F};
-        cactus::runtime::raylib::DrawTextPro(font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
+        cactus::runtime::raylib::DrawTextPro(
+            font, sub.text.c_str(), sub.position, origin, sub.rotation_deg, fs, kSpacing, sub.color);
     }
     cactus::runtime::raylib::EndMode2D();
 }
@@ -1273,7 +1279,8 @@ void flush_screen_label_queue() noexcept {
     const Font font          = GetFontDefault();
     constexpr float kSpacing = 1.0F;
     for (const auto& sub : screen_label_queue()) {
-        cactus::runtime::raylib::DrawTextEx(font, sub.text.c_str(), sub.position, static_cast<float>(sub.font_size), kSpacing, sub.color);
+        cactus::runtime::raylib::DrawTextEx(
+            font, sub.text.c_str(), sub.position, static_cast<float>(sub.font_size), kSpacing, sub.color);
     }
 }
 
@@ -1384,7 +1391,8 @@ void flush_sprite_queue() noexcept {
                             .y      = submission.position.y,
                             .width  = submission.size.x,
                             .height = submission.size.y};
-        cactus::runtime::raylib::DrawTexturePro(*texture, src, dst, Vector2{.x = 0.0F, .y = 0.0F}, 0.0F, submission.color);
+        cactus::runtime::raylib::DrawTexturePro(
+            *texture, src, dst, Vector2{.x = 0.0F, .y = 0.0F}, 0.0F, submission.color);
     }
     cactus::runtime::raylib::EndMode2D();
 }
@@ -1397,7 +1405,8 @@ void submit_model_impl(const Vector3 position,
                        const bool cast_shadow,
                        const bool animated,
                        const int clip,
-                       const float time) noexcept {
+                       const float time,
+                       const Color tint) noexcept {
     if (!visible) {
         return;
     }
@@ -1420,10 +1429,12 @@ void submit_model_impl(const Vector3 position,
         .scale            = scale,
         .model_runtime_id = resolved.runtime_id,
         .cast_shadow      = cast_shadow,
+        .tint             = tint,
         .clip             = clip,
         .time             = time,
         .animated         = animated,
     });
+    render_debug_state_storage().submitted_model_colors.push_back(tint);
     ++render_debug_state_storage().submitted_models;
     if (animated) {
         render_debug_state_storage().animated_model_submissions.push_back({.clip = clip, .time = time});
@@ -1478,6 +1489,7 @@ void begin_render_frame() noexcept {
     render_debug_state_storage().used_lit_mesh_shader   = false;
     render_debug_state_storage().drawn_sprite_layers.clear();
     render_debug_state_storage().submitted_mesh_colors.clear();
+    render_debug_state_storage().submitted_model_colors.clear();
     render_debug_state_storage().animated_model_submissions.clear();
 }
 
@@ -1601,8 +1613,9 @@ void submit_model(const Vector3 position,
                   const Vector3 scale,
                   const AssetHandle model,
                   const bool visible,
-                  const bool cast_shadow) noexcept {
-    submit_model_impl(position, rotation, scale, model, visible, cast_shadow, false, 0, 0.0F);
+                  const bool cast_shadow,
+                  const Color tint) noexcept {
+    submit_model_impl(position, rotation, scale, model, visible, cast_shadow, false, 0, 0.0F, tint);
 }
 
 void submit_model(const Vector3 position,
@@ -1612,8 +1625,9 @@ void submit_model(const Vector3 position,
                   const bool visible,
                   const bool cast_shadow,
                   const int clip,
-                  const float time) noexcept {
-    submit_model_impl(position, rotation, scale, model, visible, cast_shadow, true, clip, time);
+                  const float time,
+                  const Color tint) noexcept {
+    submit_model_impl(position, rotation, scale, model, visible, cast_shadow, true, clip, time, tint);
 }
 
 // Resolve a model handle, fill entry.path if needed, and trigger the lazy
@@ -1621,7 +1635,7 @@ void submit_model(const Vector3 position,
 // if the handle is invalid.
 struct ModelEntryAccess {
     ModelResourceEntry* entry;
-    Model*              loaded;
+    Model* loaded;
 };
 
 static ModelEntryAccess prepare_model_entry(const AssetHandle model) noexcept {
@@ -1638,49 +1652,61 @@ static ModelEntryAccess prepare_model_entry(const AssetHandle model) noexcept {
 
 int model_animation_count(const AssetHandle model) noexcept {
     auto [entry, loaded] = prepare_model_entry(model);
-    if (entry == nullptr) { return 0; }
+    if (entry == nullptr) {
+        return 0;
+    }
     ensure_model_animations(*entry);
     return entry->animation_count;
 }
 
 std::string model_animation_name(const AssetHandle model, const int clip) noexcept {
     auto [entry, loaded] = prepare_model_entry(model);
-    if (entry == nullptr) { return ""; }
+    if (entry == nullptr) {
+        return "";
+    }
     ensure_model_animations(*entry);
-    if (clip < 0 || clip >= entry->animation_count) { return ""; }
+    if (clip < 0 || clip >= entry->animation_count) {
+        return "";
+    }
     const auto& anim = entry->animations[clip];
     return std::string{anim.name, strnlen(anim.name, sizeof(anim.name))};
 }
 
 float model_animation_duration(const AssetHandle model, const int clip) noexcept {
     auto [entry, loaded] = prepare_model_entry(model);
-    if (entry == nullptr) { return 0.0F; }
+    if (entry == nullptr) {
+        return 0.0F;
+    }
     ensure_model_animations(*entry);
-    if (clip < 0 || clip >= entry->animation_count) { return 0.0F; }
+    if (clip < 0 || clip >= entry->animation_count) {
+        return 0.0F;
+    }
     return static_cast<float>(entry->animations[clip].keyframeCount) / kGltfKeyframesPerSecond;
 }
 
 Vector3 model_bounds_size(const AssetHandle model) noexcept {
     constexpr Vector3 kZeroExtents{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     auto [entry, loaded] = prepare_model_entry(model);
-    if (loaded == nullptr) { return kZeroExtents; }
+    if (loaded == nullptr) {
+        return kZeroExtents;
+    }
     const BoundingBox box = GetModelBoundingBox(*loaded);
     return Vector3{.x = box.max.x - box.min.x, .y = box.max.y - box.min.y, .z = box.max.z - box.min.z};
 }
 
 BoundingBox model_bounds_box(const AssetHandle model) noexcept {
-    constexpr BoundingBox kZeroBox{.min = {.x = 0.0F, .y = 0.0F, .z = 0.0F},
-                                   .max = {.x = 0.0F, .y = 0.0F, .z = 0.0F}};
+    constexpr BoundingBox kZeroBox{.min = {.x = 0.0F, .y = 0.0F, .z = 0.0F}, .max = {.x = 0.0F, .y = 0.0F, .z = 0.0F}};
     auto [entry, loaded] = prepare_model_entry(model);
-    if (loaded == nullptr) { return kZeroBox; }
+    if (loaded == nullptr) {
+        return kZeroBox;
+    }
     return GetModelBoundingBox(*loaded);
 }
 
 Vector3 model_bounds_center(const AssetHandle model) noexcept {
     const BoundingBox box = model_bounds_box(model);
-    return Vector3{.x = (box.min.x + box.max.x) * 0.5F,
-                   .y = (box.min.y + box.max.y) * 0.5F,
-                   .z = (box.min.z + box.max.z) * 0.5F};
+    return Vector3{
+        .x = (box.min.x + box.max.x) * 0.5F, .y = (box.min.y + box.max.y) * 0.5F, .z = (box.min.z + box.max.z) * 0.5F};
 }
 
 void submit_billboard(const Vector3 /*position*/,
@@ -1868,8 +1894,8 @@ template <std::size_t N>
             hi[axis] = std::max(hi[axis], proxy.center[axis]);
         }
     }
-    int best_axis      = 0;
-    float best_spread  = hi[0] - lo[0];
+    int best_axis     = 0;
+    float best_spread = hi[0] - lo[0];
     for (std::size_t axis = 1; axis < N; ++axis) {
         const float spread = hi[axis] - lo[axis];
         if (spread > best_spread) {
@@ -1914,7 +1940,7 @@ template <std::size_t N>
 
 template <std::size_t N>
 [[nodiscard]] std::vector<SapCandidatePair> sap_candidates_swept(const std::vector<SapInternalProxy<N>>& proxies,
-                                                                  int axis) {
+                                                                 int axis) {
     const auto axis_index = static_cast<std::size_t>(axis);
     std::vector<std::size_t> order(proxies.size());
     std::ranges::iota(order, std::size_t{0});
@@ -1952,13 +1978,13 @@ std::optional<std::size_t>& sap_small_domain_threshold_override() noexcept {
 
 template <std::size_t N>
 void sap_sync(const std::vector<SapInternalProxy<N>>& proxies,
-             std::size_t small_domain_threshold,
-             int& primary_axis,
-             std::vector<SapCandidatePair>& candidates) {
+              std::size_t small_domain_threshold,
+              int& primary_axis,
+              std::vector<SapCandidatePair>& candidates) {
     const auto effective_threshold = sap_small_domain_threshold_override().value_or(small_domain_threshold);
-    primary_axis = sap_select_primary_axis(proxies);
-    candidates   = proxies.size() < effective_threshold ? sap_candidates_brute_force(proxies)
-                                                         : sap_candidates_swept(proxies, primary_axis);
+    primary_axis                   = sap_select_primary_axis(proxies);
+    candidates                     = proxies.size() < effective_threshold ? sap_candidates_brute_force(proxies)
+                                                                          : sap_candidates_swept(proxies, primary_axis);
 }
 
 }  // namespace
@@ -1996,8 +2022,8 @@ void SapBroadPhase3D::sync(std::span<const Proxy3D> proxies) {
     std::vector<SapInternalProxy<3>> internal;
     internal.reserve(proxies.size());
     for (const auto& proxy : proxies) {
-        internal.push_back(SapInternalProxy<3>{.center = {proxy.center.x, proxy.center.y, proxy.center.z},
-                                               .radius  = proxy.radius});
+        internal.push_back(
+            SapInternalProxy<3>{.center = {proxy.center.x, proxy.center.y, proxy.center.z}, .radius = proxy.radius});
     }
     sap_sync(internal, small_domain_threshold_, primary_axis_, candidates_);
 }
@@ -2044,8 +2070,10 @@ void sap_execute_pair_tuples_impl(std::span<const Proxy> proxies,
     // exactly as the Cartesian pair-handler loop already includes (a, a)
     // among its N×N tuples (spatial-broadphase-runtime, dsl-pair-relations).
     for (std::size_t i = 0; i < proxies.size(); ++i) {
-        tuples.push_back(SapDirectedTuple{
-            .left_ordinal = proxies[i].ordinal, .right_ordinal = proxies[i].ordinal, .left_index = i, .right_index = i});
+        tuples.push_back(SapDirectedTuple{.left_ordinal  = proxies[i].ordinal,
+                                          .right_ordinal = proxies[i].ordinal,
+                                          .left_index    = i,
+                                          .right_index   = i});
     }
 
     std::ranges::sort(tuples, [](const SapDirectedTuple& lhs, const SapDirectedTuple& rhs) {
@@ -2146,12 +2174,9 @@ void draw_shape_rectangle(const Vector2 position,
         color);
 }
 
-void draw_shape_circle(const Vector2 position,
-                       const float diameter,
-                       const Vector2 origin,
-                       const Color color) noexcept {
-    cactus::runtime::raylib::DrawCircleV(Vector2{.x = position.x - origin.x, .y = position.y - origin.y},
-                                         diameter / 2.0F, color);
+void draw_shape_circle(const Vector2 position, const float diameter, const Vector2 origin, const Color color) noexcept {
+    cactus::runtime::raylib::DrawCircleV(
+        Vector2{.x = position.x - origin.x, .y = position.y - origin.y}, diameter / 2.0F, color);
 }
 
 Shader* ensure_render_pass_shader(RenderPassShaderState& state, const char* vertex_src, const char* fragment_src) {
@@ -2321,13 +2346,13 @@ PointerFrameTransitions compute_pointer_frame_transitions(entt::registry& regist
     }
 
     const entt::entity top = pointer_top_target(registry);
-    result.top              = top;
+    result.top             = top;
 
     if (top != hovered) {
         result.hover_changed = true;
         result.leave_target  = hovered;
         result.enter_target  = top;
-        hovered               = top;
+        hovered              = top;
     }
 
     const bool pressed_now  = cactus::runtime::raylib::IsMouseButtonPressed(kPointerPrimaryMouseButton);
@@ -2337,10 +2362,10 @@ PointerFrameTransitions compute_pointer_frame_transitions(entt::registry& regist
         // A miss (top == null) leaves the logical action unconsumed
         // (spec.md "Miss leaves gameplay input available").
         if (top != entt::entity{entt::null}) {
-            captured                       = top;
-            result.press_occurred          = true;
-            result.press_target            = top;
-            result.should_consume_primary  = true;
+            captured                      = top;
+            result.press_occurred         = true;
+            result.press_target           = top;
+            result.should_consume_primary = true;
         }
     } else if (captured != entt::entity{entt::null}) {
         // An active capture consumes every frame it's held, not only its
@@ -2353,7 +2378,7 @@ PointerFrameTransitions compute_pointer_frame_transitions(entt::registry& regist
         result.release_target         = captured;
         result.release_is_click       = (top == captured);
         result.should_consume_primary = true;
-        captured                       = entt::entity{entt::null};
+        captured                      = entt::entity{entt::null};
     }
 
     return result;
@@ -2593,8 +2618,11 @@ void render_ui_primitive(const UiPrimitive& primitive) noexcept {
                       bounds,
                       primitive.text_align);
     } else if (primitive.has_button) {
-        draw_ui_label(
-            primitive.button_label, 16, tint_with_opacity(primitive.button_text_color, opacity), bounds, kTextAlignCenter);
+        draw_ui_label(primitive.button_label,
+                      16,
+                      tint_with_opacity(primitive.button_text_color, opacity),
+                      bounds,
+                      kTextAlignCenter);
     }
 
     if (primitive.has_panel && primitive.panel_border_width > 0.0F && primitive.panel_border_color.a > 0) {
@@ -2607,10 +2635,9 @@ void render_ui_primitive(const UiPrimitive& primitive) noexcept {
 }
 
 void sort_window_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept {
-    std::ranges::stable_sort(
-        candidates, [](const PointerCandidate& left, const PointerCandidate& right) noexcept {
-            return left.draw_order > right.draw_order;
-        });
+    std::ranges::stable_sort(candidates, [](const PointerCandidate& left, const PointerCandidate& right) noexcept {
+        return left.draw_order > right.draw_order;
+    });
 }
 
 void sort_flat_world_pointer_candidates(std::vector<PointerCandidate>& candidates) noexcept {
@@ -2703,8 +2730,7 @@ Vector2 editor_mouse_delta_2d() noexcept {
 }
 
 Vector2 screen_delta_to_world_2d(Vector2 delta) noexcept {
-    return editor_screen_to_world_2d(delta) -
-           editor_screen_to_world_2d(Vector2{.x = 0.0F, .y = 0.0F});
+    return editor_screen_to_world_2d(delta) - editor_screen_to_world_2d(Vector2{.x = 0.0F, .y = 0.0F});
 }
 
 std::optional<Vector3> editor_ray_plane_intersect(const Ray ray,
@@ -2715,8 +2741,7 @@ std::optional<Vector3> editor_ray_plane_intersect(const Ray ray,
     if (std::abs(denominator) < kParallelEpsilon) {
         return std::nullopt;
     }
-    const float t =
-        Vector3DotProduct(Vector3Subtract(plane_origin, ray.position), plane_normal) / denominator;
+    const float t = Vector3DotProduct(Vector3Subtract(plane_origin, ray.position), plane_normal) / denominator;
     if (t < 0.0F) {
         return std::nullopt;
     }
@@ -2731,12 +2756,11 @@ Vector3 editor_plane_project_3d(Vector2 screen, Vector3 plane_origin, Vector3 pl
 Vector3 editor_mouse_delta_3d() noexcept {
     constexpr Vector3 kGroundOrigin{.x = 0.0F, .y = 0.0F, .z = 0.0F};
     constexpr Vector3 kGroundNormal{.x = 0.0F, .y = 1.0F, .z = 0.0F};
-    const Camera3D cam    = get_active_camera_3d();
-    const Vector2 cursor  = cactus::runtime::raylib::GetMousePosition();
-    const Vector2 delta   = cactus::runtime::raylib::GetMouseDelta();
+    const Camera3D cam   = get_active_camera_3d();
+    const Vector2 cursor = cactus::runtime::raylib::GetMousePosition();
+    const Vector2 delta  = cactus::runtime::raylib::GetMouseDelta();
     const Vector2 previous{.x = cursor.x - delta.x, .y = cursor.y - delta.y};
-    const auto current_hit =
-        editor_ray_plane_intersect(GetScreenToWorldRay(cursor, cam), kGroundOrigin, kGroundNormal);
+    const auto current_hit = editor_ray_plane_intersect(GetScreenToWorldRay(cursor, cam), kGroundOrigin, kGroundNormal);
     const auto previous_hit =
         editor_ray_plane_intersect(GetScreenToWorldRay(previous, cam), kGroundOrigin, kGroundNormal);
     if (!current_hit || !previous_hit) {
@@ -2751,8 +2775,7 @@ Vector3 screen_delta_on_plane_3d(const Vector2 screen,
                                  const Vector3 plane_normal) noexcept {
     const Camera3D cam = get_active_camera_3d();
     const Vector2 previous{.x = screen.x - delta.x, .y = screen.y - delta.y};
-    const auto current_hit =
-        editor_ray_plane_intersect(GetScreenToWorldRay(screen, cam), plane_origin, plane_normal);
+    const auto current_hit = editor_ray_plane_intersect(GetScreenToWorldRay(screen, cam), plane_origin, plane_normal);
     const auto previous_hit =
         editor_ray_plane_intersect(GetScreenToWorldRay(previous, cam), plane_origin, plane_normal);
     if (!current_hit || !previous_hit) {
@@ -2856,6 +2879,13 @@ float editor_wheel_delta() noexcept {
 }
 Vector2 editor_mouse_delta_screen() noexcept {
     return cactus::runtime::raylib::GetMouseDelta();
+}
+void set_cursor_captured(const bool captured) noexcept {
+    if (captured) {
+        cactus::runtime::raylib::DisableCursor();
+        return;
+    }
+    cactus::runtime::raylib::EnableCursor();
 }
 Vector2 editor_entity_position_2d(entt::registry& registry, entt::entity entity_id) noexcept {
     if (entity_position_2d_impl_storage()) {

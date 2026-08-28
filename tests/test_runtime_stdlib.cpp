@@ -29,11 +29,12 @@ constexpr auto kConstexprVec2Lerp =
     stdlib::math::vec2::lerp(Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 20.0F}, 0.25F);
 constexpr auto kConstexprVec3Cross =
     stdlib::math::vec3::cross(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
-constexpr auto kConstexprVec2Clamp =
-    stdlib::math::vec2::clamp(Vector2{.x = 15.0F, .y = -5.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F});
-constexpr auto kConstexprVec3Clamp = stdlib::math::vec3::clamp(Vector3{.x = 15.0F, .y = -5.0F, .z = 2.0F},
-                                                                Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
-                                                                Vector3{.x = 10.0F, .y = 10.0F, .z = 10.0F});
+constexpr auto kConstexprVec2Clamp    = stdlib::math::vec2::clamp(Vector2{.x = 15.0F, .y = -5.0F},
+                                                                  Vector2{.x = 0.0F, .y = 0.0F},
+                                                                  Vector2{.x = 10.0F, .y = 10.0F});
+constexpr auto kConstexprVec3Clamp    = stdlib::math::vec3::clamp(Vector3{.x = 15.0F, .y = -5.0F, .z = 2.0F},
+                                                                  Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                                  Vector3{.x = 10.0F, .y = 10.0F, .z = 10.0F});
 constexpr auto kConstexprQuatIdentity = stdlib::math::quat::identity();
 constexpr auto kConstexprQuatMultiply = stdlib::math::quat::multiply(kConstexprQuatIdentity, kConstexprQuatIdentity);
 
@@ -48,15 +49,16 @@ static_assert(kConstexprQuatMultiply.w == 1.0F);
 static_assert(noexcept(stdlib::math::lerp(0.0F, 1.0F, 0.5F)));
 static_assert(noexcept(stdlib::math::clamp(0.0F, 0.0F, 1.0F)));
 static_assert(noexcept(stdlib::math::vec2::dot(Vector2{.x = 1.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 1.0F})));
-static_assert(noexcept(stdlib::math::vec2::clamp(Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 0.0F},
-                                                  Vector2{.x = 1.0F, .y = 1.0F})));
+static_assert(noexcept(stdlib::math::vec2::clamp(Vector2{.x = 0.0F, .y = 0.0F},
+                                                 Vector2{.x = 0.0F, .y = 0.0F},
+                                                 Vector2{.x = 1.0F, .y = 1.0F})));
 static_assert(noexcept(stdlib::math::vec3::cross(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
                                                  Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F})));
 static_assert(noexcept(stdlib::math::vec3::reflect(Vector3{.x = 1.0F, .y = -1.0F, .z = 0.0F},
                                                    Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F})));
 static_assert(noexcept(stdlib::math::vec3::clamp(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
-                                                  Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
-                                                  Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F})));
+                                                 Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                 Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F})));
 static_assert(noexcept(stdlib::math::quat::identity()));
 static_assert(noexcept(stdlib::math::quat::multiply(kConstexprQuatIdentity, kConstexprQuatIdentity)));
 
@@ -99,8 +101,8 @@ TEST_CASE("Runtime stdlib: scalar and vector math helpers behave correctly", "[r
     CHECK(lerp2.y == Catch::Approx(5.0F));
     CHECK(stdlib::math::vec2::distance(Vector2{1.0F, 2.0F}, Vector2{4.0F, 6.0F}) == Catch::Approx(5.0F));
     CHECK(stdlib::math::vec2::angle(Vector2{0.0F, 1.0F}) == Catch::Approx(1.5707963F));
-    const auto clamped2 =
-        stdlib::math::vec2::clamp(Vector2{.x = 15.0F, .y = -5.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F});
+    const auto clamped2 = stdlib::math::vec2::clamp(
+        Vector2{.x = 15.0F, .y = -5.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F});
     CHECK(clamped2.x == Catch::Approx(10.0F));
     CHECK(clamped2.y == Catch::Approx(0.0F));
     const auto rotated2 = stdlib::math::vec2::rotate(Vector2{.x = 1.0F, .y = 0.0F}, std::numbers::pi_v<float> / 2.0F);
@@ -123,18 +125,21 @@ TEST_CASE("Runtime stdlib: scalar and vector math helpers behave correctly", "[r
                                                        Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
     CHECK(reflected.x == Catch::Approx(1.0F));
     CHECK(reflected.y == Catch::Approx(1.0F));
-    const auto clamped3 = stdlib::math::vec3::clamp(
-        Vector3{.x = 15.0F, .y = -5.0F, .z = 2.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 10.0F, .y = 10.0F, .z = 10.0F});
+    const auto clamped3 = stdlib::math::vec3::clamp(Vector3{.x = 15.0F, .y = -5.0F, .z = 2.0F},
+                                                    Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                    Vector3{.x = 10.0F, .y = 10.0F, .z = 10.0F});
     CHECK(clamped3.x == Catch::Approx(10.0F));
     CHECK(clamped3.y == Catch::Approx(0.0F));
     CHECK(clamped3.z == Catch::Approx(2.0F));
-    const auto rotated3 = stdlib::math::vec3::rotate(
-        Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 1.0F}, std::numbers::pi_v<float> / 2.0F);
+    const auto rotated3 = stdlib::math::vec3::rotate(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
+                                                     Vector3{.x = 0.0F, .y = 0.0F, .z = 1.0F},
+                                                     std::numbers::pi_v<float> / 2.0F);
     CHECK(rotated3.x == Catch::Approx(0.0F).margin(1e-5));
     CHECK(rotated3.y == Catch::Approx(1.0F));
     CHECK(rotated3.z == Catch::Approx(0.0F).margin(1e-5));
-    const auto rotated3_nonunit_axis = stdlib::math::vec3::rotate(
-        Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, Vector3{.x = 0.0F, .y = 0.0F, .z = 5.0F}, std::numbers::pi_v<float> / 2.0F);
+    const auto rotated3_nonunit_axis = stdlib::math::vec3::rotate(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
+                                                                  Vector3{.x = 0.0F, .y = 0.0F, .z = 5.0F},
+                                                                  std::numbers::pi_v<float> / 2.0F);
     CHECK(rotated3_nonunit_axis.x == Catch::Approx(rotated3.x).margin(1e-5));
     CHECK(rotated3_nonunit_axis.y == Catch::Approx(rotated3.y));
     CHECK(rotated3_nonunit_axis.z == Catch::Approx(rotated3.z).margin(1e-5));
@@ -154,7 +159,8 @@ TEST_CASE("Runtime stdlib: global-namespace vec2/vec3 splat constructors match c
     CHECK((splat3.x == vec3(4.0F, 4.0F, 4.0F).x && splat3.z == vec3(4.0F, 4.0F, 4.0F).z));
 }
 
-TEST_CASE("Runtime stdlib: global-namespace vec2/vec3 component constructors", "[runtime][stdlib][vector-expressions]") {
+TEST_CASE("Runtime stdlib: global-namespace vec2/vec3 component constructors",
+          "[runtime][stdlib][vector-expressions]") {
     const auto v2 = vec2(3.0F, 4.0F);
     CHECK(v2.x == Catch::Approx(3.0F));
     CHECK(v2.y == Catch::Approx(4.0F));
@@ -353,13 +359,14 @@ TEST_CASE("Runtime stdlib: quaternion total-behavior wrappers normalize and hand
     SECTION("slerp normalizes non-unit inputs and takes the shortest path") {
         const Quat non_unit{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 2.0F};
         const auto result = stdlib::math::quat::slerp(non_unit, non_unit, 0.5F);
-        const float len_sq = (result.x * result.x) + (result.y * result.y) + (result.z * result.z) + (result.w * result.w);
+        const float len_sq =
+            (result.x * result.x) + (result.y * result.y) + (result.z * result.z) + (result.w * result.w);
         CHECK(len_sq == Catch::Approx(1.0F));
 
         const Quat q{.x = 0.0F, .y = 0.0F, .z = 0.7071068F, .w = 0.7071068F};
         const Quat negated_q{.x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w};
         const auto shortest = stdlib::math::quat::slerp(identity, negated_q, 0.5F);
-        const auto direct    = stdlib::math::quat::slerp(identity, q, 0.5F);
+        const auto direct   = stdlib::math::quat::slerp(identity, q, 0.5F);
         CHECK(shortest.x == Catch::Approx(direct.x));
         CHECK(shortest.y == Catch::Approx(direct.y));
         CHECK(shortest.z == Catch::Approx(direct.z));
@@ -433,14 +440,14 @@ TEST_CASE("Runtime stdlib: quaternion new composition/comparison functions", "[r
     }
 
     SECTION("compose applies inner first, outer second, and normalizes the result") {
-        const auto outer =
-            stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, std::numbers::pi_v<float> / 2.0F);
-        const auto inner =
-            stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, std::numbers::pi_v<float> / 4.0F);
+        const auto outer    = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F},
+                                                                  std::numbers::pi_v<float> / 2.0F);
+        const auto inner    = stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
+                                                                  std::numbers::pi_v<float> / 4.0F);
         const auto composed = stdlib::math::quat::compose(outer, inner);
 
-        const float len_sq =
-            (composed.x * composed.x) + (composed.y * composed.y) + (composed.z * composed.z) + (composed.w * composed.w);
+        const float len_sq = (composed.x * composed.x) + (composed.y * composed.y) + (composed.z * composed.z) +
+                             (composed.w * composed.w);
         CHECK(len_sq == Catch::Approx(1.0F));
 
         const Vector3 v{.x = 1.0F, .y = 0.5F, .z = -0.25F};
@@ -452,28 +459,27 @@ TEST_CASE("Runtime stdlib: quaternion new composition/comparison functions", "[r
     }
 
     SECTION("rotate_local and rotate_world delegate to compose with swapped argument order") {
-        const auto current =
-            stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F}, std::numbers::pi_v<float> / 3.0F);
-        const auto delta =
-            stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F}, std::numbers::pi_v<float> / 6.0F);
+        const auto current = stdlib::math::quat::from_axis_angle(Vector3{.x = 0.0F, .y = 1.0F, .z = 0.0F},
+                                                                 std::numbers::pi_v<float> / 3.0F);
+        const auto delta   = stdlib::math::quat::from_axis_angle(Vector3{.x = 1.0F, .y = 0.0F, .z = 0.0F},
+                                                                 std::numbers::pi_v<float> / 6.0F);
 
-        const auto local  = stdlib::math::quat::rotate_local(current, delta);
+        const auto local          = stdlib::math::quat::rotate_local(current, delta);
         const auto expected_local = stdlib::math::quat::compose(current, delta);
         CHECK(local.x == Catch::Approx(expected_local.x));
         CHECK(local.y == Catch::Approx(expected_local.y));
         CHECK(local.z == Catch::Approx(expected_local.z));
         CHECK(local.w == Catch::Approx(expected_local.w));
 
-        const auto world = stdlib::math::quat::rotate_world(current, delta);
+        const auto world          = stdlib::math::quat::rotate_world(current, delta);
         const auto expected_world = stdlib::math::quat::compose(delta, current);
         CHECK(world.x == Catch::Approx(expected_world.x));
         CHECK(world.y == Catch::Approx(expected_world.y));
         CHECK(world.z == Catch::Approx(expected_world.z));
         CHECK(world.w == Catch::Approx(expected_world.w));
 
-        const bool observably_different =
-            (local.x != Catch::Approx(world.x)) || (local.y != Catch::Approx(world.y)) ||
-            (local.z != Catch::Approx(world.z)) || (local.w != Catch::Approx(world.w));
+        const bool observably_different = (local.x != Catch::Approx(world.x)) || (local.y != Catch::Approx(world.y)) ||
+                                          (local.z != Catch::Approx(world.z)) || (local.w != Catch::Approx(world.w));
         CHECK(observably_different);
     }
 
@@ -495,9 +501,12 @@ TEST_CASE("Runtime stdlib: Standard UI image fit geometry computes Stretch/Conta
     constexpr int kCover   = 2;
 
     // Stretch: whole frame maps onto the whole destination, no cropping.
-    const auto stretched = entt_backend::compute_image_draw_rects(
-        kStretch, Vector2{.x = 10.0F, .y = 20.0F}, Vector2{.x = 50.0F, .y = 25.0F}, Vector2{.x = 100.0F, .y = 50.0F},
-        /*frame_index=*/0, /*frame_count=*/1);
+    const auto stretched = entt_backend::compute_image_draw_rects(kStretch,
+                                                                  Vector2{.x = 10.0F, .y = 20.0F},
+                                                                  Vector2{.x = 50.0F, .y = 25.0F},
+                                                                  Vector2{.x = 100.0F, .y = 50.0F},
+                                                                  /*frame_index=*/0,
+                                                                  /*frame_count=*/1);
     CHECK(stretched.source.x == Catch::Approx(0.0F));
     CHECK(stretched.source.width == Catch::Approx(100.0F));
     CHECK(stretched.dest.x == Catch::Approx(10.0F));
@@ -506,8 +515,12 @@ TEST_CASE("Runtime stdlib: Standard UI image fit geometry computes Stretch/Conta
 
     // Contain: a 100x50 (2:1) image inside a 40x40 (1:1) box is width-limited
     // (scale 0.4), letterboxed and centered on the taller axis.
-    const auto contained = entt_backend::compute_image_draw_rects(
-        kContain, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 40.0F, .y = 40.0F}, Vector2{.x = 100.0F, .y = 50.0F}, 0, 1);
+    const auto contained = entt_backend::compute_image_draw_rects(kContain,
+                                                                  Vector2{.x = 0.0F, .y = 0.0F},
+                                                                  Vector2{.x = 40.0F, .y = 40.0F},
+                                                                  Vector2{.x = 100.0F, .y = 50.0F},
+                                                                  0,
+                                                                  1);
     CHECK(contained.source.width == Catch::Approx(100.0F));
     CHECK(contained.source.height == Catch::Approx(50.0F));
     CHECK(contained.dest.width == Catch::Approx(40.0F));
@@ -528,17 +541,23 @@ TEST_CASE("Runtime stdlib: Standard UI image fit geometry computes Stretch/Conta
 
     // Horizontal-strip frame slicing: a 400x100 4-frame strip's frame 2 (0-based)
     // occupies x in [200, 300), independent of fit mode.
-    const auto frame2 = entt_backend::compute_image_draw_rects(
-        kStretch, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 100.0F, .y = 100.0F}, Vector2{.x = 400.0F, .y = 100.0F},
-        /*frame_index=*/2, /*frame_count=*/4);
+    const auto frame2 = entt_backend::compute_image_draw_rects(kStretch,
+                                                               Vector2{.x = 0.0F, .y = 0.0F},
+                                                               Vector2{.x = 100.0F, .y = 100.0F},
+                                                               Vector2{.x = 400.0F, .y = 100.0F},
+                                                               /*frame_index=*/2,
+                                                               /*frame_count=*/4);
     CHECK(frame2.source.x == Catch::Approx(200.0F));
     CHECK(frame2.source.width == Catch::Approx(100.0F));
 
     // A negative/out-of-range frame index wraps modulo frame_count rather than
     // producing a negative or out-of-bounds source rect.
-    const auto wrapped = entt_backend::compute_image_draw_rects(
-        kStretch, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 100.0F, .y = 100.0F}, Vector2{.x = 400.0F, .y = 100.0F},
-        /*frame_index=*/-1, /*frame_count=*/4);
+    const auto wrapped = entt_backend::compute_image_draw_rects(kStretch,
+                                                                Vector2{.x = 0.0F, .y = 0.0F},
+                                                                Vector2{.x = 100.0F, .y = 100.0F},
+                                                                Vector2{.x = 400.0F, .y = 100.0F},
+                                                                /*frame_index=*/-1,
+                                                                /*frame_count=*/4);
     CHECK(wrapped.source.x == Catch::Approx(300.0F));  // frame 3 of 4
 }
 
@@ -593,17 +612,17 @@ TEST_CASE("Runtime stdlib: pointer target resolution respects front-to-back bloc
     // Disabled control prevents click-through: a disabled blocking candidate
     // stops evaluation, so neither it nor anything behind it is selected.
     CHECK(resolve_pointer_target({PointerCandidate{.entity = entt::entity{1}, .enabled = false, .blocks_lower = true},
-                                  PointerCandidate{.entity = entt::entity{2}, .enabled = true}}) == entt::entity{entt::null});
+                                  PointerCandidate{.entity = entt::entity{2}, .enabled = true}}) ==
+          entt::entity{entt::null});
 
     // Nonblocking overlay permits the lower target.
-    CHECK(
-        resolve_pointer_target({PointerCandidate{.entity = entt::entity{1}, .enabled = false, .blocks_lower = false},
-                                PointerCandidate{.entity = entt::entity{2}, .enabled = true}}) == entt::entity{2});
+    CHECK(resolve_pointer_target({PointerCandidate{.entity = entt::entity{1}, .enabled = false, .blocks_lower = false},
+                                  PointerCandidate{.entity = entt::entity{2}, .enabled = true}}) == entt::entity{2});
 
     // No candidates, or every candidate declines and none block: no target.
     CHECK(resolve_pointer_target({}) == entt::entity{entt::null});
-    CHECK(resolve_pointer_target(
-              {PointerCandidate{.entity = entt::entity{1}, .enabled = false, .blocks_lower = false}}) == entt::entity{entt::null});
+    CHECK(resolve_pointer_target({PointerCandidate{
+              .entity = entt::entity{1}, .enabled = false, .blocks_lower = false}}) == entt::entity{entt::null});
 }
 
 TEST_CASE("Runtime stdlib: pointer hit-test geometry covers rect/box/circle point containment",
@@ -619,7 +638,8 @@ TEST_CASE("Runtime stdlib: pointer hit-test geometry covers rect/box/circle poin
     CHECK(
         point_in_rect(Vector2{.x = 10.0F, .y = 10.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 10.0F, .y = 10.0F}));
 
-    CHECK(point_in_flat_box(Vector2{.x = 1.0F, .y = 1.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}));
+    CHECK(
+        point_in_flat_box(Vector2{.x = 1.0F, .y = 1.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}));
     CHECK_FALSE(
         point_in_flat_box(Vector2{.x = 3.0F, .y = 0.0F}, Vector2{.x = 0.0F, .y = 0.0F}, Vector2{.x = 4.0F, .y = 4.0F}));
 
@@ -1004,6 +1024,37 @@ TEST_CASE("Runtime stdlib: EnTT entities sharing a model asset submit independen
     // The per-frame pose record clears with the other render queues.
     cactus::runtime::entt_backend::begin_render_frame();
     CHECK(debug.animated_model_submissions.empty());
+    cactus::runtime::entt_backend::end_render_frame();
+    registry.clear();
+}
+
+TEST_CASE("Runtime stdlib: EnTT static and animated model submissions retain independent RGBA tints",
+          "[runtime][assets][entt][stdlib-models]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    registry.register_model(86U, "art/robot.glb", 86);
+
+    const auto identity      = stdlib::math::quat::identity();
+    const auto origin        = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    const auto unit          = Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
+    const auto static_tint   = Color{.r = 128, .g = 64, .b = 32, .a = 128};
+    const auto animated_tint = Color{.r = 32, .g = 160, .b = 255, .a = 64};
+
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 86U, true, true, static_tint);
+    cactus::runtime::entt_backend::submit_model(origin, identity, unit, 86U, true, true, 2, 0.5F, animated_tint);
+
+    const auto& debug = cactus::runtime::entt_backend::render_debug_state();
+    REQUIRE(debug.submitted_model_colors.size() == 2);
+    CHECK(debug.submitted_model_colors[0].r == static_tint.r);
+    CHECK(debug.submitted_model_colors[0].g == static_tint.g);
+    CHECK(debug.submitted_model_colors[0].b == static_tint.b);
+    CHECK(debug.submitted_model_colors[0].a == static_tint.a);
+    CHECK(debug.submitted_model_colors[1].r == animated_tint.r);
+    CHECK(debug.submitted_model_colors[1].g == animated_tint.g);
+    CHECK(debug.submitted_model_colors[1].b == animated_tint.b);
+    CHECK(debug.submitted_model_colors[1].a == animated_tint.a);
     cactus::runtime::entt_backend::end_render_frame();
     registry.clear();
 }
@@ -1552,13 +1603,12 @@ struct HierarchyWorldTransform {
 };
 }  // namespace
 
-TEST_CASE(
-    "Runtime stdlib: propagate_hierarchy composes quaternion rotation through a multi-level volume parent chain",
-    "[runtime][backend][hierarchy][quat]") {
+TEST_CASE("Runtime stdlib: propagate_hierarchy composes quaternion rotation through a multi-level volume parent chain",
+          "[runtime][backend][hierarchy][quat]") {
     entt::registry registry;
 
     const auto root       = registry.create();
-    const auto child       = registry.create();
+    const auto child      = registry.create();
     const auto grandchild = registry.create();
 
     registry.emplace<HierarchyLocalTransform>(
@@ -1601,30 +1651,30 @@ TEST_CASE(
     };
     const std::function<void(entt::entity)> copy_local = [&](entt::entity e) {
         const auto& local = registry.get<HierarchyLocalTransform>(e);
-        auto& world        = registry.get<HierarchyWorldTransform>(e);
-        world.position      = local.position;
-        world.rotation      = local.rotation;
-        world.scale         = local.scale;
+        auto& world       = registry.get<HierarchyWorldTransform>(e);
+        world.position    = local.position;
+        world.rotation    = local.rotation;
+        world.scale       = local.scale;
     };
     // Mirrors system_emitter.cpp's volume ACCUMULATE_FROM_PARENT lambda exactly, including the
     // quat::compose call this change migrated off raw quat::multiply.
-    const std::function<void(entt::entity, entt::entity)> accumulate_from_parent =
-        [&](entt::entity parent_entity, entt::entity entity) {
-            const auto& local        = registry.get<HierarchyLocalTransform>(entity);
-            auto& world               = registry.get<HierarchyWorldTransform>(entity);
-            const auto& parent_world = registry.get<HierarchyWorldTransform>(parent_entity);
-            world.position = Vector3{
-                .x = parent_world.position.x + local.position.x,
-                .y = parent_world.position.y + local.position.y,
-                .z = parent_world.position.z + local.position.z,
-            };
-            world.rotation = stdlib::math::quat::compose(parent_world.rotation, local.rotation);
-            world.scale    = Vector3{
-                   .x = parent_world.scale.x * local.scale.x,
-                   .y = parent_world.scale.y * local.scale.y,
-                   .z = parent_world.scale.z * local.scale.z,
-            };
+    const std::function<void(entt::entity, entt::entity)> accumulate_from_parent = [&](entt::entity parent_entity,
+                                                                                       entt::entity entity) {
+        const auto& local        = registry.get<HierarchyLocalTransform>(entity);
+        auto& world              = registry.get<HierarchyWorldTransform>(entity);
+        const auto& parent_world = registry.get<HierarchyWorldTransform>(parent_entity);
+        world.position           = Vector3{
+            .x = parent_world.position.x + local.position.x,
+            .y = parent_world.position.y + local.position.y,
+            .z = parent_world.position.z + local.position.z,
         };
+        world.rotation = stdlib::math::quat::compose(parent_world.rotation, local.rotation);
+        world.scale    = Vector3{
+            .x = parent_world.scale.x * local.scale.x,
+            .y = parent_world.scale.y * local.scale.y,
+            .z = parent_world.scale.z * local.scale.z,
+        };
+    };
 
     entt_backend::propagate_hierarchy(registry, has_local_world, get_parent, copy_local, accumulate_from_parent);
 
@@ -1635,8 +1685,8 @@ TEST_CASE(
 
     const auto expected_child_world = stdlib::math::quat::compose(
         registry.get<HierarchyLocalTransform>(root).rotation, registry.get<HierarchyLocalTransform>(child).rotation);
-    const auto expected_grandchild_world = stdlib::math::quat::compose(
-        expected_child_world, registry.get<HierarchyLocalTransform>(grandchild).rotation);
+    const auto expected_grandchild_world =
+        stdlib::math::quat::compose(expected_child_world, registry.get<HierarchyLocalTransform>(grandchild).rotation);
     const auto actual_grandchild_world = registry.get<HierarchyWorldTransform>(grandchild).rotation;
     CHECK(actual_grandchild_world.x == Catch::Approx(expected_grandchild_world.x));
     CHECK(actual_grandchild_world.y == Catch::Approx(expected_grandchild_world.y));

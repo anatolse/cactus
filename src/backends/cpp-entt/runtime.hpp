@@ -25,6 +25,7 @@ namespace cactus::runtime::entt_backend {
 int cactus_input_button_key(std::uint8_t button) noexcept;
 int cactus_input_button_mouse(std::uint8_t button) noexcept;
 float cactus_input_axis_value(std::uint8_t action) noexcept;
+void set_cursor_captured(bool captured) noexcept;
 
 // ── Frame-local consumed input (editor input override) ────────────────────────
 // Consumption is keyed by physical raylib key / mouse button code, not by
@@ -110,6 +111,7 @@ struct RenderDebugState {
     // drawn_sprite_layers as the observable-without-a-window channel for
     // std.render.meshes.Renderer's color tint.
     std::vector<Color> submitted_mesh_colors;
+    std::vector<Color> submitted_model_colors;
     // (clip, time) of each animated model submission this frame, in submission
     // order — the per-entity poses observable without a GPU.
     std::vector<AnimatedModelSubmission> animated_model_submissions;
@@ -165,7 +167,8 @@ void submit_model(Vector3 position,
                   Vector3 scale,
                   AssetHandle model,
                   bool visible,
-                  bool cast_shadow) noexcept;
+                  bool cast_shadow,
+                  Color tint = WHITE) noexcept;
 // Animated variant: carries the entity's ModelAnimator (clip, time) so the
 // flush re-poses the shared model per submission (dsl-model-animation).
 void submit_model(Vector3 position,
@@ -175,7 +178,8 @@ void submit_model(Vector3 position,
                   bool visible,
                   bool cast_shadow,
                   int clip,
-                  float time) noexcept;
+                  float time,
+                  Color tint = WHITE) noexcept;
 
 // ── Animation introspection extern func bridges (std.render.models) ───────────
 
@@ -334,11 +338,11 @@ struct ImageDrawRects {
 /// without a raylib window; `fit` is a std_ui__ImageFit ordinal (Stretch=0,
 /// Contain=1, Cover=2, matching UiPrimitive::image_fit).
 [[nodiscard]] ImageDrawRects compute_image_draw_rects(int fit,
-                                                       Vector2 dest_position,
-                                                       Vector2 dest_size,
-                                                       Vector2 texture_size,
-                                                       int frame_index,
-                                                       int frame_count) noexcept;
+                                                      Vector2 dest_position,
+                                                      Vector2 dest_size,
+                                                      Vector2 texture_size,
+                                                      int frame_index,
+                                                      int frame_count) noexcept;
 
 // ── Generic pointer picking (std.pointer) ──────────────────────────────────
 // Design decision #8: one merged candidate lifecycle spans window UI,
@@ -651,7 +655,7 @@ void queue_structural_command(ActivationRuntime<Occurrence>& activation,
 template <typename Occurrence, typename ConcreteEvent>
 void emit_event(ActivationRuntime<Occurrence>& activation, ConcreteEvent occurrence) {
     const auto next_depth = activation.current_cascade_depth + 1;
-    auto queued            = QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .cascade_depth = next_depth};
+    auto queued           = QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .cascade_depth = next_depth};
     if (next_depth > kMaxEventCascadeDepth) {
         queued.cascade_depth = 0;
         activation.deferred_events.push_back(std::move(queued));
@@ -666,8 +670,8 @@ void emit_event(ActivationRuntime<Occurrence>& activation, ConcreteEvent occurre
 template <typename Occurrence, typename ConcreteEvent>
 void emit_targeted_event(ActivationRuntime<Occurrence>& activation, ConcreteEvent occurrence, entt::entity target) {
     const auto next_depth = activation.current_cascade_depth + 1;
-    auto queued            = QueuedEvent<Occurrence>{
-        .occurrence = std::move(occurrence), .cascade_depth = next_depth, .target = target};
+    auto queued =
+        QueuedEvent<Occurrence>{.occurrence = std::move(occurrence), .cascade_depth = next_depth, .target = target};
     if (next_depth > kMaxEventCascadeDepth) {
         queued.cascade_depth = 0;
         activation.deferred_events.push_back(std::move(queued));

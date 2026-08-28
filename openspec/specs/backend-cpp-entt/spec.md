@@ -783,6 +783,25 @@ The cpp-entt backend SHALL allocate a single plane mesh (XY-oriented, 1×1 world
 ### Requirement: cpp-entt backend lowers world query expressions to registry queries
 The cpp-entt backend SHALL compile recognized `std.query` expressions to direct `entt::registry` queries rather than reflective or name-based lookup logic. The backend SHALL distinguish these from ordinary extern-function calls using semantic metadata that marks the call as a recognized query expression and carries the parsed trait filters.
 
+### Requirement: cpp-entt implements std.input cursor capture
+The cpp-entt backend SHALL lower the resolved std.input.set_cursor_captured function to a concrete Raylib-backed runtime operation. A true value SHALL disable and capture the cursor for relative mouse motion; a false value SHALL enable and release it. Lowering SHALL use resolved canonical function identity rather than source alias spelling.
+
+#### Scenario: True captures the Raylib cursor
+- **WHEN** a cpp-entt project calls std.input.set_cursor_captured(true)
+- **THEN** the runtime requests Raylib's captured cursor state
+
+#### Scenario: False releases the Raylib cursor
+- **WHEN** a cpp-entt project calls std.input.set_cursor_captured(false)
+- **THEN** the runtime restores Raylib's ordinary cursor state
+
+#### Scenario: Alias spelling uses the same binding
+- **WHEN** one program calls inp.set_cursor_captured after alias-importing std.input and another uses the canonical qualifier
+- **THEN** both calls lower to the same cpp-entt runtime behavior
+
+#### Scenario: Fake Raylib exposes capture transitions
+- **WHEN** a headless test calls the generated capture and release paths
+- **THEN** fake Raylib records the resulting cursor-captured state and transition calls
+
 #### Scenario: Exists query compiles to registry/view check
 - **WHEN** authored code uses `query.exists[Boss]()`
 - **THEN** the backend generates code that checks whether any live entity currently satisfies the `Boss` filter

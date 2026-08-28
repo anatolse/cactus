@@ -405,6 +405,7 @@ set(STDLIB_EXTERN_ENTT_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/stdlib-ex
 set(MESH_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/mesh-renderer.generated.cpp")
 set(MODEL_RENDERER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-renderer.generated.cpp")
 set(MODEL_ANIMATION_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/model-animation.generated.cpp")
+set(FIRST_PERSON_ARENA_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/first-person-arena.generated.cpp")
 set(PLATFORMER_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/platformer.generated.cpp")
 set(SHOOTER_SLICE_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/shooter-slice.generated.cpp")
 set(CACTUS_SHOP_GENERATED_CPP "${CACTUS_GENERATED_EXAMPLES_DIR}/cactus-shop.generated.cpp")
@@ -498,6 +499,12 @@ cactus_add_example(example_model_animation_generated
     SOURCE "examples/model-animation/main.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${MODEL_ANIMATION_GENERATED_CPP}"
+)
+
+cactus_add_example(example_first_person_arena_generated
+    SOURCE "examples/first-person-arena/main.cactus"
+    BACKEND "cpp-entt"
+    OUTPUT "${FIRST_PERSON_ARENA_GENERATED_CPP}"
 )
 
 cactus_add_example(example_platformer_generated

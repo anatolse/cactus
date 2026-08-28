@@ -1,5 +1,7 @@
 module std.collision.volume
 
+use std.math as math
+use std.math.quat as quat
 use std.math.vec3 as v3m
 
 # ── 3D Pure Collision Predicates (dsl-where-clause, stdlib-collision) ────────
@@ -17,3 +19,35 @@ pub func spheres_overlap(a_position: vec3, a_radius: float, b_position: vec3, b_
     let dist_sq = v3m.dot(delta, delta)
     let radius_sum = a_radius + b_radius
     return dist_sq < radius_sum * radius_sum
+
+pub func sphere_box_separation(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, box_rotation: quat) vec3:
+    let safe_radius = math.max(sphere_radius, 0.0)
+    let half_size = vec3(math.abs(box_size.x) / 2.0, math.abs(box_size.y) / 2.0, math.abs(box_size.z) / 2.0)
+    let local_position = quat.rotate(quat.inverse(box_rotation), sphere_position - box_position)
+    let closest_position = v3m.clamp(local_position, half_size * -1.0, half_size)
+    let local_delta = local_position - closest_position
+    let distance_squared = v3m.dot(local_delta, local_delta)
+
+    if distance_squared > 0.0:
+        if distance_squared >= safe_radius * safe_radius:
+            return vec3(0.0, 0.0, 0.0)
+        let distance = math.sqrt(distance_squared)
+        return quat.rotate(box_rotation, local_delta * ((safe_radius - distance) / distance))
+
+    let x_distance = half_size.x - math.abs(local_position.x)
+    let y_distance = half_size.y - math.abs(local_position.y)
+    let z_distance = half_size.z - math.abs(local_position.z)
+
+    if x_distance <= y_distance and x_distance <= z_distance:
+        if local_position.x < 0.0:
+            return quat.rotate(box_rotation, vec3((x_distance + safe_radius) * -1.0, 0.0, 0.0))
+        return quat.rotate(box_rotation, vec3(x_distance + safe_radius, 0.0, 0.0))
+
+    if y_distance <= z_distance:
+        if local_position.y < 0.0:
+            return quat.rotate(box_rotation, vec3(0.0, (y_distance + safe_radius) * -1.0, 0.0))
+        return quat.rotate(box_rotation, vec3(0.0, y_distance + safe_radius, 0.0))
+
+    if local_position.z < 0.0:
+        return quat.rotate(box_rotation, vec3(0.0, 0.0, (z_distance + safe_radius) * -1.0))
+    return quat.rotate(box_rotation, vec3(0.0, 0.0, z_distance + safe_radius))

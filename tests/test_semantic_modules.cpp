@@ -1904,6 +1904,34 @@ TEST_CASE("regular handler contracts infer extern function effect summaries", "[
     CHECK_FALSE(decorated.funcs.at("local_host").effect_summary.has_value());
 }
 
+TEST_CASE("cursor capture contributes the std.input effect to its handler contract",
+          "[semantic][handler-contract][effects][input]") {
+    ResolvedFunc capture;
+    capture.name      = "set_cursor_captured";
+    capture.is_pub    = true;
+    capture.is_extern = true;
+    capture.params.push_back(ResolvedParam{.name = "captured", .type = {.kind = TypeKind::Bool, .name = "bool"}});
+
+    ImportedSymbols input;
+    input.module_name = "std.input";
+    input.funcs.emplace(capture.name, std::move(capture));
+    ModuleImports imports;
+    imports.add("inp", std::move(input));
+
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.cursor\n"
+        "event tick\n"
+        "rule Capture:\n"
+        "    on tick:\n"
+        "        inp.set_cursor_captured(true)\n",
+        imports);
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    REQUIRE(decorated.handler_contracts.size() == 1);
+    CHECK(decorated.handler_contracts.front().effects == std::unordered_set<std::string>{"input"});
+}
+
 TEST_CASE("handler graph expands rule shorthand only across matching canonical triggers",
           "[semantic][handler-graph][3.2]") {
     const auto [decorated, diagnostics] = analyze_source(
@@ -2629,13 +2657,13 @@ static ModuleImports make_render_passes_imports() {
     ImportedSymbols syms;
     syms.module_name = "std.render.passes";
     ResolvedEnum pass_enum;
-    pass_enum.name        = "Pass";
-    pass_enum.variants    = {"Quads"};
-    syms.enums["Pass"]    = pass_enum;
+    pass_enum.name     = "Pass";
+    pass_enum.variants = {"Quads"};
+    syms.enums["Pass"] = pass_enum;
     ResolvedEnum target_enum;
-    target_enum.name       = "Target";
-    target_enum.variants   = {"Screen"};
-    syms.enums["Target"]   = target_enum;
+    target_enum.name     = "Target";
+    target_enum.variants = {"Screen"};
+    syms.enums["Target"] = target_enum;
     ModuleImports imports;
     imports.add("passes", std::move(syms));
     return imports;
@@ -2792,8 +2820,8 @@ constexpr const char* kOrdinaryFragmentRule =
 
 TEST_CASE("dsl-render-passes: vertex and fragment triggers resolve on a render-pass phase",
           "[semantic][render-passes][2.2][2.3]") {
-    auto [decorated, errors] =
-        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+    auto [decorated, errors] = analyze_source(render_pass_program_body(kOrdinaryVertexRule, kOrdinaryFragmentRule),
+                                              make_render_passes_imports());
 
     if (!errors.empty()) {
         INFO(errors.front().message);
@@ -2808,8 +2836,8 @@ TEST_CASE("dsl-render-passes: vertex and fragment triggers resolve on a render-p
 
 TEST_CASE("dsl-render-passes: graph connects vertex and fragment handlers with no direct schedule edge",
           "[semantic][render-passes][handler-graph][3.1][3.2]") {
-    auto [decorated, errors] =
-        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+    auto [decorated, errors] = analyze_source(render_pass_program_body(kOrdinaryVertexRule, kOrdinaryFragmentRule),
+                                              make_render_passes_imports());
 
     if (!errors.empty()) {
         INFO(errors.front().message);
@@ -2833,11 +2861,10 @@ TEST_CASE("dsl-render-passes: graph connects vertex and fragment handlers with n
     // handlers — their relationship is mediated entirely by the
     // RenderPassPlan entry above ("synthetic rasterization node"), not by
     // the ordinary conflict-edge scheduling mechanism.
-    const bool has_direct_edge =
-        std::ranges::any_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
-            return (edge.before == vertex_identity && edge.after == fragment_identity) ||
-                   (edge.before == fragment_identity && edge.after == vertex_identity);
-        });
+    const bool has_direct_edge = std::ranges::any_of(decorated.execution_graph.schedule_edges, [&](const auto& edge) {
+        return (edge.before == vertex_identity && edge.after == fragment_identity) ||
+               (edge.before == fragment_identity && edge.after == vertex_identity);
+    });
     CHECK_FALSE(has_direct_edge);
 }
 
@@ -2877,8 +2904,8 @@ TEST_CASE("dsl-render-passes: vertex handler without filter is diagnosed", "[sem
         "        v.uv_out = v.uv\n"
         "        v.tint_out = #FFFFFFFF\n";
 
-    auto [decorated, errors] =
-        analyze_source(render_pass_program_body(kFilterlessVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+    auto [decorated, errors] = analyze_source(render_pass_program_body(kFilterlessVertexRule, kOrdinaryFragmentRule),
+                                              make_render_passes_imports());
 
     (void)decorated;
     CHECK(has_diagnostic(errors, "requires an instance domain"));
@@ -2893,8 +2920,8 @@ TEST_CASE("dsl-render-passes: fragment handler with a filter is diagnosed", "[se
         "    on my_pass.fragment as f:\n"
         "        f.frag_color = f.tint\n";
 
-    auto [decorated, errors] =
-        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kFilteredFragmentRule), make_render_passes_imports());
+    auto [decorated, errors] = analyze_source(render_pass_program_body(kOrdinaryVertexRule, kFilteredFragmentRule),
+                                              make_render_passes_imports());
 
     (void)decorated;
     CHECK(has_diagnostic(errors, "is selectionless"));
@@ -2909,8 +2936,8 @@ TEST_CASE("dsl-render-passes: forbidden statement in a stage handler is diagnose
         "                position = vec2(0.0, 0.0)\n"
         "        f.frag_color = f.tint\n";
 
-    auto [decorated, errors] =
-        analyze_source(render_pass_program_body(kOrdinaryVertexRule, kSpawningFragmentRule), make_render_passes_imports());
+    auto [decorated, errors] = analyze_source(render_pass_program_body(kOrdinaryVertexRule, kSpawningFragmentRule),
+                                              make_render_passes_imports());
 
     (void)decorated;
     CHECK(has_diagnostic(errors, "'spawn' is not allowed in a render-pass fragment-stage handler body"));
@@ -2929,8 +2956,8 @@ TEST_CASE("dsl-render-passes: vertex handler may read a filtered trait but not w
         "        v.uv_out = v.uv\n"
         "        v.tint_out = #FFFFFFFF\n";
 
-    auto [decorated, errors] =
-        analyze_source(render_pass_program_body(kWritingVertexRule, kOrdinaryFragmentRule), make_render_passes_imports());
+    auto [decorated, errors] = analyze_source(render_pass_program_body(kWritingVertexRule, kOrdinaryFragmentRule),
+                                              make_render_passes_imports());
 
     (void)decorated;
     CHECK(has_diagnostic(errors, "only built-in stage-output fields are writable"));
@@ -3010,10 +3037,10 @@ TEST_CASE("dsl-render-passes: registered intrinsic is callable from a stage hand
     ImportedSymbols math_syms;
     math_syms.module_name = "std.math";
     ResolvedFunc sqrt_func;
-    sqrt_func.name        = "sqrt";
-    sqrt_func.is_extern   = true;
-    sqrt_func.params      = {ResolvedParam{.name = "v", .type = make_float_type()}};
-    sqrt_func.return_type = make_float_type();
+    sqrt_func.name          = "sqrt";
+    sqrt_func.is_extern     = true;
+    sqrt_func.params        = {ResolvedParam{.name = "v", .type = make_float_type()}};
+    sqrt_func.return_type   = make_float_type();
     math_syms.funcs["sqrt"] = sqrt_func;
 
     auto imports = make_render_passes_imports();
@@ -3025,8 +3052,7 @@ TEST_CASE("dsl-render-passes: registered intrinsic is callable from a stage hand
     CHECK_FALSE(has_diagnostic(errors, "no registered portable GLSL translation"));
 }
 
-TEST_CASE("dsl-render-passes: a plain func is always callable from a stage handler",
-          "[semantic][render-passes][2.7]") {
+TEST_CASE("dsl-render-passes: a plain func is always callable from a stage handler", "[semantic][render-passes][2.7]") {
     constexpr const char* kPlainFuncCallFragmentRule =
         "rule MyFragment:\n"
         "    on my_pass.fragment as f:\n"

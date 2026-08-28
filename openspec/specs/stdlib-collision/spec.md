@@ -44,3 +44,29 @@ Because their bodies are ordinary pure Cactus functions, `circles_overlap` and `
 #### Scenario: Locally declared collider trait supplies predicate arguments
 - **WHEN** a program declares its own local `SphereCollider` trait (distinct from `std.physics.volume.SphereCollider`) and passes its `radius` field to `spheres_overlap`
 - **THEN** the call type-checks without importing `std.physics.volume`
+
+### Requirement: std.collision.volume provides pure sphere-box separation
+std.collision.volume SHALL export pub func sphere_box_separation(sphere_position: vec3, sphere_radius: float, box_position: vec3, box_size: vec3, box_rotation: quat) vec3 as an ordinary pure Cactus function. The result SHALL be the shortest world-space translation that moves an overlapping sphere out of the oriented box, and SHALL be the zero vector when the shapes are separated or only touching. The function SHALL depend only on plain math values and SHALL NOT reference std.physics collider traits.
+
+#### Scenario: Separated sphere returns zero
+- **WHEN** the sphere lies outside the oriented box with positive clearance
+- **THEN** sphere_box_separation returns vec3(0.0, 0.0, 0.0)
+
+#### Scenario: Outside-center overlap returns outward separation
+- **WHEN** the sphere center is outside the box but the sphere surface overlaps it
+- **THEN** the returned vector points from the closest box point toward the sphere center
+- **AND** its length equals the penetration depth
+
+#### Scenario: Sphere center inside box uses nearest face
+- **WHEN** the sphere center lies inside the box
+- **THEN** the returned vector moves it through the nearest box face by the face distance plus the nonnegative sphere radius
+- **AND** equal-distance face ties resolve deterministically in local X, then Y, then Z order
+
+#### Scenario: Rotated box returns world-space result
+- **WHEN** the box has a non-identity rotation
+- **THEN** overlap is evaluated in box-local space
+- **AND** the separation vector is rotated back into world space
+
+#### Scenario: Separation is usable in a where clause
+- **WHEN** a pure where predicate compares the returned separation with the zero vector or reads its length
+- **THEN** semantic analysis accepts the call as pure

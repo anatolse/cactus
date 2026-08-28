@@ -151,6 +151,24 @@ cactus_add_headless_behavior_test(test_model_animation_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_animation_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_model_tint_headless_behavior
+    CACTUS_SOURCE tests/fixtures/model_tint_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_tint_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_cursor_capture_headless_behavior
+    CACTUS_SOURCE tests/fixtures/cursor_capture_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_cursor_capture_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_first_person_arena_headless_behavior
+    CACTUS_SOURCE examples/first-person-arena/main.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_first_person_arena_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_hierarchy_query_headless_behavior
     CACTUS_SOURCE tests/fixtures/hierarchy_query_runtime.cactus
     BACKEND cpp-entt
@@ -239,6 +257,15 @@ cactus_add_render_pass_visual_test(test_particle_burst_visual
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_particle_burst_visual.cpp
 )
 
+# Real-GL visual test (stdlib-render-models capability): proves a
+# ModelRenderer.color alpha below 255 actually renders dimmer/more
+# transparent, which CACTUS_RAYLIB_FAKE structurally cannot exercise.
+cactus_add_render_pass_visual_test(test_model_alpha_visual
+    CACTUS_SOURCE tests/fixtures/model_tint_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_alpha_visual.cpp
+)
+
 add_executable(test_example_cpp_compilation test_example_cpp_compilation.cpp)
 target_link_libraries(test_example_cpp_compilation PRIVATE Catch2::Catch2WithMain)
 add_dependencies(test_example_cpp_compilation cactus)
@@ -269,6 +296,10 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_MODEL_RENDERER_SOURCE="examples/model-renderer/main.cactus"
     CACTUS_EXAMPLE_MODEL_RENDERER_GENERATED_CPP="${MODEL_RENDERER_GENERATED_CPP}"
     CACTUS_EXAMPLE_MODEL_RENDERER_TARGET="example_model_renderer_generated"
+
+    CACTUS_EXAMPLE_FIRST_PERSON_ARENA_SOURCE="examples/first-person-arena/main.cactus"
+    CACTUS_EXAMPLE_FIRST_PERSON_ARENA_GENERATED_CPP="${FIRST_PERSON_ARENA_GENERATED_CPP}"
+    CACTUS_EXAMPLE_FIRST_PERSON_ARENA_TARGET="example_first_person_arena_generated"
 
     CACTUS_EXAMPLE_PAIR_CONTACT_SOURCE="examples/pair-contact/main.cactus"
     CACTUS_EXAMPLE_PAIR_CONTACT_GENERATED_CPP="${PAIR_CONTACT_GENERATED_CPP}"

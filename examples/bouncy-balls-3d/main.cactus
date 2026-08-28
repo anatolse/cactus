@@ -81,13 +81,10 @@ rule MoveBalls:
 # normal is not authored — it's derived each tick by rotating the fixed
 # local outward direction (0, 1, 0) by the wall's current
 # WorldTransform.rotation, so it always matches the wall's actual
-# orientation. Overlap is a single oriented-box-vs-sphere test: the ball's
-# position is rotated into the wall's local space via the inverse rotation,
-# clamped to +/-size/2 there, then rotated back to world space to find the
-# closest point on the box. This one code path handles every wall,
-# axis-aligned or tilted, with no special-casing. Gated by a closing-speed
-# check along the derived normal so a resting/sliding ball doesn't
-# re-trigger every tick. Emits a targeted WallBounce to the ball side only.
+# orientation. The shared sphere/box helper handles every wall, axis-aligned
+# or tilted. Gated by a closing-speed check along the derived normal so a
+# resting/sliding ball doesn't re-trigger every tick. Emits a targeted
+# WallBounce to the ball side only.
 rule DetectWallContact:
     pairs:
         ball:
@@ -103,12 +100,9 @@ rule DetectWallContact:
         let ball_pos = ball.tv.WorldTransform.position
         let wall_pos = wall.tv.WorldTransform.position
         let wall_rotation = wall.tv.WorldTransform.rotation
-        let half_size = wall.BoxCollider.size / 2.0
-        let local_pos = quat.rotate(quat.inverse(wall_rotation), ball_pos - wall_pos)
-        let clamped_local = v3m.clamp(local_pos, half_size * -1.0, half_size)
-        let closest_point = wall_pos + quat.rotate(wall_rotation, clamped_local)
+        let separation = collision.sphere_box_separation(ball_pos, ball.SphereCollider.radius, wall_pos, wall.BoxCollider.size, wall_rotation)
         let normal = quat.rotate(wall_rotation, vec3(0.0, 1.0, 0.0))
-        let overlapping = v3m.distance(ball_pos, closest_point) < ball.SphereCollider.radius
+        let overlapping = v3m.length(separation) > 0.0
         let closing = v3m.dot(ball.Ball.velocity, normal) > 0.0
         if overlapping and closing:
             emit WallBounce to ball:

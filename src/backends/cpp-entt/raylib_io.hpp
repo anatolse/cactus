@@ -36,11 +36,15 @@ namespace cactus::runtime::raylib {
 #define CACTUS_RL_IMPL(Name, Args) ::Name Args
 #endif
 
-#define CACTUS_RL_WRAP(Ret, Name, Params, Args) \
-    [[nodiscard]] inline Ret Name Params noexcept { return CACTUS_RL_IMPL(Name, Args); }
+#define CACTUS_RL_WRAP(Ret, Name, Params, Args)     \
+    [[nodiscard]] inline Ret Name Params noexcept { \
+        return CACTUS_RL_IMPL(Name, Args);          \
+    }
 
 #define CACTUS_RL_WRAP_VOID(Name, Params, Args) \
-    inline void Name Params noexcept { CACTUS_RL_IMPL(Name, Args); }
+    inline void Name Params noexcept {          \
+        CACTUS_RL_IMPL(Name, Args);             \
+    }
 // NOLINTEND(cppcoreguidelines-macro-usage)
 
 // ── Input (scripted when faked; never recorded) ────────────────────────────
@@ -54,6 +58,8 @@ CACTUS_RL_WRAP(bool, IsMouseButtonReleased, (int button), (button))
 CACTUS_RL_WRAP(Vector2, GetMousePosition, (), ())
 CACTUS_RL_WRAP(Vector2, GetMouseDelta, (), ())
 CACTUS_RL_WRAP(float, GetMouseWheelMove, (), ())
+CACTUS_RL_WRAP_VOID(DisableCursor, (), ())
+CACTUS_RL_WRAP_VOID(EnableCursor, (), ())
 
 // ── Window / environment (scripted when faked; never recorded) ────────────
 
@@ -69,8 +75,10 @@ CACTUS_RL_WRAP(int, GetScreenHeight, (), ())
 // without demanding cross-platform pixel-perfect acceptance (design.md's
 // "Text metrics vary by font backend and platform" risk mitigation).
 
-CACTUS_RL_WRAP(Vector2, MeasureTextEx, (Font font, const char* text, float fontSize, float spacing),
-              (font, text, fontSize, spacing))
+CACTUS_RL_WRAP(Vector2,
+               MeasureTextEx,
+               (Font font, const char* text, float fontSize, float spacing),
+               (font, text, fontSize, spacing))
 
 // ── Drawing (recorded into the call log when faked) ────────────────────────
 
@@ -84,33 +92,44 @@ CACTUS_RL_WRAP_VOID(EndTextureMode, (), ())
 CACTUS_RL_WRAP_VOID(BeginScissorMode, (int x, int y, int width, int height), (x, y, width, height))
 CACTUS_RL_WRAP_VOID(EndScissorMode, (), ())
 CACTUS_RL_WRAP_VOID(DrawMesh, (Mesh mesh, Material material, Matrix transform), (mesh, material, transform))
-CACTUS_RL_WRAP_VOID(DrawText, (const char* text, int posX, int posY, int fontSize, Color color),
+CACTUS_RL_WRAP_VOID(DrawText,
+                    (const char* text, int posX, int posY, int fontSize, Color color),
                     (text, posX, posY, fontSize, color))
-CACTUS_RL_WRAP_VOID(DrawTextEx, (Font font, const char* text, Vector2 position, float fontSize, float spacing,
-                                 Color tint),
+CACTUS_RL_WRAP_VOID(DrawTextEx,
+                    (Font font, const char* text, Vector2 position, float fontSize, float spacing, Color tint),
                     (font, text, position, fontSize, spacing, tint))
-CACTUS_RL_WRAP_VOID(DrawTextPro, (Font font, const char* text, Vector2 position, Vector2 origin, float rotation,
-                                  float fontSize, float spacing, Color tint),
+CACTUS_RL_WRAP_VOID(DrawTextPro,
+                    (Font font,
+                     const char* text,
+                     Vector2 position,
+                     Vector2 origin,
+                     float rotation,
+                     float fontSize,
+                     float spacing,
+                     Color tint),
                     (font, text, position, origin, rotation, fontSize, spacing, tint))
-CACTUS_RL_WRAP_VOID(DrawTexturePro, (Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin,
-                                     float rotation, Color tint),
+CACTUS_RL_WRAP_VOID(DrawTexturePro,
+                    (Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin, float rotation, Color tint),
                     (texture, source, dest, origin, rotation, tint))
-CACTUS_RL_WRAP_VOID(DrawRectanglePro, (Rectangle rec, Vector2 origin, float rotation, Color color),
+CACTUS_RL_WRAP_VOID(DrawRectanglePro,
+                    (Rectangle rec, Vector2 origin, float rotation, Color color),
                     (rec, origin, rotation, color))
 CACTUS_RL_WRAP_VOID(DrawCircleV, (Vector2 center, float radius, Color color), (center, radius, color))
 CACTUS_RL_WRAP_VOID(DrawRectangleLinesEx, (Rectangle rec, float lineThick, Color color), (rec, lineThick, color))
 CACTUS_RL_WRAP_VOID(DrawRectangleRec, (Rectangle rec, Color color), (rec, color))
-CACTUS_RL_WRAP_VOID(DrawLineEx, (Vector2 startPos, Vector2 endPos, float thick, Color color),
+CACTUS_RL_WRAP_VOID(DrawLineEx,
+                    (Vector2 startPos, Vector2 endPos, float thick, Color color),
                     (startPos, endPos, thick, color))
 CACTUS_RL_WRAP_VOID(DrawTriangle, (Vector2 v1, Vector2 v2, Vector2 v3, Color color), (v1, v2, v3, color))
-CACTUS_RL_WRAP_VOID(DrawRing, (Vector2 center, float innerRadius, float outerRadius, float startAngle,
-                               float endAngle, int segments, Color color),
-                    (center, innerRadius, outerRadius, startAngle, endAngle, segments, color))
+CACTUS_RL_WRAP_VOID(
+    DrawRing,
+    (Vector2 center, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments, Color color),
+    (center, innerRadius, outerRadius, startAngle, endAngle, segments, color))
 CACTUS_RL_WRAP_VOID(DrawCubeV, (Vector3 position, Vector3 size, Color color), (position, size, color))
 CACTUS_RL_WRAP_VOID(DrawCubeWiresV, (Vector3 position, Vector3 size, Color color), (position, size, color))
 CACTUS_RL_WRAP_VOID(DrawGrid, (int slices, float spacing), (slices, spacing))
-CACTUS_RL_WRAP_VOID(DrawCircle3D, (Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle,
-                                   Color color),
+CACTUS_RL_WRAP_VOID(DrawCircle3D,
+                    (Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle, Color color),
                     (center, radius, rotationAxis, rotationAngle, color))
 CACTUS_RL_WRAP_VOID(DrawLine3D, (Vector3 startPos, Vector3 endPos, Color color), (startPos, endPos, color))
 

@@ -1,0 +1,886 @@
+module main
+
+use std.core
+use std.input as inp
+use std.query as query
+use std.math as math
+use std.math.vec3 as v3
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.physics.volume as physics
+use std.collision.volume as collision
+use std.render.meshes as meshes
+use std.render.models as models
+use std.render.text as text
+use std.camera.volume as camera
+use std.camera.viewport as viewport
+
+const:
+    WINDOW_WIDTH = 960
+    WINDOW_HEIGHT = 540
+    WINDOW_TITLE = "First-Person Arena"
+    TARGET_FPS = 60
+    PLAYER_SPEED = 4.0
+    PLAYER_RADIUS = 0.35
+    PLAYER_HALF_HEIGHT = 0.9
+    PLAYER_STEP_HEIGHT = 0.55
+    CAMERA_EYE_HEIGHT = 0.65
+    ENEMY_RADIUS = 0.35
+    ENEMY_HALF_HEIGHT = 0.9
+    ROBOT_SPEED = 0.6
+    KNIGHT_SPEED = 0.7
+    SPAWN_INTERVAL = 10.0
+    CHARACTER_HEIGHT = 1.8
+    BULLET_SPEED = 20.0
+    BULLET_RADIUS = 0.12
+    BULLET_LIFETIME = 2.0
+    FIRE_COOLDOWN = 0.2
+    DEATH_DURATION = 1.0
+    HALF_PI = 1.57079633
+
+asset BoxMesh: mesh = "models/box.mesh"
+asset WhiteMaterial: material = "materials/white.mat"
+asset Robot: model = "../model-renderer/art/robot.glb"
+asset Knight: model = "../model-renderer/art/Crispoly-Characters-Mini-Red-Knight.glb"
+
+input MoveForward: button
+    key = inp.Key.W
+
+input MoveBackward: button
+    key = inp.Key.S
+
+input MoveLeft: button
+    key = inp.Key.A
+
+input MoveRight: button
+    key = inp.Key.D
+
+input Fire: button
+    mouse = inp.MouseButton.Left
+
+pub trait Floor
+pub trait PerimeterWall
+pub trait BuildingWall
+pub trait BuildingRoof
+pub trait Stair
+pub trait Solid
+pub trait Walkable
+pub trait CameraRig
+pub trait Crosshair
+pub trait GameOverLabel
+pub trait Threat
+pub trait RobotEnemy
+pub trait KnightEnemy
+
+pub trait Player:
+    var game_over: bool = false
+    var game_over_count: int = 0
+
+pub trait KinematicActor:
+    var radius: float = 0.35
+    var half_height: float = 0.9
+    var step_height: float = 0.55
+    var ground_surface: float = 0.0
+
+pub trait Enemy:
+    var speed: float = 0.6
+    var dying: bool = false
+    var death_elapsed: float = 0.0
+    var facing_yaw: float = 0.0
+
+pub trait RobotSpawnPoint:
+    var countdown: float = 0.0
+
+pub trait KnightSpawnPoint:
+    var countdown: float = 0.0
+
+pub trait Shooter:
+    var cooldown: float = 0.0
+
+pub trait Bullet:
+    var velocity: vec3 = vec3(0.0, 0.0, 0.0)
+    var lifetime: float = 2.0
+    var consumed: bool = false
+
+event CameraPose:
+    position: vec3
+    yaw: float
+    pitch: float
+
+event SeparateActor:
+    amount: vec3
+
+event GroundCandidate:
+    surface: float
+
+event BulletContact:
+    other: entity_id
+    hit_enemy: bool
+
+event EnemyHit
+event GameOver
+event GameOverPresentation
+
+template BoxVisual:
+    tv.WorldTransform:
+        rotation = quat.identity()
+    meshes.Renderer:
+        mesh = BoxMesh
+        material = WhiteMaterial
+        visible = true
+        cast_shadow = true
+
+template SolidBox:
+    use BoxVisual
+    Solid
+    physics.Collider:
+        layer = 1
+        mask = 1
+    physics.BoxCollider
+
+template WalkableBox:
+    use BoxVisual
+    Walkable
+    physics.BoxCollider
+
+template FloorBox:
+    use WalkableBox
+    Floor
+
+template PerimeterBox:
+    use SolidBox
+    PerimeterWall
+
+template BuildingBox:
+    use SolidBox
+    BuildingWall
+
+template RoofBox:
+    use WalkableBox
+    BuildingRoof
+
+template StairBox:
+    use WalkableBox
+    Stair
+
+template EnemyBase:
+    tv.WorldTransform:
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    models.ModelRenderer:
+        color = #FFFFFFFF
+    models.ModelAnimator:
+        clip = 0
+        playing = true
+        speed = 1.0
+        time = 0.0
+    physics.Collider:
+        layer = 2
+        mask = 3
+    physics.CapsuleCollider:
+        radius = ENEMY_RADIUS
+        height = CHARACTER_HEIGHT
+    KinematicActor:
+        radius = ENEMY_RADIUS
+        half_height = ENEMY_HALF_HEIGHT
+        step_height = PLAYER_STEP_HEIGHT
+    Enemy
+    Threat
+
+template RobotTemplate:
+    use EnemyBase
+    RobotEnemy
+
+template KnightTemplate:
+    use EnemyBase
+    KnightEnemy
+
+template BulletTemplate:
+    tv.WorldTransform:
+        rotation = quat.identity()
+        scale = vec3(BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0)
+    meshes.Renderer:
+        mesh = BoxMesh
+        material = WhiteMaterial
+        color = #FFD040FF
+        visible = true
+        cast_shadow = false
+    physics.Collider:
+        layer = 4
+        mask = 3
+    physics.BoxCollider:
+        size = vec3(BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0, BULLET_RADIUS * 2.0)
+    Bullet
+
+entity ArenaFloor from FloorBox:
+    tv.WorldTransform:
+        position = vec3(0.0, -0.1, 0.0)
+        scale = vec3(30.0, 0.2, 30.0)
+    meshes.Renderer:
+        color = #404040FF
+    physics.BoxCollider:
+        size = vec3(30.0, 0.2, 30.0)
+
+entity NorthWall from PerimeterBox:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.5, -15.0)
+        scale = vec3(30.5, 3.0, 0.5)
+    meshes.Renderer:
+        color = #C0C0C0FF
+    physics.BoxCollider:
+        size = vec3(30.5, 3.0, 0.5)
+
+entity SouthWall from PerimeterBox:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.5, 15.0)
+        scale = vec3(30.5, 3.0, 0.5)
+    meshes.Renderer:
+        color = #C0C0C0FF
+    physics.BoxCollider:
+        size = vec3(30.5, 3.0, 0.5)
+
+entity WestWall from PerimeterBox:
+    tv.WorldTransform:
+        position = vec3(-15.0, 1.5, 0.0)
+        scale = vec3(0.5, 3.0, 29.5)
+    meshes.Renderer:
+        color = #C0C0C0FF
+    physics.BoxCollider:
+        size = vec3(0.5, 3.0, 29.5)
+
+entity EastWall from PerimeterBox:
+    tv.WorldTransform:
+        position = vec3(15.0, 1.5, 0.0)
+        scale = vec3(0.5, 3.0, 29.5)
+    meshes.Renderer:
+        color = #C0C0C0FF
+    physics.BoxCollider:
+        size = vec3(0.5, 3.0, 29.5)
+
+entity BuildingNorthLeft from BuildingBox:
+    tv.WorldTransform:
+        position = vec3(-2.5, 2.0, -4.0)
+        scale = vec3(3.0, 4.0, 0.3)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(3.0, 4.0, 0.3)
+
+entity BuildingNorthRight from BuildingBox:
+    tv.WorldTransform:
+        position = vec3(2.5, 2.0, -4.0)
+        scale = vec3(3.0, 4.0, 0.3)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(3.0, 4.0, 0.3)
+
+entity BuildingSouthLeft from BuildingBox:
+    tv.WorldTransform:
+        position = vec3(-2.5, 2.0, 4.0)
+        scale = vec3(3.0, 4.0, 0.3)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(3.0, 4.0, 0.3)
+
+entity BuildingSouthRight from BuildingBox:
+    tv.WorldTransform:
+        position = vec3(2.5, 2.0, 4.0)
+        scale = vec3(3.0, 4.0, 0.3)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(3.0, 4.0, 0.3)
+
+entity BuildingWest from BuildingBox:
+    tv.WorldTransform:
+        position = vec3(-4.0, 2.0, 0.0)
+        scale = vec3(0.3, 4.0, 8.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.3, 4.0, 8.0)
+
+entity BuildingEast from BuildingBox:
+    tv.WorldTransform:
+        position = vec3(4.0, 2.0, 0.0)
+        scale = vec3(0.3, 4.0, 8.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.3, 4.0, 8.0)
+
+entity Roof from RoofBox:
+    tv.WorldTransform:
+        position = vec3(0.0, 3.85, 0.0)
+        scale = vec3(8.0, 0.3, 8.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(8.0, 0.3, 8.0)
+
+entity Step1 from StairBox:
+    tv.WorldTransform:
+        position = vec3(7.75, 0.25, 0.0)
+        scale = vec3(0.5, 0.5, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 0.5, 2.0)
+
+entity Step2 from StairBox:
+    tv.WorldTransform:
+        position = vec3(7.25, 0.5, 0.0)
+        scale = vec3(0.5, 1.0, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 1.0, 2.0)
+
+entity Step3 from StairBox:
+    tv.WorldTransform:
+        position = vec3(6.75, 0.75, 0.0)
+        scale = vec3(0.5, 1.5, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 1.5, 2.0)
+
+entity Step4 from StairBox:
+    tv.WorldTransform:
+        position = vec3(6.25, 1.0, 0.0)
+        scale = vec3(0.5, 2.0, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 2.0, 2.0)
+
+entity Step5 from StairBox:
+    tv.WorldTransform:
+        position = vec3(5.75, 1.25, 0.0)
+        scale = vec3(0.5, 2.5, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 2.5, 2.0)
+
+entity Step6 from StairBox:
+    tv.WorldTransform:
+        position = vec3(5.25, 1.5, 0.0)
+        scale = vec3(0.5, 3.0, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 3.0, 2.0)
+
+entity Step7 from StairBox:
+    tv.WorldTransform:
+        position = vec3(4.75, 1.75, 0.0)
+        scale = vec3(0.5, 3.5, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 3.5, 2.0)
+
+entity Step8 from StairBox:
+    tv.WorldTransform:
+        position = vec3(4.25, 2.0, 0.0)
+        scale = vec3(0.5, 4.0, 2.0)
+    meshes.Renderer:
+        color = #805020FF
+    physics.BoxCollider:
+        size = vec3(0.5, 4.0, 2.0)
+
+entity PlayerBody:
+    tv.WorldTransform:
+        position = vec3(0.0, PLAYER_HALF_HEIGHT, 10.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    physics.Collider:
+        layer = 2
+        mask = 3
+    physics.CapsuleCollider:
+        radius = PLAYER_RADIUS
+        height = PLAYER_HALF_HEIGHT * 2.0
+    camera.FirstPersonCamera:
+        pitch = 0.0
+        yaw = 0.0
+        sensitivity = 0.002
+    KinematicActor:
+        radius = PLAYER_RADIUS
+        half_height = PLAYER_HALF_HEIGHT
+        step_height = PLAYER_STEP_HEIGHT
+    Player
+    children:
+        entity PlayerCamera:
+            tv.WorldTransform
+            camera.Camera:
+                fov_y = 70.0
+                near = 0.05
+                far = 100.0
+            viewport.Viewport:
+                clear_color = #4890E0FF
+            Shooter
+            CameraRig
+
+entity RobotSpawnerNorthEast:
+    tv.WorldTransform:
+        position = vec3(12.0, ENEMY_HALF_HEIGHT, -12.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    RobotSpawnPoint
+
+entity RobotSpawnerSouthWest:
+    tv.WorldTransform:
+        position = vec3(-12.0, ENEMY_HALF_HEIGHT, 12.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    RobotSpawnPoint
+
+entity KnightSpawnerNorthWest:
+    tv.WorldTransform:
+        position = vec3(-12.0, ENEMY_HALF_HEIGHT, -12.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    KnightSpawnPoint
+
+entity KnightSpawnerSouthEast:
+    tv.WorldTransform:
+        position = vec3(12.0, ENEMY_HALF_HEIGHT, 12.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    KnightSpawnPoint
+
+entity CrosshairHud:
+    text.ScreenLabel:
+        text = "+"
+        position = vec2(474.0, 252.0)
+        font_size = 32
+        color = #FFFFFFFF
+        visible = true
+    Crosshair
+
+entity GameOverHud:
+    text.ScreenLabel:
+        text = "GAME OVER"
+        position = vec2(390.0, 245.0)
+        font_size = 48
+        color = #FFFFFFFF
+        visible = false
+    GameOverLabel
+
+entity Sun:
+    meshes.DirectionalLight:
+        direction = vec3(-0.4, -1.0, -0.2)
+        color = #FFFFFFFF
+        intensity = 1.0
+        enabled = true
+
+rule CursorLifecycle:
+    filter:
+        Player
+
+    on load:
+        inp.set_cursor_captured(true)
+
+    on unload:
+        inp.set_cursor_captured(false)
+
+rule ReadPlayerLook:
+    filter:
+        Player
+        camera.FirstPersonCamera as first_person
+        tv.WorldTransform as transform
+
+    on input:
+        if game_over:
+            return
+        let delta = inp.mouse_delta()
+        first_person.yaw = first_person.yaw - delta.x * first_person.sensitivity
+        first_person.pitch = math.clamp(first_person.pitch - delta.y * first_person.sensitivity, -1.45, 1.45)
+        transform.rotation = quat.from_euler(0.0, first_person.yaw, 0.0)
+
+rule MovePlayer:
+    filter:
+        Player
+        tv.WorldTransform as transform
+
+    on fixed_tick:
+        if game_over:
+            return
+        let move = vec3(0.0, 0.0, 0.0)
+        let forward = quat.forward(transform.rotation)
+        let right = quat.right(transform.rotation)
+        if input.down(MoveForward):
+            move += vec3(forward.x, 0.0, forward.z)
+        if input.down(MoveBackward):
+            move -= vec3(forward.x, 0.0, forward.z)
+        if input.down(MoveRight):
+            move += vec3(right.x, 0.0, right.z)
+        if input.down(MoveLeft):
+            move -= vec3(right.x, 0.0, right.z)
+        if v3.length(move) > 0.0:
+            let direction = v3.normalize(move)
+            transform.position.x += direction.x * PLAYER_SPEED * fixed_tick.dt
+            transform.position.z += direction.z * PLAYER_SPEED * fixed_tick.dt
+
+rule BeginGrounding:
+    filter:
+        KinematicActor as actor
+
+    on fixed_tick:
+        actor.ground_surface = -1000.0
+
+rule DetectActorSolidContact:
+    pairs:
+        actor:
+            KinematicActor
+            tv.WorldTransform
+        box:
+            Solid
+            physics.BoxCollider
+            tv.WorldTransform
+    after:
+        MovePlayer
+        SeekPlayer
+
+    on fixed_tick:
+        let separation = collision.sphere_box_separation(actor.tv.WorldTransform.position, actor.KinematicActor.radius, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
+        if v3.length(separation) > 0.0:
+            emit SeparateActor to actor:
+                amount = separation
+
+rule ResolveActorSolidContact:
+    filter:
+        KinematicActor
+        tv.WorldTransform as transform
+
+    on SeparateActor as contact:
+        transform.position += contact.amount
+
+rule DetectGroundCandidate:
+    pairs:
+        actor:
+            KinematicActor
+            tv.WorldTransform
+        surface:
+            Walkable
+            physics.BoxCollider
+            tv.WorldTransform
+    after:
+        MovePlayer
+        SeekPlayer
+
+    on fixed_tick:
+        let actor_position = actor.tv.WorldTransform.position
+        let surface_position = surface.tv.WorldTransform.position
+        let half_size = surface.physics.BoxCollider.size / 2.0
+        let top = surface_position.y + half_size.y
+        let feet = actor_position.y - actor.KinematicActor.half_height
+        let overlaps_x = math.abs(actor_position.x - surface_position.x) <= half_size.x + actor.KinematicActor.radius
+        let overlaps_z = math.abs(actor_position.z - surface_position.z) <= half_size.z + actor.KinematicActor.radius
+        if overlaps_x and overlaps_z and top <= feet + actor.KinematicActor.step_height:
+            emit GroundCandidate to actor:
+                surface = top
+
+rule ApplyGroundCandidate:
+    filter:
+        KinematicActor as actor
+        tv.WorldTransform as transform
+
+    on GroundCandidate as candidate:
+        if candidate.surface > actor.ground_surface:
+            actor.ground_surface = candidate.surface
+            transform.position.y = candidate.surface + actor.half_height
+
+rule ComposeCameraPose:
+    pairs:
+        rig:
+            CameraRig
+            tv.WorldTransform
+        body:
+            Player
+            tv.WorldTransform
+            camera.FirstPersonCamera
+
+    on late_tick:
+        emit CameraPose to rig:
+            position = body.tv.WorldTransform.position + vec3(0.0, CAMERA_EYE_HEIGHT, 0.0)
+            yaw = body.camera.FirstPersonCamera.yaw
+            pitch = body.camera.FirstPersonCamera.pitch
+
+rule ApplyCameraPose:
+    filter:
+        CameraRig
+        tv.WorldTransform as transform
+
+    on CameraPose as pose:
+        transform.position = pose.position
+        transform.rotation = quat.compose(quat.from_euler(0.0, pose.yaw, 0.0), quat.from_euler(pose.pitch, 0.0, 0.0))
+
+rule SpawnRobots:
+    filter:
+        RobotSpawnPoint as spawn_point
+        tv.WorldTransform as transform
+
+    on fixed_tick:
+        let player_entity = query.first[Player]()
+        let active = false
+        match player_entity:
+            Player as player =>
+                active = not player.game_over
+        if not active:
+            return
+        spawn_point.countdown -= fixed_tick.dt
+        if spawn_point.countdown > 0.0:
+            return
+        let model_scale = 1.0
+        let bounds = models.bounds_size(Robot)
+        if bounds.y > 0.0:
+            model_scale = CHARACTER_HEIGHT / bounds.y
+        spawn RobotTemplate:
+            tv.WorldTransform:
+                position = transform.position
+                scale = vec3(model_scale, model_scale, model_scale)
+            models.ModelRenderer:
+                model = Robot
+            Enemy:
+                speed = ROBOT_SPEED
+        spawn_point.countdown = SPAWN_INTERVAL
+
+rule SpawnKnights:
+    filter:
+        KnightSpawnPoint as spawn_point
+        tv.WorldTransform as transform
+
+    on fixed_tick:
+        let player_entity = query.first[Player]()
+        let active = false
+        match player_entity:
+            Player as player =>
+                active = not player.game_over
+        if not active:
+            return
+        spawn_point.countdown -= fixed_tick.dt
+        if spawn_point.countdown > 0.0:
+            return
+        let model_scale = 1.0
+        let bounds = models.bounds_size(Knight)
+        if bounds.y > 0.0:
+            model_scale = CHARACTER_HEIGHT / bounds.y
+        spawn KnightTemplate:
+            tv.WorldTransform:
+                position = transform.position
+                scale = vec3(model_scale, model_scale, model_scale)
+            models.ModelRenderer:
+                model = Knight
+            Enemy:
+                speed = KNIGHT_SPEED
+        spawn_point.countdown = SPAWN_INTERVAL
+
+rule SeekPlayer:
+    filter:
+        Enemy as enemy
+        Threat
+        tv.WorldTransform as transform
+
+    on fixed_tick:
+        if enemy.dying:
+            return
+        let player_entity = query.first[Player]()
+        let active = false
+        match player_entity:
+            Player as player =>
+                active = not player.game_over
+        if not active:
+            return
+        let target_position = tv.world_position(player_entity)
+        let delta = vec3(target_position.x - transform.position.x, 0.0, target_position.z - transform.position.z)
+        let distance = v3.length(delta)
+        if distance <= 0.0:
+            return
+        let direction = delta / distance
+        enemy.facing_yaw = math.atan2(direction.x * -1.0, direction.z * -1.0)
+        transform.rotation = quat.from_euler(0.0, enemy.facing_yaw, 0.0)
+        transform.position += direction * enemy.speed * fixed_tick.dt
+
+rule CooldownShooter:
+    filter:
+        Shooter as shooter
+
+    on tick:
+        if shooter.cooldown > 0.0:
+            shooter.cooldown = math.max(0.0, shooter.cooldown - tick.dt)
+
+rule FireBullet:
+    filter:
+        CameraRig
+        Shooter as shooter
+        tv.WorldTransform as transform
+
+    on input:
+        let player_entity = query.first[Player]()
+        let active = false
+        match player_entity:
+            Player as player =>
+                active = not player.game_over
+        if not active:
+            return
+        if not input.pressed(Fire) or shooter.cooldown > 0.0:
+            return
+        let direction = quat.forward(transform.rotation)
+        spawn BulletTemplate:
+            tv.WorldTransform:
+                position = transform.position + direction * 0.5
+            Bullet:
+                velocity = direction * BULLET_SPEED
+        shooter.cooldown = FIRE_COOLDOWN
+
+rule MoveBullets:
+    filter:
+        Bullet as bullet
+        tv.WorldTransform as transform
+
+    on fixed_tick:
+        if bullet.consumed:
+            return
+        transform.position += bullet.velocity * fixed_tick.dt
+        bullet.lifetime -= fixed_tick.dt
+        if bullet.lifetime <= 0.0:
+            bullet.consumed = true
+            destroy
+
+rule DetectBulletSolidContact:
+    pairs:
+        bullet:
+            Bullet
+            tv.WorldTransform
+        box:
+            Solid
+            physics.BoxCollider
+            tv.WorldTransform
+
+    on fixed_tick:
+        if not bullet.Bullet.consumed:
+            let separation = collision.sphere_box_separation(bullet.tv.WorldTransform.position, BULLET_RADIUS, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)
+            if v3.length(separation) > 0.0:
+                emit BulletContact to bullet:
+                    other = box
+                    hit_enemy = false
+
+rule DetectBulletEnemyContact:
+    pairs:
+        bullet:
+            Bullet
+            tv.WorldTransform
+        enemy:
+            Enemy
+            Threat
+            KinematicActor
+            tv.WorldTransform
+    after:
+        DetectBulletSolidContact
+
+    on fixed_tick:
+        if not bullet.Bullet.consumed and not enemy.Enemy.dying:
+            let bullet_position = bullet.tv.WorldTransform.position
+            let enemy_position = enemy.tv.WorldTransform.position
+            let horizontal = vec3(bullet_position.x - enemy_position.x, 0.0, bullet_position.z - enemy_position.z)
+            let close_horizontal = v3.length(horizontal) <= BULLET_RADIUS + enemy.KinematicActor.radius
+            let close_vertical = math.abs(bullet_position.y - enemy_position.y) <= enemy.KinematicActor.half_height + BULLET_RADIUS
+            if close_horizontal and close_vertical:
+                emit BulletContact to bullet:
+                    other = enemy
+                    hit_enemy = true
+
+rule ConsumeBulletContact:
+    filter:
+        Bullet as bullet
+
+    on BulletContact as contact:
+        if bullet.consumed:
+            return
+        bullet.consumed = true
+        if contact.hit_enemy:
+            emit EnemyHit to contact.other
+        destroy
+
+rule BeginEnemyDeath:
+    filter:
+        Enemy as enemy
+        models.ModelAnimator as animator
+
+    on EnemyHit:
+        if enemy.dying:
+            return
+        enemy.dying = true
+        enemy.death_elapsed = 0.0
+        animator.playing = false
+
+rule AnimateEnemyDeath:
+    filter:
+        Enemy as enemy
+        models.ModelRenderer as renderer
+        models.ModelAnimator as animator
+        tv.WorldTransform as transform
+
+    on tick:
+        if not enemy.dying:
+            return
+        animator.playing = false
+        enemy.death_elapsed += tick.dt
+        let progress = math.clamp(enemy.death_elapsed / DEATH_DURATION, 0.0, 1.0)
+        transform.rotation = quat.from_euler(progress * HALF_PI, enemy.facing_yaw, 0.0)
+        renderer.color = color(1.0, 1.0, 1.0, 1.0 - progress)
+        if enemy.death_elapsed >= DEATH_DURATION:
+            destroy
+
+rule DetectPlayerContact:
+    pairs:
+        enemy:
+            Enemy
+            Threat
+            KinematicActor
+            tv.WorldTransform
+        player:
+            Player
+            KinematicActor
+            tv.WorldTransform
+
+    on fixed_tick:
+        if not enemy.Enemy.dying and not player.Player.game_over:
+            if collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius):
+                emit GameOver to player
+
+rule EndGame:
+    filter:
+        Player
+
+    on GameOver:
+        if game_over:
+            return
+        game_over = true
+        game_over_count += 1
+        inp.set_cursor_captured(false)
+        let crosshair = query.first[Crosshair]()
+        emit GameOverPresentation to crosshair
+        let label = query.first[GameOverLabel]()
+        emit GameOverPresentation to label
+
+rule HideCrosshairOnGameOver:
+    filter:
+        Crosshair
+        text.ScreenLabel as label
+
+    on GameOverPresentation:
+        label.visible = false
+
+rule ShowGameOverLabel:
+    filter:
+        GameOverLabel
+        text.ScreenLabel as label
+
+    on GameOverPresentation:
+        label.text = "GAME OVER"
+        label.visible = true

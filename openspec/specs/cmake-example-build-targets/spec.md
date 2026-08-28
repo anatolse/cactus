@@ -158,3 +158,18 @@ The CMake build configuration SHALL register the gradient-square example through
 
 - **WHEN** the example generates and compiles cleanly against the `cpp-entt` backend
 - **THEN** its executable target is a regular default build-tree target and is not declared with `EXCLUDE_FROM_ALL`
+
+### Requirement: First-person arena example target is registered
+The CMake build configuration SHALL register the first-person arena through the reusable Cactus example target helper as a regular cpp-entt target with stable generated output metadata.
+
+#### Scenario: CMake registers first-person arena target
+- **WHEN** CMake configures generated example targets
+- **THEN** it registers example_first_person_arena_generated for examples/first-person-arena/main.cactus using the cpp-entt backend
+
+#### Scenario: Generated output path is stable
+- **WHEN** tests reference the first-person arena generated output
+- **THEN** CMake exposes a stable first-person-arena generated C++ path under CACTUS_GENERATED_EXAMPLES_DIR
+
+#### Scenario: Buildable target participates in the regular build
+- **WHEN** the example generates and compiles cleanly
+- **THEN** example_first_person_arena_generated is not excluded from the default build

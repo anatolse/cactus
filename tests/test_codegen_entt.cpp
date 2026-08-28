@@ -117,6 +117,16 @@ static ModuleImports std_input_imports() {
               "DPadLeft",
               "DPadRight"});
     add_enum("GamepadAxis", {"LeftX", "LeftY", "RightX", "RightY", "L2Axis", "R2Axis"});
+    ResolvedFunc set_cursor_captured;
+    set_cursor_captured.name         = "set_cursor_captured";
+    set_cursor_captured.module_name  = "std.input";
+    set_cursor_captured.symbol_id    = make_symbol_id(SymbolKind::Func, "std.input", "set_cursor_captured");
+    set_cursor_captured.canonical_id = make_canonical_id(*set_cursor_captured.symbol_id);
+    set_cursor_captured.is_pub       = true;
+    set_cursor_captured.is_extern    = true;
+    set_cursor_captured.params.push_back(
+        ResolvedParam{.name = "captured", .type = {.kind = TypeKind::Bool, .name = "bool"}});
+    syms.funcs.emplace(set_cursor_captured.name, std::move(set_cursor_captured));
     ModuleImports imports;
     imports.add("inp", std::move(syms));
     return imports;
@@ -786,6 +796,28 @@ TEST_CASE("Codegen EnTT: std.input extern calls lower to backend runtime namespa
     CHECK(code.find("cactus::runtime::entt_backend::down(K_JUMP)") != std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: cursor capture aliases and canonical calls lower identically",
+          "[codegen-entt][extern-func][stdlib][input][cursor]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.input as inp\n"
+        "pub event tick:\n"
+        "    dt: float\n"
+        "rule Cursor:\n"
+        "    on tick:\n"
+        "        inp.set_cursor_captured(true)\n"
+        "        std.input.set_cursor_captured(false)\n",
+        program,
+        std_input_imports());
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(count_occurrences(code, "cactus::runtime::entt_backend::set_cursor_captured(") == 2);
+    CHECK(code.find("cactus::runtime::entt_backend::set_cursor_captured(true)") != std::string::npos);
+    CHECK(code.find("cactus::runtime::entt_backend::set_cursor_captured(false)") != std::string::npos);
+    CHECK(code.find("inp.set_cursor_captured") == std::string::npos);
+    CHECK(code.find("std.input.set_cursor_captured") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: std.physics.flat query calls lower with registry access",
           "[codegen-entt][extern-func][stdlib][physics]") {
     ProgramNode program;
@@ -1202,6 +1234,7 @@ TEST_CASE("Codegen EnTT: model renderer extern rule binds to backend runtime wit
         "    let model: model_id\n"
         "    var visible: bool\n"
         "    var cast_shadow: bool\n"
+        "    var color: color = #FFFFFFFF\n"
         "event run\n"
         "extern rule ModelRender:\n"
         "    filter:\n"
@@ -1215,6 +1248,7 @@ TEST_CASE("Codegen EnTT: model renderer extern rule binds to backend runtime wit
 
     const auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("cactus::runtime::entt_backend::submit_model(") != std::string::npos);
+    CHECK(code.find("ModelRenderer_comp.cast_shadow, ModelRenderer_comp.color);") != std::string::npos);
     CHECK(code.find("void model_render_update(") == std::string::npos);
     // No ModelAnimator trait in the program: the plain submission path only.
     CHECK(code.find("try_get<ModelAnimator>") == std::string::npos);
@@ -1229,6 +1263,7 @@ TEST_CASE("Codegen EnTT: model animation extern adapter advances time without in
         "    let model: model_id\n"
         "    var visible: bool\n"
         "    var cast_shadow: bool\n"
+        "    var color: color = #FFFFFFFF\n"
         "trait ModelAnimator:\n"
         "    var clip: int\n"
         "    var playing: bool\n"
@@ -1275,6 +1310,7 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
         "    let model: model_id\n"
         "    var visible: bool\n"
         "    var cast_shadow: bool\n"
+        "    var color: color = #FFFFFFFF\n"
         "trait ModelAnimator:\n"
         "    var clip: int\n"
         "    var playing: bool\n"
@@ -1295,9 +1331,9 @@ TEST_CASE("Codegen EnTT: model renderer submits animator clip and time when the 
     const auto tick = generated_function(code, "void model_render_tick");
     // Animated entities go through the extended submit_model signature...
     CHECK(tick.find("registry.try_get<ModelAnimator>(entity)") != std::string::npos);
-    CHECK(tick.find("animator->clip, animator->time);") != std::string::npos);
+    CHECK(tick.find("animator->clip, animator->time, ModelRenderer_comp.color);") != std::string::npos);
     // ...while entities without ModelAnimator keep the plain submission.
-    CHECK(tick.find("ModelRenderer_comp.cast_shadow);") != std::string::npos);
+    CHECK(tick.find("ModelRenderer_comp.cast_shadow, ModelRenderer_comp.color);") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: screen label extern rule renders window-space text in flat and volume programs",
@@ -5687,7 +5723,7 @@ TEST_CASE(
 
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
-            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            auto code                 = EnttSystemEmitter::emit_system(*sys, decorated);
             const auto pair_body_name = extract_temp_name(code, "cactus_gen_pair_body_");
             REQUIRE_FALSE(pair_body_name.empty());
 
@@ -5741,7 +5777,7 @@ TEST_CASE(
 
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
-            auto code = EnttSystemEmitter::emit_system(*sys, decorated);
+            auto code                 = EnttSystemEmitter::emit_system(*sys, decorated);
             const auto pair_body_name = extract_temp_name(code, "cactus_gen_pair_body_");
             REQUIRE_FALSE(pair_body_name.empty());
             const auto lambda_def = code.find("auto " + pair_body_name + " = [&](entt::entity a, entt::entity b) {");
@@ -6036,9 +6072,9 @@ TEST_CASE("Codegen EnTT: deferred cascade preserves a targeted occurrence's reci
     // target through to it.
     const auto targeted =
         generated_function(code, "void generated_emit_targeted_event(Occurrence occurrence, entt::entity target)");
-    CHECK(targeted.find(
-              "emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);") !=
-          std::string::npos);
+    CHECK(
+        targeted.find("emit_targeted_event(generated_scheduler_state().activation, std::move(occurrence), target);") !=
+        std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: selectionless event handler accepts and ignores an optional recipient",
@@ -6450,8 +6486,7 @@ TEST_CASE("Codegen EnTT: pair-bound color channel read normalizes the raw byte f
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("static_cast<float>(registry.get<const Tint>(body).tint.a) / 255.0F") !=
-                  std::string::npos);
+            CHECK(code.find("static_cast<float>(registry.get<const Tint>(body).tint.a) / 255.0F") != std::string::npos);
         }
     }
 }
@@ -6511,20 +6546,20 @@ TEST_CASE("Codegen EnTT: SAP-eligible pair rule calls the runtime broad phase in
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
     auto decorated = full_pipeline("module std.collision.flat\n" + SPATIAL_JOIN_TRAITS +
-                                   "rule DetectContact:\n"
-                                   "    pairs:\n"
-                                   "        a:\n"
-                                   "            Transform\n"
-                                   "            Collider\n"
-                                   "        b:\n"
-                                   "            Transform\n"
-                                   "            Collider\n"
-                                   "    where:\n"
-                                   "        circles_overlap(a.Transform.position, a.Collider.radius, "
-                                   "b.Transform.position, b.Collider.radius)\n"
-                                   "    on tick:\n"
-                                   "        emit Contact:\n"
-                                   "            other = b\n",
+                                       "rule DetectContact:\n"
+                                       "    pairs:\n"
+                                       "        a:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "        b:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "    where:\n"
+                                       "        circles_overlap(a.Transform.position, a.Collider.radius, "
+                                       "b.Transform.position, b.Collider.radius)\n"
+                                       "    on tick:\n"
+                                       "        emit Contact:\n"
+                                       "            other = b\n",
                                    program);
 
     for (auto& decl : program.declarations) {
@@ -6574,23 +6609,24 @@ static const std::string MANUAL_DOT_SPATIAL_JOIN_TRAITS =
 TEST_CASE("Codegen EnTT: manual dot-product where: shape calls the runtime broad phase instead of a hand-rolled sweep",
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
-    auto decorated = full_pipeline("module std.math.vec2\n" + MANUAL_DOT_SPATIAL_JOIN_TRAITS +
-                                   "rule DetectContact:\n"
-                                   "    pairs:\n"
-                                   "        a:\n"
-                                   "            Transform\n"
-                                   "            Collider\n"
-                                   "        b:\n"
-                                   "            Transform\n"
-                                   "            Collider\n"
-                                   "    where:\n"
-                                   "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
-                                   "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * "
-                                   "(a.Collider.radius + b.Collider.radius)\n"
-                                   "    on tick:\n"
-                                   "        emit Contact:\n"
-                                   "            other = b\n",
-                                   program);
+    auto decorated =
+        full_pipeline("module std.math.vec2\n" + MANUAL_DOT_SPATIAL_JOIN_TRAITS +
+                          "rule DetectContact:\n"
+                          "    pairs:\n"
+                          "        a:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "        b:\n"
+                          "            Transform\n"
+                          "            Collider\n"
+                          "    where:\n"
+                          "        dot(b.Transform.position - a.Transform.position, b.Transform.position - "
+                          "a.Transform.position) < (a.Collider.radius + b.Collider.radius) * "
+                          "(a.Collider.radius + b.Collider.radius)\n"
+                          "    on tick:\n"
+                          "        emit Contact:\n"
+                          "            other = b\n",
+                      program);
 
     for (auto& decl : program.declarations) {
         auto* sys = std::get_if<RuleNode>(&decl);
@@ -6633,10 +6669,10 @@ static ModuleImports bouncy_bubbles_collision_imports() {
         ResolvedParam{.name = "b_position", .type = vec2_type},
         ResolvedParam{.name = "b_radius", .type = float_type},
     };
-    func.return_type  = bool_type;
-    const auto symbol = make_symbol_id(SymbolKind::Func, "std.collision.flat", "circles_overlap");
-    func.symbol_id    = symbol;
-    func.canonical_id = make_canonical_id(symbol);
+    func.return_type              = bool_type;
+    const auto symbol             = make_symbol_id(SymbolKind::Func, "std.collision.flat", "circles_overlap");
+    func.symbol_id                = symbol;
+    func.canonical_id             = make_canonical_id(symbol);
     syms.funcs["circles_overlap"] = std::move(func);
 
     ModuleImports imports;
@@ -6648,35 +6684,36 @@ TEST_CASE("Codegen EnTT: bouncy-bubbles' migrated DetectBubbleContact where: sha
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
     const auto imports = bouncy_bubbles_collision_imports();
-    auto decorated      = full_pipeline("trait Bubble:\n"
-                                   "    var velocity: vec2\n"
-                                   "trait CircleCollider:\n"
-                                   "    var radius: float\n"
-                                   "trait WorldTransform:\n"
-                                   "    var position: vec2\n"
-                                   "event tick:\n"
-                                   "    dt: float\n"
-                                   "event BubbleBounce:\n"
-                                   "    new_velocity: vec2\n"
-                                   "rule DetectBubbleContact:\n"
-                                   "    pairs:\n"
-                                   "        a:\n"
-                                   "            Bubble\n"
-                                   "            CircleCollider\n"
-                                   "            WorldTransform\n"
-                                   "        b:\n"
-                                   "            Bubble\n"
-                                   "            CircleCollider\n"
-                                   "            WorldTransform\n"
-                                   "    where:\n"
-                                   "        a != b\n"
-                                   "        collision.circles_overlap(a.WorldTransform.position, "
-                                   "a.CircleCollider.radius, b.WorldTransform.position, b.CircleCollider.radius)\n"
-                                   "    on tick:\n"
-                                   "        emit BubbleBounce to a:\n"
-                                   "            new_velocity = a.Bubble.velocity\n",
-                                   program,
-                                   imports);
+    auto decorated     = full_pipeline(
+        "trait Bubble:\n"
+        "    var velocity: vec2\n"
+        "trait CircleCollider:\n"
+        "    var radius: float\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "event tick:\n"
+        "    dt: float\n"
+        "event BubbleBounce:\n"
+        "    new_velocity: vec2\n"
+        "rule DetectBubbleContact:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Bubble\n"
+        "            CircleCollider\n"
+        "            WorldTransform\n"
+        "        b:\n"
+        "            Bubble\n"
+        "            CircleCollider\n"
+        "            WorldTransform\n"
+        "    where:\n"
+        "        a != b\n"
+        "        collision.circles_overlap(a.WorldTransform.position, "
+        "a.CircleCollider.radius, b.WorldTransform.position, b.CircleCollider.radius)\n"
+        "    on tick:\n"
+        "        emit BubbleBounce to a:\n"
+        "            new_velocity = a.Bubble.velocity\n",
+        program,
+        imports);
 
     for (auto& decl : program.declarations) {
         auto* sys = std::get_if<RuleNode>(&decl);
@@ -6694,23 +6731,23 @@ TEST_CASE("Codegen EnTT: cross-domain pair rule with a recognized-shape call kee
           "[codegen-entt][spatial-join]") {
     ProgramNode program;
     auto decorated = full_pipeline("module std.collision.flat\n" + SPATIAL_JOIN_TRAITS +
-                                   "trait Wall:\n"
-                                   "    var active: bool = true\n"
-                                   "rule DetectContact:\n"
-                                   "    pairs:\n"
-                                   "        a:\n"
-                                   "            Transform\n"
-                                   "            Collider\n"
-                                   "        b:\n"
-                                   "            Transform\n"
-                                   "            Collider\n"
-                                   "            Wall\n"
-                                   "    where:\n"
-                                   "        circles_overlap(a.Transform.position, a.Collider.radius, "
-                                   "b.Transform.position, b.Collider.radius)\n"
-                                   "    on tick:\n"
-                                   "        emit Contact:\n"
-                                   "            other = b\n",
+                                       "trait Wall:\n"
+                                       "    var active: bool = true\n"
+                                       "rule DetectContact:\n"
+                                       "    pairs:\n"
+                                       "        a:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "        b:\n"
+                                       "            Transform\n"
+                                       "            Collider\n"
+                                       "            Wall\n"
+                                       "    where:\n"
+                                       "        circles_overlap(a.Transform.position, a.Collider.radius, "
+                                       "b.Transform.position, b.Collider.radius)\n"
+                                       "    on tick:\n"
+                                       "        emit Contact:\n"
+                                       "            other = b\n",
                                    program);
 
     for (auto& decl : program.declarations) {
@@ -6746,13 +6783,13 @@ TEST_CASE("Codegen EnTT: render-pass stage handler's `let` locals are mangled to
     ImportedSymbols passes_syms;
     passes_syms.module_name = "std.render.passes";
     ResolvedEnum pass_enum;
-    pass_enum.name              = "Pass";
-    pass_enum.variants          = {"Quads"};
-    passes_syms.enums["Pass"]   = pass_enum;
+    pass_enum.name            = "Pass";
+    pass_enum.variants        = {"Quads"};
+    passes_syms.enums["Pass"] = pass_enum;
     ResolvedEnum target_enum;
-    target_enum.name             = "Target";
-    target_enum.variants         = {"Screen"};
-    passes_syms.enums["Target"]  = target_enum;
+    target_enum.name            = "Target";
+    target_enum.variants        = {"Screen"};
+    passes_syms.enums["Target"] = target_enum;
     ModuleImports imports;
     imports.add("passes", std::move(passes_syms));
 
@@ -6806,13 +6843,13 @@ TEST_CASE("Codegen EnTT: render-pass stage handler accepts vec2 + vec2 * float, 
     ImportedSymbols passes_syms;
     passes_syms.module_name = "std.render.passes";
     ResolvedEnum pass_enum;
-    pass_enum.name              = "Pass";
-    pass_enum.variants          = {"Quads"};
-    passes_syms.enums["Pass"]   = pass_enum;
+    pass_enum.name            = "Pass";
+    pass_enum.variants        = {"Quads"};
+    passes_syms.enums["Pass"] = pass_enum;
     ResolvedEnum target_enum;
-    target_enum.name             = "Target";
-    target_enum.variants         = {"Screen"};
-    passes_syms.enums["Target"]  = target_enum;
+    target_enum.name            = "Target";
+    target_enum.variants        = {"Screen"};
+    passes_syms.enums["Target"] = target_enum;
     ModuleImports imports;
     imports.add("passes", std::move(passes_syms));
 
@@ -6866,13 +6903,13 @@ TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", 
     ImportedSymbols passes_syms;
     passes_syms.module_name = "std.render.passes";
     ResolvedEnum pass_enum;
-    pass_enum.name              = "Pass";
-    pass_enum.variants          = {"Quads"};
-    passes_syms.enums["Pass"]   = pass_enum;
+    pass_enum.name            = "Pass";
+    pass_enum.variants        = {"Quads"};
+    passes_syms.enums["Pass"] = pass_enum;
     ResolvedEnum target_enum;
-    target_enum.name             = "Target";
-    target_enum.variants         = {"Screen"};
-    passes_syms.enums["Target"]  = target_enum;
+    target_enum.name            = "Target";
+    target_enum.variants        = {"Screen"};
+    passes_syms.enums["Target"] = target_enum;
     ModuleImports imports;
     imports.add("passes", std::move(passes_syms));
 

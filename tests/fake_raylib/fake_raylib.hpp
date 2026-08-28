@@ -41,6 +41,7 @@ struct RecordedEndScissorMode {};
 struct RecordedDrawMesh {
     Mesh mesh;
     Material material;
+    Color diffuse_color;
     Matrix transform;
 };
 struct RecordedDrawText {
@@ -188,6 +189,8 @@ void set_mouse_button_released_this_frame(int button, bool is_released) noexcept
 void set_mouse_position(Vector2 position) noexcept;
 void set_mouse_delta(Vector2 delta) noexcept;
 void set_mouse_wheel_move(float delta) noexcept;
+[[nodiscard]] bool cursor_captured() noexcept;
+[[nodiscard]] const std::vector<bool>& cursor_capture_transitions() noexcept;
 
 // ── Window / environment scripting ──────────────────────────────────────
 
@@ -213,6 +216,8 @@ void set_screen_size(int width, int height) noexcept;
 [[nodiscard]] Vector2 GetMousePosition() noexcept;
 [[nodiscard]] Vector2 GetMouseDelta() noexcept;
 [[nodiscard]] float GetMouseWheelMove() noexcept;
+void DisableCursor() noexcept;
+void EnableCursor() noexcept;
 
 [[nodiscard]] bool IsWindowReady() noexcept;
 [[nodiscard]] int GetScreenWidth() noexcept;
@@ -232,9 +237,19 @@ void EndScissorMode() noexcept;
 void DrawMesh(Mesh mesh, Material material, Matrix transform) noexcept;
 void DrawText(const char* text, int posX, int posY, int fontSize, Color color) noexcept;
 void DrawTextEx(Font font, const char* text, Vector2 position, float fontSize, float spacing, Color tint) noexcept;
-void DrawTextPro(Font font, const char* text, Vector2 position, Vector2 origin, float rotation, float fontSize,
-                 float spacing, Color tint) noexcept;
-void DrawTexturePro(Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin, float rotation,
+void DrawTextPro(Font font,
+                 const char* text,
+                 Vector2 position,
+                 Vector2 origin,
+                 float rotation,
+                 float fontSize,
+                 float spacing,
+                 Color tint) noexcept;
+void DrawTexturePro(Texture2D texture,
+                    Rectangle source,
+                    Rectangle dest,
+                    Vector2 origin,
+                    float rotation,
                     Color tint) noexcept;
 void DrawRectanglePro(Rectangle rec, Vector2 origin, float rotation, Color color) noexcept;
 void DrawCircleV(Vector2 center, float radius, Color color) noexcept;
@@ -242,8 +257,13 @@ void DrawRectangleLinesEx(Rectangle rec, float lineThick, Color color) noexcept;
 void DrawRectangleRec(Rectangle rec, Color color) noexcept;
 void DrawLineEx(Vector2 startPos, Vector2 endPos, float thick, Color color) noexcept;
 void DrawTriangle(Vector2 v1, Vector2 v2, Vector2 v3, Color color) noexcept;
-void DrawRing(Vector2 center, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments,
-             Color color) noexcept;
+void DrawRing(Vector2 center,
+              float innerRadius,
+              float outerRadius,
+              float startAngle,
+              float endAngle,
+              int segments,
+              Color color) noexcept;
 void DrawCubeV(Vector3 position, Vector3 size, Color color) noexcept;
 void DrawCubeWiresV(Vector3 position, Vector3 size, Color color) noexcept;
 void DrawGrid(int slices, float spacing) noexcept;

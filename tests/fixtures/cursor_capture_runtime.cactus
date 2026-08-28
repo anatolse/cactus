@@ -1,0 +1,25 @@
+module cursor_capture_runtime
+
+use std.core
+use std.input as inp
+
+trait CursorSequence:
+    var step: int = 0
+    var observed_delta: vec2 = vec2(0.0, 0.0)
+
+entity CursorDriver:
+    CursorSequence
+
+rule DriveCursorSequence:
+    filter:
+        CursorSequence
+
+    on tick:
+        observed_delta = inp.mouse_delta()
+        if step == 0:
+            inp.set_cursor_captured(true)
+        if step == 1:
+            std.input.set_cursor_captured(true)
+        if step == 2:
+            inp.set_cursor_captured(false)
+        step += 1

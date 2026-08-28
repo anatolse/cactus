@@ -16,6 +16,7 @@ pub trait ModelRenderer:
     let model: model_id
     var visible: bool = true
     var cast_shadow: bool = true
+    var color: color = #FFFFFFFF
 
 extern rule ModelRender:
     filter:

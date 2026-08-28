@@ -134,3 +134,5 @@ pub extern func mouse_delta() vec2
 pub extern func wheel_delta() float
 
 pub extern func consume(b: InputButton)
+
+pub extern func set_cursor_captured(captured: bool)

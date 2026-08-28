@@ -130,7 +130,8 @@ const std::unordered_map<std::string, FuncRenameMap> kRuntimeFuncNames = {
     {"std.input",
      {{"mouse_delta", {.runtime_name = "editor_mouse_delta_screen"}},
       {"wheel_delta", {.runtime_name = "editor_wheel_delta"}},
-      {"consume", {.runtime_name = "editor_consume"}}}},
+      {"consume", {.runtime_name = "editor_consume"}},
+      {"set_cursor_captured", {.runtime_name = "set_cursor_captured"}}}},
     {"std.camera.flat",
      {{"screen_to_world", {.runtime_name = "editor_screen_to_world_2d"}},
       {"screen_delta_to_world", {.runtime_name = "screen_delta_to_world_2d"}}}},
@@ -652,7 +653,8 @@ void emit_pair_binding_snapshot(std::ostringstream& out, const PairBindingCodege
 // chains, for an arbitrary entity-valued C++ expression rather than a source
 // binding name.
 std::string emit_spatial_join_access(const SpatialJoinAccess& access, const std::string& entity_expr) {
-    std::string result = "registry.get<const " + EnttCodegenUtils::trait_cpp_name(access.trait) + ">(" + entity_expr + ")";
+    std::string result =
+        "registry.get<const " + EnttCodegenUtils::trait_cpp_name(access.trait) + ">(" + entity_expr + ")";
     for (const auto& segment : access.field_path) {
         result += "." + segment;
     }
@@ -675,8 +677,8 @@ void emit_sap_pair_activation(std::ostringstream& out,
                               const std::string& pair_body_name) {
     const auto& proxy_source     = pair_binding_codegens[plan.left.binding_index];
     const std::string proxy_type = plan.dimension == SpatialJoinDimension::Flat2D ? "Proxy2D" : "Proxy3D";
-    const std::string sap_type   = plan.dimension == SpatialJoinDimension::Flat2D ? "SapBroadPhase2D" : "SapBroadPhase3D";
-    const std::string ns         = "cactus::runtime::entt_backend::";
+    const std::string sap_type = plan.dimension == SpatialJoinDimension::Flat2D ? "SapBroadPhase2D" : "SapBroadPhase3D";
+    const std::string ns       = "cactus::runtime::entt_backend::";
 
     out << "        {\n";
     out << "            std::vector<" << ns << proxy_type << "> __sap_proxies;\n";
@@ -2335,8 +2337,8 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                     // already handles this for a filter/pair trait access;
                     // this is the same fix for a plain local value (e.g. a
                     // `func`'s `color`-typed parameter).
-                    if (local_kinds != nullptr && (e.member == "r" || e.member == "g" || e.member == "b" ||
-                                                  e.member == "a")) {
+                    if (local_kinds != nullptr &&
+                        (e.member == "r" || e.member == "g" || e.member == "b" || e.member == "a")) {
                         if (const auto found = local_kinds->find(ident->name);
                             found != local_kinds->end() && found->second == NumericKind::Color) {
                             return "(static_cast<float>(" + ident->name + "." + e.member + ") / 255.0F)";
@@ -3223,8 +3225,7 @@ static void emit_pair_handler_body(std::ostringstream& out,
     if (contract != nullptr && contract->spatial_join.has_value()) {
         emit_sap_pair_activation(out, *contract->spatial_join, pair_binding_codegens, pair_body_name);
     } else {
-        out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name
-            << "_snapshot) {\n";
+        out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
         out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
             << "_snapshot) {\n";
         emit_tuple_invocation();
@@ -3689,13 +3690,13 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
             out << "        if (const auto* animator = registry.try_get<" << manim << ">(entity)) {\n";
             out << "            cactus::runtime::entt_backend::submit_model(" << wt << "_comp.position, " << wt
                 << "_comp.rotation, " << wt << "_comp.scale, " << mr << "_comp.model, " << mr << "_comp.visible, " << mr
-                << "_comp.cast_shadow, animator->clip, animator->time);\n";
+                << "_comp.cast_shadow, animator->clip, animator->time, " << mr << "_comp.color);\n";
             out << "            return;\n";
             out << "        }\n";
         }
         out << "        cactus::runtime::entt_backend::submit_model(" << wt << "_comp.position, " << wt
             << "_comp.rotation, " << wt << "_comp.scale, " << mr << "_comp.model, " << mr << "_comp.visible, " << mr
-            << "_comp.cast_shadow);\n";
+            << "_comp.cast_shadow, " << mr << "_comp.color);\n";
         out << "    });\n";
         out << "}\n\n";
         return out.str();

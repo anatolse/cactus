@@ -179,3 +179,16 @@ Automated example-compilation integration coverage SHALL include the gradient sq
 
 - **WHEN** the curated example compilation test runs the `gradient-square` case
 - **THEN** it invokes the compiler for the example, verifies the generated C++ exists, builds the registered example target, and runs the standard formatting and tidy validation steps
+
+### Requirement: First-person arena is curated for cpp-entt compilation
+Automated example-compilation integration coverage SHALL include the first-person arena as a named curated cpp-entt case using the regular registered example target.
+
+#### Scenario: Curated list includes first-person arena
+- **WHEN** ExampleCppCompilationTests enumerates curated examples
+- **THEN** it includes a case named first-person-arena with source examples/first-person-arena/main.cactus and backend cpp-entt
+
+#### Scenario: First-person arena generated output is fully validated
+- **WHEN** the curated first-person-arena case runs
+- **THEN** it invokes the compiler and verifies generated C++ exists
+- **AND** it builds the registered example target
+- **AND** it performs the standard clang-format and clang-tidy validation

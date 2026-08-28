@@ -1,0 +1,45 @@
+module model_tint_runtime
+
+use std.math.quat as quat
+use std.transform.volume as tv
+use std.render.models as models
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
+
+asset SharedModel: model = "../../examples/model-renderer/art/robot.glb"
+
+entity StaticDefault:
+    tv.WorldTransform:
+        position = vec3(-2.0, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    models.ModelRenderer:
+        model = SharedModel
+
+entity StaticTinted:
+    tv.WorldTransform:
+        position = vec3(0.0, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    models.ModelRenderer:
+        model = SharedModel
+        color = #80402080
+
+entity AnimatedTinted:
+    tv.WorldTransform:
+        position = vec3(2.0, 0.0, 0.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    models.ModelRenderer:
+        model = SharedModel
+        color = #20A0FF40
+    models.ModelAnimator:
+        playing = false
+
+entity MainCamera:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.0, 6.0)
+        rotation = quat.identity()
+        scale = vec3(1.0, 1.0, 1.0)
+    cam3d.Camera
+    vp.Viewport

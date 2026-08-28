@@ -47,6 +47,20 @@ bool same_color(const Color left, const Color right) {
     return left.r == right.r && left.g == right.g && left.b == right.b && left.a == right.a;
 }
 
+// Enemies are grounded at torso height on their own entity (collision
+// capsule center); the rendered model (ModelRenderer/ModelAnimator) lives on
+// a child EnemyVisual entity offset down by half_height instead, so the
+// visible mesh's feet-anchored origin lands on the floor. Tests that assert
+// on rendering state look it up through the Parent relation.
+entt::entity enemy_visual_of(entt::registry& registry, const entt::entity enemy) {
+    for (const auto visual : registry.view<main__EnemyVisual, std_core__Parent>()) {
+        if (registry.get<std_core__Parent>(visual).parent == enemy) {
+            return visual;
+        }
+    }
+    return entt::null;
+}
+
 void dispatch_unload(entt::registry& registry) {
     auto& activation  = cactus::runtime::entt_backend::generated_scheduler_state().activation;
     activation.active = true;
@@ -101,6 +115,43 @@ TEST_CASE("first-person arena headless: authored arena, player camera, HUD, and 
     const auto game_over = only_entity<main__GameOverLabel>(registry);
     CHECK(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
     CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(game_over).visible);
+}
+
+TEST_CASE("first-person arena headless: enemy visuals are grounded at floor level, not the collision capsule center",
+          "[runtime][codegen-entt][first-person-arena][grounding]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto enemies = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
+    REQUIRE(count<main__Enemy>(registry) == 4);
+    for (const auto enemy : enemies) {
+        const auto& root_transform = registry.get<std_transform_volume__WorldTransform>(enemy);
+        // The collision/grounding root stays at torso height (floor + half
+        // height) so wall separation, player-contact, and bullet-hit checks
+        // keep working against a stable reference.
+        CHECK(root_transform.position.y == Catch::Approx(0.9F).margin(0.01F));
+
+        const auto visual = enemy_visual_of(registry, enemy);
+        REQUIRE(registry.valid(visual));
+        REQUIRE(registry.all_of<std_render_models__ModelRenderer, std_render_models__ModelAnimator>(visual));
+        const auto& visual_transform = registry.get<std_transform_volume__WorldTransform>(visual);
+        // The rendered (feet-anchored) model is offset down by half_height,
+        // so its composed world position lands on the floor, not floating at
+        // the capsule's center.
+        CHECK(visual_transform.position.x == Catch::Approx(root_transform.position.x).margin(0.001F));
+        CHECK(visual_transform.position.y == Catch::Approx(0.0F).margin(0.01F));
+        CHECK(visual_transform.position.z == Catch::Approx(root_transform.position.z).margin(0.001F));
+
+        const auto& animator = registry.get<std_render_models__ModelAnimator>(visual);
+        CHECK(animator.playing);
+        if (registry.all_of<main__RobotEnemy>(enemy)) {
+            CHECK(animator.clip == 6);
+        } else {
+            REQUIRE(registry.all_of<main__KnightEnemy>(enemy));
+            CHECK(animator.clip == 4);
+        }
+    }
 }
 
 TEST_CASE("first-person arena headless: each corner spawner produces an independent ten-second wave",
@@ -223,13 +274,24 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
         }
     }
     REQUIRE(registry.valid(dying_enemy));
-    CHECK_FALSE(registry.get<std_render_models__ModelAnimator>(dying_enemy).playing);
+    const auto dying_visual = enemy_visual_of(registry, dying_enemy);
+    REQUIRE(registry.valid(dying_visual));
+    // The death animation clip actually plays (not frozen): a type-specific
+    // death clip starts from time 0 and keeps advancing while dying.
+    const auto& dying_animator = registry.get<std_render_models__ModelAnimator>(dying_visual);
+    CHECK(dying_animator.playing);
+    if (registry.all_of<main__RobotEnemy>(dying_enemy)) {
+        CHECK(dying_animator.clip == 1);
+    } else {
+        REQUIRE(registry.all_of<main__KnightEnemy>(dying_enemy));
+        CHECK(dying_animator.clip == 6);
+    }
     const auto death_start_rotation = registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation;
     drive_frames(registry, 28);
     REQUIRE(registry.valid(dying_enemy));
     const auto& halfway = registry.get<main__Enemy>(dying_enemy);
     CHECK(halfway.death_elapsed == Catch::Approx(0.5F).margin(0.08F));
-    const auto alpha = registry.get<std_render_models__ModelRenderer>(dying_enemy).color.a;
+    const auto alpha = registry.get<std_render_models__ModelRenderer>(dying_visual).color.a;
     CHECK(alpha >= 100);
     CHECK(alpha <= 155);
     const auto halfway_rotation = registry.get<std_transform_volume__WorldTransform>(dying_enemy).rotation;
@@ -322,5 +384,162 @@ TEST_CASE("first-person arena headless: unloading also releases cursor",
     REQUIRE(cactus_raylib_fake::cursor_captured());
     dispatch_unload(registry);
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
+}
+
+TEST_CASE("first-person arena headless: Escape releases cursor capture without ending play",
+          "[runtime][codegen-entt][first-person-arena][cursor]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    REQUIRE(cactus_raylib_fake::cursor_captured());
+    const auto player = only_entity<main__Player>(registry);
+    REQUIRE(registry.get<main__Player>(player).cursor_captured);
+
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, false);
+
+    CHECK_FALSE(cactus_raylib_fake::cursor_captured());
+    CHECK_FALSE(registry.get<main__Player>(player).cursor_captured);
+    CHECK_FALSE(registry.get<main__Player>(player).game_over);
+}
+
+TEST_CASE("first-person arena headless: a primary click while released recaptures the cursor without also firing",
+          "[runtime][codegen-entt][first-person-arena][cursor]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+    const auto player = only_entity<main__Player>(registry);
+
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_ESCAPE, false);
+    REQUIRE_FALSE(cactus_raylib_fake::cursor_captured());
+
+    const auto bullets_before = count<main__Bullet>(registry);
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
+
+    CHECK(cactus_raylib_fake::cursor_captured());
+    CHECK(registry.get<main__Player>(player).cursor_captured);
+    CHECK(count<main__Bullet>(registry) == bullets_before);
+}
+
+TEST_CASE("first-person arena headless: the arena is lit by exactly one enabled directional sun light",
+          "[runtime][codegen-entt][first-person-arena][lighting]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto lights = registry.view<std_render_meshes__DirectionalLight>();
+    REQUIRE(lights.size() == 1);
+    CHECK(registry.get<std_render_meshes__DirectionalLight>(*lights.begin()).enabled);
+}
+
+TEST_CASE("first-person arena headless: cursor_captured stays consistent with actual capture state across game over",
+          "[runtime][codegen-entt][first-person-arena][cursor][game-over]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player        = only_entity<main__Player>(registry);
+    auto& player_transform   = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto enemy         = *registry.view<main__Enemy, std_transform_volume__WorldTransform>().begin();
+    auto& enemy_transform    = registry.get<std_transform_volume__WorldTransform>(enemy);
+    enemy_transform.position = player_transform.position;
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+
+    REQUIRE(registry.get<main__Player>(player).game_over);
+    CHECK_FALSE(cactus_raylib_fake::cursor_captured());
+    CHECK_FALSE(registry.get<main__Player>(player).cursor_captured);
+}
+
+TEST_CASE("first-person arena headless: pressing R after game over fully restarts the arena",
+          "[runtime][codegen-entt][first-person-arena][restart]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player            = only_entity<main__Player>(registry);
+    auto& player_transform       = registry.get<std_transform_volume__WorldTransform>(player);
+    auto& camera_state           = registry.get<std_camera_volume__FirstPersonCamera>(player);
+    const Vector3 spawn_position = player_transform.position;
+    const Quat spawn_rotation    = player_transform.rotation;
+
+    // Fire a bullet, then walk an enemy into the player to trigger game
+    // over, so both a live Bullet and live Enemy entity exist at restart
+    // time (bullets are never respawned, unlike enemies).
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_mouse_button_pressed_this_frame(MOUSE_BUTTON_LEFT, false);
+    REQUIRE(count<main__Bullet>(registry) == 1);
+
+    const auto pre_restart_enemy = *registry.view<main__Enemy, std_transform_volume__WorldTransform>().begin();
+    registry.get<std_transform_volume__WorldTransform>(pre_restart_enemy).position = player_transform.position;
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    REQUIRE(registry.get<main__Player>(player).game_over);
+    REQUIRE(registry.get<main__Player>(player).game_over_count == 1);
+
+    // Disturb the player's transform/camera as if they'd wandered before
+    // dying, proving restart actually resets it instead of it already
+    // happening to sit at spawn.
+    player_transform.position = Vector3{.x = 5.0F, .y = 2.0F, .z = -3.0F};
+    player_transform.rotation = QuaternionFromEuler(0.0F, 1.0F, 0.0F);
+    camera_state.yaw          = 1.0F;
+    camera_state.pitch        = 0.4F;
+
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_R, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_R, false);
+
+    const auto& state = registry.get<main__Player>(player);
+    CHECK_FALSE(state.game_over);
+    CHECK(state.game_over_count == 1);
+    CHECK(state.cursor_captured);
+    CHECK(cactus_raylib_fake::cursor_captured());
+    CHECK(player_transform.position.x == Catch::Approx(spawn_position.x));
+    CHECK(player_transform.position.y == Catch::Approx(spawn_position.y));
+    CHECK(player_transform.position.z == Catch::Approx(spawn_position.z));
+    CHECK(player_transform.rotation.x == Catch::Approx(spawn_rotation.x));
+    CHECK(player_transform.rotation.y == Catch::Approx(spawn_rotation.y));
+    CHECK(player_transform.rotation.z == Catch::Approx(spawn_rotation.z));
+    CHECK(player_transform.rotation.w == Catch::Approx(spawn_rotation.w));
+    CHECK(camera_state.yaw == Catch::Approx(0.0F));
+    CHECK(camera_state.pitch == Catch::Approx(0.0F));
+
+    // The specific pre-restart enemy is gone and no bullets remain. Enemy
+    // spawn points also resume on the same immediate-first-wave schedule as
+    // a fresh game start (their countdown resets to 0.0, same as game load),
+    // so a full fresh wave already exists after this same restart frame.
+    CHECK_FALSE(registry.valid(pre_restart_enemy));
+    CHECK(count<main__Bullet>(registry) == 0);
+    CHECK(count<main__Enemy>(registry) == 4);
+
+    const auto crosshair = only_entity<main__Crosshair>(registry);
+    const auto label     = only_entity<main__GameOverLabel>(registry);
+    CHECK(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
+    CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(label).visible);
+}
+
+TEST_CASE("first-person arena headless: R has no effect while the game is not over",
+          "[runtime][codegen-entt][first-person-arena][restart]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player             = only_entity<main__Player>(registry);
+    auto& player_transform        = registry.get<std_transform_volume__WorldTransform>(player);
+    player_transform.position     = Vector3{.x = 5.0F, .y = 0.9F, .z = -3.0F};
+    const auto enemy_count_before = count<main__Enemy>(registry);
+
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_R, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_R, false);
+
+    CHECK_FALSE(registry.get<main__Player>(player).game_over);
+    CHECK(player_transform.position.x == Catch::Approx(5.0F));
+    CHECK(player_transform.position.z == Catch::Approx(-3.0F));
+    CHECK(count<main__Enemy>(registry) == enemy_count_before);
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

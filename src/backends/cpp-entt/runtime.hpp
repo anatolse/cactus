@@ -100,6 +100,7 @@ struct RenderDebugState {
     int registered_point_lights{0};
     int registered_directional_lights{0};
     int active_point_lights{0};
+    int active_directional_lights{0};
     int missing_assets{0};
     int submitted_ui_primitives{0};
     bool used_default_2d_camera{false};

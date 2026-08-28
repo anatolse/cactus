@@ -8,10 +8,12 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory_resource>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <raymath.h>
 #include <rlgl.h>
 #include <string>
@@ -126,6 +128,12 @@ struct PointLightSubmission {
     float range{10.0F};
 };
 
+struct DirectionalLightSubmission {
+    Vector3 direction{};
+    Color color{};
+    float intensity{1.0F};
+};
+
 struct TextSubmission2D {
     Vector2 position{};
     float rotation_deg{0.0F};
@@ -228,6 +236,11 @@ std::pmr::vector<PointLightSubmission>& point_light_queue() noexcept {
     return queue;
 }
 
+std::pmr::vector<DirectionalLightSubmission>& directional_light_queue() noexcept {
+    static std::pmr::vector<DirectionalLightSubmission> queue{&render_queue_resource()};
+    return queue;
+}
+
 std::vector<TextSubmission2D>& text_2d_queue() noexcept {
     static std::vector<TextSubmission2D> queue;
     return queue;
@@ -268,6 +281,15 @@ std::unordered_map<int, ModelResourceEntry>& models() noexcept {
     return entries;
 }
 
+// Root directory under which registered (project-root-relative) model asset
+// paths resolve on disk, discovered once per process and reused for the rest
+// of its lifetime (design.md Decision 2). Cleared alongside the rest of the
+// model store so headless tests get a clean slate between cases.
+std::optional<std::filesystem::path>& cached_model_asset_root() noexcept {
+    static std::optional<std::filesystem::path> root;
+    return root;
+}
+
 // Handles that already produced a missing-model diagnostic (at most one per asset).
 std::unordered_set<std::uint32_t>& diagnosed_missing_model_handles() noexcept {
     static std::unordered_set<std::uint32_t> handles;
@@ -281,8 +303,9 @@ std::unordered_set<std::uint64_t>& diagnosed_invalid_clips() noexcept {
     return keys;
 }
 
-constexpr int kMaxMeshLights  = 4;
-constexpr int kPointLightType = 1;
+constexpr int kMaxMeshLights        = 4;
+constexpr int kPointLightType       = 1;
+constexpr int kDirectionalLightType = 2;
 
 // Fixed tessellation for placeholder sphere geometry (design.md risk
 // mitigation: a shared default for every sphere-shaped mesh asset, not
@@ -344,6 +367,7 @@ uniform vec4 colDiffuse;
 
 #define MAX_LIGHTS 4
 #define LIGHT_POINT 1
+#define LIGHT_DIRECTIONAL 2
 
 struct Light {
     int enabled;
@@ -367,9 +391,12 @@ void main()
 
     for (int i = 0; i < MAX_LIGHTS; i++)
     {
-        if (lights[i].enabled == 1 && lights[i].type == LIGHT_POINT)
+        if (lights[i].enabled == 1 && (lights[i].type == LIGHT_POINT || lights[i].type == LIGHT_DIRECTIONAL))
         {
-            vec3 light = normalize(lights[i].position - fragPosition);
+            // Point lights carry a world position to aim at fragPosition; directional
+            // lights carry a pre-normalized surface-to-light unit vector directly in
+            // the same `position` uniform slot (see apply_lights_to).
+            vec3 light = (lights[i].type == LIGHT_POINT) ? normalize(lights[i].position - fragPosition) : lights[i].position;
             float NdotL = max(dot(normal, light), 0.0);
             lightDot += lights[i].color.rgb*NdotL;
 
@@ -475,6 +502,7 @@ out vec4 finalColor;
 
 #define MAX_LIGHTS 4
 #define LIGHT_POINT 1
+#define LIGHT_DIRECTIONAL 2
 
 struct Light {
     int enabled;
@@ -498,9 +526,12 @@ void main()
 
     for (int i = 0; i < MAX_LIGHTS; i++)
     {
-        if (lights[i].enabled == 1 && lights[i].type == LIGHT_POINT)
+        if (lights[i].enabled == 1 && (lights[i].type == LIGHT_POINT || lights[i].type == LIGHT_DIRECTIONAL))
         {
-            vec3 light = normalize(lights[i].position - fragPosition);
+            // Point lights carry a world position to aim at fragPosition; directional
+            // lights carry a pre-normalized surface-to-light unit vector directly in
+            // the same `position` uniform slot (see apply_lights_to).
+            vec3 light = (lights[i].type == LIGHT_POINT) ? normalize(lights[i].position - fragPosition) : lights[i].position;
             float NdotL = max(dot(normal, light), 0.0);
             lightDot += lights[i].color.rgb*NdotL;
 
@@ -698,7 +729,39 @@ void clear_lighting_shader() noexcept {
     }
 }
 
-void apply_point_lights_to(const LightingShaderState& shader_state, const Camera3D& camera, const int active_lights) {
+// A point or directional light resolved into the single shared shape the
+// shader's `position` uniform slot expects (design.md Decision 1): for point
+// lights this is the light's world position; for directional lights it is a
+// pre-normalized surface-to-light unit vector, reusing the slot instead of
+// adding a dedicated direction uniform.
+struct ResolvedLight {
+    int type{kPointLightType};
+    Vector3 position{};
+    Color color{};
+    float intensity{1.0F};
+};
+
+struct LightBudget {
+    int point_count{0};
+    int directional_count{0};
+    int active_lights{0};
+};
+
+// Point lights fill the shared kMaxMeshLights budget first, then directional
+// lights fill whatever remains (design.md Decision 1's fill order).
+LightBudget compute_light_budget() noexcept {
+    LightBudget budget;
+    budget.point_count = std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
+    budget.directional_count =
+        std::min(static_cast<int>(directional_light_queue().size()), kMaxMeshLights - budget.point_count);
+    budget.active_lights = budget.point_count + budget.directional_count;
+    return budget;
+}
+
+void apply_lights_to(const LightingShaderState& shader_state,
+                     const Camera3D& camera,
+                     const std::array<ResolvedLight, kMaxMeshLights>& resolved,
+                     const int active_lights) {
     const Shader& shader = shader_state.shader;
     const std::array<float, 4> ambient{0.22F, 0.22F, 0.28F, 1.0F};
     const std::array<float, 3> view_pos{camera.position.x, camera.position.y, camera.position.z};
@@ -707,14 +770,15 @@ void apply_point_lights_to(const LightingShaderState& shader_state, const Camera
 
     for (int i = 0; i < kMaxMeshLights; ++i) {
         const int enabled = i < active_lights ? 1 : 0;
-        const int type    = kPointLightType;
+        int type          = kPointLightType;
         const auto zero   = Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
         std::array<float, 3> position{zero.x, zero.y, zero.z};
         std::array<float, 3> target{zero.x, zero.y, zero.z};
         std::array<float, 4> color{0.0F, 0.0F, 0.0F, 1.0F};
 
         if (i < active_lights) {
-            const auto& light = point_light_queue()[static_cast<std::size_t>(i)];
+            const auto& light = resolved[static_cast<std::size_t>(i)];
+            type              = light.type;
             position[0]       = light.position.x;
             position[1]       = light.position.y;
             position[2]       = light.position.z;
@@ -733,20 +797,37 @@ void apply_point_lights_to(const LightingShaderState& shader_state, const Camera
     }
 }
 
-void apply_point_lights(const Camera3D& camera) {
-    const int active_lights = std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
-    render_debug_state_storage().active_point_lights  = active_lights;
-    render_debug_state_storage().used_lit_mesh_shader = active_lights > 0;
+void apply_lights(const Camera3D& camera) {
+    const LightBudget budget                               = compute_light_budget();
+    render_debug_state_storage().active_point_lights       = budget.point_count;
+    render_debug_state_storage().active_directional_lights = budget.directional_count;
+    render_debug_state_storage().used_lit_mesh_shader      = budget.active_lights > 0;
+
+    std::array<ResolvedLight, kMaxMeshLights> resolved{};
+    int slot = 0;
+    for (int i = 0; i < budget.point_count; ++i) {
+        const auto& light                        = point_light_queue()[static_cast<std::size_t>(i)];
+        resolved[static_cast<std::size_t>(slot)] = ResolvedLight{
+            .type = kPointLightType, .position = light.position, .color = light.color, .intensity = light.intensity};
+        ++slot;
+    }
+    for (int i = 0; i < budget.directional_count; ++i) {
+        const auto& light                        = directional_light_queue()[static_cast<std::size_t>(i)];
+        const Vector3 to_light                   = Vector3Normalize(Vector3Negate(light.direction));
+        resolved[static_cast<std::size_t>(slot)] = ResolvedLight{
+            .type = kDirectionalLightType, .position = to_light, .color = light.color, .intensity = light.intensity};
+        ++slot;
+    }
 
     // Both variants share the fragment lighting model, so both must see the
     // same light uniforms. The skinned variant is ensured here (not only at
     // model-bind time) so a skinned model loading mid-flush is lit the same
     // frame it first appears.
     if (ensure_lighting_shader() != nullptr) {
-        apply_point_lights_to(lighting_shader_state(), camera, active_lights);
+        apply_lights_to(lighting_shader_state(), camera, resolved, budget.active_lights);
     }
     if (ensure_skinned_lighting_shader() != nullptr) {
-        apply_point_lights_to(skinned_lighting_shader_state(), camera, active_lights);
+        apply_lights_to(skinned_lighting_shader_state(), camera, resolved, budget.active_lights);
     }
 }
 
@@ -827,6 +908,7 @@ void clear_model_store() noexcept {
     models().clear();
     diagnosed_missing_model_handles().clear();
     diagnosed_invalid_clips().clear();
+    cached_model_asset_root().reset();
 }
 
 Texture2D* ensure_texture_resource(const int runtime_id) {
@@ -936,6 +1018,57 @@ Model fake_model_resource() noexcept {
 }
 #endif
 
+// Registered model paths are baked project-root-relative at compile time
+// (dsl-asset-declarations); the running process's cwd may not match the
+// compiler's cwd (e.g. an example launched from build/ rather than the repo
+// root). Try the working directory first (preserves what already works),
+// then the executable's own directory and a bounded chain of its ancestors
+// (design.md Decision 2). Returns nullopt if nothing resolves, leaving the
+// caller to fail exactly as it does today.
+constexpr int kModelRootSearchMaxAncestors = 8;
+
+std::optional<std::filesystem::path> discover_model_asset_root(const std::string& registered_path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::path cwd = fs::current_path(ec);
+    if (!ec && fs::exists(cwd / registered_path, ec)) {
+        return cwd;
+    }
+
+    fs::path candidate = fs::path(GetApplicationDirectory());
+    for (int depth = 0; depth <= kModelRootSearchMaxAncestors; ++depth) {
+        ec.clear();
+        if (fs::exists(candidate / registered_path, ec)) {
+            return candidate;
+        }
+        fs::path parent = candidate.parent_path();
+        if (parent == candidate) {
+            break;
+        }
+        candidate = std::move(parent);
+    }
+    return std::nullopt;
+}
+
+// Resolves a registered model path to the path the runtime should actually
+// open, discovering (and caching) the root directory on first use. Falls
+// back to the registered path unchanged when no root has been found yet, so
+// the caller's existing FileExists-fails-once bookkeeping still applies.
+std::string resolve_model_path(const std::string& registered_path) {
+    if (registered_path.empty()) {
+        return registered_path;
+    }
+    auto& cached = cached_model_asset_root();
+    if (!cached.has_value()) {
+        cached = discover_model_asset_root(registered_path);
+    }
+    if (!cached.has_value()) {
+        return registered_path;
+    }
+    return (*cached / registered_path).string();
+}
+
 // Lazily load a registered model on first render-time use (dsl-model-assets
 // D3/D4/D6). Missing or empty files mark the entry failed — the draw is
 // skipped without placeholder geometry and the load is never retried.
@@ -954,7 +1087,8 @@ Model* ensure_model_resource(const int runtime_id) {
     if (entry.loaded) {
         return &entry.model;
     }
-    if (entry.path.empty() || !FileExists(entry.path.c_str())) {
+    const std::string resolved_path = resolve_model_path(entry.path);
+    if (entry.path.empty() || !FileExists(resolved_path.c_str())) {
         entry.failed = true;
         record_model_load_failure("model file missing: " + entry.path);
         return nullptr;
@@ -965,7 +1099,7 @@ Model* ensure_model_resource(const int runtime_id) {
 #ifdef CACTUS_RAYLIB_FAKE
     entry.model = fake_model_resource();
 #else
-    entry.model = LoadModel(entry.path.c_str());
+    entry.model = LoadModel(resolved_path.c_str());
 #endif
     if (entry.model.meshCount == 0) {
         entry.failed = true;
@@ -1004,7 +1138,8 @@ void ensure_model_animations(ModelResourceEntry& entry) {
         return;
     }
     entry.animations_load_attempted = true;
-    if (entry.path.empty() || !FileExists(entry.path.c_str())) {
+    const std::string resolved_path = resolve_model_path(entry.path);
+    if (entry.path.empty() || !FileExists(resolved_path.c_str())) {
         return;
     }
 #ifdef CACTUS_RAYLIB_FAKE
@@ -1014,7 +1149,7 @@ void ensure_model_animations(ModelResourceEntry& entry) {
     // part of what headless behavioral tests assert.
     return;
 #else
-    entry.animations = LoadModelAnimations(entry.path.c_str(), &entry.animation_count);
+    entry.animations = LoadModelAnimations(resolved_path.c_str(), &entry.animation_count);
     if (entry.animations == nullptr) {
         entry.animation_count = 0;
     }
@@ -1085,17 +1220,18 @@ void flush_mesh_queue() noexcept {
         return;
     }
 
-    render_debug_state_storage().used_default_3d_camera = true;
-    render_debug_state_storage().active_point_lights =
-        std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
-    render_debug_state_storage().used_lit_mesh_shader = render_debug_state_storage().active_point_lights > 0;
+    render_debug_state_storage().used_default_3d_camera    = true;
+    const LightBudget light_budget                         = compute_light_budget();
+    render_debug_state_storage().active_point_lights       = light_budget.point_count;
+    render_debug_state_storage().active_directional_lights = light_budget.directional_count;
+    render_debug_state_storage().used_lit_mesh_shader      = light_budget.active_lights > 0;
     if (!cactus::runtime::raylib::IsWindowReady()) {
         return;
     }
 
     const Camera3D camera = get_active_camera_3d();
 
-    apply_point_lights(camera);
+    apply_lights(camera);
 
     cactus::runtime::raylib::BeginMode3D(camera);
     for (const auto& submission : mesh_queue()) {
@@ -1115,17 +1251,18 @@ void flush_model_queue() noexcept {
         return;
     }
 
-    render_debug_state_storage().used_default_3d_camera = true;
-    render_debug_state_storage().active_point_lights =
-        std::min(static_cast<int>(point_light_queue().size()), kMaxMeshLights);
-    render_debug_state_storage().used_lit_mesh_shader = render_debug_state_storage().active_point_lights > 0;
+    render_debug_state_storage().used_default_3d_camera    = true;
+    const LightBudget light_budget                         = compute_light_budget();
+    render_debug_state_storage().active_point_lights       = light_budget.point_count;
+    render_debug_state_storage().active_directional_lights = light_budget.directional_count;
+    render_debug_state_storage().used_lit_mesh_shader      = light_budget.active_lights > 0;
 
     // Materialization still runs headless so failure bookkeeping stays
     // test-observable; only the draw calls require a window.
     const bool window_ready = cactus::runtime::raylib::IsWindowReady();
     if (window_ready) {
         const Camera3D camera = get_active_camera_3d();
-        apply_point_lights(camera);
+        apply_lights(camera);
         cactus::runtime::raylib::BeginMode3D(camera);
     }
     for (const auto& submission : model_queue()) {
@@ -1452,6 +1589,7 @@ void reset_render_debug_state() noexcept {
     mesh_queue().clear();
     model_queue().clear();
     point_light_queue().clear();
+    directional_light_queue().clear();
     text_2d_queue().clear();
     text_3d_queue().clear();
     screen_label_queue().clear();
@@ -1480,13 +1618,15 @@ void begin_render_frame() noexcept {
     mesh_queue().clear();
     model_queue().clear();
     point_light_queue().clear();
+    directional_light_queue().clear();
     text_2d_queue().clear();
     text_3d_queue().clear();
     screen_label_queue().clear();
-    render_debug_state_storage().used_default_2d_camera = false;
-    render_debug_state_storage().used_default_3d_camera = false;
-    render_debug_state_storage().active_point_lights    = 0;
-    render_debug_state_storage().used_lit_mesh_shader   = false;
+    render_debug_state_storage().used_default_2d_camera    = false;
+    render_debug_state_storage().used_default_3d_camera    = false;
+    render_debug_state_storage().active_point_lights       = 0;
+    render_debug_state_storage().active_directional_lights = 0;
+    render_debug_state_storage().used_lit_mesh_shader      = false;
     render_debug_state_storage().drawn_sprite_layers.clear();
     render_debug_state_storage().submitted_mesh_colors.clear();
     render_debug_state_storage().submitted_model_colors.clear();
@@ -1504,6 +1644,7 @@ static void flush_viewport_queues() noexcept {
     text_3d_queue().clear();
     sprite_queue().clear();
     point_light_queue().clear();
+    directional_light_queue().clear();
     text_2d_queue().clear();
 }
 
@@ -1741,11 +1882,16 @@ void register_point_light(const Vector3 position,
     }
 }
 
-void register_directional_light(const Vector3 /*direction*/,
-                                const Color /*color*/,
-                                const float /*intensity*/,
+void register_directional_light(const Vector3 direction,
+                                const Color color,
+                                const float intensity,
                                 const bool enabled) noexcept {
     if (enabled) {
+        directional_light_queue().push_back(DirectionalLightSubmission{
+            .direction = direction,
+            .color     = color,
+            .intensity = intensity,
+        });
         ++render_debug_state_storage().registered_directional_lights;
     }
 }

@@ -889,6 +889,33 @@ TEST_CASE("Runtime stdlib: EnTT animation introspection reads real GLB clips bef
     cactus::runtime::entt_backend::reset_render_debug_state();
 }
 
+TEST_CASE(
+    "Runtime stdlib: EnTT model materializes from a project-root-relative path when the process cwd "
+    "does not match the compiler's cwd",
+    "[runtime][assets][entt][asset-runtime-infrastructure]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+
+    // Compile-time-baked asset paths are project-root-relative
+    // (dsl-asset-declarations), not relative to wherever the executable
+    // happens to be launched from. The test binary's own cwd (this test
+    // suite's working directory, e.g. build/tests) is neither the repo root
+    // nor an ancestor with "examples" directly under it in one hop, so this
+    // registered path is resolvable only if the runtime searches beyond the
+    // raw working directory (design.md Decision 2).
+    REQUIRE_FALSE(fs::exists("examples/model-renderer/art/robot.glb"));
+    registry.register_model(87U, "examples/model-renderer/art/robot.glb", 87);
+
+    // Animation introspection is CPU-side and needs no window, so it proves
+    // materialization succeeded without depending on a real GL context.
+    const int count = cactus::runtime::entt_backend::model_animation_count(87U);
+    CHECK(count == 14);
+
+    registry.clear();
+    cactus::runtime::entt_backend::reset_render_debug_state();
+}
+
 TEST_CASE("Runtime stdlib: EnTT model bounds introspection stays total without a loadable model",
           "[runtime][assets][entt][dynamic-model-spawning]") {
     auto& registry = shared_asset_registry();
@@ -1143,6 +1170,34 @@ TEST_CASE("Runtime stdlib: EnTT point lights participate in lit mesh frame state
 
     CHECK(cactus::runtime::entt_backend::render_debug_state().registered_point_lights == 2);
     CHECK(cactus::runtime::entt_backend::render_debug_state().active_point_lights == 2);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().used_lit_mesh_shader);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_3d_camera);
+}
+
+TEST_CASE("Runtime stdlib: EnTT directional lights participate in lit mesh frame state", "[runtime][assets][entt]") {
+    auto& registry = shared_asset_registry();
+    registry.clear();
+    registry.register_mesh(61U, "sun_lit_cube", 61);
+    registry.register_material(62U, "sun_lit_material", 62);
+
+    cactus::runtime::entt_backend::reset_render_debug_state();
+    cactus::runtime::entt_backend::begin_render_frame();
+    cactus::runtime::entt_backend::submit_mesh(Vector3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                               stdlib::math::quat::identity(),
+                                               Vector3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+                                               61U,
+                                               62U,
+                                               true,
+                                               true,
+                                               WHITE);
+    cactus::runtime::entt_backend::register_directional_light(
+        Vector3{.x = -0.4F, .y = -1.0F, .z = -0.3F}, WHITE, 1.0F, true);
+    cactus::runtime::entt_backend::register_directional_light(
+        Vector3{.x = 0.0F, .y = -1.0F, .z = 0.0F}, WHITE, 0.5F, false);
+    cactus::runtime::entt_backend::end_render_frame();
+
+    CHECK(cactus::runtime::entt_backend::render_debug_state().registered_directional_lights == 1);
+    CHECK(cactus::runtime::entt_backend::render_debug_state().active_directional_lights == 1);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_lit_mesh_shader);
     CHECK(cactus::runtime::entt_backend::render_debug_state().used_default_3d_camera);
 }

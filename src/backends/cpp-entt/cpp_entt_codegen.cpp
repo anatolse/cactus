@@ -2445,6 +2445,7 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     out << "int main() try {\n";
     out << "    const auto config = cactus::runtime::entt_backend::generated_project_config();\n";
     out << "    InitWindow(config.window_width, config.window_height, config.window_title);\n";
+    out << "    SetExitKey(KEY_NULL);\n";
     out << "    SetTargetFPS(config.target_fps);\n\n";
     out << "    entt::registry registry;\n";
     out << "    entt::dispatcher dispatcher;\n";

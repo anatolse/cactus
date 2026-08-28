@@ -586,6 +586,11 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("struct TickEvent") == std::string::npos);
     CHECK(code.find("int main()") != std::string::npos);
     CHECK(code.find("InitWindow(config.window_width, config.window_height, config.window_title)") != std::string::npos);
+    // Generated entrypoints disable raylib's default ESC-quits-window
+    // behavior immediately after window creation (backend-cpp-entrypoints),
+    // so authored gameplay can repurpose Escape without the window closing.
+    CHECK(code.find("InitWindow(config.window_width, config.window_height, config.window_title);\n"
+                    "    SetExitKey(KEY_NULL);\n") != std::string::npos);
     CHECK(code.find("entt::registry registry;") != std::string::npos);
     CHECK(code.find("entt::dispatcher dispatcher;") != std::string::npos);
     CHECK(code.find("cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);") != std::string::npos);
@@ -985,6 +990,38 @@ TEST_CASE("Codegen EnTT: mesh renderer extern rule binds to backend runtime with
     CHECK(code.find("cactus::runtime::entt_backend::submit_mesh(") != std::string::npos);
     CHECK(code.find("Renderer_comp.color") != std::string::npos);
     CHECK(code.find("void mesh_renderer_update(") == std::string::npos);
+}
+
+// Regression coverage for the runtime-side directional-light rewire: codegen
+// recognition of DirectionalLightRender (system_emitter.cpp) is independent of
+// how the cpp-entt runtime shades the light, so it must still emit exactly one
+// register_directional_light call fed by the trait's own fields.
+TEST_CASE("Codegen EnTT: directional light render extern rule binds to backend runtime without user callback",
+          "[codegen-entt][assets]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.render.meshes\n"
+        "trait DirectionalLight:\n"
+        "    var direction: vec3\n"
+        "    var color: color\n"
+        "    var intensity: float\n"
+        "    var enabled: bool\n"
+        "event run\n"
+        "extern rule DirectionalLightRender:\n"
+        "    filter:\n"
+        "        DirectionalLight\n"
+        "    on run:\n"
+        "        reads:\n"
+        "            DirectionalLight\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("cactus::runtime::entt_backend::register_directional_light(") != std::string::npos);
+    CHECK(code.find("DirectionalLight_comp.direction") != std::string::npos);
+    CHECK(code.find("DirectionalLight_comp.color") != std::string::npos);
+    CHECK(code.find("DirectionalLight_comp.intensity") != std::string::npos);
+    CHECK(code.find("DirectionalLight_comp.enabled") != std::string::npos);
+    CHECK(code.find("void directional_light_render_update(") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: shape renderer draws Circle shapes via draw_shape_circle alongside Rectangle",

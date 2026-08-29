@@ -4816,6 +4816,51 @@ TEST_CASE("Codegen EnTT: std.transform.flat world_position injects registry as f
     CHECK(rule.find("cactus::runtime::entt_backend::editor_entity_position_2d(registry,") != std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: std.transform.flat world_position registers live-position impl without std.editor",
+          "[codegen-entt][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "use std.transform.flat as transform2d\n"
+        "pub event tick\n"
+        "trait WorldTransform:\n"
+        "    var position: vec2\n"
+        "trait Selection:\n"
+        "    var sel: entity_id\n"
+        "rule GetPos:\n"
+        "    filter:\n"
+        "        Selection\n"
+        "    on tick:\n"
+        "        let _pos = transform2d.world_position(sel)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto init = generated_function(code, "void generated_init_project");
+    CHECK(init.find("register_editor_entity_position_2d_impl") != std::string::npos);
+    CHECK(init.find("return Vector2{.x = __wt->position.x, .y = __wt->position.y}") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: std.transform.volume world_position registers live-position impl without std.editor",
+          "[codegen-entt][stdlib]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        std::string("use std.transform.volume as transform3d\n"
+                    "pub event tick\n") +
+            kWorldTransformVolumeTrait +
+            "trait Selection:\n"
+            "    var sel: entity_id\n"
+            "rule GetPos:\n"
+            "    filter:\n"
+            "        Selection\n"
+            "    on tick:\n"
+            "        let _pos = transform3d.world_position(sel)\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    const auto init = generated_function(code, "void generated_init_project");
+    CHECK(init.find("register_editor_entity_position_3d_impl") != std::string::npos);
+    CHECK(init.find("return __wt->position") != std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: clean-named editor extern func spawn_template lowers with registry injected",
           "[codegen-entt][editor][stdlib]") {
     ProgramNode program;

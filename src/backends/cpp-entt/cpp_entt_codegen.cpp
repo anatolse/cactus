@@ -3228,7 +3228,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            }\n";
         out << "        });\n";
     }
-    if (uses_editor && wt_usage.flat) {
+    if (wt_usage.flat) {
         out << "    cactus::runtime::entt_backend::register_editor_entity_position_2d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity __eid) -> Vector2 {\n";
         out << "            if (reg.valid(__eid)) {\n";
@@ -3248,7 +3248,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            }\n";
         out << "        });\n";
     }
-    if (uses_editor && rig_is_3d) {
+    if (rig_is_3d) {
         out << "    cactus::runtime::entt_backend::register_editor_entity_position_3d_impl(\n";
         out << "        [](entt::registry& reg, entt::entity __eid) -> Vector3 {\n";
         out << "            if (reg.valid(__eid)) {\n";

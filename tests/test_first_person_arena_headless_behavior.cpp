@@ -182,12 +182,19 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
             registry.destroy(enemy);
         }
     }
-    player_transform.position   = Vector3{.x = 0.0F, .y = 0.9F, .z = 8.0F};
+    // Player sits away from the world origin along x as well as z: a seeker
+    // walking toward the origin (the world_position live-read bug) would
+    // also see its raw distance-to-player shrink from here, since the
+    // origin lies further along the same z direction. Only a real chase of
+    // the player keeps the seeker's x converged on the player's x instead
+    // of drifting toward zero.
+    player_transform.position   = Vector3{.x = 5.0F, .y = 0.9F, .z = 8.0F};
     auto& seeker_transform      = registry.get<std_transform_volume__WorldTransform>(seeker);
-    seeker_transform.position   = Vector3{.x = 0.0F, .y = 0.9F, .z = 12.0F};
+    seeker_transform.position   = Vector3{.x = 5.0F, .y = 0.9F, .z = 12.0F};
     const float distance_before = horizontal_distance(player_transform.position, seeker_transform.position);
     drive_frames(registry, 30);
     CHECK(horizontal_distance(player_transform.position, seeker_transform.position) < distance_before);
+    CHECK(seeker_transform.position.x == Catch::Approx(5.0F).margin(0.05F));
 
     registry.destroy(seeker);
     player_transform.position = Vector3{.x = 0.0F, .y = 0.9F, .z = -14.35F};
@@ -541,5 +548,68 @@ TEST_CASE("first-person arena headless: R has no effect while the game is not ov
     CHECK(player_transform.position.x == Catch::Approx(5.0F));
     CHECK(player_transform.position.z == Catch::Approx(-3.0F));
     CHECK(count<main__Enemy>(registry) == enemy_count_before);
+}
+
+TEST_CASE("first-person arena headless: overlapping live enemies of any kind are pushed apart",
+          "[runtime][codegen-entt][first-person-arena][separation]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    // Mark the player game-over so SeekPlayer no-ops and only
+    // DetectEnemySeparation moves these two enemies below.
+    const auto player = only_entity<main__Player>(registry);
+    registry.get<main__Player>(player).game_over = true;
+
+    const auto robot  = *registry.view<main__RobotEnemy, std_transform_volume__WorldTransform>().begin();
+    const auto knight = *registry.view<main__KnightEnemy, std_transform_volume__WorldTransform>().begin();
+    for (const auto enemy : registry.view<main__Enemy>()) {
+        if (enemy != robot && enemy != knight) {
+            registry.destroy(enemy);
+        }
+    }
+
+    auto& robot_transform     = registry.get<std_transform_volume__WorldTransform>(robot);
+    auto& knight_transform    = registry.get<std_transform_volume__WorldTransform>(knight);
+    robot_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 0.0F};
+    knight_transform.position = Vector3{.x = 0.1F, .y = 0.9F, .z = 0.0F};
+    const float radius_sum =
+        registry.get<main__KinematicActor>(robot).radius + registry.get<main__KinematicActor>(knight).radius;
+
+    drive_frames(registry, 10);
+    CHECK(horizontal_distance(robot_transform.position, knight_transform.position) >= radius_sum - 0.001F);
+}
+
+TEST_CASE("first-person arena headless: a dying enemy does not participate in separation",
+          "[runtime][codegen-entt][first-person-arena][separation]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player = only_entity<main__Player>(registry);
+    registry.get<main__Player>(player).game_over = true;
+
+    const auto enemies      = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
+    auto iterator            = enemies.begin();
+    const auto live          = *iterator;
+    ++iterator;
+    const auto dying_enemy = *iterator;
+    for (const auto enemy : registry.view<main__Enemy>()) {
+        if (enemy != live && enemy != dying_enemy) {
+            registry.destroy(enemy);
+        }
+    }
+    registry.get<main__Enemy>(dying_enemy).dying = true;
+
+    auto& live_transform      = registry.get<std_transform_volume__WorldTransform>(live);
+    auto& dying_transform     = registry.get<std_transform_volume__WorldTransform>(dying_enemy);
+    live_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 0.0F};
+    dying_transform.position = Vector3{.x = 0.1F, .y = 0.9F, .z = 0.0F};
+
+    drive_frames(registry, 10);
+    CHECK(live_transform.position.x == Catch::Approx(0.0F).margin(0.001F));
+    CHECK(live_transform.position.z == Catch::Approx(0.0F).margin(0.001F));
+    CHECK(dying_transform.position.x == Catch::Approx(0.1F).margin(0.001F));
+    CHECK(dying_transform.position.z == Catch::Approx(0.0F).margin(0.001F));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

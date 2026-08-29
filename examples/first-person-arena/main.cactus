@@ -604,6 +604,30 @@ rule BeginGrounding:
     on fixed_tick:
         actor.ground_surface = -1000.0
 
+rule DetectEnemySeparation:
+    pairs:
+        a:
+            Enemy
+            KinematicActor
+            tv.WorldTransform
+        b:
+            Enemy
+            KinematicActor
+            tv.WorldTransform
+    after:
+        MovePlayer
+        SeekPlayer
+    where:
+        a != b
+        not a.Enemy.dying
+        not b.Enemy.dying
+        v3.length(collision.sphere_sphere_separation(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)) > 0.0
+
+    on fixed_tick:
+        let separation = collision.sphere_sphere_separation(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)
+        emit SeparateActor to a:
+            amount = separation * 0.5
+
 rule DetectActorSolidContact:
     pairs:
         actor:
@@ -616,6 +640,7 @@ rule DetectActorSolidContact:
     after:
         MovePlayer
         SeekPlayer
+        DetectEnemySeparation
 
     on fixed_tick:
         let separation = collision.sphere_box_separation(actor.tv.WorldTransform.position, actor.KinematicActor.radius, box.tv.WorldTransform.position, box.physics.BoxCollider.size, box.tv.WorldTransform.rotation)

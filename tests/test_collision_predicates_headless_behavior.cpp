@@ -106,4 +106,47 @@ TEST_CASE("stdlib-collision: sphere_box_separation remains usable in a pure wher
     REQUIRE(view.size() == 1);
     CHECK(registry.get<collision_predicates_runtime__SphereBoxCandidate>(*view.begin()).accepted);
 }
+
+TEST_CASE("stdlib-collision: sphere_sphere_separation handles contact, penetration, and coincident centers",
+          "[runtime][codegen-entt][stdlib-collision]") {
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    drive_frame(registry);
+
+    const auto view = registry.view<collision_predicates_runtime__Probe>();
+    REQUIRE(view.size() == 1);
+    const auto& probe = registry.get<collision_predicates_runtime__Probe>(*view.begin());
+
+    CHECK(probe.sphere_sphere_separate.x == Catch::Approx(0.0F));
+    CHECK(probe.sphere_sphere_separate.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_sphere_separate.z == Catch::Approx(0.0F));
+    CHECK(probe.sphere_sphere_touch.x == Catch::Approx(0.0F));
+    CHECK(probe.sphere_sphere_touch.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_sphere_touch.z == Catch::Approx(0.0F));
+    // a at (1.5,0,0) r=1, b at origin r=1: penetration depth 0.5, pointing
+    // from b's center toward a's center (+x).
+    CHECK(probe.sphere_sphere_overlap.x == Catch::Approx(0.5F));
+    CHECK(probe.sphere_sphere_overlap.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_sphere_overlap.z == Catch::Approx(0.0F));
+    // Coincident centers: deterministic fixed-axis result, length equal to
+    // the summed radii, instead of dividing by zero.
+    CHECK(probe.sphere_sphere_coincident.x == Catch::Approx(2.0F));
+    CHECK(probe.sphere_sphere_coincident.y == Catch::Approx(0.0F));
+    CHECK(probe.sphere_sphere_coincident.z == Catch::Approx(0.0F));
+}
+
+TEST_CASE("stdlib-collision: sphere_sphere_separation remains usable in a pure where predicate",
+          "[runtime][codegen-entt][where-clause][stdlib-collision]") {
+    entt::registry registry;
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+
+    drive_frame(registry);
+
+    const auto view = registry.view<collision_predicates_runtime__SphereSphereCandidate>();
+    REQUIRE(view.size() == 1);
+    CHECK(registry.get<collision_predicates_runtime__SphereSphereCandidate>(*view.begin()).accepted);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

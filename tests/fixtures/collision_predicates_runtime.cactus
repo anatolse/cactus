@@ -22,6 +22,10 @@ trait Probe:
     var sphere_box_overlap: vec3 = vec3(0.0, 0.0, 0.0)
     var sphere_box_inside_tie: vec3 = vec3(0.0, 0.0, 0.0)
     var sphere_box_rotated: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_sphere_separate: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_sphere_touch: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_sphere_overlap: vec3 = vec3(0.0, 0.0, 0.0)
+    var sphere_sphere_coincident: vec3 = vec3(0.0, 0.0, 0.0)
 
 rule ComputeProbe:
     filter:
@@ -39,6 +43,10 @@ rule ComputeProbe:
         sphere_box_overlap = vol.sphere_box_separation(vec3(1.5, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0), quat.identity())
         sphere_box_inside_tie = vol.sphere_box_separation(vec3(0.0, 0.0, 0.0), 0.5, vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0), quat.identity())
         sphere_box_rotated = vol.sphere_box_separation(vec3(0.0, 1.5, 0.0), 1.0, vec3(0.0, 0.0, 0.0), vec3(2.0, 4.0, 2.0), quat.from_axis_angle(vec3(0.0, 0.0, 1.0), 1.57079633))
+        sphere_sphere_separate = vol.sphere_sphere_separation(vec3(3.0, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), 1.0)
+        sphere_sphere_touch = vol.sphere_sphere_separation(vec3(2.0, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), 1.0)
+        sphere_sphere_overlap = vol.sphere_sphere_separation(vec3(1.5, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), 1.0)
+        sphere_sphere_coincident = vol.sphere_sphere_separation(vec3(0.0, 0.0, 0.0), 1.0, vec3(0.0, 0.0, 0.0), 1.0)
 
 entity ProbeEntity:
     Probe
@@ -132,3 +140,39 @@ entity SphereBoxCandidateEntity:
 
 entity SeparationBoxEntity:
     SeparationBox
+
+trait SphereSphereCandidate:
+    let position: vec3 = vec3(1.5, 0.0, 0.0)
+    let radius: float = 1.0
+    var accepted: bool = false
+
+trait SeparationSphere:
+    let position: vec3 = vec3(0.0, 0.0, 0.0)
+    let radius: float = 1.0
+
+event SphereSphereAccepted
+
+rule DetectSphereSphereWhere:
+    pairs:
+        sphere_a:
+            SphereSphereCandidate
+        sphere_b:
+            SeparationSphere
+    where:
+        v3m.length(vol.sphere_sphere_separation(sphere_a.SphereSphereCandidate.position, sphere_a.SphereSphereCandidate.radius, sphere_b.SeparationSphere.position, sphere_b.SeparationSphere.radius)) > 0.0
+
+    on tick:
+        emit SphereSphereAccepted to sphere_a
+
+rule RecordSphereSphereWhere:
+    filter:
+        SphereSphereCandidate
+
+    on SphereSphereAccepted:
+        accepted = true
+
+entity SphereSphereCandidateEntity:
+    SphereSphereCandidate
+
+entity SeparationSphereEntity:
+    SeparationSphere

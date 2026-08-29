@@ -70,3 +70,27 @@ std.collision.volume SHALL export pub func sphere_box_separation(sphere_position
 #### Scenario: Separation is usable in a where clause
 - **WHEN** a pure where predicate compares the returned separation with the zero vector or reads its length
 - **THEN** semantic analysis accepts the call as pure
+
+### Requirement: std.collision.volume provides pure sphere-sphere separation
+std.collision.volume SHALL export pub func sphere_sphere_separation(a_position: vec3, a_radius: float, b_position: vec3, b_radius: float) vec3 as an ordinary pure Cactus function. The result SHALL be the shortest world-space translation that moves `a` out of overlap with `b` along the line between their centers, and SHALL be the zero vector when the spheres are separated or only touching. The function SHALL depend only on plain math values and SHALL NOT reference std.physics collider traits.
+
+#### Scenario: Separated spheres return zero
+- **WHEN** the spheres lie apart with positive clearance
+- **THEN** sphere_sphere_separation returns vec3(0.0, 0.0, 0.0)
+
+#### Scenario: Touching spheres return zero
+- **WHEN** the spheres are exactly the sum of their radii apart
+- **THEN** sphere_sphere_separation returns vec3(0.0, 0.0, 0.0)
+
+#### Scenario: Overlapping spheres return outward separation along their center line
+- **WHEN** the spheres overlap
+- **THEN** the returned vector points from b's center toward a's center
+- **AND** its length equals the penetration depth (the summed radii minus the center distance)
+
+#### Scenario: Coincident centers resolve deterministically
+- **WHEN** both spheres share the same center position
+- **THEN** sphere_sphere_separation returns a deterministic non-zero vector along a fixed axis, with length equal to the summed radii, rather than dividing by zero
+
+#### Scenario: Separation is usable in a where clause
+- **WHEN** a pure where predicate compares the returned separation with the zero vector or reads its length
+- **THEN** semantic analysis accepts the call as pure

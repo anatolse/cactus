@@ -587,6 +587,25 @@ The cpp-entt backend-owned mesh render path SHALL support at least two enabled p
 - **WHEN** two enabled recognized stdlib point lights are registered before the mesh pass flushes
 - **THEN** the cpp-entt runtime retains both lights for the frame instead of dropping to a single-light debug path
 
+### Requirement: EnTT mesh and model render passes apply registered directional lights to shading
+The cpp-entt backend SHALL treat recognized stdlib directional-light registration as render-pass input for backend-owned mesh and model shading rather than debug-only accounting. During a render frame, an enabled directional light registered through the recognized `std.render.meshes.DirectionalLightRender` binding SHALL contribute lighting data consumed by both the backend-owned mesh pass and the backend-owned model pass (including skinned models), sharing the same per-frame light-slot budget already used by point lights.
+
+#### Scenario: Enabled directional light participates in the mesh pass
+- **WHEN** a cpp-entt program registers an enabled `std.render.meshes.DirectionalLight` and also submits a visible mesh in the same render frame
+- **THEN** the backend-owned mesh pass retains that light as active lighting input for the frame, oriented along the light's authored `direction`
+
+#### Scenario: Enabled directional light participates in the model pass
+- **WHEN** a cpp-entt program registers an enabled `std.render.meshes.DirectionalLight` and also submits a visible model (skinned or unskinned) in the same render frame
+- **THEN** the backend-owned model pass retains that light as active lighting input for the frame
+
+#### Scenario: Disabled directional light does not contribute shading input
+- **WHEN** a registered `std.render.meshes.DirectionalLight` has `enabled = false`
+- **THEN** the backend does not add that light to the active lighting inputs used for mesh or model shading in that frame
+
+#### Scenario: Directional and point lights share one frame's light budget
+- **WHEN** enabled point lights and an enabled directional light are registered in the same frame, together exceeding the backend's per-frame light-slot budget
+- **THEN** the backend retains lights up to that budget and does not crash or silently corrupt unrelated shading state for the frame
+
 ### Requirement: cpp-entt backend lowers bounded foreach over list values
 The cpp-entt backend SHALL compile bounded foreach statements into C++ iteration over the evaluated list snapshot. The iterable expression SHALL be emitted once before the generated loop.
 
@@ -682,6 +701,17 @@ The cpp-entt backend SHALL clear projected-trait state at the deterministic fram
 #### Scenario: Durable component survives projection cleanup
 - **WHEN** an entity had durable `Highlighted` before projection and receives a projected `Highlighted` value during the frame
 - **THEN** the next frame observes the original durable `Highlighted` value unless authored code changed or removed it durably
+
+### Requirement: Projected-trait tracking is implemented as a shared runtime template
+The cpp-entt backend SHALL implement per-component-type projected-trait tracking (remember/project/cancel/clear) using a single `ProjectedTraitTracker<Component>` template hosted in the backend runtime and instantiated once per projected component type, rather than emitting an independent copy of the remember/project/cancel/clear function bodies as per-program generated text for each projected trait. Generated per-program output SHALL be limited to a thin per-type tracker instantiation plus the calls needed to route project/cancel/clear operations through it. Tag components (no fields) and data-bearing components SHALL both be supported by the same template, selected via `std::is_empty_v<Component>`.
+
+#### Scenario: Tag and data-bearing projected traits share one template
+- **WHEN** a program projects both a marker trait and a field-bearing trait
+- **THEN** the generated output instantiates `ProjectedTraitTracker` for both component types from the shared runtime template rather than emitting distinct hand-written remember/project/cancel/clear function bodies for each
+
+#### Scenario: Per-program generated text no longer scales with tracking logic size
+- **WHEN** two programs each project a projected trait
+- **THEN** the per-program generated projected-trait tracking text for each is limited to the tracker instantiation and routing calls for its projected types, with the remember/project/cancel/clear logic itself residing once in the shared runtime template rather than duplicated per program
 
 ### Requirement: Backend recognizes TextRenderer2D and emits DrawTextPro-based 2D text rendering
 The cpp-entt backend SHALL recognize the `extern rule TextRenderer2D` from `std.render.text` (identified by its filter containing `std.transform.flat.WorldTransform` and `TextLabel`) and emit a rule body that submits text draw calls for the backend-owned 2D render pass. The generated code SHALL use `DrawTextPro` (or equivalent rotation-capable raylib function) so that `WorldTransform.rotation` (radians) is applied to the rendered text.
@@ -1030,6 +1060,17 @@ The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands durin
 #### Scenario: No spawn/destroy handler means no notification codegen
 - **WHEN** the linked program declares no handler triggered by `std.core.spawn` or `std.core.destroy`
 - **THEN** `generated_commit_activation` applies commands without emitting either notification, and no dispatch overload for `std_core__spawnEvent`/`std_core__destroyEvent` is generated
+
+### Requirement: Activation and event-scheduler machinery is implemented as shared runtime helpers
+The cpp-entt backend SHALL implement its per-frame activation/event-scheduler machinery — entity reservation, structural command queuing and commit, event emission (including targeted emission), and event-cascade draining — using helpers templated on the program's `EventOccurrence` type and hosted in the backend runtime, rather than emitting an independent copy of this machinery as per-program generated text. Generated per-program output SHALL be limited to declaring the program's concrete `EventOccurrence` type and its program-specific hooks (spawn/destroy notification synthesis, event dispatch to handlers), calling through to the shared runtime helpers for the scheduler logic itself.
+
+#### Scenario: Structurally identical scheduler machinery is shared across programs
+- **WHEN** two programs with different event sets are both generated for cpp-entt
+- **THEN** the generated output for each contains only its program-specific `EventOccurrence` declaration and dispatch/notification hooks calling into the shared runtime scheduler helpers, not two independent copies of the queuing/commit/drain logic
+
+#### Scenario: Programs without spawn/destroy handlers pay no extra runtime cost
+- **WHEN** a program declares no `on spawn` or `on destroy` handler
+- **THEN** the generated activation-commit path does not emit or execute spawn/destroy notification synthesis for that program
 
 ### Requirement: Graph-driven main loop runs one-shot load/unload boundary activations
 When the cpp-entt backend generates the graph-driven main loop, and the linked program declares at least one handler triggered by `std.core.load`, the generated `main()` SHALL run one activation — inject a `std.core.load` root occurrence, execute its handler cascade, then commit — exactly once, after `generated_init_project` completes and before the first frame occurrence is injected. Symmetrically, when the linked program declares at least one handler triggered by `std.core.unload`, generated `main()` SHALL run one `std.core.unload` activation (inject, cascade, commit) exactly once, after the frame loop exits and before `CloseWindow()`. Neither activation SHALL execute when the corresponding trigger has no handler in the linked program.

@@ -51,3 +51,18 @@ The standard cpp-entt executable entrypoint SHALL obtain frame delta time from t
 #### Scenario: No-main host uses the same API
 - **WHEN** a no-main host drives generated code
 - **THEN** it supplies a typed external frame occurrence through the same scheduler entrypoint
+
+### Requirement: Generated entrypoints disable raylib's default exit key
+The standard cpp-entt executable entrypoint SHALL disable raylib's default `KEY_ESCAPE` exit-key behavior immediately after window creation, so pressing Escape no longer closes the generated window on its own. Closing the window through the OS window chrome (close button, Alt+F4, or equivalent) SHALL remain unaffected. Authored gameplay code remains free to bind Escape (or any other key) to its own logic through ordinary `std.input` declarations.
+
+#### Scenario: Escape no longer closes the window by itself
+- **WHEN** a standard `cpp-entt` generated executable is running and Escape is pressed
+- **THEN** the generated main loop does not exit as a result of that key press alone
+
+#### Scenario: OS window close still exits the loop
+- **WHEN** the generated window is closed through the OS window chrome
+- **THEN** the generated main loop exits, unaffected by the disabled default exit key
+
+#### Scenario: Authored code can still bind Escape to its own behavior
+- **WHEN** a program declares `input SomeAction: button` bound to `Key.Escape` and queries it from a handler
+- **THEN** that authored binding observes Escape presses normally, independent of the disabled default exit-key behavior

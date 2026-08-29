@@ -84,3 +84,18 @@ When performance-critical generated runtime hierarchy behavior requires dynamic 
 #### Scenario: Recursive destroy scratch storage uses pmr
 - **WHEN** the backend runtime needs temporary storage to track active recursive destroy state
 - **THEN** that storage is implemented with `std::pmr` resources/containers or an allocation-free equivalent
+
+### Requirement: world_position returns the live entity's position independent of editor usage
+`std.transform.flat.world_position(of: entity_id)` and `std.transform.volume.world_position(of: entity_id)` SHALL return the target entity's live `WorldTransform.position` whenever that entity is valid and carries a `WorldTransform` of the corresponding dimensionality, for any compiled program — not only programs that also import `std.editor`. The zero vector SHALL be returned only when the target entity is invalid or has no matching `WorldTransform`.
+
+#### Scenario: Non-editor program reads a live entity's position
+- **WHEN** a program that does not use `std.editor` calls `world_position(of: some_valid_entity)` on an entity carrying `WorldTransform`
+- **THEN** the call returns that entity's actual `WorldTransform.position`, not the zero vector
+
+#### Scenario: Editor-using program still reads live positions
+- **WHEN** a program that uses `std.editor` calls `world_position(of: some_valid_entity)`
+- **THEN** the call returns that entity's actual `WorldTransform.position`, matching non-editor programs
+
+#### Scenario: Invalid or missing entity falls back to zero
+- **WHEN** `world_position` is called with an entity that is invalid, or that lacks the corresponding `WorldTransform`
+- **THEN** the call returns the zero vector for that dimensionality

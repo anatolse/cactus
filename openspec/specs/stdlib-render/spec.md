@@ -155,6 +155,21 @@ For supported backend-owned 3D render paths, recognized `std.render.meshes.Point
 - **WHEN** a `std.render.meshes.PointLight` has `enabled = false`
 - **THEN** the backend does not contribute that light to the frame's mesh-lighting inputs
 
+### Requirement: Backend-backed directional lights contribute to backend-backed mesh and model shading
+For supported backend-owned 3D render paths, recognized `std.render.meshes.DirectionalLightRender` behavior SHALL provide per-frame directional-light inputs consumed by backend-backed mesh and model rendering, rather than only non-visual registration accounting.
+
+#### Scenario: Enabled directional light affects mesh-rendering inputs
+- **WHEN** a supported backend schedules `DirectionalLightRender` and `MeshRenderer` in the same frame for an enabled light and a visible mesh
+- **THEN** the backend-backed mesh rendering path receives directional-light data from the registered light for that frame
+
+#### Scenario: Enabled directional light affects model-rendering inputs
+- **WHEN** a supported backend schedules `DirectionalLightRender` and a model-rendering extern rule in the same frame for an enabled light and a visible model
+- **THEN** the backend-backed model rendering path receives directional-light data from the registered light for that frame
+
+#### Scenario: Disabled directional light does not affect mesh- or model-rendering inputs
+- **WHEN** a `std.render.meshes.DirectionalLight` has `enabled = false`
+- **THEN** the backend does not contribute that light to the frame's mesh- or model-lighting inputs
+
 ### Requirement: std.render.meshes point-light behavior supports representative multi-light scenes
 The shipped `std.render.meshes.PointLight` surface SHALL be sufficient for representative multi-light scenes where at least two enabled point lights contribute to the same backend-backed mesh render frame.
 

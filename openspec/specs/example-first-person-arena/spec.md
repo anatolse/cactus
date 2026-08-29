@@ -35,8 +35,19 @@ The example SHALL author a roofless square arena in Cactus entities and template
 - **WHEN** one frame is rendered
 - **THEN** the floor is dark grey, perimeter walls are light grey, the building and stairs are brown, and the viewport background is blue
 
+### Requirement: Arena is lit by a directional sun light
+The example SHALL author one enabled directional light representing sunlight, angled so it illuminates the floor, walls, and building rather than leaving authored map geometry and character models rendering unlit.
+
+#### Scenario: Sun light is present and enabled
+- **WHEN** the authored entities are inspected
+- **THEN** exactly one entity carries an enabled `std.render.meshes.DirectionalLight`
+
+#### Scenario: Lit surfaces are visibly brighter than an unlit render
+- **WHEN** one frame is rendered with the authored sun light enabled
+- **THEN** floor, wall, and building surfaces facing toward the light render visibly brighter than they would with the light disabled
+
 ### Requirement: Player uses first-person controls and a collider
-The player SHALL move with W/A/S/D input relative to its horizontal facing direction and look with mouse delta using yaw and pitch. Pitch SHALL be clamped to avoid flipping. The first-person camera SHALL remain attached to the player body, the mouse cursor SHALL be captured during play, and the player body SHALL carry volume Collider and CapsuleCollider traits used by authored arena collision and grounding rules.
+The player SHALL move with W/A/S/D input relative to its horizontal facing direction and look with mouse delta using yaw and pitch. Pitch SHALL be clamped to avoid flipping. The first-person camera SHALL remain attached to the player body, and the player body SHALL carry volume Collider and CapsuleCollider traits used by authored arena collision and grounding rules. The mouse cursor SHALL be captured when play begins; pressing Escape SHALL release cursor capture without ending the game, and a subsequent primary click while released SHALL recapture it. Cursor capture SHALL also be released automatically on game over and recaptured automatically on restart.
 
 #### Scenario: Mouse movement rotates the view
 - **WHEN** the captured mouse reports horizontal and vertical delta while the game is active
@@ -55,6 +66,16 @@ The player SHALL move with W/A/S/D input relative to its horizontal facing direc
 - **WHEN** the player moves over the exterior steps in order
 - **THEN** authored grounding raises the player by each reachable step
 - **AND** the player can stand and move on the building roof
+
+#### Scenario: Escape releases cursor capture without ending play
+- **WHEN** the cursor is captured and Escape is pressed while the game is active (not game over)
+- **THEN** the cursor is released
+- **AND** the game remains active, not in the game-over state
+
+#### Scenario: Primary click recaptures a released cursor
+- **WHEN** the cursor is released (not via game over) and a primary click occurs
+- **THEN** the cursor is recaptured
+- **AND** that same click does not also fire a bullet
 
 ### Requirement: Four corner spawn points produce robot and knight waves
 The arena SHALL contain four authored corner spawn-point entities: two assigned to robots and two assigned to knights. Each spawn point SHALL create one enemy immediately when play begins and one additional enemy every ten seconds while the game remains active.
@@ -86,6 +107,25 @@ Robot and knight enemies SHALL render their reused models with animation, carry 
 #### Scenario: Enemy contact triggers game over
 - **WHEN** a live enemy overlaps the player's collider
 - **THEN** the player enters game over exactly once
+
+### Requirement: Live enemies do not overlap each other
+While multiple live (non-dying) enemies are simultaneously present, authored separation SHALL keep their capsule colliders from penetrating one another, regardless of enemy kind. Enemies in their death transition SHALL NOT participate in this separation.
+
+#### Scenario: Two robots are pushed apart
+- **WHEN** two live robot enemies' colliders would overlap
+- **THEN** authored separation moves them apart so their colliders no longer overlap
+
+#### Scenario: A robot and a knight are pushed apart
+- **WHEN** a live robot enemy's collider would overlap a live knight enemy's collider
+- **THEN** authored separation moves them apart so their colliders no longer overlap
+
+#### Scenario: Two knights are pushed apart
+- **WHEN** two live knight enemies' colliders would overlap
+- **THEN** authored separation moves them apart so their colliders no longer overlap
+
+#### Scenario: A dying enemy does not participate in separation
+- **WHEN** one of two overlapping enemies has begun its death transition
+- **THEN** authored separation does not move either enemy for that pair
 
 ### Requirement: Player fires small cubic projectiles
 Primary mouse input SHALL spawn a small cube-rendered bullet from the first-person camera along its current forward direction, subject to a short authored cooldown. Each bullet SHALL carry velocity, finite lifetime, and a volume box collider. It SHALL be destroyed when its lifetime expires, when it hits solid map geometry, or when it hits a live enemy.
@@ -133,3 +173,33 @@ The example SHALL render a centered crosshair during play. When a live enemy rea
 - **THEN** GAME OVER is visible in window space
 - **AND** subsequent gameplay input does not move the player or create bullets
 - **AND** the cursor is no longer captured
+
+### Requirement: Player can restart the game after game over
+While in the game-over state, pressing "R" SHALL restart the game: all live enemies and in-flight bullets SHALL be removed, the player SHALL return to its original spawn position and orientation with `game_over` cleared, spawn points SHALL resume producing enemies on the same immediate-first-wave schedule as a fresh game start, and the crosshair/game-over HUD and cursor capture SHALL return to their start-of-game state. Restarting SHALL NOT reset the player's accumulated game-over count.
+
+#### Scenario: Restart clears live enemies and bullets
+- **WHEN** "R" is pressed while the game is over
+- **THEN** no `Enemy` or `Bullet` entities remain immediately after the restart completes
+
+#### Scenario: Restart returns the player to a playable state
+- **WHEN** "R" is pressed while the game is over
+- **THEN** `game_over` becomes false
+- **AND** the player is positioned and oriented at its original spawn transform
+- **AND** the cursor is captured again
+
+#### Scenario: Restart resumes enemy spawning
+- **WHEN** "R" is pressed while the game is over and gameplay continues afterward
+- **THEN** each spawn point produces its first post-restart enemy on the same immediate-first-wave schedule as the original game start
+
+#### Scenario: Restart restores the crosshair and hides the game-over label
+- **WHEN** "R" is pressed while the game is over
+- **THEN** the crosshair becomes visible again
+- **AND** the GAME OVER label becomes hidden
+
+#### Scenario: Restart does not reset the death counter
+- **WHEN** "R" is pressed after at least one prior game over
+- **THEN** the player's accumulated game-over count is unchanged by the restart
+
+#### Scenario: "R" has no effect during active play
+- **WHEN** "R" is pressed while the game is not in the game-over state
+- **THEN** no restart occurs and ongoing gameplay is unaffected

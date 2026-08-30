@@ -31,6 +31,18 @@ std::size_t count(entt::registry& registry) {
     return registry.view<Trait>().size();
 }
 
+entt::entity isolate_single_enemy(entt::registry& registry) {
+    const auto enemies = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
+    REQUIRE(enemies.begin() != enemies.end());
+    const auto seeker = *enemies.begin();
+    for (const auto enemy : enemies) {
+        if (enemy != seeker) {
+            registry.destroy(enemy);
+        }
+    }
+    return seeker;
+}
+
 void drive_frames(entt::registry& registry, const int count) {
     for (int frame = 0; frame < count; ++frame) {
         cactus_headless_test::drive_frame(registry, kFrameDt);
@@ -145,11 +157,18 @@ TEST_CASE("first-person arena headless: enemy visuals are grounded at floor leve
 
         const auto& animator = registry.get<std_render_models__ModelAnimator>(visual);
         CHECK(animator.playing);
+        // Animator speed is derived from movement speed (ROBOT_SPEED /
+        // ROBOT_RUN_REFERENCE_SPEED, KNIGHT_SPEED / KNIGHT_RUN_REFERENCE_SPEED
+        // in main.cactus) rather than a fixed 1.0, so a future change to
+        // either enemy's movement speed can't silently desync its clip's
+        // stride from its translation again.
         if (registry.all_of<main__RobotEnemy>(enemy)) {
             CHECK(animator.clip == 6);
+            CHECK(animator.speed == Catch::Approx(3.0F / 3.5F).margin(0.001F));
         } else {
             REQUIRE(registry.all_of<main__KnightEnemy>(enemy));
             CHECK(animator.clip == 4);
+            CHECK(animator.speed == Catch::Approx(3.3F / 3.5F).margin(0.001F));
         }
     }
 }
@@ -161,7 +180,20 @@ TEST_CASE("first-person arena headless: each corner spawner produces an independ
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
     REQUIRE(count<main__Enemy>(registry) == 4);
 
-    drive_frames(registry, 610);
+    // Enemies now move at a believable run pace (fast enough to cross the
+    // arena well within one ten-second spawn interval), so this
+    // timing-focused test periodically teleports every live enemy out of
+    // pursuit range: reaching the player would end the game and stop
+    // spawning before the assertion below, which is testing spawn timing,
+    // not combat outcome. 61 chunks of 10 frames matches the original
+    // 610-frame (~10.17s) window.
+    for (int chunk = 0; chunk < 61; ++chunk) {
+        drive_frames(registry, 10);
+        for (const auto enemy : registry.view<main__Enemy, std_transform_volume__WorldTransform>()) {
+            registry.get<std_transform_volume__WorldTransform>(enemy).position =
+                Vector3{.x = 100.0F, .y = 0.9F, .z = 100.0F};
+        }
+    }
     CHECK(count<main__RobotEnemy>(registry) == 4);
     CHECK(count<main__KnightEnemy>(registry) == 4);
 }
@@ -174,14 +206,7 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
 
     const auto player      = only_entity<main__Player>(registry);
     auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
-    const auto enemies     = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
-    REQUIRE(enemies.begin() != enemies.end());
-    const auto seeker = *enemies.begin();
-    for (const auto enemy : enemies) {
-        if (enemy != seeker) {
-            registry.destroy(enemy);
-        }
-    }
+    const auto seeker      = isolate_single_enemy(registry);
     // Player sits away from the world origin along x as well as z: a seeker
     // walking toward the origin (the world_position live-read bug) would
     // also see its raw distance-to-player shrink from here, since the
@@ -227,6 +252,141 @@ TEST_CASE("first-person arena headless: facing-relative movement, seeking, wall 
     CHECK(std::abs(player_transform.position.x) > std::abs(player_transform.position.z - 8.0F));
     CHECK(camera_state.pitch <= 1.45F);
     CHECK(camera_state.pitch >= -1.45F);
+}
+
+TEST_CASE("first-person arena headless: player falls gradually off a ledge instead of teleporting",
+          "[runtime][codegen-entt][first-person-arena][movement][jump]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player          = only_entity<main__Player>(registry);
+    auto& player_transform     = registry.get<std_transform_volume__WorldTransform>(player);
+    // Off the roof's footprint (x in [-4,4], z in [-4,4]) and away from the
+    // exterior stairs (around x in [4.25,7.75], z = 0), so the only surface
+    // below is the arena floor several meters down.
+    player_transform.position  = Vector3{.x = 4.5F, .y = 4.9F, .z = -10.0F};
+
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    CHECK(player_transform.position.y > 4.5F);
+
+    drive_frames(registry, 90);
+    CHECK(player_transform.position.y == Catch::Approx(0.9F).margin(0.05F));
+    CHECK(registry.get<main__KinematicActor>(player).grounded);
+}
+
+TEST_CASE("first-person arena headless: player jumps while grounded and cannot re-trigger mid-air",
+          "[runtime][codegen-entt][first-person-arena][movement][jump]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player          = only_entity<main__Player>(registry);
+    auto& player_transform     = registry.get<std_transform_volume__WorldTransform>(player);
+    player_transform.position  = Vector3{.x = 0.0F, .y = 0.9F, .z = 8.0F};
+    auto& actor                = registry.get<main__KinematicActor>(player);
+
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, false);
+    CHECK(player_transform.position.y > 0.95F);
+    CHECK_FALSE(actor.grounded);
+    const float velocity_after_first_press = actor.vertical_velocity;
+
+    // A second press while still airborne must not re-trigger the impulse:
+    // velocity should keep decaying from gravity, not jump back up.
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, true);
+    cactus_headless_test::drive_frame(registry, kFrameDt);
+    cactus_raylib_fake::set_key_pressed_this_frame(KEY_SPACE, false);
+    CHECK(actor.vertical_velocity < velocity_after_first_press);
+
+    drive_frames(registry, 90);
+    CHECK(player_transform.position.y == Catch::Approx(0.9F).margin(0.05F));
+    CHECK(actor.grounded);
+}
+
+TEST_CASE("first-person arena headless: enemy steers around a wall directly blocking its path",
+          "[runtime][codegen-entt][first-person-arena][ai]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player      = only_entity<main__Player>(registry);
+    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto seeker      = isolate_single_enemy(registry);
+
+    // BuildingNorthLeft spans x in [-4,-1], z in [-4.15,-3.85] — solid, with
+    // no door there (the door gap is x in (-1,1)). Player and seeker sit
+    // perfectly aligned through it on the x axis with zero tangential
+    // offset, so a naive straight-line pursuit drives directly into the wall
+    // face and, absent steering, gets pushed back to the same spot every
+    // tick with nothing to break the symmetry.
+    player_transform.position    = Vector3{.x = -2.5F, .y = 0.9F, .z = 0.0F};
+    auto& seeker_transform       = registry.get<std_transform_volume__WorldTransform>(seeker);
+    seeker_transform.position    = Vector3{.x = -2.5F, .y = 0.9F, .z = -8.0F};
+    const Vector3 seeker_start   = seeker_transform.position;
+    const float distance_before  = horizontal_distance(player_transform.position, seeker_transform.position);
+
+    drive_frames(registry, 600);
+
+    const float traveled = horizontal_distance(seeker_start, seeker_transform.position);
+    CHECK(traveled > 1.0F);
+    CHECK(horizontal_distance(player_transform.position, seeker_transform.position) < distance_before * 0.5F);
+}
+
+TEST_CASE("first-person arena headless: enemy vaults a low obstacle instead of only walking around it",
+          "[runtime][codegen-entt][first-person-arena][ai][jump]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player      = only_entity<main__Player>(registry);
+    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto seeker      = isolate_single_enemy(registry);
+
+    // LowBarrier spans x in [-1.5,1.5], z in [4.75,5.25], height 0.8 —
+    // taller than PLAYER_STEP_HEIGHT (not auto-steppable) but short enough
+    // to clear with a jump. Player and seeker sit aligned through its
+    // center.
+    player_transform.position   = Vector3{.x = 0.0F, .y = 0.9F, .z = 9.0F};
+    auto& seeker_transform      = registry.get<std_transform_volume__WorldTransform>(seeker);
+    seeker_transform.position   = Vector3{.x = 0.0F, .y = 0.9F, .z = 1.0F};
+    const float distance_before = horizontal_distance(player_transform.position, seeker_transform.position);
+
+    float max_height = seeker_transform.position.y;
+    for (int chunk = 0; chunk < 60; ++chunk) {
+        drive_frames(registry, 10);
+        max_height = std::max(max_height, seeker_transform.position.y);
+    }
+
+    CHECK(max_height > 1.2F);
+    CHECK(horizontal_distance(player_transform.position, seeker_transform.position) < distance_before * 0.5F);
+}
+
+TEST_CASE("first-person arena headless: enemy does not try to vault a wall too tall to clear",
+          "[runtime][codegen-entt][first-person-arena][ai][jump]") {
+    cactus_raylib_fake::reset();
+    entt::registry registry;
+    cactus_headless_test::drive_one_frame(registry, kFrameDt);
+
+    const auto player      = only_entity<main__Player>(registry);
+    auto& player_transform = registry.get<std_transform_volume__WorldTransform>(player);
+    const auto seeker      = isolate_single_enemy(registry);
+
+    // Same aligned-through-a-wall setup as the steering test (BuildingNorthLeft,
+    // 4m tall — clearly too tall to vault), but here checking height instead
+    // of steering: the enemy must never jump at it.
+    player_transform.position = Vector3{.x = -2.5F, .y = 0.9F, .z = 0.0F};
+    auto& seeker_transform    = registry.get<std_transform_volume__WorldTransform>(seeker);
+    seeker_transform.position = Vector3{.x = -2.5F, .y = 0.9F, .z = -8.0F};
+
+    float max_height = seeker_transform.position.y;
+    for (int chunk = 0; chunk < 60; ++chunk) {
+        drive_frames(registry, 10);
+        max_height = std::max(max_height, seeker_transform.position.y);
+    }
+
+    CHECK(max_height < 1.1F);
 }
 
 TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, and drive the death fade",

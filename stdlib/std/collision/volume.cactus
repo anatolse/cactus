@@ -20,6 +20,16 @@ pub func spheres_overlap(a_position: vec3, a_radius: float, b_position: vec3, b_
     let radius_sum = a_radius + b_radius
     return dist_sq < radius_sum * radius_sum
 
+# Shared by sphere_sphere_separation and sphere_box_separation's overlap
+# branch: given a vector already known to have distance_squared > 0.0, pushes
+# along it by the penetration depth against threshold, or returns zero if
+# distance_squared clears threshold (no overlap).
+func push_out_along_delta(delta: vec3, distance_squared: float, threshold: float) vec3:
+    if distance_squared >= threshold * threshold:
+        return vec3(0.0, 0.0, 0.0)
+    let distance = math.sqrt(distance_squared)
+    return delta * ((threshold - distance) / distance)
+
 # Minimum-translation vector to push sphere A out of sphere B along the
 # center-to-center axis. Coincident centers have no separation axis, so that
 # degenerate case returns an arbitrary fixed direction instead of dividing by
@@ -32,11 +42,7 @@ pub func sphere_sphere_separation(a_position: vec3, a_radius: float, b_position:
     if distance_squared <= 0.0:
         return vec3(radius_sum, 0.0, 0.0)
 
-    if distance_squared >= radius_sum * radius_sum:
-        return vec3(0.0, 0.0, 0.0)
-
-    let distance = math.sqrt(distance_squared)
-    return delta * ((radius_sum - distance) / distance)
+    return push_out_along_delta(delta, distance_squared, radius_sum)
 
 # Minimum-translation vector to push a sphere out of an oriented box: work in
 # the box's local (unrotated) space, clamp to the closest point on the box,

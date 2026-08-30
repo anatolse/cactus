@@ -25,10 +25,29 @@ const:
     PLAYER_HALF_HEIGHT = 0.9
     PLAYER_STEP_HEIGHT = 0.55
     CAMERA_EYE_HEIGHT = 0.65
+    GRAVITY = 20.0
+    JUMP_VELOCITY = 6.5
+    MAX_FALL_SPEED = 20.0
+    # Absorbs the single-tick sinking gravity always applies before grounding
+    # re-corrects it (see IntegrateVerticalMotion/DetectGroundCandidate) — not
+    # a general-purpose slop value.
+    GROUND_CONTACT_TOLERANCE = 0.05
     ENEMY_RADIUS = 0.35
     ENEMY_HALF_HEIGHT = 0.9
-    ROBOT_SPEED = 0.6
-    KNIGHT_SPEED = 0.7
+    # Reference speed each running clip's stride was authored for (tuned by
+    # eye against playback); ModelAnimator.speed is set to
+    # <kind>_SPEED / <kind>_RUN_REFERENCE_SPEED at spawn, so retuning the
+    # movement speed alone can't silently reintroduce foot-sliding.
+    ROBOT_RUN_REFERENCE_SPEED = 3.5
+    KNIGHT_RUN_REFERENCE_SPEED = 3.5
+    ROBOT_SPEED = 3.0
+    KNIGHT_SPEED = 3.3
+    # How far ahead an enemy probes for a blocking wall before committing to a
+    # heading, and the fixed deflection angles it tries (in order) when the
+    # direct-to-player heading is blocked.
+    ENEMY_STEER_PROBE_DISTANCE = 1.0
+    ENEMY_STEER_ANGLE_SMALL = 0.6981317
+    ENEMY_STEER_ANGLE_LARGE = 1.3962634
     SPAWN_INTERVAL = 10.0
     CHARACTER_HEIGHT = 1.8
     BULLET_SPEED = 20.0
@@ -45,8 +64,18 @@ const:
     # the knight's death reaction.
     ROBOT_RUN_CLIP = 6
     ROBOT_DEATH_CLIP = 1
+    # Both packs happen to load their jump clip at index 3 (Robot_Jump,
+    # Jump) — coincidence, not an assumption; kept as separate named
+    # constants per kind rather than one shared literal in case that ever
+    # changes with a model swap.
+    ROBOT_JUMP_CLIP = 3
+    KNIGHT_JUMP_CLIP = 3
     KNIGHT_RUN_CLIP = 4
     KNIGHT_DEATH_CLIP = 6
+    # How far above the enemy's torso the "would clearing this obstacle by
+    # jumping actually work" probe checks — an obstacle that still blocks at
+    # this height is treated as too tall to vault (route around it instead).
+    ENEMY_VAULT_CLEARANCE_HEIGHT = 1.3
 
 asset BoxMesh: mesh = "models/box.mesh"
 asset WhiteMaterial: material = "materials/white.mat"
@@ -67,6 +96,9 @@ input MoveRight: button
 
 input Fire: button
     mouse = inp.MouseButton.Left
+
+input Jump: button
+    key = inp.Key.Space
 
 input ReleaseCursor: button
     key = inp.Key.Escape
@@ -99,6 +131,8 @@ pub trait KinematicActor:
     var half_height: float = 0.9
     var step_height: float = 0.55
     var ground_surface: float = 0.0
+    var vertical_velocity: float = 0.0
+    var grounded: bool = true
 
 pub trait Enemy:
     var speed: float = 0.6
@@ -111,6 +145,7 @@ pub trait Enemy:
     # its own local space (the robot's front is +Z, not the engine's usual
     # -Z) can still visually face its direction of travel.
     var visual_yaw_offset: float = 0.0
+    var is_vaulting: bool = false
 
 pub trait RobotSpawnPoint:
     var countdown: float = 0.0
@@ -153,7 +188,10 @@ event RestartCleanup
 event RestartSpawnPoint
 event RestartPresentation
 
-event BeginDeathAnimation:
+# Generic "switch this visual's clip and restart playback from the top"
+# trigger — used for the death transition and (see SeekPlayer) starting and
+# ending an enemy's vault-jump animation.
+event SetEnemyClip:
     clip: int
 
 event EnemyDeathProgress:
@@ -448,6 +486,20 @@ entity Step8 from StairBox:
     physics.BoxCollider:
         size = vec3(0.5, 4.0, 2.0)
 
+# Taller than PLAYER_STEP_HEIGHT (can't be auto-climbed like a stair) but
+# short enough to clear with a single jump — sits on the direct approach from
+# the player's spawn toward the building, so both the player's jump and
+# enemies' vault-over-a-short-obstacle behavior get exercised without needing
+# to seek it out deliberately.
+entity LowBarrier from SolidBox:
+    tv.WorldTransform:
+        position = vec3(0.0, 0.4, 5.0)
+        scale = vec3(3.0, 0.8, 0.5)
+    meshes.Renderer:
+        color = #606060FF
+    physics.BoxCollider:
+        size = vec3(3.0, 0.8, 0.5)
+
 entity PlayerBody:
     tv.WorldTransform:
         position = vec3(0.0, PLAYER_HALF_HEIGHT, 10.0)
@@ -597,12 +649,47 @@ rule MovePlayer:
             transform.position.x += direction.x * PLAYER_SPEED * fixed_tick.dt
             transform.position.z += direction.z * PLAYER_SPEED * fixed_tick.dt
 
+# Reacts to the one-shot `pressed` edge during `on input` (fires exactly once
+# per frame) rather than `on fixed_tick`, which can repeat zero or more times
+# per frame under its accumulator cadence and would risk stacking multiple
+# impulses from a single press.
+rule ApplyJump:
+    filter:
+        Player
+        KinematicActor as actor
+
+    on input:
+        if game_over:
+            return
+        if actor.grounded and input.pressed(Jump):
+            actor.vertical_velocity = JUMP_VELOCITY
+            actor.grounded = false
+
 rule BeginGrounding:
     filter:
         KinematicActor as actor
 
     on fixed_tick:
         actor.ground_surface = -1000.0
+
+# Applies gravity every tick, including while resting: DetectGroundCandidate/
+# ApplyGroundCandidate below correct the resulting sub-frame sink back onto
+# the surface each tick (that's what GROUND_CONTACT_TOLERANCE absorbs), so
+# there is no separate "am I grounded" branch here. Marking `grounded = false`
+# unconditionally is a provisional default for this tick; ApplyGroundCandidate
+# flips it back to true if a surface is found within range.
+rule IntegrateVerticalMotion:
+    filter:
+        KinematicActor as actor
+        tv.WorldTransform as transform
+    after:
+        MovePlayer
+        SeekPlayer
+
+    on fixed_tick:
+        actor.vertical_velocity = math.max(actor.vertical_velocity - GRAVITY * fixed_tick.dt, MAX_FALL_SPEED * -1.0)
+        transform.position.y += actor.vertical_velocity * fixed_tick.dt
+        actor.grounded = false
 
 rule DetectEnemySeparation:
     pairs:
@@ -621,7 +708,7 @@ rule DetectEnemySeparation:
         a != b
         not a.Enemy.dying
         not b.Enemy.dying
-        v3.length(collision.sphere_sphere_separation(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)) > 0.0
+        collision.spheres_overlap(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)
 
     on fixed_tick:
         let separation = collision.sphere_sphere_separation(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)
@@ -668,6 +755,7 @@ rule DetectGroundCandidate:
     after:
         MovePlayer
         SeekPlayer
+        IntegrateVerticalMotion
 
     on fixed_tick:
         let actor_position = actor.tv.WorldTransform.position
@@ -677,7 +765,17 @@ rule DetectGroundCandidate:
         let feet = actor_position.y - actor.KinematicActor.half_height
         let overlaps_x = math.abs(actor_position.x - surface_position.x) <= half_size.x + actor.KinematicActor.radius
         let overlaps_z = math.abs(actor_position.z - surface_position.z) <= half_size.z + actor.KinematicActor.radius
-        if overlaps_x and overlaps_z and top <= feet + actor.KinematicActor.step_height:
+        # Bounded on both sides: `top <= feet + step_height` lets an actor
+        # step up onto a nearby-height surface (stairs); `feet <= top +
+        # GROUND_CONTACT_TOLERANCE` keeps a surface far below current feet
+        # (e.g. the floor under a roof edge) from counting as reachable ground
+        # until an actual fall has brought feet down to meet it — without
+        # this bound, walking off a ledge would instantly snap down to
+        # whatever surface is below instead of falling. Excluding candidates
+        # while still rising (vertical_velocity > 0.0) keeps a jump's initial
+        # upward tick from being immediately re-snapped back onto the surface
+        # it just left.
+        if overlaps_x and overlaps_z and actor.KinematicActor.vertical_velocity <= 0.0 and top <= feet + actor.KinematicActor.step_height and feet <= top + GROUND_CONTACT_TOLERANCE:
             emit GroundCandidate to actor:
                 surface = top
 
@@ -690,6 +788,8 @@ rule ApplyGroundCandidate:
         if candidate.surface > actor.ground_surface:
             actor.ground_surface = candidate.surface
             transform.position.y = candidate.surface + actor.half_height
+            actor.vertical_velocity = 0.0
+            actor.grounded = true
 
 rule ComposeCameraPose:
     pairs:
@@ -783,6 +883,7 @@ rule SpawnRobots:
                         model = Robot
                     models.ModelAnimator:
                         clip = ROBOT_RUN_CLIP
+                        speed = ROBOT_SPEED / ROBOT_RUN_REFERENCE_SPEED
         spawn_point.countdown = SPAWN_INTERVAL
 
 rule SpawnKnights:
@@ -818,12 +919,21 @@ rule SpawnKnights:
                         model = Knight
                     models.ModelAnimator:
                         clip = KNIGHT_RUN_CLIP
+                        speed = KNIGHT_SPEED / KNIGHT_RUN_REFERENCE_SPEED
         spawn_point.countdown = SPAWN_INTERVAL
+
+# Whether a sphere of ENEMY_RADIUS centered at probe overlaps this wall's
+# box — the same box-geometry-aware predicate DetectActorSolidContact relies
+# on for real wall collision, reused here for the AI's obstacle probing since
+# std.physics.volume.query's raycast can't see box extent (see SeekPlayer).
+func is_probe_blocked(probe: vec3, wall_position: vec3, wall_size: vec3, wall_rotation: quat) bool:
+    return v3.length(collision.sphere_box_separation(probe, ENEMY_RADIUS, wall_position, wall_size, wall_rotation)) > 0.0
 
 rule SeekPlayer:
     filter:
         Enemy as enemy
         Threat
+        KinematicActor as actor
         tv.WorldTransform as transform
 
     on fixed_tick:
@@ -836,12 +946,129 @@ rule SeekPlayer:
                 active = not player.game_over
         if not active:
             return
+
+        # actor.grounded reflects the end of the *previous* tick's grounding
+        # resolution (this tick's own IntegrateVerticalMotion/
+        # DetectGroundCandidate haven't run yet) — a deliberate one-tick lag,
+        # same as ApplyJump's grounded check, that sidesteps needing this
+        # fixed_tick rule to depend on another fixed_tick rule's downstream
+        # GroundCandidate-event cascade within the same tick.
+        if enemy.is_vaulting and actor.grounded:
+            enemy.is_vaulting = false
+            let run_clip = ROBOT_RUN_CLIP
+            match self:
+                KnightEnemy =>
+                    run_clip = KNIGHT_RUN_CLIP
+            for visual in query.children[EnemyVisual](of = self):
+                emit SetEnemyClip to visual:
+                    clip = run_clip
+
         let target_position = tv.world_position(player_entity)
         let delta = vec3(target_position.x - transform.position.x, 0.0, target_position.z - transform.position.z)
         let distance = v3.length(delta)
         if distance <= 0.0:
             return
-        let direction = delta / distance
+        let direct_direction = delta / distance
+        let up = vec3(0.0, 1.0, 0.0)
+        let probe_direct = transform.position + direct_direction * ENEMY_STEER_PROBE_DISTANCE
+        let solid_walls = query.all[Solid]()
+
+        # Checked in two passes: the direct heading alone first, since that's
+        # the common case and the only one steering/vaulting ever needs — the
+        # deflected candidates and vault-clearance probe below are wasted
+        # work on a tick where the direct path is already clear.
+        let direct_blocked = false
+        for wall in solid_walls:
+            let wall_position = vec3(0.0, 0.0, 0.0)
+            let wall_rotation = quat.identity()
+            match wall:
+                tv.WorldTransform as wall_transform =>
+                    wall_position = wall_transform.position
+                    wall_rotation = wall_transform.rotation
+            let wall_size = vec3(1.0, 1.0, 1.0)
+            match wall:
+                physics.BoxCollider as wall_box =>
+                    wall_size = wall_box.size
+            if not direct_blocked and is_probe_blocked(probe_direct, wall_position, wall_size, wall_rotation):
+                direct_blocked = true
+
+        let direction = direct_direction
+        if direct_blocked:
+            let candidate_left_small = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_SMALL)
+            let candidate_right_small = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_SMALL * -1.0)
+            let candidate_left_large = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_LARGE)
+            let candidate_right_large = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_LARGE * -1.0)
+            let probe_left_small = transform.position + candidate_left_small * ENEMY_STEER_PROBE_DISTANCE
+            let probe_right_small = transform.position + candidate_right_small * ENEMY_STEER_PROBE_DISTANCE
+            let probe_left_large = transform.position + candidate_left_large * ENEMY_STEER_PROBE_DISTANCE
+            let probe_right_large = transform.position + candidate_right_large * ENEMY_STEER_PROBE_DISTANCE
+            # Same x/z as probe_direct, raised to jump-clearance height: an
+            # obstacle that blocks here too is too tall to vault.
+            let probe_direct_high = vec3(probe_direct.x, transform.position.y + ENEMY_VAULT_CLEARANCE_HEIGHT, probe_direct.z)
+
+            let direct_high_blocked = false
+            let left_small_blocked = false
+            let right_small_blocked = false
+            let left_large_blocked = false
+            let right_large_blocked = false
+            for wall in solid_walls:
+                let wall_position = vec3(0.0, 0.0, 0.0)
+                let wall_rotation = quat.identity()
+                match wall:
+                    tv.WorldTransform as wall_transform =>
+                        wall_position = wall_transform.position
+                        wall_rotation = wall_transform.rotation
+                let wall_size = vec3(1.0, 1.0, 1.0)
+                match wall:
+                    physics.BoxCollider as wall_box =>
+                        wall_size = wall_box.size
+                if not direct_high_blocked and is_probe_blocked(probe_direct_high, wall_position, wall_size, wall_rotation):
+                    direct_high_blocked = true
+                if not left_small_blocked and is_probe_blocked(probe_left_small, wall_position, wall_size, wall_rotation):
+                    left_small_blocked = true
+                if not right_small_blocked and is_probe_blocked(probe_right_small, wall_position, wall_size, wall_rotation):
+                    right_small_blocked = true
+                if not left_large_blocked and is_probe_blocked(probe_left_large, wall_position, wall_size, wall_rotation):
+                    left_large_blocked = true
+                if not right_large_blocked and is_probe_blocked(probe_right_large, wall_position, wall_size, wall_rotation):
+                    right_large_blocked = true
+
+            # Vaultable beats steering: a short obstacle dead ahead is jumped
+            # over on the direct heading rather than detoured around. Only
+            # trigger while grounded, read from last tick's resolution (same
+            # lag as the landing check above and ApplyJump's grounded check).
+            # `enemy.is_vaulting` is already false by the time we'd reach here
+            # in the same tick a landing clears it, so it adds nothing beyond
+            # actor.grounded and isn't repeated as a guard here.
+            let can_vault = not direct_high_blocked
+            if can_vault and actor.grounded:
+                actor.vertical_velocity = JUMP_VELOCITY
+                actor.grounded = false
+                enemy.is_vaulting = true
+                let jump_clip = ROBOT_JUMP_CLIP
+                match self:
+                    KnightEnemy =>
+                        jump_clip = KNIGHT_JUMP_CLIP
+                for visual in query.children[EnemyVisual](of = self):
+                    emit SetEnemyClip to visual:
+                        clip = jump_clip
+
+            # Priority order (small deflection, then large deflection,
+            # alternating sides): flat guards instead of nested ifs so each
+            # line stands alone — falls back to the direct heading when every
+            # candidate is blocked and vaulting doesn't apply, same as before
+            # steering existed (the existing wall-separation rules still
+            # prevent tunneling in that case).
+            let steering_needed = not can_vault
+            if steering_needed and not left_small_blocked:
+                direction = candidate_left_small
+            if steering_needed and left_small_blocked and not right_small_blocked:
+                direction = candidate_right_small
+            if steering_needed and left_small_blocked and right_small_blocked and not left_large_blocked:
+                direction = candidate_left_large
+            if steering_needed and left_small_blocked and right_small_blocked and left_large_blocked and not right_large_blocked:
+                direction = candidate_right_large
+
         enemy.facing_yaw = math.atan2(direction.x * -1.0, direction.z * -1.0)
         transform.rotation = quat.from_euler(0.0, enemy.facing_yaw, 0.0)
         transform.position += direction * enemy.speed * fixed_tick.dt
@@ -960,7 +1187,7 @@ rule BeginRobotDeath:
         enemy.dying = true
         enemy.death_elapsed = 0.0
         for visual in query.children[EnemyVisual](of = self):
-            emit BeginDeathAnimation to visual:
+            emit SetEnemyClip to visual:
                 clip = ROBOT_DEATH_CLIP
 
 rule BeginKnightDeath:
@@ -974,15 +1201,15 @@ rule BeginKnightDeath:
         enemy.dying = true
         enemy.death_elapsed = 0.0
         for visual in query.children[EnemyVisual](of = self):
-            emit BeginDeathAnimation to visual:
+            emit SetEnemyClip to visual:
                 clip = KNIGHT_DEATH_CLIP
 
-rule ApplyBeginDeathAnimation:
+rule ApplySetEnemyClip:
     filter:
         EnemyVisual
         models.ModelAnimator as animator
 
-    on BeginDeathAnimation as trigger:
+    on SetEnemyClip as trigger:
         animator.clip = trigger.clip
         animator.time = 0.0
         animator.playing = true

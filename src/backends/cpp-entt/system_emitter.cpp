@@ -928,66 +928,6 @@ const std::vector<DebugDrawRendererSpec>& debug_draw_renderer_specs() {
     return specs;
 }
 
-std::string sort_key_expr(const SortKey& key, const std::string& entity_name, const RuleNode& sys) {
-    auto alias_to_trait = [&]() -> std::string {
-        for (const auto& entry : sys.filter.entries) {
-            auto dot    = entry.qualified_name.rfind('.');
-            auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
-            if (entry.alias.has_value() && *entry.alias == key.alias) {
-                return simple;
-            }
-            if (simple == key.alias) {
-                return simple;
-            }
-        }
-        for (const auto& trait : sys.filter.trait_names) {
-            if (trait == key.alias) {
-                return trait;
-            }
-        }
-        return "";
-    };
-
-    std::string trait_name = alias_to_trait();
-    std::ostringstream expr;
-    expr << "registry.get<" << trait_name << ">(" << entity_name << ")." << key.field;
-    return expr.str();
-}
-
-std::string primary_sort_trait(const SortKey& key, const RuleNode& sys) {
-    for (const auto& entry : sys.filter.entries) {
-        auto dot    = entry.qualified_name.rfind('.');
-        auto simple = (dot != std::string::npos) ? entry.qualified_name.substr(dot + 1) : entry.qualified_name;
-        if ((entry.alias.has_value() && *entry.alias == key.alias) || simple == key.alias) {
-            return simple;
-        }
-    }
-    for (const auto& trait : sys.filter.trait_names) {
-        if (trait == key.alias) {
-            return trait;
-        }
-    }
-    return key.alias;
-}
-
-void emit_sort_call(std::ostringstream& out, const RuleNode& sys, int indent = 1) {
-    if (sys.order_by.empty()) {
-        return;
-    }
-
-    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
-    out << ind << "registry.sort<" << primary_sort_trait(sys.order_by.front(), sys)
-        << ">([&](entt::entity a, entt::entity b) {\n";
-    for (const auto& key : sys.order_by) {
-        auto left  = sort_key_expr(key, "a", sys);
-        auto right = sort_key_expr(key, "b", sys);
-        out << ind << "    if (" << left << " != " << right << ") return " << left << (key.descending ? " > " : " < ")
-            << right << ";\n";
-    }
-    out << ind << "    return false;\n";
-    out << ind << "});\n";
-}
-
 std::string foreach_temp_name(const ForeachStmt& stmt) {
     return "foreach_snapshot_" + std::to_string(std::max(stmt.location.line, 0)) + "_" +
            std::to_string(std::max(stmt.location.column, 0));
@@ -1077,10 +1017,15 @@ void emit_filter_alias_bindings(std::ostringstream& out,
     }
 }
 
+// `drive_from` pins which element drives iteration (EnTT's view.use<>). A
+// multi-element view otherwise picks its own leading pool, which would ignore
+// a registry.sort<> of any other pool — so an order-by'd rule must pin the
+// same trait it sorted. Empty (the default) leaves EnTT's own choice alone.
 void emit_view_declaration(std::ostringstream& out,
                            const std::vector<std::string>& cpp_type_names,
                            const std::vector<std::string>& exclude_cpp_type_names,
-                           int indent) {
+                           int indent,
+                           const std::string& drive_from = {}) {
     const std::string ind(static_cast<size_t>(indent) * 4, ' ');
     out << ind << "auto view = registry.view<";
     for (size_t i = 0; i < cpp_type_names.size(); ++i) {
@@ -1101,6 +1046,9 @@ void emit_view_declaration(std::ostringstream& out,
         out << ">";
     }
     out << ");\n";
+    if (!drive_from.empty()) {
+        out << ind << "view.use<" << drive_from << ">();\n";
+    }
 }
 
 void emit_view_each_header(std::ostringstream& out,
@@ -1292,6 +1240,133 @@ static std::string rewrite_expr(const ExprNode& expr,
                                 const std::unordered_map<std::string, std::string>& cpp_overrides = {},
                                 const PairCodegenScope* pair_scope                                = nullptr,
                                 const LocalNumericKinds* local_kinds                              = nullptr);
+
+// Which component pool `registry.sort<T>()` physically permutes, and which
+// element the sorted view is then pinned to drive iteration from. Any
+// positively-filtered trait works: the comparator reads whatever traits the
+// sort-key expressions name via registry.get<>, independently of which pool is
+// being reordered, so this choice is arbitrary and carries no meaning beyond
+// picking one pool. It is load-bearing only in that the same trait must be
+// used for both the sort and the view's use<> pin — an unpinned multi-trait
+// view is free to iterate from a different (unsorted) pool and would silently
+// ignore the sort.
+std::string primary_sort_trait(const RuleNode& sys, const DecoratedProgram& program) {
+    const auto cpp_types = filter_cpp_type_names(sys.filter, program);
+    return cpp_types.empty() ? std::string{} : cpp_types.front();
+}
+
+// One `[&](entt::entity) { ... }` key extractor per sort key, binding the
+// rule's filter components off the passed entity exactly as a handler body
+// would, so the sort-key expression lowers through the ordinary expression
+// emitter (rewrite_expr) with the same names in scope it would see in the
+// handler. Returns the emitted lambda names, positionally matching
+// sys.order_by.
+std::vector<std::string> emit_sort_key_extractors(std::ostringstream& out,
+                                                  const RuleNode& sys,
+                                                  const std::vector<FilterBinding>& bindings,
+                                                  const std::vector<std::string>& trait_names,
+                                                  const DecoratedProgram& program,
+                                                  const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                                  int indent) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    std::vector<std::string> names;
+    names.reserve(sys.order_by.size());
+    for (const auto& key : sys.order_by) {
+        auto name = gen_temp_name("sort_key", key.location);
+        out << ind << "auto " << name << " = [&](entt::entity entity) {\n";
+        out << ind << "    (void)entity;\n";
+        emit_component_bindings_from_entity(out, bindings, "entity", indent + 1, program);
+        emit_filter_alias_bindings(out, sys.filter, program, indent + 1);
+        out << ind << "    return "
+            << rewrite_expr(*key.expression, trait_names, program, {}, cpp_overrides) << ";\n";
+        out << ind << "};\n";
+        names.push_back(std::move(name));
+    }
+    return names;
+}
+
+// Lexicographic comparator body over already-emitted key extractors: each key
+// short-circuits on inequality, later keys break earlier ties, and equal-on-
+// every-key compares false so the sort sees a strict weak ordering.
+void emit_sort_comparator_body(std::ostringstream& out,
+                               const RuleNode& sys,
+                               const std::vector<std::string>& key_names,
+                               const std::string& lhs,
+                               const std::string& rhs,
+                               int indent) {
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    for (std::size_t i = 0; i < key_names.size(); ++i) {
+        out << ind << "{\n";
+        out << ind << "    const auto cactus_lhs_key = " << key_names[i] << "(" << lhs << ");\n";
+        out << ind << "    const auto cactus_rhs_key = " << key_names[i] << "(" << rhs << ");\n";
+        out << ind << "    if (cactus_lhs_key != cactus_rhs_key) {\n";
+        out << ind << "        return cactus_lhs_key " << (sys.order_by[i].descending ? '>' : '<')
+            << " cactus_rhs_key;\n";
+        out << ind << "    }\n";
+        out << ind << "}\n";
+    }
+    out << ind << "return false;\n";
+}
+
+// Returns the anchor trait it sorted by (see primary_sort_trait), or empty
+// when the rule isn't ordered — the caller reuses this to pin the matching
+// view's drive_from instead of re-deriving the same anchor a second time.
+//
+// The key extractors read every filter trait unconditionally (see
+// emit_sort_key_extractors), so they are only safe to call on an entity that
+// satisfies the rule's *full* filter/exclude — not merely one that belongs to
+// the anchor trait's own pool. registry.sort<Anchor>(comparator) sorts the
+// anchor's raw pool, which can contain entities missing one of the other
+// filter traits (e.g. an anchor-pool entity with Ranked but not Marker), so
+// calling the extractor from inside that comparator would call registry.get<>
+// on a component the entity doesn't have. Instead, snapshot exactly the
+// entities the real handler view will visit, sort that snapshot with the
+// extractors (safe: every entity in it has every filter trait), and use
+// EnTT storage's sort_as(first, last) to permute the anchor pool to match —
+// it reorders entities present in both the pool and the given range to agree
+// with that range's order, skipping anything else in the pool, without
+// invoking a comparator over the pool's other entities.
+std::string emit_sort_call(std::ostringstream& out,
+                           const RuleNode& sys,
+                           const std::vector<FilterBinding>& bindings,
+                           const std::vector<std::string>& trait_names,
+                           const DecoratedProgram& program,
+                           const std::unordered_map<std::string, std::string>& cpp_overrides,
+                           int indent = 1) {
+    auto anchor = primary_sort_trait(sys, program);
+    if (sys.order_by.empty() || anchor.empty()) {
+        return {};
+    }
+
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const auto key_names = emit_sort_key_extractors(out, sys, bindings, trait_names, program, cpp_overrides, indent);
+
+    const auto filter_cpp_types  = filter_cpp_type_names(sys.filter, program);
+    const auto exclude_cpp_types = filter_cpp_type_names(sys.exclude, program);
+    const auto snapshot_name     = gen_temp_name("sort_entities", sys.location);
+    out << ind << "std::vector<entt::entity> " << snapshot_name << ";\n";
+    out << ind << "for (auto entity : registry.view<";
+    for (size_t i = 0; i < filter_cpp_types.size(); ++i) {
+        out << (i == 0 ? "" : ", ") << filter_cpp_types[i];
+    }
+    out << ">(";
+    if (!exclude_cpp_types.empty()) {
+        out << "entt::exclude<";
+        for (size_t i = 0; i < exclude_cpp_types.size(); ++i) {
+            out << (i == 0 ? "" : ", ") << exclude_cpp_types[i];
+        }
+        out << ">";
+    }
+    out << ")) {\n";
+    out << ind << "    " << snapshot_name << ".push_back(entity);\n";
+    out << ind << "}\n";
+    out << ind << "std::ranges::stable_sort(" << snapshot_name << ", [&](entt::entity a, entt::entity b) {\n";
+    emit_sort_comparator_body(out, sys, key_names, "a", "b", indent + 1);
+    out << ind << "});\n";
+    out << ind << "registry.storage<" << anchor << ">().sort_as(" << snapshot_name << ".begin(), " << snapshot_name
+        << ".end());\n";
+    return anchor;
+}
 
 // Rewrites a vec2/vec3 constructor argument, promoting an `int`-kind result
 // to `float` via the same infer_numeric_kind machinery mixed int/float binary
@@ -3144,6 +3219,29 @@ std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedPr
     return out.str();
 }
 
+// One `[&](entt::entity <left>, entt::entity <right>) { ... }` extractor per
+// sort key, with both pair bindings as parameters so a cross-binding key
+// expression lowers through the ordinary pair-scope expression emitter with
+// exactly the names it was authored against.
+static std::vector<std::string> emit_pair_sort_key_extractors(
+    std::ostringstream& out,
+    const RuleNode& sys,
+    const std::vector<PairBindingCodegen>& pair_binding_codegens,
+    const PairCodegenScope& pair_codegen_scope,
+    const DecoratedProgram& program) {
+    std::vector<std::string> names;
+    names.reserve(sys.order_by.size());
+    for (const auto& key : sys.order_by) {
+        auto name = gen_temp_name("pair_sort_key", key.location);
+        out << "    auto " << name << " = [&](entt::entity " << pair_binding_codegens[0].scope.binding_name
+            << ", entt::entity " << pair_binding_codegens[1].scope.binding_name << ") {\n";
+        out << "        return " << rewrite_expr(*key.expression, {}, program, {}, {}, &pair_codegen_scope) << ";\n";
+        out << "    };\n";
+        names.push_back(std::move(name));
+    }
+    return names;
+}
+
 // A pair handler snapshots both bindings' live memberships up
 // front (deterministic, creation-ordinal order), then iterates
 // their directed Cartesian product left-binding-major without
@@ -3151,6 +3249,7 @@ std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedPr
 // the body is read-only (const), matching the read-only pair
 // trait rule enforced by semantic analysis.
 static void emit_pair_handler_body(std::ostringstream& out,
+                                   const RuleNode& sys,
                                    const EventHandlerNode& handler,
                                    const std::vector<PairBindingCodegen>& pair_binding_codegens,
                                    const PairCodegenScope& pair_codegen_scope,
@@ -3175,6 +3274,17 @@ static void emit_pair_handler_body(std::ostringstream& out,
     const auto pair_body =
         rewrite_stmt_block(handler.body, 5, {}, program, {}, false, {}, &pair_codegen_scope, pair_locals, pair_kinds);
     const auto pair_body_name = gen_temp_name("pair_body", handler.location);
+    // dsl-rule-order-by on a pair domain: a pair pass has no backing component
+    // pool for registry.sort<> to permute, so an ordered rule buffers its
+    // tuples and sorts the buffer instead, reusing emit_sort_comparator_body
+    // (the same lexicographic comparator the unary registry.sort<> path
+    // emits). Every dispatch site below then feeds the collector rather than
+    // invoking the body directly, and the sorted buffer is replayed once at
+    // the end. A rule without `order by:` pays none of this and keeps
+    // streaming exactly as before.
+    const bool ordered           = !sys.order_by.empty();
+    const auto tuple_buffer_name = gen_temp_name("pair_tuples", handler.location);
+    const auto dispatch_name     = ordered ? gen_temp_name("pair_collect", handler.location) : pair_body_name;
     // The tuple body is defined once as a named lambda and every dispatch
     // site below (and emit_sap_pair_activation, when spatial broadphase
     // applies) calls it by name instead of re-splicing its own copy. Every
@@ -3185,8 +3295,14 @@ static void emit_pair_handler_body(std::ostringstream& out,
         << right.scope.binding_name << ") {\n";
     out << pair_body;
     out << "    };\n";
-    const auto emit_tuple_invocation = [&out, &pair_body_name, &left, &right]() {
-        out << "                " << pair_body_name << "(" << left.scope.binding_name << ", "
+    if (ordered) {
+        out << "    std::vector<std::pair<entt::entity, entt::entity>> " << tuple_buffer_name << ";\n";
+        out << "    auto " << dispatch_name << " = [&](entt::entity cactus_left, entt::entity cactus_right) {\n";
+        out << "        " << tuple_buffer_name << ".emplace_back(cactus_left, cactus_right);\n";
+        out << "    };\n";
+    }
+    const auto emit_tuple_invocation = [&out, &dispatch_name, &left, &right]() {
+        out << "                " << dispatch_name << "(" << left.scope.binding_name << ", "
             << right.scope.binding_name << ");\n";
     };
     // Recipient-targeted delivery: only tuples incident to the
@@ -3223,7 +3339,7 @@ static void emit_pair_handler_body(std::ostringstream& out,
     out << "        }\n";
     out << "    } else {\n";
     if (contract != nullptr && contract->spatial_join.has_value()) {
-        emit_sap_pair_activation(out, *contract->spatial_join, pair_binding_codegens, pair_body_name);
+        emit_sap_pair_activation(out, *contract->spatial_join, pair_binding_codegens, dispatch_name);
     } else {
         out << "        for (auto " << left.scope.binding_name << " : " << left.scope.binding_name << "_snapshot) {\n";
         out << "            for (auto " << right.scope.binding_name << " : " << right.scope.binding_name
@@ -3232,6 +3348,20 @@ static void emit_pair_handler_body(std::ostringstream& out,
         out << "            }\n";
         out << "        }\n";
     }
+    out << "    }\n";
+    if (!ordered) {
+        return;
+    }
+    const auto key_names = emit_pair_sort_key_extractors(out, sys, pair_binding_codegens, pair_codegen_scope, program);
+    // stable_sort, not sort: tuples with equal keys must keep the pass's own
+    // left-binding-major collection order (dsl-rule-order-by).
+    out << "    std::ranges::stable_sort(" << tuple_buffer_name
+        << ", [&](const auto& cactus_lhs, const auto& cactus_rhs) {\n";
+    emit_sort_comparator_body(
+        out, sys, key_names, "cactus_lhs.first, cactus_lhs.second", "cactus_rhs.first, cactus_rhs.second", 2);
+    out << "    });\n";
+    out << "    for (const auto& cactus_tuple : " << tuple_buffer_name << ") {\n";
+    out << "        " << pair_body_name << "(cactus_tuple.first, cactus_tuple.second);\n";
     out << "    }\n";
 }
 
@@ -3306,8 +3436,8 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     out << ");\n";
     out << "        }\n";
     out << "    } else {\n";
-    emit_sort_call(out, sys, 2);
-    emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2);
+    const auto sort_anchor = emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides, 2);
+    emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2, sort_anchor);
     emit_view_each_header(out, filter_bindings_list, 2, program);
     out << "        " << handler_body_name << "(entity";
     for (const auto& cpp_name : data_cpp_types) {
@@ -3323,10 +3453,11 @@ static void emit_filtered_handler_body(std::ostringstream& out,
 static void emit_fallback_handler_body(std::ostringstream& out,
                                        const RuleNode& sys,
                                        const EventHandlerNode& handler,
+                                       const std::vector<FilterBinding>& filter_bindings_list,
                                        const std::vector<std::string>& filter_traits,
                                        const DecoratedProgram& program,
                                        const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
-    emit_sort_call(out, sys);
+    emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides);
     out << "    for (auto entity : registry.storage<entt::entity>()) {\n";
     out << "        (void)entity;\n";
     emit_storage_filter_skip(out, sys.filter, sys.exclude, program, 2);
@@ -3396,7 +3527,7 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         out << "    (void)cactus_recipient;\n";
 
         if (is_pair) {
-            emit_pair_handler_body(out, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
+            emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
         } else if (selectionless) {
             emit_selectionless_handler_body(out, handler, filter_traits, program, filter_cpp_overrides);
         } else if (!filter_traits.empty()) {
@@ -3410,7 +3541,8 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
                                        program,
                                        filter_cpp_overrides);
         } else {
-            emit_fallback_handler_body(out, sys, handler, filter_traits, program, filter_cpp_overrides);
+            emit_fallback_handler_body(
+                out, sys, handler, filter_bindings_list, filter_traits, program, filter_cpp_overrides);
         }
         out << "}\n\n";
     }

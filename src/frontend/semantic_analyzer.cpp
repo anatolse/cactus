@@ -1651,6 +1651,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                             resolve_expr(*predicate);
                         }
                     }
+                    for (auto& key : node.order_by) {
+                        resolve_expr(*key.expression);
+                    }
                     for (auto& handler : node.handlers) {
                         handler.resolved_trigger = try_resolve_handler_trigger(handler.event_name);
                         resolve_stmts(handler.body);
@@ -1659,6 +1662,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     node.resolved_rule_id = make_symbol_id(SymbolKind::Rule, current_module_id_, node.name);
                     resolve_filter_clause(node.filter);
                     resolve_filter_clause(node.exclude);
+                    for (auto& key : node.order_by) {
+                        resolve_expr(*key.expression);
+                    }
                     for (auto& handler : node.handlers) {
                         handler.resolved_trigger = try_resolve_handler_trigger(handler.trigger_name);
                     }
@@ -1930,61 +1936,109 @@ void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::s
         stmt.stmt);
 }
 
-void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::string& func_name) {
+// The recursive deny-list traversal shared by check_func_purity_expr,
+// check_where_purity_expr, and check_order_by_purity_expr (design.md: extract
+// rather than add a third divergent copy). The traversal order and shape is
+// identical across all three; what differs is which node kinds are impure and
+// what diagnostic that produces, so those decisions are the caller-supplied
+// hooks (fired after recursing into a CallExpr's children, matching every
+// existing call site's order; fired before recursing into a SpawnExpr's or
+// QueryCallExpr's children, also matching every existing call site).
+void SemanticAnalyzer::check_purity_deny_list(  // NOLINT(readability-function-cognitive-complexity) -- exhaustive
+                                                // per-ExprNode-kind traversal, inherited from the
+                                                // already-NOLINT'd check_where_purity_expr this consolidates
+    const ExprNode& expr,
+    const std::function<void(const CallExpr&)>& on_call,
+    const std::function<void(const SpawnExpr&)>& on_spawn,
+    const std::function<void(const QueryCallExpr&)>& on_query) {
     std::visit(
-        [this, &func_name](auto& e) {
+        [&](auto& e) {  // NOLINT(readability-function-cognitive-complexity) -- see function-level NOLINT above
             using E = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<E, CallExpr>) {
-                check_func_purity_expr(*e.callee, func_name);
+                check_purity_deny_list(*e.callee, on_call, on_spawn, on_query);
                 for (auto& arg : e.args) {
-                    check_func_purity_expr(*arg, func_name);
+                    check_purity_deny_list(*arg, on_call, on_spawn, on_query);
                 }
-                if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
-                    ident != nullptr && ident->name == "exists") {
-                    errors_.error(e.location,
-                                  "`exists()` requires world access; only allowed inside rule event handlers");
-                }
-                if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                    // Use canonical IDs so same simple names across modules don't
-                    // create false recursion edges (task 3.6).
-                    const auto callee_canonical = func_names_.contains(ident->name)
-                                                      ? make_canonical_id(current_module_name_, ident->name)
-                                                      : ident->name;
-                    call_graph_[make_canonical_id(current_module_name_, func_name)].insert(callee_canonical);
-                    // Ordinary imports are namespace bindings. Unqualified imported
-                    // function calls are rejected unless they come from std.core.
-                    if (!func_names_.contains(ident->name) && !imports_.empty()) {
-                        auto pit = imports_.func_providers.find(ident->name);
-                        if (pit != imports_.func_providers.end() && !pit->second.empty() &&
-                            !find_std_core_provider(imports_, pit->second).has_value()) {
-                            errors_.error(
-                                e.location,
-                                imported_reference_diagnostic(imports_, "function", ident->name, pit->second));
-                        }
+                on_call(e);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                check_purity_deny_list(*e.left, on_call, on_spawn, on_query);
+                check_purity_deny_list(*e.right, on_call, on_spawn, on_query);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                check_purity_deny_list(*e.operand, on_call, on_spawn, on_query);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                check_purity_deny_list(*e.object, on_call, on_spawn, on_query);
+            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                check_purity_deny_list(*e.body, on_call, on_spawn, on_query);
+            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                check_purity_deny_list(*e.source, on_call, on_spawn, on_query);
+                for (auto& op : e.operations) {
+                    for (auto& arg : op.args) {
+                        check_purity_deny_list(*arg, on_call, on_spawn, on_query);
                     }
                 }
-            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                check_func_purity_expr(*e.left, func_name);
-                check_func_purity_expr(*e.right, func_name);
-            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                check_func_purity_expr(*e.operand, func_name);
-            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                check_func_purity_expr(*e.object, func_name);
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                check_purity_deny_list(*e.subject, on_call, on_spawn, on_query);
+                for (auto& arm : e.arms) {
+                    check_purity_deny_list(*arm.pattern, on_call, on_spawn, on_query);
+                    check_purity_deny_list(*arm.body, on_call, on_spawn, on_query);
+                }
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                check_purity_deny_list(*e.condition, on_call, on_spawn, on_query);
+                check_purity_deny_list(*e.then_expr, on_call, on_spawn, on_query);
+                check_purity_deny_list(*e.else_expr, on_call, on_spawn, on_query);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                for (auto& element : e.elements) {
+                    check_purity_deny_list(*element, on_call, on_spawn, on_query);
+                }
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                on_spawn(e);
                 for (auto& trait : e.overrides) {
                     for (auto& field : trait.assignments) {
-                        check_func_purity_expr(*field.value, func_name);
+                        check_purity_deny_list(*field.value, on_call, on_spawn, on_query);
                     }
                 }
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                errors_.error(e.location,
-                              "query expressions require world access; only allowed inside rule event handlers");
+                on_query(e);
                 for (auto& arg : e.named_args) {
-                    check_func_purity_expr(*arg.value, func_name);
+                    check_purity_deny_list(*arg.value, on_call, on_spawn, on_query);
                 }
             }
         },
         expr.expr);
+}
+
+void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::string& func_name) {
+    check_purity_deny_list(
+        expr,
+        /*on_call=*/
+        [this, &func_name](const CallExpr& e) {
+            if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr); ident != nullptr && ident->name == "exists") {
+                errors_.error(e.location, "`exists()` requires world access; only allowed inside rule event handlers");
+            }
+            if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
+                // Use canonical IDs so same simple names across modules don't
+                // create false recursion edges (task 3.6).
+                const auto callee_canonical = func_names_.contains(ident->name)
+                                                  ? make_canonical_id(current_module_name_, ident->name)
+                                                  : ident->name;
+                call_graph_[make_canonical_id(current_module_name_, func_name)].insert(callee_canonical);
+                // Ordinary imports are namespace bindings. Unqualified imported
+                // function calls are rejected unless they come from std.core.
+                if (!func_names_.contains(ident->name) && !imports_.empty()) {
+                    auto pit = imports_.func_providers.find(ident->name);
+                    if (pit != imports_.func_providers.end() && !pit->second.empty() &&
+                        !find_std_core_provider(imports_, pit->second).has_value()) {
+                        errors_.error(e.location,
+                                      imported_reference_diagnostic(imports_, "function", ident->name, pit->second));
+                    }
+                }
+            }
+        },
+        /*on_spawn=*/[](const SpawnExpr&) {},
+        /*on_query=*/
+        [this](const QueryCallExpr& e) {
+            errors_.error(e.location, "query expressions require world access; only allowed inside rule event handlers");
+        });
 }
 
 // ── Phase 3c: No Recursion ──────────────────────────────────────────────────
@@ -2239,14 +2293,15 @@ void SemanticAnalyzer::validate_pair_bindings(RuleNode& rule) {
     }
     auto& pairs = *rule.pairs;
 
+    // order by: is deliberately absent here — a pairs: rule may declare it
+    // (dsl-pair-relations); only filter:/exclude: force a unary domain.
     const bool has_unary_clause = !rule.filter.entries.empty() || !rule.filter.trait_names.empty() ||
-                                  !rule.exclude.entries.empty() || !rule.exclude.trait_names.empty() ||
-                                  !rule.order_by.empty();
+                                  !rule.exclude.entries.empty() || !rule.exclude.trait_names.empty();
     if (has_unary_clause) {
         errors_.error(pairs.location,
                       "rule '" + rule.name +
-                          "' must choose one execution domain: `pairs:` cannot be combined with `filter:`, "
-                          "`exclude:`, or `order by:`");
+                          "' must choose one execution domain: `pairs:` cannot be combined with `filter:` or "
+                          "`exclude:`");
     }
 
     if (pairs.bindings.size() != 2) {
@@ -2305,63 +2360,127 @@ std::unordered_map<std::string, const ResolvedTrait*> SemanticAnalyzer::build_fi
     return bindings;
 }
 
+/// The dotted source spelling of an expression that is a plain member chain
+/// (`p.pos.y`), for diagnostics that want to name what they're rejecting.
+/// Empty for any other expression shape — a computed key has no single
+/// spelling to quote, so its diagnostics fall back to generic wording.
+std::string member_chain_spelling(const ExprNode& expr) {
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    if (member == nullptr) {
+        return {};
+    }
+    const auto chain = member_chain_segments(*member);
+    if (!chain.has_value()) {
+        return {};
+    }
+    std::string joined;
+    for (const auto& segment : *chain) {
+        if (!joined.empty()) {
+            joined += '.';
+        }
+        joined += segment;
+    }
+    return joined;
+}
+
+/// The binding a member-chain sort key reads through, or empty when the key
+/// isn't rooted at a plain identifier. Takes the key's already-computed
+/// member_chain_spelling so a caller that needs both doesn't walk the chain
+/// twice.
+std::string member_chain_root(const std::string& spelling) {
+    const auto dot = spelling.find('.');
+    return dot == std::string::npos ? spelling : spelling.substr(0, dot);
+}
+
+// Reports the out-of-scope-binding diagnostic for a sort key rooted at a name
+// the rule's domain doesn't declare. Returns true when it reported, so the
+// caller stops before type inference produces a vaguer second complaint.
+bool SemanticAnalyzer::report_unbound_sort_key_root(
+    const SortKey& key,
+    const std::string& spelling,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const PairScope* pair_scope,
+    const std::string& rule_name) {
+    const auto root = member_chain_root(spelling);
+    if (root.empty()) {
+        return false;
+    }
+    if (pair_scope != nullptr && !pair_scope->contains(root)) {
+        errors_.error(key.location, "'" + root + "' is not a declared pair binding in rule '" + rule_name + "'");
+        return true;
+    }
+    if (pair_scope == nullptr && !filter_bindings.contains(root)) {
+        errors_.error(key.location, "sort key alias '" + root + "' is not declared in filter:");
+        return true;
+    }
+    return false;
+}
+
 void SemanticAnalyzer::validate_order_by_key(
     const SortKey& key,
-    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings) {
-    auto binding_it = filter_bindings.find(key.alias);
-    if (binding_it == filter_bindings.end() || binding_it->second == nullptr) {
-        errors_.error(key.location, "order by alias '" + key.alias + "' is not declared in rule filter");
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const PairScope* pair_scope,
+    const std::string& rule_name) {
+    // Computed once and threaded through below so scope-checking and the
+    // eventual diagnostics don't each re-walk the same small chain.
+    const auto spelling = member_chain_spelling(*key.expression);
+
+    // Scope first: a key naming an undeclared binding gets that specific
+    // dsl-rule-order-by diagnostic rather than a vaguer "not orderable" one
+    // once type inference gives up on it.
+    if (report_unbound_sort_key_root(key, spelling, filter_bindings, pair_scope, rule_name)) {
         return;
     }
 
-    TypeInfo current;
-    bool resolved_any         = false;
-    const auto* current_trait = binding_it->second;
-    size_t start              = 0;
-    while (start < key.field.size()) {
-        size_t dot         = key.field.find('.', start);
-        std::string member = key.field.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
-
-        if (!resolved_any) {
-            current      = find_field_type_in(current_trait->fields, member);
-            resolved_any = true;
-        } else if (current.kind == TypeKind::Vec2 || current.kind == TypeKind::Vec3) {
-            if (member == "x" || member == "y" || (current.kind == TypeKind::Vec3 && member == "z")) {
-                current = make_float_type();
-            } else {
-                current = make_unknown_type();
-            }
-        } else if (current.kind == TypeKind::Color) {
-            if (member == "r" || member == "g" || member == "b" || member == "a") {
-                current = make_float_type();
-            } else {
-                current = make_unknown_type();
-            }
-        } else {
-            current = make_unknown_type();
-        }
-
-        if (current.kind == TypeKind::Unknown) {
-            errors_.error(
-                key.location,
-                "order by field '" + key.alias + "." + key.field + "' is not valid for the referenced filter trait");
-            return;
-        }
-
-        if (dot == std::string::npos) {
-            break;
-        }
-        start = dot + 1;
-    }
-
-    if (current.kind == TypeKind::Unknown) {
+    // Purity before typing: an impure key is invalid whatever its type, and
+    // typing it first would surface its own diagnostics (e.g. a query's
+    // "requires world access") ahead of the more fundamental rejection.
+    const auto error_count_before = errors_.error_count();
+    check_order_by_purity_expr(*key.expression);
+    if (errors_.error_count() > error_count_before) {
         return;
     }
 
-    if (current.kind != TypeKind::Int && current.kind != TypeKind::Float && current.kind != TypeKind::Bool) {
-        errors_.error(
-            key.location,
-            "order by key '" + key.alias + "." + key.field + "' must have scalar-comparable type (int, float, bool)");
+    const auto type = infer_expr_type(*key.expression, filter_bindings, {}, nullptr, pair_scope);
+    if (type.kind == TypeKind::Int || type.kind == TypeKind::Float || type.kind == TypeKind::Bool) {
+        return;
+    }
+
+    if (type.kind == TypeKind::Unknown) {
+        // A genuinely unresolvable reference was already reported by
+        // infer_expr_type; a chain that resolves partway then hits an
+        // unsupported member (e.g. `.z` on a vec2) reports nothing on its own,
+        // so name it here.
+        if (errors_.error_count() == error_count_before && !spelling.empty()) {
+            errors_.error(key.location,
+                          "order by field '" + spelling + "' is not valid for the referenced trait");
+        }
+        return;
+    }
+
+    const std::string subject = spelling.empty() ? "expression" : "'" + spelling + "'";
+    std::string message       = "sort key " + subject + " has type '" + type.name + "' which is not orderable";
+    if ((type.kind == TypeKind::Vec2 || type.kind == TypeKind::Vec3) && !spelling.empty()) {
+        message += "; use a scalar field or member (e.g., '" + spelling + ".y')";
+    }
+    errors_.error(key.location, message);
+}
+
+// Shared by both validateOrderByClause overloads for the unary-filter-domain
+// case (a pairs: domain only exists on RuleNode, so that branch stays on the
+// RuleNode overload). Assumes rule.order_by is already known non-empty.
+void SemanticAnalyzer::validate_unary_order_by(const FilterClause& filter,
+                                               const std::vector<SortKey>& order_by,
+                                               const SourceLocation& location,
+                                               const std::string& rule_name) {
+    if (filter.entries.empty() && filter.trait_names.empty()) {
+        errors_.error(location, "rule '" + rule_name + "': `order by:` requires a `filter:` or `pairs:` clause");
+        return;
+    }
+
+    auto filter_bindings = build_filter_bindings(filter);
+    for (const auto& key : order_by) {
+        validate_order_by_key(key, filter_bindings, nullptr, rule_name);
     }
 }
 
@@ -2370,16 +2489,15 @@ void SemanticAnalyzer::validateOrderByClause(const RuleNode& rule) {
         return;
     }
 
-    if (rule.filter.entries.empty() && rule.filter.trait_names.empty()) {
-        errors_.error(rule.location, "rule '" + rule.name + "' cannot use `order by:` without a `filter:` clause");
+    if (rule.pairs.has_value()) {
+        auto pair_scope = build_pair_scope(*rule.pairs);
+        for (const auto& key : rule.order_by) {
+            validate_order_by_key(key, {}, &pair_scope, rule.name);
+        }
         return;
     }
 
-    auto filter_bindings = build_filter_bindings(rule.filter);
-
-    for (const auto& key : rule.order_by) {
-        validate_order_by_key(key, filter_bindings);
-    }
+    validate_unary_order_by(rule.filter, rule.order_by, rule.location, rule.name);
 }
 
 void SemanticAnalyzer::validateOrderByClause(const ExternRuleNode& rule) {
@@ -2387,14 +2505,7 @@ void SemanticAnalyzer::validateOrderByClause(const ExternRuleNode& rule) {
         return;
     }
 
-    RuleNode proxy;
-    proxy.name        = rule.name;
-    proxy.filter      = rule.filter;
-    proxy.exclude     = rule.exclude;
-    proxy.order_by    = rule.order_by;
-    proxy.after_rules = rule.after_rules;
-    proxy.location    = rule.location;
-    validateOrderByClause(proxy);
+    validate_unary_order_by(rule.filter, rule.order_by, rule.location, rule.name);
 }
 
 SemanticAnalyzer::PhaseCollection SemanticAnalyzer::collect_phase_declarations(ProgramNode& program) {
@@ -3190,70 +3301,37 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
 // purity comes from the callee's already-computed ResolvedFunc::effect_summary
 // (empty = pure, non-empty or unknown = impure), the same source contract
 // inference's add_call_effects already trusts.
-void SemanticAnalyzer::check_where_purity_expr(  // NOLINT(readability-function-cognitive-complexity) -- exhaustive
-                                                  // per-ExprNode-kind purity dispatch, the same shape as the
-                                                  // already-NOLINT'd resolve_expr/walk_handler_body::visit_expr
-    const ExprNode& expr) {
-    std::visit(
-        [this](auto& e) {  // NOLINT(readability-function-cognitive-complexity) -- see function-level NOLINT above
-            using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, CallExpr>) {
-                check_where_purity_expr(*e.callee);
-                for (auto& arg : e.args) {
-                    check_where_purity_expr(*arg);
-                }
-                if (e.resolved_callee_id.has_value()) {
-                    const auto* function = find_resolved_func(*e.resolved_callee_id);
-                    if (function != nullptr &&
-                        (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
-                        errors_.error(e.location, "where: predicates must be pure");
-                    }
-                }
-            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                check_where_purity_expr(*e.left);
-                check_where_purity_expr(*e.right);
-            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                check_where_purity_expr(*e.operand);
-            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                check_where_purity_expr(*e.object);
-            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                check_where_purity_expr(*e.body);
-            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                check_where_purity_expr(*e.source);
-                for (auto& op : e.operations) {
-                    for (auto& arg : op.args) {
-                        check_where_purity_expr(*arg);
-                    }
-                }
-            } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                check_where_purity_expr(*e.subject);
-                for (auto& arm : e.arms) {
-                    check_where_purity_expr(*arm.pattern);
-                    check_where_purity_expr(*arm.body);
-                }
-            } else if constexpr (std::is_same_v<E, IfExpr>) {
-                check_where_purity_expr(*e.condition);
-                check_where_purity_expr(*e.then_expr);
-                check_where_purity_expr(*e.else_expr);
-            } else if constexpr (std::is_same_v<E, ListExpr>) {
-                for (auto& element : e.elements) {
-                    check_where_purity_expr(*element);
-                }
-            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                errors_.error(e.location, "where: predicates must be pure");
-                for (auto& trait : e.overrides) {
-                    for (auto& field : trait.assignments) {
-                        check_where_purity_expr(*field.value);
-                    }
-                }
-            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                errors_.error(e.location, "where: predicates must be pure");
-                for (auto& arg : e.named_args) {
-                    check_where_purity_expr(*arg.value);
+void SemanticAnalyzer::check_where_purity_expr(const ExprNode& expr) {
+    check_purity_deny_list(
+        expr,
+        /*on_call=*/
+        [this](const CallExpr& e) {
+            if (e.resolved_callee_id.has_value()) {
+                const auto* function = find_resolved_func(*e.resolved_callee_id);
+                if (function != nullptr && (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
+                    errors_.error(e.location, "where: predicates must be pure");
                 }
             }
         },
-        expr.expr);
+        /*on_spawn=*/[this](const SpawnExpr& e) { errors_.error(e.location, "where: predicates must be pure"); },
+        /*on_query=*/[this](const QueryCallExpr& e) { errors_.error(e.location, "where: predicates must be pure"); });
+}
+
+void SemanticAnalyzer::check_order_by_purity_expr(const ExprNode& expr) {
+    check_purity_deny_list(
+        expr,
+        /*on_call=*/
+        [this](const CallExpr& e) {
+            if (e.resolved_callee_id.has_value()) {
+                const auto* function = find_resolved_func(*e.resolved_callee_id);
+                if (function != nullptr && (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
+                    errors_.error(e.location, "order by: sort keys must be pure");
+                }
+            }
+        },
+        /*on_spawn=*/[this](const SpawnExpr& e) { errors_.error(e.location, "order by: sort keys must be pure"); },
+        /*on_query=*/
+        [this](const QueryCallExpr& e) { errors_.error(e.location, "order by: sort keys must be pure"); });
 }
 
 void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
@@ -4163,10 +4241,28 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
             contract.writes.insert(write);
         }
         contract.projects.insert(handler.resolved_projects.begin(), handler.resolved_projects.end());
-        for (const auto& sort_key : rule.order_by) {
-            if (const auto found = filter_aliases.find(sort_key.alias); found != filter_aliases.end()) {
-                contract.reads.insert(found->second);
+        // An extern rule declares its body reads explicitly, so the only
+        // inference left is over its order by: keys — walked with the shared
+        // expression walker so a computed key folds every filter-alias read it
+        // touches, not just the one its outermost chain happens to be rooted at.
+        auto resolve_order_by_read = [&](const ExprNode& expr, const LocalNames&) -> bool {
+            const auto* root = std::get_if<IdentExpr>(&expr.expr);
+            if (root == nullptr) {
+                const auto* member = std::get_if<MemberExpr>(&expr.expr);
+                root = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
             }
+            if (root == nullptr) {
+                return false;
+            }
+            const auto found = filter_aliases.find(root->name);
+            if (found == filter_aliases.end()) {
+                return false;
+            }
+            contract.reads.insert(found->second);
+            return true;
+        };
+        for (const auto& sort_key : rule.order_by) {
+            walk_expression_reads(*sort_key.expression, LocalNames{}, contract, resolve_order_by_read);
         }
         contract.emits.insert(handler.resolved_emits.begin(), handler.resolved_emits.end());
         for (const auto& command : handler.commands) {
@@ -4209,6 +4305,116 @@ void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) {
 
 // ── Shared AST walk for handler-contract inference (regular + pair rules) ──
 
+void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
+                                            HandlerCommandKind kind,
+                                            std::optional<SymbolId> target) {
+    InferredHandlerCommand command{.kind = kind, .target = std::move(target)};
+    if (std::ranges::find(contract.commands, command) == contract.commands.end()) {
+        contract.commands.push_back(std::move(command));
+    }
+}
+
+void SemanticAnalyzer::add_contract_call_effects(HandlerContract& contract,
+                                                 const std::optional<SymbolId>& callee) const {
+    if (!callee.has_value()) {
+        return;
+    }
+    const auto* function = find_resolved_func(*callee);
+    if (function == nullptr || !function->is_extern) {
+        return;
+    }
+    if (function->effect_summary.has_value()) {
+        contract.effects.insert(function->effect_summary->begin(), function->effect_summary->end());
+    } else {
+        contract.effects.insert("external");
+    }
+}
+
+void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-cognitive-complexity) -- exhaustive
+                                               // per-ExprNode-kind dispatch, the same shape as the already-NOLINT'd
+                                               // resolve_expr
+    const ExprNode& expr,
+    const LocalNames& locals,
+    HandlerContract& contract,
+    const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const {
+    if (resolve_read(expr, locals)) {
+        return;
+    }
+    auto visit = [&](const ExprNode& child, const LocalNames& child_locals) {
+        walk_expression_reads(child, child_locals, contract, resolve_read);
+    };
+    std::function<void(const std::vector<ChildOverrideNode>&, const LocalNames&)> visit_child_overrides;
+    visit_child_overrides = [&](const std::vector<ChildOverrideNode>& overrides, const LocalNames& child_locals) {
+        for (const auto& child : overrides) {
+            for (const auto& trait : child.traits) {
+                for (const auto& field : trait.assignments) {
+                    visit(*field.value, child_locals);
+                }
+            }
+            visit_child_overrides(child.children, child_locals);
+        }
+    };
+    std::visit(
+        [&](const auto& node) {
+            using E = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<E, IdentExpr>) {
+                // handled (or intentionally ignored) by resolve_read above
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                visit(*node.left, locals);
+                visit(*node.right, locals);
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                visit(*node.operand, locals);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                add_contract_call_effects(contract, node.resolved_callee_id);
+                for (const auto& arg : node.args) {
+                    visit(*arg, locals);
+                }
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                // Not resolved directly by resolve_read above; walk the object.
+                visit(*node.object, locals);
+            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
+                auto lambda_locals = locals;
+                lambda_locals.insert(node.params.begin(), node.params.end());
+                visit(*node.body, lambda_locals);
+            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
+                visit(*node.source, locals);
+                for (const auto& operation : node.operations) {
+                    for (const auto& arg : operation.args) {
+                        visit(*arg, locals);
+                    }
+                }
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                visit(*node.subject, locals);
+                for (const auto& arm : node.arms) {
+                    visit(*arm.pattern, locals);
+                    visit(*arm.body, locals);
+                }
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                visit(*node.condition, locals);
+                visit(*node.then_expr, locals);
+                visit(*node.else_expr, locals);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                for (const auto& element : node.elements) {
+                    visit(*element, locals);
+                }
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                add_contract_command(contract, HandlerCommandKind::Spawn, node.resolved_template_id);
+                for (const auto& override_entry : node.overrides) {
+                    for (const auto& field : override_entry.assignments) {
+                        visit(*field.value, locals);
+                    }
+                }
+                visit_child_overrides(node.child_overrides, locals);
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                add_contract_call_effects(contract, node.resolved_callee_id);
+                for (const auto& arg : node.named_args) {
+                    visit(*arg.value, locals);
+                }
+            }
+        },
+        expr.expr);
+}
+
 void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognitive-complexity) -- the single
                                            // consolidated home for what used to be two independently-duplicated AST
                                            // walkers; see design.md task 3.1
@@ -4219,29 +4425,14 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
     const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
     const std::function<void(const SymbolId&)>& on_project_trait) const {
     auto add_command = [&contract](HandlerCommandKind kind, std::optional<SymbolId> target) {
-        InferredHandlerCommand command{.kind = kind, .target = std::move(target)};
-        if (std::ranges::find(contract.commands, command) == contract.commands.end()) {
-            contract.commands.push_back(std::move(command));
-        }
-    };
-    auto add_call_effects = [this, &contract](const std::optional<SymbolId>& callee) {
-        if (!callee.has_value()) {
-            return;
-        }
-        const auto* function = find_resolved_func(*callee);
-        if (function == nullptr || !function->is_extern) {
-            return;
-        }
-        if (function->effect_summary.has_value()) {
-            contract.effects.insert(function->effect_summary->begin(), function->effect_summary->end());
-        } else {
-            contract.effects.insert("external");
-        }
+        add_contract_command(contract, kind, std::move(target));
     };
 
     std::function<void(const std::vector<ChildOverrideNode>&, const LocalNames&)> visit_child_overrides;
-    std::function<void(const ExprNode&, const LocalNames&)> visit_expr;
     std::function<void(const std::vector<std::unique_ptr<StmtNode>>&, LocalNames)> visit_stmts;
+    auto visit_expr = [&](const ExprNode& expr, const LocalNames& locals) {
+        walk_expression_reads(expr, locals, contract, resolve_read);
+    };
     visit_child_overrides = [&](const std::vector<ChildOverrideNode>& overrides, const LocalNames& locals) {
         for (const auto& child : overrides) {
             for (const auto& trait : child.traits) {
@@ -4251,70 +4442,6 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
             }
             visit_child_overrides(child.children, locals);
         }
-    };
-    visit_expr = [&](const ExprNode& expr, const LocalNames& locals) {
-        if (resolve_read(expr, locals)) {
-            return;
-        }
-        std::visit(
-            [&](const auto& node) {
-                using E = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<E, IdentExpr>) {
-                    // handled (or intentionally ignored) by resolve_read above
-                } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                    visit_expr(*node.left, locals);
-                    visit_expr(*node.right, locals);
-                } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                    visit_expr(*node.operand, locals);
-                } else if constexpr (std::is_same_v<E, CallExpr>) {
-                    add_call_effects(node.resolved_callee_id);
-                    for (const auto& arg : node.args) {
-                        visit_expr(*arg, locals);
-                    }
-                } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                    // Not resolved directly by resolve_read above; walk the object.
-                    visit_expr(*node.object, locals);
-                } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                    auto lambda_locals = locals;
-                    lambda_locals.insert(node.params.begin(), node.params.end());
-                    visit_expr(*node.body, lambda_locals);
-                } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                    visit_expr(*node.source, locals);
-                    for (const auto& operation : node.operations) {
-                        for (const auto& arg : operation.args) {
-                            visit_expr(*arg, locals);
-                        }
-                    }
-                } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                    visit_expr(*node.subject, locals);
-                    for (const auto& arm : node.arms) {
-                        visit_expr(*arm.pattern, locals);
-                        visit_expr(*arm.body, locals);
-                    }
-                } else if constexpr (std::is_same_v<E, IfExpr>) {
-                    visit_expr(*node.condition, locals);
-                    visit_expr(*node.then_expr, locals);
-                    visit_expr(*node.else_expr, locals);
-                } else if constexpr (std::is_same_v<E, ListExpr>) {
-                    for (const auto& element : node.elements) {
-                        visit_expr(*element, locals);
-                    }
-                } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                    add_command(HandlerCommandKind::Spawn, node.resolved_template_id);
-                    for (const auto& override_entry : node.overrides) {
-                        for (const auto& field : override_entry.assignments) {
-                            visit_expr(*field.value, locals);
-                        }
-                    }
-                    visit_child_overrides(node.child_overrides, locals);
-                } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                    add_call_effects(node.resolved_callee_id);
-                    for (const auto& arg : node.named_args) {
-                        visit_expr(*arg.value, locals);
-                    }
-                }
-            },
-            expr.expr);
     };
     visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts, LocalNames locals) {
         for (const auto& stmt : stmts) {
@@ -4523,10 +4650,12 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
         }
     };
 
+    // An order by: key is an ordinary expression, so its reads resolve through
+    // the same walk and the same resolve_read strategy the handler body uses —
+    // a computed key reading a trait the body never mentions still reaches the
+    // contract (handler-contracts).
     for (const auto& key : rule.order_by) {
-        if (auto alias = aliases.find(key.alias); alias != aliases.end()) {
-            contract.reads.insert(alias->second);
-        }
+        walk_expression_reads(*key.expression, LocalNames{}, contract, resolve_read);
     }
     LocalNames handler_locals;
     handler_locals.insert(handler.event_name);
@@ -4589,6 +4718,13 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     // is already visited for reads by walk_handler_body before this runs.
     auto handle_var_assign = [](const VarAssign&, const LocalNames&) {};
     auto on_project_trait  = [&contract](const SymbolId& trait) { contract.projects.insert(trait); };
+
+    // Same walk and same pair-read primitive as the handler body, so a sort
+    // key reading through both bindings records both binding-qualified reads
+    // (handler-contracts).
+    for (const auto& key : rule.order_by) {
+        walk_expression_reads(*key.expression, LocalNames{}, contract, resolve_read);
+    }
 
     LocalNames handler_locals;
     handler_locals.insert(handler.event_name);
@@ -6155,6 +6291,31 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
 // event/trait/phase owners plus qualified-alias lookup — an inherently large
 // exhaustive dispatch, not further decomposable without threading more state.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TypeInfo SemanticAnalyzer::descend_vector_color_members(TypeInfo start,
+                                                        const std::vector<std::string>& segments,
+                                                        std::size_t from_index) {
+    TypeInfo current = std::move(start);
+    for (std::size_t i = from_index; i < segments.size(); ++i) {
+        const auto& seg = segments[i];
+        if (current.kind == TypeKind::Vec2 || current.kind == TypeKind::Vec3) {
+            if (seg == "x" || seg == "y" || (current.kind == TypeKind::Vec3 && seg == "z")) {
+                current = make_float_type();
+                continue;
+            }
+            return make_unknown_type();
+        }
+        if (current.kind == TypeKind::Color) {
+            if (seg == "r" || seg == "g" || seg == "b" || seg == "a") {
+                current = make_float_type();
+                continue;
+            }
+            return make_unknown_type();
+        }
+        return make_unknown_type();
+    }
+    return current;
+}
+
 TypeInfo SemanticAnalyzer::infer_member_expr_type(
     const MemberExpr& member,
     const SourceLocation& location,
@@ -6182,40 +6343,31 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
                     return make_unknown_type();
                 }
                 const auto* trait = find_resolved_trait(make_canonical_id(resolved->trait_id));
-                TypeInfo current;
-                bool resolved_any = false;
-                for (std::size_t i = resolved->consumed_segments; i < segments.size(); ++i) {
-                    const auto& seg = segments[i];
-                    if (!resolved_any) {
-                        current      = trait == nullptr ? make_unknown_type() : find_field_type_in(trait->fields, seg);
-                        resolved_any = true;
-                    } else if (current.kind == TypeKind::Vec2 || current.kind == TypeKind::Vec3) {
-                        if (seg == "x" || seg == "y" || (current.kind == TypeKind::Vec3 && seg == "z")) {
-                            current = make_float_type();
-                        } else {
-                            return make_unknown_type();
-                        }
-                    } else if (current.kind == TypeKind::Color) {
-                        if (seg == "r" || seg == "g" || seg == "b" || seg == "a") {
-                            current = make_float_type();
-                        } else {
-                            return make_unknown_type();
-                        }
-                    } else {
-                        return make_unknown_type();
-                    }
+                if (resolved->consumed_segments >= segments.size()) {
+                    return make_unknown_type();
                 }
-                return resolved_any ? current : make_unknown_type();
+                const auto first =
+                    trait == nullptr ? make_unknown_type()
+                                     : find_field_type_in(trait->fields, segments[resolved->consumed_segments]);
+                return descend_vector_color_members(first, segments, resolved->consumed_segments + 1);
             }
+        }
+    }
+    // Flatten the chain the same way for a plain filter-alias/local root, so a
+    // nested access like `p.pos.y` resolves through vec2/vec3/color component
+    // descent identically to the pair-binding case above (dsl-rule-order-by
+    // needs this to type-check computed sort keys; where: predicates gain the
+    // same precision as an incidental side effect of sharing the walk).
+    if (auto chain = member_chain_segments(member); chain.has_value() && chain->size() >= 2) {
+        if (auto trait_it = filter_bindings.find(chain->front());
+            trait_it != filter_bindings.end() && trait_it->second != nullptr) {
+            const auto first = find_field_type_in(trait_it->second->fields, (*chain)[1]);
+            return descend_vector_color_members(first, *chain, 2);
         }
     }
     const auto* owner = std::get_if<IdentExpr>(&member.object->expr);
     if (owner == nullptr) {
         return make_unknown_type();
-    }
-    if (auto trait_it = filter_bindings.find(owner->name);
-        trait_it != filter_bindings.end() && trait_it->second != nullptr) {
-        return find_field_type_in(trait_it->second->fields, member.member);
     }
     if (handler_event != nullptr && owner->name == handler_event->name) {
         const auto* field = find_field_in(handler_event->fields, member.member);
@@ -6519,6 +6671,12 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
                 !find_std_core_provider(imports_, provider_it->second).has_value()) {
                 errors_.error(expr.location,
                               imported_reference_diagnostic(imports_, "function", ident->name, provider_it->second));
+            }
+        }
+        if (call->resolved_callee_id.has_value()) {
+            if (const auto* function = find_resolved_func(*call->resolved_callee_id);
+                function != nullptr && function->return_type.has_value()) {
+                return *function->return_type;
             }
         }
         return make_unknown_type();

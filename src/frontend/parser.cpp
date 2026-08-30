@@ -1243,10 +1243,11 @@ RuleNode Parser::parse_rule() {
         }
     }
 
-    // A pairs: rule selects tuples, not a single-entity filter, so it
-    // cannot also carry a filter/exclude/order-by clause meant for that model.
+    // A pairs: rule selects tuples, not a single-entity filter, so it cannot
+    // also carry a filter/exclude clause meant for that model. order by: is
+    // exempt — a pairs: rule may declare it (dsl-pair-relations).
     auto common      = parse_common_rule_clauses([&](const SourceLocation& clause_loc, const char* clause_name) {
-        if (saw_pairs) {
+        if (saw_pairs && std::string(clause_name) != "order by:") {
             errors_.error(clause_loc,
                           std::string("'") + clause_name + "' cannot be combined with 'pairs:' on the same rule");
         }
@@ -1529,28 +1530,19 @@ std::vector<SortKey> Parser::parse_order_by_clause() {
             break;
         }
 
-        auto key_loc = peek().location;
-        auto alias   = consume(TokenType::IDENTIFIER, "expected sort key alias").value;
-        consume(TokenType::DOT, "expected '.' after sort key alias");
-        auto field = consume(TokenType::IDENTIFIER, "expected sort key field").value;
-        while (match(TokenType::DOT)) {
-            field += ".";
-            field += consume(TokenType::IDENTIFIER, "expected field member after '.'").value;
-        }
+        auto key_loc            = peek().location;
+        auto error_count_before = errors_.error_count();
+        auto expression         = parse_expression();
 
         bool descending = false;
-        if (check(TokenType::IDENTIFIER)) {
-            std::string direction = advance().value;
-            if (direction == "asc") {
-                descending = false;
-            } else if (direction == "desc") {
-                descending = true;
-            } else {
-                errors_.error(key_loc, "expected 'asc' or 'desc' in order by clause");
-            }
+        if (check(TokenType::IDENTIFIER) && (peek().value == "asc" || peek().value == "desc")) {
+            descending = advance().value == "desc";
         }
         expect_newline();
-        keys.push_back({.alias = alias, .field = field, .descending = descending, .location = key_loc});
+        keys.push_back(SortKey{.expression = std::move(expression), .descending = descending, .location = key_loc});
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
     }
 
     expect_dedent();

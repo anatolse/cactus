@@ -1,0 +1,200 @@
+module pairs_order_by_runtime
+
+use std.core
+
+# Runtime coverage for computed `order by:` sort keys (dsl-rule-order-by) on
+# both a unary `filter:` domain and a binary `pairs:` domain.
+#
+# Every rule below fingerprints its own iteration order the same way
+# spatial_join_tuples_runtime does: each visited entity/tuple emits a
+# single-digit code, and a Recorder singleton rolls those digits into one
+# integer, so the final value is a direct, order-sensitive fingerprint of the
+# whole pass.
+#
+# The three ranked entities carry scores 1/4/7 with tags 1/2/3. Sorting by the
+# *computed* key `offset_penalty(score, 5)` (squared distance from 5) yields
+# penalties 16/1/4, so ascending penalty order is tag2, tag3, tag1 — a
+# different order than ascending raw `score` (tag1, tag2, tag3) would give.
+# That difference is what makes these assertions prove the sort key is
+# genuinely evaluated as an expression rather than read as a bare field.
+
+func offset_penalty(value: int, origin: int) int:
+    return (value - origin) * (value - origin)
+
+trait Ranked:
+    var score: int = 0
+    var tag: int = 0
+
+trait Marker:
+    var flag: int = 0
+
+trait Recorder:
+    var unary_sequence: int = 0
+    var swapped_sequence: int = 0
+    var pair_sequence: int = 0
+    var weight_sequence: int = 0
+
+event UnaryVisited:
+    code: int
+
+event SwappedVisited:
+    code: int
+
+event PairVisited:
+    code: int
+
+# Ascending computed penalty => tag2, tag3, tag1 => 231.
+rule RankByPenalty:
+    filter:
+        Ranked as r
+        Marker as m
+    order by:
+        offset_penalty(r.score, 5) asc
+
+    on tick:
+        emit UnaryVisited:
+            code = r.tag
+
+# Identical sort semantics to RankByPenalty, but the filter declares its two
+# traits in the opposite order. Which trait codegen picks as the physical sort
+# anchor is arbitrary, so this rule must produce the same 231 fingerprint.
+rule RankByPenaltySwapped:
+    filter:
+        Marker as m
+        Ranked as r
+    order by:
+        offset_penalty(r.score, 5) asc
+
+    on tick:
+        emit SwappedVisited:
+            code = r.tag
+
+# Cross-binding computed key over a pair domain, descending by score
+# difference. The 6 non-self tuples produce keys 6, 3, 3, -3, -3, -6; the two
+# pairs of equal keys must keep left-binding-major creation order, making the
+# expected fingerprint 637152 rather than any other permutation of the same
+# six digits.
+rule RankPairsByGap:
+    pairs:
+        actor:
+            Ranked
+        rival:
+            Ranked
+    order by:
+        actor.Ranked.score - rival.Ranked.score desc
+    where:
+        actor.Ranked.tag != rival.Ranked.tag
+
+    on tick:
+        emit PairVisited:
+            code = ((actor.Ranked.tag - 1) * 3) + (rival.Ranked.tag - 1)
+
+rule RecordUnary:
+    filter:
+        Recorder
+
+    on UnaryVisited as visit:
+        unary_sequence = (unary_sequence * 10) + visit.code
+
+rule RecordSwapped:
+    filter:
+        Recorder
+
+    on SwappedVisited as visit:
+        swapped_sequence = (swapped_sequence * 10) + visit.code
+
+rule RecordPair:
+    filter:
+        Recorder
+
+    on PairVisited as visit:
+        pair_sequence = (pair_sequence * 10) + visit.code
+
+entity Alpha:
+    Ranked:
+        score = 1
+        tag = 1
+    Marker:
+        flag = 0
+
+entity Beta:
+    Ranked:
+        score = 4
+        tag = 2
+    Marker:
+        flag = 0
+
+entity Gamma:
+    Ranked:
+        score = 7
+        tag = 3
+    Marker:
+        flag = 0
+
+entity Log:
+    Recorder
+
+# Weight/Tint is a second, independent filter pair (disjoint from Ranked's
+# pairs: domain) used only to cover sorting a filter whose component pools are
+# not identical: WeightOnly has Weight but not Tint, so it sits in the Weight
+# pool (the anchor RankByWeight physically sorts) without satisfying the
+# rule's full filter. The sort key extractors read every filter trait
+# unconditionally, so evaluating them on an anchor-pool entity outside the
+# filter's actual intersection would be undefined behavior if the sort weren't
+# restricted to entities that satisfy the whole filter.
+
+trait Weight:
+    var value: int = 0
+    var group: int = 0
+
+trait Tint:
+    var value: int = 0
+
+event WeightVisited:
+    code: int
+
+# Same ascending-computed-penalty shape as RankByPenalty: values 1/4/7 give
+# penalties 16/1/4, so ascending order is group2, group3, group1 => 231.
+rule RankByWeight:
+    filter:
+        Weight as w
+        Tint as t
+    order by:
+        offset_penalty(w.value, 5) asc
+
+    on tick:
+        emit WeightVisited:
+            code = w.group
+
+rule RecordWeight:
+    filter:
+        Recorder
+
+    on WeightVisited as visit:
+        weight_sequence = (weight_sequence * 10) + visit.code
+
+entity WeightAlpha:
+    Weight:
+        value = 1
+        group = 1
+    Tint:
+        value = 0
+
+entity WeightBeta:
+    Weight:
+        value = 4
+        group = 2
+    Tint:
+        value = 0
+
+entity WeightGamma:
+    Weight:
+        value = 7
+        group = 3
+    Tint:
+        value = 0
+
+entity WeightOnly:
+    Weight:
+        value = 2
+        group = 9

@@ -7,12 +7,17 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -1558,6 +1563,38 @@ TEST_CASE("Parser: bare add statement parsed", "[parser][dynamic-traits]") {
     CHECK_FALSE(add->target_expr.has_value());
 }
 
+// Flattens a MemberExpr chain rooted at an identifier into (alias, dotted
+// field), mirroring the shape SortKey{alias, field} used to store directly
+// before order-by's sort keys became general expressions.
+static std::optional<std::pair<std::string, std::string>> sort_key_alias_field(const ExprNode& expr) {
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    if (member == nullptr) {
+        return std::nullopt;
+    }
+    std::vector<std::string> segments{member->member};
+    const ExprNode* cursor = member->object.get();
+    while (cursor != nullptr) {
+        if (const auto* inner = std::get_if<MemberExpr>(&cursor->expr)) {
+            segments.push_back(inner->member);
+            cursor = inner->object.get();
+            continue;
+        }
+        if (const auto* ident = std::get_if<IdentExpr>(&cursor->expr)) {
+            std::ranges::reverse(segments);
+            std::string field;
+            for (size_t i = 0; i < segments.size(); ++i) {
+                if (i != 0) {
+                    field += '.';
+                }
+                field += segments[i];
+            }
+            return std::make_pair(ident->name, field);
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 TEST_CASE("Parser: extern rule declaration with filter and order by", "[parser][extern-rule]") {
     auto prog = parse(
         "extern rule SpriteRenderer:\n"
@@ -1582,11 +1619,15 @@ TEST_CASE("Parser: extern rule declaration with filter and order by", "[parser][
     REQUIRE(decl.exclude.entries.size() == 1);
     CHECK(decl.exclude.entries[0].qualified_name == "Hidden");
     REQUIRE(decl.order_by.size() == 2);
-    CHECK(decl.order_by[0].alias == "r");
-    CHECK(decl.order_by[0].field == "layer");
+    auto key0 = sort_key_alias_field(*decl.order_by[0].expression);
+    REQUIRE(key0.has_value());
+    CHECK(key0->first == "r");
+    CHECK(key0->second == "layer");
     CHECK_FALSE(decl.order_by[0].descending);
-    CHECK(decl.order_by[1].alias == "pos");
-    CHECK(decl.order_by[1].field == "pos.y");
+    auto key1 = sort_key_alias_field(*decl.order_by[1].expression);
+    REQUIRE(key1.has_value());
+    CHECK(key1->first == "pos");
+    CHECK(key1->second == "pos.y");
     CHECK(decl.order_by[1].descending);
     REQUIRE(decl.after_rules.size() == 1);
     CHECK(decl.after_rules[0] == "TransformUpdate");
@@ -1604,8 +1645,10 @@ TEST_CASE("Parser: rule order by single and default asc", "[parser][rule-order-b
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.order_by.size() == 1);
-    CHECK(sys.order_by[0].alias == "s");
-    CHECK(sys.order_by[0].field == "layer");
+    auto key0 = sort_key_alias_field(*sys.order_by[0].expression);
+    REQUIRE(key0.has_value());
+    CHECK(key0->first == "s");
+    CHECK(key0->second == "layer");
     CHECK_FALSE(sys.order_by[0].descending);
 }
 
@@ -1623,11 +1666,15 @@ TEST_CASE("Parser: rule order by multi key", "[parser][rule-order-by]") {
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     REQUIRE(sys.order_by.size() == 2);
-    CHECK(sys.order_by[0].alias == "s");
-    CHECK(sys.order_by[0].field == "layer");
+    auto key0 = sort_key_alias_field(*sys.order_by[0].expression);
+    REQUIRE(key0.has_value());
+    CHECK(key0->first == "s");
+    CHECK(key0->second == "layer");
     CHECK_FALSE(sys.order_by[0].descending);
-    CHECK(sys.order_by[1].alias == "p");
-    CHECK(sys.order_by[1].field == "pos.y");
+    auto key1 = sort_key_alias_field(*sys.order_by[1].expression);
+    REQUIRE(key1.has_value());
+    CHECK(key1->first == "p");
+    CHECK(key1->second == "pos.y");
     CHECK(sys.order_by[1].descending);
 }
 
@@ -1641,6 +1688,27 @@ TEST_CASE("Parser: rule without order by leaves clause empty", "[parser][rule-or
 
     auto& sys = std::get<RuleNode>(prog.declarations[0]);
     CHECK(sys.order_by.empty());
+}
+
+TEST_CASE("Parser: rule order by accepts a computed cross-expression sort key", "[parser][rule-order-by]") {
+    auto prog = parse(
+        "rule Render:\n"
+        "    filter:\n"
+        "        Position as pos\n"
+        "    order by:\n"
+        "        math.length(pos.value - origin) desc\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.order_by.size() == 1);
+    CHECK(sys.order_by[0].descending);
+    const auto* call = std::get_if<CallExpr>(&sys.order_by[0].expression->expr);
+    REQUIRE(call != nullptr);
+    REQUIRE(call->args.size() == 1);
+    const auto* subtract = std::get_if<BinaryExpr>(&call->args[0]->expr);
+    REQUIRE(subtract != nullptr);
+    CHECK(subtract->op == "-");
 }
 
 // ── Pair relations (dsl-pair-relations) ─────────────────────────────────────
@@ -1802,9 +1870,11 @@ TEST_CASE("Parser: pairs clause combined with exclude is rejected", "[parser][pa
     REQUIRE(errors.has_errors());
 }
 
-TEST_CASE("Parser: pairs clause combined with order by is rejected", "[parser][pair-relations]") {
-    auto errors = parse_expect_errors(
-        "rule Bad:\n"
+// order by: is not mutually exclusive with pairs: at the parser layer (or, as
+// of a later task, at the semantic layer either) — only filter:/exclude: are.
+TEST_CASE("Parser: pairs clause combined with order by parses successfully", "[parser][pair-relations]") {
+    auto prog = parse(
+        "rule Contacts:\n"
         "    pairs:\n"
         "        body:\n"
         "            DynamicBody\n"
@@ -1814,7 +1884,14 @@ TEST_CASE("Parser: pairs clause combined with order by is rejected", "[parser][p
         "        body.DynamicBody.x\n"
         "    on fixed_tick:\n"
         "        x = 1\n");
-    REQUIRE(errors.has_errors());
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.pairs.has_value());
+    REQUIRE(sys.order_by.size() == 1);
+    auto key0 = sort_key_alias_field(*sys.order_by[0].expression);
+    REQUIRE(key0.has_value());
+    CHECK(key0->first == "body");
+    CHECK(key0->second == "DynamicBody.x");
 }
 
 TEST_CASE("Parser: dotted assignment target parses name and path", "[parser][pair-relations]") {

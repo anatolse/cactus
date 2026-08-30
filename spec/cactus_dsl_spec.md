@@ -49,7 +49,7 @@ The current gameplay-core profile includes:
 - `entity`, `template`
 - `rule`, `extern rule`, `event`, `extern event`, `phase`, `func`, `extern func`
 - `asset`, `input`
-- `rule` selection domains: selectionless, unary `filter:`/`exclude:`/`order by:`, and binary `pairs:` relations
+- `rule` selection domains: selectionless, unary `filter:`/`exclude:`, and binary `pairs:` relations, with `order by:` available to either non-selectionless domain
 - handlers triggered by declared phases or ordinary events, such as `on input:`, `on fixed_tick:`, `on tick:`, and `on PlayerDamaged:`
 - statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit` (broadcast or targeted with `to`), `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
 
@@ -359,17 +359,18 @@ Hierarchy syntax creates parent-child **relations only**. It does not by itself 
 
 ### 3.8 Rules
 
-Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`/`order by:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:`, `exclude:`, and `order by:`.
+Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:` and `exclude:`. `order by:` belongs to no single domain — it may accompany either a unary `filter:` domain or a binary `pairs:` domain, and requires one of them.
 
 ```ebnf
 rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   ( unary_domain | pairs_clause )
+                  [ order_by_clause ]
                   [ after_clause ]
                   [ where_clause ]
                   { event_handler }
                   DEDENT ;
 
-unary_domain    = [ filter_clause ] [ exclude_clause ] [ order_by_clause ] ;
+unary_domain    = [ filter_clause ] [ exclude_clause ] ;
 
 filter_clause   = "filter" ":" NEWLINE INDENT
                   { filter_entry }
@@ -385,10 +386,16 @@ order_by_clause = "order" "by" ":" NEWLINE INDENT
                   { sort_key NEWLINE }
                   DEDENT ;
 
+sort_key        = expression [ "asc" | "desc" ] ;
+
 after_clause    = "after" ":" NEWLINE INDENT
                   { IDENTIFIER NEWLINE }
                   DEDENT ;
 ```
+
+A sort key is a pure expression of the same class as a `where:` predicate (§3.8.2) — literals and constants, reads through in-scope bindings, operators, and calls to functions proven pure — and must type-check as scalar-comparable (`int`, `float`, or `bool`). A bare `alias.field` path is simply the trivial case of that grammar. Direction defaults to `asc` when omitted; multiple sort keys order lexicographically, each breaking the preceding key's ties.
+
+`order by:` requires a `filter:` or `pairs:` domain and may reference only that domain's bindings — a `filter:` alias for a unary rule, or either binding for a pair rule (so a pair sort key may read across both). On a pair domain it reorders the tuple pass only; it never changes which tuples run or how many.
 
 ```cactus
 rule Patrol:
@@ -404,7 +411,7 @@ rule Patrol:
 
 #### 3.8.1 Pair Relations
 
-`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the rule-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern rule` declarations.
+`pairs:` declares a binary iteration domain over two ordered, uniquely named entity bindings, each with its own positive trait requirements. `pairs` is recognized contextually at the rule-clause position (like `children` inside archetype bodies); it is not a reserved keyword elsewhere and does not appear in the global keyword list. `pairs:` is rejected on `extern rule` declarations. It is mutually exclusive with `filter:` and `exclude:`, but may be combined with `order by:` (§3.8) to fix the tuple pass's invocation order.
 
 ```ebnf
 pairs_clause    = "pairs" ":" NEWLINE INDENT

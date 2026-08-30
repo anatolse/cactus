@@ -644,9 +644,11 @@ struct FilterClause {
     SourceLocation location;
 };
 
+// A sort key's expression is a pure expression of the same class as a
+// where: predicate (dsl-where-clause) — a bare `alias.field` path is just its
+// trivial case, not the general grammar.
 struct SortKey {
-    std::string alias;
-    std::string field;
+    std::unique_ptr<ExprNode> expression;
     bool descending = false;
     SourceLocation location;
 };

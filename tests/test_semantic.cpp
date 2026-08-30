@@ -654,6 +654,130 @@ TEST_CASE("Semantic: order by invalid color member errors", "[semantic][rule-ord
     CHECK(message.find("t.tint.w") != std::string::npos);
 }
 
+TEST_CASE("Semantic: impure order by sort key is rejected", "[semantic][rule-order-by]") {
+    auto err = analyze_first_error(STDLIB_EVENTS +
+                                   "trait Health:\n"
+                                   "    var value: int\n"
+                                   "template Marker:\n"
+                                   "    Health:\n"
+                                   "        value = 1\n"
+                                   "rule Render:\n"
+                                   "    filter:\n"
+                                   "        Health as h\n"
+                                   "    order by:\n"
+                                   "        spawn Marker:\n"
+                                   "            Health:\n"
+                                   "                value = 1\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("must be pure") != std::string::npos);
+}
+
+TEST_CASE("Semantic: order by accepts a computed sort key over a single filter alias", "[semantic][rule-order-by]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Health:\n"
+                                                   "    var value: int\n"
+                                                   "func doubled(v: int) int:\n"
+                                                   "    return v * 2\n"
+                                                   "rule Render:\n"
+                                                   "    filter:\n"
+                                                   "        Health as h\n"
+                                                   "    order by:\n"
+                                                   "        doubled(h.value) desc\n"
+                                                   "    on tick:\n"
+                                                   "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: order by rejects a computed sort key with a non-scalar result type",
+          "[semantic][rule-order-by]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
+                                             "    var pos: vec2\n"
+                                             "func identity(v: vec2) vec2:\n"
+                                             "    return v\n"
+                                             "rule Render:\n"
+                                             "    filter:\n"
+                                             "        Position as p\n"
+                                             "    order by:\n"
+                                             "        identity(p.pos) asc\n"
+                                             "    on tick:\n"
+                                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: order by without filter or pairs reports the specific diagnostic", "[semantic][rule-order-by]") {
+    auto err = analyze_first_error(STDLIB_EVENTS +
+                                   "rule NoDomain:\n"
+                                   "    order by:\n"
+                                   "        1\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("`order by:` requires a `filter:` or `pairs:` clause") != std::string::npos);
+}
+
+TEST_CASE("Semantic: order by accepts a cross-binding computed pair sort key", "[semantic][rule-order-by][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
+                                                   "    var pos: vec2\n"
+                                                   "rule Contacts:\n"
+                                                   "    pairs:\n"
+                                                   "        actor:\n"
+                                                   "            Position\n"
+                                                   "        victim:\n"
+                                                   "            Position\n"
+                                                   "    order by:\n"
+                                                   "        actor.Position.pos.x - victim.Position.pos.x desc\n"
+                                                   "    on fixed_tick:\n"
+                                                   "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: order by rejects a pair sort key naming an undeclared binding",
+          "[semantic][rule-order-by][pair-relations]") {
+    auto err = analyze_first_error(STDLIB_EVENTS +
+                                   "trait Position:\n"
+                                   "    var pos: vec2\n"
+                                   "rule Contacts:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Position\n"
+                                   "        victim:\n"
+                                   "            Position\n"
+                                   "    order by:\n"
+                                   "        other.Position.pos.x asc\n"
+                                   "    on fixed_tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("pair binding") != std::string::npos);
+}
+
+// Regression guard (task 4.3): only order by: was carved out of pairs:'s
+// unary-clause exclusion — filter:/exclude: combined with pairs: must still
+// be rejected end to end.
+TEST_CASE("Semantic: pairs combined with filter is still rejected", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
+                                             "    var pos: vec2\n"
+                                             "rule Bad:\n"
+                                             "    pairs:\n"
+                                             "        actor:\n"
+                                             "            Position\n"
+                                             "        victim:\n"
+                                             "            Position\n"
+                                             "    filter:\n"
+                                             "        Position\n"
+                                             "    on fixed_tick:\n"
+                                             "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: pairs combined with exclude is still rejected", "[semantic][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "trait Position:\n"
+                                             "    var pos: vec2\n"
+                                             "rule Bad:\n"
+                                             "    pairs:\n"
+                                             "        actor:\n"
+                                             "            Position\n"
+                                             "        victim:\n"
+                                             "            Position\n"
+                                             "    exclude:\n"
+                                             "        Position\n"
+                                             "    on fixed_tick:\n"
+                                             "        let x = 1\n"));
+}
+
 TEST_CASE("Semantic: vec2/vec3 splat constructors type-check as trait field defaults",
           "[semantic][vector-expressions]") {
     auto result = analyze(
@@ -2187,6 +2311,58 @@ TEST_CASE("Semantic: pair handler contract records domain, bindings, bound reads
     const BoundTraitAccess wall_collider_read{.binding_index = 1, .trait = collider_id};
     CHECK(std::ranges::find(contract.bound_reads, body_transform_read) != contract.bound_reads.end());
     CHECK(std::ranges::find(contract.bound_reads, wall_collider_read) != contract.bound_reads.end());
+}
+
+// handler-contracts: an order by: key's reads must reach the contract with the
+// same precision as a body read, so scheduling sees identical dependency data
+// whether a trait is touched in order by:, where:, or the handler body. The
+// computed key here reads Collider through a nested call the body never
+// mentions, so a flat root-alias lookup would miss it.
+TEST_CASE("Semantic: unary handler contract folds reads from a computed order by key",
+          "[semantic][rule-order-by][handler-contracts]") {
+    auto result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                          "func doubled(v: int) int:\n"
+                          "    return v * 2\n"
+                          "rule Ranked:\n"
+                          "    filter:\n"
+                          "        DynamicBody as body\n"
+                          "        Collider as col\n"
+                          "    order by:\n"
+                          "        doubled(col.mask) desc\n"
+                          "    on tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    CHECK(contract.reads.contains(make_symbol_id(SymbolKind::Trait, "test", "Collider")));
+}
+
+TEST_CASE("Semantic: pair handler contract folds binding-qualified reads from an order by key",
+          "[semantic][rule-order-by][pair-relations][handler-contracts]") {
+    auto result = analyze(STDLIB_EVENTS + PAIR_TRAITS +
+                          "rule Ranked:\n"
+                          "    pairs:\n"
+                          "        actor:\n"
+                          "            Transform\n"
+                          "        victim:\n"
+                          "            Transform\n"
+                          "    order by:\n"
+                          "        actor.Transform.x - victim.Transform.x desc\n"
+                          "    on fixed_tick:\n"
+                          "        let x = 1\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract    = result.handler_contracts[0];
+    const auto transform_id = make_symbol_id(SymbolKind::Trait, "test", "Transform");
+
+    // Conservative `reads` is a set, so the same trait read through both
+    // bindings collapses to one entry; `bound_reads` keeps the two roles apart.
+    CHECK(contract.reads.contains(transform_id));
+    const BoundTraitAccess actor_read{.binding_index = 0, .trait = transform_id};
+    const BoundTraitAccess victim_read{.binding_index = 1, .trait = transform_id};
+    CHECK(std::ranges::find(contract.bound_reads, actor_read) != contract.bound_reads.end());
+    CHECK(std::ranges::find(contract.bound_reads, victim_read) != contract.bound_reads.end());
+    CHECK(contract.bound_reads.size() == 2);
 }
 
 TEST_CASE("Semantic: unary rules keep their existing domain and are unaffected by pair support",

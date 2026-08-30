@@ -2531,8 +2531,22 @@ TEST_CASE("Codegen EnTT: rule order by emits registry sort for single key", "[co
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("registry.sort<Sprite>([&](entt::entity a, entt::entity b)") != std::string::npos);
-            CHECK(code.find("registry.get<Sprite>(a).layer < registry.get<Sprite>(b).layer") != std::string::npos);
+            // The comparator sorts a snapshot of the actually-filtered
+            // entities (safe to call registry.get<> on for every filter
+            // trait), then the anchor pool is permuted to match via EnTT's
+            // range-sort overload rather than a comparator invoked over the
+            // anchor's whole (potentially wider) pool.
+            CHECK(code.find("std::ranges::stable_sort(") != std::string::npos);
+            CHECK(code.find("registry.storage<Sprite>().sort_as(") != std::string::npos);
+            // The sorted pool must also drive the view, or a multi-element
+            // view is free to iterate from some other, unsorted pool.
+            CHECK(code.find("view.use<Sprite>();") != std::string::npos);
+            // Each key is evaluated by a per-entity extractor lambda rather
+            // than being inlined twice into the comparator, so an arbitrary
+            // expression lowers through the ordinary expression emitter.
+            CHECK(code.find("= [&](entt::entity entity) {") != std::string::npos);
+            CHECK(code.find("return s.layer;") != std::string::npos);
+            CHECK(code.find("return cactus_lhs_key < cactus_rhs_key;") != std::string::npos);
         }
     }
 }
@@ -2560,10 +2574,15 @@ TEST_CASE("Codegen EnTT: rule order by emits multi-key comparator", "[codegen-en
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("if (registry.get<Sprite>(a).layer != registry.get<Sprite>(b).layer)") !=
-                  std::string::npos);
-            CHECK(code.find("return registry.get<Position>(a).pos.y > registry.get<Position>(b).pos.y;") !=
-                  std::string::npos);
+            // Lexicographic: the primary key compares ascending and only a tie
+            // falls through to the secondary key's descending compare.
+            CHECK(code.find("return s.layer;") != std::string::npos);
+            CHECK(code.find("return p.pos.y;") != std::string::npos);
+            const auto ascending  = code.find("return cactus_lhs_key < cactus_rhs_key;");
+            const auto descending = code.find("return cactus_lhs_key > cactus_rhs_key;");
+            CHECK(ascending != std::string::npos);
+            CHECK(descending != std::string::npos);
+            CHECK(ascending < descending);
         }
     }
 }
@@ -5680,12 +5699,27 @@ TEST_CASE(
     });
     REQUIRE(flat_node_it != decorated.execution_graph.handlers.end());
 
-    ExternRuleNode volume_rule                = *flat_rule;
+    // ExternRuleNode is move-only (order_by's SortKey holds a
+    // std::unique_ptr<ExprNode>), and flat_rule must stay intact for its own
+    // dispatch below, so clone field-by-field instead of copy-constructing;
+    // this fixture never sets order by:, so leaving it default-empty matches
+    // flat_rule's own state exactly.
+    ExternRuleNode volume_rule;
+    volume_rule.name                   = flat_rule->name;
+    volume_rule.is_stdlib               = flat_rule->is_stdlib;
+    volume_rule.resolved_rule_id        = flat_rule->resolved_rule_id;
+    volume_rule.resolved_after_rule_ids = flat_rule->resolved_after_rule_ids;
+    volume_rule.filter                  = flat_rule->filter;
+    volume_rule.exclude                 = flat_rule->exclude;
+    volume_rule.after_rules             = flat_rule->after_rules;
+    volume_rule.handlers                = flat_rule->handlers;
+    volume_rule.location                = flat_rule->location;
     volume_rule.resolved_rule_id->module.name = "std.transform.volume";
-    program.declarations.emplace_back(volume_rule);
+    const auto volume_rule_id                 = *volume_rule.resolved_rule_id;
+    program.declarations.emplace_back(std::move(volume_rule));
 
     HandlerNode volume_node   = *flat_node_it;
-    volume_node.identity.rule = *volume_rule.resolved_rule_id;
+    volume_node.identity.rule = volume_rule_id;
     decorated.execution_graph.handlers.push_back(volume_node);
     decorated.execution_graph.stable_topological_order.push_back(volume_node.identity);
 

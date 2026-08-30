@@ -614,6 +614,19 @@ private:
     // for a predicate-expression list rather than a func's statement body.
     void validate_where_clauses(ProgramNode& program);
     void check_where_purity_expr(const ExprNode& expr);
+    // dsl-rule-order-by: same purity requirement as a where: predicate,
+    // reported under order-by's own diagnostic.
+    void check_order_by_purity_expr(const ExprNode& expr);
+    // The recursive deny-list walk shared (in shape) by check_func_purity_expr,
+    // check_where_purity_expr, and check_order_by_purity_expr: every impure
+    // expression form funnels through this one traversal, and each caller
+    // supplies hooks for the node kinds whose impurity diagnostic differs
+    // (a call to a function with effects; a spawn; a world query) — the
+    // traversal itself is identical across all three.
+    void check_purity_deny_list(const ExprNode& expr,
+                                const std::function<void(const CallExpr&)>& on_call,
+                                const std::function<void(const SpawnExpr&)>& on_spawn,
+                                const std::function<void(const QueryCallExpr&)>& on_query);
     void validate_external_handler_contracts(ProgramNode& program);
     void validateOrderByClause(const RuleNode& rule);
     void validateOrderByClause(const ExternRuleNode& rule);
@@ -699,11 +712,26 @@ private:
     [[nodiscard]] std::unordered_map<std::string, const ResolvedTrait*> build_filter_bindings(
         const FilterClause& filter) const;
     // Shared by validateOrderByClause(RuleNode)/validateOrderByClause(ExternRuleNode):
-    // resolves one order-by key's dotted field path against its filter alias's
-    // trait, reporting "not declared"/"not a valid field"/"not scalar-comparable"
-    // as appropriate.
+    // checks one order-by sort key's purity, resolves its expression type via
+    // infer_expr_type (filter_bindings for a unary domain, pair_scope for a
+    // pairs domain — exactly one of the two is non-empty/non-null per call),
+    // and requires a scalar-comparable (int/float/bool) result.
     void validate_order_by_key(const SortKey& key,
-                               const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings);
+                               const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                               const PairScope* pair_scope,
+                               const std::string& rule_name);
+    // The unary-filter-domain body shared by both validateOrderByClause
+    // overloads (RuleNode's pairs: branch has no ExternRuleNode equivalent, so
+    // it stays out of this helper). Assumes order_by is already known non-empty.
+    void validate_unary_order_by(const FilterClause& filter,
+                                 const std::vector<SortKey>& order_by,
+                                 const SourceLocation& location,
+                                 const std::string& rule_name);
+    bool report_unbound_sort_key_root(const SortKey& key,
+                                      const std::string& spelling,
+                                      const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                      const PairScope* pair_scope,
+                                      const std::string& rule_name);
     TypeInfo infer_expr_type(const ExprNode& expr,
                              const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                              const std::unordered_map<std::string, TypeInfo>& local_bindings,
@@ -722,6 +750,17 @@ private:
                                     const std::unordered_map<std::string, TypeInfo>& local_bindings,
                                     const ResolvedStruct* handler_event,
                                     const PairScope* pair_scope) const;
+    // Walks trailing dotted segments (starting at `from_index`) from an
+    // already-resolved starting type, applying vec2/vec3 x/y/z and color
+    // r/g/b/a component access. Shared by infer_member_expr_type's pair-scope
+    // chain resolution and its filter-alias/local chain resolution, so a
+    // nested access like `p.pos.y` or `body.tf.WorldTransform.position.x`
+    // resolves the same way regardless of which kind of binding it starts
+    // from. Returns the unmodified start type when there are no trailing
+    // segments to walk.
+    [[nodiscard]] static TypeInfo descend_vector_color_members(TypeInfo start,
+                                                                const std::vector<std::string>& segments,
+                                                                std::size_t from_index);
     // Validates vec2(...)/vec3(...) constructor calls (1-argument splat or
     // 2-/3-argument component form, each argument float-typed) from
     // infer_expr_type's CallExpr arm. Returns nullopt when the callee isn't
@@ -900,6 +939,24 @@ private:
                            const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read,
                            const std::function<void(const VarAssign&, const LocalNames&)>& handle_var_assign,
                            const std::function<void(const SymbolId&)>& on_project_trait) const;
+
+    // walk_handler_body's per-expression half, callable on its own. An
+    // `order by:` sort key is a bare expression with no enclosing statement,
+    // so folding its reads into a contract means walking exactly this — the
+    // same traversal, the same resolve_read hook — rather than a second
+    // order-by-specific walker (dsl-rule-order-by contract folding).
+    void walk_expression_reads(const ExprNode& expr,
+                               const LocalNames& locals,
+                               HandlerContract& contract,
+                               const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const;
+
+    // The two contract mutations walk_expression_reads and walk_handler_body's
+    // statement half both perform, shared so a `spawn`/`destroy` reached
+    // through either produces one identical entry.
+    static void add_contract_command(HandlerContract& contract,
+                                     HandlerCommandKind kind,
+                                     std::optional<SymbolId> target);
+    void add_contract_call_effects(HandlerContract& contract, const std::optional<SymbolId>& callee) const;
 
     InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule, const EventHandlerNode& handler) const;
 

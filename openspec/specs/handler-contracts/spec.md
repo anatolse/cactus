@@ -41,6 +41,17 @@ Every trait read reachable from a handler's `where:` predicates SHALL be folded 
 - **WHEN** a pair handler's `where:` predicate reads `Collider` through both the `body` and `wall` bindings
 - **THEN** its contract's `bound_reads` records two binding-qualified reads and its conservative `reads` set contains Collider once
 
+### Requirement: order by: reads are folded into handler contracts
+Every trait read reachable from a handler's `order by:` sort key expressions SHALL be folded into that handler's contract with the same precision as reads reachable from the handler body: binding-qualified (`bound_reads`) for a pair handler, canonical for a unary handler, in both cases also contributing to the contract's conservative `reads` union. Scheduling SHALL see identical data dependencies whether a read occurs in an `order by:` key, a `where:` predicate, or the handler body.
+
+#### Scenario: order by: read is recorded like a body read
+- **WHEN** a unary handler's `order by:` sort key reads `ball.velocity`
+- **THEN** the handler's contract records the canonical Ball trait in `reads`, identically to a body read of the same field
+
+#### Scenario: order by: bound read distinguishes pair binding roles
+- **WHEN** a pair handler's `order by:` sort key reads `Position` through both the `actor` and `target` bindings
+- **THEN** its contract's `bound_reads` records two binding-qualified reads and its conservative `reads` set contains Position once
+
 ### Requirement: Regular handler contracts are inferred
 The semantic analyzer SHALL infer a regular handler's contract from all reachable statements and expressions. Immutable trait field access SHALL add `reads`; mutation SHALL add `writes`; `writes` SHALL mean read/write access; event emission SHALL add `emits`; structural statements SHALL add the corresponding `commands`; and calls to effectful extern functions SHALL add their known effect domain or conservative `external` effect.
 
@@ -53,11 +64,22 @@ The semantic analyzer SHALL infer a regular handler's contract from all reachabl
 - **THEN** its contract contains Contact in `emits` and `spawn Particle` in `commands`
 
 ### Requirement: Projected outputs are distinct contract capabilities
-Handler contracts SHALL record projected trait outputs separately from durable writes. Scheduling SHALL treat projection as production of that trait for ordered later matching and reads, while pair read-only validation SHALL continue to prohibit durable writes through pair bindings.
+Handler contracts SHALL record projected trait outputs separately from durable writes. Scheduling SHALL treat projection as production of that trait for ordered later matching and reads, while pair read-only validation SHALL continue to prohibit durable writes through pair bindings not admitted by the pair-relations provably-one-per-binding `limit:` carve-out.
 
 #### Scenario: Project output creates producer conflict information
 - **WHEN** one handler projects Contacting and a later handler filters and reads Contacting
 - **THEN** contract graph construction can order the projection producer before the consumer without classifying projection as a durable component mutation
+
+### Requirement: A write through a provably-limited pair binding is inferred like any other write
+When a pair handler mutates a trait through the `per` binding of a provably-one `limit:` clause, contract inference SHALL record that mutation as an ordinary write: folded into the contract's `writes` and contributing to its conservative `reads`/`writes` union for scheduling, identically to a write inferred through a unary filter alias.
+
+#### Scenario: Provably-limited pair write is recorded
+- **WHEN** a pair handler under `limit: 1 per actor` assigns `actor.KinematicActor.grounded = true`
+- **THEN** the handler's contract records the canonical KinematicActor trait in `writes`
+
+#### Scenario: Scheduling sees the same conflict information as a unary write
+- **WHEN** one rule writes a trait through a provably-limited pair binding and another rule reads the same trait through an ordinary `filter:` alias
+- **THEN** the execution graph orders them using the same read/write conflict rule it would apply between two unary handlers
 
 ### Requirement: External handlers declare complete contracts
 An `extern rule` handler SHALL declare zero or more `reads:`, `writes:`, `projects:`, `emits:`, `commands:`, and `effects:` blocks because its implementation is unavailable for inference. Trait entries in `reads`, `writes`, and `projects` SHALL resolve through that rule's filter aliases or canonical trait references. Event and command entries SHALL resolve canonically. Projected outputs SHALL remain distinct from durable writes, and the same canonical trait SHALL NOT appear in both `writes` and `projects` for one handler.

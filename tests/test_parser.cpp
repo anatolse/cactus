@@ -2103,6 +2103,122 @@ TEST_CASE("Parser: where clause on extern rule is rejected", "[parser][where-cla
     REQUIRE(errors.has_errors());
 }
 
+// ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
+
+TEST_CASE("Parser: global limit on a pairs rule is parsed", "[parser][rule-limit]") {
+    auto prog = parse(
+        "rule Contacts:\n"
+        "    pairs:\n"
+        "        actor:\n"
+        "            Body\n"
+        "        other:\n"
+        "            Body\n"
+        "    limit: 10\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.limit.has_value());
+    CHECK_FALSE(sys.limit->per_binding.has_value());
+    const auto* count = std::get_if<LiteralExpr>(&sys.limit->count->expr);
+    REQUIRE(count != nullptr);
+    CHECK(count->value == "10");
+}
+
+TEST_CASE("Parser: per-binding limit on a pairs rule is parsed", "[parser][rule-limit]") {
+    auto prog = parse(
+        "rule Contacts:\n"
+        "    pairs:\n"
+        "        actor:\n"
+        "            Body\n"
+        "        other:\n"
+        "            Body\n"
+        "    limit: 1 per actor\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.limit.has_value());
+    REQUIRE(sys.limit->per_binding.has_value());
+    CHECK(*sys.limit->per_binding == "actor");
+    const auto* count = std::get_if<LiteralExpr>(&sys.limit->count->expr);
+    REQUIRE(count != nullptr);
+    CHECK(count->value == "1");
+}
+
+TEST_CASE("Parser: limit on a filter rule is parsed", "[parser][rule-limit]") {
+    auto prog = parse(
+        "rule Render:\n"
+        "    filter:\n"
+        "        Sprite as s\n"
+        "    order by:\n"
+        "        s.layer\n"
+        "    limit: 10\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.limit.has_value());
+    CHECK_FALSE(sys.limit->per_binding.has_value());
+    CHECK(sys.order_by.size() == 1);
+}
+
+TEST_CASE("Parser: limit count accepts a computed expression", "[parser][rule-limit]") {
+    auto prog = parse(
+        "rule Contacts:\n"
+        "    pairs:\n"
+        "        tower:\n"
+        "            Tower\n"
+        "        other:\n"
+        "            Body\n"
+        "    limit: tower.Tower.target_count per tower\n"
+        "    on fixed_tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.limit.has_value());
+    REQUIRE(sys.limit->per_binding.has_value());
+    CHECK(*sys.limit->per_binding == "tower");
+    CHECK(std::holds_alternative<MemberExpr>(sys.limit->count->expr));
+}
+
+TEST_CASE("Parser: rule without limit leaves clause unset", "[parser][rule-limit]") {
+    auto prog = parse(
+        "rule Render:\n"
+        "    filter:\n"
+        "        Sprite\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    CHECK_FALSE(sys.limit.has_value());
+}
+
+// The domain requirement is a semantic check (see test_semantic.cpp's
+// "limit: requires a filter: or pairs: domain"), exactly as it is for where: —
+// the parser accepts the clause and records it for that later pass.
+TEST_CASE("Parser: limit on a selectionless rule still parses", "[parser][rule-limit]") {
+    auto prog = parse(
+        "rule Selectionless:\n"
+        "    limit: 10\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.limit.has_value());
+    CHECK(sys.filter.entries.empty());
+    CHECK_FALSE(sys.pairs.has_value());
+}
+
+TEST_CASE("Parser: limit clause on extern rule is rejected", "[parser][rule-limit]") {
+    auto errors = parse_expect_errors(
+        "extern rule Bad:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    limit: 10\n");
+    REQUIRE(errors.has_errors());
+}
+
 TEST_CASE("Parser: extern rule rejects executable handler statements", "[parser][extern-rule]") {
     auto errors = parse_expect_errors(
         "extern rule Bad:\n"

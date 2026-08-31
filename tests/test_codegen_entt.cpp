@@ -7071,4 +7071,111 @@ TEST_CASE("Codegen EnTT: render-pass stage handler still rejects Vec2 + Color", 
     CHECK(errors.has_errors());
 }
 
+// ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
+
+static const std::string LIMIT_TRAITS =
+    "event tick:\n"
+    "    dt: float\n"
+    "trait Actor:\n"
+    "    var ground: int = 0\n"
+    "trait Surface:\n"
+    "    var code: int = 0\n";
+
+static std::string emit_limit_rule(const std::string& source, const std::string& rule_name) {
+    ProgramNode program;
+    auto decorated = full_pipeline(source, program);
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys != nullptr && sys->name == rule_name) {
+            return EnttSystemEmitter::emit_system(*sys, decorated);
+        }
+    }
+    FAIL("rule '" + rule_name + "' not found in the analyzed program");
+    return {};
+}
+
+TEST_CASE("Codegen EnTT: a provably-one per-binding limit emits a mutable write through its binding",
+          "[codegen-entt][rule-limit][pair-relations]") {
+    const auto code = emit_limit_rule(LIMIT_TRAITS +
+                                          "rule Ground:\n"
+                                          "    pairs:\n"
+                                          "        actor:\n"
+                                          "            Actor\n"
+                                          "        surface:\n"
+                                          "            Surface\n"
+                                          "    limit: 1 per actor\n"
+                                          "    on tick:\n"
+                                          "        actor.Actor.ground = surface.Surface.code\n",
+                                      "Ground");
+
+    // The assignment target must be a mutable component reference; the
+    // non-limited binding it reads from stays const.
+    CHECK(code.find("registry.get<Actor>(actor).ground =") != std::string::npos);
+    CHECK(code.find("registry.get<const Surface>(surface).code") != std::string::npos);
+    CHECK(code.find("registry.get<const Actor>(actor)") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a pair binding under a non-provable limit keeps read-only access",
+          "[codegen-entt][rule-limit][pair-relations]") {
+    const auto code = emit_limit_rule(LIMIT_TRAITS +
+                                          "rule Ground:\n"
+                                          "    pairs:\n"
+                                          "        actor:\n"
+                                          "            Actor\n"
+                                          "        surface:\n"
+                                          "            Surface\n"
+                                          "    limit: 2 per actor\n"
+                                          "    on tick:\n"
+                                          "        let x = actor.Actor.ground\n",
+                                      "Ground");
+
+    CHECK(code.find("registry.get<const Actor>(actor)") != std::string::npos);
+    CHECK(code.find("registry.get<Actor>(actor)") == std::string::npos);
+}
+
+// Task 6.3's regression guard, checked directly rather than inferred: a rule
+// with `where:` but no `limit:` must still go through the full-desugar path,
+// so no separate predicate lambda appears and the body carries the guard.
+TEST_CASE("Codegen EnTT: a where: rule without a limit keeps the desugared body guard",
+          "[codegen-entt][rule-limit][where-clause]") {
+    const auto code = emit_limit_rule(LIMIT_TRAITS +
+                                          "rule Ground:\n"
+                                          "    pairs:\n"
+                                          "        actor:\n"
+                                          "            Actor\n"
+                                          "        surface:\n"
+                                          "            Surface\n"
+                                          "    where:\n"
+                                          "        actor.Actor.ground == 0\n"
+                                          "    on tick:\n"
+                                          "        let x = surface.Surface.code\n",
+                                      "Ground");
+
+    CHECK(code.find("cactus_gen_pair_where_") == std::string::npos);
+    CHECK(code.find("if (!(") != std::string::npos);
+}
+
+// Recipient-targeted delivery is a separate runtime branch from the broadcast
+// view loop a global `limit:` truncates; without its own guard, a live
+// recipient would always activate regardless of the count (e.g. `limit: 0`
+// would still deliver to a directly targeted entity).
+TEST_CASE("Codegen EnTT: a global limit also gates recipient-targeted delivery",
+          "[codegen-entt][rule-limit]") {
+    const auto code = emit_limit_rule(LIMIT_TRAITS +
+                                          "rule TakeOne:\n"
+                                          "    filter:\n"
+                                          "        Actor as a\n"
+                                          "    limit: 1\n"
+                                          "    on tick:\n"
+                                          "        let x = 1\n",
+                                      "TakeOne");
+
+    const auto recipient_start = code.find("if (cactus_recipient.has_value())");
+    REQUIRE(recipient_start != std::string::npos);
+    const auto broadcast_start = code.find("} else {", recipient_start);
+    REQUIRE(broadcast_start != std::string::npos);
+    const auto recipient_block = code.substr(recipient_start, broadcast_start - recipient_start);
+    CHECK(recipient_block.find(" > 0)") != std::string::npos);
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

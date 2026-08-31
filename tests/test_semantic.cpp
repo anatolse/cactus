@@ -3278,4 +3278,403 @@ TEST_CASE("Semantic: manual dot-product recognized predicate produces no unaccel
     REQUIRE(result.handler_contracts[0].spatial_join.has_value());
     CHECK(diagnostics.empty());
 }
+// ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
+
+static const std::string LIMIT_TRAITS =
+    "trait Actor:\n"
+    "    var grounded: bool = false\n"
+    "    var height: float = 0.0\n"
+    "trait Surface:\n"
+    "    var top: float = 0.0\n"
+    "trait Tower:\n"
+    "    var target_count: int = 1\n";
+
+// The `provably_one` proof is recorded on the AST for codegen to consume, so
+// asserting on it needs the analyzed ProgramNode rather than DecoratedProgram.
+static bool analyze_limit_provably_one(const std::string& source) {
+    const std::string src = "module test\n" + source;
+    ErrorReporter errors;
+    Lexer lexer(src, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    REQUIRE_FALSE(errors.has_errors());
+    Parser parser(std::move(tokens), errors);
+    auto program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(program);
+    for (const auto& decl : program.declarations) {
+        const auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule != nullptr && rule->limit.has_value()) {
+            return rule->limit->provably_one;
+        }
+    }
+    FAIL("no rule with a limit: clause in the analyzed program");
+    return false;
+}
+
+TEST_CASE("Semantic: limit without filter or pairs reports the specific diagnostic", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS +
+                                   "rule NoDomain:\n"
+                                   "    limit: 10\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("`limit:` requires a `filter:` or `pairs:` clause") != std::string::npos);
+}
+
+TEST_CASE("Semantic: global limit is accepted on both a unary and a pair domain", "[semantic][rule-limit]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Unary:\n"
+                                   "    filter:\n"
+                                   "        Actor as a\n"
+                                   "    limit: 10\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n"
+                                   "rule Paired:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 10\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: per-binding limit on a unary rule is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Unary:\n"
+                                   "    filter:\n"
+                                   "        Actor as a\n"
+                                   "    limit: 1 per a\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("`per`") != std::string::npos);
+}
+
+TEST_CASE("Semantic: per-binding limit naming an undeclared binding is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Paired:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 1 per enemy\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("pair binding") != std::string::npos);
+}
+
+TEST_CASE("Semantic: per-binding limit computed from the per binding's own trait is accepted",
+          "[semantic][rule-limit]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Paired:\n"
+                                   "    pairs:\n"
+                                   "        tower:\n"
+                                   "            Tower\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: tower.Tower.target_count per tower\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: per-binding limit referencing the other binding is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Paired:\n"
+                                   "    pairs:\n"
+                                   "        tower:\n"
+                                   "            Tower\n"
+                                   "        other:\n"
+                                   "            Tower\n"
+                                   "    limit: other.Tower.target_count per tower\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("limit") != std::string::npos);
+}
+
+TEST_CASE("Semantic: non-int limit count is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Unary:\n"
+                                   "    filter:\n"
+                                   "        Actor as a\n"
+                                   "    limit: 1.5\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("'int'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: a global limit count referencing a domain binding is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Paired:\n"
+                                   "    pairs:\n"
+                                   "        tower:\n"
+                                   "            Tower\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: tower.Tower.target_count\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("limit") != std::string::npos);
+}
+
+TEST_CASE("Semantic: a global limit count referencing a unary filter alias is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Unary:\n"
+                                   "    filter:\n"
+                                   "        Actor as a\n"
+                                   "    limit: a.height\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("filter binding") != std::string::npos);
+}
+
+// Bare unqualified field access is ordinarily legal DSL (dsl-where-clause),
+// so the scope check has to deny it here too, not just the alias-qualified
+// spelling `a.height` covered above.
+TEST_CASE("Semantic: a global limit count referencing a bare filter field is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Unary:\n"
+                                   "    filter:\n"
+                                   "        Actor as a\n"
+                                   "    limit: height\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("filter binding") != std::string::npos);
+}
+
+TEST_CASE("Semantic: impure limit count is rejected", "[semantic][rule-limit]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Unary:\n"
+                                   "    filter:\n"
+                                   "        Actor as a\n"
+                                   "    limit: query.count[Surface]()\n"
+                                   "    on tick:\n"
+                                   "        let x = 1\n");
+    CHECK(err.find("must be pure") != std::string::npos);
+}
+
+TEST_CASE("Semantic: literal one is provably one", "[semantic][rule-limit]") {
+    CHECK(analyze_limit_provably_one(STDLIB_EVENTS + LIMIT_TRAITS +
+                                     "rule Paired:\n"
+                                     "    pairs:\n"
+                                     "        actor:\n"
+                                     "            Actor\n"
+                                     "        surface:\n"
+                                     "            Surface\n"
+                                     "    limit: 1 per actor\n"
+                                     "    on tick:\n"
+                                     "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: a named constant equal to one is provably one", "[semantic][rule-limit]") {
+    CHECK(analyze_limit_provably_one(STDLIB_EVENTS + LIMIT_TRAITS +
+                                     "const:\n"
+                                     "    MAX_ONE = 1\n"
+                                     "rule Paired:\n"
+                                     "    pairs:\n"
+                                     "        actor:\n"
+                                     "            Actor\n"
+                                     "        surface:\n"
+                                     "            Surface\n"
+                                     "    limit: MAX_ONE per actor\n"
+                                     "    on tick:\n"
+                                     "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: a constant other than one is not provably one", "[semantic][rule-limit]") {
+    CHECK_FALSE(analyze_limit_provably_one(STDLIB_EVENTS + LIMIT_TRAITS +
+                                           "rule Paired:\n"
+                                           "    pairs:\n"
+                                           "        actor:\n"
+                                           "            Actor\n"
+                                           "        surface:\n"
+                                           "            Surface\n"
+                                           "    limit: 2 per actor\n"
+                                           "    on tick:\n"
+                                           "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: a non-constant count is not provably one", "[semantic][rule-limit]") {
+    CHECK_FALSE(analyze_limit_provably_one(STDLIB_EVENTS + LIMIT_TRAITS +
+                                           "rule Paired:\n"
+                                           "    pairs:\n"
+                                           "        tower:\n"
+                                           "            Tower\n"
+                                           "        surface:\n"
+                                           "            Surface\n"
+                                           "    limit: tower.Tower.target_count per tower\n"
+                                           "    on tick:\n"
+                                           "        let x = 1\n"));
+}
+
+// ── Pair read-only carve-out (dsl-pair-relations) ───────────────────────────
+
+TEST_CASE("Semantic: mutation through a provably-one per binding is accepted", "[semantic][rule-limit][pair-relations]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Ground:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 1 per actor\n"
+                                   "    on tick:\n"
+                                   "        actor.Actor.grounded = true\n"));
+}
+
+TEST_CASE("Semantic: the non-limited binding remains read-only under a per-binding limit",
+          "[semantic][rule-limit][pair-relations]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Ground:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 1 per actor\n"
+                                   "    on tick:\n"
+                                   "        surface.Surface.top = 1.0\n");
+    CHECK(err.find("read-only") != std::string::npos);
+}
+
+TEST_CASE("Semantic: mutation is rejected when the limit is not provably one",
+          "[semantic][rule-limit][pair-relations]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Ground:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 2 per actor\n"
+                                   "    on tick:\n"
+                                   "        actor.Actor.grounded = true\n");
+    CHECK(err.find("read-only") != std::string::npos);
+}
+
+TEST_CASE("Semantic: a global limit grants no pair-binding write access", "[semantic][rule-limit][pair-relations]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Ground:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 10\n"
+                                   "    on tick:\n"
+                                   "        actor.Actor.grounded = true\n");
+    CHECK(err.find("read-only") != std::string::npos);
+}
+
+TEST_CASE("Semantic: a rule with no limit still rejects mutation on either pair binding",
+          "[semantic][rule-limit][pair-relations]") {
+    CHECK(analyze_has_errors(STDLIB_EVENTS + LIMIT_TRAITS +
+                             "rule Ground:\n"
+                             "    pairs:\n"
+                             "        actor:\n"
+                             "            Actor\n"
+                             "        surface:\n"
+                             "            Surface\n"
+                             "    on tick:\n"
+                             "        actor.Actor.grounded = true\n"));
+    CHECK(analyze_has_errors(STDLIB_EVENTS + LIMIT_TRAITS +
+                             "rule Ground:\n"
+                             "    pairs:\n"
+                             "        actor:\n"
+                             "            Actor\n"
+                             "        surface:\n"
+                             "            Surface\n"
+                             "    on tick:\n"
+                             "        surface.Surface.top = 1.0\n"));
+}
+
+// The trait-match check stays unconditional: only ordinary dotted-path
+// assignment is carved out, never a mutable match alias.
+TEST_CASE("Semantic: trait match on a provably-limited binding is still rejected",
+          "[semantic][rule-limit][pair-relations]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Ground:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 1 per actor\n"
+                                   "    on tick:\n"
+                                   "        match actor:\n"
+                                   "            Actor as a =>\n"
+                                   "                let x = 1\n");
+    CHECK(err.find("cannot trait-match directly on binding") != std::string::npos);
+}
+
+// A bare `actor = ...` has no field to write; only a dotted trait path
+// through the provably-one binding is admitted (spec: "only ordinary
+// dotted-path assignment is admitted").
+TEST_CASE("Semantic: a bare reassignment of a provably-limited binding is still rejected",
+          "[semantic][rule-limit][pair-relations]") {
+    auto err = analyze_first_error(STDLIB_EVENTS + LIMIT_TRAITS +
+                                   "rule Ground:\n"
+                                   "    pairs:\n"
+                                   "        actor:\n"
+                                   "            Actor\n"
+                                   "        surface:\n"
+                                   "            Surface\n"
+                                   "    limit: 1 per actor\n"
+                                   "    on tick:\n"
+                                   "        actor = surface\n");
+    CHECK(err.find("read-only") != std::string::npos);
+}
+
+// ── Pair write contract inference (handler-contracts) ───────────────────────
+
+TEST_CASE("Semantic: a provably-limited pair write is recorded in the contract",
+          "[semantic][rule-limit][handler-contracts]") {
+    auto result = analyze(STDLIB_EVENTS + LIMIT_TRAITS +
+                          "rule Ground:\n"
+                          "    pairs:\n"
+                          "        actor:\n"
+                          "            Actor\n"
+                          "        surface:\n"
+                          "            Surface\n"
+                          "    limit: 1 per actor\n"
+                          "    on tick:\n"
+                          "        actor.Actor.grounded = true\n");
+
+    REQUIRE(result.handler_contracts.size() == 1);
+    const auto& contract = result.handler_contracts[0];
+    const auto actor_trait = make_symbol_id(SymbolKind::Trait, "test", "Actor");
+    CHECK(contract.writes.contains(actor_trait));
+    CHECK(contract.reads.contains(actor_trait));
+}
+
+TEST_CASE("Semantic: a provably-limited pair write conflicts with a unary read of the same trait",
+          "[semantic][rule-limit][handler-contracts]") {
+    auto result = analyze(STDLIB_EVENTS + LIMIT_TRAITS +
+                          "rule Ground:\n"
+                          "    pairs:\n"
+                          "        actor:\n"
+                          "            Actor\n"
+                          "        surface:\n"
+                          "            Surface\n"
+                          "    limit: 1 per actor\n"
+                          "    on tick:\n"
+                          "        actor.Actor.grounded = true\n"
+                          "rule ReadGround:\n"
+                          "    filter:\n"
+                          "        Actor as a\n"
+                          "    on tick:\n"
+                          "        let x = a.grounded\n");
+
+    REQUIRE(result.handler_contracts.size() == 2);
+    const auto actor_trait = make_symbol_id(SymbolKind::Trait, "test", "Actor");
+    const auto writer = std::ranges::find_if(result.handler_contracts,
+                                             [&](const auto& c) { return c.writes.contains(actor_trait); });
+    REQUIRE(writer != result.handler_contracts.end());
+    CHECK(writer->domain_kind == HandlerDomainKind::Pair);
+    const auto reader = std::ranges::find_if(result.handler_contracts, [&](const auto& c) {
+        return c.domain_kind != HandlerDomainKind::Pair && c.reads.contains(actor_trait);
+    });
+    REQUIRE(reader != result.handler_contracts.end());
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -972,7 +972,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     phase_names_.clear();
     func_names_.clear();
     rule_names_.clear();
-    const_names_.clear();
+    const_initializers_.clear();
     module_scope_symbols_.clear();
     asset_decl_types_.clear();
     input_decl_types_.clear();
@@ -1145,7 +1145,7 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                 } else if constexpr (std::is_same_v<T, ConstBlockNode>) {
                     for (auto& a : node.assignments) {
                         declare_module_scope_symbol(SymbolKind::Const, a.name, a.location);
-                        const_names_.insert(a.name);
+                        const_initializers_[a.name] = a.value.get();
                         result_.string_pool.intern(a.name);
                     }
                 } else if constexpr (std::is_same_v<T, TemplateNode>) {
@@ -1255,6 +1255,14 @@ void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         auto* rule = std::get_if<RuleNode>(&decl);
         if (rule == nullptr || !rule->where_clause.has_value() || rule->where_clause->predicates.empty()) {
+            continue;
+        }
+        // dsl-rule-limit: truncation assigns slots by position, so a
+        // where:-rejected candidate must never reach one — which a lazy body
+        // guard cannot prevent, since its early `return` is indistinguishable
+        // from any other. A limited rule keeps its predicates unlowered for
+        // codegen to evaluate as a pre-slot filter instead.
+        if (rule->limit.has_value()) {
             continue;
         }
         const auto& predicates = rule->where_clause->predicates;
@@ -2241,6 +2249,20 @@ bool SemanticAnalyzer::resolve_filter_entry(const FilterEntry& entry, std::strin
 
 // ── Pair relations (dsl-pair-relations) ─────────────────────────────────────
 
+PairScope SemanticAnalyzer::build_pair_scope(const RuleNode& rule) {
+    auto scope = build_pair_scope(*rule.pairs);
+    if (!rule.limit.has_value() || !rule.limit->per_binding.has_value()) {
+        return scope;
+    }
+    const auto binding = scope.find(*rule.limit->per_binding);
+    if (binding == scope.end()) {
+        return scope;
+    }
+    binding->second.writability =
+        rule.limit->provably_one ? PairBindingWritability::Writable : PairBindingWritability::UnprovenPerLimit;
+    return scope;
+}
+
 PairScope SemanticAnalyzer::build_pair_scope(const PairClause& pairs) {
     PairScope scope;
     for (std::size_t index = 0; index < pairs.bindings.size(); ++index) {
@@ -2506,6 +2528,190 @@ void SemanticAnalyzer::validateOrderByClause(const ExternRuleNode& rule) {
     }
 
     validate_unary_order_by(rule.filter, rule.order_by, rule.location, rule.name);
+}
+
+// ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
+
+namespace {
+
+// Whether a member chain anywhere in `expr` is rooted at `name`, which is all
+// a limit count's scope check needs: the count may name constants freely, but
+// naming a domain binding is legal only for the one `per` partitions by. At
+// most two candidate names (the rule's two pair bindings) are ever checked,
+// so a short-circuiting predicate avoids collecting every identifier root
+// into a set just to test membership of one.
+bool expr_references_ident(const ExprNode& expr, const std::string& name) {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->name == name;
+    }
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        return expr_references_ident(*member->object, name);
+    }
+    if (const auto* binary = std::get_if<BinaryExpr>(&expr.expr)) {
+        return expr_references_ident(*binary->left, name) || expr_references_ident(*binary->right, name);
+    }
+    if (const auto* unary = std::get_if<UnaryExpr>(&expr.expr)) {
+        return expr_references_ident(*unary->operand, name);
+    }
+    if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        return std::ranges::any_of(call->args,
+                                    [&](const auto& arg) { return expr_references_ident(*arg, name); });
+    }
+    return false;
+}
+
+// Every name a unary global limit count must not read: its filter aliases and
+// trait names (the pair-relations equivalent of a pair binding), plus each
+// field on those traits — bare unqualified field access is ordinarily legal
+// DSL (dsl-where-clause), so the scope check has to deny it here too, not
+// just the alias-qualified spelling. A global limit's count is evaluated once
+// before the loop that would bind any of these (emit_filtered_handler_body),
+// so referencing them is never resolvable at the point codegen emits it.
+std::unordered_set<std::string> unary_domain_scope_names(
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings) {
+    std::unordered_set<std::string> names;
+    for (const auto& [name, trait] : filter_bindings) {
+        names.insert(name);
+        if (trait == nullptr) {
+            continue;
+        }
+        for (const auto& field : trait->fields) {
+            names.insert(field.name);
+        }
+    }
+    return names;
+}
+
+}  // namespace
+
+void SemanticAnalyzer::check_limit_purity_expr(const ExprNode& expr) {
+    check_purity_deny_list(
+        expr,
+        /*on_call=*/
+        [this](const CallExpr& e) {
+            if (e.resolved_callee_id.has_value()) {
+                const auto* function = find_resolved_func(*e.resolved_callee_id);
+                if (function != nullptr &&
+                    (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
+                    errors_.error(e.location, "limit: count expressions must be pure");
+                }
+            }
+        },
+        /*on_spawn=*/[this](const SpawnExpr& e) { errors_.error(e.location, "limit: count expressions must be pure"); },
+        /*on_query=*/
+        [this](const QueryCallExpr& e) { errors_.error(e.location, "limit: count expressions must be pure"); });
+}
+
+bool SemanticAnalyzer::limit_count_is_provably_one(const ExprNode& count) const {
+    const auto is_literal_one = [](const ExprNode& expr) {
+        const auto* literal = std::get_if<LiteralExpr>(&expr.expr);
+        return literal != nullptr && literal->kind == LiteralExpr::Kind::Int && literal->value == "1";
+    };
+    if (is_literal_one(count)) {
+        return true;
+    }
+    const auto* ident = std::get_if<IdentExpr>(&count.expr);
+    if (ident == nullptr) {
+        return false;
+    }
+    const auto declared = const_initializers_.find(ident->name);
+    return declared != const_initializers_.end() && declared->second != nullptr && is_literal_one(*declared->second);
+}
+
+// The scope a limit count may read from: just the `per` binding when one is
+// named, and nothing at all otherwise — a global limit's count may reference
+// only constants, and a per-binding limit's must not reach for the binding it
+// does not partition by, whose value varies across the very tuples the count
+// is meant to bound. Reports and yields nullopt when either rule is violated.
+std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleNode& rule) {
+    PairScope per_scope;
+    if (!rule.pairs.has_value()) {
+        // `per` requires `pairs:` (rejected earlier in validateLimitClause), so
+        // this is always the global form here: its count may reference only
+        // constants, exactly like the pair case below, just against the
+        // unary domain's own names instead of a pair binding's.
+        for (const auto& name : unary_domain_scope_names(build_filter_bindings(rule.filter))) {
+            if (expr_references_ident(*rule.limit->count, name)) {
+                errors_.error(rule.limit->location, "limit: count expression cannot reference filter binding '" +
+                                                         name +
+                                                         "'; a global `limit:` count may reference only constants");
+                return std::nullopt;
+            }
+        }
+        return per_scope;
+    }
+    const auto& limit = *rule.limit;
+    auto full_scope   = build_pair_scope(*rule.pairs);
+    if (limit.per_binding.has_value()) {
+        const auto binding = full_scope.find(*limit.per_binding);
+        if (binding == full_scope.end()) {
+            errors_.error(limit.per_location,
+                          "'" + *limit.per_binding + "' is not a declared pair binding in rule '" + rule.name + "'");
+            return std::nullopt;
+        }
+        per_scope.emplace(*limit.per_binding, binding->second);
+    }
+
+    // Scanned in the bindings' source order so a count naming both bindings
+    // always reports the same one.
+    const std::string* offender = nullptr;
+    for (const auto& binding : rule.pairs->bindings) {
+        if (!per_scope.contains(binding.name) && expr_references_ident(*limit.count, binding.name)) {
+            offender = &binding.name;
+            break;
+        }
+    }
+    if (offender == nullptr) {
+        return per_scope;
+    }
+    std::string allowed = "a global `limit:` count may reference only constants";
+    if (limit.per_binding.has_value()) {
+        allowed = "a `per " + *limit.per_binding + "` count may only read '" + *limit.per_binding + "'";
+    }
+    errors_.error(limit.location,
+                  "limit: count expression cannot reference pair binding '" + *offender + "'; " + allowed);
+    return std::nullopt;
+}
+
+void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
+    if (!rule.limit.has_value()) {
+        return;
+    }
+    auto& limit          = *rule.limit;
+    const bool has_pairs = rule.pairs.has_value();
+    if (rule.filter.entries.empty() && rule.filter.trait_names.empty() && !has_pairs) {
+        errors_.error(limit.location, "rule '" + rule.name + "': `limit:` requires a `filter:` or `pairs:` clause");
+        return;
+    }
+    if (limit.per_binding.has_value() && !has_pairs) {
+        errors_.error(limit.per_location,
+                      "rule '" + rule.name +
+                          "': `per` requires a `pairs:` clause; a unary domain has no binding to partition by");
+        return;
+    }
+
+    const auto per_scope = resolve_limit_count_scope(rule);
+    if (!per_scope.has_value()) {
+        return;
+    }
+
+    // Purity before typing, for the same reason where:/order by: check it
+    // first: an impure count is invalid whatever its type, and typing it
+    // would surface its own diagnostics ahead of the more fundamental one.
+    const auto error_count_before = errors_.error_count();
+    check_limit_purity_expr(*limit.count);
+    if (errors_.error_count() > error_count_before) {
+        return;
+    }
+
+    const PairScope* scope_ptr = per_scope->empty() ? nullptr : &*per_scope;
+    const auto type            = infer_expr_type(*limit.count, {}, {}, nullptr, scope_ptr);
+    if (type.kind != TypeKind::Int && type.kind != TypeKind::Unknown) {
+        errors_.error(limit.location, "limit: count expression must be of type 'int', got '" + type.name + "'");
+        return;
+    }
+
+    limit.provably_one = limit.per_binding.has_value() && limit_count_is_provably_one(*limit.count);
 }
 
 SemanticAnalyzer::PhaseCollection SemanticAnalyzer::collect_phase_declarations(ProgramNode& program) {
@@ -3281,6 +3487,7 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
 
             validate_pair_bindings(*rule);
             validateOrderByClause(*rule);
+            validateLimitClause(*rule);
         }
         if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
             validate_filter_clause_traits(rule->filter, "extern rule '" + rule->name + "'");
@@ -3596,7 +3803,7 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
 
             PairScope pair_scope;
             if (rule->pairs.has_value()) {
-                pair_scope = build_pair_scope(*rule->pairs);
+                pair_scope = build_pair_scope(*rule);
                 for (const auto& binding : rule->pairs->bindings) {
                     filter_bound.insert(binding.name);
                     for (const auto& entry : binding.traits) {
@@ -3911,9 +4118,36 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         }
         if (const auto* assign_stmt = std::get_if<VarAssign>(&stmt->stmt)) {
             bool target_rejected = false;
+            // A binding the rule's `limit:` proved singular is an ordinary
+            // mutable target (dsl-rule-limit); every other pair-scope name
+            // stays read-only, and a name outside the scope entirely has no
+            // entity to assign into at all.
+            const PairBindingScope* bound = nullptr;
             if (pair_scope != nullptr) {
-                if (pair_scope->contains(assign_stmt->name)) {
-                    errors_.error(assign_stmt->location, "pair-bound durable traits are read-only");
+                if (const auto found = pair_scope->find(assign_stmt->name); found != pair_scope->end()) {
+                    bound = &found->second;
+                }
+            }
+            // The provably-one carve-out admits only ordinary dotted-path
+            // assignment (`actor.Actor.field = ...`); a bare `actor = ...`
+            // has no field to write and would otherwise fall through to
+            // codegen's "new local" branch, silently shadow-declaring instead
+            // of doing anything (dsl-rule-limit).
+            const bool writable_target = bound != nullptr && bound->writability == PairBindingWritability::Writable &&
+                                         !assign_stmt->path.empty();
+            if (pair_scope != nullptr && !writable_target) {
+                if (bound != nullptr && bound->writability == PairBindingWritability::Writable) {
+                    errors_.error(assign_stmt->location,
+                                  "pair-bound durable traits are read-only; assign a dotted trait path through '" +
+                                      assign_stmt->name + "' (e.g. '" + assign_stmt->name +
+                                      ".Trait.field = ...') rather than the binding itself");
+                } else if (bound != nullptr) {
+                    errors_.error(assign_stmt->location,
+                                  bound->writability == PairBindingWritability::UnprovenPerLimit
+                                      ? "pair-bound durable traits are read-only; this rule's `limit:` count must be "
+                                        "the literal 1 (or a `const` initialized to 1) to make '" +
+                                            assign_stmt->name + "' writable"
+                                      : "pair-bound durable traits are read-only");
                 } else {
                     errors_.error(assign_stmt->location,
                                   "pair handlers have no implicit current entity to assign into; use an explicit "
@@ -4142,7 +4376,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
     dep.rule_id   = rule.resolved_rule_id;
 
     std::vector<ResolvedHandlerTrigger> declared_triggers;
-    const auto pair_scope = rule.pairs.has_value() ? build_pair_scope(*rule.pairs) : PairScope{};
+    const auto pair_scope = rule.pairs.has_value() ? build_pair_scope(rule) : PairScope{};
     // Rule-level, not per-handler: every handler on this rule shares the same
     // `pairs:`/`where:` domain, so eligibility is identical for each of them.
     const auto spatial_join =
@@ -4666,6 +4900,28 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     return contract;
 }
 
+void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
+                                                 const PairScope& pair_scope,
+                                                 InferredHandlerContract& contract) {
+    if (node.path.empty()) {
+        return;
+    }
+    const auto binding = pair_scope.find(node.name);
+    if (binding == pair_scope.end() || binding->second.writability != PairBindingWritability::Writable) {
+        return;
+    }
+    const auto resolved = resolve_pair_member_chain(node.name, node.path, pair_scope);
+    if (!resolved.has_value()) {
+        return;
+    }
+    const BoundTraitAccess access{.binding_index = resolved->binding_index, .trait = resolved->trait_id};
+    if (std::ranges::find(contract.bound_reads, access) == contract.bound_reads.end()) {
+        contract.bound_reads.push_back(access);
+    }
+    contract.reads.insert(resolved->trait_id);
+    contract.writes.insert(resolved->trait_id);
+}
+
 InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const RuleNode& rule,
                                                                       const EventHandlerNode& handler,
                                                                       const PairScope& pair_scope) const {
@@ -4714,9 +4970,19 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
         // Bare pair-binding references and locals carry no read on their own.
         return std::holds_alternative<MemberExpr>(expr.expr) && try_record_pair_read(expr);
     };
-    // Rejected by validate_event_stmts (pair traits are read-only); the value
-    // is already visited for reads by walk_handler_body before this runs.
-    auto handle_var_assign = [](const VarAssign&, const LocalNames&) {};
+    // A write through a binding the rule's `limit:` proved singular is an
+    // ordinary write (handler-contracts): it must reach `writes` — and, since
+    // contract writes are read/write capabilities, `reads` too — so
+    // scheduling sees the same conflict information a unary write produces.
+    // Every other pair-binding assignment was rejected by validate_event_stmts
+    // and records nothing; the value side is already visited for reads by
+    // walk_handler_body before this runs.
+    auto handle_var_assign = [&](const VarAssign& node, const LocalNames&) {
+        // No `locals` gate: the pair bindings are deliberately seeded into the
+        // walk's local set (so bare references carry no read), which would
+        // filter out the very assignments this needs to see.
+        record_pair_binding_write(node, pair_scope, contract);
+    };
     auto on_project_trait  = [&contract](const SymbolId& trait) { contract.projects.insert(trait); };
 
     // Same walk and same pair-read primitive as the handler body, so a sort
@@ -5046,7 +5312,7 @@ bool SemanticAnalyzer::imported_symbols_contain_non_template(const ImportedSymbo
 bool SemanticAnalyzer::local_non_template_symbol_exists(const std::string& name) const {
     return trait_names_.contains(name) || entity_names_.contains(name) || struct_names_.contains(name) ||
            enum_names_.contains(name) || event_names_.contains(name) || func_names_.contains(name) ||
-           rule_names_.contains(name) || const_names_.contains(name) || asset_decl_types_.contains(name) ||
+           rule_names_.contains(name) || const_initializers_.contains(name) || asset_decl_types_.contains(name) ||
            input_decl_types_.contains(name) || use_names_.contains(name);
 }
 

@@ -460,6 +460,11 @@ struct PairCodegenTraitAccess {
 
 struct PairCodegenBinding {
     std::string binding_name;
+    // dsl-rule-limit: the binding a provably-one `limit: ... per` names, whose
+    // trait access is emitted mutable (registry.get<T>) instead of the
+    // read-only registry.get<const T> every other pair binding gets. Mirrors
+    // the frontend's PairBindingScope::writable.
+    bool writable = false;
     std::unordered_map<std::string, PairCodegenTraitAccess> traits;  // access key -> resolved trait
 };
 
@@ -2349,8 +2354,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                                 if (found == binding->traits.end()) {
                                     continue;
                                 }
-                                std::string access =
-                                    "registry.get<const " + found->second.cpp_type + ">(" + root->name + ")";
+                                std::string access = "registry.get<" +
+                                                     std::string(binding->writable ? "" : "const ") +
+                                                     found->second.cpp_type + ">(" + root->name + ")";
                                 // A `.<field>.r`/`.g`/`.b`/`.a` tail on a
                                 // color-typed field needs the same normalized-
                                 // float read every other color access uses
@@ -3242,12 +3248,100 @@ static std::vector<std::string> emit_pair_sort_key_extractors(
     return names;
 }
 
+// The body of a retained `where:` filter lambda (dsl-rule-limit): `return
+// (pred0) && (pred1) && ...;`, each predicate lowered through `rewrite`.
+// Shared by the pair and unary where-filter lambdas below, which differ only
+// in how a single predicate gets rewritten (pair scope vs. filter traits).
+static void emit_where_predicate_conjunction(std::ostringstream& out,
+                                             const std::vector<std::unique_ptr<ExprNode>>& predicates,
+                                             const std::function<std::string(const ExprNode&)>& rewrite) {
+    out << "        return ";
+    for (std::size_t i = 0; i < predicates.size(); ++i) {
+        out << (i == 0 ? "" : " && ") << "(" << rewrite(*predicates[i]) << ")";
+    }
+    out << ";\n";
+}
+
+// One `[&](entt::entity <left>, entt::entity <right>) { return ...; }` guard
+// for a rule whose `where:` was retained rather than desugared into the body
+// (dsl-rule-limit): the predicates lower through the same pair-scope
+// expression emitter the sort keys use, conjoined in source order. Returns the
+// lambda's name, or empty when this rule has no retained `where:`.
+static std::string emit_pair_where_filter(std::ostringstream& out,
+                                          const RuleNode& sys,
+                                          const std::vector<PairBindingCodegen>& pair_binding_codegens,
+                                          const PairCodegenScope& pair_codegen_scope,
+                                          const DecoratedProgram& program) {
+    if (!sys.limit.has_value() || !sys.where_clause.has_value() || sys.where_clause->predicates.empty()) {
+        return {};
+    }
+    auto name = gen_temp_name("pair_where", sys.where_clause->location);
+    out << "    auto " << name << " = [&](entt::entity " << pair_binding_codegens[0].scope.binding_name
+        << ", entt::entity " << pair_binding_codegens[1].scope.binding_name << ") {\n";
+    emit_where_predicate_conjunction(out, sys.where_clause->predicates, [&](const ExprNode& predicate) {
+        return rewrite_expr(predicate, {}, program, {}, {}, &pair_codegen_scope);
+    });
+    out << "    };\n";
+    return name;
+}
+
+// The truncation replay for a limited pair rule (dsl-rule-limit): one linear
+// pass over the already-filtered (and, when `order by:` is present, sorted)
+// tuple buffer. A global limit counts into a single implicit partition; a
+// `per <binding>` limit keys a counter on that binding's entity handle and
+// evaluates its own count expression once per distinct partition value, so
+// partitions resolve independently of each other.
+static void emit_pair_limit_replay(std::ostringstream& out,
+                                   const RuleNode& sys,
+                                   const std::string& tuple_buffer_name,
+                                   const std::string& pair_body_name,
+                                   const PairCodegenScope& pair_codegen_scope,
+                                   const DecoratedProgram& program) {
+    const auto& limit    = *sys.limit;
+    const auto count_expr = rewrite_expr(*limit.count, {}, program, {}, {}, &pair_codegen_scope);
+    if (!limit.per_binding.has_value()) {
+        const auto limit_name = gen_temp_name("pair_limit", limit.location);
+        const auto taken_name = gen_temp_name("pair_taken", limit.location);
+        out << "    const int " << limit_name << " = " << count_expr << ";\n";
+        out << "    int " << taken_name << " = 0;\n";
+        out << "    for (const auto& cactus_tuple : " << tuple_buffer_name << ") {\n";
+        out << "        if (" << taken_name << " >= " << limit_name << ") { break; }\n";
+        out << "        ++" << taken_name << ";\n";
+        out << "        " << pair_body_name << "(cactus_tuple.first, cactus_tuple.second);\n";
+        out << "    }\n";
+        return;
+    }
+    const bool per_is_left  = pair_codegen_scope.bindings[0].binding_name == *limit.per_binding;
+    const std::string member = per_is_left ? "first" : "second";
+    const auto count_name    = gen_temp_name("pair_limit_of", limit.location);
+    const auto counts_name   = gen_temp_name("pair_partition", limit.location);
+    out << "    auto " << count_name << " = [&]([[maybe_unused]] entt::entity " << *limit.per_binding << ") {\n";
+    out << "        return " << count_expr << ";\n";
+    out << "    };\n";
+    // {taken, cap} per partition, cap computed once on the partition's first
+    // tuple: the count expression may read the binding's own trait fields, so
+    // re-running it every tuple would re-evaluate that read once per tuple
+    // sharing the partition instead of once per distinct binding value.
+    out << "    std::unordered_map<std::uint32_t, std::pair<int, int>> " << counts_name << ";\n";
+    out << "    for (const auto& cactus_tuple : " << tuple_buffer_name << ") {\n";
+    out << "        const auto cactus_partition_key = static_cast<std::uint32_t>(cactus_tuple." << member << ");\n";
+    out << "        auto [cactus_partition_it, cactus_partition_new] = " << counts_name
+        << ".try_emplace(cactus_partition_key, 0, 0);\n";
+    out << "        auto& [cactus_taken, cactus_cap] = cactus_partition_it->second;\n";
+    out << "        if (cactus_partition_new) { cactus_cap = " << count_name << "(cactus_tuple." << member
+        << "); }\n";
+    out << "        if (cactus_taken >= cactus_cap) { continue; }\n";
+    out << "        ++cactus_taken;\n";
+    out << "        " << pair_body_name << "(cactus_tuple.first, cactus_tuple.second);\n";
+    out << "    }\n";
+}
+
 // A pair handler snapshots both bindings' live memberships up
 // front (deterministic, creation-ordinal order), then iterates
 // their directed Cartesian product left-binding-major without
 // ever materializing the full tuple list. Component access inside
-// the body is read-only (const), matching the read-only pair
-// trait rule enforced by semantic analysis.
+// the body is read-only (const) unless a provably-one `limit: ... per`
+// made one binding writable, matching what semantic analysis enforced.
 static void emit_pair_handler_body(std::ostringstream& out,
                                    const RuleNode& sys,
                                    const EventHandlerNode& handler,
@@ -3282,9 +3376,14 @@ static void emit_pair_handler_body(std::ostringstream& out,
     // invoking the body directly, and the sorted buffer is replayed once at
     // the end. A rule without `order by:` pays none of this and keeps
     // streaming exactly as before.
+    // dsl-rule-limit reuses that same buffer: truncation has to see the whole
+    // candidate sequence in order before it can decide which tuples occupy
+    // slots, so a limited rule materializes even without `order by:`.
     const bool ordered           = !sys.order_by.empty();
+    const bool limited           = sys.limit.has_value();
+    const bool buffered          = ordered || limited;
     const auto tuple_buffer_name = gen_temp_name("pair_tuples", handler.location);
-    const auto dispatch_name     = ordered ? gen_temp_name("pair_collect", handler.location) : pair_body_name;
+    const auto dispatch_name     = buffered ? gen_temp_name("pair_collect", handler.location) : pair_body_name;
     // The tuple body is defined once as a named lambda and every dispatch
     // site below (and emit_sap_pair_activation, when spatial broadphase
     // applies) calls it by name instead of re-splicing its own copy. Every
@@ -3295,9 +3394,16 @@ static void emit_pair_handler_body(std::ostringstream& out,
         << right.scope.binding_name << ") {\n";
     out << pair_body;
     out << "    };\n";
-    if (ordered) {
+    // The retained `where:` filter runs here, at collection, so a rejected
+    // candidate never reaches the buffer and therefore can never occupy a
+    // slot truncation would otherwise have given it (dsl-rule-limit).
+    const auto where_filter_name = emit_pair_where_filter(out, sys, pair_binding_codegens, pair_codegen_scope, program);
+    if (buffered) {
         out << "    std::vector<std::pair<entt::entity, entt::entity>> " << tuple_buffer_name << ";\n";
         out << "    auto " << dispatch_name << " = [&](entt::entity cactus_left, entt::entity cactus_right) {\n";
+        if (!where_filter_name.empty()) {
+            out << "        if (!" << where_filter_name << "(cactus_left, cactus_right)) { return; }\n";
+        }
         out << "        " << tuple_buffer_name << ".emplace_back(cactus_left, cactus_right);\n";
         out << "    };\n";
     }
@@ -3349,17 +3455,24 @@ static void emit_pair_handler_body(std::ostringstream& out,
         out << "        }\n";
     }
     out << "    }\n";
-    if (!ordered) {
+    if (!buffered) {
         return;
     }
-    const auto key_names = emit_pair_sort_key_extractors(out, sys, pair_binding_codegens, pair_codegen_scope, program);
-    // stable_sort, not sort: tuples with equal keys must keep the pass's own
-    // left-binding-major collection order (dsl-rule-order-by).
-    out << "    std::ranges::stable_sort(" << tuple_buffer_name
-        << ", [&](const auto& cactus_lhs, const auto& cactus_rhs) {\n";
-    emit_sort_comparator_body(
-        out, sys, key_names, "cactus_lhs.first, cactus_lhs.second", "cactus_rhs.first, cactus_rhs.second", 2);
-    out << "    });\n";
+    if (ordered) {
+        const auto key_names =
+            emit_pair_sort_key_extractors(out, sys, pair_binding_codegens, pair_codegen_scope, program);
+        // stable_sort, not sort: tuples with equal keys must keep the pass's own
+        // left-binding-major collection order (dsl-rule-order-by).
+        out << "    std::ranges::stable_sort(" << tuple_buffer_name
+            << ", [&](const auto& cactus_lhs, const auto& cactus_rhs) {\n";
+        emit_sort_comparator_body(
+            out, sys, key_names, "cactus_lhs.first, cactus_lhs.second", "cactus_rhs.first, cactus_rhs.second", 2);
+        out << "    });\n";
+    }
+    if (limited) {
+        emit_pair_limit_replay(out, sys, tuple_buffer_name, pair_body_name, pair_codegen_scope, program);
+        return;
+    }
     out << "    for (const auto& cactus_tuple : " << tuple_buffer_name << ") {\n";
     out << "        " << pair_body_name << "(cactus_tuple.first, cactus_tuple.second);\n";
     out << "    }\n";
@@ -3375,6 +3488,38 @@ static void emit_selectionless_handler_body(std::ostringstream& out,
     LocalNumericKinds local_kinds;
     out << rewrite_stmt_block(
         handler.body, 1, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
+}
+
+// Recipient-targeted delivery's call to the shared handler-body lambda, gated
+// by whichever of the retained `where:` predicate and the domain `limit:`
+// count apply (either, both, or neither) — extracted so the branching lives
+// in one place instead of the enclosing function.
+static void emit_recipient_handler_call(std::ostringstream& out,
+                                        const std::string& handler_body_name,
+                                        bool has_retained_where,
+                                        bool limited,
+                                        const std::string& where_filter_name,
+                                        const std::string& limit_name,
+                                        const std::function<void(std::ostringstream&)>& call_args) {
+    const bool guarded = has_retained_where || limited;
+    if (guarded) {
+        out << "            if (";
+        if (has_retained_where) {
+            out << where_filter_name << "(entity";
+            call_args(out);
+            out << ")";
+        }
+        if (limited) {
+            out << (has_retained_where ? " && " : "") << limit_name << " > 0";
+        }
+        out << ") {\n";
+    }
+    out << "            " << handler_body_name << "(entity";
+    call_args(out);
+    out << ");\n";
+    if (guarded) {
+        out << "            }\n";
+    }
 }
 
 static void emit_filtered_handler_body(std::ostringstream& out,
@@ -3409,6 +3554,45 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     emit_filter_alias_bindings(out, sys.filter, program, 2);
     out << filtered_body;
     out << "    };\n";
+    // A limited rule keeps its `where:` unlowered (dsl-rule-limit), so the
+    // predicate becomes a second lambda of exactly the handler body's shape —
+    // same entity/component parameters, same filter-alias bindings — checked
+    // before a candidate can be counted toward the limit or delivered.
+    const bool limited            = sys.limit.has_value();
+    const bool has_retained_where = limited && sys.where_clause.has_value() &&
+                                    !sys.where_clause->predicates.empty();
+    std::string where_filter_name;
+    if (has_retained_where) {
+        where_filter_name = gen_temp_name("where_filter", sys.where_clause->location);
+        out << "    auto " << where_filter_name << " = [&](entt::entity entity";
+        for (const auto& cpp_name : data_cpp_types) {
+            out << ", [[maybe_unused]] " << cpp_name << "& " << cpp_name << "_comp";
+        }
+        out << ") {\n";
+        out << "        (void)entity;\n";
+        emit_filter_alias_bindings(out, sys.filter, program, 2);
+        emit_where_predicate_conjunction(out, sys.where_clause->predicates, [&](const ExprNode& predicate) {
+            return rewrite_expr(predicate, filter_traits, program, {}, filter_cpp_overrides);
+        });
+        out << "    };\n";
+    }
+    const auto call_args = [&data_cpp_types](std::ostringstream& os) {
+        for (const auto& cpp_name : data_cpp_types) {
+            os << ", " << cpp_name << "_comp";
+        }
+    };
+    // Computed once, ahead of the recipient/broadcast split, so a targeted
+    // delivery can be gated by the same count a broadcast pass truncates by
+    // instead of ignoring it: a live recipient still counts as one candidate
+    // of the domain `limit:` bounds (dsl-rule-limit), and `limit: 0` must
+    // suppress it exactly as it would suppress the last slot of a broadcast
+    // pass.
+    std::string limit_name;
+    if (limited) {
+        limit_name = gen_temp_name("limit", sys.limit->location);
+        out << "    const int " << limit_name << " = "
+            << rewrite_expr(*sys.limit->count, filter_traits, program, {}, filter_cpp_overrides) << ";\n";
+    }
     // Recipient-targeted delivery: run at most once, for the
     // recipient, and only if it satisfies this handler's selection
     // (targeted-event-delivery, "Unary target ... only if it
@@ -3429,22 +3613,39 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     }
     out << ") {\n";
     emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
-    out << "            " << handler_body_name << "(entity";
-    for (const auto& cpp_name : data_cpp_types) {
-        out << ", " << cpp_name << "_comp";
-    }
-    out << ");\n";
+    emit_recipient_handler_call(out, handler_body_name, has_retained_where, limited, where_filter_name, limit_name, call_args);
     out << "        }\n";
     out << "    } else {\n";
     const auto sort_anchor = emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides, 2);
     emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2, sort_anchor);
-    emit_view_each_header(out, filter_bindings_list, 2, program);
-    out << "        " << handler_body_name << "(entity";
-    for (const auto& cpp_name : data_cpp_types) {
-        out << ", " << cpp_name << "_comp";
+    if (!limited) {
+        emit_view_each_header(out, filter_bindings_list, 2, program);
+        out << "        " << handler_body_name << "(entity";
+        call_args(out);
+        out << ");\n";
+        out << "        });\n";
+        out << "    }\n";
+        return;
     }
+    // Bounded take over the same view the unlimited path iterates, after any
+    // registry.sort<> the rule's `order by:` performed: a range-for rather
+    // than view.each so the pass can stop the moment the limit is reached,
+    // and only where:-surviving candidates count toward it (dsl-rule-limit).
+    const auto taken_name = gen_temp_name("taken", sys.limit->location);
+    out << "        int " << taken_name << " = 0;\n";
+    out << "        for (auto entity : view) {\n";
+    out << "            if (" << taken_name << " >= " << limit_name << ") { break; }\n";
+    emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
+    if (has_retained_where) {
+        out << "            if (!" << where_filter_name << "(entity";
+        call_args(out);
+        out << ")) { continue; }\n";
+    }
+    out << "            ++" << taken_name << ";\n";
+    out << "            " << handler_body_name << "(entity";
+    call_args(out);
     out << ");\n";
-    out << "        });\n";
+    out << "        }\n";
     out << "    }\n";
 }
 
@@ -3494,8 +3695,14 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
     std::vector<PairBindingCodegen> pair_binding_codegens;
     PairCodegenScope pair_codegen_scope;
     if (is_pair_system) {
+        // Semantic analysis already proved which binding — if any — a
+        // `limit: 1 per <binding>` makes writable; codegen only consumes that
+        // decision, it never re-derives it.
+        const bool writable_binding_declared =
+            sys.limit.has_value() && sys.limit->provably_one && sys.limit->per_binding.has_value();
         for (const auto& binding : sys.pairs->bindings) {
-            auto codegen = build_pair_binding_codegen(binding, program);
+            auto codegen          = build_pair_binding_codegen(binding, program);
+            codegen.scope.writable = writable_binding_declared && binding.name == *sys.limit->per_binding;
             pair_codegen_scope.bindings.push_back(codegen.scope);
             pair_binding_codegens.push_back(std::move(codegen));
         }

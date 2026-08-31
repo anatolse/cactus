@@ -125,6 +125,8 @@ private:
     [[nodiscard]] bool at_pairs_clause() const;
     WhereClause parse_where_clause();
     [[nodiscard]] bool at_where_clause() const;
+    LimitClause parse_limit_clause();
+    [[nodiscard]] bool at_limit_clause() const;
     std::vector<LocatedName> parse_name_block(TokenType keyword, const char* clause_name);
     std::vector<HandlerReferenceNode> parse_handler_order_block();
     std::vector<HandlerCommandNode> parse_command_block();

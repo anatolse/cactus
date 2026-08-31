@@ -19,7 +19,7 @@ The repository SHALL provide examples/first-person-arena/main.cactus as a standa
 - **AND** the first-person-arena directory contains no copied or newly generated binary model assets
 
 ### Requirement: Arena geometry is authored in Cactus
-The example SHALL author a roofless square arena in Cactus entities and templates. It SHALL include a dark-grey floor, light-grey perimeter walls, a brown central cubic building with two opposite ground-level door openings, an exterior staircase, and a walkable building roof. The active viewport SHALL provide a blue sky background.
+The example SHALL author a roofless square arena in Cactus entities and templates. It SHALL include a dark-grey floor, light-grey perimeter walls, a brown central cubic building with two opposite ground-level door openings, an exterior staircase, a walkable building roof, and at least one low solid obstacle short enough for an enemy to vault. The active viewport SHALL provide a blue sky background.
 
 #### Scenario: Arena has no roof
 - **WHEN** the authored map entities are inspected
@@ -35,6 +35,11 @@ The example SHALL author a roofless square arena in Cactus entities and template
 - **WHEN** one frame is rendered
 - **THEN** the floor is dark grey, perimeter walls are light grey, the building and stairs are brown, and the viewport background is blue
 
+#### Scenario: A low obstacle exists for enemies to vault
+- **WHEN** the authored map entities are inspected
+- **THEN** at least one solid obstacle shorter than the perimeter walls and building walls lies in a path an enemy takes toward the player
+- **AND** its height is short enough that the vaulting behavior in "Live enemies seek the player and end the game on contact" applies to it
+
 ### Requirement: Arena is lit by a directional sun light
 The example SHALL author one enabled directional light representing sunlight, angled so it illuminates the floor, walls, and building rather than leaving authored map geometry and character models rendering unlit.
 
@@ -47,7 +52,7 @@ The example SHALL author one enabled directional light representing sunlight, an
 - **THEN** floor, wall, and building surfaces facing toward the light render visibly brighter than they would with the light disabled
 
 ### Requirement: Player uses first-person controls and a collider
-The player SHALL move with W/A/S/D input relative to its horizontal facing direction and look with mouse delta using yaw and pitch. Pitch SHALL be clamped to avoid flipping. The first-person camera SHALL remain attached to the player body, and the player body SHALL carry volume Collider and CapsuleCollider traits used by authored arena collision and grounding rules. The mouse cursor SHALL be captured when play begins; pressing Escape SHALL release cursor capture without ending the game, and a subsequent primary click while released SHALL recapture it. Cursor capture SHALL also be released automatically on game over and recaptured automatically on restart.
+The player SHALL move with W/A/S/D input relative to its horizontal facing direction and look with mouse delta using yaw and pitch. Pitch SHALL be clamped to avoid flipping. The first-person camera SHALL remain attached to the player body, and the player body SHALL carry volume Collider and CapsuleCollider traits used by authored arena collision and grounding rules. The mouse cursor SHALL be captured when play begins; pressing Escape SHALL release cursor capture without ending the game, and a subsequent primary click while released SHALL recapture it. Cursor capture SHALL also be released automatically on game over and recaptured automatically on restart. The player SHALL fall under gravity when unsupported and SHALL be able to jump with a dedicated input while grounded; falling and jumping SHALL be gradual (velocity-driven over time) rather than an instantaneous position change, while climbing a small step (such as the exterior staircase) SHALL remain an immediate snap as before.
 
 #### Scenario: Mouse movement rotates the view
 - **WHEN** the captured mouse reports horizontal and vertical delta while the game is active
@@ -64,7 +69,7 @@ The player SHALL move with W/A/S/D input relative to its horizontal facing direc
 
 #### Scenario: Player can climb to the building roof
 - **WHEN** the player moves over the exterior steps in order
-- **THEN** authored grounding raises the player by each reachable step
+- **THEN** authored grounding raises the player by each reachable step immediately
 - **AND** the player can stand and move on the building roof
 
 #### Scenario: Escape releases cursor capture without ending play
@@ -76,6 +81,20 @@ The player SHALL move with W/A/S/D input relative to its horizontal facing direc
 - **WHEN** the cursor is released (not via game over) and a primary click occurs
 - **THEN** the cursor is recaptured
 - **AND** that same click does not also fire a bullet
+
+#### Scenario: Walking off a ledge falls gradually instead of teleporting
+- **WHEN** the player moves past the edge of an elevated surface such as the building roof, with no lower step within stepping range
+- **THEN** the player's height decreases progressively over multiple ticks under gravity rather than snapping instantly to the surface below
+- **AND** the player comes to rest on the lower surface once reached
+
+#### Scenario: Jumping while grounded launches the player upward
+- **WHEN** the jump input is pressed while the player is grounded
+- **THEN** the player's height increases over subsequent ticks under an upward impulse before gravity returns it to the ground
+- **AND** the player's horizontal movement is unaffected
+
+#### Scenario: Jump input is ignored while airborne
+- **WHEN** the jump input is pressed while the player is already falling or mid-jump
+- **THEN** no additional upward impulse is applied
 
 ### Requirement: Four corner spawn points produce robot and knight waves
 The arena SHALL contain four authored corner spawn-point entities: two assigned to robots and two assigned to knights. Each spawn point SHALL create one enemy immediately when play begins and one additional enemy every ten seconds while the game remains active.
@@ -94,7 +113,7 @@ The arena SHALL contain four authored corner spawn-point entities: two assigned 
 - **THEN** later spawn intervals create no additional enemies
 
 ### Requirement: Live enemies seek the player and end the game on contact
-Robot and knight enemies SHALL render their reused models with animation, carry volume Collider and CapsuleCollider traits, face and move toward the live player, and use authored solid-box separation to remain inside the arena and respond to the building. A live enemy reaching the player's collider SHALL trigger game over.
+Robot and knight enemies SHALL render their reused models with animation, carry volume Collider and CapsuleCollider traits, face and move toward the live player, and use authored solid-box separation to remain inside the arena and respond to the building. Each enemy's model-animator playback speed SHALL be derived from its current movement speed so its running clip's stride visually matches its translation. When a wall directly blocks an enemy's straight-line path to the player, the enemy SHALL steer toward an alternate unobstructed heading rather than remaining stuck against the wall. When an enemy's chosen heading is blocked by an obstacle short enough to clear, the enemy SHALL jump over it using the same gravity-driven vertical motion available to the player, switching to a jump animation clip where its model has one. A live enemy reaching the player's collider SHALL trigger game over.
 
 #### Scenario: Enemy advances toward player
 - **WHEN** a live enemy and player are separated with no solid box between them
@@ -107,6 +126,25 @@ Robot and knight enemies SHALL render their reused models with animation, carry 
 #### Scenario: Enemy contact triggers game over
 - **WHEN** a live enemy overlaps the player's collider
 - **THEN** the player enters game over exactly once
+
+#### Scenario: Enemy animation speed matches movement speed
+- **WHEN** a live enemy is moving toward the player
+- **THEN** its model-animator playback speed is derived from its current movement speed rather than a fixed independent value
+
+#### Scenario: Enemy steers around a wall blocking the direct path
+- **WHEN** a wall lies directly between a live enemy and the player, blocking the enemy's straight-line heading
+- **THEN** the enemy moves along an alternate heading that is not blocked
+- **AND** the enemy's position changes tick over tick rather than remaining stuck oscillating against the wall
+
+#### Scenario: Enemy vaults a short obstacle in its path
+- **WHEN** a live enemy's chosen heading is blocked by a solid obstacle short enough to clear
+- **THEN** the enemy gains upward velocity and passes over the obstacle instead of being blocked by it
+- **AND** the enemy plays a jump animation clip if its model has one, or otherwise continues playing its existing movement clip through the vault
+
+#### Scenario: Enemy does not attempt to vault a wall taller than it can clear
+- **WHEN** a live enemy's chosen heading is blocked by a perimeter wall or building wall
+- **THEN** the enemy does not jump
+- **AND** authored separation and steering handle the obstacle as before
 
 ### Requirement: Live enemies do not overlap each other
 While multiple live (non-dying) enemies are simultaneously present, authored separation SHALL keep their capsule colliders from penetrating one another, regardless of enemy kind. Enemies in their death transition SHALL NOT participate in this separation.

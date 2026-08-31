@@ -1262,6 +1262,15 @@ RuleNode Parser::parse_rule() {
         node.where_clause = parse_where_clause();
     }
 
+    skip_newlines();
+    if (at_limit_clause()) {
+        auto error_count_before = errors_.error_count();
+        node.limit              = parse_limit_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
@@ -1506,6 +1515,33 @@ WhereClause Parser::parse_where_clause() {
         errors_.error(loc, "where: block must contain at least one predicate");
     }
 
+    return clause;
+}
+
+bool Parser::at_limit_clause() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "limit" && peek_next().type == TokenType::COLON;
+}
+
+// `limit: <expression> [per <binding>]` — a single inline count expression
+// rather than an indented block, since unlike where:/order by: a rule carries
+// at most one limit. `per` is contextual, so an expression the author ended
+// with a bare identifier can't be confused for it: the count is parsed first
+// and `per` only recognized when it is followed by the binding identifier.
+LimitClause Parser::parse_limit_clause() {
+    auto loc = peek().location;
+    advance();  // consume contextual 'limit' identifier
+    consume(TokenType::COLON, "expected ':'");
+
+    LimitClause clause;
+    clause.location = loc;
+    clause.count    = parse_expression();
+
+    if (check(TokenType::IDENTIFIER) && peek().value == "per") {
+        clause.per_location = peek().location;
+        advance();
+        clause.per_binding = consume(TokenType::IDENTIFIER, "expected binding name after 'per'").value;
+    }
+    expect_newline();
     return clause;
 }
 
@@ -2836,6 +2872,17 @@ ExternRuleNode Parser::parse_extern_rule() {
         auto error_count_before = errors_.error_count();
         parse_where_clause();  // parsed and discarded; where: is regular-rule-only
         errors_.error(where_loc, "'where:' is not valid on external rules");
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
+    skip_newlines();
+    if (at_limit_clause()) {
+        auto limit_loc          = peek().location;
+        auto error_count_before = errors_.error_count();
+        parse_limit_clause();  // parsed and discarded; limit: is regular-rule-only
+        errors_.error(limit_loc, "'limit:' is not valid on external rules");
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }

@@ -683,6 +683,22 @@ struct WhereClause {
     SourceLocation location;
 };
 
+// ── Limit Clause (dsl-rule-limit) ───────────────────────────────────────────
+
+// `limit:` block on a regular rule — a pure `int` count expression, optionally
+// partitioned by one of a pair domain's two bindings (`per <binding>`).
+// Requires an existing `filter:` or `pairs:` domain; validated by semantic
+// analysis, not the parser.
+struct LimitClause {
+    std::unique_ptr<ExprNode> count;
+    std::optional<std::string> per_binding;
+    SourceLocation per_location;
+    // Set by semantic analysis: `count` folds to the literal 1, which is what
+    // makes `per_binding` writable in this rule's handlers.
+    bool provably_one = false;
+    SourceLocation location;
+};
+
 struct RuleNode {
     std::string name;
     bool is_stdlib = false;
@@ -692,6 +708,7 @@ struct RuleNode {
     FilterClause exclude;                           // empty entries = no exclude
     std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
+    std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
     std::vector<SortKey> order_by;
     std::vector<std::string> after_rules;  // explicit ordering: this rule runs after these
     std::vector<EventHandlerNode> handlers;

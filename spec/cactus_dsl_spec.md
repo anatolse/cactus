@@ -49,7 +49,7 @@ The current gameplay-core profile includes:
 - `entity`, `template`
 - `rule`, `extern rule`, `event`, `extern event`, `phase`, `func`, `extern func`
 - `asset`, `input`
-- `rule` selection domains: selectionless, unary `filter:`/`exclude:`, and binary `pairs:` relations, with `order by:` available to either non-selectionless domain
+- `rule` selection domains: selectionless, unary `filter:`/`exclude:`, and binary `pairs:` relations, with `order by:` and `limit:` available to either non-selectionless domain
 - handlers triggered by declared phases or ordinary events, such as `on input:`, `on fixed_tick:`, `on tick:`, and `on PlayerDamaged:`
 - statements: `let`, `var`, assignment, `if`, bounded `for ... in ...:`, `emit` (broadcast or targeted with `to`), `spawn`, `destroy`, `load`, `add`, `remove`, `project`, `return`
 
@@ -359,7 +359,7 @@ Hierarchy syntax creates parent-child **relations only**. It does not by itself 
 
 ### 3.8 Rules
 
-Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:` and `exclude:`. `order by:` belongs to no single domain — it may accompany either a unary `filter:` domain or a binary `pairs:` domain, and requires one of them.
+Rules contain gameplay logic over filtered entities. A regular rule has exactly one execution domain: **selectionless** (no `filter:`/`exclude:`/`pairs:`), **unary** (`filter:`/`exclude:`), or **binary pair** (`pairs:`). `pairs:` is mutually exclusive with `filter:` and `exclude:`. `order by:` and `limit:` belong to no single domain — each may accompany either a unary `filter:` domain or a binary `pairs:` domain, and each requires one of them.
 
 ```ebnf
 rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
@@ -367,6 +367,7 @@ rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   [ order_by_clause ]
                   [ after_clause ]
                   [ where_clause ]
+                  [ limit_clause ]
                   { event_handler }
                   DEDENT ;
 
@@ -391,6 +392,8 @@ sort_key        = expression [ "asc" | "desc" ] ;
 after_clause    = "after" ":" NEWLINE INDENT
                   { IDENTIFIER NEWLINE }
                   DEDENT ;
+
+limit_clause    = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
 ```
 
 A sort key is a pure expression of the same class as a `where:` predicate (§3.8.2) — literals and constants, reads through in-scope bindings, operators, and calls to functions proven pure — and must type-check as scalar-comparable (`int`, `float`, or `bool`). A bare `alias.field` path is simply the trivial case of that grammar. Direction defaults to `asc` when omitted; multiple sort keys order lexicographically, each breaking the preceding key's ties.
@@ -457,7 +460,7 @@ Binding names and their aliases must be unambiguous within every handler scope o
 
 **Passes snapshot membership, not values.** Before executing any tuple body, the runtime records both bindings' live membership in stable, creation-order-sorted snapshots (a monotonic per-entity creation ordinal, assigned at load time and at spawn commit, defines this order independently of backend storage layout) and lazily iterates their product left-binding-major: for `left = [a, b]` and `right = [x, y]`, tuple order is `(a,x)`, `(a,y)`, `(b,x)`, `(b,y)`. Membership is fixed for the whole pass; component values are read live from storage when each tuple executes. Projected traits and buffered structural commands issued mid-pass cannot add or remove tuples from the pass already in progress — they become visible only in a later pass or at the next activation commit.
 
-**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read.
+**Pair-bound durable trait access is read-only.** A pair handler may read any trait it selected (`body.Collider.mask`, `wall.transform.position`), but direct or indirect mutation — assignment, compound assignment, or a data-bearing trait-match alias obtained from a binding — is rejected during semantic analysis. Selecting a trait does not itself count as a read. The single exception is a binding named by a provably-one `limit: ... per` (§3.8.3), which admits ordinary dotted-path assignment; a trait-match alias stays rejected even there.
 
 **There is no implicit current entity.** `self` and any statement form that defaults to `self` (bare `destroy`, bare `remove`, `add`/`project` with no `to`) are rejected in pair handlers. Every entity-targeting operation must name a binding explicitly:
 
@@ -523,6 +526,37 @@ rule DetectBallContact:
 This is purely an optimization: it never changes which entities or tuples satisfy the rule, and every other shape — wrapped in `not`, combined with `or`, a computed (non-member-chain) argument, cross-domain bindings, component-wise arithmetic (`dx*dx + dy*dy`) in place of the dot-product form, a check split across intermediate `let` bindings, or a call to any other function — remains fully supported as an ordinary predicate, evaluated exactly as it is today. No backend is required to implement this acceleration, and its absence is never a compile error or a behavior difference.
 
 **An unaccelerated linear-distance predicate produces a warning.** When a pair rule's `where:` predicate calls the unaccelerated linear-distance function (`std.math.vec2.distance`, `std.math.vec3.distance`) with two pair-binding-rooted position arguments and compares the result with `<`, `<=`, `>`, or `>=` against a sum of two pair-binding-rooted radius-like reads — the same computation as the recognized shapes above, but using linear rather than squared distance — the compiler emits a warning diagnostic naming the dimension-appropriate recognized alternative (`circles_overlap`/`spheres_overlap`, or the equivalent squared dot-product expression). This diagnostic is never an error and never changes compilation output; it does not fire for a predicate that already matches either recognized shape, or for a predicate unrelated to spatial overlap (e.g. `a != b`).
+
+#### 3.8.3 Limit Clause
+
+`limit:` bounds how many rows or tuples of an existing unary (`filter:`) or pair (`pairs:`) domain produce a handler activation. `limit` is recognized contextually at the rule-clause position (like `pairs` and `where`); it is not a reserved keyword elsewhere, and neither is `per`. `limit:` is rejected on rules that declare neither `filter:` nor `pairs:`, and on `extern rule` declarations. A rule carries at most one `limit:`.
+
+**It applies after `where:` and `order by:`.** The logical pipeline is `filter → where → order by → limit`: `limit:` bounds the already-filtered and, if present, ordered domain. It never changes which rows survive `where:` or their relative order — only how many of them run. In particular, a row rejected by `where:` never occupies a slot; the bound counts survivors, so a rule under `limit: 1 per actor` whose top-ranked candidate fails `where:` activates on the next-ranked survivor rather than not at all.
+
+```cactus
+rule GroundActor:
+    pairs:
+        actor:
+            KinematicActor
+        surface:
+            Solid
+    order by:
+        actor.KinematicActor.feet_y - surface.Solid.top asc
+    where:
+        surface.Solid.top <= actor.KinematicActor.feet_y
+    limit: 1 per actor
+
+    on fixed_tick:
+        actor.KinematicActor.ground_surface = surface.Solid.top
+```
+
+**The global form bounds total count; the `per` form bounds each partition.** `limit: N` with no `per` admits at most `N` rows (unary) or `N` tuples in total (pair), and guarantees nothing about how often any single entity occurs among them. `limit: N per <binding>` is accepted only on a `pairs:` rule and only when `<binding>` names one of that rule's two bindings; it admits at most `N` tuples for each distinct value of that binding. A binding value with no surviving tuples produces no activation at all.
+
+**The count expression is pure, `int`-typed, and narrowly scoped.** It has the same purity class as a `where:` predicate (§3.8.2) and must type-check as `int`. A global `limit:`'s count may reference only constants. A `limit ... per <binding>`'s count may additionally read `<binding>`'s own trait fields — evaluated once per distinct binding value — but must not reference the rule's other binding, whose value varies across the very tuples the count bounds.
+
+**Selection is deterministic.** With `order by:`, sort keys are evaluated against the rule's snapshot and equal keys break ties by stable creation order. Without `order by:`, `limit:` takes the domain's existing stable iteration order — for a pair domain, the left-binding-major snapshot order of §3.8.1. Each partition of a `per` limit resolves independently of every other. A conforming backend's physical strategy must not change which rows this selects.
+
+**A provably-one `per` limit makes its binding writable.** When a `limit: <expr> per <binding>`'s count expression is the literal `1`, or a name whose `const:` initializer is literally `1`, the compiler proves that at most one tuple per `<binding>` value can run — and `<binding>` becomes an ordinary mutable assignment target inside that rule's handlers, carved out of §3.8.1's pair read-only rule. The proof is deliberately syntactic: any other expression, including one that always evaluates to `1` at runtime (`2 - 1`, a non-constant field read), is not provable. The rule's other binding stays read-only, a global `limit:` grants no writability on either binding, and trait-matching directly on a pair binding stays rejected regardless of any `limit:` — only ordinary dotted-path assignment is admitted. Such a write is inferred into the handler's contract exactly like a write through a unary `filter:` alias, so scheduling sees the same read/write conflict information.
 
 ### 3.9 Event Handlers
 
@@ -912,7 +946,7 @@ rule Damage:
 
 Bare (unqualified) trait-field access is accepted when it resolves to exactly one selected trait; `alias.field`/`TraitName.field` remain the preferred style for handlers filtering multiple substantial traits.
 
-Pair handlers (§3.8.1) use a third, binding-qualified form instead of a filter alias: `binding.Trait.field`, `binding.module_alias.Trait.field`, or `binding.alias.field` for a binding-local `as` alias. Pair-bound access is read-only.
+Pair handlers (§3.8.1) use a third, binding-qualified form instead of a filter alias: `binding.Trait.field`, `binding.module_alias.Trait.field`, or `binding.alias.field` for a binding-local `as` alias. Pair-bound access is read-only, except through a binding a provably-one `limit: ... per` made writable (§3.8.3).
 
 ### 4.3 `entity_id` Semantics
 

@@ -497,6 +497,13 @@ struct ModuleImports {
              std::unordered_set<std::string> non_pub_templates = {});
 };
 
+// dsl-rule-limit: a pair binding's write eligibility. `Writable` is the sole
+// case where dsl-pair-relations' read-only rule gives way — the binding named
+// by a `limit:` proven to admit at most one tuple per binding value.
+// `UnprovenPerLimit` marks the near-miss (a `per` binding whose count isn't
+// provably one) so its rejection can say what would have made it writable.
+enum class PairBindingWritability : std::uint8_t { ReadOnly, Writable, UnprovenPerLimit };
+
 // Resolved binding-relative trait namespace for one pair binding, built once
 // per rule (from its `pairs:` clause) and reused across that rule's
 // handlers while typing and validating handler bodies. Keys are the dotted
@@ -504,7 +511,8 @@ struct ModuleImports {
 // an imported module-qualified name ("tf.WorldTransform"), or a binding-local
 // alias ("transform") — mirroring FilterEntry's dotted-name/alias shape.
 struct PairBindingScope {
-    std::size_t index = 0;
+    std::size_t index                     = 0;
+    PairBindingWritability writability = PairBindingWritability::ReadOnly;
     std::unordered_map<std::string, SymbolId> trait_by_access_key;
 };
 
@@ -608,6 +616,10 @@ private:
     void validate_rule_filters(ProgramNode& program);
     void validate_pair_bindings(RuleNode& rule);
     [[nodiscard]] static PairScope build_pair_scope(const PairClause& pairs);
+    // The same scope plus the rule's `limit:` writability proof applied, for
+    // every site that validates or infers against a whole rule rather than a
+    // bare `pairs:` clause.
+    [[nodiscard]] static PairScope build_pair_scope(const RuleNode& rule);
     // dsl-where-clause: requires an existing filter:/pairs: domain, type-checks
     // every predicate as bool, and enforces purity via check_where_purity_expr
     // — the same recursive deny-list shape as check_func_purity_expr, reused
@@ -617,6 +629,20 @@ private:
     // dsl-rule-order-by: same purity requirement as a where: predicate,
     // reported under order-by's own diagnostic.
     void check_order_by_purity_expr(const ExprNode& expr);
+    // dsl-rule-limit: same purity requirement again, reported under limit's
+    // own diagnostic.
+    void check_limit_purity_expr(const ExprNode& expr);
+    // dsl-rule-limit: `limit:` needs a filter:/pairs: domain, `per <binding>`
+    // needs a pairs: domain naming one of its bindings, and the count
+    // expression is pure, `int`-typed, and scoped to the `per` binding alone
+    // (constants only without one). Also records the provably-one proof on
+    // the clause, which is what unlocks the pair-binding write carve-out.
+    void validateLimitClause(RuleNode& rule);
+    [[nodiscard]] std::optional<PairScope> resolve_limit_count_scope(const RuleNode& rule);
+    // The deliberately narrow two-shape proof (design.md): the literal `1`, or
+    // a name whose `const:` initializer is literally `1`. Nothing else — an
+    // arithmetic expression that happens to evaluate to 1 is not provable.
+    [[nodiscard]] bool limit_count_is_provably_one(const ExprNode& count) const;
     // The recursive deny-list walk shared (in shape) by check_func_purity_expr,
     // check_where_purity_expr, and check_order_by_purity_expr: every impure
     // expression form funnels through this one traversal, and each caller
@@ -829,6 +855,14 @@ private:
     InferredHandlerContract infer_pair_handler_contract(const RuleNode& rule,
                                                         const EventHandlerNode& handler,
                                                         const PairScope& pair_scope) const;
+    // handler-contracts: a write through the binding a provably-one `limit:`
+    // made writable is an ordinary write — folded into `writes` and, since
+    // contract writes are read/write capabilities, `reads` too. Every other
+    // pair-binding assignment was already rejected by validate_event_stmts
+    // and contributes nothing.
+    static void record_pair_binding_write(const VarAssign& node,
+                                          const PairScope& pair_scope,
+                                          InferredHandlerContract& contract);
     // dsl-where-clause / spatial-broadphase-runtime: read-only pattern-match
     // over an already-validated `where:` predicate list for a direct,
     // unwrapped circles_overlap/spheres_overlap call, or an equivalent manual
@@ -1091,7 +1125,10 @@ private:
     std::unordered_set<std::string> phase_names_;
     std::unordered_set<std::string> func_names_;
     std::unordered_set<std::string> rule_names_;
-    std::unordered_set<std::string> const_names_;
+    // const name -> its declared initializer; also doubles as the const-name
+    // membership set (local_non_template_symbol_exists), for
+    // limit_count_is_provably_one.
+    std::unordered_map<std::string, const ExprNode*> const_initializers_;
     std::unordered_map<std::string, SymbolId> module_scope_symbols_;
 
     // Asset and input declaration tracking (dsl-spec-new-features)

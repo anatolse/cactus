@@ -229,6 +229,12 @@ cactus_add_headless_behavior_test(test_pairs_order_by_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pairs_order_by_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_pairs_limit_headless_behavior
+    CACTUS_SOURCE tests/fixtures/pairs_limit_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pairs_limit_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_collision_predicates_headless_behavior
     CACTUS_SOURCE tests/fixtures/collision_predicates_runtime.cactus
     BACKEND cpp-entt

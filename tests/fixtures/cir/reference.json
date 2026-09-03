@@ -1,0 +1,1802 @@
+{
+  "schema": "cactus-cir",
+  "version": 1,
+  "modules": [
+    "std.core"
+  ],
+  "traits": [
+    {
+      "symbol": {
+        "kind": "trait",
+        "module": "std.core",
+        "name": "Collider",
+        "canonical": "std.core.Collider"
+      },
+      "fields": [
+        {
+          "name": "radius",
+          "type": "float",
+          "is_var": true,
+          "is_persist": false,
+          "is_sync": false,
+          "has_default": false
+        }
+      ]
+    },
+    {
+      "symbol": {
+        "kind": "trait",
+        "module": "std.core",
+        "name": "Health",
+        "canonical": "std.core.Health"
+      },
+      "fields": [
+        {
+          "name": "current",
+          "type": "float",
+          "is_var": true,
+          "is_persist": false,
+          "is_sync": false,
+          "has_default": false
+        }
+      ]
+    },
+    {
+      "symbol": {
+        "kind": "trait",
+        "module": "std.core",
+        "name": "Marker",
+        "canonical": "std.core.Marker"
+      },
+      "fields": []
+    },
+    {
+      "symbol": {
+        "kind": "trait",
+        "module": "std.core",
+        "name": "PointerHit",
+        "canonical": "std.core.PointerHit"
+      },
+      "fields": []
+    },
+    {
+      "symbol": {
+        "kind": "trait",
+        "module": "std.core",
+        "name": "Shield",
+        "canonical": "std.core.Shield"
+      },
+      "fields": []
+    },
+    {
+      "symbol": {
+        "kind": "trait",
+        "module": "std.core",
+        "name": "Transform",
+        "canonical": "std.core.Transform"
+      },
+      "fields": [
+        {
+          "name": "position",
+          "type": "vec2",
+          "is_var": true,
+          "is_persist": false,
+          "is_sync": false,
+          "has_default": false
+        }
+      ]
+    }
+  ],
+  "rule_groups": [
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Boot",
+        "canonical": "std.core.Boot"
+      },
+      "handlers": [
+        "std.core.Boot/on std.core.load"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Contact",
+        "canonical": "std.core.Contact"
+      },
+      "handlers": [
+        "std.core.Contact/on std.core.fixed_tick"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Greet",
+        "canonical": "std.core.Greet"
+      },
+      "handlers": [
+        "std.core.Greet/on std.core.spawn"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "LogA",
+        "canonical": "std.core.LogA"
+      },
+      "handlers": [
+        "std.core.LogA/on std.core.frame"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "LogB",
+        "canonical": "std.core.LogB"
+      },
+      "handlers": [
+        "std.core.LogB/on std.core.frame"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "OverlayFragment",
+        "canonical": "std.core.OverlayFragment"
+      },
+      "handlers": [
+        "std.core.OverlayFragment/on std.core.overlay__fragment"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "OverlayVertex",
+        "canonical": "std.core.OverlayVertex"
+      },
+      "handlers": [
+        "std.core.OverlayVertex/on std.core.overlay__vertex"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Painter",
+        "canonical": "std.core.Painter"
+      },
+      "handlers": [
+        "std.core.Painter/on std.core.fixed_tick"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Projector",
+        "canonical": "std.core.Projector"
+      },
+      "handlers": [
+        "std.core.Projector/on std.core.frame"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "React",
+        "canonical": "std.core.React"
+      },
+      "handlers": [
+        "std.core.React/on std.core.Damaged"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Reader",
+        "canonical": "std.core.Reader"
+      },
+      "handlers": [
+        "std.core.Reader/on std.core.fixed_tick"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Sampler",
+        "canonical": "std.core.Sampler"
+      },
+      "handlers": [
+        "std.core.Sampler/on std.core.frame"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Selector",
+        "canonical": "std.core.Selector"
+      },
+      "handlers": [
+        "std.core.Selector/on std.core.frame"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Sweeper",
+        "canonical": "std.core.Sweeper"
+      },
+      "handlers": [
+        "std.core.Sweeper/on std.core.fixed_tick"
+      ]
+    },
+    {
+      "rule": {
+        "kind": "rule",
+        "module": "std.core",
+        "name": "Writer",
+        "canonical": "std.core.Writer"
+      },
+      "handlers": [
+        "std.core.Writer/on std.core.fixed_tick"
+      ]
+    }
+  ],
+  "nodes": {
+    "handlers": [
+      {
+        "id": "std.core.Boot/on std.core.load",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Boot",
+          "canonical": "std.core.Boot"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "load",
+            "canonical": "std.core.load"
+          }
+        },
+        "implementation": "cactus",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 16,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 32,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Contact/on std.core.fixed_tick",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Contact",
+          "canonical": "std.core.Contact"
+        },
+        "trigger": {
+          "kind": "phase",
+          "symbol": {
+            "kind": "phase",
+            "module": "std.core",
+            "name": "fixed_tick",
+            "canonical": "std.core.fixed_tick"
+          }
+        },
+        "implementation": "cactus",
+        "domain": "pair",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [
+          {
+            "name": "a",
+            "required_traits": [
+              {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Transform",
+                "canonical": "std.core.Transform"
+              },
+              {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Collider",
+                "canonical": "std.core.Collider"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "required_traits": [
+              {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Transform",
+                "canonical": "std.core.Transform"
+              },
+              {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Collider",
+                "canonical": "std.core.Collider"
+              }
+            ]
+          }
+        ],
+        "spatial_join": {
+          "dimension": "flat-2d",
+          "left": {
+            "binding_index": 0,
+            "position": {
+              "trait": {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Transform",
+                "canonical": "std.core.Transform"
+              },
+              "field_path": [
+                "position"
+              ]
+            },
+            "radius": {
+              "trait": {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Collider",
+                "canonical": "std.core.Collider"
+              },
+              "field_path": [
+                "radius"
+              ]
+            }
+          },
+          "right": {
+            "binding_index": 1,
+            "position": {
+              "trait": {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Transform",
+                "canonical": "std.core.Transform"
+              },
+              "field_path": [
+                "position"
+              ]
+            },
+            "radius": {
+              "trait": {
+                "kind": "trait",
+                "module": "std.core",
+                "name": "Collider",
+                "canonical": "std.core.Collider"
+              },
+              "field_path": [
+                "radius"
+              ]
+            }
+          },
+          "matched_predicate_index": 0
+        },
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Collider",
+            "canonical": "std.core.Collider"
+          },
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Transform",
+            "canonical": "std.core.Transform"
+          }
+        ],
+        "bound_reads": [
+          {
+            "binding_index": 0,
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Collider",
+              "canonical": "std.core.Collider"
+            }
+          },
+          {
+            "binding_index": 0,
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Transform",
+              "canonical": "std.core.Transform"
+            }
+          },
+          {
+            "binding_index": 1,
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Collider",
+              "canonical": "std.core.Collider"
+            }
+          },
+          {
+            "binding_index": 1,
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Transform",
+              "canonical": "std.core.Transform"
+            }
+          }
+        ],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 28,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 102,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Greet/on std.core.spawn",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Greet",
+          "canonical": "std.core.Greet"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "spawn",
+            "canonical": "std.core.spawn"
+          }
+        },
+        "implementation": "cactus",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [
+          {
+            "kind": "event",
+            "module": "std.core",
+            "name": "Damaged",
+            "canonical": "std.core.Damaged"
+          }
+        ],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 17,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 35,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.LogA/on std.core.frame",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "LogA",
+          "canonical": "std.core.LogA"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "frame",
+            "canonical": "std.core.frame"
+          }
+        },
+        "implementation": "external",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Marker",
+            "canonical": "std.core.Marker"
+          }
+        ],
+        "bound_reads": [],
+        "writes": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Marker",
+            "canonical": "std.core.Marker"
+          }
+        ],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 22,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 59,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.LogB/on std.core.frame",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "LogB",
+          "canonical": "std.core.LogB"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "frame",
+            "canonical": "std.core.frame"
+          }
+        },
+        "implementation": "external",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Marker",
+            "canonical": "std.core.Marker"
+          }
+        ],
+        "bound_reads": [],
+        "writes": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Marker",
+            "canonical": "std.core.Marker"
+          }
+        ],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 23,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 63,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.OverlayFragment/on std.core.overlay__fragment",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "OverlayFragment",
+          "canonical": "std.core.OverlayFragment"
+        },
+        "trigger": {
+          "kind": "render stage",
+          "symbol": {
+            "kind": "phase",
+            "module": "std.core",
+            "name": "overlay__fragment",
+            "canonical": "std.core.overlay__fragment"
+          }
+        },
+        "implementation": "cactus",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 30,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 112,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.OverlayVertex/on std.core.overlay__vertex",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "OverlayVertex",
+          "canonical": "std.core.OverlayVertex"
+        },
+        "trigger": {
+          "kind": "render stage",
+          "symbol": {
+            "kind": "phase",
+            "module": "std.core",
+            "name": "overlay__vertex",
+            "canonical": "std.core.overlay__vertex"
+          }
+        },
+        "implementation": "cactus",
+        "domain": "unary",
+        "selection": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Transform",
+            "canonical": "std.core.Transform"
+          }
+        ],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Transform",
+            "canonical": "std.core.Transform"
+          }
+        ],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 29,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 107,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Painter/on std.core.fixed_tick",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Painter",
+          "canonical": "std.core.Painter"
+        },
+        "trigger": {
+          "kind": "phase",
+          "symbol": {
+            "kind": "phase",
+            "module": "std.core",
+            "name": "fixed_tick",
+            "canonical": "std.core.fixed_tick"
+          }
+        },
+        "implementation": "external",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [
+          "graphics"
+        ],
+        "explicit_after": [
+          "std.core.Reader/on std.core.fixed_tick"
+        ],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 27,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 87,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Projector/on std.core.frame",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Projector",
+          "canonical": "std.core.Projector"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "frame",
+            "canonical": "std.core.frame"
+          }
+        },
+        "implementation": "external",
+        "domain": "unary",
+        "selection": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "PointerHit",
+            "canonical": "std.core.PointerHit"
+          }
+        ],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "PointerHit",
+            "canonical": "std.core.PointerHit"
+          }
+        ],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 20,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 49,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.React/on std.core.Damaged",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "React",
+          "canonical": "std.core.React"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "Damaged",
+            "canonical": "std.core.Damaged"
+          }
+        },
+        "implementation": "cactus",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 18,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 39,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Reader/on std.core.fixed_tick",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Reader",
+          "canonical": "std.core.Reader"
+        },
+        "trigger": {
+          "kind": "phase",
+          "symbol": {
+            "kind": "phase",
+            "module": "std.core",
+            "name": "fixed_tick",
+            "canonical": "std.core.fixed_tick"
+          }
+        },
+        "implementation": "external",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Health",
+            "canonical": "std.core.Health"
+          }
+        ],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [
+          "graphics"
+        ],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 26,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 81,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Sampler/on std.core.frame",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Sampler",
+          "canonical": "std.core.Sampler"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "frame",
+            "canonical": "std.core.frame"
+          }
+        },
+        "implementation": "external",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [
+          {
+            "kind": "destroy",
+            "target": null
+          },
+          {
+            "kind": "add",
+            "target": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Shield",
+              "canonical": "std.core.Shield"
+            }
+          }
+        ],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 19,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 42,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Selector/on std.core.frame",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Selector",
+          "canonical": "std.core.Selector"
+        },
+        "trigger": {
+          "kind": "event",
+          "symbol": {
+            "kind": "event",
+            "module": "std.core",
+            "name": "frame",
+            "canonical": "std.core.frame"
+          }
+        },
+        "implementation": "external",
+        "domain": "unary",
+        "selection": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "PointerHit",
+            "canonical": "std.core.PointerHit"
+          }
+        ],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "PointerHit",
+            "canonical": "std.core.PointerHit"
+          }
+        ],
+        "bound_reads": [],
+        "writes": [],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 21,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 55,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Sweeper/on std.core.fixed_tick",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Sweeper",
+          "canonical": "std.core.Sweeper"
+        },
+        "trigger": {
+          "kind": "phase",
+          "symbol": {
+            "kind": "phase",
+            "module": "std.core",
+            "name": "fixed_tick",
+            "canonical": "std.core.fixed_tick"
+          }
+        },
+        "implementation": "external",
+        "domain": "selectionless",
+        "selection": [],
+        "exclusion": [],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Health",
+            "canonical": "std.core.Health"
+          }
+        ],
+        "bound_reads": [],
+        "writes": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Health",
+            "canonical": "std.core.Health"
+          }
+        ],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [
+          "std.core.Writer/on std.core.fixed_tick"
+        ],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 24,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 69,
+          "column": 5
+        }
+      },
+      {
+        "id": "std.core.Writer/on std.core.fixed_tick",
+        "kind": "handler",
+        "rule": {
+          "kind": "rule",
+          "module": "std.core",
+          "name": "Writer",
+          "canonical": "std.core.Writer"
+        },
+        "trigger": {
+          "kind": "phase",
+          "symbol": {
+            "kind": "phase",
+            "module": "std.core",
+            "name": "fixed_tick",
+            "canonical": "std.core.fixed_tick"
+          }
+        },
+        "implementation": "external",
+        "domain": "unary",
+        "selection": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Marker",
+            "canonical": "std.core.Marker"
+          }
+        ],
+        "exclusion": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Shield",
+            "canonical": "std.core.Shield"
+          }
+        ],
+        "bindings": [],
+        "spatial_join": null,
+        "reads": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Health",
+            "canonical": "std.core.Health"
+          }
+        ],
+        "bound_reads": [],
+        "writes": [
+          {
+            "kind": "trait",
+            "module": "std.core",
+            "name": "Health",
+            "canonical": "std.core.Health"
+          }
+        ],
+        "projects": [],
+        "emits": [],
+        "commands": [],
+        "effects": [],
+        "explicit_after": [],
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 25,
+          "handler_index": 0
+        },
+        "location": {
+          "file": "cir_test.cactus",
+          "line": 77,
+          "column": 5
+        }
+      }
+    ],
+    "phases": [
+      {
+        "id": "cir:phase/std.core.fixed_tick",
+        "kind": "phase",
+        "phase": {
+          "kind": "phase",
+          "module": "std.core",
+          "name": "fixed_tick",
+          "canonical": "std.core.fixed_tick"
+        },
+        "declared": true,
+        "source_dependencies": [],
+        "runtime_root": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "every_seconds": 0.5,
+        "max_repetitions": null,
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 14,
+          "handler_index": 0
+        }
+      },
+      {
+        "id": "cir:phase/std.core.input",
+        "kind": "phase",
+        "phase": {
+          "kind": "phase",
+          "module": "std.core",
+          "name": "input",
+          "canonical": "std.core.input"
+        },
+        "declared": true,
+        "source_dependencies": [
+          {
+            "kind": "event",
+            "symbol": {
+              "kind": "event",
+              "module": "std.core",
+              "name": "frame",
+              "canonical": "std.core.frame"
+            }
+          }
+        ],
+        "runtime_root": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "every_seconds": null,
+        "max_repetitions": null,
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 13,
+          "handler_index": 0
+        }
+      },
+      {
+        "id": "cir:phase/std.core.overlay",
+        "kind": "phase",
+        "phase": {
+          "kind": "phase",
+          "module": "std.core",
+          "name": "overlay",
+          "canonical": "std.core.overlay"
+        },
+        "declared": true,
+        "source_dependencies": [
+          {
+            "kind": "event",
+            "symbol": {
+              "kind": "event",
+              "module": "std.core",
+              "name": "frame",
+              "canonical": "std.core.frame"
+            }
+          }
+        ],
+        "runtime_root": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "every_seconds": null,
+        "max_repetitions": null,
+        "declaration_order": {
+          "module_index": 0,
+          "declaration_index": 15,
+          "handler_index": 0
+        }
+      }
+    ],
+    "event_producers": [
+      {
+        "id": "cir:activation-commit/std.core.spawn",
+        "kind": "activation-commit",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "spawn",
+          "canonical": "std.core.spawn"
+        }
+      },
+      {
+        "id": "cir:external-event-source/std.core.frame",
+        "kind": "external-event-source",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        }
+      },
+      {
+        "id": "cir:scheduler-boundary/std.core.load",
+        "kind": "scheduler-boundary",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "load",
+          "canonical": "std.core.load"
+        }
+      }
+    ],
+    "rasterizations": [
+      {
+        "id": "cir:rasterization/std.core.overlay",
+        "kind": "rasterization",
+        "phase": {
+          "kind": "phase",
+          "module": "std.core",
+          "name": "overlay",
+          "canonical": "std.core.overlay"
+        }
+      }
+    ]
+  },
+  "relations": {
+    "schedule_dependencies": [
+      {
+        "before": "std.core.LogA/on std.core.frame",
+        "after": "std.core.LogB/on std.core.frame",
+        "kind": "data-conflict",
+        "orientation": "declaration-order",
+        "trait_provenance": [
+          {
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Marker",
+              "canonical": "std.core.Marker"
+            },
+            "before": [
+              "read",
+              "write"
+            ],
+            "after": [
+              "read",
+              "write"
+            ]
+          }
+        ],
+        "effect_provenance": []
+      },
+      {
+        "before": "std.core.Projector/on std.core.frame",
+        "after": "std.core.Selector/on std.core.frame",
+        "kind": "data-conflict",
+        "orientation": "writer-before-reader",
+        "trait_provenance": [
+          {
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "PointerHit",
+              "canonical": "std.core.PointerHit"
+            },
+            "before": [
+              "project",
+              "select"
+            ],
+            "after": [
+              "read",
+              "select"
+            ]
+          }
+        ],
+        "effect_provenance": []
+      },
+      {
+        "before": "std.core.Reader/on std.core.fixed_tick",
+        "after": "std.core.Painter/on std.core.fixed_tick",
+        "kind": "explicit-handler",
+        "orientation": "explicit",
+        "trait_provenance": [],
+        "effect_provenance": []
+      },
+      {
+        "before": "std.core.Reader/on std.core.fixed_tick",
+        "after": "std.core.Painter/on std.core.fixed_tick",
+        "kind": "effect-conflict",
+        "orientation": "explicit",
+        "trait_provenance": [],
+        "effect_provenance": [
+          "graphics"
+        ]
+      },
+      {
+        "before": "std.core.Sweeper/on std.core.fixed_tick",
+        "after": "std.core.Reader/on std.core.fixed_tick",
+        "kind": "data-conflict",
+        "orientation": "writer-before-reader",
+        "trait_provenance": [
+          {
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Health",
+              "canonical": "std.core.Health"
+            },
+            "before": [
+              "read",
+              "write"
+            ],
+            "after": [
+              "read"
+            ]
+          }
+        ],
+        "effect_provenance": []
+      },
+      {
+        "before": "std.core.Writer/on std.core.fixed_tick",
+        "after": "std.core.Reader/on std.core.fixed_tick",
+        "kind": "data-conflict",
+        "orientation": "writer-before-reader",
+        "trait_provenance": [
+          {
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Health",
+              "canonical": "std.core.Health"
+            },
+            "before": [
+              "read",
+              "write"
+            ],
+            "after": [
+              "read"
+            ]
+          }
+        ],
+        "effect_provenance": []
+      },
+      {
+        "before": "std.core.Writer/on std.core.fixed_tick",
+        "after": "std.core.Sweeper/on std.core.fixed_tick",
+        "kind": "explicit-rule",
+        "orientation": "explicit",
+        "trait_provenance": [],
+        "effect_provenance": []
+      },
+      {
+        "before": "std.core.Writer/on std.core.fixed_tick",
+        "after": "std.core.Sweeper/on std.core.fixed_tick",
+        "kind": "data-conflict",
+        "orientation": "explicit",
+        "trait_provenance": [
+          {
+            "trait": {
+              "kind": "trait",
+              "module": "std.core",
+              "name": "Health",
+              "canonical": "std.core.Health"
+            },
+            "before": [
+              "read",
+              "write"
+            ],
+            "after": [
+              "read",
+              "write"
+            ]
+          }
+        ],
+        "effect_provenance": []
+      }
+    ],
+    "phase_dependencies": [
+      {
+        "upstream": "cir:phase/std.core.input",
+        "downstream": "cir:phase/std.core.fixed_tick"
+      }
+    ],
+    "phase_barriers": [
+      {
+        "upstream_phase": "cir:phase/std.core.input",
+        "downstream_handler": "std.core.Contact/on std.core.fixed_tick"
+      },
+      {
+        "upstream_phase": "cir:phase/std.core.input",
+        "downstream_handler": "std.core.Painter/on std.core.fixed_tick"
+      },
+      {
+        "upstream_phase": "cir:phase/std.core.input",
+        "downstream_handler": "std.core.Reader/on std.core.fixed_tick"
+      },
+      {
+        "upstream_phase": "cir:phase/std.core.input",
+        "downstream_handler": "std.core.Sweeper/on std.core.fixed_tick"
+      },
+      {
+        "upstream_phase": "cir:phase/std.core.input",
+        "downstream_handler": "std.core.Writer/on std.core.fixed_tick"
+      }
+    ],
+    "event_flows": [
+      {
+        "producer": "cir:activation-commit/std.core.spawn",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "spawn",
+          "canonical": "std.core.spawn"
+        },
+        "consumer": "std.core.Greet/on std.core.spawn"
+      },
+      {
+        "producer": "cir:external-event-source/std.core.frame",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "consumer": "std.core.LogA/on std.core.frame"
+      },
+      {
+        "producer": "cir:external-event-source/std.core.frame",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "consumer": "std.core.LogB/on std.core.frame"
+      },
+      {
+        "producer": "cir:external-event-source/std.core.frame",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "consumer": "std.core.Projector/on std.core.frame"
+      },
+      {
+        "producer": "cir:external-event-source/std.core.frame",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "consumer": "std.core.Sampler/on std.core.frame"
+      },
+      {
+        "producer": "cir:external-event-source/std.core.frame",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        },
+        "consumer": "std.core.Selector/on std.core.frame"
+      },
+      {
+        "producer": "cir:scheduler-boundary/std.core.load",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "load",
+          "canonical": "std.core.load"
+        },
+        "consumer": "std.core.Boot/on std.core.load"
+      },
+      {
+        "producer": "std.core.Greet/on std.core.spawn",
+        "event": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "Damaged",
+          "canonical": "std.core.Damaged"
+        },
+        "consumer": "std.core.React/on std.core.Damaged"
+      }
+    ],
+    "render_pass_flows": [
+      {
+        "before": "cir:rasterization/std.core.overlay",
+        "after": "std.core.OverlayFragment/on std.core.overlay__fragment"
+      },
+      {
+        "before": "std.core.OverlayFragment/on std.core.overlay__fragment",
+        "after": "cir:phase/std.core.overlay"
+      },
+      {
+        "before": "std.core.OverlayVertex/on std.core.overlay__vertex",
+        "after": "cir:rasterization/std.core.overlay"
+      }
+    ]
+  },
+  "activation_schedules": [
+    {
+      "activation": {
+        "kind": "event",
+        "symbol": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "Damaged",
+          "canonical": "std.core.Damaged"
+        }
+      },
+      "stable_order": [
+        "std.core.React/on std.core.Damaged"
+      ],
+      "levels": [
+        {
+          "index": 0,
+          "handlers": [
+            "std.core.React/on std.core.Damaged"
+          ]
+        }
+      ]
+    },
+    {
+      "activation": {
+        "kind": "event",
+        "symbol": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "frame",
+          "canonical": "std.core.frame"
+        }
+      },
+      "stable_order": [
+        "std.core.Sampler/on std.core.frame",
+        "std.core.Projector/on std.core.frame",
+        "std.core.LogA/on std.core.frame",
+        "std.core.Selector/on std.core.frame",
+        "std.core.LogB/on std.core.frame"
+      ],
+      "levels": [
+        {
+          "index": 0,
+          "handlers": [
+            "std.core.Sampler/on std.core.frame",
+            "std.core.Projector/on std.core.frame",
+            "std.core.LogA/on std.core.frame"
+          ]
+        },
+        {
+          "index": 1,
+          "handlers": [
+            "std.core.Selector/on std.core.frame",
+            "std.core.LogB/on std.core.frame"
+          ]
+        }
+      ]
+    },
+    {
+      "activation": {
+        "kind": "event",
+        "symbol": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "load",
+          "canonical": "std.core.load"
+        }
+      },
+      "stable_order": [
+        "std.core.Boot/on std.core.load"
+      ],
+      "levels": [
+        {
+          "index": 0,
+          "handlers": [
+            "std.core.Boot/on std.core.load"
+          ]
+        }
+      ]
+    },
+    {
+      "activation": {
+        "kind": "event",
+        "symbol": {
+          "kind": "event",
+          "module": "std.core",
+          "name": "spawn",
+          "canonical": "std.core.spawn"
+        }
+      },
+      "stable_order": [
+        "std.core.Greet/on std.core.spawn"
+      ],
+      "levels": [
+        {
+          "index": 0,
+          "handlers": [
+            "std.core.Greet/on std.core.spawn"
+          ]
+        }
+      ]
+    },
+    {
+      "activation": {
+        "kind": "phase",
+        "symbol": {
+          "kind": "phase",
+          "module": "std.core",
+          "name": "fixed_tick",
+          "canonical": "std.core.fixed_tick"
+        }
+      },
+      "stable_order": [
+        "std.core.Writer/on std.core.fixed_tick",
+        "std.core.Contact/on std.core.fixed_tick",
+        "std.core.Sweeper/on std.core.fixed_tick",
+        "std.core.Reader/on std.core.fixed_tick",
+        "std.core.Painter/on std.core.fixed_tick"
+      ],
+      "levels": [
+        {
+          "index": 0,
+          "handlers": [
+            "std.core.Writer/on std.core.fixed_tick",
+            "std.core.Contact/on std.core.fixed_tick"
+          ]
+        },
+        {
+          "index": 1,
+          "handlers": [
+            "std.core.Sweeper/on std.core.fixed_tick"
+          ]
+        },
+        {
+          "index": 2,
+          "handlers": [
+            "std.core.Reader/on std.core.fixed_tick"
+          ]
+        },
+        {
+          "index": 3,
+          "handlers": [
+            "std.core.Painter/on std.core.fixed_tick"
+          ]
+        }
+      ]
+    },
+    {
+      "activation": {
+        "kind": "render stage",
+        "symbol": {
+          "kind": "phase",
+          "module": "std.core",
+          "name": "overlay__fragment",
+          "canonical": "std.core.overlay__fragment"
+        }
+      },
+      "stable_order": [
+        "std.core.OverlayFragment/on std.core.overlay__fragment"
+      ],
+      "levels": [
+        {
+          "index": 0,
+          "handlers": [
+            "std.core.OverlayFragment/on std.core.overlay__fragment"
+          ]
+        }
+      ]
+    },
+    {
+      "activation": {
+        "kind": "render stage",
+        "symbol": {
+          "kind": "phase",
+          "module": "std.core",
+          "name": "overlay__vertex",
+          "canonical": "std.core.overlay__vertex"
+        }
+      },
+      "stable_order": [
+        "std.core.OverlayVertex/on std.core.overlay__vertex"
+      ],
+      "levels": [
+        {
+          "index": 0,
+          "handlers": [
+            "std.core.OverlayVertex/on std.core.overlay__vertex"
+          ]
+        }
+      ]
+    }
+  ]
+}

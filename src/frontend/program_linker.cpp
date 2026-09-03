@@ -191,8 +191,8 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
     // module-qualified SymbolId/HandlerIdentity values directly (no
     // declaration_order to patch), so a straight append is sufficient.
     target.execution_graph.render_passes.insert(target.execution_graph.render_passes.end(),
-                                                 src.execution_graph.render_passes.begin(),
-                                                 src.execution_graph.render_passes.end());
+                                                src.execution_graph.render_passes.begin(),
+                                                src.execution_graph.render_passes.end());
     for (const auto& edge : src.execution_graph.schedule_edges) {
         if (edge.kind != ScheduleEdgeKind::ExplicitHandler && edge.kind != ScheduleEdgeKind::ExplicitRule) {
             continue;
@@ -223,6 +223,7 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
 
     if (ok) {
         merged_modules_.insert(src_module_name);
+        target.linked_modules.push_back(src_module_name);
         ok = rebuild_execution_graph(target, false);
     }
     return ok;
@@ -274,7 +275,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
         }
     }
 
-    const bool schedule_ok = compute_handler_schedule(graph, errors_);
+    const bool schedule_ok = compute_handler_schedule(graph, collect_external_events(program.events), errors_);
     check_phase_lineage_cycles(graph.phases, errors_);
 
     return schedule_ok && !errors_.has_errors();

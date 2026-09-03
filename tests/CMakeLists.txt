@@ -94,6 +94,16 @@ add_executable(test_program_linker test_program_linker.cpp)
 target_link_libraries(test_program_linker PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME ProgramLinkerTests COMMAND test_program_linker)
 
+# CIR model, lowering, validation, and serialization tests
+add_executable(test_cir test_cir.cpp)
+target_link_libraries(test_cir PRIVATE cactus_cir Catch2::Catch2WithMain)
+add_test(NAME CirTests COMMAND test_cir)
+
+# CLI driver / option model tests
+add_executable(test_cli test_cli.cpp)
+target_link_libraries(test_cli PRIVATE cactus_cli Catch2::Catch2WithMain)
+add_test(NAME CliTests COMMAND test_cli)
+
 # Multi-module integration tests
 add_executable(test_multi_module_integration test_multi_module_integration.cpp)
 target_link_libraries(test_multi_module_integration PRIVATE cactus_frontend cactus_backend_cpp_entt Catch2::Catch2WithMain)

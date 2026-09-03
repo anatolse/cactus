@@ -83,6 +83,14 @@ void ModuleArtifact::write_handler_identity(std::ostream& out, const HandlerIden
     write_trigger(out, identity.trigger);
 }
 
+void ModuleArtifact::write_event_producer(std::ostream& out, const EventProducer& producer) {
+    write_u8(out, static_cast<uint8_t>(producer.kind));
+    write_bool(out, producer.handler.has_value());
+    if (producer.handler.has_value()) {
+        write_handler_identity(out, *producer.handler);
+    }
+}
+
 void ModuleArtifact::write_declaration_order(std::ostream& out, const DeclarationOrder& order) {
     write_u64(out, order.module_index);
     write_u64(out, order.declaration_index);
@@ -383,7 +391,7 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
 
     write_bool(out, contract.spatial_join.has_value());
     if (contract.spatial_join.has_value()) {
-        const auto& plan = *contract.spatial_join;
+        const auto& plan        = *contract.spatial_join;
         const auto write_access = [&out](const SpatialJoinAccess& access) {
             write_symbol_id(out, access.trait);
             write_u32(out, static_cast<uint32_t>(access.field_path.size()));
@@ -478,7 +486,7 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
 
     write_u32(out, static_cast<uint32_t>(graph.event_flows.size()));
     for (const auto& edge : graph.event_flows) {
-        write_handler_identity(out, edge.producer);
+        write_event_producer(out, edge.producer);
         write_symbol_id(out, edge.event);
         write_handler_identity(out, edge.consumer);
     }
@@ -568,6 +576,15 @@ std::optional<SymbolId> ModuleArtifact::read_optional_symbol_id(std::istream& in
 
 ResolvedHandlerTrigger ModuleArtifact::read_trigger(std::istream& in) {
     return ResolvedHandlerTrigger{.kind = static_cast<HandlerTriggerKind>(read_u8(in)), .symbol = read_symbol_id(in)};
+}
+
+EventProducer ModuleArtifact::read_event_producer(std::istream& in) {
+    EventProducer producer;
+    producer.kind = static_cast<EventProducerKind>(read_u8(in));
+    if (read_bool(in)) {
+        producer.handler = read_handler_identity(in);
+    }
+    return producer;
 }
 
 HandlerIdentity ModuleArtifact::read_handler_identity(std::istream& in) {
@@ -908,7 +925,7 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     if (read_bool(in)) {
         const auto read_access = [&in]() {
             SpatialJoinAccess access;
-            access.trait                    = read_symbol_id(in);
+            access.trait                = read_symbol_id(in);
             const auto field_path_count = read_u32(in);
             access.field_path.reserve(field_path_count);
             for (uint32_t i = 0; i < field_path_count; ++i) {
@@ -919,8 +936,8 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
         const auto read_binding = [&in, &read_access]() {
             SpatialJoinBinding binding;
             binding.binding_index = static_cast<std::size_t>(read_u64(in));
-            binding.position       = read_access();
-            binding.radius         = read_access();
+            binding.position      = read_access();
+            binding.radius        = read_access();
             return binding;
         };
         SpatialJoinPlan plan;
@@ -998,7 +1015,7 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
     graph.render_passes.reserve(render_pass_count);
     for (uint32_t i = 0; i < render_pass_count; ++i) {
         RenderPassPlan plan;
-        plan.phase           = read_symbol_id(in);
+        plan.phase            = read_symbol_id(in);
         plan.vertex_handler   = read_handler_identity(in);
         plan.fragment_handler = read_handler_identity(in);
         graph.render_passes.push_back(std::move(plan));
@@ -1032,7 +1049,7 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
     graph.event_flows.reserve(flow_count);
     for (uint32_t i = 0; i < flow_count; ++i) {
         graph.event_flows.push_back(EventFlowEdge{
-            .producer = read_handler_identity(in), .event = read_symbol_id(in), .consumer = read_handler_identity(in)});
+            .producer = read_event_producer(in), .event = read_symbol_id(in), .consumer = read_handler_identity(in)});
     }
 
     const auto order_count = read_u32(in);

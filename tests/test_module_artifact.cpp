@@ -263,6 +263,112 @@ TEST_CASE("ModuleArtifact: version mismatch error", "[artifact]") {
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: pre-producer version 12 artifact rejected cleanly", "[artifact][event-producers]") {
+    // Version 12 is the last format version before typed event producers
+    // widened EventFlowEdge::producer. A `.cmod` from that compiler must be
+    // rejected by the version check rather than misread as the old bare
+    // HandlerIdentity shape.
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "pre-producer.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char old_version = 12;
+        out.write(&old_version, 1);
+        // rest is garbage in the old (bare producer identity) shape.
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    auto result = artifact.load(path, name);
+    CHECK_FALSE(result.has_value());
+    CHECK(errors.has_errors());
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: every producer kind round-trips with its identities intact",
+          "[artifact][event-producers]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    const auto emitted  = make_symbol_id(SymbolKind::Event, "runtime.lib", "Emitted");
+    const auto external = make_symbol_id(SymbolKind::Event, "runtime.lib", "frame");
+    const auto boot     = make_symbol_id(SymbolKind::Event, "std.core", "load");
+    const auto spawned  = make_symbol_id(SymbolKind::Event, "std.core", "spawn");
+
+    const auto trigger_for = [](const SymbolId& event) {
+        return ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = event};
+    };
+    const auto handler_for = [&](const std::string& rule, const SymbolId& event) {
+        return HandlerIdentity{.rule = make_symbol_id(SymbolKind::Rule, "runtime.lib", rule),
+                               .trigger = trigger_for(event)};
+    };
+
+    const auto producer_handler = handler_for("Emitter", external);
+    const auto emitted_consumer = handler_for("OnEmitted", emitted);
+    const auto extern_consumer  = handler_for("OnFrame", external);
+    const auto boot_consumer    = handler_for("OnLoad", boot);
+    const auto spawn_consumer   = handler_for("OnSpawn", spawned);
+
+    DecoratedProgram prog;
+    prog.execution_graph.event_flows = {
+        EventFlowEdge{.producer = EventProducer{.kind = EventProducerKind::Handler, .handler = producer_handler},
+                      .event    = emitted,
+                      .consumer = emitted_consumer},
+        EventFlowEdge{.producer = EventProducer{.kind = EventProducerKind::ExternalSource},
+                      .event    = external,
+                      .consumer = extern_consumer},
+        EventFlowEdge{.producer = EventProducer{.kind = EventProducerKind::SchedulerBoundary},
+                      .event    = boot,
+                      .consumer = boot_consumer},
+        EventFlowEdge{.producer = EventProducer{.kind = EventProducerKind::ActivationCommit},
+                      .event    = spawned,
+                      .consumer = spawn_consumer},
+    };
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(prog, "runtime.lib", build_dir));
+
+    std::string name;
+    auto loaded = artifact.load(build_dir / "runtime.lib.cmod", name);
+    REQUIRE(loaded.has_value());
+
+    const auto& flows = loaded->execution_graph.event_flows;
+    REQUIRE(flows.size() == 4);
+
+    CHECK(flows[0].producer.kind == EventProducerKind::Handler);
+    REQUIRE(flows[0].producer.handler.has_value());
+    CHECK(*flows[0].producer.handler == producer_handler);
+    CHECK(flows[0].event == emitted);
+    CHECK(flows[0].consumer == emitted_consumer);
+
+    CHECK(flows[1].producer.kind == EventProducerKind::ExternalSource);
+    CHECK_FALSE(flows[1].producer.handler.has_value());
+    CHECK(flows[1].event == external);
+    CHECK(flows[1].consumer == extern_consumer);
+
+    CHECK(flows[2].producer.kind == EventProducerKind::SchedulerBoundary);
+    CHECK_FALSE(flows[2].producer.handler.has_value());
+    CHECK(flows[2].event == boot);
+    CHECK(flows[2].consumer == boot_consumer);
+
+    CHECK(flows[3].producer.kind == EventProducerKind::ActivationCommit);
+    CHECK_FALSE(flows[3].producer.handler.has_value());
+    CHECK(flows[3].event == spawned);
+    CHECK(flows[3].consumer == spawn_consumer);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: pre-rename version 9 artifact rejected cleanly", "[artifact]") {
     // Version 9 is the last format version before the system->rule rename bumped
     // CURRENT_VERSION to 10 (SystemDependency -> RuleDependency). A `.cmod` produced
@@ -722,7 +828,9 @@ TEST_CASE("ModuleArtifact: runtime declarations and handler graph round-trip", "
     prog.execution_graph.phase_barriers.push_back(
         PhaseBarrierEdge{.upstream_phase = tick, .downstream_handler = second_handler});
     prog.execution_graph.event_flows.push_back(
-        EventFlowEdge{.producer = first_handler, .event = spawned, .consumer = second_handler});
+        EventFlowEdge{.producer = EventProducer{.kind = EventProducerKind::Handler, .handler = first_handler},
+                      .event    = spawned,
+                      .consumer = second_handler});
     prog.execution_graph.stable_topological_order = {first_handler, second_handler};
     prog.execution_graph.dependency_levels.push_back(
         DependencyLevel{.activation = tick_trigger, .index = 1, .handlers = {second_handler}});

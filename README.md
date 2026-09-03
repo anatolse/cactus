@@ -42,9 +42,14 @@ compiler generates all of that.
 ```
 .cactus source → lexer → parser → semantic analysis → decorated AST
                → C++ codegen (EnTT + raylib) → native binary
+                ↘ execution CIR (inspection only)
 ```
 
 - `src/frontend` — lexer, parser, semantic analyzer, module system
+- `src/cli` — the compiler driver: option parsing, the module pipeline,
+  and output writing
+- `src/cir` — execution CIR v1: an owned, backend-neutral view of handlers,
+  their data dependencies, scheduling, event flow, and parallel levels
 - `src/backends/cpp-entt` — the only working backend today: generates C++
   using EnTT (ECS) and raylib (rendering / input / audio)
 - `src/backends/rust` — planned, not implemented
@@ -52,6 +57,32 @@ compiler generates all of that.
   written in Cactus itself
 - `examples/` — platformer, twin-stick shooter, split-screen, 3D model
   rendering, editor — real(ish) games doubling as compiler test fixtures
+
+## Compiling a game
+
+```
+cactus game.cactus --output game.cpp          # C++ (the default)
+cactus game.cactus --module-path ./lib        # extra module search directory
+```
+
+## Inspecting the execution graph
+
+`--emit cir` dumps the compiler's own view of the program instead of
+generating code — which handlers exist, what orders them, and which of them
+could run in parallel.
+
+```
+cactus game.cactus --emit cir                        # JSON on stdout
+cactus game.cactus --emit cir --format dot -o g.dot  # Graphviz
+cactus game.cactus --emit cir --format mermaid       # Mermaid flowchart
+```
+
+JSON is the complete, versioned form: everything CIR v1 knows is in it, so
+nothing has to be recovered from the AST. DOT and Mermaid are deliberately
+lossy projections meant for reading — they drop most contract detail to stay
+legible. CIR v1 covers execution structure only; handler bodies are not
+lowered, and the cpp-entt backend does not consume CIR yet, so `--emit cir`
+changes nothing about the C++ that `--emit cpp` produces.
 
 ## Building
 

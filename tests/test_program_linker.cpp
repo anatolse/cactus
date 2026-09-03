@@ -1,13 +1,16 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
+#include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
+#include <map>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -229,6 +232,72 @@ TEST_CASE("program_linker: link from artifact files round-trip", "[linker][5.1]"
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("program_linker: records merged modules in merge order", "[linker][linked-modules]") {
+    auto build_dir = linker_build_dir() / "linked_modules";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    auto prog_a = make_program("Position", true);
+    auto prog_b = make_program("EnemyAI", true);
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(prog_a, "player", build_dir));
+    REQUIRE(artifact.save(prog_b, "enemies", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link({build_dir / "player.cmod", build_dir / "enemies.cmod"});
+
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(merged.has_value());
+    CHECK(merged->linked_modules == std::vector<std::string>{"player", "enemies"});
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("program_linker: module_index indexes linked_modules", "[linker][linked-modules]") {
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram target;
+
+    DecoratedProgram base;
+    base.execution_graph.handlers.push_back(
+        linked_handler(linked_symbol(SymbolKind::Rule, "base", "BaseRule"),
+                       {.kind = HandlerTriggerKind::Event, .symbol = linked_symbol(SymbolKind::Event, "base", "tick")},
+                       0));
+    DecoratedProgram app;
+    app.execution_graph.handlers.push_back(
+        linked_handler(linked_symbol(SymbolKind::Rule, "app", "AppRule"),
+                       {.kind = HandlerTriggerKind::Event, .symbol = linked_symbol(SymbolKind::Event, "base", "tick")},
+                       0));
+
+    REQUIRE(linker.merge_into(target, base, "base"));
+    REQUIRE(linker.merge_into(target, app, "app"));
+    REQUIRE_FALSE(errors.has_errors());
+
+    REQUIRE(target.linked_modules == std::vector<std::string>{"base", "app"});
+    for (const auto& handler : target.execution_graph.handlers) {
+        const auto index = handler.declaration_order.module_index;
+        REQUIRE(index < target.linked_modules.size());
+        CHECK(target.linked_modules[index] == handler.identity.rule.module.name);
+    }
+}
+
+TEST_CASE("program_linker: re-merging a module does not duplicate its linked_modules entry",
+          "[linker][linked-modules]") {
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram target;
+    auto core = make_program("Frame", true);
+
+    REQUIRE(linker.merge_into(target, core, "std.core"));
+    REQUIRE(linker.merge_into(target, core, "std.core"));
+
+    CHECK(target.linked_modules == std::vector<std::string>{"std.core"});
+}
+
 TEST_CASE("program_linker: link accepts same simple pub name from different module artifacts", "[linker][4.4]") {
     auto build_dir = linker_build_dir() / "same_name";
     std::error_code ec;
@@ -381,10 +450,140 @@ TEST_CASE("program_linker: rebuilds cross-module conflicts and event flow", "[li
     CHECK(conflict->orientation == ScheduleEdgeOrientation::WriterBeforeReader);
     CHECK(conflict->trait_provenance == std::vector<SymbolId>{position});
     REQUIRE(merged.execution_graph.event_flows.size() == 1);
-    CHECK(merged.execution_graph.event_flows[0].producer == producer.identity);
+    CHECK(merged.execution_graph.event_flows[0].producer.kind == EventProducerKind::Handler);
+    REQUIRE(merged.execution_graph.event_flows[0].producer.handler.has_value());
+    CHECK(*merged.execution_graph.event_flows[0].producer.handler == producer.identity);
     CHECK(merged.execution_graph.event_flows[0].consumer == consumer.identity);
     CHECK(merged.execution_graph.stable_topological_order[0] == producer.identity);
     CHECK(merged.execution_graph.stable_topological_order[1] == reader.identity);
+}
+
+// ── Runtime-owned event producers (add-graph-event-producers) ────────────────
+
+namespace {
+
+/// Builds the program shape both producer tests below use: a handler-emitted
+/// flow plus one consumer of each runtime-owned trigger kind.
+ResolvedHandlerTrigger event_trigger(const SymbolId& event) {
+    return ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = event};
+}
+
+struct ProducerFixture {
+    SymbolId frame = make_symbol_id(SymbolKind::Event, "runtime", "frame");
+    SymbolId ping  = make_symbol_id(SymbolKind::Event, "runtime", "Ping");
+    SymbolId load  = make_symbol_id(SymbolKind::Event, "std.core", "load");
+    SymbolId spawn = make_symbol_id(SymbolKind::Event, "std.core", "spawn");
+
+    /// The external `frame` declaration the scheduler needs to see.
+    [[nodiscard]] ResolvedEvent frame_event() const {
+        ResolvedEvent event;
+        event.name        = "frame";
+        event.module_name = "runtime";
+        event.is_external = true;
+        event.symbol_id   = frame;
+        return event;
+    }
+};
+
+/// Maps each consumer rule's local name to the producer kinds recorded for it.
+std::map<std::string, std::vector<EventProducerKind>> producer_kinds_by_consumer(const ExecutionGraph& graph) {
+    std::map<std::string, std::vector<EventProducerKind>> kinds;
+    for (const auto& edge : graph.event_flows) {
+        kinds[edge.consumer.rule.local_name].push_back(edge.producer.kind);
+    }
+    for (auto& [_, list] : kinds) {
+        std::ranges::sort(list);
+    }
+    return kinds;
+}
+
+}  // namespace
+
+TEST_CASE("program_linker: producer kinds survive linking several artifacts", "[linker][event-producers]") {
+    auto build_dir = linker_build_dir() / "event_producers";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const ProducerFixture fx;
+
+    DecoratedProgram emitter_program;
+    emitter_program.events["frame"] = fx.frame_event();
+    auto emitter = linked_handler(linked_symbol(SymbolKind::Rule, "emitter", "Tick"), event_trigger(fx.frame), 0);
+    emitter.contract.emits.insert(fx.ping);
+    emitter_program.execution_graph.handlers.push_back(emitter);
+
+    DecoratedProgram consumer_program;
+    consumer_program.execution_graph.handlers = {
+        linked_handler(linked_symbol(SymbolKind::Rule, "consumer", "OnPing"), event_trigger(fx.ping), 0),
+        linked_handler(linked_symbol(SymbolKind::Rule, "consumer", "OnLoad"), event_trigger(fx.load), 1),
+        linked_handler(linked_symbol(SymbolKind::Rule, "consumer", "OnSpawn"), event_trigger(fx.spawn), 2),
+    };
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(emitter_program, "emitter", build_dir));
+    REQUIRE(artifact.save(consumer_program, "consumer", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link({build_dir / "emitter.cmod", build_dir / "consumer.cmod"});
+    REQUIRE(merged.has_value());
+    REQUIRE_FALSE(link_errors.has_errors());
+
+    const auto kinds = producer_kinds_by_consumer(merged->execution_graph);
+    CHECK(kinds.at("Tick") == std::vector<EventProducerKind>{EventProducerKind::ExternalSource});
+    CHECK(kinds.at("OnPing") == std::vector<EventProducerKind>{EventProducerKind::Handler});
+    CHECK(kinds.at("OnLoad") == std::vector<EventProducerKind>{EventProducerKind::SchedulerBoundary});
+    CHECK(kinds.at("OnSpawn") == std::vector<EventProducerKind>{EventProducerKind::ActivationCommit});
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("program_linker: linked and single-module paths agree on every producer kind",
+          "[linker][event-producers]") {
+    auto build_dir = linker_build_dir() / "producer_agreement";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const ProducerFixture fx;
+
+    const auto build_handlers = [&] {
+        auto emitter = linked_handler(linked_symbol(SymbolKind::Rule, "app", "Tick"), event_trigger(fx.frame), 0);
+        emitter.contract.emits.insert(fx.ping);
+        return std::vector<HandlerNode>{
+            emitter,
+            linked_handler(linked_symbol(SymbolKind::Rule, "app", "OnPing"), event_trigger(fx.ping), 1),
+            linked_handler(linked_symbol(SymbolKind::Rule, "app", "OnLoad"), event_trigger(fx.load), 2),
+            linked_handler(linked_symbol(SymbolKind::Rule, "app", "OnSpawn"), event_trigger(fx.spawn), 3),
+        };
+    };
+
+    // Single-module path: the shared scheduling core straight over one graph.
+    ExecutionGraph single;
+    single.handlers = build_handlers();
+    ErrorReporter single_errors;
+    REQUIRE(compute_handler_schedule(single, ExternalEventSet{fx.frame}, single_errors));
+
+    // Linked path: the same handlers routed through artifact save/link.
+    DecoratedProgram app_program;
+    app_program.events["frame"]              = fx.frame_event();
+    app_program.execution_graph.handlers     = build_handlers();
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(app_program, "app", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto merged = linker.link({build_dir / "app.cmod"});
+    REQUIRE(merged.has_value());
+    REQUIRE_FALSE(link_errors.has_errors());
+
+    CHECK(producer_kinds_by_consumer(single) == producer_kinds_by_consumer(merged->execution_graph));
+
+    fs::remove_all(build_dir, ec);
 }
 
 TEST_CASE("program_linker: preserves external project capabilities across module merge",

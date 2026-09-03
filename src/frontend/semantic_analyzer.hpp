@@ -334,8 +334,25 @@ struct PhaseBarrierEdge {
     HandlerIdentity downstream_handler;
 };
 
+/// What produces an event delivered to a consumer handler. Non-handler kinds
+/// are runtime-owned work the scheduler performs rather than authored rules.
+enum class EventProducerKind : std::uint8_t {
+    Handler,            // another handler's `emit`
+    ExternalSource,     // injected by the host for an `extern event`
+    SchedulerBoundary,  // scheduler boot/teardown (std.core load/unload)
+    ActivationCommit,   // structural-command commit (std.core spawn/destroy)
+};
+
+struct EventProducer {
+    EventProducerKind kind = EventProducerKind::Handler;
+    // Engaged exactly when kind == Handler.
+    std::optional<HandlerIdentity> handler;
+
+    friend bool operator==(const EventProducer&, const EventProducer&) = default;
+};
+
 struct EventFlowEdge {
-    HandlerIdentity producer;
+    EventProducer producer;
     SymbolId event;
     HandlerIdentity consumer;
 };
@@ -390,6 +407,10 @@ struct DecoratedProgram {
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
     std::vector<ResolvedSourceModule> source_modules;
+    /// Modules contributing to this program, in merge order — the table
+    /// `DeclarationOrder::module_index` indexes. The single-module path records
+    /// just its own module; the linker records every merged module in order.
+    std::vector<std::string> linked_modules;
     StringPool string_pool;
     ProgramNode* ast = nullptr;  // non-owning pointer to original AST
 };
@@ -511,7 +532,7 @@ enum class PairBindingWritability : std::uint8_t { ReadOnly, Writable, UnprovenP
 // an imported module-qualified name ("tf.WorldTransform"), or a binding-local
 // alias ("transform") — mirroring FilterEntry's dotted-name/alias shape.
 struct PairBindingScope {
-    std::size_t index                     = 0;
+    std::size_t index                  = 0;
     PairBindingWritability writability = PairBindingWritability::ReadOnly;
     std::unordered_map<std::string, SymbolId> trait_by_access_key;
 };
@@ -785,8 +806,8 @@ private:
     // from. Returns the unmodified start type when there are no trailing
     // segments to walk.
     [[nodiscard]] static TypeInfo descend_vector_color_members(TypeInfo start,
-                                                                const std::vector<std::string>& segments,
-                                                                std::size_t from_index);
+                                                               const std::vector<std::string>& segments,
+                                                               std::size_t from_index);
     // Validates vec2(...)/vec3(...) constructor calls (1-argument splat or
     // 2-/3-argument component form, each argument float-typed) from
     // infer_expr_type's CallExpr arm. Returns nullopt when the callee isn't

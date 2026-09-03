@@ -2,6 +2,7 @@
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
 #include "common/types.hpp"
+#include "frontend/execution_graph_scheduler.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
@@ -2475,9 +2476,295 @@ TEST_CASE("handler graph connects a pair event producer to its consumer regardle
     REQUIRE(decorated.execution_graph.event_flows.size() == 1);
 
     const auto& flow = decorated.execution_graph.event_flows[0];
-    CHECK(flow.producer.rule == make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"));
+    REQUIRE(flow.producer.kind == EventProducerKind::Handler);
+    REQUIRE(flow.producer.handler.has_value());
+    CHECK(flow.producer.handler->rule == make_symbol_id(SymbolKind::Rule, "game.pairs", "DetectContacts"));
     CHECK(flow.event == make_symbol_id(SymbolKind::Event, "game.pairs", "Contact"));
     CHECK(flow.consumer.rule == make_symbol_id(SymbolKind::Rule, "game.pairs", "ResolveContact"));
+}
+
+TEST_CASE("handler-emitted event flow carries a Handler producer with its producing identity",
+          "[semantic][handler-graph][event-producers]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.flow\n"
+        "event tick\n"
+        "event Damaged\n"
+        "rule Attack:\n"
+        "    on tick:\n"
+        "        emit Damaged\n"
+        "rule React:\n"
+        "    on Damaged:\n"
+        "        let x = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    REQUIRE(decorated.execution_graph.event_flows.size() == 1);
+
+    const auto expected_producer = HandlerIdentity{
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.flow", "Attack"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.flow", "tick")}};
+
+    const auto& flow = decorated.execution_graph.event_flows[0];
+    CHECK(flow.producer.kind == EventProducerKind::Handler);
+    REQUIRE(flow.producer.handler.has_value());
+    CHECK(*flow.producer.handler == expected_producer);
+    CHECK(flow.event == make_symbol_id(SymbolKind::Event, "game.flow", "Damaged"));
+    CHECK(flow.consumer.rule == make_symbol_id(SymbolKind::Rule, "game.flow", "React"));
+}
+
+// ── Runtime-owned event producers (add-graph-event-producers) ───────────────
+
+namespace {
+
+/// Collects the producer kinds recorded for `event_name` delivered to the rule
+/// `consumer_rule`, in graph order.
+std::vector<EventProducerKind> producer_kinds_for(const DecoratedProgram& decorated,
+                                                  const std::string& module_name,
+                                                  const std::string& event_name,
+                                                  const std::string& consumer_rule) {
+    const auto event    = make_symbol_id(SymbolKind::Event, module_name, event_name);
+    const auto rule     = make_symbol_id(SymbolKind::Rule, module_name, consumer_rule);
+    std::vector<EventProducerKind> kinds;
+    for (const auto& edge : decorated.execution_graph.event_flows) {
+        if (edge.event == event && edge.consumer.rule == rule) {
+            kinds.push_back(edge.producer.kind);
+        }
+    }
+    return kinds;
+}
+
+bool has_producer_of_kind(const DecoratedProgram& decorated, EventProducerKind kind) {
+    return std::ranges::any_of(decorated.execution_graph.event_flows,
+                               [&](const auto& edge) { return edge.producer.kind == kind; });
+}
+
+}  // namespace
+
+TEST_CASE("scheduler-boundary producers are recorded for load and unload consumers",
+          "[semantic][handler-graph][event-producers]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module std.core\n"
+        "pub event load\n"
+        "pub event unload\n"
+        "rule Boot:\n"
+        "    on load:\n"
+        "        let x = 1\n"
+        "rule Teardown:\n"
+        "    on unload:\n"
+        "        let y = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    CHECK(producer_kinds_for(decorated, "std.core", "load", "Boot") ==
+          std::vector<EventProducerKind>{EventProducerKind::SchedulerBoundary});
+    CHECK(producer_kinds_for(decorated, "std.core", "unload", "Teardown") ==
+          std::vector<EventProducerKind>{EventProducerKind::SchedulerBoundary});
+
+    // A scheduler boundary is not an authored handler, so it names none.
+    for (const auto& edge : decorated.execution_graph.event_flows) {
+        CHECK_FALSE(edge.producer.handler.has_value());
+    }
+}
+
+TEST_CASE("a program consuming neither load nor unload gets no scheduler-boundary producer",
+          "[semantic][handler-graph][event-producers]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module std.core\n"
+        "pub event load\n"
+        "pub event unload\n"
+        "event tick\n"
+        "rule Move:\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    CHECK_FALSE(has_producer_of_kind(decorated, EventProducerKind::SchedulerBoundary));
+}
+
+TEST_CASE("activation-commit producers are recorded for spawn and destroy consumers",
+          "[semantic][handler-graph][event-producers]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module std.core\n"
+        "pub event spawn\n"
+        "pub event destroy\n"
+        "rule Greet:\n"
+        "    on spawn:\n"
+        "        let x = 1\n"
+        "rule Mourn:\n"
+        "    on destroy:\n"
+        "        let y = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    // Recorded even though no handler queues a Spawn/Destroy command: the
+    // commit step statically exists, and whether it fires is runtime state.
+    CHECK(producer_kinds_for(decorated, "std.core", "spawn", "Greet") ==
+          std::vector<EventProducerKind>{EventProducerKind::ActivationCommit});
+    CHECK(producer_kinds_for(decorated, "std.core", "destroy", "Mourn") ==
+          std::vector<EventProducerKind>{EventProducerKind::ActivationCommit});
+}
+
+TEST_CASE("an external-source producer is recorded for a consumed extern event",
+          "[semantic][handler-graph][event-producers]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.ext\n"
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "rule Tick:\n"
+        "    on frame:\n"
+        "        let x = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    CHECK(producer_kinds_for(decorated, "game.ext", "frame", "Tick") ==
+          std::vector<EventProducerKind>{EventProducerKind::ExternalSource});
+}
+
+TEST_CASE("a consumed non-extern event with no emitter gets no producer",
+          "[semantic][handler-graph][event-producers]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.quiet\n"
+        "event Damaged\n"
+        "rule React:\n"
+        "    on Damaged:\n"
+        "        let x = 1\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    CHECK(decorated.execution_graph.event_flows.empty());
+}
+
+TEST_CASE("an extern event that is also handler-emitted receives both producer edges",
+          "[semantic][handler-graph][event-producers]") {
+    // Driven through the scheduling core directly rather than from source:
+    // semantic analysis rejects `emit` of an extern event ("can only be emitted
+    // by the runtime"), so this graph state is unreachable from the DSL. The
+    // external and handler checks are independent by construction, and this
+    // pins that independence.
+    const auto ping = make_symbol_id(SymbolKind::Event, "game.both", "Ping");
+    const auto tick = make_symbol_id(SymbolKind::Event, "game.both", "tick");
+
+    const auto emitter =
+        HandlerIdentity{.rule    = make_symbol_id(SymbolKind::Rule, "game.both", "Emitter"),
+                        .trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = tick}};
+    const auto listener =
+        HandlerIdentity{.rule    = make_symbol_id(SymbolKind::Rule, "game.both", "Listener"),
+                        .trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = ping}};
+
+    ExecutionGraph graph;
+    HandlerNode emitter_node;
+    emitter_node.identity = emitter;
+    emitter_node.contract.emits.insert(ping);
+    HandlerNode listener_node;
+    listener_node.identity = listener;
+    graph.handlers = {emitter_node, listener_node};
+
+    ErrorReporter errors;
+    REQUIRE(compute_handler_schedule(graph, ExternalEventSet{ping}, errors));
+
+    std::vector<EventProducerKind> kinds;
+    for (const auto& edge : graph.event_flows) {
+        if (edge.event == ping && edge.consumer == listener) {
+            kinds.push_back(edge.producer.kind);
+        }
+    }
+    CHECK(std::ranges::count(kinds, EventProducerKind::Handler) == 1);
+    CHECK(std::ranges::count(kinds, EventProducerKind::ExternalSource) == 1);
+    CHECK(kinds.size() == 2);
+}
+
+TEST_CASE("producer records leave schedule edges, order, and levels untouched",
+          "[semantic][handler-graph][event-producers]") {
+    // Same program scheduled twice, differing only in whether the host declares
+    // `frame` external — i.e. whether ExternalSource producer records exist.
+    const auto frame    = make_symbol_id(SymbolKind::Event, "game.inv", "frame");
+    const auto position = make_symbol_id(SymbolKind::Trait, "game.inv", "Position");
+
+    const auto writer =
+        HandlerIdentity{.rule    = make_symbol_id(SymbolKind::Rule, "game.inv", "Move"),
+                        .trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = frame}};
+    const auto reader =
+        HandlerIdentity{.rule    = make_symbol_id(SymbolKind::Rule, "game.inv", "Draw"),
+                        .trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Event, .symbol = frame}};
+
+    const auto build_graph = [&] {
+        ExecutionGraph graph;
+        HandlerNode writer_node;
+        writer_node.identity                    = writer;
+        writer_node.declaration_order            = DeclarationOrder{.declaration_index = 0};
+        writer_node.contract.writes.insert(position);
+        HandlerNode reader_node;
+        reader_node.identity                    = reader;
+        reader_node.declaration_order            = DeclarationOrder{.declaration_index = 1};
+        reader_node.contract.reads.insert(position);
+        graph.handlers = {writer_node, reader_node};
+        return graph;
+    };
+
+    ErrorReporter with_errors;
+    auto with_producers = build_graph();
+    REQUIRE(compute_handler_schedule(with_producers, ExternalEventSet{frame}, with_errors));
+
+    ErrorReporter without_errors;
+    auto without_producers = build_graph();
+    REQUIRE(compute_handler_schedule(without_producers, ExternalEventSet{}, without_errors));
+
+    // The variable actually varied.
+    CHECK(with_producers.event_flows.size() == 2);
+    CHECK(without_producers.event_flows.empty());
+
+    CHECK(with_producers.schedule_edges.size() == without_producers.schedule_edges.size());
+    CHECK(with_producers.stable_topological_order == without_producers.stable_topological_order);
+    REQUIRE(with_producers.dependency_levels.size() == without_producers.dependency_levels.size());
+    for (std::size_t i = 0; i < with_producers.dependency_levels.size(); ++i) {
+        CHECK(with_producers.dependency_levels[i].index == without_producers.dependency_levels[i].index);
+        CHECK(with_producers.dependency_levels[i].handlers == without_producers.dependency_levels[i].handlers);
+    }
+    CHECK(with_errors.diagnostics().size() == without_errors.diagnostics().size());
+
+    // Producer edges never leak into the scheduled DAG.
+    CHECK(with_producers.schedule_edges.size() == 1);
+    CHECK(with_producers.schedule_edges[0].before == writer);
+    CHECK(with_producers.schedule_edges[0].after == reader);
+}
+
+TEST_CASE("a commit-produced consumer feeding back to a further spawn is a legal cycle",
+          "[semantic][handler-graph][event-producers]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module std.core\n"
+        "pub event spawn\n"
+        "event Respawn\n"
+        "trait Marker:\n"
+        "    var n: int = 0\n"
+        "template MarkerTemplate:\n"
+        "    Marker:\n"
+        "        n = 1\n"
+        "rule OnSpawned:\n"
+        "    filter:\n"
+        "        Marker\n"
+        "    on spawn:\n"
+        "        emit Respawn\n"
+        "rule SpawnMore:\n"
+        "    on Respawn:\n"
+        "        spawn MarkerTemplate:\n"
+        "            Marker:\n"
+        "                n = 2\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    // commit -> OnSpawned -> Respawn -> SpawnMore -> (queues Spawn) -> commit
+    CHECK(producer_kinds_for(decorated, "std.core", "spawn", "OnSpawned") ==
+          std::vector<EventProducerKind>{EventProducerKind::ActivationCommit});
+    CHECK(producer_kinds_for(decorated, "std.core", "Respawn", "SpawnMore") ==
+          std::vector<EventProducerKind>{EventProducerKind::Handler});
+
+    // Event/producer cycles are legal; only schedule edges must stay acyclic.
+    CHECK_FALSE(has_diagnostic(diagnostics, "cycle"));
 }
 
 TEST_CASE("handler graph honors explicit after: ordering on a pair rule", "[semantic][handler-graph][pair-relations]") {
@@ -2633,7 +2920,7 @@ TEST_CASE("handler graph separates phase barriers from cyclic event flow", "[sem
     const auto has_flow =
         [&](const HandlerIdentity& producer, const std::string& event, const HandlerIdentity& consumer) {
             return std::ranges::any_of(decorated.execution_graph.event_flows, [&](const auto& edge) {
-                return edge.producer == producer &&
+                return edge.producer.kind == EventProducerKind::Handler && edge.producer.handler == producer &&
                        edge.event == make_symbol_id(SymbolKind::Event, "game.activation", event) &&
                        edge.consumer == consumer;
             });
@@ -3125,5 +3412,19 @@ TEST_CASE("dsl-render-passes: render-pass stage triggers are rejected on extern 
 
     (void)decorated;
     CHECK(has_diagnostic(errors, "render-pass stage triggers are not valid on 'extern rule' declarations"));
+}
+
+TEST_CASE("semantic analysis records its own module as the only linked module", "[semantic][linked-modules]") {
+    auto [decorated, errors] = analyze_source(
+        "module game.core\n"
+        "\n"
+        "trait Position:\n"
+        "    var x: float\n");
+
+    REQUIRE(errors.empty());
+    CHECK(decorated.linked_modules == std::vector<std::string>{"game.core"});
+    for (const auto& handler : decorated.execution_graph.handlers) {
+        CHECK(handler.declaration_order.module_index < decorated.linked_modules.size());
+    }
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

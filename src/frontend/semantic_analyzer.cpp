@@ -995,6 +995,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     current_module_is_stdlib_ = module_name_is_stdlib(current_module_id_.name);
     result_.module_name       = current_module_id_.name;
     result_.source_modules.push_back(ResolvedSourceModule{.module_name = current_module_id_.name, .ast = &program});
+    result_.linked_modules.push_back(current_module_id_.name);
 
     // Phase 1: Collect all type declarations
     collect_types(program);
@@ -1271,8 +1272,10 @@ void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
         auto build_guard_condition = [&]() -> std::unique_ptr<ExprNode> {
             auto combined = clone_expr(*predicates.front());
             for (std::size_t i = 1; i < predicates.size(); ++i) {
-                BinaryExpr conjunction{
-                    .op = "and", .left = std::move(combined), .right = clone_expr(*predicates[i]), .location = location};
+                BinaryExpr conjunction{.op       = "and",
+                                       .left     = std::move(combined),
+                                       .right    = clone_expr(*predicates[i]),
+                                       .location = location};
                 combined = std::make_unique<ExprNode>(ExprNode::Variant{std::move(conjunction)}, location);
             }
             UnaryExpr negated{.op = "not", .operand = std::move(combined), .location = location};
@@ -1281,10 +1284,10 @@ void SemanticAnalyzer::desugar_where_clauses(ProgramNode& program) {
 
         for (auto& handler : rule->handlers) {
             std::vector<std::unique_ptr<StmtNode>> guard_then;
-            guard_then.push_back(
-                std::make_unique<StmtNode>(StmtNode::Variant{ReturnStmt{.value = std::nullopt, .location = location}},
-                                           location));
-            IfStmt guard{.condition = build_guard_condition(), .then_body = std::move(guard_then), .location = location};
+            guard_then.push_back(std::make_unique<StmtNode>(
+                StmtNode::Variant{ReturnStmt{.value = std::nullopt, .location = location}}, location));
+            IfStmt guard{
+                .condition = build_guard_condition(), .then_body = std::move(guard_then), .location = location};
             handler.body.insert(handler.body.begin(),
                                 std::make_unique<StmtNode>(StmtNode::Variant{std::move(guard)}, location));
         }
@@ -2045,7 +2048,8 @@ void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::s
         /*on_spawn=*/[](const SpawnExpr&) {},
         /*on_query=*/
         [this](const QueryCallExpr& e) {
-            errors_.error(e.location, "query expressions require world access; only allowed inside rule event handlers");
+            errors_.error(e.location,
+                          "query expressions require world access; only allowed inside rule event handlers");
         });
 }
 
@@ -2474,8 +2478,7 @@ void SemanticAnalyzer::validate_order_by_key(
         // unsupported member (e.g. `.z` on a vec2) reports nothing on its own,
         // so name it here.
         if (errors_.error_count() == error_count_before && !spelling.empty()) {
-            errors_.error(key.location,
-                          "order by field '" + spelling + "' is not valid for the referenced trait");
+            errors_.error(key.location, "order by field '" + spelling + "' is not valid for the referenced trait");
         }
         return;
     }
@@ -2554,8 +2557,7 @@ bool expr_references_ident(const ExprNode& expr, const std::string& name) {
         return expr_references_ident(*unary->operand, name);
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
-        return std::ranges::any_of(call->args,
-                                    [&](const auto& arg) { return expr_references_ident(*arg, name); });
+        return std::ranges::any_of(call->args, [&](const auto& arg) { return expr_references_ident(*arg, name); });
     }
     return false;
 }
@@ -2632,9 +2634,9 @@ std::optional<PairScope> SemanticAnalyzer::resolve_limit_count_scope(const RuleN
         // unary domain's own names instead of a pair binding's.
         for (const auto& name : unary_domain_scope_names(build_filter_bindings(rule.filter))) {
             if (expr_references_ident(*rule.limit->count, name)) {
-                errors_.error(rule.limit->location, "limit: count expression cannot reference filter binding '" +
-                                                         name +
-                                                         "'; a global `limit:` count may reference only constants");
+                errors_.error(rule.limit->location,
+                              "limit: count expression cannot reference filter binding '" + name +
+                                  "'; a global `limit:` count may reference only constants");
                 return std::nullopt;
             }
         }
@@ -3009,9 +3011,8 @@ void SemanticAnalyzer::validate_phase_field_initializers(const PhaseCollection& 
             // compile-time-constant enum literals, validated separately by
             // validate_render_pass_descriptor_fields once resolved_enum_member
             // is available (see analyze()'s ordering comment).
-            if (resolved_phase.render_pass.has_value() &&
-                (index == resolved_phase.render_pass->pass_field_index ||
-                 index == resolved_phase.render_pass->target_field_index)) {
+            if (resolved_phase.render_pass.has_value() && (index == resolved_phase.render_pass->pass_field_index ||
+                                                           index == resolved_phase.render_pass->target_field_index)) {
                 continue;
             }
             auto& field_node               = phase->fields[index];
@@ -3157,8 +3158,8 @@ void SemanticAnalyzer::validate_render_pass_descriptor_fields(ProgramNode& progr
 }
 
 void SemanticAnalyzer::validate_render_pass_stage_handler_shape(const RuleNode& rule,
-                                                                 const EventHandlerNode& handler,
-                                                                 bool is_vertex) const {
+                                                                const EventHandlerNode& handler,
+                                                                bool is_vertex) const {
     if (!handler.alias.has_value()) {
         errors_.error(handler.location,
                       "render-pass stage handler must bind an alias (e.g. 'as v') to access its built-in fields");
@@ -3208,9 +3209,9 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
                                   std::string("a world query is not allowed in a render-pass ") + stage_desc +
                                       "-stage handler body");
                 } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                    errors_.error(expr.location,
-                                  std::string("'spawn' is not allowed in a render-pass ") + stage_desc +
-                                      "-stage handler body");
+                    errors_.error(
+                        expr.location,
+                        std::string("'spawn' is not allowed in a render-pass ") + stage_desc + "-stage handler body");
                 } else if constexpr (std::is_same_v<E, BinaryExpr>) {
                     visit_expr(*node.left);
                     visit_expr(*node.right);
@@ -3223,7 +3224,7 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
                         (callee_ident->name == "vec2" || callee_ident->name == "vec3" || callee_ident->name == "color");
                     if (!is_vector_ctor) {
                         auto callee_symbol = resolve_callee_symbol(*node.callee);
-                        const auto* func    = callee_symbol.has_value() ? find_resolved_func(*callee_symbol) : nullptr;
+                        const auto* func   = callee_symbol.has_value() ? find_resolved_func(*callee_symbol) : nullptr;
                         if (func != nullptr && func->is_extern &&
                             !is_render_pass_portable_glsl_intrinsic(*callee_symbol)) {
                             errors_.error(expr.location,
@@ -3267,9 +3268,9 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
     };
 
     const auto forbid_statement = [&](const SourceLocation& loc, const char* keyword) {
-        errors_.error(loc,
-                      std::string("'") + keyword + "' is not allowed in a render-pass " + stage_desc +
-                          "-stage handler body");
+        errors_.error(
+            loc,
+            std::string("'") + keyword + "' is not allowed in a render-pass " + stage_desc + "-stage handler body");
     };
 
     visit_stmts = [&](const std::vector<std::unique_ptr<StmtNode>>& stmts) {
@@ -3339,9 +3340,8 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
 void SemanticAnalyzer::validate_render_pass_stage_handlers(ProgramNode& program) {
     using StageMatch = std::pair<RuleNode*, EventHandlerNode*>;
 
-    const auto validate_cardinality = [this](const PhaseNode& phase,
-                                             const char* stage,
-                                             const std::vector<StageMatch>& matches) -> const StageMatch* {
+    const auto validate_cardinality =
+        [this](const PhaseNode& phase, const char* stage, const std::vector<StageMatch>& matches) -> const StageMatch* {
         if (matches.empty()) {
             errors_.error(phase.location,
                           "render-pass phase '" + phase.name + "' has no '" + std::string(stage) + "' stage handler");
@@ -3404,9 +3404,9 @@ void SemanticAnalyzer::validate_render_pass_stage_handlers(ProgramNode& program)
             if (handler->alias.has_value()) {
                 std::unordered_set<std::string> filter_alias_names;
                 for (const auto& entry : rule->filter.entries) {
-                    filter_alias_names.insert(entry.alias.value_or(
-                        entry.resolved_trait_id.has_value() ? entry.resolved_trait_id->local_name
-                                                            : entry.qualified_name));
+                    filter_alias_names.insert(entry.alias.value_or(entry.resolved_trait_id.has_value()
+                                                                       ? entry.resolved_trait_id->local_name
+                                                                       : entry.qualified_name));
                 }
                 filter_alias_names.insert(rule->filter.trait_names.begin(), rule->filter.trait_names.end());
                 validate_render_pass_stage_handler_body(
@@ -3417,7 +3417,8 @@ void SemanticAnalyzer::validate_render_pass_stage_handlers(ProgramNode& program)
             const auto& [rule, handler] = *fragment_match;
             validate_render_pass_stage_handler_shape(*rule, *handler, false);
             if (handler->alias.has_value()) {
-                validate_render_pass_stage_handler_body(handler->body, *handler->alias, {}, kFragmentOutputs, "fragment");
+                validate_render_pass_stage_handler_body(
+                    handler->body, *handler->alias, {}, kFragmentOutputs, "fragment");
             }
         }
 
@@ -3427,12 +3428,12 @@ void SemanticAnalyzer::validate_render_pass_stage_handlers(ProgramNode& program)
         // shape/body diagnostics above (codegen never runs on a program with
         // errors, so a partially-valid entry here is harmless).
         if (vertex_match != nullptr && fragment_match != nullptr) {
-            result_.execution_graph.render_passes.push_back(
-                RenderPassPlan{.phase           = *phase->resolved_phase_id,
-                               .vertex_handler   = HandlerIdentity{.rule    = *vertex_match->first->resolved_rule_id,
-                                                                  .trigger = info.vertex_trigger},
-                               .fragment_handler = HandlerIdentity{.rule = *fragment_match->first->resolved_rule_id,
-                                                                   .trigger = info.fragment_trigger}});
+            result_.execution_graph.render_passes.push_back(RenderPassPlan{
+                .phase = *phase->resolved_phase_id,
+                .vertex_handler =
+                    HandlerIdentity{.rule = *vertex_match->first->resolved_rule_id, .trigger = info.vertex_trigger},
+                .fragment_handler = HandlerIdentity{.rule    = *fragment_match->first->resolved_rule_id,
+                                                    .trigger = info.fragment_trigger}});
         }
     }
 }
@@ -3515,7 +3516,8 @@ void SemanticAnalyzer::check_where_purity_expr(const ExprNode& expr) {
         [this](const CallExpr& e) {
             if (e.resolved_callee_id.has_value()) {
                 const auto* function = find_resolved_func(*e.resolved_callee_id);
-                if (function != nullptr && (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
+                if (function != nullptr &&
+                    (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
                     errors_.error(e.location, "where: predicates must be pure");
                 }
             }
@@ -3531,7 +3533,8 @@ void SemanticAnalyzer::check_order_by_purity_expr(const ExprNode& expr) {
         [this](const CallExpr& e) {
             if (e.resolved_callee_id.has_value()) {
                 const auto* function = find_resolved_func(*e.resolved_callee_id);
-                if (function != nullptr && (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
+                if (function != nullptr &&
+                    (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
                     errors_.error(e.location, "order by: sort keys must be pure");
                 }
             }
@@ -3550,13 +3553,14 @@ void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
 
         if (rule->filter.entries.empty() && !rule->pairs.has_value()) {
             errors_.error(rule->where_clause->location,
-                          "'where:' requires rule '" + rule->name + "' to declare an existing 'filter:' or 'pairs:'"
-                                                                    " domain");
+                          "'where:' requires rule '" + rule->name +
+                              "' to declare an existing 'filter:' or 'pairs:'"
+                              " domain");
             continue;
         }
 
-        auto filter_bindings = build_filter_bindings(rule->filter);
-        auto pair_scope       = rule->pairs.has_value() ? build_pair_scope(*rule->pairs) : PairScope{};
+        auto filter_bindings            = build_filter_bindings(rule->filter);
+        auto pair_scope                 = rule->pairs.has_value() ? build_pair_scope(*rule->pairs) : PairScope{};
         const PairScope* pair_scope_ptr = rule->pairs.has_value() ? &pair_scope : nullptr;
 
         for (auto& predicate : rule->where_clause->predicates) {
@@ -3825,7 +3829,8 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                 const bool render_stage_trigger = handler.resolved_trigger.has_value() &&
                                                   handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage;
                 if (!event_trigger && !phase_trigger && !render_stage_trigger) {
-                    diagnose_unresolved_handler_trigger("rule '" + rule->name + "'", handler.event_name, handler.location);
+                    diagnose_unresolved_handler_trigger(
+                        "rule '" + rule->name + "'", handler.event_name, handler.location);
                 }
                 // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
                 if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
@@ -4195,12 +4200,12 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             if (!target_rejected && assign_stmt->op != "=" &&
                 (target_type.kind == TypeKind::Vec2 || target_type.kind == TypeKind::Vec3) &&
                 value_type.kind != TypeKind::Unknown) {
-                const auto binary_op   = assign_stmt->op.substr(0, 1);
-                auto result_kind       = lookup_vector_binary_op_result(target_type.kind, binary_op, value_type.kind);
+                const auto binary_op = assign_stmt->op.substr(0, 1);
+                auto result_kind     = lookup_vector_binary_op_result(target_type.kind, binary_op, value_type.kind);
                 if (!result_kind.has_value() || *result_kind != target_type.kind) {
-                    errors_.error(assign_stmt->location, "no compound assignment '" + assign_stmt->op +
-                                                              "' for target type '" + target_type.name +
-                                                              "' and source type '" + value_type.name + "'");
+                    errors_.error(assign_stmt->location,
+                                  "no compound assignment '" + assign_stmt->op + "' for target type '" +
+                                      target_type.name + "' and source type '" + value_type.name + "'");
                 }
             }
             continue;
@@ -4249,9 +4254,9 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         }
         if (const auto* foreach_stmt = std::get_if<ForeachStmt>(&stmt->stmt)) {
             if (validate_range_iterable(*foreach_stmt->iterable, filter_bindings, locals, handler_event, pair_scope)) {
-                auto range_locals    = locals;
-                TypeInfo element_type = make_int_type();
-                element_type.is_let   = true;
+                auto range_locals                    = locals;
+                TypeInfo element_type                = make_int_type();
+                element_type.is_let                  = true;
                 range_locals[foreach_stmt->var_name] = std::move(element_type);
                 validate_event_stmts(
                     foreach_stmt->body, filter_bindings, range_locals, handler_event, rule_name, pair_scope);
@@ -4379,8 +4384,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
     const auto pair_scope = rule.pairs.has_value() ? build_pair_scope(rule) : PairScope{};
     // Rule-level, not per-handler: every handler on this rule shares the same
     // `pairs:`/`where:` domain, so eligibility is identical for each of them.
-    const auto spatial_join =
-        rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_) : std::nullopt;
+    const auto spatial_join = rule.pairs.has_value() ? recognize_spatial_join(rule, pair_scope, errors_) : std::nullopt;
     for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
         const auto& handler = rule.handlers[handler_index];
         collect_rule_deps(handler.body, dep);
@@ -4393,8 +4397,8 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             }
             declared_triggers.push_back(*handler.resolved_trigger);
 
-            auto inferred = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
-                                                   : infer_regular_handler_contract(rule, handler);
+            auto inferred         = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
+                                                           : infer_regular_handler_contract(rule, handler);
             inferred.spatial_join = spatial_join;
             result_.handler_contracts.push_back(inferred);
 
@@ -4483,7 +4487,7 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
             const auto* root = std::get_if<IdentExpr>(&expr.expr);
             if (root == nullptr) {
                 const auto* member = std::get_if<MemberExpr>(&expr.expr);
-                root = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
+                root               = member == nullptr ? nullptr : std::get_if<IdentExpr>(&member->object->expr);
             }
             if (root == nullptr) {
                 return false;
@@ -4983,7 +4987,7 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
         // filter out the very assignments this needs to see.
         record_pair_binding_write(node, pair_scope, contract);
     };
-    auto on_project_trait  = [&contract](const SymbolId& trait) { contract.projects.insert(trait); };
+    auto on_project_trait = [&contract](const SymbolId& trait) { contract.projects.insert(trait); };
 
     // Same walk and same pair-read primitive as the handler body, so a sort
     // key reading through both bindings records both binding-qualified reads
@@ -5006,7 +5010,8 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
 }
 
 std::optional<SemanticAnalyzer::SpatialJoinResolvedArg> SemanticAnalyzer::resolve_spatial_join_arg(
-    const ExprNode& arg, const PairScope& pair_scope) {
+    const ExprNode& arg,
+    const PairScope& pair_scope) {
     const auto* member = std::get_if<MemberExpr>(&arg.expr);
     if (member == nullptr) {
         return std::nullopt;
@@ -5021,8 +5026,8 @@ std::optional<SemanticAnalyzer::SpatialJoinResolvedArg> SemanticAnalyzer::resolv
     if (!resolved.has_value()) {
         return std::nullopt;
     }
-    std::vector<std::string> field_path(
-        segments.begin() + static_cast<std::ptrdiff_t>(resolved->consumed_segments), segments.end());
+    std::vector<std::string> field_path(segments.begin() + static_cast<std::ptrdiff_t>(resolved->consumed_segments),
+                                        segments.end());
     return SpatialJoinResolvedArg{
         .binding_name  = root_name,
         .access        = SpatialJoinAccess{.trait = resolved->trait_id, .field_path = std::move(field_path)},
@@ -5030,7 +5035,8 @@ std::optional<SemanticAnalyzer::SpatialJoinResolvedArg> SemanticAnalyzer::resolv
 }
 
 std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recognize_spatial_predicate(
-    const CallExpr& call, const PairScope& pair_scope) {
+    const CallExpr& call,
+    const PairScope& pair_scope) {
     if (!call.resolved_callee_id.has_value() || call.args.size() != 4) {
         return std::nullopt;
     }
@@ -5076,11 +5082,14 @@ bool SemanticAnalyzer::spatial_join_resolved_args_equal(const SpatialJoinResolve
 
 bool SemanticAnalyzer::spatial_join_operand_pairs_equal(const SpatialJoinOperandPair& lhs,
                                                         const SpatialJoinOperandPair& rhs) {
-    return spatial_join_resolved_args_equal(lhs.first, rhs.first) && spatial_join_resolved_args_equal(lhs.second, rhs.second);
+    return spatial_join_resolved_args_equal(lhs.first, rhs.first) &&
+           spatial_join_resolved_args_equal(lhs.second, rhs.second);
 }
 
 std::optional<SemanticAnalyzer::SpatialJoinOperandPair> SemanticAnalyzer::resolve_spatial_join_operand_pair(
-    const ExprNode& expr, const std::string& op, const PairScope& pair_scope) {
+    const ExprNode& expr,
+    const std::string& op,
+    const PairScope& pair_scope) {
     const auto* binary = std::get_if<BinaryExpr>(&expr.expr);
     if (binary == nullptr || binary->op != op) {
         return std::nullopt;
@@ -5094,7 +5103,8 @@ std::optional<SemanticAnalyzer::SpatialJoinOperandPair> SemanticAnalyzer::resolv
 }
 
 std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recognize_manual_distance_predicate(
-    const BinaryExpr& comparison, const PairScope& pair_scope) {
+    const BinaryExpr& comparison,
+    const PairScope& pair_scope) {
     if (comparison.op != "<" && comparison.op != "<=") {
         return std::nullopt;
     }
@@ -5141,8 +5151,8 @@ std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recogniz
     // Positions and radii are matched by binding name, not by argument
     // order -- the canonical shape's delta ("b - a") and radius sum
     // ("a + b") don't share an operand order.
-    const auto& radius_first  = sum_left->first;
-    const auto& radius_second = sum_left->second;
+    const auto& radius_first                        = sum_left->first;
+    const auto& radius_second                       = sum_left->second;
     const SpatialJoinResolvedArg* radius_for_first  = nullptr;
     const SpatialJoinResolvedArg* radius_for_second = nullptr;
     if (position_first.binding_name == radius_first.binding_name) {
@@ -5171,10 +5181,10 @@ std::optional<SemanticAnalyzer::SpatialJoinMatch> SemanticAnalyzer::try_recogniz
 }
 
 void SemanticAnalyzer::check_unaccelerated_distance_predicate(const ExprNode& predicate,
-                                                               const PairScope& pair_scope,
-                                                               ErrorReporter& errors) {
+                                                              const PairScope& pair_scope,
+                                                              ErrorReporter& errors) {
     static const std::unordered_set<std::string> COMPARISON_OPS = {"<", "<=", ">", ">="};
-    const auto* comparison = std::get_if<BinaryExpr>(&predicate.expr);
+    const auto* comparison                                      = std::get_if<BinaryExpr>(&predicate.expr);
     if (comparison == nullptr || !COMPARISON_OPS.contains(comparison->op)) {
         return;
     }
@@ -5183,7 +5193,7 @@ void SemanticAnalyzer::check_unaccelerated_distance_predicate(const ExprNode& pr
         return;
     }
     const char* recognized_alternative = nullptr;
-    const auto canonical = make_canonical_id(*distance_call->resolved_callee_id);
+    const auto canonical               = make_canonical_id(*distance_call->resolved_callee_id);
     if (canonical == "std.math.vec2.distance") {
         recognized_alternative = "circles_overlap";
     } else if (canonical == "std.math.vec3.distance") {
@@ -5256,8 +5266,8 @@ std::optional<SpatialJoinPlan> SemanticAnalyzer::recognize_spatial_join(const Ru
             continue;
         }
         return SpatialJoinPlan{.dimension               = match->dimension,
-                               .left                     = match->left,
-                               .right                    = match->right,
+                               .left                    = match->left,
+                               .right                   = match->right,
                                .matched_predicate_index = predicate_index};
     }
     return std::nullopt;
@@ -5487,7 +5497,7 @@ const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const SymbolId& symbo
         if (auto it = syms.traits.find(symbol.local_name); it != syms.traits.end()) {
             return &it->second;
         }
-        for (const auto& [_, trait] : syms.traits) {
+        for (const auto& [trait_name, trait] : syms.traits) {
             if ((trait.symbol_id.has_value() && *trait.symbol_id == symbol) || trait.canonical_id == canonical) {
                 return &trait;
             }
@@ -5635,8 +5645,8 @@ std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_render_stage
 }
 
 void SemanticAnalyzer::diagnose_unresolved_handler_trigger(const std::string& owner_desc,
-                                                            const std::string& event_name,
-                                                            const SourceLocation& loc) const {
+                                                           const std::string& event_name,
+                                                           const SourceLocation& loc) const {
     auto resolved = resolve_name(dotted_segments(event_name));
     if (resolved.has_value() && resolved->symbol.kind == SymbolKind::Phase && resolved->member_segments.size() == 1 &&
         (resolved->member_segments.front() == "vertex" || resolved->member_segments.front() == "fragment")) {
@@ -6612,9 +6622,9 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
                 if (resolved->consumed_segments >= segments.size()) {
                     return make_unknown_type();
                 }
-                const auto first =
-                    trait == nullptr ? make_unknown_type()
-                                     : find_field_type_in(trait->fields, segments[resolved->consumed_segments]);
+                const auto first = trait == nullptr
+                                       ? make_unknown_type()
+                                       : find_field_type_in(trait->fields, segments[resolved->consumed_segments]);
                 return descend_vector_color_members(first, segments, resolved->consumed_segments + 1);
             }
         }
@@ -6773,8 +6783,9 @@ std::optional<TypeInfo> SemanticAnalyzer::infer_vector_constructor_call_type(
     TypeInfo result_type              = is_vec2 ? make_vec2_type() : make_vec3_type();
 
     if (call.args.size() != 1 && call.args.size() != component_count) {
-        errors_.error(location, "'" + ident->name + "' expects 1 (splat) or " + std::to_string(component_count) +
-                                     " arguments, got " + std::to_string(call.args.size()));
+        errors_.error(location,
+                      "'" + ident->name + "' expects 1 (splat) or " + std::to_string(component_count) +
+                          " arguments, got " + std::to_string(call.args.size()));
         return result_type;
     }
 
@@ -6798,16 +6809,14 @@ bool SemanticAnalyzer::validate_range_iterable(
     }
 
     if (call->args.size() != 2 && call->args.size() != 3) {
-        errors_.error(iterable.location,
-                      "'range' expects 2 or 3 arguments, got " + std::to_string(call->args.size()));
+        errors_.error(iterable.location, "'range' expects 2 or 3 arguments, got " + std::to_string(call->args.size()));
         return true;
     }
 
     for (const auto& arg : call->args) {
         auto arg_type = infer_expr_type(*arg, filter_bindings, local_bindings, handler_event, pair_scope);
         if (arg_type.kind != TypeKind::Int && arg_type.kind != TypeKind::Unknown) {
-            errors_.error(iterable.location,
-                          "'range' argument must be of type 'int', got '" + arg_type.name + "'");
+            errors_.error(iterable.location, "'range' argument must be of type 'int', got '" + arg_type.name + "'");
         }
     }
     return true;
@@ -6904,12 +6913,13 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return make_unknown_type();
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
-        if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr); ident != nullptr && ident->name == "range") {
+        if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr);
+            ident != nullptr && ident->name == "range") {
             errors_.error(expr.location, "`range()` is only valid as the iterable of a `for` statement");
             return make_unknown_type();
         }
-        if (auto vector_type = infer_vector_constructor_call_type(*call, expr.location, filter_bindings,
-                                                                   local_bindings, handler_event, pair_scope)) {
+        if (auto vector_type = infer_vector_constructor_call_type(
+                *call, expr.location, filter_bindings, local_bindings, handler_event, pair_scope)) {
             return *vector_type;
         }
         if (is_std_text_format_callee(*call->callee)) {
@@ -6970,8 +6980,9 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             if (auto result_kind = lookup_vector_binary_op_result(left.kind, binary->op, right.kind)) {
                 return vector_result_type_info(*result_kind);
             }
-            errors_.error(expr.location, "no operator '" + binary->op + "' for operand types '" + left.name +
-                                              "' and '" + right.name + "'");
+            errors_.error(
+                expr.location,
+                "no operator '" + binary->op + "' for operand types '" + left.name + "' and '" + right.name + "'");
             return make_unknown_type();
         }
         if (left.kind == TypeKind::Float || right.kind == TypeKind::Float) {
@@ -8398,7 +8409,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // topological leveling are computed by the shared scheduling core, which
     // also performs the phase-barrier/event-flow construction that
     // build_dependency_graph used to do inline (see execution_graph_scheduler.hpp).
-    (void)compute_handler_schedule(result_.execution_graph, errors_);
+    (void)compute_handler_schedule(result_.execution_graph, collect_external_events(result_.events), errors_);
 }
 
 }  // namespace cactus

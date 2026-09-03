@@ -139,17 +139,39 @@ target_link_libraries(cactus_backend_cpp_entt
         cactus_runtime_cpp_entt
         EnTT::EnTT)
 
-# ── CLI Executable ──────────────────────────────────────────────────────────────
-add_executable(cactus src/main.cpp)
-target_link_libraries(cactus PRIVATE
+# ── Cactus Intermediate Representation ──────────────────────────────────────────
+add_library(cactus_cir STATIC
+    src/cir/cir.cpp
+    src/cir/cir_text.cpp
+    src/cir/cir_lowering.cpp
+    src/cir/cir_validation.cpp
+    src/cir/cir_json.cpp
+    src/cir/cir_graph_projection.cpp
+    src/cir/cir_graphviz.cpp
+)
+target_include_directories(cactus_cir PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(cactus_cir PUBLIC cactus_frontend)
+
+# ── CLI Driver Library ──────────────────────────────────────────────────────────
+add_library(cactus_cli STATIC
+    src/cli/cli_options.cpp
+    src/cli/cli_driver.cpp
+)
+target_include_directories(cactus_cli PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(cactus_cli PUBLIC
     cactus_frontend
     cactus_backend_cpp_entt
+    cactus_cir
 )
 # Stdlib directory is baked in at compile time so the compiler can always find std.core
-target_compile_definitions(cactus PRIVATE
+target_compile_definitions(cactus_cli PRIVATE
     CACTUS_STDLIB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/stdlib"
     CACTUS_CLANG_FORMAT_EXE_PATH="${CACTUS_CLANG_FORMAT_EXE}"
 )
+
+# ── CLI Executable ──────────────────────────────────────────────────────────────
+add_executable(cactus src/main.cpp)
+target_link_libraries(cactus PRIVATE cactus_cli)
 
 # ── Generated Example Executables ─────────────────────────────────────────────
 set(CACTUS_GENERATED_EXAMPLES_DIR "${CMAKE_BINARY_DIR}/generated_examples")

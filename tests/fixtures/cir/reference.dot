@@ -1,0 +1,112 @@
+digraph cactus_cir {
+  rankdir=LR;
+  node [fontname="monospace"];
+  edge [fontname="monospace"];
+  subgraph cluster_g0 {
+    label="std.core.Boot";
+    style=rounded;
+    n7 [label="std.core.Boot/on std.core.load", shape=box];
+  }
+  subgraph cluster_g1 {
+    label="std.core.Contact";
+    style=rounded;
+    n8 [label="std.core.Contact/on std.core.fixed_tick", shape=box];
+  }
+  subgraph cluster_g2 {
+    label="std.core.Greet";
+    style=rounded;
+    n9 [label="std.core.Greet/on std.core.spawn", shape=box];
+  }
+  subgraph cluster_g3 {
+    label="std.core.LogA";
+    style=rounded;
+    n10 [label="std.core.LogA/on std.core.frame", shape=box];
+  }
+  subgraph cluster_g4 {
+    label="std.core.LogB";
+    style=rounded;
+    n11 [label="std.core.LogB/on std.core.frame", shape=box];
+  }
+  subgraph cluster_g5 {
+    label="std.core.OverlayFragment";
+    style=rounded;
+    n12 [label="std.core.OverlayFragment/on std.core.overlay__fragment", shape=box];
+  }
+  subgraph cluster_g6 {
+    label="std.core.OverlayVertex";
+    style=rounded;
+    n13 [label="std.core.OverlayVertex/on std.core.overlay__vertex", shape=box];
+  }
+  subgraph cluster_g7 {
+    label="std.core.Painter";
+    style=rounded;
+    n14 [label="std.core.Painter/on std.core.fixed_tick", shape=box];
+  }
+  subgraph cluster_g8 {
+    label="std.core.Projector";
+    style=rounded;
+    n15 [label="std.core.Projector/on std.core.frame", shape=box];
+  }
+  subgraph cluster_g9 {
+    label="std.core.React";
+    style=rounded;
+    n16 [label="std.core.React/on std.core.Damaged", shape=box];
+  }
+  subgraph cluster_g10 {
+    label="std.core.Reader";
+    style=rounded;
+    n17 [label="std.core.Reader/on std.core.fixed_tick", shape=box];
+  }
+  subgraph cluster_g11 {
+    label="std.core.Sampler";
+    style=rounded;
+    n18 [label="std.core.Sampler/on std.core.frame", shape=box];
+  }
+  subgraph cluster_g12 {
+    label="std.core.Selector";
+    style=rounded;
+    n19 [label="std.core.Selector/on std.core.frame", shape=box];
+  }
+  subgraph cluster_g13 {
+    label="std.core.Sweeper";
+    style=rounded;
+    n20 [label="std.core.Sweeper/on std.core.fixed_tick", shape=box];
+  }
+  subgraph cluster_g14 {
+    label="std.core.Writer";
+    style=rounded;
+    n21 [label="std.core.Writer/on std.core.fixed_tick", shape=box];
+  }
+  n0 [label="activation-commit: std.core.spawn", shape=invhouse];
+  n1 [label="external-event-source: std.core.frame", shape=hexagon];
+  n2 [label="phase std.core.fixed_tick", shape=ellipse];
+  n3 [label="phase std.core.input", shape=ellipse];
+  n4 [label="phase std.core.overlay", shape=ellipse];
+  n5 [label="rasterization: std.core.overlay", shape=parallelogram];
+  n6 [label="scheduler-boundary: std.core.load", shape=house];
+  n0 -> n9 [label="event std.core.spawn", color="#2e7d32", style=dashed, constraint=false];
+  n1 -> n10 [label="event std.core.frame", color="#2e7d32", style=dashed, constraint=false];
+  n1 -> n11 [label="event std.core.frame", color="#2e7d32", style=dashed, constraint=false];
+  n1 -> n15 [label="event std.core.frame", color="#2e7d32", style=dashed, constraint=false];
+  n1 -> n18 [label="event std.core.frame", color="#2e7d32", style=dashed, constraint=false];
+  n1 -> n19 [label="event std.core.frame", color="#2e7d32", style=dashed, constraint=false];
+  n3 -> n2 [label="phase", color="#1565c0", style=solid];
+  n3 -> n8 [label="barrier", color="#1565c0", style=dotted];
+  n3 -> n14 [label="barrier", color="#1565c0", style=dotted];
+  n3 -> n17 [label="barrier", color="#1565c0", style=dotted];
+  n3 -> n20 [label="barrier", color="#1565c0", style=dotted];
+  n3 -> n21 [label="barrier", color="#1565c0", style=dotted];
+  n5 -> n12 [label="render", color="#ad1457", style=solid];
+  n6 -> n7 [label="event std.core.load", color="#2e7d32", style=dashed, constraint=false];
+  n9 -> n16 [label="event std.core.Damaged", color="#2e7d32", style=dashed, constraint=false];
+  n10 -> n11 [label="std.core.Marker (read+write/read+write)", color="#333333", style=solid];
+  n12 -> n4 [label="render", color="#ad1457", style=solid];
+  n13 -> n5 [label="render", color="#ad1457", style=solid];
+  n15 -> n19 [label="std.core.PointerHit (project+select/read+select)", color="#333333", style=solid];
+  n17 -> n14 [label="effect graphics", color="#ef6c00", style=dashed];
+  n17 -> n14 [label="after", color="#6a1b9a", style=bold];
+  n20 -> n17 [label="std.core.Health (read+write/read)", color="#333333", style=solid];
+  n21 -> n17 [label="std.core.Health (read+write/read)", color="#333333", style=solid];
+  n21 -> n20 [label="std.core.Health (read+write/read+write)", color="#333333", style=solid];
+  n21 -> n20 [label="after", color="#6a1b9a", style=bold];
+}

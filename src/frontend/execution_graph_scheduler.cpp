@@ -1,5 +1,7 @@
 #include "frontend/execution_graph_scheduler.hpp"
 
+#include "frontend/core_event_identities.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -29,10 +31,21 @@ bool declaration_precedes(const HandlerNode& left, const HandlerNode& right) {
 
 }  // namespace
 
+ExternalEventSet collect_external_events(const std::unordered_map<std::string, ResolvedEvent>& events) {
+    ExternalEventSet external;
+    for (const auto& [name, event] : events) {
+        if (!event.is_external) {
+            continue;
+        }
+        external.insert(event.symbol_id.value_or(make_symbol_id(SymbolKind::Event, event.module_name, name)));
+    }
+    return external;
+}
+
 // The single consolidated home for what used to be two independently-duplicated
 // ~250-line scheduling algorithms; see design.md D1-D5.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
+bool compute_handler_schedule(ExecutionGraph& graph, const ExternalEventSet& external_events, ErrorReporter& errors) {
     std::unordered_map<HandlerIdentity, const HandlerNode*, HandlerIdentityHash> nodes;
     for (const auto& handler : graph.handlers) {
         nodes.emplace(handler.identity, &handler);
@@ -68,10 +81,36 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
             for (const auto& consumer : graph.handlers) {
                 if (consumer.identity.trigger.kind == HandlerTriggerKind::Event &&
                     consumer.identity.trigger.symbol == event) {
-                    graph.event_flows.push_back(
-                        EventFlowEdge{.producer = producer.identity, .event = event, .consumer = consumer.identity});
+                    graph.event_flows.push_back(EventFlowEdge{
+                        .producer = EventProducer{.kind = EventProducerKind::Handler, .handler = producer.identity},
+                        .event    = event,
+                        .consumer = consumer.identity});
                 }
             }
+        }
+    }
+    // Runtime-owned producers: work the scheduler itself performs, so no
+    // handler identity exists to name. Recognized from canonical trigger
+    // identity alone, in graph.handlers order.
+    for (const auto& consumer : graph.handlers) {
+        if (consumer.identity.trigger.kind != HandlerTriggerKind::Event) {
+            continue;
+        }
+        const auto& event = consumer.identity.trigger.symbol;
+        const auto record = [&](EventProducerKind kind) {
+            graph.event_flows.push_back(EventFlowEdge{.producer = EventProducer{.kind = kind, .handler = std::nullopt},
+                                                      .event    = event,
+                                                      .consumer = consumer.identity});
+        };
+        // Lifecycle kinds are mutually exclusive by identity; host injection is
+        // an independent property, so an extern event may also be emitted.
+        if (core_events::is_scheduler_boundary(event)) {
+            record(EventProducerKind::SchedulerBoundary);
+        } else if (core_events::is_activation_commit(event)) {
+            record(EventProducerKind::ActivationCommit);
+        }
+        if (external_events.contains(event)) {
+            record(EventProducerKind::ExternalSource);
         }
     }
 

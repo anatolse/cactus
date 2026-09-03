@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 12;
+    static constexpr uint8_t CURRENT_VERSION = 13;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -61,6 +61,7 @@ private:
     static void write_optional_symbol_id(std::ostream& out, const std::optional<SymbolId>& symbol);
     static void write_trigger(std::ostream& out, const ResolvedHandlerTrigger& trigger);
     static void write_handler_identity(std::ostream& out, const HandlerIdentity& identity);
+    static void write_event_producer(std::ostream& out, const EventProducer& producer);
     static void write_declaration_order(std::ostream& out, const DeclarationOrder& order);
     static void write_location(std::ostream& out, const SourceLocation& location);
     void write_type_info(std::ostream& out, const TypeInfo& t);
@@ -105,6 +106,7 @@ private:
     static std::optional<SymbolId> read_optional_symbol_id(std::istream& in);
     static ResolvedHandlerTrigger read_trigger(std::istream& in);
     static HandlerIdentity read_handler_identity(std::istream& in);
+    static EventProducer read_event_producer(std::istream& in);
     static DeclarationOrder read_declaration_order(std::istream& in);
     static SourceLocation read_location(std::istream& in);
     TypeInfo read_type_info(std::istream& in);

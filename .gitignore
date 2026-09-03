@@ -19,12 +19,15 @@ CMakeUserPresets.json
 *.dll
 *.so
 *.dylib
+*.cmod
 
 # OS
 .DS_Store
 Thumbs.db
 .cactus/
 build-clang-o3-release/
+build-clang-verify/
+build-msvc-verify/
 build-remove-cpp-manual/
 openspec/changes/archive/*
 openspec/changes/*

@@ -60,7 +60,7 @@ except ImportError:  # pragma: no cover - import guard
 
 
 MODEL = "claude-opus-5"
-CODEX_MODEL = "gpt-5.3-codex"
+CODEX_MODEL = "gpt-5.6-sol"
 REPO = Path(__file__).resolve().parent.parent
 SEED_FORMAT_VERSION = 2
 RUN_FORMAT_VERSION = 2

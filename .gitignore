@@ -34,3 +34,6 @@ openspec/changes/*
 .codex/
 .github/skills/
 .agents/
+# Notation-evolution experiment (generated; regenerate with tools/evolve_notation.py)
+experiments/
+__pycache__/

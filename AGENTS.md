@@ -1,5 +1,7 @@
 # Cactus — agent instructions
 
+Use simple English. A concise sentence or question is better than a long, vague one.
+
 A DSL for making games that compiles to native C++ (EnTT ECS + raylib) — see
 `README.md` for the project thesis. This file is layered: this preamble applies to
 every task in the repo; the named subsections below scope further guidance to their

@@ -359,6 +359,37 @@ ARENA = "examples/first-person-arena/main.cactus"
 PARTICLES = "examples/particle-burst/particle_burst.cactus"
 GRADIENT = "examples/gradient-square/gradient_square.cactus"
 
+#: `Player`'s field declarations (game_over, game_over_count,
+#: cursor_captured), read bare or via a `player`-bound alias by several
+#: katas below. Without this range in view, a blind auditor sees the reads
+#: but never the declaration and calls the state undeclared.
+PLAYER_TRAIT_RANGE = (124, 127)
+
+#: A real calibration run showed the gate rejecting the ancestor for three
+#: constructs the compiler accepts but `spec/cactus_dsl_spec.md` does not
+#: state plainly enough for a blind auditor to credit: `range()`, local
+#: `let` reassignment, and a string literal assigned to an ordinary mutable
+#: trait field. Appended to notation.md alongside the normative sources.
+NOTATION_CLARIFICATIONS = """
+## Clarifications from observed compiler behavior
+
+The sources above are the canonical grammar and semantics, but three points
+they do not state plainly are load-bearing for judging real programs:
+
+- `range(start, stop)` is a builtin producing an integer sequence. It is
+  valid only as the iterable of a `for ... in ...:` statement; any other use
+  is rejected.
+- A local declared with `let_decl` is not immutable: it may be reassigned
+  by a later `=`, `+=`, or `-=` statement in the same body. Only a trait
+  `field_decl`'s `let` (as opposed to `var`) is immutable -- `let` at
+  statement level is ordinary local-variable declaration, not a constant
+  binding.
+- Section 4.6's string-literal restriction governs free-standing string
+  literals. Assigning a string literal to an ordinary mutable trait field
+  (a `var name: string` field, such as `std.render.text.ScreenLabel.text`)
+  is an ordinary field assignment, not a violation.
+"""
+
 
 @dataclasses.dataclass(frozen=True)
 class Kata:
@@ -377,7 +408,7 @@ KATAS: tuple[Kata, ...] = (
          "fixed range. Four directional inputs move the player across the ground "
          "plane at a constant speed relative to the current heading, with no "
          "vertical component. No movement or look occurs once the game is over.",
-         ((598, 610), (628, 650))),
+         (PLAYER_TRAIT_RANGE, (598, 610), (628, 650))),
     Kata("K02", "Gravity, ground detection, step-up",
          "G3 aggregation, G7 absence",
          "Each step an actor accelerates downward to a terminal speed. An actor "
@@ -403,14 +434,14 @@ KATAS: tuple[Kata, ...] = (
          "G8 capacity, G15 composition",
          "A spawn point emits one enemy every fixed interval. An enemy that has "
          "finished dying is removed from the world.",
-         ((852, 923), (1217, 1241))),
+         (PLAYER_TRAIT_RANGE, (852, 923), (1217, 1241))),
     Kata("K06", "Projectile lifecycle",
          "G4 cross-entity write, G13 time",
          "Firing is rate-limited by a cooldown. A projectile travels at constant "
          "velocity, expires after a fixed lifetime, and on first contact with a "
          "solid or an enemy is consumed -- exactly once, even when it contacts "
          "several things in the same step. Contact with an enemy kills that enemy.",
-         ((1076, 1177),)),
+         (PLAYER_TRAIT_RANGE, (1076, 1177))),
     Kata("K07", "Camera rig pose composition",
          "G2 ordering, G15 composition",
          "A camera rig's world pose is derived each frame from the player's "
@@ -430,7 +461,7 @@ KATAS: tuple[Kata, ...] = (
          "player, the crosshair hides, a game-over label shows. A restart input "
          "then removes every enemy and projectile, resets every spawn timer, "
          "restores the HUD, and returns the player to the starting state.",
-         ((1251, 1374),)),
+         (PLAYER_TRAIT_RANGE, (1251, 1374))),
     Kata("K10", "Obstacle-aware steering with vaulting",
          "G5 extension, G19 control flow",
          "An enemy heads toward the player. If the direct heading is blocked by a "
@@ -438,7 +469,7 @@ KATAS: tuple[Kata, ...] = (
          "takes the first unblocked one. If the blocking obstacle is short enough "
          "to clear, it jumps instead of steering around, playing a jump animation "
          "for the duration of the vault.",
-         ((925, 1074),)),
+         (PLAYER_TRAIT_RANGE, (925, 1074))),
     Kata("K11", "A drawing stage authored as ordinary rules",
          "G21 GPU stages, G12 numeric surface",
          "A single screen-space quad of fixed size is drawn centred on an "
@@ -2687,6 +2718,7 @@ def scaffold_seed(out: Path) -> None:
         if path.suffix == ".cactus":
             body = f"```cactus\n{body}\n```"
         parts.append(f"\n## From `{heading}`\n\n{body}")
+    parts.append(NOTATION_CLARIFICATIONS)
     (out / "notation.md").write_text("\n".join(parts), encoding="utf-8")
 
     (out / "ui_measure_arrange.md").write_text(

@@ -1367,6 +1367,20 @@ class KataSlices(unittest.TestCase):
                 self.assertGreater(lo, end, kata.ident)
                 end = hi
 
+    def test_player_state_katas_include_the_player_trait_declaration(self):
+        """K01/K05/K06/K09/K10 read game_over/game_over_count/cursor_captured
+        via a bare or player-bound access. The gate cannot credit that state
+        as declared unless Player's field declarations are in view -- being
+        referenced is not the same as being shown as declared."""
+        needs_player_trait = {"K01", "K05", "K06", "K09", "K10"}
+        for kata in ev.KATAS:
+            text = ev._slice(ev.REPO / kata.source, kata.arena_ranges)
+            if kata.ident in needs_player_trait:
+                self.assertIn("pub trait Player:", text, kata.ident)
+                self.assertIn("var game_over: bool", text, kata.ident)
+            else:
+                self.assertNotIn("pub trait Player:", text, kata.ident)
+
     def test_ui_baseline_ranges_cover_exactly_the_two_layout_handlers(self):
         lines = (ev.REPO / ev.UI_BASELINE["source"]).read_text(
             encoding="utf-8").splitlines()
@@ -1380,6 +1394,22 @@ class KataSlices(unittest.TestCase):
         self.assertEqual(measure[1] + 1, arrange[0])
         self.assertEqual(ev.UI_BASELINE["total_lines"],
                          (measure[1] - measure[0] + 1) + (arrange[1] - arrange[0] + 1))
+
+
+class NotationReferenceCompleteness(unittest.TestCase):
+    """A real calibration run showed the gate rejecting the ancestor for
+    range(), local let reassignment, and string-literal field assignment --
+    all real, compiler-accepted constructs the base spec text alone does not
+    state plainly enough for a blind auditor to credit."""
+
+    def test_documents_constructs_the_gate_would_otherwise_reject(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "seed"
+            ev.scaffold_seed(root)
+            notation = (root / "notation.md").read_text(encoding="utf-8")
+        self.assertIn("range(start, stop)", notation)
+        self.assertIn("`let_decl` is not immutable", notation)
+        self.assertIn("is an ordinary field assignment, not a violation", notation)
 
 
 # --------------------------------------------------------------------------

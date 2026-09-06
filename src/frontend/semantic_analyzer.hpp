@@ -372,6 +372,13 @@ struct ExecutionGraph {
     std::vector<DependencyLevel> dependency_levels;
 };
 
+struct ResolvedTemplateParameter {
+    std::string name;
+    TypeInfo type;
+    std::shared_ptr<ExprNode> default_value;
+    SourceLocation location;
+};
+
 struct DecoratedProgram {
     std::string module_name;  // this program's explicit declaring module name
     // Map key: simple local declaration name. Each declaration still carries a non-empty
@@ -385,6 +392,8 @@ struct DecoratedProgram {
     std::unordered_map<std::string, ResolvedPhase> phases;
     std::unordered_set<std::string> pub_templates;
     std::unordered_set<std::string> non_pub_templates;
+    std::unordered_map<std::string, std::vector<ResolvedTemplateParameter>> template_parameters;
+    std::unordered_map<std::string, std::shared_ptr<TemplateNode>> template_blueprints;
     std::unordered_set<std::string> pub_events;  // pub event names (for ImportedSymbols export)
     std::vector<RuleDependency> dependency_graph;
     std::vector<InferredHandlerContract> handler_contracts;
@@ -412,6 +421,8 @@ struct ImportedTemplate {
     std::string module_name;
     std::string canonical_id;
     std::optional<SymbolId> symbol_id;
+    std::vector<ResolvedTemplateParameter> parameters;
+    std::shared_ptr<TemplateNode> blueprint;
 };
 
 /// Canonical identity for an imported event.
@@ -649,7 +660,7 @@ private:
     // supplies hooks for the node kinds whose impurity diagnostic differs
     // (a call to a function with effects; a spawn; a world query) — the
     // traversal itself is identical across all three.
-    void check_purity_deny_list(const ExprNode& expr,
+    static void check_purity_deny_list(const ExprNode& expr,
                                 const std::function<void(const CallExpr&)>& on_call,
                                 const std::function<void(const SpawnExpr&)>& on_spawn,
                                 const std::function<void(const QueryCallExpr&)>& on_query);
@@ -690,6 +701,21 @@ private:
     void validate_template_unit_declarations(ProgramNode& program);
     void validate_template_use_cycles(ProgramNode& program);
     void flatten_template_compositions(ProgramNode& program);
+    void collect_template_parameters(ProgramNode& program);
+    void validate_template_applications(ProgramNode& program);
+    void validate_template_arguments(const std::string& name,
+                                     const TemplateArguments& arguments,
+                                     const SourceLocation& location,
+                                     const std::unordered_map<std::string, const ResolvedTrait*>& filters,
+                                     const std::unordered_map<std::string, TypeInfo>& locals,
+                                     const ResolvedStruct* event,
+                                     const PairScope* pairs = nullptr) const;
+    void validate_template_argument_purity(const ExprNode& expr) const;
+    void validate_template_value_names(const ExprNode& expr,
+                                       const std::unordered_map<std::string, const ResolvedTrait*>& filters,
+                                       const std::unordered_map<std::string, TypeInfo>& locals,
+                                       const ResolvedStruct* event,
+                                       const PairScope* pairs = nullptr) const;
     void validate_template_backed_entity_overrides(ProgramNode& program);
     void validate_spawn_sites(ProgramNode& program);
 

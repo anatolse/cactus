@@ -1,4 +1,5 @@
 #include "backends/cpp-entt/system_emitter.hpp"
+#include "common/ast_expressions.hpp"
 
 #include "frontend/symbol_identity.hpp"
 
@@ -1590,7 +1591,7 @@ static std::string archetype_node_create_at_function_name(const std::string& mod
     return archetype_node_create_function_name(module_name, archetype_name, role_path) + "_at";
 }
 
-static const std::vector<ChildArchetypeNode>* find_template_children(const DecoratedProgram& program,
+static const TemplateNode* find_template_node(const DecoratedProgram& program,
                                                                      const SymbolId& template_id) {
     if (program.ast == nullptr) {
         return nullptr;
@@ -1599,7 +1600,7 @@ static const std::vector<ChildArchetypeNode>* find_template_children(const Decor
         const auto* tmpl = std::get_if<TemplateNode>(&decl);
         if (tmpl != nullptr && tmpl->resolved_template_id.has_value() && *tmpl->resolved_template_id == template_id &&
             !tmpl->children.empty()) {
-            return &tmpl->children;
+            return tmpl;
         }
     }
     return nullptr;
@@ -1619,14 +1620,15 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                                        const std::vector<std::string>& trait_names,
                                        const DecoratedProgram& program,
                                        const std::unordered_set<std::string>& pointer_aliases,
-                                       const PairCodegenScope* pair_scope = nullptr) {
+                                       const PairCodegenScope* pair_scope,
+                                       const std::string& arguments) {
     static const std::vector<ChildOverrideNode> NO_OVERRIDES;
     std::size_t index = 0;
     for (const auto& child : children) {
         const std::string var = var_prefix + "_" + std::to_string(index);
         role_path.push_back(child.role);
         out << "    auto " << var << " = "
-            << archetype_node_create_function_name(template_module, template_local_name, role_path) << "(registry);\n";
+            << archetype_node_create_function_name(template_module, template_local_name, role_path) << "(registry" << arguments << ");\n";
         {
             const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
             out << "    registry.emplace_or_replace<" << parent_cpp << ">(" << var << ", " << parent_cpp
@@ -1656,16 +1658,26 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                                    trait_names,
                                    program,
                                    pointer_aliases,
-                                   pair_scope);
+                                   pair_scope,
+                                   arguments);
         role_path.pop_back();
         ++index;
     }
 }
 
+static std::string emit_template_bindings(std::ostringstream& out,
+                                          const TemplateArguments& arguments,
+                                          const std::string& indent,
+                                          const std::vector<std::string>& trait_names,
+                                          const DecoratedProgram& program,
+                                          const std::unordered_set<std::string>& pointer_aliases,
+                                          const PairCodegenScope* pair_scope);
+
 static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id,
                                                      const std::vector<ArchetypeTraitEntry>& root_overrides,
                                                      const std::vector<ChildOverrideNode>& child_overrides,
-                                                     const std::vector<ChildArchetypeNode>& children,
+                                                     const TemplateNode& template_node,
+                                                     const TemplateArguments& bindings,
                                                      const std::vector<std::string>& trait_names,
                                                      const DecoratedProgram& program,
                                                      const std::unordered_set<std::string>& pointer_aliases,
@@ -1678,6 +1690,16 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     const std::string tmpl_module = is_local_tmpl ? program.module_name : template_id.module.name;
     const std::string& tmpl_local = template_id.local_name;
     out << "([&]() {\n";
+    emit_template_bindings(out, bindings, "    ", trait_names, program, pointer_aliases, pair_scope);
+    std::string arguments;
+    for (const auto& slot : template_node.initializers) {
+        arguments += ", " + initializer_slot_name(slot.index);
+        if (slot.value != nullptr) {
+            out << "    [[maybe_unused]] const " << EnttCodegenUtils::type_to_cpp(slot.type) << " "
+                << initializer_slot_name(slot.index) << " = "
+                << rewrite_expr(*slot.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
+        }
+    }
     const bool graph_runtime = !program.execution_graph.phases.empty();
     // "spawned"/"committed" are arbitrary-looking, ordinary-sounding names a DSL author could
     // plausibly bind via `let`; mangle them so an override expression referencing such a
@@ -1692,18 +1714,18 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            auto " << committed_name << " = "
             << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, "
-            << spawned_name << ");\n";
+            << spawned_name << arguments << ");\n";
         out << emit_spawn_overrides(
             committed_name, root_overrides, 3, trait_names, program, pointer_aliases, pair_scope);
     } else {
         out << "    auto " << spawned_name << " = "
-            << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path) << "(registry);\n";
+            << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path) << "(registry" << arguments << ");\n";
         out << emit_spawn_overrides(spawned_name, root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
     emit_spawn_child_expansion(out,
                                tmpl_module,
                                tmpl_local,
-                               children,
+                               template_node.children,
                                child_overrides,
                                graph_runtime ? committed_name : spawned_name,
                                "child",
@@ -1711,13 +1733,33 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                trait_names,
                                program,
                                pointer_aliases,
-                               pair_scope);
+                               pair_scope,
+                               arguments);
     if (graph_runtime) {
         out << "        });\n";
     }
     out << "    return " << spawned_name << ";\n";
     out << "})()";
     return out.str();
+}
+
+static std::string emit_template_bindings(std::ostringstream& out,
+                                          const TemplateArguments& arguments,
+                                          const std::string& indent,
+                                          const std::vector<std::string>& trait_names,
+                                          const DecoratedProgram& program,
+                                          const std::unordered_set<std::string>& pointer_aliases,
+                                          const PairCodegenScope* pair_scope) {
+    for (const auto& binding : arguments.bindings) {
+        out << indent << "const " << EnttCodegenUtils::type_to_cpp(binding.type) << " "
+            << initializer_slot_name(binding.index) << " = "
+            << rewrite_expr(*binding.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
+    }
+    std::string values;
+    for (std::size_t index = 0; index < arguments.bindings.size(); ++index) {
+        values += ", " + initializer_slot_name(index);
+    }
+    return values;
 }
 
 static std::string emit_spawn_expression(const SpawnExpr& spawn,
@@ -1729,11 +1771,12 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                  ? *spawn.resolved_template_id
                                  : make_symbol_id(SymbolKind::Template, program.module_name, spawn.template_name);
     if (!spawn.child_overrides.empty()) {
-        if (const auto* children = find_template_children(program, tmpl_id)) {
+        if (const auto* node = find_template_node(program, tmpl_id)) {
             return emit_hierarchical_spawn_expansion(tmpl_id,
                                                      spawn.overrides,
                                                      spawn.child_overrides,
-                                                     *children,
+                                                     *node,
+                                                     spawn.arguments,
                                                      trait_names,
                                                      program,
                                                      pointer_aliases,
@@ -1744,19 +1787,20 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
     std::ostringstream out;
     const std::string spawned_name = gen_temp_name("spawned", spawn.location);
     out << "([&]() {\n";
+    const auto arguments = emit_template_bindings(out, spawn.arguments, "    ", trait_names, program, pointer_aliases, pair_scope);
     if (!program.execution_graph.phases.empty()) {
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, " << spawned_name
-            << ");\n";
+            << arguments << ");\n";
         out << emit_spawn_overrides(
             spawned_name, spawn.overrides, 3, trait_names, program, pointer_aliases, pair_scope);
         out << "        });\n";
     } else {
         out << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
-            << "(registry);\n";
+            << "(registry" << arguments << ");\n";
         out << emit_spawn_overrides(
             spawned_name, spawn.overrides, 1, trait_names, program, pointer_aliases, pair_scope);
     }
@@ -2113,6 +2157,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
             } else if constexpr (std::is_same_v<E, SelfExpr>) {
                 return "entity";
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (e.template_slot.has_value()) {
+                    return initializer_slot_name(*e.template_slot);
+                }
                 if (is_input_action_name(program, e.name)) {
                     return input_action_constant_name(e.name);
                 }
@@ -2615,12 +2662,13 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
                                  ? *s.resolved_template_id
                                  : make_symbol_id(SymbolKind::Template, program.module_name, s.template_name);
     if (!s.child_overrides.empty()) {
-        if (const auto* children = find_template_children(program, tmpl_id)) {
+        if (const auto* node = find_template_node(program, tmpl_id)) {
             return ind +
                    emit_hierarchical_spawn_expansion(tmpl_id,
                                                      s.overrides,
                                                      s.child_overrides,
-                                                     *children,
+                                                     *node,
+                                                     s.arguments,
                                                      trait_names,
                                                      program,
                                                      pointer_aliases,
@@ -2632,6 +2680,7 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
     std::ostringstream result;
     const std::string spawned_name = gen_temp_name("spawned", s.location);
     result << ind << "{\n";
+    const auto arguments = emit_template_bindings(result, s.arguments, ind + "    ", trait_names, program, pointer_aliases, pair_scope);
     if (!program.execution_graph.phases.empty()) {
         result << ind << "    auto " << spawned_name
                << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
@@ -2639,13 +2688,13 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
         result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
         result << ind << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, "
-               << spawned_name << ");\n";
+               << spawned_name << arguments << ");\n";
         result << emit_spawn_overrides(
             spawned_name, s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
         result << ind << "        });\n";
     } else {
         result << ind << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
-               << "(registry);\n";
+               << "(registry" << arguments << ");\n";
         result << emit_spawn_overrides(
             spawned_name, s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
     }

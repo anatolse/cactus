@@ -107,6 +107,9 @@ private:
     TypeRef parse_type_ref();
     FuncParam parse_param();
     std::vector<FuncParam> parse_param_list();
+    std::vector<FieldNode> parse_template_parameters();
+    TemplateArguments parse_template_arguments();
+    void skip_template_list_spacing();
     FieldAssignment parse_field_assignment();
     std::vector<FieldAssignment> parse_field_assignment_block();
     ArchetypeTemplateUseEntry parse_archetype_template_use_entry();
@@ -164,6 +167,7 @@ private:
     std::unique_ptr<ExprNode> parse_unary_expr();
     std::unique_ptr<ExprNode> parse_postfix_expr();
     std::unique_ptr<ExprNode> parse_primary_expr();
+    std::unique_ptr<ExprNode> parse_spawn_expr();
     MatchExpr parse_match_expr();
     IfExpr parse_if_expr();
 

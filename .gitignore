@@ -37,3 +37,5 @@ openspec/changes/*
 # Notation-evolution experiment (generated; regenerate with tools/evolve_notation.py)
 experiments/
 __pycache__/
+/build-msvc-verify/
+/build-clang-verify/

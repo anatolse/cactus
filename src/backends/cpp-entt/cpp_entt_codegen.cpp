@@ -1,4 +1,5 @@
 #include "backends/cpp-entt/cpp_entt_codegen.hpp"
+#include "common/ast_expressions.hpp"
 
 #include "frontend/symbol_identity.hpp"
 
@@ -1635,17 +1636,18 @@ void emit_archetype_node_helpers(std::ostringstream& out,
                                  const std::string& archetype_name,
                                  const std::vector<ChildArchetypeNode>& children,
                                  const DecoratedProgram& program,
-                                 std::vector<std::string>& role_path) {
+                                 std::vector<std::string>& role_path,
+                                 const std::string& parameters = {}) {
     for (const auto& child : children) {
         role_path.push_back(child.role);
         out << "static entt::entity "
             << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
-            << "(entt::registry& registry) {\n";
+            << "(entt::registry& registry" << parameters << ") {\n";
         out << "    auto entity = registry.create();\n";
         emit_archetype_trait_initializers(out, child.traits, program, "entity", 1);
         out << "    return entity;\n";
         out << "}\n\n";
-        emit_archetype_node_helpers(out, archetype_name, child.children, program, role_path);
+        emit_archetype_node_helpers(out, archetype_name, child.children, program, role_path, parameters);
         role_path.pop_back();
     }
 }
@@ -1660,17 +1662,18 @@ void emit_child_creation_sequence(std::ostringstream& out,
                                   const std::string& parent_var,
                                   const std::string& var_prefix,
                                   std::vector<std::string>& role_path,
-                                  const DecoratedProgram& program) {
+                                  const DecoratedProgram& program,
+                                  const std::string& arguments = {}) {
     std::size_t index = 0;
     for (const auto& child : children) {
         const std::string var = var_prefix + "_" + std::to_string(index);
         role_path.push_back(child.role);
         out << "    auto " << var << " = "
-            << archetype_node_create_function_name(module_name, archetype_name, role_path) << "(registry);\n";
+            << archetype_node_create_function_name(module_name, archetype_name, role_path) << "(registry" << arguments << ");\n";
         const std::string parent_cpp = EnttCodegenUtils::trait_cpp_name("Parent", program);
         out << "    registry.emplace_or_replace<" << parent_cpp << ">(" << var << ", " << parent_cpp
             << "{.parent = " << parent_var << "});\n";
-        emit_child_creation_sequence(out, module_name, archetype_name, child.children, var, var, role_path, program);
+        emit_child_creation_sequence(out, module_name, archetype_name, child.children, var, var, role_path, program, arguments);
         role_path.pop_back();
         ++index;
     }
@@ -1679,10 +1682,62 @@ void emit_child_creation_sequence(std::ostringstream& out,
 // For hierarchical archetypes, emit per-node helpers plus a canonical
 // create_<archetype> wrapper that expands the override-free tree and returns
 // the root entity (D9). Flat archetypes generate the same code as before.
+std::string emit_planned_creation_functions(const std::string& name,
+                                            const std::vector<ArchetypeTraitEntry>& traits,
+                                            const std::vector<ChildArchetypeNode>& children,
+                                            const std::vector<InitializerSlot>& slots,
+                                            const DecoratedProgram& program) {
+    std::ostringstream out;
+    std::string parameters;
+    std::string arguments;
+    std::string all_parameters;
+    std::string all_arguments;
+    for (const auto& slot : slots) {
+        const auto declaration = ", [[maybe_unused]] " + EnttCodegenUtils::type_to_cpp(slot.type) + " " + initializer_slot_name(slot.index);
+        const auto argument = ", " + initializer_slot_name(slot.index);
+        all_parameters += declaration;
+        all_arguments += argument;
+        if (slot.value != nullptr) {
+            continue;
+        }
+        parameters += declaration;
+        arguments += argument;
+    }
+    const auto create = archetype_create_function_name(program.module_name, name);
+    const auto create_at = archetype_create_at_function_name(program.module_name, name);
+    std::vector<std::string> role_path;
+    const auto node_at = archetype_node_create_at_function_name(program.module_name, name, role_path);
+    const auto node_create = archetype_node_create_function_name(program.module_name, name, role_path);
+    out << "static entt::entity " << node_at << "(entt::registry& registry, entt::entity hint" << all_parameters << ") {\n";
+    out << "    auto entity = registry.create(hint);\n";
+    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    out << "    return entity;\n}\n";
+    out << "[[maybe_unused]] static entt::entity " << node_create << "(entt::registry& registry" << all_parameters << ") {\n";
+    out << "    return " << node_at << "(registry, registry.create()" << all_arguments << ");\n}\n";
+    emit_archetype_node_helpers(out, name, children, program, role_path, all_parameters);
+    out << "entt::entity " << create_at << "(entt::registry& registry, entt::entity hint" << parameters << ") {\n";
+    for (const auto& slot : slots) {
+        if (slot.value != nullptr) {
+            out << "    [[maybe_unused]] const " << EnttCodegenUtils::type_to_cpp(slot.type) << " " << initializer_slot_name(slot.index)
+                << " = " << EnttCodegenUtils::emit_expr(*slot.value, program) << ";\n";
+        }
+    }
+    out << "    auto entity = " << node_at << "(registry, hint" << all_arguments << ");\n";
+    emit_child_creation_sequence(out, program.module_name, name, children, "entity", "child", role_path, program, all_arguments);
+    out << "    return entity;\n}\n";
+    out << "entt::entity " << create << "(entt::registry& registry" << parameters << ") {\n";
+    out << "    return " << create_at << "(registry, registry.create()" << arguments << ");\n}\n\n";
+    return out.str();
+}
+
 std::string emit_archetype_creation_functions(const std::string& archetype_name,
                                               const std::vector<ArchetypeTraitEntry>& traits,
                                               const std::vector<ChildArchetypeNode>& children,
-                                              const DecoratedProgram& program) {
+                                              const DecoratedProgram& program,
+                                              const std::vector<InitializerSlot>& slots) {
+    if (!slots.empty()) {
+        return emit_planned_creation_functions(archetype_name, traits, children, slots, program);
+    }
     if (children.empty()) {
         return emit_archetype_creation_function(archetype_name, traits, program);
     }
@@ -2785,12 +2840,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
-                out << emit_archetype_creation_functions(tmpl->name, tmpl->traits, tmpl->children, program);
+                out << emit_archetype_creation_functions(tmpl->name, tmpl->traits, tmpl->children, program, tmpl->initializers);
             }
         }
         for (auto& decl : program.ast->declarations) {
             if (auto* entity = std::get_if<EntityNode>(&decl)) {
-                out << emit_archetype_creation_functions(entity->name, entity->traits, entity->children, program);
+                out << emit_archetype_creation_functions(entity->name, entity->traits, entity->children, program, entity->initializers);
             }
         }
     }

@@ -211,16 +211,22 @@ Both `entity` and `template` use archetype bodies. An archetype body can contain
 Legacy `unit` is no longer valid; use `entity` instead.
 
 ```ebnf
-entity_decl     = [ "pub" ] "entity" IDENTIFIER [ "from" dotted_name ] ":" NEWLINE INDENT
+entity_decl     = [ "pub" ] "entity" IDENTIFIER [ "from" template_ref ] ":" NEWLINE INDENT
                   { archetype_entry }
-                  DEDENT ;
+                  DEDENT
+                | [ "pub" ] "entity" IDENTIFIER "from" template_application NEWLINE ;
 
-template_decl   = [ "pub" ] "template" IDENTIFIER ":" NEWLINE INDENT
+template_decl   = [ "pub" ] "template" IDENTIFIER [ template_parameters ] ":" NEWLINE INDENT
                   { archetype_entry }
                   DEDENT ;
 
 archetype_entry = template_use_entry | archetype_trait_entry ;
-template_use_entry = "use" dotted_name NEWLINE ;
+template_use_entry = "use" template_ref NEWLINE ;
+template_ref    = dotted_name | template_application ;
+template_application = dotted_name "(" [ named_argument { "," named_argument } [ "," ] ] ")" ;
+named_argument  = IDENTIFIER "=" expression ;
+template_parameters = "(" [ template_parameter { "," template_parameter } [ "," ] ] ")" ;
+template_parameter = IDENTIFIER ":" type_ref [ "=" expression ] ;
 
 archetype_trait_entry = IDENTIFIER NEWLINE
                       | IDENTIFIER ":" NEWLINE INDENT
@@ -274,6 +280,14 @@ Template-backed entities (`entity Name from Template:`) are the declarative load
 
 Deferred grouped syntax (`entities from Template:` with multiple named instances in one block) is not part of this version of the language.
 
+Templates may declare typed immutable parameters. Applications bind named arguments only; parameter names are not arbitrary trait fields. Parameter and argument lists may span lines. Explicit arguments evaluate exactly once in source order, followed by omitted defaults in parameter declaration order. Defaults are pure expressions using constants and earlier parameters; later or cyclic references are errors.
+
+Bound values are reused by the root, composed templates, and descendants. Trait and child structure remains static. Instance override bodies win field-by-field after binding, even when an override makes an argument's value unused; every supplied argument is still evaluated once.
+
+Spawn arguments may read handler locals, selected trait values, and event or phase data. Load-time arguments cannot capture handler state. All arguments must be pure. Parameters take precedence over module symbols within the template and cannot conflict with child roles in the same scope. Templates and template applications are not ordinary values.
+
+Existing parameterless declarations and colon bodies remain valid. An application with parentheses may omit its override body, including an empty `()` application when all parameters have defaults. A bare parameterless `entity ... from Template` or `spawn Template` still requires its existing colon body.
+
 #### Hierarchical children (`children:` blocks)
 
 Archetype bodies may contain a contextual `children:` block that declares a tree of related entities. `children` is recognized only inside archetype bodies (an identifier named `children` directly followed by `:`); neither `child` nor `children` is a reserved keyword elsewhere.
@@ -285,9 +299,10 @@ children_block  = "children" ":" NEWLINE INDENT
                   { child_decl }
                   DEDENT ;
 
-child_decl      = "entity" IDENTIFIER [ "from" dotted_name ] ":" NEWLINE INDENT
+child_decl      = "entity" IDENTIFIER [ "from" template_ref ] ":" NEWLINE INDENT
                   { archetype_entry }        (* overrides when `from` is present *)
-                  DEDENT ;
+                  DEDENT
+                | "entity" IDENTIFIER "from" template_application NEWLINE ;
 
 (* In template-backed entity bodies and spawn bodies, `children:` entries are
    overrides addressing existing roles instead of declarations: *)
@@ -762,9 +777,10 @@ primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
 `spawn` is both an expression and a statement surface:
 
 ```ebnf
-spawn_expr      = "spawn" IDENTIFIER ":" NEWLINE INDENT
+spawn_expr      = "spawn" template_ref ":" NEWLINE INDENT
                   { archetype_trait_entry }
-                  DEDENT ;
+                  DEDENT
+                | "spawn" template_application ;
 ```
 
 `spawn TemplateName:` is runtime entity creation. It creates an `entity_id` from the named template's already-composed archetype, then applies the spawn body's nested trait override blocks. Unlike body-level `use TemplateName`, `spawn` can run inside handlers and creates a new entity at the activation commit boundary.

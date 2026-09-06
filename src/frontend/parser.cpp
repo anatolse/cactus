@@ -955,8 +955,69 @@ ArchetypeTemplateUseEntry Parser::parse_archetype_template_use_entry() {
     auto loc = peek().location;
     consume(TokenType::USE, "expected 'use'");
     auto template_name = parse_dotted_name();
+    auto arguments = parse_template_arguments();
     expect_newline();
-    return {.template_name = template_name, .location = loc};
+    return {.template_name = template_name, .location = loc, .arguments = std::move(arguments)};
+}
+
+void Parser::skip_template_list_spacing() {
+    while (check(TokenType::NEWLINE) || check(TokenType::INDENT) || check(TokenType::DEDENT)) {
+        advance();
+    }
+}
+
+TemplateArguments Parser::parse_template_arguments() {
+    TemplateArguments arguments;
+    arguments.has_parentheses = match(TokenType::LPAREN);
+    if (!arguments.has_parentheses) {
+        return arguments;
+    }
+    skip_template_list_spacing();
+    while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
+        const auto location = peek().location;
+        if (!check(TokenType::IDENTIFIER) || peek_next().type != TokenType::ASSIGN) {
+            errors_.error(location, "template arguments must be named: name = expression");
+            parse_expression();
+        } else {
+            auto name = advance().value;
+            advance();
+            arguments.values.push_back({.name = std::move(name), .value = parse_expression(), .location = location});
+        }
+        skip_template_list_spacing();
+        if (!match(TokenType::COMMA)) {
+            break;
+        }
+        skip_template_list_spacing();
+    }
+    consume(TokenType::RPAREN, "expected ')' after template arguments");
+    return arguments;
+}
+
+std::vector<FieldNode> Parser::parse_template_parameters() {
+    std::vector<FieldNode> parameters;
+    if (!match(TokenType::LPAREN)) {
+        return parameters;
+    }
+    skip_template_list_spacing();
+    while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
+        FieldNode parameter;
+        parameter.location = peek().location;
+        parameter.modifiers.is_let = true;
+        parameter.name = consume(TokenType::IDENTIFIER, "expected template parameter name").value;
+        consume(TokenType::COLON, "expected ':' after template parameter name");
+        parameter.type = parse_type_ref();
+        if (match(TokenType::ASSIGN)) {
+            parameter.default_value = parse_expression();
+        }
+        parameters.push_back(std::move(parameter));
+        skip_template_list_spacing();
+        if (!match(TokenType::COMMA)) {
+            break;
+        }
+        skip_template_list_spacing();
+    }
+    consume(TokenType::RPAREN, "expected ')' after template parameters");
+    return parameters;
 }
 
 // `children:` is contextual inside archetype bodies: an identifier named
@@ -1047,6 +1108,11 @@ ChildArchetypeNode Parser::parse_child_declaration() {
 
     if (match(TokenType::FROM)) {
         node.template_ref = parse_dotted_name();
+        node.arguments = parse_template_arguments();
+    }
+    if (node.arguments.has_parentheses && !check(TokenType::COLON)) {
+        expect_newline();
+        return node;
     }
 
     consume(TokenType::COLON, "expected ':'");
@@ -1171,6 +1237,11 @@ EntityNode Parser::parse_entity(bool is_pub) {
 
     if (match(TokenType::FROM)) {
         node.template_ref = parse_dotted_name();
+        node.arguments = parse_template_arguments();
+    }
+    if (node.arguments.has_parentheses && !check(TokenType::COLON)) {
+        expect_newline();
+        return node;
     }
 
     consume(TokenType::COLON, "expected ':'");
@@ -1197,6 +1268,7 @@ TemplateNode Parser::parse_template(bool is_pub) {
     auto loc = peek().location;
     consume(TokenType::TEMPLATE, "expected 'template'");
     auto name = consume(TokenType::IDENTIFIER, "expected template name").value;
+    auto parameters = parse_template_parameters();
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
     expect_indent();
@@ -1205,6 +1277,7 @@ TemplateNode Parser::parse_template(bool is_pub) {
     node.name     = name;
     node.is_pub   = is_pub;
     node.location = loc;
+    node.parameters = std::move(parameters);
 
     auto body          = parse_archetype_body_entries(ChildBlockMode::Declarations);
     node.body_entries  = std::move(body.entries);
@@ -2172,6 +2245,11 @@ SpawnStmt Parser::parse_spawn_stmt() {
     SpawnStmt spawn_stmt;
     spawn_stmt.template_name = template_name;
     spawn_stmt.location      = loc;
+    spawn_stmt.arguments = parse_template_arguments();
+    if (spawn_stmt.arguments.has_parentheses && !check(TokenType::COLON)) {
+        expect_newline();
+        return spawn_stmt;
+    }
     consume(TokenType::COLON, "expected ':'");
     auto overrides             = parse_archetype_override_block();
     spawn_stmt.overrides       = std::move(overrides.traits);
@@ -2588,20 +2666,30 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
     return expr;
 }
 
+std::unique_ptr<ExprNode> Parser::parse_spawn_expr() {
+    auto loc = peek().location;
+    consume(TokenType::SPAWN, "expected 'spawn'");
+
+    SpawnExpr spawn;
+    spawn.template_name = parse_dotted_name();
+    spawn.location      = loc;
+    spawn.arguments     = parse_template_arguments();
+    if (spawn.arguments.has_parentheses && !check(TokenType::COLON)) {
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(spawn)}, loc);
+    }
+
+    consume(TokenType::COLON, "expected ':'");
+    auto overrides        = parse_archetype_override_block();
+    spawn.overrides       = std::move(overrides.traits);
+    spawn.child_overrides = std::move(overrides.child_overrides);
+    return std::make_unique<ExprNode>(ExprNode::Variant{std::move(spawn)}, loc);
+}
+
 std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
     auto loc = peek().location;
 
     if (check(TokenType::SPAWN)) {
-        advance();
-        auto template_name = parse_dotted_name();
-        consume(TokenType::COLON, "expected ':'");
-        SpawnExpr spawn;
-        spawn.template_name   = template_name;
-        auto overrides        = parse_archetype_override_block();
-        spawn.overrides       = std::move(overrides.traits);
-        spawn.child_overrides = std::move(overrides.child_overrides);
-        spawn.location        = loc;
-        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(spawn)}, loc);
+        return parse_spawn_expr();
     }
 
     // Integer literal

@@ -849,6 +849,55 @@ TEST_CASE("Parser: filter with unqualified aliases", "[parser][modules]") {
 // ── New parser tests (dynamic-ecs-language) ────────────────────────────────
 
 // Task 4.1: template declaration
+TEST_CASE("Parser: named template applications support dependent defaults", "[parser][template-parameters]") {
+    auto program = parse(R"(template Projectile(speed: float, velocity: vec2 = vec2(speed, 0.0)):
+    Motion:
+        velocity = velocity
+entity First from Projectile(speed = 12.0)
+)");
+    REQUIRE(program.declarations.size() == 2);
+    CHECK(std::holds_alternative<TemplateNode>(program.declarations[0]));
+    CHECK(std::holds_alternative<EntityNode>(program.declarations[1]));
+}
+
+TEST_CASE("Parser: parameterized templates apply at every creation site", "[parser][template-parameters]") {
+    auto program = parse(R"(template Leaf(value: int):
+    Data:
+        value = value
+template Tree(value: int = 3):
+    use Leaf(value = value)
+    children:
+        entity Child from Leaf(value = value)
+entity Root from Tree(value = 5):
+    Data:
+        value = 7
+rule Create:
+    on tick:
+        spawn Tree(value = 8)
+        let tree = spawn Tree(value = 9)
+)");
+    REQUIRE(program.declarations.size() == 4);
+}
+
+TEST_CASE("Parser: template arguments must be named", "[parser][template-parameters]") {
+    auto errors = parse_expect_errors("entity First from Projectile(12.0)\n");
+    CHECK(errors.has_errors());
+}
+
+TEST_CASE("Parser: template interfaces and applications support multiline lists", "[parser][template-parameters]") {
+    auto program = parse(R"(template Item(
+    a: int,
+    b: int = 2,
+):
+    Data
+entity First from Item(
+    a = 1,
+)
+)");
+    REQUIRE(program.declarations.size() == 2);
+    CHECK(std::get<TemplateNode>(program.declarations[0]).parameters.size() == 2);
+}
+
 TEST_CASE("Parser: template declaration", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "template EnemyWalker:\n"

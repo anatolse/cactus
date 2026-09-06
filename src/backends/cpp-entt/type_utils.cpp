@@ -1,4 +1,5 @@
 #include "backends/cpp-entt/type_utils.hpp"
+#include "common/ast_expressions.hpp"
 
 #include "frontend/symbol_identity.hpp"
 
@@ -266,6 +267,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 }
                 return e.value;
             } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (e.template_slot.has_value()) {
+                    return initializer_slot_name(*e.template_slot);
+                }
                 if (is_input_action_name(ast, e.name)) {
                     return input_action_constant_name(e.name);
                 }

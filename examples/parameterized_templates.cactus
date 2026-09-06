@@ -1,0 +1,36 @@
+module parameterized_templates
+
+use std.core
+
+pub trait Data:
+    var value: int
+    var derived: int
+
+template Leaf(value: int):
+    Data:
+        value = value
+        derived = value * 2
+
+template Tree(value: int, derived: int = value * 2):
+    use Leaf(value = value)
+    Data:
+        value = value
+        derived = derived
+    children:
+        entity Child from Leaf(value = value)
+
+entity Initial from Tree(value = 3):
+    Data:
+        derived = 99
+
+rule Create:
+    on load:
+        let runtime_value = 7
+        let root = spawn Tree(value = runtime_value)
+        spawn Tree(value = 11):
+            Data:
+                derived = 77
+            children:
+                Child:
+                    Data:
+                        derived = 88

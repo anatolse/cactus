@@ -1,8 +1,11 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
+#include "common/template_metadata.hpp"
 #include "common/types.hpp"
 #include "frontend/module_artifact.hpp"
+#include "frontend/lexer.hpp"
+#include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -74,6 +77,78 @@ static SymbolId test_symbol(SymbolKind kind, const std::string& local_name) {
 }
 
 // ── Artifact filename ────────────────────────────────────────────────────────
+
+// Instantiates `lib.Item(a = 4)` against the supplied view of module `library`
+// and hands back the flattened creation plan the consumer ended up with.
+static EntityNode instantiate_imported_item(ImportedSymbols symbols, ErrorReporter& errors) {
+    ModuleImports imports;
+    imports.add("lib", std::move(symbols));
+    Lexer lexer(R"(module consumer
+use library as lib
+entity First from lib.Item(a = 4)
+)",
+                "consumer.cactus",
+                errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast, imports);
+    return std::move(std::get<EntityNode>(ast.declarations.back()));
+}
+
+TEST_CASE("ModuleArtifact: imported template defaults retain typed bindings", "[artifact][template-parameters]") {
+    ErrorReporter errors;
+    Lexer lexer(R"(module library
+pub trait Data:
+    var value: int
+pub template Item(a: int, b: int = a * 2):
+    Data:
+        value = b
+)",
+                "library.cactus",
+                errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    auto program = analyzer.analyze(ast);
+    REQUIRE_FALSE(errors.has_errors());
+
+    ImportedSymbols source_symbols;
+    source_symbols.module_name    = "library";
+    source_symbols.traits["Data"] = program.traits.at("Data");
+    source_symbols.templates["Item"] = exported_template(program, "library", "Item");
+    const auto from_source           = instantiate_imported_item(std::move(source_symbols), errors);
+    REQUIRE_FALSE(errors.has_errors());
+
+    ModuleArtifact artifact(errors);
+    const auto directory = test_build_dir();
+    REQUIRE(artifact.save(program, "library", directory));
+    auto symbols = artifact.extract_pub_symbols(directory / "library.cmod");
+    REQUIRE(symbols.has_value());
+    const auto from_artifact = instantiate_imported_item(std::move(*symbols), errors);
+    REQUIRE_FALSE(errors.has_errors());
+
+    REQUIRE(from_artifact.initializers.size() == 2);
+    REQUIRE(from_artifact.traits.size() == 1);
+    CHECK(from_artifact.initializers[0].index == 0);
+    CHECK(from_artifact.initializers[1].index == 1);
+    CHECK(from_artifact.initializers[1].type.kind == TypeKind::Int);
+    CHECK(from_artifact.traits[0].resolved_trait_id == make_symbol_id(SymbolKind::Trait, "library", "Data"));
+    // The default `b = a * 2` crosses the artifact as an expression, so the
+    // dependent slot reference has to survive serialization, not just the type.
+    const auto& product = std::get<BinaryExpr>(from_artifact.initializers[1].value->expr);
+    CHECK(product.op == "*");
+    CHECK(std::get<IdentExpr>(product.left->expr).template_slot == 0);
+
+    REQUIRE(from_source.initializers.size() == from_artifact.initializers.size());
+    for (std::size_t i = 0; i < from_source.initializers.size(); ++i) {
+        CHECK(from_source.initializers[i].index == from_artifact.initializers[i].index);
+        CHECK(from_source.initializers[i].type.kind == from_artifact.initializers[i].type.kind);
+    }
+    REQUIRE(from_source.traits.size() == from_artifact.traits.size());
+    CHECK(from_source.traits[0].resolved_trait_id == from_artifact.traits[0].resolved_trait_id);
+    CHECK(from_source.traits[0].assignments.size() == from_artifact.traits[0].assignments.size());
+}
 
 TEST_CASE("ModuleArtifact: artifact_filename simple", "[artifact]") {
     auto p = ModuleArtifact::artifact_filename("player");

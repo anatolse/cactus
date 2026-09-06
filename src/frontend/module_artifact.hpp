@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 12;
+    static constexpr uint8_t CURRENT_VERSION = 13;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -65,6 +65,15 @@ private:
     static void write_location(std::ostream& out, const SourceLocation& location);
     void write_type_info(std::ostream& out, const TypeInfo& t);
     void write_field(std::ostream& out, const ResolvedField& field);
+    void write_expression(std::ostream& out, const ExprNode& expression);
+    static void write_enum_member(std::ostream& out, const std::optional<ResolvedEnumMember>& member);
+    std::unique_ptr<ExprNode> read_expression(std::istream& in);
+    void write_template_metadata(std::ostream& out, const DecoratedProgram& program);
+    void read_template_metadata(std::istream& in, DecoratedProgram& program);
+    void write_archetype_traits(std::ostream& out, const std::vector<ArchetypeTraitEntry>& traits);
+    std::vector<ArchetypeTraitEntry> read_archetype_traits(std::istream& in);
+    void write_archetype_children(std::ostream& out, const std::vector<ChildArchetypeNode>& children);
+    std::vector<ChildArchetypeNode> read_archetype_children(std::istream& in);
 
     void write_traits(std::ostream& out,
                       const std::unordered_map<std::string, ResolvedTrait>& traits,

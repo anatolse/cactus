@@ -67,10 +67,30 @@ struct ArchetypeTraitEntry {
     SourceLocation location;
 };
 
+struct InitializerSlot {
+    std::size_t index = 0;
+    TypeInfo type;
+    std::shared_ptr<ExprNode> value;
+    bool is_default = false;
+};
+
+struct TemplateArguments {
+    bool has_parentheses = false;
+    std::vector<FieldAssignment> values;
+    // Set by semantic analysis. Mutable because argument types are only known
+    // during expression inference, which walks the tree by const reference and
+    // is the only pass that reaches spawn applications nested inside larger
+    // expressions. Several passes infer the same expression, so `bound` keeps
+    // binding — and its diagnostics — to the first one.
+    mutable std::vector<InitializerSlot> bindings;
+    mutable bool bound = false;
+};
+
 struct ArchetypeTemplateUseEntry {
     std::string template_name;
     std::optional<SymbolId> resolved_template_id;  // set by semantic analysis; source spelling is preserved
     SourceLocation location;
+    TemplateArguments arguments;
 };
 
 struct ArchetypeBodyEntry {
@@ -106,6 +126,7 @@ struct ChildArchetypeNode {
     std::vector<ChildArchetypeNode> children;        // declared children (no template_ref)
     std::vector<ChildOverrideNode> child_overrides;  // overrides (template_ref set)
     SourceLocation location;
+    TemplateArguments arguments;
 };
 
 struct SpawnExpr {
@@ -114,6 +135,7 @@ struct SpawnExpr {
     std::vector<ArchetypeTraitEntry> overrides;
     std::vector<ChildOverrideNode> child_overrides;
     SourceLocation location;
+    TemplateArguments arguments;
 };
 
 struct QueryFilterPredicate {
@@ -143,6 +165,8 @@ struct LiteralExpr {
 struct IdentExpr {
     std::string name;
     SourceLocation location;
+    std::optional<std::size_t> template_slot;
+    TypeInfo template_type;
 };
 
 struct SelfExpr {
@@ -336,6 +360,7 @@ struct SpawnStmt {
     std::vector<ArchetypeTraitEntry> overrides;
     std::vector<ChildOverrideNode> child_overrides;
     SourceLocation location;
+    TemplateArguments arguments;
 };
 
 // destroy — removes current entity
@@ -612,6 +637,8 @@ struct EntityNode {
     std::vector<ChildArchetypeNode> children;        // declared children (no template_ref)
     std::vector<ChildOverrideNode> child_overrides;  // child overrides (template_ref set)
     SourceLocation location;
+    TemplateArguments arguments;
+    std::vector<InitializerSlot> initializers;
 };
 
 // Template declaration — multi-instance blueprint, not auto-instantiated.
@@ -625,6 +652,8 @@ struct TemplateNode {
     std::vector<ArchetypeTraitEntry> traits;
     std::vector<ChildArchetypeNode> children;
     SourceLocation location;
+    std::vector<FieldNode> parameters;
+    std::vector<InitializerSlot> initializers;
 };
 
 struct FilterEntry {

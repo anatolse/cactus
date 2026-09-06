@@ -1,4 +1,5 @@
 #include "frontend/module_artifact.hpp"
+#include "common/template_metadata.hpp"
 
 #include "frontend/symbol_identity.hpp"
 
@@ -1109,6 +1110,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_handler_contracts(out, program.handler_contracts);
     write_execution_graph(out, program.execution_graph);
     write_string_pool(out, program.string_pool);
+    write_template_metadata(out, program);
 
     return out.good();
 }
@@ -1155,6 +1157,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     program.handler_contracts = read_handler_contracts(in);
     program.execution_graph   = read_execution_graph(in);
     program.string_pool       = read_string_pool(in);
+    read_template_metadata(in, program);
     program.ast               = nullptr;  // not serialized
 
     if (!in.good()) {
@@ -1232,13 +1235,7 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     }
 
     for (const auto& tmpl_name : program->pub_templates) {
-        const auto symbol = make_symbol_id(SymbolKind::Template, module_name, tmpl_name);
-        ImportedTemplate tmpl;
-        tmpl.name                    = symbol.local_name;
-        tmpl.module_name             = symbol.module.name;
-        tmpl.canonical_id            = make_canonical_id(symbol);
-        tmpl.symbol_id               = symbol;
-        symbols.templates[tmpl_name] = tmpl;
+        symbols.templates[tmpl_name] = exported_template(*program, module_name, tmpl_name);
     }
 
     for (const auto& dep : program->dependency_graph) {
@@ -1283,6 +1280,346 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
     }
 
     return symbols;
+}
+
+void ModuleArtifact::write_enum_member(std::ostream& out, const std::optional<ResolvedEnumMember>& member) {
+    write_bool(out, member.has_value());
+    if (!member.has_value()) {
+        return;
+    }
+    write_symbol_id(out, member->enum_id);
+    write_str(out, member->member);
+    write_i64(out, member->index);
+}
+
+// Expression kinds go on the wire as ExprNode::Variant indices, so reordering
+// the variant silently reinterprets every previously written artifact.
+template <std::size_t Index, typename Alternative>
+constexpr bool expr_alternative_is = std::is_same_v<std::variant_alternative_t<Index, ExprNode::Variant>, Alternative>;
+static_assert(expr_alternative_is<0, LiteralExpr>);
+static_assert(expr_alternative_is<1, IdentExpr>);
+static_assert(expr_alternative_is<3, BinaryExpr>);
+static_assert(expr_alternative_is<4, UnaryExpr>);
+static_assert(expr_alternative_is<5, CallExpr>);
+static_assert(expr_alternative_is<6, MemberExpr>);
+static_assert(expr_alternative_is<7, LambdaExpr>);
+static_assert(expr_alternative_is<8, PipelineExpr>);
+static_assert(expr_alternative_is<9, MatchExpr>);
+static_assert(expr_alternative_is<10, IfExpr>);
+static_assert(expr_alternative_is<11, ListExpr>);
+
+void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& expression) {
+    write_u8(out, static_cast<uint8_t>(expression.expr.index()));
+    write_location(out, expression.location);
+    auto expressions = [&](const auto& values) {
+        write_u32(out, static_cast<uint32_t>(values.size()));
+        for (const auto& value : values) {
+            write_expression(out, *value);
+        }
+    };
+    std::visit([&](const auto& node) {
+        using Node = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<Node, LiteralExpr>) {
+            write_u8(out, static_cast<uint8_t>(node.kind));
+            write_str(out, node.value);
+        } else if constexpr (std::is_same_v<Node, IdentExpr>) {
+            write_str(out, node.name);
+            write_bool(out, node.template_slot.has_value());
+            write_u64(out, node.template_slot.value_or(0));
+            write_type_info(out, node.template_type);
+        } else if constexpr (std::is_same_v<Node, BinaryExpr>) {
+            write_str(out, node.op);
+            write_expression(out, *node.left);
+            write_expression(out, *node.right);
+        } else if constexpr (std::is_same_v<Node, UnaryExpr>) {
+            write_str(out, node.op);
+            write_expression(out, *node.operand);
+        } else if constexpr (std::is_same_v<Node, CallExpr>) {
+            write_optional_symbol_id(out, node.resolved_callee_id);
+            write_expression(out, *node.callee);
+            expressions(node.args);
+        } else if constexpr (std::is_same_v<Node, MemberExpr>) {
+            write_expression(out, *node.object);
+            write_str(out, node.member);
+            write_enum_member(out, node.resolved_enum_member);
+        } else if constexpr (std::is_same_v<Node, IfExpr>) {
+            write_expression(out, *node.condition);
+            write_expression(out, *node.then_expr);
+            write_expression(out, *node.else_expr);
+        } else if constexpr (std::is_same_v<Node, ListExpr>) {
+            expressions(node.elements);
+        } else if constexpr (std::is_same_v<Node, LambdaExpr>) {
+            write_u32(out, static_cast<uint32_t>(node.params.size()));
+            for (const auto& name : node.params) {
+                write_str(out, name);
+            }
+            write_expression(out, *node.body);
+        } else if constexpr (std::is_same_v<Node, MatchExpr>) {
+            write_expression(out, *node.subject);
+            write_u32(out, static_cast<uint32_t>(node.arms.size()));
+            for (const auto& arm : node.arms) {
+                write_expression(out, *arm.pattern);
+                write_expression(out, *arm.body);
+            }
+        } else if constexpr (std::is_same_v<Node, PipelineExpr>) {
+            write_expression(out, *node.source);
+            write_u32(out, static_cast<uint32_t>(node.operations.size()));
+            for (const auto& operation : node.operations) {
+                write_str(out, operation.method);
+                expressions(operation.args);
+            }
+        } else {
+            out.setstate(std::ios::failbit);
+        }
+    }, expression.expr);
+}
+
+std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
+    const auto kind = read_u8(in);
+    const auto location = read_location(in);
+    auto wrap = [&](auto node) {
+        node.location = location;
+        return std::make_unique<ExprNode>(ExprNode::Variant{std::move(node)}, location);
+    };
+    auto expressions = [&]() {
+        std::vector<std::unique_ptr<ExprNode>> values;
+        const auto count = read_u32(in);
+        for (uint32_t i = 0; i < count && in.good(); ++i) {
+            values.push_back(read_expression(in));
+        }
+        return values;
+    };
+    switch (kind) {
+        case 0: {
+            LiteralExpr node;
+            node.kind = static_cast<LiteralExpr::Kind>(read_u8(in));
+            node.value = read_str(in);
+            return wrap(std::move(node));
+        }
+        case 1: {
+            IdentExpr node;
+            node.name = read_str(in);
+            const auto has_slot = read_bool(in);
+            const auto index = read_u64(in);
+            if (has_slot) {
+                node.template_slot = static_cast<std::size_t>(index);
+            }
+            node.template_type = read_type_info(in);
+            return wrap(std::move(node));
+        }
+        case 3: {
+            BinaryExpr node;
+            node.op = read_str(in);
+            node.left = read_expression(in);
+            node.right = read_expression(in);
+            return wrap(std::move(node));
+        }
+        case 4: {
+            UnaryExpr node;
+            node.op = read_str(in);
+            node.operand = read_expression(in);
+            return wrap(std::move(node));
+        }
+        case 5: {
+            CallExpr node;
+            node.resolved_callee_id = read_optional_symbol_id(in);
+            node.callee = read_expression(in);
+            node.args = expressions();
+            return wrap(std::move(node));
+        }
+        case 6: {
+            MemberExpr node;
+            node.object = read_expression(in);
+            node.member = read_str(in);
+            if (read_bool(in)) {
+                ResolvedEnumMember member;
+                member.enum_id = read_symbol_id(in);
+                member.member = read_str(in);
+                member.index = static_cast<int32_t>(read_i64(in));
+                node.resolved_enum_member = std::move(member);
+            }
+            return wrap(std::move(node));
+        }
+        case 7: {
+            LambdaExpr node;
+            const auto count = read_u32(in);
+            for (uint32_t i = 0; i < count && in.good(); ++i) {
+                node.params.push_back(read_str(in));
+            }
+            node.body = read_expression(in);
+            return wrap(std::move(node));
+        }
+        case 8: {
+            PipelineExpr node;
+            node.source = read_expression(in);
+            const auto count = read_u32(in);
+            for (uint32_t i = 0; i < count && in.good(); ++i) {
+                PipelineExpr::PipelineOp operation;
+                operation.method = read_str(in);
+                operation.args = expressions();
+                node.operations.push_back(std::move(operation));
+            }
+            return wrap(std::move(node));
+        }
+        case 9: {
+            MatchExpr node;
+            node.subject = read_expression(in);
+            const auto count = read_u32(in);
+            for (uint32_t i = 0; i < count && in.good(); ++i) {
+                MatchArm arm;
+                arm.pattern = read_expression(in);
+                arm.body = read_expression(in);
+                arm.location = location;
+                node.arms.push_back(std::move(arm));
+            }
+            return wrap(std::move(node));
+        }
+        case 10: {
+            IfExpr node;
+            node.condition = read_expression(in);
+            node.then_expr = read_expression(in);
+            node.else_expr = read_expression(in);
+            return wrap(std::move(node));
+        }
+        case 11:
+            return wrap(ListExpr{.elements = expressions()});
+        default:
+            in.setstate(std::ios::failbit);
+            return nullptr;
+    }
+}
+
+void ModuleArtifact::write_archetype_traits(std::ostream& out, const std::vector<ArchetypeTraitEntry>& traits) {
+    write_u32(out, static_cast<uint32_t>(traits.size()));
+    for (const auto& trait : traits) {
+        write_str(out, trait.trait_name);
+        write_optional_symbol_id(out, trait.resolved_trait_id);
+        write_location(out, trait.location);
+        write_u32(out, static_cast<uint32_t>(trait.assignments.size()));
+        for (const auto& assignment : trait.assignments) {
+            write_str(out, assignment.name);
+            write_location(out, assignment.location);
+            write_expression(out, *assignment.value);
+        }
+    }
+}
+
+std::vector<ArchetypeTraitEntry> ModuleArtifact::read_archetype_traits(std::istream& in) {
+    std::vector<ArchetypeTraitEntry> traits;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        ArchetypeTraitEntry trait;
+        trait.trait_name = read_str(in);
+        trait.resolved_trait_id = read_optional_symbol_id(in);
+        trait.location = read_location(in);
+        const auto fields = read_u32(in);
+        for (uint32_t j = 0; j < fields && in.good(); ++j) {
+            FieldAssignment assignment;
+            assignment.name = read_str(in);
+            assignment.location = read_location(in);
+            assignment.value = read_expression(in);
+            trait.assignments.push_back(std::move(assignment));
+        }
+        traits.push_back(std::move(trait));
+    }
+    return traits;
+}
+
+void ModuleArtifact::write_archetype_children(std::ostream& out, const std::vector<ChildArchetypeNode>& children) {
+    write_u32(out, static_cast<uint32_t>(children.size()));
+    for (const auto& child : children) {
+        write_str(out, child.role);
+        write_location(out, child.location);
+        write_archetype_traits(out, child.traits);
+        write_archetype_children(out, child.children);
+    }
+}
+
+std::vector<ChildArchetypeNode> ModuleArtifact::read_archetype_children(std::istream& in) {
+    std::vector<ChildArchetypeNode> children;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        ChildArchetypeNode child;
+        child.role = read_str(in);
+        child.location = read_location(in);
+        child.traits = read_archetype_traits(in);
+        child.children = read_archetype_children(in);
+        children.push_back(std::move(child));
+    }
+    return children;
+}
+
+void ModuleArtifact::write_template_metadata(std::ostream& out, const DecoratedProgram& program) {
+    write_u32(out, static_cast<uint32_t>(program.template_parameters.size()));
+    for (const auto& [name, parameters] : program.template_parameters) {
+        write_str(out, name);
+        write_u32(out, static_cast<uint32_t>(parameters.size()));
+        for (const auto& parameter : parameters) {
+            write_str(out, parameter.name);
+            write_type_info(out, parameter.type);
+            write_location(out, parameter.location);
+            write_bool(out, parameter.default_value != nullptr);
+            if (parameter.default_value != nullptr) {
+                write_expression(out, *parameter.default_value);
+            }
+        }
+        const auto found = program.template_blueprints.find(name);
+        const auto* blueprint = found == program.template_blueprints.end() ? nullptr : found->second.get();
+        write_bool(out, blueprint != nullptr);
+        if (blueprint == nullptr) {
+            continue;
+        }
+        write_optional_symbol_id(out, blueprint->resolved_template_id);
+        write_archetype_traits(out, blueprint->traits);
+        write_archetype_children(out, blueprint->children);
+        write_u32(out, static_cast<uint32_t>(blueprint->initializers.size()));
+        for (const auto& slot : blueprint->initializers) {
+            write_u64(out, slot.index);
+            write_type_info(out, slot.type);
+            write_bool(out, slot.value != nullptr);
+            if (slot.value != nullptr) {
+                write_expression(out, *slot.value);
+            }
+        }
+    }
+}
+
+void ModuleArtifact::read_template_metadata(std::istream& in, DecoratedProgram& program) {
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        const auto name = read_str(in);
+        const auto parameter_count = read_u32(in);
+        auto& parameters = program.template_parameters[name];
+        for (uint32_t j = 0; j < parameter_count && in.good(); ++j) {
+            ResolvedTemplateParameter parameter;
+            parameter.name = read_str(in);
+            parameter.type = read_type_info(in);
+            parameter.location = read_location(in);
+            if (read_bool(in)) {
+                parameter.default_value = read_expression(in);
+            }
+            parameters.push_back(std::move(parameter));
+        }
+        if (!read_bool(in)) {
+            continue;
+        }
+        auto blueprint = std::make_shared<TemplateNode>();
+        blueprint->name = name;
+        blueprint->resolved_template_id = read_optional_symbol_id(in);
+        blueprint->traits = read_archetype_traits(in);
+        blueprint->children = read_archetype_children(in);
+        const auto slot_count = read_u32(in);
+        for (uint32_t j = 0; j < slot_count && in.good(); ++j) {
+            InitializerSlot slot;
+            slot.index = static_cast<std::size_t>(read_u64(in));
+            slot.type = read_type_info(in);
+            if (read_bool(in)) {
+                slot.value = read_expression(in);
+            }
+            blueprint->initializers.push_back(std::move(slot));
+        }
+        program.template_blueprints[name] = std::move(blueprint);
+    }
 }
 
 }  // namespace cactus

@@ -1,4 +1,5 @@
 #include "common/error_reporter.hpp"
+#include "common/template_metadata.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/module_resolver.hpp"
@@ -141,13 +142,7 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
         }
     }
     for (const auto& name : prog.pub_templates) {
-        const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::Template, module_name, name);
-        cactus::ImportedTemplate tmpl;
-        tmpl.name            = symbol.local_name;
-        tmpl.module_name     = symbol.module.name;
-        tmpl.canonical_id    = cactus::make_canonical_id(symbol);
-        tmpl.symbol_id       = symbol;
-        syms.templates[name] = tmpl;
+        syms.templates[name] = cactus::exported_template(prog, module_name, name);
     }
     for (const auto& dep : prog.dependency_graph) {
         const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::Rule, module_name, dep.rule_name);

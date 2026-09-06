@@ -487,7 +487,8 @@ TEST_CASE("examples do not present removed syntax as current syntax", "[examples
         {"legacy config block", std::regex{R"(\bconfig\s*:)", std::regex::icase}},
         {"parenthesized add statement", std::regex{R"(\badd\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
         {"parenthesized emit statement", std::regex{R"(\bemit\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
-        {"parenthesized spawn statement", std::regex{R"(\bspawn\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"}},
+        {"positional spawn arguments",
+         std::regex{R"(\bspawn\s+[A-Za-z_][A-Za-z0-9_.]*\s*\((?!\s*(\)|$|[A-Za-z_][A-Za-z0-9_]*\s*=)))"}},
     }};
 
     const auto sources = cactus_example_sources();

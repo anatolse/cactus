@@ -1,6 +1,7 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
+#include "common/template_metadata.hpp"
 #include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
 #include "frontend/module_resolver.hpp"
@@ -266,10 +267,7 @@ TEST_CASE("integration: game_templates + editor_module cross-compile with std.ed
         }
     }
     for (const auto& name : gt_prog->pub_templates) {
-        ImportedTemplate tmpl;
-        tmpl.name               = name;
-        tmpl.canonical_id       = make_canonical_id("game_templates", name);
-        gt_syms.templates[name] = tmpl;
+        gt_syms.templates[name] = exported_template(*gt_prog, "game_templates", name);
     }
     ModuleImports editor_imports;
     editor_imports.add("game_templates", std::move(gt_syms));
@@ -539,13 +537,7 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
         syms.funcs[name]      = std::move(exported);
     }
     for (const auto& name : prog.pub_templates) {
-        const auto symbol = make_symbol_id(SymbolKind::Template, module_name, name);
-        ImportedTemplate tmpl;
-        tmpl.name            = symbol.local_name;
-        tmpl.module_name     = symbol.module.name;
-        tmpl.canonical_id    = make_canonical_id(symbol);
-        tmpl.symbol_id       = symbol;
-        syms.templates[name] = tmpl;
+        syms.templates[name] = exported_template(prog, module_name, name);
     }
     for (const auto& dep : prog.dependency_graph) {
         const auto symbol = make_symbol_id(SymbolKind::Rule, module_name, dep.rule_name);

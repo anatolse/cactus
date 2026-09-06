@@ -1,5 +1,7 @@
 #include "frontend/semantic_analyzer.hpp"
 
+#include "common/ast_expressions.hpp"
+
 #include "common/render_pass_builtin_fields.hpp"
 #include "common/render_pass_intrinsics.hpp"
 #include "common/vector_binary_ops.hpp"
@@ -432,9 +434,9 @@ std::optional<std::vector<std::string>> callee_chain_segments(const ExprNode& ca
 }
 
 bool expr_contains_self(const ExprNode& expr);
-bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments);
 std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr);
 FieldAssignment clone_field_assignment(const FieldAssignment& assignment);
+TemplateArguments clone_template_arguments(const TemplateArguments& arguments);
 ArchetypeTraitEntry clone_archetype_trait_entry(const ArchetypeTraitEntry& entry);
 std::vector<ArchetypeTraitEntry> clone_archetype_trait_entries(const std::vector<ArchetypeTraitEntry>& entries);
 ChildOverrideNode clone_child_override_node(const ChildOverrideNode& node);
@@ -442,54 +444,10 @@ std::vector<ChildOverrideNode> clone_child_override_nodes(const std::vector<Chil
 ChildArchetypeNode clone_child_archetype_node(const ChildArchetypeNode& node);
 std::vector<ChildArchetypeNode> clone_child_archetype_nodes(const std::vector<ChildArchetypeNode>& nodes);
 
-template <typename ExprContainer>
-bool any_expr_contains_self(const ExprContainer& expressions) {
-    return std::ranges::any_of(expressions, [](const auto& expr) { return expr_contains_self(*expr); });
-}
-
 bool expr_contains_self(const ExprNode& expr) {
-    return std::visit(
-        [](const auto& e) -> bool {
-            using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, SelfExpr>) {
-                return true;
-            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                return expr_contains_self(*e.operand);
-            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                return expr_contains_self(*e.left) || expr_contains_self(*e.right);
-            } else if constexpr (std::is_same_v<E, CallExpr>) {
-                return expr_contains_self(*e.callee) || any_expr_contains_self(e.args);
-            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                return expr_contains_self(*e.object);
-            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                return expr_contains_self(*e.body);
-            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                return expr_contains_self(*e.source) || std::ranges::any_of(e.operations, [](const auto& op) {
-                           return any_expr_contains_self(op.args);
-                       });
-            } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                return expr_contains_self(*e.subject) || std::ranges::any_of(e.arms, [](const auto& arm) {
-                           return expr_contains_self(*arm.pattern) || expr_contains_self(*arm.body);
-                       });
-            } else if constexpr (std::is_same_v<E, IfExpr>) {
-                return expr_contains_self(*e.condition) || expr_contains_self(*e.then_expr) ||
-                       expr_contains_self(*e.else_expr);
-            } else if constexpr (std::is_same_v<E, ListExpr>) {
-                return any_expr_contains_self(e.elements);
-            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                return std::ranges::any_of(
-                    e.overrides, [](const auto& trait) { return field_assignments_contain_self(trait.assignments); });
-            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                return field_assignments_contain_self(e.named_args);
-            } else {
-                return false;
-            }
-        },
-        expr.expr);
-}
-
-bool field_assignments_contain_self(const std::vector<FieldAssignment>& assignments) {
-    return std::ranges::any_of(assignments, [](const auto& field) { return expr_contains_self(*field.value); });
+    bool found = false;
+    visit_expression(expr, [&found](const ExprNode& node) { found |= std::holds_alternative<SelfExpr>(node.expr); });
+    return found;
 }
 
 std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
@@ -568,6 +526,7 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                                .overrides       = clone_archetype_trait_entries(e.overrides),
                                .child_overrides = clone_child_override_nodes(e.child_overrides),
                                .location        = e.location};
+                copy.arguments = clone_template_arguments(e.arguments);
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
                 QueryCallExpr copy;
@@ -587,6 +546,17 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
 FieldAssignment clone_field_assignment(const FieldAssignment& assignment) {
     return FieldAssignment{
         .name = assignment.name, .value = clone_expr(*assignment.value), .location = assignment.location};
+}
+
+TemplateArguments clone_template_arguments(const TemplateArguments& arguments) {
+    TemplateArguments copy;
+    copy.has_parentheses = arguments.has_parentheses;
+    copy.bindings        = arguments.bindings;
+    copy.bound           = arguments.bound;
+    for (const auto& argument : arguments.values) {
+        copy.values.push_back(clone_field_assignment(argument));
+    }
+    return copy;
 }
 
 ArchetypeTraitEntry clone_archetype_trait_entry(const ArchetypeTraitEntry& entry) {
@@ -634,7 +604,13 @@ ChildArchetypeNode clone_child_archetype_node(const ChildArchetypeNode& node) {
     copy.template_ref    = node.template_ref;
     copy.location        = node.location;
     copy.body_entries    = node.body_entries;
-    copy.template_uses   = node.template_uses;
+    for (const auto& use : node.template_uses) {
+        copy.template_uses.push_back({.template_name = use.template_name,
+                                      .resolved_template_id = use.resolved_template_id,
+                                      .location = use.location,
+                                      .arguments = clone_template_arguments(use.arguments)});
+    }
+    copy.arguments = clone_template_arguments(node.arguments);
     copy.traits          = clone_archetype_trait_entries(node.traits);
     copy.children        = clone_child_archetype_nodes(node.children);
     copy.child_overrides = clone_child_override_nodes(node.child_overrides);
@@ -677,6 +653,60 @@ void merge_trait_entry_into(std::vector<ArchetypeTraitEntry>& merged, const Arch
         } else {
             *field = clone_field_assignment(assignment);
         }
+    }
+}
+
+// Flattened archetypes carry both merged traits and recursively flattened
+// child trees (dsl-hierarchical-entity-templates D2).
+struct FlattenedArchetype {
+    std::vector<ArchetypeTraitEntry> traits;
+    std::vector<ChildArchetypeNode> children;
+    std::vector<InitializerSlot> initializers;
+};
+
+FlattenedArchetype clone_flattened(const FlattenedArchetype& flattened) {
+    return FlattenedArchetype{.traits       = clone_archetype_trait_entries(flattened.traits),
+                              .children     = clone_child_archetype_nodes(flattened.children),
+                              .initializers = flattened.initializers};
+}
+
+// Splice one template application's slots onto the applying scope's slot list.
+// The applied archetype numbers its slots from zero, so everything it carries
+// shifts up by however many slots the applying scope already owns; explicit
+// arguments are written in the applying scope and keep their numbering.
+void bind_application(FlattenedArchetype& used,
+                      const TemplateArguments& arguments,
+                      std::vector<InitializerSlot>& slots) {
+    const auto offset  = slots.size();
+    auto offset_traits = [offset](auto& traits) {
+        for (auto& trait : traits) {
+            for (auto& assignment : trait.assignments) {
+                offset_initializer_slots(*assignment.value, offset);
+            }
+        }
+    };
+    auto offset_children = [&offset_traits](this auto&& self, auto& children) -> void {
+        for (auto& child : children) {
+            offset_traits(child.traits);
+            self(child.children);
+        }
+    };
+    offset_traits(used.traits);
+    offset_children(used.children);
+    for (const auto& binding : arguments.bindings) {
+        auto value = clone_expr(*binding.value);
+        if (binding.is_default) {
+            offset_initializer_slots(*value, offset);
+        }
+        slots.push_back({.index = binding.index + offset, .type = binding.type, .value = std::move(value)});
+    }
+    for (const auto& slot : used.initializers) {
+        if (slot.value == nullptr) {
+            continue;
+        }
+        auto value = clone_expr(*slot.value);
+        offset_initializer_slots(*value, offset);
+        slots.push_back({.index = slot.index + offset, .type = slot.type, .value = std::move(value)});
     }
 }
 
@@ -1015,6 +1045,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 2: Resolve types in fields
     resolve_all_types(program);
     resolve_trait_references(program);
+    collect_template_parameters(program);
 
     // Phase 3: Semantic checks
     check_const_strings(program);
@@ -1038,6 +1069,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
 
     // Phase 3: Dynamic ECS checks (dynamic-ecs-language change)
     validate_template_unit_declarations(program);
+    validate_template_applications(program);
     validate_template_use_cycles(program);
     flatten_template_compositions(program);
     validate_template_backed_entity_overrides(program);
@@ -1376,6 +1408,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
     std::function<void(std::vector<ChildArchetypeNode>&)> resolve_child_archetypes;
     std::function<void(ExprNode&)> resolve_expr;
     std::function<void(std::vector<std::unique_ptr<StmtNode>>&)> resolve_stmts;
+    std::unordered_map<std::string, std::pair<std::size_t, TypeInfo>> template_scope;
 
     resolve_child_overrides = [&](std::vector<ChildOverrideNode>& overrides) {
         for (auto& override_node : overrides) {
@@ -1388,14 +1421,23 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
 
     resolve_child_archetypes = [&](std::vector<ChildArchetypeNode>& children) {
         for (auto& child : children) {
+            for (auto& argument : child.arguments.values) {
+                resolve_expr(*argument.value);
+            }
             if (child.template_ref.has_value()) {
                 child.resolved_template_ref_id = try_resolve_template_ref_to_symbol(*child.template_ref);
             }
             for (auto& use : child.template_uses) {
                 use.resolved_template_id = try_resolve_template_ref_to_symbol(use.template_name);
+                for (auto& argument : use.arguments.values) {
+                    resolve_expr(*argument.value);
+                }
             }
             for (auto& trait : child.traits) {
                 resolve_trait_entry(trait);
+                for (auto& assignment : trait.assignments) {
+                    resolve_expr(*assignment.value);
+                }
             }
             resolve_child_archetypes(child.children);
             resolve_child_overrides(child.child_overrides);
@@ -1425,6 +1467,12 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
     };
 
     resolve_expr = [&](ExprNode& expr) {
+        if (auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+            if (const auto found = template_scope.find(ident->name); found != template_scope.end()) {
+                ident->template_slot = found->second.first;
+                ident->template_type = found->second.second;
+            }
+        }
         std::visit(
             [&](auto& e) {  // NOLINT(readability-function-cognitive-complexity) -- per-ExprNode-kind resolution
                 using E = std::decay_t<decltype(e)>;
@@ -1435,6 +1483,10 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     resolve_expr(*e.right);
                 } else if constexpr (std::is_same_v<E, CallExpr>) {
                     e.resolved_callee_id = resolve_callee_symbol(*e.callee);
+                    if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
+                        ident != nullptr && template_names_.contains(ident->name)) {
+                        errors_.error(e.location, "template applications are only valid at creation sites");
+                    }
                     resolve_expr(*e.callee);
                     for (auto& arg : e.args) {
                         resolve_expr(*arg);
@@ -1469,6 +1521,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     }
                 } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                     e.resolved_template_id = try_resolve_template_ref_to_symbol(e.template_name);
+                    for (auto& argument : e.arguments.values) {
+                        resolve_expr(*argument.value);
+                    }
                     for (auto& override_entry : e.overrides) {
                         resolve_trait_entry(override_entry);
                         for (auto& assignment : override_entry.assignments) {
@@ -1533,6 +1588,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                         }
                     } else if constexpr (std::is_same_v<S, SpawnStmt>) {
                         s.resolved_template_id = try_resolve_template_ref_to_symbol(s.template_name);
+                        for (auto& argument : s.arguments.values) {
+                            resolve_expr(*argument.value);
+                        }
                         for (auto& override_entry : s.overrides) {
                             resolve_trait_entry(override_entry);
                             for (auto& assignment : override_entry.assignments) {
@@ -1587,6 +1645,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     }
                 } else if constexpr (std::is_same_v<T, EntityNode>) {
                     node.resolved_entity_id = make_symbol_id(SymbolKind::Entity, current_module_id_, node.name);
+                    for (auto& argument : node.arguments.values) {
+                        resolve_expr(*argument.value);
+                    }
                     if (node.template_ref.has_value()) {
                         node.resolved_template_ref_id = try_resolve_template_ref_to_symbol(*node.template_ref);
                     }
@@ -1598,11 +1659,20 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     }
                     for (auto& use : node.template_uses) {
                         use.resolved_template_id = try_resolve_template_ref_to_symbol(use.template_name);
+                        for (auto& argument : use.arguments.values) {
+                            resolve_expr(*argument.value);
+                        }
                     }
                     resolve_child_archetypes(node.children);
                     resolve_child_overrides(node.child_overrides);
                 } else if constexpr (std::is_same_v<T, TemplateNode>) {
                     node.resolved_template_id = make_symbol_id(SymbolKind::Template, current_module_id_, node.name);
+                    for (auto& parameter : node.parameters) {
+                        if (parameter.default_value.has_value()) {
+                            resolve_expr(**parameter.default_value);
+                        }
+                        template_scope.emplace(parameter.name, std::pair{template_scope.size(), resolve_type_ref(parameter.type)});
+                    }
                     for (auto& trait : node.traits) {
                         resolve_trait_entry(trait);
                         for (auto& assignment : trait.assignments) {
@@ -1611,8 +1681,12 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     }
                     for (auto& use : node.template_uses) {
                         use.resolved_template_id = try_resolve_template_ref_to_symbol(use.template_name);
+                        for (auto& argument : use.arguments.values) {
+                            resolve_expr(*argument.value);
+                        }
                     }
                     resolve_child_archetypes(node.children);
+                    template_scope.clear();
                 } else if constexpr (std::is_same_v<T, PhaseNode>) {
                     node.resolved_phase_id = make_symbol_id(SymbolKind::Phase, current_module_id_, node.name);
                     node.resolved_from.clear();
@@ -1952,69 +2026,24 @@ void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::s
 // hooks (fired after recursing into a CallExpr's children, matching every
 // existing call site's order; fired before recursing into a SpawnExpr's or
 // QueryCallExpr's children, also matching every existing call site).
-void SemanticAnalyzer::check_purity_deny_list(  // NOLINT(readability-function-cognitive-complexity) -- exhaustive
-                                                // per-ExprNode-kind traversal, inherited from the
-                                                // already-NOLINT'd check_where_purity_expr this consolidates
+void SemanticAnalyzer::check_purity_deny_list(
     const ExprNode& expr,
     const std::function<void(const CallExpr&)>& on_call,
     const std::function<void(const SpawnExpr&)>& on_spawn,
     const std::function<void(const QueryCallExpr&)>& on_query) {
-    std::visit(
-        [&](auto& e) {  // NOLINT(readability-function-cognitive-complexity) -- see function-level NOLINT above
-            using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, CallExpr>) {
-                check_purity_deny_list(*e.callee, on_call, on_spawn, on_query);
-                for (auto& arg : e.args) {
-                    check_purity_deny_list(*arg, on_call, on_spawn, on_query);
-                }
-                on_call(e);
-            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                check_purity_deny_list(*e.left, on_call, on_spawn, on_query);
-                check_purity_deny_list(*e.right, on_call, on_spawn, on_query);
-            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                check_purity_deny_list(*e.operand, on_call, on_spawn, on_query);
-            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                check_purity_deny_list(*e.object, on_call, on_spawn, on_query);
-            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                check_purity_deny_list(*e.body, on_call, on_spawn, on_query);
-            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                check_purity_deny_list(*e.source, on_call, on_spawn, on_query);
-                for (auto& op : e.operations) {
-                    for (auto& arg : op.args) {
-                        check_purity_deny_list(*arg, on_call, on_spawn, on_query);
-                    }
-                }
-            } else if constexpr (std::is_same_v<E, MatchExpr>) {
-                check_purity_deny_list(*e.subject, on_call, on_spawn, on_query);
-                for (auto& arm : e.arms) {
-                    check_purity_deny_list(*arm.pattern, on_call, on_spawn, on_query);
-                    check_purity_deny_list(*arm.body, on_call, on_spawn, on_query);
-                }
-            } else if constexpr (std::is_same_v<E, IfExpr>) {
-                check_purity_deny_list(*e.condition, on_call, on_spawn, on_query);
-                check_purity_deny_list(*e.then_expr, on_call, on_spawn, on_query);
-                check_purity_deny_list(*e.else_expr, on_call, on_spawn, on_query);
-            } else if constexpr (std::is_same_v<E, ListExpr>) {
-                for (auto& element : e.elements) {
-                    check_purity_deny_list(*element, on_call, on_spawn, on_query);
-                }
-            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
-                on_spawn(e);
-                for (auto& trait : e.overrides) {
-                    for (auto& field : trait.assignments) {
-                        check_purity_deny_list(*field.value, on_call, on_spawn, on_query);
-                    }
-                }
-            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
-                on_query(e);
-                for (auto& arg : e.named_args) {
-                    check_purity_deny_list(*arg.value, on_call, on_spawn, on_query);
-                }
+    visit_expression(expr, [&](const ExprNode& node) {
+        std::visit([&](const auto& value) {
+            using Value = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Value, CallExpr>) {
+                on_call(value);
+            } else if constexpr (std::is_same_v<Value, SpawnExpr>) {
+                on_spawn(value);
+            } else if constexpr (std::is_same_v<Value, QueryCallExpr>) {
+                on_query(value);
             }
-        },
-        expr.expr);
+        }, node.expr);
+    });
 }
-
 void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::string& func_name) {
     check_purity_deny_list(
         expr,
@@ -4108,6 +4137,11 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
     auto in_rule_handler = !rule_name.empty();
 
     for (const auto& stmt : stmts) {
+        if (const auto* spawn = std::get_if<SpawnStmt>(&stmt->stmt)) {
+            validate_template_arguments(spawn->template_name, spawn->arguments, spawn->location,
+                                        filter_bindings, locals, handler_event, pair_scope);
+            continue;
+        }
         if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
             locals[let_stmt->name] =
                 infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event, pair_scope);
@@ -6493,6 +6527,9 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const PairScope* pair_scope) const {
+    if (ident.template_slot.has_value()) {
+        return ident.template_type;
+    }
     if (auto local_it = local_bindings.find(ident.name); local_it != local_bindings.end()) {
         return local_it->second;
     }
@@ -6860,7 +6897,9 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
             *member, expr.location, filter_bindings, local_bindings, handler_event, pair_scope);
     }
 
-    if (std::holds_alternative<SpawnExpr>(expr.expr)) {
+    if (const auto* spawn = std::get_if<SpawnExpr>(&expr.expr)) {
+        validate_template_arguments(spawn->template_name, spawn->arguments, spawn->location,
+                                    filter_bindings, local_bindings, handler_event, pair_scope);
         return make_entity_id_type();
     }
     if (const auto* qcall = std::get_if<QueryCallExpr>(&expr.expr)) {
@@ -7484,6 +7523,171 @@ void SemanticAnalyzer::validate_template_use_cycles(ProgramNode& program) {
     }
 }
 
+void SemanticAnalyzer::validate_template_argument_purity(const ExprNode& expr) const {
+    check_purity_deny_list(expr,
+        [this](const CallExpr& call) {
+            if (!call.resolved_callee_id.has_value()) {
+                return;
+            }
+            const auto* function = find_resolved_func(*call.resolved_callee_id);
+            if (function == nullptr || !function->effect_summary.has_value() || !function->effect_summary->empty()) {
+                errors_.error(call.location, "template arguments and defaults must be pure");
+            }
+        },
+        [this](const SpawnExpr& spawn) { errors_.error(spawn.location, "template arguments and defaults must be pure"); },
+        [this](const QueryCallExpr& query) { errors_.error(query.location, "template arguments and defaults must be pure"); });
+}
+
+void SemanticAnalyzer::validate_template_value_names(
+    const ExprNode& expr,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filters,
+    const std::unordered_map<std::string, TypeInfo>& locals,
+    const ResolvedStruct* event, const PairScope* pairs) const {
+    std::unordered_set<const ExprNode*> callees;
+    visit_expression(expr, [&](const ExprNode& node) {
+        if (const auto* call = std::get_if<CallExpr>(&node.expr)) {
+            callees.insert(call->callee.get());
+        }
+        const auto* ident = std::get_if<IdentExpr>(&node.expr);
+        if (ident == nullptr || callees.contains(&node) || is_known_type(ident->name)) {
+            return;
+        }
+        const bool module_name = std::ranges::any_of(imports_.modules, [&](const auto& module) {
+            return module.first == ident->name || module.first.starts_with(ident->name + ".");
+        });
+        if (module_name) {
+            return;
+        }
+        if (infer_expr_type(node, filters, locals, event, pairs).kind == TypeKind::Unknown) {
+            errors_.error(node.location, "name '" + ident->name + "' is unavailable in this template argument or default");
+        }
+    });
+}
+
+void SemanticAnalyzer::collect_template_parameters(ProgramNode& program) {
+    for (const auto& [qualifier, module] : imports_.modules) {
+        for (const auto& [name, imported] : module.templates) {
+            auto qualified = qualifier;
+            qualified.append(".").append(name);
+            result_.template_parameters[qualified] = imported.parameters;
+            result_.template_blueprints[qualified] = imported.blueprint;
+        }
+    }
+    for (auto& declaration : program.declarations) {
+        auto* node = std::get_if<TemplateNode>(&declaration);
+        if (node == nullptr) {
+            continue;
+        }
+        auto& signature = result_.template_parameters[node->name];
+        std::unordered_map<std::string, TypeInfo> earlier;
+        for (const auto& parameter : node->parameters) {
+            auto type = resolve_type_ref(parameter.type);
+            if (earlier.contains(parameter.name)) {
+                errors_.error(parameter.location, "duplicate template parameter '" + parameter.name + "'");
+                continue;
+            }
+            ResolvedTemplateParameter resolved{.name = parameter.name, .type = type, .location = parameter.location};
+            if (parameter.default_value.has_value()) {
+                resolved.default_value = clone_expr(**parameter.default_value);
+                validate_template_argument_purity(*resolved.default_value);
+                validate_template_value_names(*resolved.default_value, {}, earlier, nullptr);
+                const auto actual = infer_expr_type(*resolved.default_value, {}, earlier, nullptr);
+                if (!same_type(type, actual)) {
+                    errors_.error(parameter.location, "template default must match parameter type and use only constants or earlier parameters");
+                }
+            }
+            signature.push_back(std::move(resolved));
+            earlier.emplace(parameter.name, std::move(type));
+        }
+        for (const auto& child : node->children) {
+            if (earlier.contains(child.role)) {
+                errors_.error(child.location, "child role conflicts with template parameter '" + child.role + "'");
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_template_arguments(
+    const std::string& name, const TemplateArguments& arguments, const SourceLocation& location,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filters,
+    const std::unordered_map<std::string, TypeInfo>& locals,
+    const ResolvedStruct* event, const PairScope* pairs) const {
+    const auto found = result_.template_parameters.find(name);
+    if (found == result_.template_parameters.end() || arguments.bound) {
+        return;
+    }
+    arguments.bound = true;
+    std::unordered_map<std::string, const ResolvedTemplateParameter*> parameters;
+    for (const auto& parameter : found->second) {
+        parameters.emplace(parameter.name, &parameter);
+    }
+    std::unordered_set<std::string> supplied;
+    for (const auto& argument : arguments.values) {
+        if (!supplied.insert(argument.name).second) {
+            errors_.error(argument.location, "duplicate template argument '" + argument.name + "'");
+        }
+        const auto parameter = parameters.find(argument.name);
+        if (parameter == parameters.end()) {
+            errors_.error(argument.location, "unknown template argument '" + argument.name + "'");
+            continue;
+        }
+        validate_template_argument_purity(*argument.value);
+        validate_template_value_names(*argument.value, filters, locals, event, pairs);
+        const auto actual = infer_expr_type(*argument.value, filters, locals, event, pairs);
+        if (!same_type(parameter->second->type, actual)) {
+            errors_.error(argument.location, "template argument '" + argument.name + "' must have type '" + parameter->second->type.name + "'");
+        }
+        const auto index = static_cast<std::size_t>(parameter->second - found->second.data());
+        arguments.bindings.push_back({.index = index, .type = parameter->second->type,
+                                      .value = clone_expr(*argument.value)});
+    }
+    for (const auto& parameter : found->second) {
+        if (!supplied.contains(parameter.name) && parameter.default_value == nullptr) {
+            errors_.error(location, "missing required template argument '" + parameter.name + "'");
+        }
+        if (!supplied.contains(parameter.name) && parameter.default_value != nullptr) {
+            const auto index = static_cast<std::size_t>(&parameter - found->second.data());
+            arguments.bindings.push_back({.index = index, .type = parameter.type,
+                                          .value = clone_expr(*parameter.default_value), .is_default = true});
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_template_applications(ProgramNode& program) {
+    using Locals = std::unordered_map<std::string, TypeInfo>;
+    auto validate_uses = [this](const auto& uses, const Locals& locals) {
+        for (const auto& use : uses) {
+            validate_template_arguments(use.template_name, use.arguments, use.location, {}, locals, nullptr);
+        }
+    };
+    auto validate_children = [this, &validate_uses](this auto&& self, const auto& children, const Locals& locals) -> void {
+        for (const auto& child : children) {
+            if (child.template_ref.has_value()) {
+                validate_template_arguments(*child.template_ref, child.arguments, child.location, {}, locals, nullptr);
+            }
+            validate_uses(child.template_uses, locals);
+            self(child.children, locals);
+        }
+    };
+    for (const auto& declaration : program.declarations) {
+        if (const auto* node = std::get_if<TemplateNode>(&declaration)) {
+            Locals locals;
+            for (const auto& parameter : result_.template_parameters.at(node->name)) {
+                locals.emplace(parameter.name, parameter.type);
+            }
+            validate_uses(node->template_uses, locals);
+            validate_children(node->children, locals);
+        }
+        if (const auto* node = std::get_if<EntityNode>(&declaration)) {
+            if (node->template_ref.has_value()) {
+                validate_template_arguments(*node->template_ref, node->arguments, node->location, {}, {}, nullptr);
+            }
+            validate_uses(node->template_uses, {});
+            validate_children(node->children, {});
+        }
+    }
+}
+
 void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
     std::unordered_map<std::string, TemplateNode*> local_templates;
     std::vector<TemplateNode*> template_order;
@@ -7495,18 +7699,6 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         }
     }
 
-    // Flattened archetypes carry both merged traits and recursively flattened
-    // child trees (dsl-hierarchical-entity-templates D2).
-    struct FlattenedArchetype {
-        std::vector<ArchetypeTraitEntry> traits;
-        std::vector<ChildArchetypeNode> children;
-    };
-
-    auto clone_flattened = [](const FlattenedArchetype& flattened) {
-        return FlattenedArchetype{.traits   = clone_archetype_trait_entries(flattened.traits),
-                                  .children = clone_child_archetype_nodes(flattened.children)};
-    };
-
     std::unordered_map<std::string, FlattenedArchetype> flattened_templates;
     std::unordered_set<std::string> visiting;
 
@@ -7514,29 +7706,40 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
     std::function<FlattenedArchetype(const std::vector<ArchetypeBodyEntry>&,
                                      const std::vector<ArchetypeTemplateUseEntry>&,
                                      const std::vector<ArchetypeTraitEntry>&,
-                                     const std::vector<ChildArchetypeNode>&)>
+                                     const std::vector<ChildArchetypeNode>&,
+                                     std::vector<InitializerSlot>)>
         flatten_body;
-    std::function<ChildArchetypeNode(const ChildArchetypeNode&)> flatten_child;
+    std::function<ChildArchetypeNode(const ChildArchetypeNode&, std::vector<InitializerSlot>&)> flatten_child;
+
+    // Blueprints cover imported templates and locals already flattened this pass.
+    auto find_flattened_template = [&](const std::string& name) -> std::optional<FlattenedArchetype> {
+        const auto found = result_.template_blueprints.find(name);
+        if (found == result_.template_blueprints.end() || found->second == nullptr) {
+            return std::nullopt;
+        }
+        const auto& blueprint = *found->second;
+        return FlattenedArchetype{.traits = clone_archetype_trait_entries(blueprint.traits),
+                                  .children = clone_child_archetype_nodes(blueprint.children),
+                                  .initializers = blueprint.initializers};
+    };
 
     auto append_template_use = [&](FlattenedArchetype& merged, const ArchetypeTemplateUseEntry& use) {
-        if (use.template_name.contains('.')) {
-            // Imported templates are resolved during validation. Their concrete
-            // archetype bodies are not present in this compilation unit, so they
-            // remain represented by the original template-use entry for later
-            // multi-module/backend handling.
+        std::optional<FlattenedArchetype> used;
+        if (auto template_it = local_templates.find(use.template_name);
+            template_it != local_templates.end() && template_it->second != nullptr) {
+            used = flatten_template(*template_it->second);
+        } else {
+            used = find_flattened_template(use.template_name);
+        }
+        if (!used.has_value()) {
             return;
         }
 
-        auto template_it = local_templates.find(use.template_name);
-        if (template_it == local_templates.end() || template_it->second == nullptr) {
-            return;
-        }
-
-        auto used = flatten_template(*template_it->second);
-        for (const auto& used_trait : used.traits) {
+        bind_application(*used, use.arguments, merged.initializers);
+        for (const auto& used_trait : used->traits) {
             merge_trait_entry_into(merged.traits, used_trait);
         }
-        for (const auto& used_child : used.children) {
+        for (const auto& used_child : used->children) {
             merge_child_archetype_into(merged.children, used_child);
         }
     };
@@ -7544,8 +7747,10 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
     flatten_body = [&](const std::vector<ArchetypeBodyEntry>& body_entries,
                        const std::vector<ArchetypeTemplateUseEntry>& template_uses,
                        const std::vector<ArchetypeTraitEntry>& traits,
-                       const std::vector<ChildArchetypeNode>& children) {
+                       const std::vector<ChildArchetypeNode>& children,
+                       std::vector<InitializerSlot> slots) {
         FlattenedArchetype merged;
+        merged.initializers = std::move(slots);
 
         if (body_entries.empty()) {
             // Some tests construct AST nodes directly and predate body_entries.
@@ -7574,18 +7779,19 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         // Declared children flatten recursively and merge by role with any
         // children contributed by body-level `use` templates.
         for (const auto& child : children) {
-            merge_child_archetype_into(merged.children, flatten_child(child));
+            merge_child_archetype_into(merged.children, flatten_child(child, merged.initializers));
         }
 
         return merged;
     };
 
-    flatten_child = [&](const ChildArchetypeNode& node) {
+    flatten_child = [&](const ChildArchetypeNode& node, std::vector<InitializerSlot>& slots) {
         ChildArchetypeNode flat;
         flat.role     = node.role;
         flat.location = node.location;
 
-        auto own = flatten_body(node.body_entries, node.template_uses, node.traits, node.children);
+        auto own = flatten_body(node.body_entries, node.template_uses, node.traits, node.children, std::move(slots));
+        slots = std::move(own.initializers);
         if (!node.template_ref.has_value()) {
             flat.traits   = std::move(own.traits);
             flat.children = std::move(own.children);
@@ -7596,13 +7802,18 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         // (traits and descendants), then applies the child body and nested
         // overrides on top.
         FlattenedArchetype base;
-        bool base_available   = false;
-        const auto dot        = node.template_ref->rfind('.');
-        const auto lookup_key = dot != std::string::npos ? node.template_ref->substr(dot + 1) : *node.template_ref;
+        bool base_available    = false;
+        const auto& lookup_key = *node.template_ref;
         if (auto template_it = local_templates.find(lookup_key);
             template_it != local_templates.end() && template_it->second != nullptr) {
             base           = flatten_template(*template_it->second);
             base_available = true;
+        } else if (auto imported = find_flattened_template(lookup_key); imported.has_value()) {
+            base           = std::move(*imported);
+            base_available = true;
+        }
+        if (base_available) {
+            bind_application(base, node.arguments, slots);
         }
 
         for (const auto& trait : own.traits) {
@@ -7635,12 +7846,24 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
             return FlattenedArchetype{.traits = clone_archetype_trait_entries(tmpl.traits), .children = {}};
         }
 
-        auto flattened = flatten_body(tmpl.body_entries, tmpl.template_uses, tmpl.traits, tmpl.children);
+        std::vector<InitializerSlot> slots;
+        for (const auto& parameter : result_.template_parameters.at(tmpl.name)) {
+            slots.push_back({.index = slots.size(), .type = parameter.type});
+        }
+        auto flattened = flatten_body(tmpl.body_entries, tmpl.template_uses, tmpl.traits, tmpl.children, std::move(slots));
         visiting.erase(tmpl.name);
 
         flattened_templates[tmpl.name] = clone_flattened(flattened);
         tmpl.traits                    = clone_archetype_trait_entries(flattened.traits);
         tmpl.children                  = clone_child_archetype_nodes(flattened.children);
+        tmpl.initializers              = flattened.initializers;
+        auto blueprint = std::make_shared<TemplateNode>();
+        blueprint->name = tmpl.name;
+        blueprint->resolved_template_id = tmpl.resolved_template_id;
+        blueprint->traits = clone_archetype_trait_entries(tmpl.traits);
+        blueprint->children = clone_child_archetype_nodes(tmpl.children);
+        blueprint->initializers = tmpl.initializers;
+        result_.template_blueprints[tmpl.name] = std::move(blueprint);
         archetype_traits_[tmpl.name]   = &tmpl.traits;
         archetype_children_[tmpl.name] = &tmpl.children;
         return flattened;
@@ -7660,6 +7883,25 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
                 // archetype_traits_ uses unqualified names; strip module qualifier if present
                 const auto dot        = tmpl_ref.rfind('.');
                 const auto lookup_key = dot != std::string::npos ? tmpl_ref.substr(dot + 1) : tmpl_ref;
+                auto applied          = find_flattened_template(tmpl_ref);
+                if (!applied.has_value()) {
+                    if (const auto found = local_templates.find(lookup_key);
+                        found != local_templates.end() && found->second != nullptr) {
+                        applied = flatten_template(*found->second);
+                    }
+                }
+                if (applied.has_value()) {
+                    bind_application(*applied, entity->arguments, entity->initializers);
+                    for (const auto& entry : entity->traits) {
+                        merge_trait_entry_into(applied->traits, entry);
+                    }
+                    apply_child_overrides_onto(applied->children, entity->child_overrides);
+                    entity->traits                    = std::move(applied->traits);
+                    entity->children                  = std::move(applied->children);
+                    archetype_traits_[entity->name]   = &entity->traits;
+                    archetype_children_[entity->name] = &entity->children;
+                    continue;
+                }
                 auto tmpl_it          = archetype_traits_.find(lookup_key);
                 if (tmpl_it != archetype_traits_.end() && tmpl_it->second != nullptr) {
                     auto merged = clone_archetype_trait_entries(*tmpl_it->second);
@@ -7680,9 +7922,10 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
                 // (If template not found, validation already reported the error; leave traits as-is)
             } else {
                 auto flattened =
-                    flatten_body(entity->body_entries, entity->template_uses, entity->traits, entity->children);
+                    flatten_body(entity->body_entries, entity->template_uses, entity->traits, entity->children, {});
                 entity->traits   = clone_archetype_trait_entries(flattened.traits);
                 entity->children = clone_child_archetype_nodes(flattened.children);
+                entity->initializers = std::move(flattened.initializers);
             }
             archetype_traits_[entity->name]   = &entity->traits;
             archetype_children_[entity->name] = &entity->children;

@@ -80,6 +80,151 @@ static std::pair<DecoratedProgram, std::vector<Diagnostic>> analyze_with_diagnos
     return {std::move(result), errors.diagnostics()};
 }
 
+static bool analyze_has_errors(const std::string& source);
+
+TEST_CASE("Semantic: template defaults reject later parameters inside constructors", "[semantic][template-parameters]") {
+    CHECK(analyze_has_errors(R"(trait Data
+template Item(a: vec2 = vec2(b), b: float = 1.0):
+    Data
+)"));
+}
+
+TEST_CASE("Semantic: template values cannot capture handler state at load time", "[semantic][template-parameters]") {
+    CHECK(analyze_has_errors(R"(trait Data
+template Item(value: int):
+    Data
+entity First from Item(value = handler_local)
+)"));
+}
+
+TEST_CASE("Semantic: template parameters bind dependent defaults", "[semantic][template-parameters]") {
+    auto program = analyze(R"(trait Motion:
+    var velocity: vec2
+template Projectile(speed: float, velocity: vec2 = vec2(speed, 0.0)):
+    Motion:
+        velocity = velocity
+entity First from Projectile(speed = 12.0)
+)");
+    CHECK(program.module_name == "test");
+}
+
+TEST_CASE("Semantic: template argument diagnostics accumulate", "[semantic][template-parameters]") {
+    const std::string source = R"(module test
+trait Data:
+    var value: int
+template Item(value: int):
+    Data:
+        value = value
+entity Missing from Item()
+entity Duplicate from Item(value = 1, value = 2)
+entity Wrong from Item(value = true)
+entity Unknown from Item(extra = 1)
+)";
+    ErrorReporter errors;
+    Lexer lexer(source, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast);
+    REQUIRE(errors.error_count() >= 4);
+    for (const auto& diagnostic : errors.diagnostics()) {
+        CHECK_FALSE(diagnostic.message.empty());
+    }
+}
+
+TEST_CASE("Semantic: template binding plans preserve source order then dependent defaults", "[semantic][template-parameters]") {
+    ErrorReporter errors;
+    Lexer lexer(R"(module test
+trait Data:
+    var value: int
+template Item(a: int, b: int, c: int = a + b):
+    Data:
+        value = c
+entity First from Item(b = 2, a = 1)
+)", "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast);
+    REQUIRE_FALSE(errors.has_errors());
+    const auto& entity = std::get<EntityNode>(ast.declarations.back());
+    REQUIRE(entity.initializers.size() == 3);
+    CHECK(entity.initializers[0].index == 1);
+    CHECK(entity.initializers[1].index == 0);
+    CHECK(entity.initializers[2].index == 2);
+    const auto& sum = std::get<BinaryExpr>(entity.initializers[2].value->expr);
+    CHECK(std::get<IdentExpr>(sum.left->expr).template_slot == 0);
+    CHECK(std::get<IdentExpr>(sum.right->expr).template_slot == 1);
+}
+
+TEST_CASE("Semantic: spawn arguments read trait values and event data", "[semantic][template-parameters]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + R"(trait Pos:
+    var x: float
+trait Motion:
+    var speed: float
+template Projectile(speed: float):
+    Motion:
+        speed = speed
+rule Fire:
+    filter:
+        Pos
+    on tick:
+        spawn Projectile(speed = x + tick.dt)
+)"));
+}
+
+TEST_CASE("Semantic: template parameters reject duplicates and child-role collisions",
+          "[semantic][template-parameters]") {
+    CHECK(analyze_has_errors(R"(trait Data:
+    var value: int
+template Item(value: int, value: int):
+    Data:
+        value = value
+)"));
+    // The `children:` block needs `Parent`, which this module has no import for,
+    // so pin the assertion to the collision diagnostic itself.
+    ErrorReporter errors;
+    Lexer lexer(R"(module test
+trait Data:
+    var value: int
+template Item(Child: int):
+    Data:
+        value = Child
+    children:
+        entity Child:
+            Data:
+                value = 1
+)",
+                "test.cactus",
+                errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast);
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
+        return diagnostic.message == "child role conflicts with template parameter 'Child'";
+    }));
+}
+
+TEST_CASE("Semantic: templates cannot be called as ordinary values", "[semantic][template-parameters]") {
+    ErrorReporter errors;
+    Lexer lexer(R"(module test
+trait Data
+template Item(value: int):
+    Data
+func invalid() int:
+    return Item(1)
+)", "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast);
+    CHECK(errors.has_errors());
+}
+
 static bool analyze_has_errors(const std::string& source) {
     const std::string src = starts_with_module_decl(source) ? source : "module test\n" + source;
     ErrorReporter errors;

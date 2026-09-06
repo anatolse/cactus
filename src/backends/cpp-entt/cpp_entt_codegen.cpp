@@ -32,6 +32,7 @@ const ResolvedEvent* find_std_core_event(const DecoratedProgram& program,
                                          bool require_external = false);
 bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& event_symbol);
 const PhasePlan* find_render_phase(const DecoratedProgram& program);
+bool creation_takes_parameters(const std::vector<InitializerSlot>& slots);
 
 bool program_uses_module(const DecoratedProgram& program, std::string_view module_name) {
     if (program.ast == nullptr) {
@@ -217,6 +218,12 @@ std::string emit_external_command_forward_declarations(const DecoratedProgram& p
                 throw std::runtime_error("cpp-entt cannot lower external spawn capability for missing template '" +
                                          make_canonical_id(*command.target) + "'");
             }
+            if (creation_takes_parameters(template_node->initializers)) {
+                throw std::runtime_error(
+                    "cpp-entt cannot lower external spawn capability for parameterized template '" +
+                    make_canonical_id(*command.target) +
+                    "': an external handler has no place to supply template arguments");
+            }
             declarations.insert("entt::entity " +
                                 archetype_create_at_function_name(program.module_name, template_node->name) +
                                 "(entt::registry& registry, entt::entity hint);");
@@ -303,6 +310,12 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                         throw std::runtime_error(
                             "cpp-entt cannot lower external spawn capability for missing template '" +
                             make_canonical_id(*command.target) + "'");
+                    }
+                    if (creation_takes_parameters(template_node->initializers)) {
+                        throw std::runtime_error(
+                            "cpp-entt cannot lower external spawn capability for parameterized template '" +
+                            make_canonical_id(*command.target) +
+                            "': an external handler has no place to supply template arguments");
                     }
                     const auto factory = archetype_create_at_function_name(program.module_name, template_node->name);
                     out << "    [[nodiscard]] entt::entity " << method_name << "() const {\n";
@@ -1679,6 +1692,12 @@ void emit_child_creation_sequence(std::ostringstream& out,
     }
 }
 
+// A slot without a bound value becomes a parameter of create_<archetype>, so
+// the archetype has no nullary factory for callers that need one.
+bool creation_takes_parameters(const std::vector<InitializerSlot>& slots) {
+    return std::ranges::any_of(slots, [](const auto& slot) { return slot.value == nullptr; });
+}
+
 // For hierarchical archetypes, emit per-node helpers plus a canonical
 // create_<archetype> wrapper that expands the override-free tree and returns
 // the root entity (D9). Flat archetypes generate the same code as before.
@@ -2858,8 +2877,18 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         constexpr std::size_t kEditorPaletteMaxSlots = 16;
         std::size_t pub_template_count               = 0;
         for (const auto& decl : program.ast->declarations) {
-            if (const auto* tmpl = std::get_if<TemplateNode>(&decl); tmpl != nullptr && tmpl->is_pub) {
-                ++pub_template_count;
+            const auto* tmpl = std::get_if<TemplateNode>(&decl);
+            if (tmpl == nullptr || !tmpl->is_pub) {
+                continue;
+            }
+            ++pub_template_count;
+            // The palette stores each factory as a plain entt::entity(*)(entt::registry&);
+            // a template parameter would add an argument the palette cannot supply.
+            if (creation_takes_parameters(tmpl->initializers)) {
+                throw std::runtime_error(
+                    "cpp-entt backend: pub template '" + tmpl->name +
+                    "' takes template parameters, but std.editor's palette can only spawn parameterless "
+                    "templates; drop `pub`, or wrap it in a parameterless pub template that applies it");
             }
         }
         if (pub_template_count > kEditorPaletteMaxSlots) {

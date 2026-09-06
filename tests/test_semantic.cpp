@@ -175,6 +175,96 @@ rule Fire:
 )"));
 }
 
+// A child template referenced through this module's own name must splice the
+// same traits the bare name does, not silently resolve to nothing.
+TEST_CASE("Semantic: self-qualified child template reference keeps the template's traits",
+          "[semantic][template-parameters][hierarchy]") {
+    ErrorReporter errors;
+    Lexer lexer(R"(module v
+trait Parent:
+    var parent: entity_id
+trait Sink:
+    var value: int
+    var extra: int
+template Leaf:
+    Sink:
+        value = 9
+entity Root:
+    Sink
+    children:
+        entity Kid from v.Leaf:
+            Sink:
+                extra = 1
+)",
+                "test.cactus",
+                errors);
+    Parser parser(lexer.tokenize(), errors);
+    auto ast = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(ast);
+    REQUIRE_FALSE(errors.has_errors());
+
+    const auto& root = std::get<EntityNode>(ast.declarations.back());
+    REQUIRE(root.children.size() == 1);
+    const auto& kid = root.children[0];
+    REQUIRE(kid.traits.size() == 1);
+    const auto& assignments = kid.traits[0].assignments;
+    CHECK(std::ranges::any_of(assignments, [](const auto& a) { return a.name == "value"; }));
+    CHECK(std::ranges::any_of(assignments, [](const auto& a) { return a.name == "extra"; }));
+}
+
+TEST_CASE("Semantic: template arguments and defaults read module constants", "[semantic][template-parameters]") {
+    CHECK_FALSE(analyze_has_errors(R"(const:
+    BASE = 4
+    DOUBLE = 8
+trait Data:
+    var value: int
+template Item(value: int = BASE, other: int = DOUBLE):
+    Data:
+        value = value
+entity First from Item(value = BASE)
+)"));
+}
+
+TEST_CASE("Semantic: spawn arguments read aliased filter bindings", "[semantic][template-parameters]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + R"(trait Source:
+    var value: int
+trait Data:
+    var value: int
+template Made(value: int):
+    Data:
+        value = value
+rule R:
+    filter:
+        Source as s
+    on tick:
+        spawn Made(value = s.value + 1)
+)"));
+}
+
+// A trait read reaching the scheduler only through an argument still has to
+// order this handler after the one that writes it.
+TEST_CASE("Semantic: spawn argument trait reads reach the handler contract", "[semantic][template-parameters]") {
+    auto program = analyze(STDLIB_EVENTS + R"(trait Source:
+    var value: int
+trait Data:
+    var value: int
+template Made(value: int):
+    Data:
+        value = value
+rule Reader:
+    filter:
+        Source
+    on tick:
+        spawn Made(value = value)
+)");
+    const auto contract = std::ranges::find_if(
+        program.handler_contracts, [](const auto& candidate) { return candidate.rule.local_name == "Reader"; });
+    REQUIRE(contract != program.handler_contracts.end());
+    CHECK(std::ranges::any_of(contract->reads, [](const SymbolId& read) { return read.local_name == "Source"; }));
+}
+
 TEST_CASE("Semantic: template parameters reject duplicates and child-role collisions",
           "[semantic][template-parameters]") {
     CHECK(analyze_has_errors(R"(trait Data:

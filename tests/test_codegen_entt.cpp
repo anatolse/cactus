@@ -3352,6 +3352,54 @@ TEST_CASE("Codegen EnTT: editor template_names()/template_index() expose a decla
     CHECK(code.find("return -1;") != std::string::npos);
 }
 
+// The palette stores every factory as entt::entity(*)(entt::registry&), which a
+// parameterized template's create_<name> cannot convert to; failing here beats
+// emitting a translation unit that does not compile.
+TEST_CASE("Codegen EnTT: editor palette rejects a pub template that takes parameters",
+          "[codegen-entt][stdlib][editor][template-parameters]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "use std.editor\n"
+        "pub event tick\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "trait Position:\n"
+        "    var value: vec2 = vec2(0.0, 0.0)\n"
+        "pub template Box(origin: vec2):\n"
+        "    Position:\n"
+        "        value = origin\n"
+        "pub extern func template_names() list[string]\n",
+        program);
+
+    CHECK_THROWS_AS(CppEnttCodegen::generate(decorated), std::runtime_error);
+}
+
+// A parameterless pub template stays registrable, so the check above must not
+// fire on a template whose slots all carry bound values.
+TEST_CASE("Codegen EnTT: editor palette still accepts parameterless pub templates",
+          "[codegen-entt][stdlib][editor][template-parameters]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "module std.editor\n"
+        "use std.editor\n"
+        "pub event tick\n"
+        "pub trait EditorState:\n"
+        "    var active: bool = true\n"
+        "pub entity Editor:\n"
+        "    EditorState\n"
+        "trait Position:\n"
+        "    var value: vec2 = vec2(0.0, 0.0)\n"
+        "pub template Box:\n"
+        "    Position\n"
+        "pub extern func template_names() list[string]\n",
+        program);
+
+    CHECK_NOTHROW(CppEnttCodegen::generate(decorated));
+}
+
 TEST_CASE(
     "Codegen EnTT: clean-named editor extern funcs active_mode/template_names/screen_size lower without "
     "registry injection except active_mode",

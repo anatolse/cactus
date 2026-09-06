@@ -1,4 +1,5 @@
 #include "frontend/module_artifact.hpp"
+#include "common/ast_expressions.hpp"
 #include "common/template_metadata.hpp"
 
 #include "frontend/symbol_identity.hpp"
@@ -1298,6 +1299,11 @@ template <std::size_t Index, typename Alternative>
 constexpr bool expr_alternative_is = std::is_same_v<std::variant_alternative_t<Index, ExprNode::Variant>, Alternative>;
 static_assert(expr_alternative_is<0, LiteralExpr>);
 static_assert(expr_alternative_is<1, IdentExpr>);
+// 2, 12 and 13 have no encoding; expression_is_serializable rejects them by
+// type, so their indices are pinned too.
+static_assert(expr_alternative_is<2, SelfExpr>);
+static_assert(expr_alternative_is<12, SpawnExpr>);
+static_assert(expr_alternative_is<13, QueryCallExpr>);
 static_assert(expr_alternative_is<3, BinaryExpr>);
 static_assert(expr_alternative_is<4, UnaryExpr>);
 static_assert(expr_alternative_is<5, CallExpr>);
@@ -1307,6 +1313,42 @@ static_assert(expr_alternative_is<8, PipelineExpr>);
 static_assert(expr_alternative_is<9, MatchExpr>);
 static_assert(expr_alternative_is<10, IfExpr>);
 static_assert(expr_alternative_is<11, ListExpr>);
+
+namespace {
+
+// write_expression fails the stream on an alternative it has no encoding for,
+// which would abort the whole artifact rather than just drop one blueprint.
+bool expression_is_serializable(const ExprNode& expression) {
+    bool serializable = true;
+    visit_expression(expression, [&serializable](const ExprNode& node) {
+        serializable = serializable && !std::holds_alternative<SelfExpr>(node.expr) &&
+                       !std::holds_alternative<SpawnExpr>(node.expr) &&
+                       !std::holds_alternative<QueryCallExpr>(node.expr);
+    });
+    return serializable;
+}
+
+bool traits_are_serializable(const std::vector<ArchetypeTraitEntry>& traits) {
+    return std::ranges::all_of(traits, [](const auto& trait) {
+        return std::ranges::all_of(trait.assignments,
+                                   [](const auto& assignment) { return expression_is_serializable(*assignment.value); });
+    });
+}
+
+bool children_are_serializable(const std::vector<ChildArchetypeNode>& children) {
+    return std::ranges::all_of(children, [](const auto& child) {
+        return traits_are_serializable(child.traits) && children_are_serializable(child.children);
+    });
+}
+
+bool blueprint_is_serializable(const TemplateNode& blueprint) {
+    return traits_are_serializable(blueprint.traits) && children_are_serializable(blueprint.children) &&
+           std::ranges::all_of(blueprint.initializers, [](const auto& slot) {
+               return slot.value == nullptr || expression_is_serializable(*slot.value);
+           });
+}
+
+}  // namespace
 
 void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& expression) {
     write_u8(out, static_cast<uint8_t>(expression.expr.index()));
@@ -1550,21 +1592,38 @@ std::vector<ChildArchetypeNode> ModuleArtifact::read_archetype_children(std::ist
 }
 
 void ModuleArtifact::write_template_metadata(std::ostream& out, const DecoratedProgram& program) {
-    write_u32(out, static_cast<uint32_t>(program.template_parameters.size()));
+    // template_parameters also holds every imported template, keyed by its
+    // qualified spelling. Re-encoding those would store a second, staleable copy
+    // of another module's blueprints; this module only speaks for its own.
+    const auto is_local = [](const std::string& name) { return !name.contains('.'); };
+    const auto local_count =
+        std::ranges::count_if(program.template_parameters, [&](const auto& entry) { return is_local(entry.first); });
+    write_u32(out, static_cast<uint32_t>(local_count));
     for (const auto& [name, parameters] : program.template_parameters) {
+        if (!is_local(name)) {
+            continue;
+        }
         write_str(out, name);
         write_u32(out, static_cast<uint32_t>(parameters.size()));
         for (const auto& parameter : parameters) {
             write_str(out, parameter.name);
             write_type_info(out, parameter.type);
             write_location(out, parameter.location);
-            write_bool(out, parameter.default_value != nullptr);
-            if (parameter.default_value != nullptr) {
+            const bool has_default =
+                parameter.default_value != nullptr && expression_is_serializable(*parameter.default_value);
+            write_bool(out, has_default);
+            if (has_default) {
                 write_expression(out, *parameter.default_value);
             }
         }
         const auto found = program.template_blueprints.find(name);
         const auto* blueprint = found == program.template_blueprints.end() ? nullptr : found->second.get();
+        // A blueprint the expression encoder cannot represent is dropped rather
+        // than failing the stream: importers already handle a missing blueprint,
+        // but a failed stream loses the whole artifact.
+        if (blueprint != nullptr && !blueprint_is_serializable(*blueprint)) {
+            blueprint = nullptr;
+        }
         write_bool(out, blueprint != nullptr);
         if (blueprint == nullptr) {
             continue;

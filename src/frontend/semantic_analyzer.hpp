@@ -711,6 +711,8 @@ private:
                                      const ResolvedStruct* event,
                                      const PairScope* pairs = nullptr) const;
     void validate_template_argument_purity(const ExprNode& expr) const;
+    std::unordered_map<std::string, TypeInfo> template_value_scope(
+        const std::unordered_map<std::string, TypeInfo>& locals) const;
     void validate_template_value_names(const ExprNode& expr,
                                        const std::unordered_map<std::string, const ResolvedTrait*>& filters,
                                        const std::unordered_map<std::string, TypeInfo>& locals,

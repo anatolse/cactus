@@ -2023,9 +2023,8 @@ void SemanticAnalyzer::check_func_purity_stmt(const StmtNode& stmt, const std::s
 // rather than add a third divergent copy). The traversal order and shape is
 // identical across all three; what differs is which node kinds are impure and
 // what diagnostic that produces, so those decisions are the caller-supplied
-// hooks (fired after recursing into a CallExpr's children, matching every
-// existing call site's order; fired before recursing into a SpawnExpr's or
-// QueryCallExpr's children, also matching every existing call site).
+// hooks. visit_expression is pre-order, so a hook fires before the node's own
+// children — nested impurities are reported outermost-first.
 void SemanticAnalyzer::check_purity_deny_list(
     const ExprNode& expr,
     const std::function<void(const CallExpr&)>& on_call,
@@ -2044,6 +2043,7 @@ void SemanticAnalyzer::check_purity_deny_list(
         }, node.expr);
     });
 }
+
 void SemanticAnalyzer::check_func_purity_expr(const ExprNode& expr, const std::string& func_name) {
     check_purity_deny_list(
         expr,
@@ -4667,6 +4667,9 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
                 }
             } else if constexpr (std::is_same_v<E, SpawnExpr>) {
                 add_contract_command(contract, HandlerCommandKind::Spawn, node.resolved_template_id);
+                for (const auto& argument : node.arguments.values) {
+                    visit(*argument.value, locals);
+                }
                 for (const auto& override_entry : node.overrides) {
                     for (const auto& field : override_entry.assignments) {
                         visit(*field.value, locals);
@@ -4734,6 +4737,9 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                         }
                     } else if constexpr (std::is_same_v<S, SpawnStmt>) {
                         add_command(HandlerCommandKind::Spawn, node.resolved_template_id);
+                        for (const auto& argument : node.arguments.values) {
+                            visit_expr(*argument.value, locals);
+                        }
                         for (const auto& override_entry : node.overrides) {
                             for (const auto& field : override_entry.assignments) {
                                 visit_expr(*field.value, locals);
@@ -7538,18 +7544,50 @@ void SemanticAnalyzer::validate_template_argument_purity(const ExprNode& expr) c
         [this](const QueryCallExpr& query) { errors_.error(query.location, "template arguments and defaults must be pure"); });
 }
 
+// Template arguments and defaults may read module constants, which are not
+// otherwise typed by identifier inference. Resolving them repeatedly lets one
+// constant be defined in terms of another regardless of declaration order.
+std::unordered_map<std::string, TypeInfo> SemanticAnalyzer::template_value_scope(
+    const std::unordered_map<std::string, TypeInfo>& locals) const {
+    std::unordered_map<std::string, TypeInfo> scope;
+    for (bool resolved_any = true; resolved_any;) {
+        resolved_any = false;
+        for (const auto& [name, initializer] : const_initializers_) {
+            if (initializer == nullptr || scope.contains(name)) {
+                continue;
+            }
+            auto type = infer_expr_type(*initializer, {}, scope, nullptr);
+            if (type.kind == TypeKind::Unknown) {
+                continue;
+            }
+            scope.emplace(name, std::move(type));
+            resolved_any = true;
+        }
+    }
+    for (const auto& [name, type] : locals) {
+        scope[name] = type;
+    }
+    return scope;
+}
+
 void SemanticAnalyzer::validate_template_value_names(
     const ExprNode& expr,
     const std::unordered_map<std::string, const ResolvedTrait*>& filters,
     const std::unordered_map<std::string, TypeInfo>& locals,
     const ResolvedStruct* event, const PairScope* pairs) const {
-    std::unordered_set<const ExprNode*> callees;
+    // A callee name and the root of a member chain carry no standalone type, so
+    // only whole-expression inference can judge them; the pre-order walk reaches
+    // each parent before the child it excuses.
+    std::unordered_set<const ExprNode*> deferred;
     visit_expression(expr, [&](const ExprNode& node) {
         if (const auto* call = std::get_if<CallExpr>(&node.expr)) {
-            callees.insert(call->callee.get());
+            deferred.insert(call->callee.get());
+        }
+        if (const auto* member = std::get_if<MemberExpr>(&node.expr)) {
+            deferred.insert(member->object.get());
         }
         const auto* ident = std::get_if<IdentExpr>(&node.expr);
-        if (ident == nullptr || callees.contains(&node) || is_known_type(ident->name)) {
+        if (ident == nullptr || deferred.contains(&node) || is_known_type(ident->name)) {
             return;
         }
         const bool module_name = std::ranges::any_of(imports_.modules, [&](const auto& module) {
@@ -7565,12 +7603,25 @@ void SemanticAnalyzer::validate_template_value_names(
 }
 
 void SemanticAnalyzer::collect_template_parameters(ProgramNode& program) {
+    // Applications are looked up by their source spelling, and an aliased import
+    // is addressable by either its alias or its canonical module path, so both
+    // spellings must resolve to the same signature.
+    auto register_import = [this](const std::string& prefix, const std::string& name,
+                                  const ImportedTemplate& imported) {
+        if (prefix.empty()) {
+            return;
+        }
+        auto qualified = prefix;
+        qualified.append(".").append(name);
+        result_.template_parameters[qualified] = imported.parameters;
+        result_.template_blueprints[qualified] = imported.blueprint;
+    };
     for (const auto& [qualifier, module] : imports_.modules) {
         for (const auto& [name, imported] : module.templates) {
-            auto qualified = qualifier;
-            qualified.append(".").append(name);
-            result_.template_parameters[qualified] = imported.parameters;
-            result_.template_blueprints[qualified] = imported.blueprint;
+            register_import(qualifier, name, imported);
+            if (module.module_name != qualifier) {
+                register_import(module.module_name, name, imported);
+            }
         }
     }
     for (auto& declaration : program.declarations) {
@@ -7589,9 +7640,10 @@ void SemanticAnalyzer::collect_template_parameters(ProgramNode& program) {
             ResolvedTemplateParameter resolved{.name = parameter.name, .type = type, .location = parameter.location};
             if (parameter.default_value.has_value()) {
                 resolved.default_value = clone_expr(**parameter.default_value);
+                const auto scope = template_value_scope(earlier);
                 validate_template_argument_purity(*resolved.default_value);
-                validate_template_value_names(*resolved.default_value, {}, earlier, nullptr);
-                const auto actual = infer_expr_type(*resolved.default_value, {}, earlier, nullptr);
+                validate_template_value_names(*resolved.default_value, {}, scope, nullptr);
+                const auto actual = infer_expr_type(*resolved.default_value, {}, scope, nullptr);
                 if (!same_type(type, actual)) {
                     errors_.error(parameter.location, "template default must match parameter type and use only constants or earlier parameters");
                 }
@@ -7616,7 +7668,8 @@ void SemanticAnalyzer::validate_template_arguments(
     if (found == result_.template_parameters.end() || arguments.bound) {
         return;
     }
-    arguments.bound = true;
+    arguments.bound  = true;
+    const auto scope = template_value_scope(locals);
     std::unordered_map<std::string, const ResolvedTemplateParameter*> parameters;
     for (const auto& parameter : found->second) {
         parameters.emplace(parameter.name, &parameter);
@@ -7632,8 +7685,8 @@ void SemanticAnalyzer::validate_template_arguments(
             continue;
         }
         validate_template_argument_purity(*argument.value);
-        validate_template_value_names(*argument.value, filters, locals, event, pairs);
-        const auto actual = infer_expr_type(*argument.value, filters, locals, event, pairs);
+        validate_template_value_names(*argument.value, filters, scope, event, pairs);
+        const auto actual = infer_expr_type(*argument.value, filters, scope, event, pairs);
         if (!same_type(parameter->second->type, actual)) {
             errors_.error(argument.location, "template argument '" + argument.name + "' must have type '" + parameter->second->type.name + "'");
         }
@@ -7802,14 +7855,19 @@ void SemanticAnalyzer::flatten_template_compositions(ProgramNode& program) {
         // (traits and descendants), then applies the child body and nested
         // overrides on top.
         FlattenedArchetype base;
-        bool base_available    = false;
-        const auto& lookup_key = *node.template_ref;
-        if (auto template_it = local_templates.find(lookup_key);
-            template_it != local_templates.end() && template_it->second != nullptr) {
-            base           = flatten_template(*template_it->second);
-            base_available = true;
-        } else if (auto imported = find_flattened_template(lookup_key); imported.has_value()) {
+        bool base_available = false;
+        // Imported templates are keyed by their qualified spelling; a local one
+        // is keyed by its bare name even when the source qualifies it with its
+        // own module, so fall back to the unqualified name like entity sites do.
+        const auto& tmpl_ref  = *node.template_ref;
+        const auto dot        = tmpl_ref.rfind('.');
+        const auto local_name = dot != std::string::npos ? tmpl_ref.substr(dot + 1) : tmpl_ref;
+        if (auto imported = find_flattened_template(tmpl_ref); imported.has_value()) {
             base           = std::move(*imported);
+            base_available = true;
+        } else if (auto template_it = local_templates.find(local_name);
+                   template_it != local_templates.end() && template_it->second != nullptr) {
+            base           = flatten_template(*template_it->second);
             base_available = true;
         }
         if (base_available) {

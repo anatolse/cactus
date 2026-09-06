@@ -78,15 +78,19 @@ static SymbolId test_symbol(SymbolKind kind, const std::string& local_name) {
 
 // ── Artifact filename ────────────────────────────────────────────────────────
 
-// Instantiates `lib.Item(a = 4)` against the supplied view of module `library`
-// and hands back the flattened creation plan the consumer ended up with.
-static EntityNode instantiate_imported_item(ImportedSymbols symbols, ErrorReporter& errors) {
+// Instantiates `Item(a = 4)` under the given qualifier against the supplied view
+// of module `library`, and hands back the flattened creation plan the consumer
+// ended up with. An aliased import is addressable by the alias or by the
+// canonical module path, so both spellings have to reach the same signature.
+static EntityNode instantiate_imported_item(ImportedSymbols symbols,
+                                            ErrorReporter& errors,
+                                            const std::string& qualifier = "lib") {
     ModuleImports imports;
     imports.add("lib", std::move(symbols));
-    Lexer lexer(R"(module consumer
-use library as lib
-entity First from lib.Item(a = 4)
-)",
+    Lexer lexer("module consumer\n"
+                "use library as lib\n"
+                "entity First from " +
+                    qualifier + ".Item(a = 4)\n",
                 "consumer.cactus",
                 errors);
     Parser parser(lexer.tokenize(), errors);
@@ -148,6 +152,15 @@ pub template Item(a: int, b: int = a * 2):
     REQUIRE(from_source.traits.size() == from_artifact.traits.size());
     CHECK(from_source.traits[0].resolved_trait_id == from_artifact.traits[0].resolved_trait_id);
     CHECK(from_source.traits[0].assignments.size() == from_artifact.traits[0].assignments.size());
+
+    auto canonical_symbols = artifact.extract_pub_symbols(directory / "library.cmod");
+    REQUIRE(canonical_symbols.has_value());
+    const auto from_canonical = instantiate_imported_item(std::move(*canonical_symbols), errors, "library");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(from_canonical.initializers.size() == from_artifact.initializers.size());
+    for (std::size_t i = 0; i < from_canonical.initializers.size(); ++i) {
+        CHECK(from_canonical.initializers[i].index == from_artifact.initializers[i].index);
+    }
 }
 
 TEST_CASE("ModuleArtifact: artifact_filename simple", "[artifact]") {

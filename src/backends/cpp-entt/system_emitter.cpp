@@ -1755,8 +1755,17 @@ static std::string emit_template_bindings(std::ostringstream& out,
             << initializer_slot_name(binding.index) << " = "
             << rewrite_expr(*binding.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
     }
+    // Bindings are written in evaluation order (explicit arguments first, then
+    // defaults); the callee declares its slots in parameter order, so the call
+    // must pass them sorted by slot index rather than by binding position.
+    std::vector<std::size_t> indices;
+    indices.reserve(arguments.bindings.size());
+    for (const auto& binding : arguments.bindings) {
+        indices.push_back(binding.index);
+    }
+    std::ranges::sort(indices);
     std::string values;
-    for (std::size_t index = 0; index < arguments.bindings.size(); ++index) {
+    for (const auto index : indices) {
         values += ", " + initializer_slot_name(index);
     }
     return values;

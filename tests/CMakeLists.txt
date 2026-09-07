@@ -259,6 +259,12 @@ cactus_add_headless_behavior_test(test_bouncy_bubbles_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_bouncy_bubbles_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_gameplay_timers_headless_behavior
+    CACTUS_SOURCE examples/gameplay_timers.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_gameplay_timers_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_particle_burst_headless_behavior
     CACTUS_SOURCE examples/particle-burst/particle_burst.cactus
     BACKEND cpp-entt

@@ -1,0 +1,162 @@
+module gameplay_timers
+
+use std.core
+use std.query as query
+use std.time as time
+
+const:
+    BULLET_LIFETIME = 0.04
+    RELOAD_SECONDS = 0.11
+    SHIELD_SECONDS = 0.07
+
+# ── Traits and events ────────────────────────────────────────────────────────
+
+trait Bullet
+
+trait Muzzle:
+    var pending_shots: int = 0
+
+trait Weapon:
+    var reloads_ready: int = 0
+    var shields_ready: int = 0
+
+# A timer entity's authored reference back to the entity it serves.
+trait TimerOwner:
+    var owner: entity_id
+
+trait ReloadChannel
+
+trait ShieldChannel
+
+trait Metronome:
+    var expirations: int = 0
+
+# Timer entities are driven by whatever gameplay system owns them. This demo
+# collects a frame's requests in one trait so a single input-phase rule issues
+# them, in the order a real game would: restarts first, then a cancellation,
+# then a teardown of the timer entity itself.
+trait TimerRequests:
+    var restarts: int = 0
+    var first_duration: float = 0.0
+    var second_duration: float = 0.0
+    var cancel_pending: bool = false
+    var destroy_pending: bool = false
+
+event ReloadReady
+
+event ShieldReady
+
+# ── Projectile lifetime ──────────────────────────────────────────────────────
+# A bullet carries its own countdown. std.time destroys it when the countdown
+# reaches zero, so no rule here does lifetime arithmetic.
+
+template BulletTemplate:
+    Bullet
+    time.Lifetime:
+        remaining = BULLET_LIFETIME
+
+rule FireBullets:
+    filter:
+        Muzzle as muzzle
+
+    on fixed_tick:
+        if muzzle.pending_shots <= 0:
+            return
+        muzzle.pending_shots -= 1
+        # A parameterless spawn still requires a body; nothing here varies per shot.
+        spawn BulletTemplate:
+            Bullet
+
+# ── Reload and shield timers ─────────────────────────────────────────────────
+# Each countdown lives on its own timer entity, so the two never share a Timer
+# trait. A relay rule turns that entity's TimerExpired into the gameplay event
+# its owner actually cares about.
+
+# The player carries TimerRequests but no Timer: a restart aimed at it is an
+# ordinary no-match, never an implicit Timer.
+entity Player:
+    Weapon
+    Muzzle
+    TimerRequests
+
+entity ReloadTimer:
+    time.Timer
+    TimerOwner
+    ReloadChannel
+    TimerRequests:
+        first_duration = RELOAD_SECONDS
+
+entity ShieldTimer:
+    time.Timer
+    TimerOwner
+    ShieldChannel
+    TimerRequests:
+        first_duration = SHIELD_SECONDS
+
+entity MetronomeTimer:
+    time.Timer
+    Metronome
+    TimerRequests
+
+rule BindTimerOwners:
+    filter:
+        TimerOwner as link
+
+    on load:
+        link.owner = query.first[Weapon]()
+
+rule RelayReload:
+    filter:
+        TimerOwner as link
+        ReloadChannel
+
+    on time.TimerExpired:
+        emit ReloadReady to link.owner
+
+rule RelayShield:
+    filter:
+        TimerOwner as link
+        ShieldChannel
+
+    on time.TimerExpired:
+        emit ShieldReady to link.owner
+
+rule CountWeaponEvents:
+    filter:
+        Weapon as weapon
+
+    on ReloadReady:
+        weapon.reloads_ready += 1
+
+    on ShieldReady:
+        weapon.shields_ready += 1
+
+# A timer that rearms itself from its own expiry handler. Because std.time
+# disarms before emitting and advances at most once per fixed step, this
+# expires exactly once per step instead of looping inside one.
+rule RepeatMetronome:
+    filter:
+        Metronome as metronome
+
+    on time.TimerExpired:
+        metronome.expirations += 1
+        emit time.RestartTimer to self:
+            duration = 0.0
+
+rule ApplyTimerRequests:
+    filter:
+        TimerRequests as requests
+
+    on input:
+        if requests.restarts >= 1:
+            emit time.RestartTimer to self:
+                duration = requests.first_duration
+        if requests.restarts >= 2:
+            emit time.RestartTimer to self:
+                duration = requests.second_duration
+        requests.restarts = 0
+        if requests.cancel_pending:
+            requests.cancel_pending = false
+            emit time.CancelTimer to self
+        if requests.destroy_pending:
+            destroy

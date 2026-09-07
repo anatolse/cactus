@@ -1,0 +1,78 @@
+module std.time
+
+use std.core as core
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+# Countdown that destroys its entity when it runs out. Seconds of simulation
+# time, advanced once per fixed step — never wall-clock time.
+pub trait Lifetime:
+    var remaining: float
+    var paused: bool = false
+
+# One-shot countdown. Arm it with RestartTimer; it emits one TimerExpired back
+# to its own entity and disarms. One Timer is one countdown: give an entity
+# that needs several independent delays one timer entity per delay.
+pub trait Timer:
+    var remaining: float = 0.0
+    var armed: bool = false
+    var paused: bool = false
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+# Replaces an existing Timer's countdown and arms it, keeping `paused` as is.
+# It never adds a Timer to an entity that has none.
+pub event RestartTimer:
+    duration: float
+
+# Disarms a Timer without an expiration.
+pub event CancelTimer
+
+# Delivered to the timer's own entity when its countdown reaches zero. Relay
+# it to the gameplay event you actually want.
+pub event TimerExpired
+
+# ── Rules ─────────────────────────────────────────────────────────────────────
+
+# A usable duration is finite and non-negative; anything else becomes a
+# zero-length countdown. NaN fails the first test, and infinity — which does
+# not — fails the second, since inf - inf is NaN and NaN never equals zero.
+# The second test needs IEEE semantics, so no backend may compile with fast-math.
+func seconds_or_zero(value: float) float:
+    if value >= 0.0 and value - value == 0.0:
+        return value
+    return 0.0
+
+rule AdvanceLifetime:
+    filter:
+        Lifetime as lifetime
+
+    on core.fixed_tick as step:
+        if lifetime.paused:
+            return
+        lifetime.remaining = seconds_or_zero(lifetime.remaining) - step.dt
+        if lifetime.remaining > 0.0:
+            return
+        lifetime.remaining = 0.0
+        destroy
+
+rule AdvanceTimer:
+    filter:
+        Timer as timer
+
+    on RestartTimer as request:
+        timer.remaining = seconds_or_zero(request.duration)
+        timer.armed = true
+
+    on CancelTimer:
+        timer.armed = false
+
+    on core.fixed_tick as step:
+        if timer.paused or not timer.armed:
+            return
+        timer.remaining = seconds_or_zero(timer.remaining) - step.dt
+        if timer.remaining > 0.0:
+            return
+        timer.remaining = 0.0
+        timer.armed = false
+        emit TimerExpired to self

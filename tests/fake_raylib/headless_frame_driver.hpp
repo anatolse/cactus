@@ -26,13 +26,20 @@ inline void dispatch_load_event(entt::registry& registry) {
     boundary_activation.active = false;
 }
 
+// Brings a fresh registry up to the state a generated main() reaches just
+// before its frame loop. Use directly when a test drives its own frames after
+// setting up state; drive_one_frame/drive_frames call it for you.
+inline void init_and_load(entt::registry& registry) {
+    cactus::runtime::entt_backend::generated_init_project(registry);
+    cactus::runtime::entt_backend::generated_load_project(registry);
+    dispatch_load_event(registry);
+}
+
 // Initializes and loads the project, then drives exactly one frame with the
 // given `dt`. For multi-frame scenarios use drive_frames instead — calling
 // this repeatedly on the same registry would re-run init/load each time.
 inline void drive_one_frame(entt::registry& registry, float dt) {
-    cactus::runtime::entt_backend::generated_init_project(registry);
-    cactus::runtime::entt_backend::generated_load_project(registry);
-    dispatch_load_event(registry);
+    init_and_load(registry);
     cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = dt});
     cactus::runtime::entt_backend::generated_drain_external_events(registry);
 }
@@ -43,9 +50,7 @@ inline void drive_one_frame(entt::registry& registry, float dt) {
 // cactus_raylib_fake::find_call/ordered_subsequence per frame, or reset()
 // between calls to drive_one_frame if only the latest frame matters.
 inline void drive_frames(entt::registry& registry, float dt, int frame_count) {
-    cactus::runtime::entt_backend::generated_init_project(registry);
-    cactus::runtime::entt_backend::generated_load_project(registry);
-    dispatch_load_event(registry);
+    init_and_load(registry);
     for (int frame = 0; frame < frame_count; ++frame) {
         cactus::runtime::entt_backend::generated_inject_external_event(std_core__frameEvent{.dt = dt});
         cactus::runtime::entt_backend::generated_drain_external_events(registry);

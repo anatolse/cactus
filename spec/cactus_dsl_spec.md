@@ -1216,6 +1216,7 @@ The gameplay core is extended by stdlib modules and backend-provided declaration
 - physics stdlib for collision and movement helpers
 - camera stdlib for 2D/3D camera behavior
 - audio stdlib for sound/music playback surfaces
+- `std.time` for entity lifetime and one-shot gameplay delays (§7.5)
 
 ### 7.2 Extern Functions
 
@@ -1270,6 +1271,66 @@ Because `DesiredSize`/`ComputedLayout` are projected traits, they are visible to
 #### 7.4.3 Deferred UI Features
 
 Not part of the current Standard UI surface: keyboard/gamepad focus, text entry/editing, scrolling and virtualized lists, themes, data binding, accessibility, and general style inheritance. Layout containers use symmetric `vec2` padding only (no per-edge padding) in the initial surface. These remain candidates for a later change, not core-language syntax (§8.1 still applies to `view`/`panel`/`button`-style retained-tree keywords).
+
+### 7.5 Lifetime and Timers (`std.time`)
+
+`std.time` is an ordinary ECS capability, not core-language syntax: entity lifetime and one-shot delays are traits, targeted events, and rules, with no delayed-event keyword, coroutine, callback storage, or hidden scheduler. See `examples/gameplay_timers.cactus` for a complete program.
+
+**Traits.**
+
+- `Lifetime` — `remaining`, `paused`. The entity is destroyed when `remaining` reaches zero.
+- `Timer` — `remaining`, `armed`, `paused`. One `Timer` is one countdown; it emits one targeted `TimerExpired` back to its own entity and disarms.
+
+**Events.** `RestartTimer` (`duration`) replaces an existing `Timer`'s countdown and arms it; `CancelTimer` disarms it without an expiration; zero-payload `TimerExpired` announces the expiry. All three are ordinary targeted events (§5.4) with ordinary delivery, so a stale or non-matching target is simply a no-match.
+
+**Fixed simulation time.** Both countdowns advance by `fixed_tick.dt` once per eligible fixed-step invocation (§5.1), never by wall-clock or frame time. A frame that performs no fixed step consumes no countdown time, and catch-up repetitions the `max:` cap drops are never simulated — so a stalled frame cannot expire a timer early or late. Non-finite (`NaN`, `±inf`) and negative durations or `remaining` values normalize to a zero-length countdown.
+
+**Pause is local.** `Lifetime.paused` and `Timer.paused` are the only pause policy in this module; there is no global clock or pause manager. A paused countdown neither advances nor expires, and `RestartTimer` preserves `paused`, so a timer restarted while paused resumes with its replacement duration intact.
+
+**Restart ordering.** Requests apply in event delivery order, so two restarts before the same step leave the last duration in place rather than summing, and a `RestartTimer` followed by a `CancelTimer` never expires. A timer disarms *before* queuing `TimerExpired`, and each fixed-step invocation advances a timer at most once. There is no second, hidden timer update: `AdvanceTimer` is one node in the fixed-step graph, and everything an expiry sets off drains after it, within the same step —
+
+```text
+fixed_tick step N:   ... -> AdvanceLifetime, AdvanceTimer -> cascade -> commit
+                                                    |            |
+                                          queues TimerExpired    delivers TimerExpired,
+                                                                 then any RestartTimer it emits
+fixed_tick step N+1: ... -> AdvanceTimer            <- the rearmed timer's next advance
+```
+
+So an expiry handler that rearms its own timer (even with a zero duration) fires again no earlier than step N+1, rather than looping inside step N, and a restart issued after step N's timer node has already run does not retroactively change step N.
+
+**Structural eligibility.** `RestartTimer` operates on entities that already carry a `Timer`; it never adds the trait. A newly spawned `Timer` or `Lifetime` becomes selectable at the ordinary activation commit (§5.3) and first advances on the *next* eligible fixed step. Destroying a timer's owner cancels its countdown with no expiration.
+
+**Projectile recipe.** Put the countdown on the projectile itself and let `std.time` destroy it:
+
+```cactus
+template BulletTemplate:
+    Bullet
+    time.Lifetime:
+        remaining = BULLET_LIFETIME
+```
+
+**Reload recipe.** Give each independent countdown its own timer entity, and relay its expiry to the gameplay event the owner cares about — this is how one entity gets several simultaneous, independent delays without a channel field:
+
+```cactus
+rule RelayReload:
+    filter:
+        TimerOwner as link
+        ReloadChannel
+
+    on time.TimerExpired:
+        emit ReloadReady to link.owner
+
+rule StartReload:
+    filter:
+        Weapon as weapon
+
+    on ShotFired:
+        emit time.RestartTimer to weapon.reload_timer:
+            duration = RELOAD_SECONDS
+```
+
+`TimerOwner.owner` and `Weapon.reload_timer` are ordinary authored `entity_id` fields — the module supplies no implicit link between a timer and whatever it serves.
 
 ## 8. Deferred and Migration Notes
 

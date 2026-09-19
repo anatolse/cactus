@@ -1085,6 +1085,9 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 5: Validate after: clauses and cycle detection
     validate_after_clauses(program);
 
+    build_persistence_metadata(program);
+    report_unsupported_persistence_fields(result_, errors_);
+
     return std::move(result_);
 }
 
@@ -2147,6 +2150,177 @@ void SemanticAnalyzer::check_persist_sync(ProgramNode& program) {
             }
         }
     }
+}
+
+// ── Persistence Metadata ────────────────────────────────────────────────────
+
+namespace {
+
+// Appends every `add TraitName` reachable in `stmts`, including ones nested in
+// conditionals, bounded loops, and trait-match arms.
+void collect_add_trait_statements(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                  std::vector<const AddTraitStmt*>& out) {
+    for (const auto& stmt : stmts) {
+        if (stmt == nullptr) {
+            continue;
+        }
+        if (const auto* add = std::get_if<AddTraitStmt>(&stmt->stmt)) {
+            out.push_back(add);
+        } else if (const auto* branch = std::get_if<IfStmt>(&stmt->stmt)) {
+            collect_add_trait_statements(branch->then_body, out);
+            for (const auto& else_if : branch->else_if_branches) {
+                collect_add_trait_statements(else_if.body, out);
+            }
+            collect_add_trait_statements(branch->else_body, out);
+        } else if (const auto* loop = std::get_if<ForeachStmt>(&stmt->stmt)) {
+            collect_add_trait_statements(loop->body, out);
+        } else if (const auto* match = std::get_if<TraitMatchStmt>(&stmt->stmt)) {
+            for (const auto& arm : match->arms) {
+                collect_add_trait_statements(arm.body, out);
+            }
+            if (match->wildcard.has_value()) {
+                collect_add_trait_statements(match->wildcard->body, out);
+            }
+        }
+    }
+}
+
+std::vector<std::string> sorted_assigned_field_names(const ArchetypeTraitEntry& entry) {
+    std::vector<std::string> names;
+    names.reserve(entry.assignments.size());
+    for (const auto& assignment : entry.assignments) {
+        names.push_back(assignment.name);
+    }
+    std::ranges::sort(names);
+    return names;
+}
+
+std::vector<std::string> child_role_names(const std::vector<ChildArchetypeNode>& children) {
+    std::vector<std::string> roles;
+    roles.reserve(children.size());
+    for (const auto& child : children) {
+        roles.push_back(child.role);
+    }
+    return roles;
+}
+
+std::vector<PersistenceBaselineTrait> baseline_traits_of(const std::vector<ArchetypeTraitEntry>& traits,
+                                                         const std::string& module_name) {
+    std::vector<PersistenceBaselineTrait> baseline;
+    baseline.reserve(traits.size());
+    for (const auto& entry : traits) {
+        baseline.push_back(PersistenceBaselineTrait{
+            .trait =
+                resolved_or_local_symbol(SymbolKind::Trait, entry.resolved_trait_id, module_name, entry.trait_name),
+            .assigned_fields = sorted_assigned_field_names(entry)});
+    }
+    std::ranges::sort(baseline, [](const PersistenceBaselineTrait& left, const PersistenceBaselineTrait& right) {
+        return make_canonical_id(left.trait) < make_canonical_id(right.trait);
+    });
+    return baseline;
+}
+
+// A native `commands: add T` capability attaches traits just as an authored
+// `add T` does, so both feed the same answer.
+bool extern_rule_adds_persistent_trait(const Declaration& decl, const auto& is_persistent_trait) {
+    const auto* extern_rule = std::get_if<ExternRuleNode>(&decl);
+    if (extern_rule == nullptr) {
+        return false;
+    }
+    return std::ranges::any_of(extern_rule->handlers, [&](const ExternHandlerNode& handler) {
+        return std::ranges::any_of(handler.commands, [&](const HandlerCommandNode& command) {
+            return command.kind == HandlerCommandKind::Add && command.target.has_value() &&
+                   is_persistent_trait(command.resolved_target_id, command.target->spelling);
+        });
+    });
+}
+
+}  // namespace
+
+void SemanticAnalyzer::build_persistence_metadata(const ProgramNode& program) {
+    auto& metadata = result_.persistence;
+
+    const std::string& module_name = current_module_id_.name;
+
+    const auto is_persistent_trait = [this](const std::optional<SymbolId>& resolved, const std::string& spelling) {
+        const ResolvedTrait* trait = find_resolved_trait(resolved, spelling);
+        return trait != nullptr && trait_declares_persist_field(*trait);
+    };
+
+    const auto declares_persistent = [&](const std::vector<ArchetypeTraitEntry>& traits) {
+        return std::ranges::any_of(traits, [&](const ArchetypeTraitEntry& entry) {
+            return is_persistent_trait(entry.resolved_trait_id, entry.trait_name);
+        });
+    };
+
+    const auto collect_children = [&](this const auto& self,
+                                      const SymbolId& archetype,
+                                      const std::vector<ChildArchetypeNode>& children,
+                                      std::vector<std::string>& role_path) -> void {
+        for (const auto& child : children) {
+            role_path.push_back(child.role);
+            metadata.archetypes.push_back(PersistenceArchetypeDescriptor{
+                .node                      = ArchetypeNodeId{.archetype = archetype, .role_path = role_path},
+                .baseline_traits           = baseline_traits_of(child.traits, module_name),
+                .child_roles               = child_role_names(child.children),
+                .declares_persistent_trait = declares_persistent(child.traits)});
+            self(archetype, child.children, role_path);
+            role_path.pop_back();
+        }
+    };
+
+    const auto collect_archetype = [&](const SymbolId& archetype,
+                                       const std::vector<ArchetypeTraitEntry>& traits,
+                                       const std::vector<ChildArchetypeNode>& children,
+                                       const std::vector<FieldNode>& parameters) {
+        std::vector<std::string> parameter_names;
+        parameter_names.reserve(parameters.size());
+        for (const auto& parameter : parameters) {
+            parameter_names.push_back(parameter.name);
+        }
+        metadata.archetypes.push_back(
+            PersistenceArchetypeDescriptor{.node                      = ArchetypeNodeId{.archetype = archetype},
+                                           .baseline_traits           = baseline_traits_of(traits, module_name),
+                                           .parameters                = std::move(parameter_names),
+                                           .child_roles               = child_role_names(children),
+                                           .declares_persistent_trait = declares_persistent(traits)});
+        std::vector<std::string> role_path;
+        collect_children(archetype, children, role_path);
+    };
+
+    std::vector<const AddTraitStmt*> add_statements;
+    for (const auto& decl : program.declarations) {
+        if (const auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            collect_archetype(
+                resolved_or_local_symbol(SymbolKind::Template, tmpl->resolved_template_id, module_name, tmpl->name),
+                tmpl->traits,
+                tmpl->children,
+                tmpl->parameters);
+        } else if (const auto* entity = std::get_if<EntityNode>(&decl)) {
+            collect_archetype(
+                resolved_or_local_symbol(SymbolKind::Entity, entity->resolved_entity_id, module_name, entity->name),
+                entity->traits,
+                entity->children,
+                std::vector<FieldNode>{});
+        } else if (const auto* rule = std::get_if<RuleNode>(&decl)) {
+            for (const auto& handler : rule->handlers) {
+                collect_add_trait_statements(handler.body, add_statements);
+            }
+        } else if (const auto* func = std::get_if<FuncNode>(&decl)) {
+            collect_add_trait_statements(func->body, add_statements);
+        }
+    }
+
+    sort_archetype_descriptors(metadata.archetypes);
+
+    metadata.attaches_persistent_trait =
+        std::ranges::any_of(add_statements,
+                            [&](const AddTraitStmt* add) {
+                                return is_persistent_trait(add->resolved_trait_id, add->trait_name);
+                            }) ||
+        std::ranges::any_of(program.declarations, [&](const Declaration& decl) {
+            return extern_rule_adds_persistent_trait(decl, is_persistent_trait);
+        });
 }
 
 // Validates every trait field's default-value expression: type-compatible
@@ -5527,7 +5701,7 @@ const ResolvedTrait* SemanticAnalyzer::find_resolved_trait(const SymbolId& symbo
         if (auto it = syms.traits.find(symbol.local_name); it != syms.traits.end()) {
             return &it->second;
         }
-        for (const auto& [_, trait] : syms.traits) {
+        for (const auto& [trait_name, trait] : syms.traits) {
             if ((trait.symbol_id.has_value() && *trait.symbol_id == symbol) || trait.canonical_id == canonical) {
                 return &trait;
             }

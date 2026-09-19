@@ -28,6 +28,7 @@ set_property(TARGET cactus_raylib_fake PROPERTY CXX_CLANG_TIDY "")
 # never linked into a real example.
 add_library(cactus_runtime_cpp_entt_headless_fake STATIC EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/backends/cpp-entt/persistence_file_adapter.cpp
 )
 target_include_directories(cactus_runtime_cpp_entt_headless_fake PUBLIC
     ${CMAKE_SOURCE_DIR}/src
@@ -73,6 +74,21 @@ add_test(NAME CodegenEnttTests COMMAND test_codegen_entt)
 add_executable(test_module_resolver test_module_resolver.cpp)
 target_link_libraries(test_module_resolver PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME ModuleResolverTests COMMAND test_module_resolver)
+
+# Decorated persistence metadata tests (add-world-save-restore change)
+add_executable(test_persistence_metadata test_persistence_metadata.cpp)
+target_link_libraries(test_persistence_metadata PRIVATE cactus_frontend Catch2::Catch2WithMain)
+add_test(NAME PersistenceMetadataTests COMMAND test_persistence_metadata)
+
+# World snapshot document tests (add-world-save-restore change)
+add_executable(test_persistence_document test_persistence_document.cpp)
+target_link_libraries(test_persistence_document PRIVATE cactus_runtime_common Catch2::Catch2WithMain)
+add_test(NAME PersistenceDocumentTests COMMAND test_persistence_document)
+
+# Creation/structural provenance codegen tests (add-world-save-restore change)
+add_executable(test_persistence_provenance_codegen test_persistence_provenance_codegen.cpp)
+target_link_libraries(test_persistence_provenance_codegen PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME PersistenceProvenanceCodegenTests COMMAND test_persistence_provenance_codegen)
 
 # Module artifact tests
 add_executable(test_module_artifact test_module_artifact.cpp)
@@ -131,6 +147,56 @@ add_test(NAME RuntimeActivationSchedulerTests COMMAND test_runtime_activation_sc
 add_executable(test_runtime_projected_trait_tracker test_runtime_projected_trait_tracker.cpp)
 target_link_libraries(test_runtime_projected_trait_tracker PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeProjectedTraitTrackerTests COMMAND test_runtime_projected_trait_tracker)
+
+# DocumentIdMap runtime tests (add-world-save-restore change)
+add_executable(test_runtime_document_id_map test_runtime_document_id_map.cpp)
+target_link_libraries(test_runtime_document_id_map PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeDocumentIdMapTests COMMAND test_runtime_document_id_map)
+
+# Persistence request scheduling runtime tests (add-world-save-restore change)
+add_executable(test_runtime_persistence_scheduling test_runtime_persistence_scheduling.cpp)
+target_link_libraries(test_runtime_persistence_scheduling PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimePersistenceSchedulingTests COMMAND test_runtime_persistence_scheduling)
+
+# Persistence adapter contract runtime tests (add-world-save-restore change)
+add_executable(test_runtime_persistence_adapter test_runtime_persistence_adapter.cpp)
+target_link_libraries(test_runtime_persistence_adapter PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimePersistenceAdapterTests COMMAND test_runtime_persistence_adapter)
+
+# Example file adapter runtime tests (add-world-save-restore change)
+add_executable(test_runtime_persistence_file_adapter test_runtime_persistence_file_adapter.cpp)
+target_link_libraries(test_runtime_persistence_file_adapter PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimePersistenceFileAdapterTests COMMAND test_runtime_persistence_file_adapter)
+
+# Default generated-main() adapter registration (add-world-save-restore task 5.4): a
+# golden-text check against the real compiler output for a std.persistence-using
+# fixture. Reads the generated .cpp as plain text rather than compiling/running it,
+# since generated main() opens a real window (see cactus_add_headless_behavior_test's
+# CACTUS_GENERATED_NO_MAIN, used by every other persistence test instead).
+set(persistence_default_main_source "${CMAKE_SOURCE_DIR}/examples/persistence_save_events.cactus")
+set(persistence_default_main_generated
+    "${CACTUS_GENERATED_EXAMPLES_DIR}/test_persistence_default_main_registration.generated.cpp")
+add_custom_command(
+    OUTPUT "${persistence_default_main_generated}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<SHELL_PATH:${CACTUS_GENERATED_EXAMPLES_DIR}>"
+    COMMAND $<TARGET_FILE:cactus>
+            "$<SHELL_PATH:${persistence_default_main_source}>"
+            --backend cpp-entt
+            --output "$<SHELL_PATH:${persistence_default_main_generated}>"
+    DEPENDS cactus "${persistence_default_main_source}"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Generating golden-text fixture for default persistence adapter registration"
+    VERBATIM
+)
+add_custom_target(generate_persistence_default_main_fixture DEPENDS "${persistence_default_main_generated}")
+
+add_executable(test_persistence_default_main_registration EXCLUDE_FROM_ALL test_persistence_default_main_registration.cpp)
+add_dependencies(test_persistence_default_main_registration generate_persistence_default_main_fixture)
+target_compile_definitions(test_persistence_default_main_registration PRIVATE
+    CACTUS_GENERATED_CPP_PATH="${persistence_default_main_generated}"
+)
+target_link_libraries(test_persistence_default_main_registration PRIVATE Catch2::Catch2WithMain)
+add_test(NAME PersistenceDefaultMainRegistrationTests COMMAND test_persistence_default_main_registration)
 
 # Headless behavioral tests (example-behavior-tests capability)
 cactus_add_headless_behavior_test(test_blue_square_headless_behavior
@@ -263,6 +329,30 @@ cactus_add_headless_behavior_test(test_gameplay_timers_headless_behavior
     CACTUS_SOURCE examples/gameplay_timers.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_gameplay_timers_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_world_persistence_headless_behavior
+    CACTUS_SOURCE examples/world_persistence.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_world_persistence_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_world_persistence_dynamic_headless_behavior
+    CACTUS_SOURCE examples/world_persistence_dynamic.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_world_persistence_dynamic_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_persistence_save_events_headless_behavior
+    CACTUS_SOURCE examples/persistence_save_events.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_save_events_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_persistence_save_on_load_headless_behavior
+    CACTUS_SOURCE examples/persistence_save_on_load.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_save_on_load_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_particle_burst_headless_behavior

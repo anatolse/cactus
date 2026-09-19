@@ -23,6 +23,10 @@ inline void dispatch_load_event(entt::registry& registry) {
     cactus::runtime::entt_backend::generated_dispatch_event(registry, std_core__loadEvent{});
     cactus::runtime::entt_backend::generated_drain_event_cascade(registry);
     cactus::runtime::entt_backend::generated_commit_activation(registry);
+    // Mirrors generated main()'s load boundary (add-world-save-restore task
+    // 4.4): a SaveRequested emitted from `on load:` is processed at this same
+    // boundary, not deferred to the first frame.
+    cactus::runtime::entt_backend::generated_process_persistence_boundary(registry);
     boundary_activation.active = false;
 }
 

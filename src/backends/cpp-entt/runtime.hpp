@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/cactus_runtime.hpp"
+#include "common/persistence_document.hpp"
 
 #include "backends/cpp-entt/raylib_io.hpp"
 #include "backends/cpp-entt/spatial_query.hpp"
@@ -560,6 +561,366 @@ struct CreationOrdinal {
 
 [[nodiscard]] std::uint64_t generated_next_creation_ordinal() noexcept;
 
+// ── World-persistence provenance ───────────────────────────────────────────
+// A saved record rebuilds an entity's unmarked state from the values evaluated
+// once when it was created, so participating creation sites keep a copy of what
+// they emplaced. One component per trait, not one per entity, so removing and
+// re-adding a trait overwrites only that trait's copy.
+template <typename Trait>
+struct Construction {
+    Trait value{};
+};
+
+// Index into the program's generated archetype-node table. Emplaced by exactly
+// the creation sites that retain Construction, so an entity never carries one
+// without the other.
+struct ArchetypeOrigin {
+    std::uint32_t node{};
+};
+
+// Takes the value directly when the caller already has it (e.g. the value it
+// just emplaced), avoiding a redundant sparse-set lookup on every persisted
+// creation/structural site.
+template <typename Trait>
+void retain_construction(entt::registry& registry, entt::entity entity, const Trait& value) {
+    registry.emplace_or_replace<Construction<Trait>>(entity, Construction<Trait>{value});
+}
+
+template <typename Trait>
+void retain_construction(entt::registry& registry, entt::entity entity) {
+    retain_construction<Trait>(registry, entity, registry.get<Trait>(entity));
+}
+
+template <typename Trait>
+void discard_construction(entt::registry& registry, entt::entity entity) {
+    registry.remove<Construction<Trait>>(entity);
+}
+
+// Capture refuses to write a record it could not rebuild; a partial record is
+// worse than a reported failure.
+[[nodiscard]] inline bool has_capture_provenance(const entt::registry& registry, entt::entity entity) noexcept {
+    return registry.valid(entity) && registry.all_of<ArchetypeOrigin>(entity);
+}
+
+// Hands out one document-local identity per referenced entity. Excluded targets
+// get an identity too, so repeated references to the same excluded entity stay
+// equal to each other and distinct from a reference to a different one, without
+// pulling either into the document.
+class DocumentIdMap {
+public:
+    // Capture knows the eligible-entity count before assigning any identity;
+    // reserving avoids repeated rehashing while filling the table.
+    void reserve(std::size_t entity_count) { entries_.reserve(entity_count); }
+
+    // Idempotent with respect to a prior reference(): a forward reference made
+    // before an entity's own inclusion must keep pointing at the same identity
+    // once that entity is included, not silently rebind to a fresh one.
+    persistence::DocumentId include(entt::entity entity) {
+        auto& entry     = entry_for(entity);
+        entry.included = true;
+        return entry.id;
+    }
+
+    [[nodiscard]] persistence::EntityRef reference(entt::entity entity) {
+        if (entity == entt::null) {
+            return {};
+        }
+        const auto& entry = entry_for(entity);
+        return persistence::EntityRef{.id = entry.id, .present = entry.included};
+    }
+
+    // Guards nested struct capture against the configured depth bound: false
+    // means the bound was already reached, so the caller must not recurse and
+    // should record an absent value instead, without calling exit_nesting()
+    // (nothing was entered). A true result must be paired with exactly one
+    // exit_nesting() call once the guarded recursion returns.
+    [[nodiscard]] bool enter_nesting() noexcept {
+        if (depth_ >= persistence::kMaxPersistenceNestingDepth) {
+            exceeded_ = true;
+            return false;
+        }
+        ++depth_;
+        return true;
+    }
+
+    void exit_nesting() noexcept { --depth_; }
+
+    // A list past the configured collection bound stops growing rather than
+    // consuming unbounded memory; the caller marks the document truncated
+    // instead of recording a false impression of a complete collection.
+    void mark_limit_exceeded() noexcept { exceeded_ = true; }
+
+    [[nodiscard]] bool limit_exceeded() const noexcept { return exceeded_; }
+
+private:
+    struct Entry {
+        persistence::DocumentId id = 0;
+        bool included              = false;
+    };
+
+    // One hash probe per call instead of two lookups across two separately
+    // hashed containers keyed by the same entity.
+    Entry& entry_for(entt::entity entity) {
+        auto [it, inserted] = entries_.try_emplace(entity);
+        if (inserted) {
+            it->second.id = next_++;
+        }
+        return it->second;
+    }
+
+    std::unordered_map<entt::entity, Entry> entries_;
+    std::size_t depth_  = 0;
+    bool exceeded_      = false;
+    persistence::DocumentId next_ = 1;
+};
+
+// ── Field value conversion ─────────────────────────────────────────────────
+// Program-independent, so generated capture calls these instead of restating
+// each backend representation inline.
+
+// The schema descriptor (common/persistence_metadata.cpp) reports Int and
+// Float fields as exactly 32 bits: the backend's actual storage width, which
+// these assertions pin down rather than assume. dsl-type-system describes
+// `float` as 64-bit; the backend has always stored C++ `float` (32-bit) for
+// every DSL float field, so the schema reports what is actually written, not
+// the language's promised width. Closing that language/backend gap is a
+// separate, tracked type-system issue — this schema exposes the backend's
+// exact representation without redefining language arithmetic.
+static_assert(sizeof(int) == 4, "PersistenceValueKind::Int assumes a 32-bit backend int");
+static_assert(sizeof(float) == 4, "PersistenceValueKind::Float assumes a 32-bit backend float");
+
+[[nodiscard]] inline persistence::Value to_persistence_value(bool value) {
+    return persistence::Value::of_bool(value);
+}
+
+[[nodiscard]] inline persistence::Value to_persistence_value(int value) {
+    return persistence::Value::of_int(value);
+}
+
+[[nodiscard]] inline persistence::Value to_persistence_value(float value) {
+    return persistence::Value::of_float(value);
+}
+
+[[nodiscard]] inline persistence::Value to_persistence_value(const std::string& value) {
+    return persistence::Value::of_string(value);
+}
+
+[[nodiscard]] inline persistence::Value to_persistence_value(Vector2 value) {
+    return persistence::Value::of_vector(PersistenceValueKind::Float, 2, {value.x, value.y, 0.0F, 0.0F});
+}
+
+[[nodiscard]] inline persistence::Value to_persistence_value(Vector3 value) {
+    return persistence::Value::of_vector(PersistenceValueKind::Float, 3, {value.x, value.y, value.z, 0.0F});
+}
+
+[[nodiscard]] inline persistence::Value to_persistence_value(Quat value) {
+    return persistence::Value::of_vector(PersistenceValueKind::Float, 4, {value.x, value.y, value.z, value.w});
+}
+
+// Color lanes are bytes in the backend; float carries every one of them exactly.
+static_assert(sizeof(Color::r) == 1, "PersistenceValueKind::Int color lanes assume an 8-bit backend channel");
+[[nodiscard]] inline persistence::Value to_persistence_value(Color value) {
+    return persistence::Value::of_vector(PersistenceValueKind::Int,
+                                         4,
+                                         {static_cast<float>(value.r),
+                                          static_cast<float>(value.g),
+                                          static_cast<float>(value.b),
+                                          static_cast<float>(value.a)});
+}
+
+// ── World-persistence request scheduling ───────────────────────────────────
+// SaveRequested occurrences are collected here rather than dispatched to
+// gameplay handlers — a runtime-owned effect domain (dsl-stdlib-persistence
+// decision 6), the same shape as std.debug's renderers. Requests accumulate
+// during one activation and are frozen into a batch only at that
+// activation's boundary, so ordering and "later boundary" deferral are
+// properties of this queue, not of any one caller.
+
+struct PendingSaveRequest {
+    std::string slot;
+    int request_id = 0;
+
+    friend bool operator==(const PendingSaveRequest&, const PendingSaveRequest&) = default;
+};
+
+// The result of processing one request.
+struct SaveOutcome {
+    bool ok = false;
+    std::string slot;
+    int request_id = 0;
+    std::string code;     // populated when !ok
+    std::string message;  // populated when !ok
+};
+
+// ── Storage adapter contract (dsl-stdlib-persistence decision 7) ───────────
+// Reference for a host writing a custom PersistenceAdapter. An adapter owns
+// encoding and storage; it never receives registry access or spawn
+// capabilities, only a schema descriptor and an owned typed snapshot. Both
+// directions are part of the ABI now, even though only write is reached by
+// this change's own generated request-processing path (world snapshot ->
+// live entities is add-world-snapshot-restore's concern) — a document-level
+// write/read round trip through the same adapter is how this change
+// validates format independence without a restore path yet existing.
+//
+// Error codes: `code`/`message` on PersistenceWriteResult/PersistenceReadResult
+// are free-form strings the adapter chooses, surfaced verbatim to gameplay as
+// `storage.SaveFailed.code`/`.message`. Two codes are runtime-owned and never
+// come from an adapter: "adapter_unavailable" (generated_execute_save_request/
+// read_persistence_document below, when no adapter or that direction's
+// function is registered) and "incompatible_schema" (read_persistence_document,
+// when persistence::schema_accepts rejects the decoded document — see that
+// function for the exact compatibility policy: exact revision+fingerprint
+// match, no partial or best-effort compatibility). An adapter reports
+// everything else about its own encoding/storage failure through its own
+// chosen code; "io_failure" is the convention the example file adapter below
+// uses and a reasonable default for a new adapter's own I/O errors.
+//
+// Numeric representation limits: the schema and snapshot report the backend's
+// actual storage width (see the ABI static_asserts above this section, and
+// common/persistence_metadata.cpp), not the DSL's nominal type width. Capture
+// truncates rather than fails when a collection or nesting depth exceeds
+// common/persistence_document.hpp's kMaxPersistenceCollectionSize/
+// kMaxPersistenceNestingDepth — Snapshot::truncated is set instead of the save
+// producing an error, since a bound must not turn a large-but-legitimate save
+// into a hard failure. A field whose type the schema cannot represent at all
+// is rejected at compile time (common/persistence_metadata.cpp's unsupported-
+// field diagnostic) and therefore can never reach an adapter as a runtime
+// value.
+//
+// Example encoding and default registration: see persistence_file_adapter.hpp
+// for the documented example adapter's on-disk format, and
+// register_persistence_adapter below (also generated main()'s default
+// registration, cpp_entt_codegen.cpp's emit_backend_main) for how an adapter
+// is wired in.
+
+struct PersistenceWriteResult {
+    bool ok = false;
+    std::string code;     // populated when !ok
+    std::string message;  // populated when !ok
+};
+
+struct PersistenceReadResult {
+    bool ok = false;
+    persistence::Snapshot snapshot;  // populated when ok
+    std::string code;                // populated when !ok
+    std::string message;             // populated when !ok
+};
+
+using PersistenceWriteFn = std::function<PersistenceWriteResult(
+    const std::string& slot, const persistence::SchemaDescriptor& schema, const persistence::Snapshot& snapshot)>;
+using PersistenceReadFn =
+    std::function<PersistenceReadResult(const std::string& slot, const persistence::SchemaDescriptor& schema)>;
+
+// A host registers one of these; encoding and storage are entirely the
+// adapter's own choice. Either function left unset behaves as
+// adapter_unavailable for that direction.
+struct PersistenceAdapter {
+    PersistenceWriteFn write;
+    PersistenceReadFn read;
+};
+
+struct PersistenceRuntimeState {
+    std::vector<PendingSaveRequest> pending;  // frozen into a batch at the boundary
+    PersistenceAdapter adapter;               // unset: every request fails as adapter_unavailable
+    bool processing_batch = false;            // guards against reentrant boundary processing
+};
+
+[[nodiscard]] inline PersistenceRuntimeState& generated_persistence_state() {
+    static PersistenceRuntimeState state;
+    return state;
+}
+
+// Resets processing_batch on every exit path, including one an adapter's own
+// exception unwinds through, so a single non-compliant custom write/read
+// (the ABI cannot enforce "never throws" at compile time) cannot leave the
+// reentrancy guard stuck true and silently wedge every future save request.
+class ScopedPersistenceBatch {
+public:
+    explicit ScopedPersistenceBatch(PersistenceRuntimeState& state) noexcept
+        : state_(state) {
+        state_.processing_batch = true;
+    }
+    ~ScopedPersistenceBatch() { state_.processing_batch = false; }
+
+    ScopedPersistenceBatch(const ScopedPersistenceBatch&)            = delete;
+    ScopedPersistenceBatch& operator=(const ScopedPersistenceBatch&) = delete;
+    ScopedPersistenceBatch(ScopedPersistenceBatch&&)                 = delete;
+    ScopedPersistenceBatch& operator=(ScopedPersistenceBatch&&)      = delete;
+
+private:
+    PersistenceRuntimeState& state_;
+};
+
+// The public registration surface (dsl-stdlib-persistence "Saving works
+// without host C++ integration"): generated main() registers the example
+// file adapter by default (task 5.4); a host building with
+// CACTUS_GENERATED_NO_MAIN registers whatever adapter it wants, or clears the
+// slot to deliberately keep every request failing as adapter_unavailable.
+inline void register_persistence_adapter(PersistenceAdapter adapter) {
+    generated_persistence_state().adapter = std::move(adapter);
+}
+
+inline void clear_persistence_adapter() {
+    generated_persistence_state().adapter = PersistenceAdapter{};
+}
+
+inline void generated_queue_save_request(std::string slot, int request_id) {
+    generated_persistence_state().pending.push_back(
+        PendingSaveRequest{.slot = std::move(slot), .request_id = request_id});
+}
+
+// Extracts the current queue as one ordered batch and clears it, so requests
+// queued while this batch's outcomes are being delivered join a later batch
+// instead of the one currently frozen.
+[[nodiscard]] inline std::vector<PendingSaveRequest> generated_freeze_save_request_batch() {
+    std::vector<PendingSaveRequest> batch;
+    std::swap(batch, generated_persistence_state().pending);
+    return batch;
+}
+
+[[nodiscard]] inline SaveOutcome generated_execute_save_request(const std::string& slot,
+                                                                int request_id,
+                                                                const persistence::SchemaDescriptor& schema,
+                                                                const persistence::Snapshot& snapshot) {
+    const auto& write = generated_persistence_state().adapter.write;
+    if (!write) {
+        return SaveOutcome{.ok         = false,
+                           .slot       = slot,
+                           .request_id = request_id,
+                           .code       = "adapter_unavailable",
+                           .message    = "no persistence adapter is registered"};
+    }
+    const auto result = write(slot, schema, snapshot);
+    if (result.ok) {
+        return SaveOutcome{.ok = true, .slot = slot, .request_id = request_id};
+    }
+    return SaveOutcome{
+        .ok = false, .slot = slot, .request_id = request_id, .code = result.code, .message = result.message};
+}
+
+// Reads one document back through the registered adapter, rejecting it if
+// its schema does not match the running program's — document validation
+// stays runtime-owned even when an adapter also validates its own encoding
+// (dsl-stdlib-persistence "Storage adapters own format and location").
+[[nodiscard]] inline PersistenceReadResult read_persistence_document(const std::string& slot,
+                                                                     const persistence::SchemaDescriptor& schema) {
+    const auto& read = generated_persistence_state().adapter.read;
+    if (!read) {
+        return PersistenceReadResult{
+            .ok = false, .code = "adapter_unavailable", .message = "no persistence adapter is registered"};
+    }
+    auto result = read(slot, schema);
+    if (!result.ok) {
+        return result;
+    }
+    if (!persistence::schema_accepts(schema, result.snapshot)) {
+        return PersistenceReadResult{.ok      = false,
+                                     .code    = "incompatible_schema",
+                                     .message = "stored document's schema does not match the running program"};
+    }
+    return result;
+}
+
 // ── Activation/event-scheduler machinery (extract-codegen-runtime-scaffolding)
 // Structural command queued during an activation (entity spawn/destroy,
 // trait add/remove) and applied once the activation commits. Has no
@@ -848,6 +1209,12 @@ public:
     // obligation without touching the registry.
     void cancel(entt::entity entity) {
         previous_.erase(entity);
+    }
+
+    // True while this entity's component is a frame-local projection rather
+    // than durable structure, which world capture must not record.
+    [[nodiscard]] bool is_projected(entt::entity entity) const {
+        return previous_.contains(entity);
     }
 
     // Restores or removes every tracked entity's component per the recorded

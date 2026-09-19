@@ -173,6 +173,14 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
     target.non_pub_templates.insert(src.non_pub_templates.begin(), src.non_pub_templates.end());
     target.pub_events.insert(src.pub_events.begin(), src.pub_events.end());
 
+    // Re-sorting after the append keeps the linked order independent of module
+    // link order.
+    target.persistence.archetypes.insert(target.persistence.archetypes.end(),
+                                         src.persistence.archetypes.begin(),
+                                         src.persistence.archetypes.end());
+    sort_archetype_descriptors(target.persistence.archetypes);
+    target.persistence.attaches_persistent_trait |= src.persistence.attaches_persistent_trait;
+
     // ── 5.4 + 5.2: Merge dependency graph (append) ──────────────────────────
     for (const auto& dep : src.dependency_graph) {
         target.dependency_graph.push_back(dep);
@@ -311,10 +319,24 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
         return std::nullopt;
     }
 
+    validate_persistence_requires_graph_scheduler(merged);
+
     if (errors_.has_errors()) {
         return std::nullopt;
     }
     return merged;
+}
+
+void ProgramLinker::validate_persistence_requires_graph_scheduler(const DecoratedProgram& program) {
+    const bool uses_persistence = std::ranges::any_of(program.events, [](const auto& entry) {
+        return entry.second.symbol_id.has_value() && entry.second.symbol_id->module.name == "std.persistence";
+    });
+    if (!uses_persistence || !program.execution_graph.phases.empty()) {
+        return;
+    }
+    errors_.error({},
+                  "std.persistence requires the graph-driven scheduler (this program declares no `pub phase`); "
+                  "a save request on the legacy frame path would never be processed");
 }
 
 }  // namespace cactus

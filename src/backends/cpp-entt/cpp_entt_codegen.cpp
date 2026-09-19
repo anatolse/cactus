@@ -5,6 +5,7 @@
 
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
+#include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/render_pass_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
@@ -30,6 +31,8 @@ const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program);
 const ResolvedEvent* find_std_core_event(const DecoratedProgram& program,
                                          std::string_view name,
                                          bool require_external = false);
+const ResolvedEvent* find_std_persistence_event(const DecoratedProgram& program, std::string_view name);
+std::string emit_persistence_boundary_processor(const DecoratedProgram& program);
 bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& event_symbol);
 const PhasePlan* find_render_phase(const DecoratedProgram& program);
 bool creation_takes_parameters(const std::vector<InitializerSlot>& slots);
@@ -352,6 +355,10 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                     out << "                if (!registry.valid(target)) { return; }\n";
                     out << "                ::cancel_projected_" << type << "(target);\n";
                     out << "                registry.emplace_or_replace<" << type << ">(target, std::move(value));\n";
+                    if (EnttPersistenceEmitter::structural_site_tracks_construction(
+                            program, command.target, command.target->local_name)) {
+                        out << EnttPersistenceEmitter::emit_retain_construction(type, "target", "                ");
+                    }
                     out << "            });\n";
                     out << "    }\n";
                     break;
@@ -368,6 +375,10 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                     out << "                ::cancel_projected_" << type << "(target);\n";
                     out << "                if (registry.all_of<" << type << ">(target)) { registry.remove<" << type
                         << ">(target); }\n";
+                    if (EnttPersistenceEmitter::structural_site_tracks_construction(
+                            program, command.target, command.target->local_name)) {
+                        out << EnttPersistenceEmitter::emit_discard_construction(type, "target", "                ");
+                    }
                     out << "            });\n";
                     out << "    }\n";
                     break;
@@ -859,6 +870,17 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << "}\n\n";
     }
 
+    // The concrete per-event generated_dispatch_event overload (defined later,
+    // once per event in program.events) must already be declared here: this
+    // function is not a template, so the fallback call below would otherwise
+    // resolve to the generic no-op default declared above instead of the real
+    // handler dispatch, silently dropping every `on <ExternEvent>:` handler.
+    for (const auto* event : external_events) {
+        out << "void generated_dispatch_event(entt::registry&, const "
+            << event_runtime_cpp_type(program, *event->symbol_id) << "&, std::optional<entt::entity> = std::nullopt);\n";
+    }
+    out << "\n";
+
     for (const auto* event : external_events) {
         const auto root_type     = event_runtime_cpp_type(program, *event->symbol_id);
         const bool is_frame_root = event == frame_event;
@@ -869,8 +891,10 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         if (is_frame_root) {
             out << "    reset_consumed_input();\n";
         }
+        bool routed_to_phase = false;
         for (const auto* phase : phase_order) {
             if (phase->runtime_root.has_value() && *phase->runtime_root == *event->symbol_id) {
+                routed_to_phase = true;
                 out << "    generated_run_phase_batch_" << canonical_to_cpp_name(phase->phase)
                     << "(registry, root_event);\n";
                 // Projected-trait cleanup fires once per frame, immediately
@@ -880,8 +904,25 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                 }
             }
         }
+        if (!routed_to_phase) {
+            // No phase claims this event as its root (e.g. std.persistence's
+            // save outcomes): it is still its own activation on injection —
+            // dispatch its `on <Event>:` handlers, drain whatever cascade
+            // they queue, then commit, exactly like a phase batch does for
+            // its root event.
+            out << "    generated_scheduler_state().activation.active = true;\n";
+            out << "    generated_dispatch_event(registry, root_event);\n";
+            out << "    generated_drain_event_cascade(registry);\n";
+            out << "    generated_commit_activation(registry);\n";
+            out << "    generated_scheduler_state().activation.active = false;\n";
+        }
         out << "}\n\n";
     }
+
+    // Defined after this function (its body needs generated_capture_world_snapshot
+    // and the outcome event types, emitted later): declared here so the call
+    // below resolves regardless of definition order in the file.
+    out << "void generated_process_persistence_boundary(entt::registry& registry);\n\n";
 
     out << "void generated_drain_external_events(entt::registry& registry) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
@@ -896,6 +937,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence); },\n";
     out << "                   queued.occurrence);\n";
     out << "    }\n";
+    // Persistence requests are processed only once this drain's own root
+    // events (and everything their handlers cascaded/committed) are fully
+    // settled — the boundary decision-6 requires. generated_process_persistence_boundary
+    // itself guards against the reentrant nested call this makes when it
+    // delivers each outcome as its own activation.
+    out << "    generated_process_persistence_boundary(registry);\n";
     out << "}\n\n";
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();
@@ -1034,10 +1081,32 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                       [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
     for (const auto* event : events) {
         const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
-        out << "void generated_dispatch_event(entt::registry& registry, const " << event_type
-            << "& occurrence, std::optional<entt::entity> target = std::nullopt) {\n";
+        // External events already got a forward declaration in
+        // emit_graph_scheduler_state (with the default argument) so
+        // generated_process_root_event's fallback there could call them
+        // before this definition exists in the file; repeating the default
+        // here would be an illegal redefinition of it.
+        const bool default_already_declared = event->is_external;
+        out << "void generated_dispatch_event(entt::registry& registry, const " << event_type << "& occurrence, "
+            << "std::optional<entt::entity> target" << (default_already_declared ? "" : " = std::nullopt") << ") {\n";
         out << "    (void)occurrence;\n";
         out << "    (void)target;\n";
+        // std.persistence.SaveRequested is a runtime-owned effect domain
+        // (dsl-stdlib-persistence decision 6), not a gameplay handler target:
+        // every occurrence joins the request queue regardless of whether any
+        // rule also declares `on SaveRequested:`. This is a direct special
+        // case rather than an `extern rule ...: effects: persistence` in the
+        // style of std.debug's renderers, because that style is not actually
+        // a generic effects-keyed dispatch: `system_emitter.cpp`'s renderer
+        // table is a hardcoded (module, rule_name) lookup that still needs a
+        // native C++ handler registered by name for each entry. Routing
+        // through it here would trade this one dispatch-site branch for a
+        // second hardcoded table entry plus a native function — more
+        // machinery for the same outcome, not less.
+        if (event->symbol_id.has_value() && event->name == "SaveRequested" &&
+            event->symbol_id->module.name == "std.persistence") {
+            out << "    generated_queue_save_request(occurrence.slot, occurrence.request_id);\n";
+        }
         bool emitted = false;
         for (const auto& identity : program.execution_graph.stable_topological_order) {
             if (identity.trigger.kind != HandlerTriggerKind::Event || identity.trigger.symbol != *event->symbol_id) {
@@ -1559,7 +1628,8 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
                                        const std::vector<ArchetypeTraitEntry>& traits,
                                        const DecoratedProgram& program,
                                        const std::string& entity_name,
-                                       int indent) {
+                                       int indent,
+                                       const std::optional<std::uint32_t>& origin) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     // Every DSL-authored creation site (load-time archetypes, hierarchical
     // children, and committed spawns) funnels through this helper, so
@@ -1572,6 +1642,9 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
     out << ind << "registry.emplace<cactus::runtime::entt_backend::CreationOrdinal>(" << entity_name
         << ", cactus::runtime::entt_backend::CreationOrdinal{.value = "
            "cactus::runtime::entt_backend::generated_next_creation_ordinal()});\n";
+    if (origin.has_value()) {
+        out << EnttPersistenceEmitter::emit_archetype_origin(*origin, entity_name, ind);
+    }
     for (const auto& trait : traits) {
         const std::string cpp_name =
             EnttCodegenUtils::trait_cpp_name(trait.resolved_trait_id, trait.trait_name, program);
@@ -1589,6 +1662,8 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
             continue;
         }
 
+        const bool retain = origin.has_value() && EnttPersistenceEmitter::trait_has_construction_payload(
+                                                      program, trait.resolved_trait_id, trait.trait_name);
         out << ind << "{\n";
         std::size_t widest = std::string("auto component").size();
         for (const auto& assignment : trait.assignments) {
@@ -1600,11 +1675,15 @@ void emit_archetype_trait_initializers(std::ostringstream& out,
                 << EnttCodegenUtils::emit_expr(*assignment.value, program) << ";\n";
         }
         out << ind << "    registry.emplace<" << cpp_name << ">(" << entity_name << ", component);\n";
+        if (retain) {
+            out << EnttPersistenceEmitter::emit_retain_construction(cpp_name, entity_name, ind + "    ");
+        }
         out << ind << "}\n";
     }
 }
 
 std::string emit_archetype_creation_function(const std::string& archetype_name,
+                                             const SymbolId& archetype,
                                              const std::vector<ArchetypeTraitEntry>& traits,
                                              const DecoratedProgram& program) {
     std::ostringstream out;
@@ -1612,7 +1691,8 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
     const auto create_name = archetype_create_function_name(program.module_name, archetype_name);
     out << "entt::entity " << at_name << "(entt::registry& registry, entt::entity hint) {\n";
     out << "    auto entity = registry.create(hint);\n";
-    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    emit_archetype_trait_initializers(
+        out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
     out << "    return entity;\n";
     out << "}\n\n";
     // Delegates rather than re-running emit_archetype_trait_initializers: the
@@ -1647,6 +1727,7 @@ std::string archetype_node_create_at_function_name(const std::string& module_nam
 
 void emit_archetype_node_helpers(std::ostringstream& out,
                                  const std::string& archetype_name,
+                                 const SymbolId& archetype,
                                  const std::vector<ChildArchetypeNode>& children,
                                  const DecoratedProgram& program,
                                  std::vector<std::string>& role_path,
@@ -1657,10 +1738,16 @@ void emit_archetype_node_helpers(std::ostringstream& out,
             << archetype_node_create_function_name(program.module_name, archetype_name, role_path)
             << "(entt::registry& registry" << parameters << ") {\n";
         out << "    auto entity = registry.create();\n";
-        emit_archetype_trait_initializers(out, child.traits, program, "entity", 1);
+        emit_archetype_trait_initializers(
+            out,
+            child.traits,
+            program,
+            "entity",
+            1,
+            EnttPersistenceEmitter::archetype_origin_index(program, archetype, role_path));
         out << "    return entity;\n";
         out << "}\n\n";
-        emit_archetype_node_helpers(out, archetype_name, child.children, program, role_path, parameters);
+        emit_archetype_node_helpers(out, archetype_name, archetype, child.children, program, role_path, parameters);
         role_path.pop_back();
     }
 }
@@ -1702,6 +1789,7 @@ bool creation_takes_parameters(const std::vector<InitializerSlot>& slots) {
 // create_<archetype> wrapper that expands the override-free tree and returns
 // the root entity (D9). Flat archetypes generate the same code as before.
 std::string emit_planned_creation_functions(const std::string& name,
+                                            const SymbolId& archetype,
                                             const std::vector<ArchetypeTraitEntry>& traits,
                                             const std::vector<ChildArchetypeNode>& children,
                                             const std::vector<InitializerSlot>& slots,
@@ -1725,15 +1813,18 @@ std::string emit_planned_creation_functions(const std::string& name,
     const auto create = archetype_create_function_name(program.module_name, name);
     const auto create_at = archetype_create_at_function_name(program.module_name, name);
     std::vector<std::string> role_path;
-    const auto node_at = archetype_node_create_at_function_name(program.module_name, name, role_path);
+    const auto node_at     = archetype_node_create_at_function_name(program.module_name, name, role_path);
     const auto node_create = archetype_node_create_function_name(program.module_name, name, role_path);
-    out << "static entt::entity " << node_at << "(entt::registry& registry, entt::entity hint" << all_parameters << ") {\n";
+    out << "static entt::entity " << node_at << "(entt::registry& registry, entt::entity hint" << all_parameters
+        << ") {\n";
     out << "    auto entity = registry.create(hint);\n";
-    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    emit_archetype_trait_initializers(
+        out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
     out << "    return entity;\n}\n";
-    out << "[[maybe_unused]] static entt::entity " << node_create << "(entt::registry& registry" << all_parameters << ") {\n";
+    out << "[[maybe_unused]] static entt::entity " << node_create << "(entt::registry& registry" << all_parameters
+        << ") {\n";
     out << "    return " << node_at << "(registry, registry.create()" << all_arguments << ");\n}\n";
-    emit_archetype_node_helpers(out, name, children, program, role_path, all_parameters);
+    emit_archetype_node_helpers(out, name, archetype, children, program, role_path, all_parameters);
     out << "entt::entity " << create_at << "(entt::registry& registry, entt::entity hint" << parameters << ") {\n";
     for (const auto& slot : slots) {
         if (slot.value != nullptr) {
@@ -1750,15 +1841,16 @@ std::string emit_planned_creation_functions(const std::string& name,
 }
 
 std::string emit_archetype_creation_functions(const std::string& archetype_name,
+                                              const SymbolId& archetype,
                                               const std::vector<ArchetypeTraitEntry>& traits,
                                               const std::vector<ChildArchetypeNode>& children,
                                               const DecoratedProgram& program,
                                               const std::vector<InitializerSlot>& slots) {
     if (!slots.empty()) {
-        return emit_planned_creation_functions(archetype_name, traits, children, slots, program);
+        return emit_planned_creation_functions(archetype_name, archetype, traits, children, slots, program);
     }
     if (children.empty()) {
-        return emit_archetype_creation_function(archetype_name, traits, program);
+        return emit_archetype_creation_function(archetype_name, archetype, traits, program);
     }
 
     std::ostringstream out;
@@ -1768,7 +1860,8 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     const auto node_name    = archetype_node_create_function_name(program.module_name, archetype_name, role_path);
     out << "static entt::entity " << node_at_name << "(entt::registry& registry, entt::entity hint) {\n";
     out << "    auto entity = registry.create(hint);\n";
-    emit_archetype_trait_initializers(out, traits, program, "entity", 1);
+    emit_archetype_trait_initializers(
+        out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
     out << "    return entity;\n";
     out << "}\n\n";
     // Delegates rather than re-running emit_archetype_trait_initializers, same
@@ -1776,7 +1869,7 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     out << "static entt::entity " << node_name << "(entt::registry& registry) {\n";
     out << "    return " << node_at_name << "(registry, registry.create());\n";
     out << "}\n\n";
-    emit_archetype_node_helpers(out, archetype_name, children, program, role_path);
+    emit_archetype_node_helpers(out, archetype_name, archetype, children, program, role_path);
 
     out << "entt::entity " << archetype_create_function_name(program.module_name, archetype_name)
         << "(entt::registry& registry) {\n";
@@ -2443,6 +2536,96 @@ const ResolvedEvent* find_external_frame_event(const DecoratedProgram& program) 
     return find_std_core_event(program, "frame", /*require_external=*/true);
 }
 
+const ResolvedEvent* find_std_persistence_event(const DecoratedProgram& program, std::string_view name) {
+    for (const auto& [_, event] : program.events) {
+        if (event.name == name && event.symbol_id.has_value() && event.symbol_id->module.name == "std.persistence") {
+            return &event;
+        }
+    }
+    return nullptr;
+}
+
+bool program_uses_persistence(const DecoratedProgram& program) {
+    return find_std_persistence_event(program, "SaveRequested") != nullptr &&
+           find_std_persistence_event(program, "SaveCompleted") != nullptr &&
+           find_std_persistence_event(program, "SaveFailed") != nullptr;
+}
+
+// Bridges the activation scheduler to world persistence: SaveRequested
+// occurrences accumulate in a runtime queue (see generated_queue_save_request)
+// rather than reaching gameplay handlers; this is the boundary decision-6
+// requires them frozen into a batch and processed at.
+//
+// generated_drain_external_events unconditionally forward-declares and calls
+// this whenever the program is graph-driven at all (emit_graph_scheduler_state
+// does not gate that on persistence usage), so a definition must always exist
+// for such programs even when they never import std.persistence — hence the
+// no-op stub below rather than emitting nothing.
+std::string emit_persistence_boundary_processor(const DecoratedProgram& program) {
+    if (program.execution_graph.phases.empty()) {
+        return {};  // not graph-driven: nothing forward-declares or calls this
+    }
+    const auto* save_requested = find_std_persistence_event(program, "SaveRequested");
+    const auto* save_completed = find_std_persistence_event(program, "SaveCompleted");
+    const auto* save_failed    = find_std_persistence_event(program, "SaveFailed");
+    if (save_requested == nullptr || save_completed == nullptr || save_failed == nullptr) {
+        return "namespace cactus::runtime::entt_backend {\n\n"
+              "inline void generated_process_persistence_boundary(entt::registry&) {}\n\n"
+              "}  // namespace cactus::runtime::entt_backend\n\n";
+    }
+    const auto completed_type = event_runtime_cpp_type(program, *save_completed->symbol_id);
+    const auto failed_type    = event_runtime_cpp_type(program, *save_failed->symbol_id);
+    const bool has_schema     = EnttPersistenceEmitter::program_retains_provenance(program);
+
+    std::ostringstream out;
+    out << "namespace cactus::runtime::entt_backend {\n\n";
+    out << "inline void generated_process_persistence_boundary(entt::registry& registry) {\n";
+    out << "    auto& persistence_state = generated_persistence_state();\n";
+    out << "    if (persistence_state.processing_batch) { return; }\n";
+    out << "    auto batch = generated_freeze_save_request_batch();\n";
+    out << "    if (batch.empty()) { return; }\n";
+    out << "    cactus::runtime::entt_backend::ScopedPersistenceBatch batch_guard(persistence_state);\n";
+    if (has_schema) {
+        out << "    const auto snapshot = generated_capture_world_snapshot(registry);\n";
+        out << "    const auto& schema = generated_schema;\n";
+    } else {
+        out << "    const cactus::persistence::Snapshot snapshot{};\n";
+        out << "    const cactus::persistence::SchemaDescriptor schema{};\n";
+    }
+    // Every request's write runs before any outcome is delivered (decision 6:
+    // "both captures and writes run before either outcome event is
+    // delivered"): a single generated_drain_external_events call after this
+    // loop delivers every injected outcome as one cascade, in request order,
+    // rather than draining (and so running that request's own gameplay
+    // handler) between each write. A write that throws — the adapter ABI is
+    // a host-supplied std::function, so a non-compliant custom adapter can
+    // throw even though the shipped example adapter never does — becomes
+    // that one request's io_failure outcome instead of aborting the rest of
+    // the batch or leaking past this boundary.
+    out << "    for (const auto& request : batch) {\n";
+    out << "        try {\n";
+    out << "            const auto outcome = generated_execute_save_request(request.slot, request.request_id, "
+           "schema, snapshot);\n";
+    out << "            if (outcome.ok) {\n";
+    out << "                generated_inject_external_event(" << completed_type
+        << "{.slot = outcome.slot, .request_id = outcome.request_id});\n";
+    out << "            } else {\n";
+    out << "                generated_inject_external_event(" << failed_type
+        << "{.slot = outcome.slot, .request_id = outcome.request_id, .code = outcome.code, .message = "
+           "outcome.message});\n";
+    out << "            }\n";
+    out << "        } catch (const std::exception& persistence_adapter_error) {\n";
+    out << "            generated_inject_external_event(" << failed_type
+        << "{.slot = request.slot, .request_id = request.request_id, .code = \"io_failure\", .message = "
+           "persistence_adapter_error.what()});\n";
+    out << "        }\n";
+    out << "    }\n";
+    out << "    generated_drain_external_events(registry);\n";
+    out << "}\n\n";
+    out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    return out.str();
+}
+
 // Whether any handler in the execution graph's stable topological order is
 // triggered by this event — the same per-event handler-presence check
 // generated_dispatch_event's body construction already performs (see the
@@ -2510,6 +2693,11 @@ std::string emit_backend_main(const DecoratedProgram& program) {
         out << "        cactus::runtime::entt_backend::generated_dispatch_event(registry, " << event_type << "{});\n";
         out << "        cactus::runtime::entt_backend::generated_drain_event_cascade(registry);\n";
         out << "        cactus::runtime::entt_backend::generated_commit_activation(registry);\n";
+        // Scene transitions obey the same boundary ordering as any other
+        // activation (dsl-stdlib-persistence): a SaveRequested queued during
+        // this load/unload activation must be processed here too, not left
+        // to accumulate until the next frame (or forever, for unload).
+        out << "        cactus::runtime::entt_backend::generated_process_persistence_boundary(registry);\n";
         out << "        boundary_activation.active = false;\n";
         out << "    }\n";
     };
@@ -2524,6 +2712,14 @@ std::string emit_backend_main(const DecoratedProgram& program) {
     out << "    entt::registry registry;\n";
     out << "    entt::dispatcher dispatcher;\n";
     out << "    cactus::runtime::entt_backend::generated_setup_dispatcher(dispatcher);\n";
+    if (program_uses_persistence(program)) {
+        // Saving works without host C++ integration (dsl-stdlib-persistence):
+        // an author who only writes Cactus still gets a working adapter.
+        // Hosts building their own main() via CACTUS_GENERATED_NO_MAIN
+        // register whatever adapter they want instead of this default.
+        out << "    cactus::runtime::entt_backend::register_persistence_adapter(\n";
+        out << "        cactus::runtime::entt_backend::make_example_file_adapter(\"saves\"));\n";
+    }
     out << "    cactus::runtime::entt_backend::generated_init_project(registry);\n";
     out << "    cactus::runtime::entt_backend::generated_load_project(registry);\n";
     if (has_load_handler) {
@@ -2595,6 +2791,9 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
            "readability-use-std-min-max)\n";
     out << "// Generated C++ mirrors authored DSL constants, declarations, and system control flow.\n\n";
     out << "#include \"backends/cpp-entt/runtime.hpp\"\n";
+    if (program_uses_persistence(program)) {
+        out << "#include \"backends/cpp-entt/persistence_file_adapter.hpp\"\n";
+    }
     out << "\n";
     out << "#include <entt/entt.hpp>\n";
     out << "#include <raylib.h>\n";
@@ -2627,10 +2826,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "#include <limits>\n";
     out << "#include <optional>\n";
     out << "#include <string>\n";
+    out << "#include <string_view>\n";
     out << "#include <unordered_map>\n";
     out << "#include <unordered_set>\n";
     if (!program.execution_graph.phases.empty()) {
-        out << "#include <string_view>\n";
         out << "#include <stdexcept>\n";
         out << "#include <utility>\n";
         out << "#include <variant>\n";
@@ -2730,6 +2929,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
 
+    out << EnttPersistenceEmitter::emit_schema_descriptor(program);
+    out << EnttPersistenceEmitter::emit_archetype_node_table(program);
+    out << EnttPersistenceEmitter::emit_missing_provenance_probe(program);
+
     // Monotonic, non-reused per-entity creation order (dsl-pair-relations):
     // pair handlers sort their binding snapshots by this ordinal so tuple and
     // emitted-event order is deterministic and backend-independent. Assigned
@@ -2750,6 +2953,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << emit_camera_translate_helpers(emit_2d_helper, emit_3d_helper, cam2d_cpp, cam3d_cpp, wt3d_cpp);
 
     out << emit_projected_trait_registry_helpers(program);
+
+    out << EnttPersistenceEmitter::emit_world_capture(program);
 
     // Events
     if (program.ast != nullptr) {
@@ -2773,6 +2978,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
 
     out << emit_external_command_forward_declarations(program);
     out << emit_graph_scheduler_state(program);
+    out << emit_persistence_boundary_processor(program);
     out << emit_graph_external_handler_abi(program);
 
     const bool has_flat_colliders   = has_flat_collider_support(program);
@@ -2803,14 +3009,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     // Persist serialization stubs
     out << "// ── Persist Serialization ────────────────────────────────────────────\n\n";
     for (const auto& [name, t] : program.traits) {
-        bool has_persist = false;
-        for (const auto& f : t.fields) {
-            if (f.is_persist) {
-                has_persist = true;
-                break;
-            }
-        }
-        if (has_persist) {
+        if (trait_declares_persist_field(t)) {
             const std::string cpp_name = canonical_to_cpp_name(t.module_name, t.name);
             out << "void save_" << cpp_name << "(const " << cpp_name << "& comp) {\n";
             out << "    (void)comp;\n";
@@ -2859,12 +3058,26 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";
         for (auto& decl : program.ast->declarations) {
             if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
-                out << emit_archetype_creation_functions(tmpl->name, tmpl->traits, tmpl->children, program, tmpl->initializers);
+                out << emit_archetype_creation_functions(
+                    tmpl->name,
+                    resolved_or_local_symbol(
+                        SymbolKind::Template, tmpl->resolved_template_id, program.module_name, tmpl->name),
+                    tmpl->traits,
+                    tmpl->children,
+                    program,
+                    tmpl->initializers);
             }
         }
         for (auto& decl : program.ast->declarations) {
             if (auto* entity = std::get_if<EntityNode>(&decl)) {
-                out << emit_archetype_creation_functions(entity->name, entity->traits, entity->children, program, entity->initializers);
+                out << emit_archetype_creation_functions(
+                    entity->name,
+                    resolved_or_local_symbol(
+                        SymbolKind::Entity, entity->resolved_entity_id, program.module_name, entity->name),
+                    entity->traits,
+                    entity->children,
+                    program,
+                    entity->initializers);
             }
         }
     }
@@ -3113,12 +3326,29 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << "            auto it = cactus_template_registry.find(name);\n";
         out << "            if (it == cactus_template_registry.end()) { return entt::entity{entt::null}; }\n";
         out << "            auto entity = it->second(reg);\n";
+        // The editor places an entity at a runtime-chosen position, the same
+        // kind of per-entity override an authored `spawn Template: Field:
+        // value:` gets from emit_spawn_overrides — so this site must retain
+        // it the same way, or a saved editor-placed entity would report its
+        // template's baseline position instead of where it was placed.
+        const std::string wt_canonical =
+            volume_transform ? "std.transform.volume.WorldTransform" : "std.transform.flat.WorldTransform";
         if (has_local) {
-            out << "            if (auto* lt = reg.try_get<" << lt_cpp << ">(entity)) { lt->position = " << pos_value
-                << "; }\n";
+            out << "            if (auto* lt = reg.try_get<" << lt_cpp << ">(entity)) {\n";
+            out << "                lt->position = " << pos_value << ";\n";
+            if (EnttPersistenceEmitter::structural_site_tracks_construction(program, std::nullopt, lt_canonical)) {
+                out << "                cactus::runtime::entt_backend::retain_construction<" << lt_cpp
+                    << ">(reg, entity, *lt);\n";
+            }
+            out << "            }\n";
         }
-        out << "            if (auto* wt = reg.try_get<" << wt_cpp_spawn << ">(entity)) { wt->position = " << pos_value
-            << "; }\n";
+        out << "            if (auto* wt = reg.try_get<" << wt_cpp_spawn << ">(entity)) {\n";
+        out << "                wt->position = " << pos_value << ";\n";
+        if (EnttPersistenceEmitter::structural_site_tracks_construction(program, std::nullopt, wt_canonical)) {
+            out << "                cactus::runtime::entt_backend::retain_construction<" << wt_cpp_spawn
+                << ">(reg, entity, *wt);\n";
+        }
+        out << "            }\n";
         out << "            return entity;\n";
         out << "        });\n";
     }

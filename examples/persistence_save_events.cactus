@@ -1,0 +1,79 @@
+module persistence_save_events
+
+use std.core
+use std.persistence as storage
+
+# Exercises the save request/outcome round trip in isolation: an author emits
+# SaveRequested and later receives exactly one correlated SaveCompleted or
+# SaveFailed outcome. Nothing here touches world capture or an adapter — this
+# fixture is only about the request/outcome event surface itself.
+
+const:
+    SAVE_SLOT = "slot1"
+
+trait SaveStatus:
+    var pending_requests: int = 0
+    var pending_burst: int = 0
+    var requests_sent: int = 0
+    var completed_count: int = 0
+    var last_completed_slot: string = ""
+    var last_completed_id: int = 0
+    var failed_count: int = 0
+    var last_failed_slot: string = ""
+    var last_failed_id: int = 0
+    var last_code: string = ""
+    var last_message: string = ""
+    # Guards resubmission from ObserveSaveFailed to one attempt, so the fixture
+    # cannot loop forever while still proving a deferred-boundary resubmit.
+    var resubmitted: bool = false
+
+entity Tracker:
+    SaveStatus
+
+rule RequestSave:
+    filter:
+        SaveStatus as status
+
+    on tick:
+        if status.pending_requests > 0:
+            status.pending_requests -= 1
+            status.requests_sent += 1
+            emit storage.SaveRequested:
+                slot = SAVE_SLOT
+                request_id = status.requests_sent
+        if status.pending_burst > 0:
+            status.pending_burst -= 1
+            status.requests_sent += 1
+            emit storage.SaveRequested:
+                slot = SAVE_SLOT
+                request_id = status.requests_sent
+            status.requests_sent += 1
+            emit storage.SaveRequested:
+                slot = SAVE_SLOT
+                request_id = status.requests_sent
+
+rule ObserveSaveCompleted:
+    filter:
+        SaveStatus as status
+
+    on storage.SaveCompleted as outcome:
+        status.completed_count += 1
+        status.last_completed_slot = outcome.slot
+        status.last_completed_id = outcome.request_id
+
+rule ObserveSaveFailed:
+    filter:
+        SaveStatus as status
+
+    on storage.SaveFailed as outcome:
+        status.failed_count += 1
+        status.last_failed_slot = outcome.slot
+        status.last_failed_id = outcome.request_id
+        status.last_code = outcome.code
+        status.last_message = outcome.message
+        if not status.resubmitted:
+            status.resubmitted = true
+            status.requests_sent += 1
+            emit storage.SaveRequested:
+                slot = SAVE_SLOT
+                request_id = status.requests_sent

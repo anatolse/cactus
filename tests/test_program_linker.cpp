@@ -608,6 +608,78 @@ TEST_CASE("program_linker: artifact link preserves explicit cross-module edge an
     fs::remove_all(build_dir, ec);
 }
 
+// ── add-world-save-restore: persistence requires the graph-driven scheduler ─
+
+TEST_CASE("program_linker: std.persistence with no declared phases is rejected at link time",
+          "[linker][persistence]") {
+    auto build_dir = linker_build_dir() / "persistence_legacy";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    DecoratedProgram program;
+    ResolvedEvent save_requested;
+    save_requested.name        = "SaveRequested";
+    save_requested.module_name = "std.persistence";
+    save_requested.symbol_id   = linked_symbol(SymbolKind::Event, "std.persistence", "SaveRequested");
+    save_requested.is_pub      = true;
+    program.events["SaveRequested"] = save_requested;
+    // No phases pushed to program.execution_graph: this is the legacy
+    // update_project/render_project shape, not graph-driven.
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(program, "legacy_app", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({build_dir / "legacy_app.cmod"});
+
+    CHECK_FALSE(linked.has_value());
+    REQUIRE(link_errors.has_errors());
+    const bool found_diagnostic = std::ranges::any_of(link_errors.diagnostics(), [](const Diagnostic& diagnostic) {
+        return diagnostic.message.contains("std.persistence") && diagnostic.message.contains("phase");
+    });
+    CHECK(found_diagnostic);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("program_linker: std.persistence with declared phases links without error", "[linker][persistence]") {
+    auto build_dir = linker_build_dir() / "persistence_graph_driven";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto frame = linked_symbol(SymbolKind::Event, "std.core", "frame");
+    const auto tick   = linked_symbol(SymbolKind::Phase, "std.core", "tick");
+
+    DecoratedProgram program;
+    ResolvedEvent save_requested;
+    save_requested.name             = "SaveRequested";
+    save_requested.module_name      = "std.persistence";
+    save_requested.symbol_id        = linked_symbol(SymbolKind::Event, "std.persistence", "SaveRequested");
+    save_requested.is_pub           = true;
+    program.events["SaveRequested"] = save_requested;
+    program.execution_graph.phases.push_back(
+        PhasePlan{.phase             = tick,
+                  .runtime_root      = frame,
+                  .declaration_order = {.declaration_index = 0}});
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(program, "graph_app", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({build_dir / "graph_app.cmod"});
+
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(linked.has_value());
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("program_linker: linked handler cycles are rejected canonically", "[linker][runtime-graph][4.4]") {
     const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
     const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};

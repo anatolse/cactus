@@ -3,6 +3,7 @@
 
 #include "frontend/symbol_identity.hpp"
 
+#include "backends/cpp-entt/persistence_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
 
 #include <algorithm>
@@ -1539,13 +1540,17 @@ static std::string trait_cpp_from_entry(const ArchetypeTraitEntry& entry, const 
     return EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.trait_name, program);
 }
 
+// An override is evaluated once at construction, so when the spawned node's
+// creation path retains provenance the override belongs to the construction
+// data rather than counting as a later mutation.
 static std::string emit_spawn_overrides(const std::string& entity_name,
                                         const std::vector<ArchetypeTraitEntry>& overrides,
                                         int indent,
                                         const std::vector<std::string>& trait_names,
                                         const DecoratedProgram& program,
                                         const std::unordered_set<std::string>& pointer_aliases,
-                                        const PairCodegenScope* pair_scope = nullptr) {
+                                        const PairCodegenScope* pair_scope,
+                                        bool retain_construction) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     std::ostringstream out;
     for (const auto& override_entry : overrides) {
@@ -1567,6 +1572,10 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
         }
         out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", " << value_name
             << ");\n";
+        if (retain_construction && EnttPersistenceEmitter::trait_has_construction_payload(
+                                       program, override_entry.resolved_trait_id, override_entry.trait_name)) {
+            out << EnttPersistenceEmitter::emit_retain_construction(cpp_name, entity_name, ind + "    ");
+        }
         out << ind << "}\n";
     }
     return out.str();
@@ -1612,6 +1621,7 @@ static const TemplateNode* find_template_node(const DecoratedProgram& program,
 static void emit_spawn_child_expansion(std::ostringstream& out,
                                        const std::string& template_module,
                                        const std::string& template_local_name,
+                                       const SymbolId& archetype,
                                        const std::vector<ChildArchetypeNode>& children,
                                        const std::vector<ChildOverrideNode>& overrides,
                                        const std::string& parent_var,
@@ -1644,12 +1654,20 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
         }
         if (override_node != nullptr) {
             out << emit_spawn_overrides(
-                var, override_node->traits, 1, trait_names, program, pointer_aliases, pair_scope);
+                var,
+                override_node->traits,
+                1,
+                trait_names,
+                program,
+                pointer_aliases,
+                pair_scope,
+                EnttPersistenceEmitter::node_retains_construction(program, archetype, role_path));
         }
 
         emit_spawn_child_expansion(out,
                                    template_module,
                                    template_local_name,
+                                   archetype,
                                    child.children,
                                    override_node != nullptr ? override_node->children : NO_OVERRIDES,
                                    var,
@@ -1707,6 +1725,16 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
     // the target/parent self-reference cases above).
     const std::string spawned_name   = gen_temp_name("spawned", location);
     const std::string committed_name = gen_temp_name("committed", location);
+    const auto overrides             = [&](const std::string& entity_name, int indent) {
+        return emit_spawn_overrides(entity_name,
+                                    root_overrides,
+                                    indent,
+                                    trait_names,
+                                    program,
+                                    pointer_aliases,
+                                    pair_scope,
+                                    EnttPersistenceEmitter::node_retains_construction(program, template_id));
+    };
     if (graph_runtime) {
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
@@ -1715,16 +1743,16 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
         out << "            auto " << committed_name << " = "
             << archetype_node_create_at_function_name(tmpl_module, tmpl_local, role_path) << "(registry, "
             << spawned_name << arguments << ");\n";
-        out << emit_spawn_overrides(
-            committed_name, root_overrides, 3, trait_names, program, pointer_aliases, pair_scope);
+        out << overrides(committed_name, 3);
     } else {
         out << "    auto " << spawned_name << " = "
             << archetype_node_create_function_name(tmpl_module, tmpl_local, role_path) << "(registry" << arguments << ");\n";
-        out << emit_spawn_overrides(spawned_name, root_overrides, 1, trait_names, program, pointer_aliases, pair_scope);
+        out << overrides(spawned_name, 1);
     }
     emit_spawn_child_expansion(out,
                                tmpl_module,
                                tmpl_local,
+                               template_id,
                                template_node.children,
                                child_overrides,
                                graph_runtime ? committed_name : spawned_name,
@@ -1796,7 +1824,18 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
     std::ostringstream out;
     const std::string spawned_name = gen_temp_name("spawned", spawn.location);
     out << "([&]() {\n";
-    const auto arguments = emit_template_bindings(out, spawn.arguments, "    ", trait_names, program, pointer_aliases, pair_scope);
+    const auto arguments =
+        emit_template_bindings(out, spawn.arguments, "    ", trait_names, program, pointer_aliases, pair_scope);
+    const auto overrides = [&](int indent) {
+        return emit_spawn_overrides(spawned_name,
+                                    spawn.overrides,
+                                    indent,
+                                    trait_names,
+                                    program,
+                                    pointer_aliases,
+                                    pair_scope,
+                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id));
+    };
     if (!program.execution_graph.phases.empty()) {
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
@@ -1804,14 +1843,12 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
         out << "        [=](entt::registry& registry) mutable {\n";
         out << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, " << spawned_name
             << arguments << ");\n";
-        out << emit_spawn_overrides(
-            spawned_name, spawn.overrides, 3, trait_names, program, pointer_aliases, pair_scope);
+        out << overrides(3);
         out << "        });\n";
     } else {
         out << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
             << "(registry" << arguments << ");\n";
-        out << emit_spawn_overrides(
-            spawned_name, spawn.overrides, 1, trait_names, program, pointer_aliases, pair_scope);
+        out << overrides(1);
     }
     out << "    return " << spawned_name << ";\n";
     out << "})()";
@@ -2689,7 +2726,18 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
     std::ostringstream result;
     const std::string spawned_name = gen_temp_name("spawned", s.location);
     result << ind << "{\n";
-    const auto arguments = emit_template_bindings(result, s.arguments, ind + "    ", trait_names, program, pointer_aliases, pair_scope);
+    const auto arguments =
+        emit_template_bindings(result, s.arguments, ind + "    ", trait_names, program, pointer_aliases, pair_scope);
+    const auto overrides = [&](int override_indent) {
+        return emit_spawn_overrides(spawned_name,
+                                    s.overrides,
+                                    override_indent,
+                                    trait_names,
+                                    program,
+                                    pointer_aliases,
+                                    pair_scope,
+                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id));
+    };
     if (!program.execution_graph.phases.empty()) {
         result << ind << "    auto " << spawned_name
                << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
@@ -2698,14 +2746,12 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
         result << ind << "        [=](entt::registry& registry) mutable {\n";
         result << ind << "            " << archetype_create_at_function_name(tmpl_id, program) << "(registry, "
                << spawned_name << arguments << ");\n";
-        result << emit_spawn_overrides(
-            spawned_name, s.overrides, indent + 3, trait_names, program, pointer_aliases, pair_scope);
+        result << overrides(indent + 3);
         result << ind << "        });\n";
     } else {
         result << ind << "    auto " << spawned_name << " = " << archetype_create_function_name(tmpl_id, program)
                << "(registry" << arguments << ");\n";
-        result << emit_spawn_overrides(
-            spawned_name, s.overrides, indent + 1, trait_names, program, pointer_aliases, pair_scope);
+        result << overrides(indent + 1);
     }
     result << ind << "}\n";
     return result.str();
@@ -2731,6 +2777,13 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     const std::string target_name   = gen_temp_name("target", s.location);
     const std::string existing_name = gen_temp_name("existing", s.location);
     const std::string value_name    = gen_temp_name("value", s.location);
+    // An add can land on an entity that is (or becomes) eligible, and the added
+    // trait's initialization is the incarnation a save has to rebuild.
+    const bool retain =
+        EnttPersistenceEmitter::structural_site_tracks_construction(program, s.resolved_trait_id, s.trait_name);
+    const auto retain_line = [&](const std::string& entity_expr, const std::string& indentation) {
+        return retain ? EnttPersistenceEmitter::emit_retain_construction(cpp, entity_expr, indentation) : std::string{};
+    };
     if (!program.execution_graph.phases.empty()) {
         std::ostringstream result;
         result << ind << "{\n";
@@ -2755,6 +2808,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
             result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name << ", "
                    << value_name << ");\n";
         }
+        result << retain_line(target_name, ind + "            ");
         result << ind << "        });\n";
         result << ind << "}\n";
         return result.str();
@@ -2762,11 +2816,11 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     if (s.args.empty()) {
         if (GUARDED) {
             return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" +
-                   target + ");\n" + ind + "    registry.emplace_or_replace<" + cpp + ">(" + target + ");\n" + ind +
-                   "}\n";
+                   target + ");\n" + ind + "    registry.emplace_or_replace<" + cpp + ">(" + target + ");\n" +
+                   retain_line(target, ind + "    ") + ind + "}\n";
         }
         return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "registry.emplace_or_replace<" + cpp +
-               ">(" + target + ");\n";
+               ">(" + target + ");\n" + retain_line(target, ind);
     }
 
     std::ostringstream result;
@@ -2785,6 +2839,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
     }
     result << ind << (GUARDED ? "        " : "    ") << "registry.emplace_or_replace<" << cpp << ">(" << target << ", "
            << value_name << ");\n";
+    result << retain_line(target, ind + (GUARDED ? "        " : "    "));
     result << ind << (GUARDED ? "    " : "") << "}\n";
     if (GUARDED) {
         result << ind << "}\n";
@@ -2805,6 +2860,14 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
             ? rewrite_expr(**s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
             : "entity";
     const std::string cpp = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
+    // A removed trait's construction copy would otherwise be mistaken for the
+    // live one if the trait is added back.
+    const bool discard =
+        EnttPersistenceEmitter::structural_site_tracks_construction(program, s.resolved_trait_id, s.trait_name);
+    const auto discard_line = [&](const std::string& entity_expr, const std::string& indentation) {
+        return discard ? EnttPersistenceEmitter::emit_discard_construction(cpp, entity_expr, indentation)
+                       : std::string{};
+    };
     if (!program.execution_graph.phases.empty()) {
         const std::string target_name = gen_temp_name("target", s.location);
         return ind + "{\n" + ind + "    const auto " + target_name + " = " + target + ";\n" + ind +
@@ -2813,16 +2876,19 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
                "        [=](entt::registry& registry) {\n" + ind + "            if (!registry.valid(" + target_name +
                ")) { return; }\n" + ind + "            cancel_projected_" + cpp + "(" + target_name + ");\n" + ind +
                "            if (registry.all_of<" + cpp + ">(" + target_name + ")) {\n" + ind +
-               "                registry.remove<" + cpp + ">(" + target_name + ");\n" + ind + "            }\n" + ind +
-               "        });\n" + ind + "}\n";
+               "                registry.remove<" + cpp + ">(" + target_name + ");\n" +
+               discard_line(target_name, ind + "                ") + ind + "            }\n" + ind + "        });\n" +
+               ind + "}\n";
     }
     if (s.target_expr.has_value()) {
         return ind + "if (registry.valid(" + target + ")) {\n" + ind + "    cancel_projected_" + cpp + "(" + target +
                ");\n" + ind + "    if (registry.all_of<" + cpp + ">(" + target + ")) {\n" + ind +
-               "        registry.remove<" + cpp + ">(" + target + ");\n" + ind + "    }\n" + ind + "}\n";
+               "        registry.remove<" + cpp + ">(" + target + ");\n" + discard_line(target, ind + "        ") +
+               ind + "    }\n" + ind + "}\n";
     }
     return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "if (registry.all_of<" + cpp + ">(" +
-           target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" + target + ");\n" + ind + "}\n";
+           target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" + target + ");\n" +
+           discard_line(target, ind + "    ") + ind + "}\n";
 }
 
 static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,

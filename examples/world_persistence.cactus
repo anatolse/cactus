@@ -1,0 +1,110 @@
+module world_persistence
+
+use std.core
+use std.transform.flat as tf
+
+# A tiny world that exercises what a save has to preserve: an archetype
+# baseline, a field the author marked durable, values that only exist because
+# of how an entity was spawned, and entities that must stay out of the file.
+
+const:
+    BOSS_MAXIMUM = 500
+    ENEMY_MAXIMUM = 700
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+# `maximum` is rebuilt from the archetype baseline and the spawn arguments;
+# only `current` is written into the save file.
+pub trait Health:
+    let maximum: int = 100
+    persist var current: int = 100
+
+# A particle carries no durable field, so no save ever mentions one — however
+# many spawn overrides it was given.
+trait Sparkle:
+    var lifetime: float = 0.2
+    var hue: float = 0.0
+
+trait Spawner:
+    var pending_enemies: int = 0
+    var pending_particles: int = 0
+
+# A structural grouping with no durable field of its own: eligibility for the
+# hierarchy below comes entirely from Member's Badge, not from Formation.
+trait Squad:
+    var label: int = 0
+
+trait Badge:
+    persist var rank: int = 0
+
+# A collection large enough to test the capture-side size bound directly, not
+# a gameplay-meaningful inventory.
+trait Cargo:
+    persist var slots: list[int]
+
+# A float field to test that capture preserves the backend's exact 32-bit
+# representation rather than rounding through some other width.
+trait Precision:
+    persist var value: float = 0.0
+
+# ── Archetypes ────────────────────────────────────────────────────────────────
+
+# The boss overrides Health.maximum in its declaration, so 500 belongs to the
+# archetype baseline rather than to any one boss's construction data.
+entity Boss:
+    Health:
+        maximum = BOSS_MAXIMUM
+        current = BOSS_MAXIMUM
+
+entity Director:
+    Spawner
+
+entity Warehouse:
+    Cargo
+
+entity Gauge:
+    Precision
+
+# Formation itself declares no persist field, so a save never records it; its
+# child Member does, so Member is captured as a root with an absent parent
+# rather than dragging the ephemeral Formation into the document.
+entity Formation:
+    Squad
+    children:
+        entity Member:
+            Badge:
+                rank = 1
+
+# Enemies get their maximum at spawn time. The evaluated argument is the
+# construction value a save records — later mutation of `maximum` is not.
+template Enemy(maximum: int):
+    Health:
+        maximum = maximum
+        current = maximum
+    tf.LocalTransform
+
+template Particle:
+    Sparkle
+    tf.LocalTransform
+    Persistent
+
+# ── Rules ─────────────────────────────────────────────────────────────────────
+
+rule SpawnWorld:
+    filter:
+        Spawner as spawner
+
+    on tick:
+        if spawner.pending_enemies > 0:
+            spawner.pending_enemies -= 1
+            spawn Enemy(maximum = ENEMY_MAXIMUM):
+                tf.LocalTransform:
+                    position = vec2(4.0, 5.0)
+        if spawner.pending_particles > 0:
+            spawner.pending_particles -= 1
+            spawn Particle:
+                Sparkle:
+                    lifetime = 0.9
+                    hue = 0.3
+                tf.LocalTransform:
+                    position = vec2(1.0, 2.0)

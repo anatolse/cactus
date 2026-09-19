@@ -48,7 +48,7 @@ target_compile_definitions(raylib PRIVATE SUPPORT_GPU_SKINNING=1)
 
 # ── Compiler Warnings (after FetchContent so they don't apply to deps) ──────────
 if(MSVC)
-    add_compile_options(/W4 /WX /permissive-)
+    add_compile_options(/W4 /WX /permissive- /bigobj)
 else()
     add_compile_options(
         -Wall
@@ -93,12 +93,14 @@ target_include_directories(cactus_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # ── Reusable C++ Runtime Libraries ─────────────────────────────────────────────
 add_library(cactus_runtime_common STATIC
     src/common/cactus_runtime.cpp
+    src/common/persistence_document.cpp
 )
 target_include_directories(cactus_runtime_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_runtime_common PUBLIC cactus_common raylib)
 
 add_library(cactus_runtime_cpp_entt STATIC
     src/backends/cpp-entt/runtime.cpp
+    src/backends/cpp-entt/persistence_file_adapter.cpp
 )
 target_include_directories(cactus_runtime_cpp_entt PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -108,6 +110,7 @@ target_link_libraries(cactus_runtime_cpp_entt PUBLIC cactus_runtime_common EnTT:
 
 # ── Frontend Library ────────────────────────────────────────────────────────────
 add_library(cactus_frontend STATIC
+    src/common/persistence_metadata.cpp
     src/frontend/lexer.cpp
     src/frontend/parser.cpp
     src/frontend/semantic_analyzer.cpp
@@ -127,6 +130,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/system_emitter.cpp
     src/backends/cpp-entt/event_emitter.cpp
     src/backends/cpp-entt/render_pass_emitter.cpp
+    src/backends/cpp-entt/persistence_emitter.cpp
     src/backends/cpp-entt/cpp_entt_codegen.cpp
 )
 target_include_directories(cactus_backend_cpp_entt PUBLIC

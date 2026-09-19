@@ -1,0 +1,38 @@
+module persistence_save_on_load
+
+use std.core
+use std.persistence as storage
+
+# Scene transitions obey the same boundary ordering as any other activation
+# (dsl-stdlib-persistence "Save operations occur at deterministic
+# boundaries"): a SaveRequested emitted from `on load:` must be processed at
+# that same load boundary, not deferred until the first frame.
+
+const:
+    SAVE_SLOT = "slot1"
+
+trait SaveStatus:
+    var requests_sent: int = 0
+    var failed_count: int = 0
+    var last_code: string = ""
+
+entity Tracker:
+    SaveStatus
+
+rule RequestSaveOnLoad:
+    filter:
+        SaveStatus as status
+
+    on load:
+        status.requests_sent += 1
+        emit storage.SaveRequested:
+            slot = SAVE_SLOT
+            request_id = status.requests_sent
+
+rule ObserveSaveFailed:
+    filter:
+        SaveStatus as status
+
+    on storage.SaveFailed as outcome:
+        status.failed_count += 1
+        status.last_code = outcome.code

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/error_reporter.hpp"
+#include "common/persistence_metadata.hpp"
 #include "common/string_pool.hpp"
 #include "common/types.hpp"
 #include "frontend/ast.hpp"
@@ -398,6 +399,7 @@ struct DecoratedProgram {
     std::vector<RuleDependency> dependency_graph;
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
+    ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;
     StringPool string_pool;
     ProgramNode* ast = nullptr;  // non-owning pointer to original AST
@@ -584,6 +586,9 @@ private:
     void check_func_purity_expr(const ExprNode& expr, const std::string& func_name);
     void check_no_recursion(ProgramNode& program);
     void check_persist_sync(ProgramNode& program);
+    // Runs after flatten_template_compositions, so every archetype node's trait
+    // set is already the composed baseline.
+    void build_persistence_metadata(const ProgramNode& program);
     // The 5 sequential phases of validate_phase_declarations, in order: collect
     // phases/constants; validate from:/after:/every:/max:; DFS lineage+cycle
     // detection; synthesize dt/alpha fields; validate+bind field initializers.

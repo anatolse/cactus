@@ -1,5 +1,6 @@
 #include "frontend/module_artifact.hpp"
 #include "common/ast_expressions.hpp"
+#include "common/binary_io.hpp"
 #include "common/template_metadata.hpp"
 
 #include "frontend/symbol_identity.hpp"
@@ -28,20 +29,15 @@ fs::path ModuleArtifact::artifact_filename(const std::string& module_name) {
 // ── Write helpers ───────────────────────────────────────────────────────────
 
 void ModuleArtifact::write_u8(std::ostream& out, uint8_t v) {
-    out.put(static_cast<char>(v));
+    binary_io::write_uint(out, v);
 }
 
 void ModuleArtifact::write_u32(std::ostream& out, uint32_t v) {
-    out.put(static_cast<char>(v & 0xFFU));
-    out.put(static_cast<char>((v >> 8U) & 0xFFU));
-    out.put(static_cast<char>((v >> 16U) & 0xFFU));
-    out.put(static_cast<char>((v >> 24U) & 0xFFU));
+    binary_io::write_uint(out, v);
 }
 
 void ModuleArtifact::write_u64(std::ostream& out, uint64_t v) {
-    for (unsigned shift = 0; shift < 64U; shift += 8U) {
-        out.put(static_cast<char>((v >> shift) & 0xFFU));
-    }
+    binary_io::write_uint(out, v);
 }
 
 void ModuleArtifact::write_i64(std::ostream& out, int64_t v) {
@@ -58,8 +54,7 @@ void ModuleArtifact::write_bool(std::ostream& out, bool v) {
 }
 
 void ModuleArtifact::write_str(std::ostream& out, const std::string& s) {
-    write_u32(out, static_cast<uint32_t>(s.size()));
-    out.write(s.data(), static_cast<std::streamsize>(s.size()));
+    binary_io::write_string(out, s);
 }
 
 void ModuleArtifact::write_symbol_id(std::ostream& out, const SymbolId& symbol) {
@@ -329,6 +324,13 @@ void ModuleArtifact::write_symbol_vector(std::ostream& out, const std::vector<Sy
     }
 }
 
+void ModuleArtifact::write_string_vector(std::ostream& out, const std::vector<std::string>& values) {
+    write_u32(out, static_cast<uint32_t>(values.size()));
+    for (const auto& value : values) {
+        write_str(out, value);
+    }
+}
+
 void ModuleArtifact::write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph) {
     write_u32(out, static_cast<uint32_t>(graph.size()));
     for (const auto& dep : graph) {
@@ -513,23 +515,15 @@ void ModuleArtifact::write_string_pool(std::ostream& out, const StringPool& pool
 // ── Read helpers ─────────────────────────────────────────────────────────────
 
 uint8_t ModuleArtifact::read_u8(std::istream& in) {
-    return static_cast<uint8_t>(in.get());
+    return binary_io::read_uint<uint8_t>(in);
 }
 
 uint32_t ModuleArtifact::read_u32(std::istream& in) {
-    const uint32_t B0 = static_cast<uint8_t>(in.get());
-    const uint32_t B1 = static_cast<uint8_t>(in.get());
-    const uint32_t B2 = static_cast<uint8_t>(in.get());
-    const uint32_t B3 = static_cast<uint8_t>(in.get());
-    return B0 | (B1 << 8U) | (B2 << 16U) | (B3 << 24U);
+    return binary_io::read_uint<uint32_t>(in);
 }
 
 uint64_t ModuleArtifact::read_u64(std::istream& in) {
-    uint64_t value = 0;
-    for (unsigned shift = 0; shift < 64U; shift += 8U) {
-        value |= static_cast<uint64_t>(static_cast<uint8_t>(in.get())) << shift;
-    }
-    return value;
+    return binary_io::read_uint<uint64_t>(in);
 }
 
 int64_t ModuleArtifact::read_i64(std::istream& in) {
@@ -545,14 +539,7 @@ bool ModuleArtifact::read_bool(std::istream& in) {
 }
 
 std::string ModuleArtifact::read_str(std::istream& in) {
-    uint32_t len = read_u32(in);
-    if (len > 1024U * 1024U) {
-        in.setstate(std::ios::failbit);
-        return {};
-    }
-    std::string s(len, '\0');
-    in.read(s.data(), static_cast<std::streamsize>(len));
-    return s;
+    return binary_io::read_string(in);
 }
 
 SymbolId ModuleArtifact::read_symbol_id(std::istream& in) {
@@ -830,6 +817,16 @@ std::vector<SymbolId> ModuleArtifact::read_symbol_vector(std::istream& in) {
     values.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         values.push_back(read_symbol_id(in));
+    }
+    return values;
+}
+
+std::vector<std::string> ModuleArtifact::read_string_vector(std::istream& in) {
+    std::vector<std::string> values;
+    const auto count = read_u32(in);
+    values.reserve(count);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        values.push_back(read_str(in));
     }
     return values;
 }
@@ -1112,6 +1109,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_execution_graph(out, program.execution_graph);
     write_string_pool(out, program.string_pool);
     write_template_metadata(out, program);
+    write_persistence_metadata(out, program.persistence);
 
     return out.good();
 }
@@ -1159,6 +1157,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     program.execution_graph   = read_execution_graph(in);
     program.string_pool       = read_string_pool(in);
     read_template_metadata(in, program);
+    program.persistence       = read_persistence_metadata(in);
     program.ast               = nullptr;  // not serialized
 
     if (!in.good()) {
@@ -1641,6 +1640,47 @@ void ModuleArtifact::write_template_metadata(std::ostream& out, const DecoratedP
             }
         }
     }
+}
+
+void ModuleArtifact::write_persistence_metadata(std::ostream& out, const ModulePersistenceMetadata& metadata) {
+    write_bool(out, metadata.attaches_persistent_trait);
+    write_u32(out, static_cast<uint32_t>(metadata.archetypes.size()));
+    for (const auto& archetype : metadata.archetypes) {
+        write_symbol_id(out, archetype.node.archetype);
+        write_string_vector(out, archetype.node.role_path);
+        write_u32(out, static_cast<uint32_t>(archetype.baseline_traits.size()));
+        for (const auto& baseline : archetype.baseline_traits) {
+            write_symbol_id(out, baseline.trait);
+            write_string_vector(out, baseline.assigned_fields);
+        }
+        write_string_vector(out, archetype.parameters);
+        write_string_vector(out, archetype.child_roles);
+        write_bool(out, archetype.declares_persistent_trait);
+    }
+}
+
+ModulePersistenceMetadata ModuleArtifact::read_persistence_metadata(std::istream& in) {
+    ModulePersistenceMetadata metadata;
+    metadata.attaches_persistent_trait = read_bool(in);
+    const auto archetype_count         = read_u32(in);
+    for (uint32_t i = 0; i < archetype_count && in.good(); ++i) {
+        PersistenceArchetypeDescriptor archetype;
+        archetype.node.archetype  = read_symbol_id(in);
+        archetype.node.role_path  = read_string_vector(in);
+        const auto baseline_count = read_u32(in);
+        archetype.baseline_traits.reserve(baseline_count);
+        for (uint32_t b = 0; b < baseline_count && in.good(); ++b) {
+            PersistenceBaselineTrait baseline;
+            baseline.trait           = read_symbol_id(in);
+            baseline.assigned_fields = read_string_vector(in);
+            archetype.baseline_traits.push_back(std::move(baseline));
+        }
+        archetype.parameters                = read_string_vector(in);
+        archetype.child_roles               = read_string_vector(in);
+        archetype.declares_persistent_trait = read_bool(in);
+        metadata.archetypes.push_back(std::move(archetype));
+    }
+    return metadata;
 }
 
 void ModuleArtifact::read_template_metadata(std::istream& in, DecoratedProgram& program) {

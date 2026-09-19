@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 13;
+    static constexpr uint8_t CURRENT_VERSION = 14;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -70,6 +70,8 @@ private:
     std::unique_ptr<ExprNode> read_expression(std::istream& in);
     void write_template_metadata(std::ostream& out, const DecoratedProgram& program);
     void read_template_metadata(std::istream& in, DecoratedProgram& program);
+    static void write_persistence_metadata(std::ostream& out, const ModulePersistenceMetadata& metadata);
+    static ModulePersistenceMetadata read_persistence_metadata(std::istream& in);
     void write_archetype_traits(std::ostream& out, const std::vector<ArchetypeTraitEntry>& traits);
     std::vector<ArchetypeTraitEntry> read_archetype_traits(std::istream& in);
     void write_archetype_children(std::ostream& out, const std::vector<ChildArchetypeNode>& children);
@@ -96,6 +98,7 @@ private:
     static void write_string_set(std::ostream& out, const std::unordered_set<std::string>& values);
     static void write_symbol_set(std::ostream& out, const std::unordered_set<SymbolId>& values);
     static void write_symbol_vector(std::ostream& out, const std::vector<SymbolId>& values);
+    static void write_string_vector(std::ostream& out, const std::vector<std::string>& values);
     static void write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph);
     static void write_contract(std::ostream& out, const HandlerContract& contract);
     static void write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts);
@@ -128,6 +131,7 @@ private:
     static std::unordered_set<std::string> read_string_set(std::istream& in);
     static std::unordered_set<SymbolId> read_symbol_set(std::istream& in);
     static std::vector<SymbolId> read_symbol_vector(std::istream& in);
+    static std::vector<std::string> read_string_vector(std::istream& in);
     static std::vector<RuleDependency> read_dep_graph(std::istream& in);
     static HandlerContract read_contract(std::istream& in);
     static std::vector<InferredHandlerContract> read_handler_contracts(std::istream& in);

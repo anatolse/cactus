@@ -40,6 +40,13 @@ public:
 
 private:
     bool rebuild_execution_graph(DecoratedProgram& program, bool validate_references);
+    // Save operations occur at deterministic boundaries defined only for the
+    // graph-driven scheduler (dsl-stdlib-persistence): the legacy
+    // update_project/render_project path has no such boundary, so a request
+    // there would accumulate in the queue and never be processed. Runs after
+    // rebuild_execution_graph, once program.events and
+    // program.execution_graph.phases reflect every linked module.
+    void validate_persistence_requires_graph_scheduler(const DecoratedProgram& program);
 
     std::vector<ScheduleEdge> linked_explicit_edges_;
 

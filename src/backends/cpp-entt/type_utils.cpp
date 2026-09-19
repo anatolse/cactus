@@ -675,4 +675,30 @@ WorldTransformUsage EnttCodegenUtils::world_transform_usage(const DecoratedProgr
     return usage_from_unique_variant(program);
 }
 
+const ExprNode* EnttCodegenUtils::find_trait_field_default(const DecoratedProgram& program,
+                                                           const std::string& module_name,
+                                                           const std::string& trait_name,
+                                                           const std::string& field_name) {
+    if (program.ast == nullptr) {
+        return nullptr;
+    }
+    std::string current_module;
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* mod = std::get_if<ModuleNode>(&decl)) {
+            current_module = mod->name;
+            continue;
+        }
+        const auto* trait_node = std::get_if<TraitNode>(&decl);
+        if (trait_node == nullptr || trait_node->name != trait_name || current_module != module_name) {
+            continue;
+        }
+        for (const auto& field : trait_node->fields) {
+            if (field.name == field_name) {
+                return field.default_value.has_value() ? field.default_value->get() : nullptr;
+            }
+        }
+    }
+    return nullptr;
+}
+
 }  // namespace cactus

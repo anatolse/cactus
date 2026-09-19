@@ -62,6 +62,15 @@ public:
     // WorldTransform references, never from merged-map presence — std.editor
     // transitively imports both flat and volume variants into every program.
     static WorldTransformUsage world_transform_usage(const DecoratedProgram& program);
+
+    // A trait field's declared `= expression` default, read from the AST so the
+    // backend never keeps a copy that can drift from the declaration. Tracks the
+    // enclosing module while scanning: trait names collide across modules (e.g.
+    // flat and volume both declare `WorldTransform`, with different field types).
+    static const ExprNode* find_trait_field_default(const DecoratedProgram& program,
+                                                    const std::string& module_name,
+                                                    const std::string& trait_name,
+                                                    const std::string& field_name);
 };
 
 // Canonical C++ name for a generated system handler function.

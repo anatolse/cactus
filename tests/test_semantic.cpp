@@ -516,6 +516,29 @@ TEST_CASE("Semantic: emit payload with valid field — ok", "[semantic]") {
                                                    "            amount = 1\n"));
 }
 
+TEST_CASE("Semantic: extern event cannot be emitted by authored code — error", "[semantic][persistence]") {
+    // Mirrors std.persistence's SaveCompleted/SaveFailed: an extern event is
+    // runtime-injected only, the same restriction std.core.frame already has.
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "extern event SaveCompleted:\n"
+                                             "    slot: string\n"
+                                             "rule Bad:\n"
+                                             "    on tick:\n"
+                                             "        emit SaveCompleted:\n"
+                                             "            slot = \"x\"\n"));
+}
+
+TEST_CASE("Semantic: extern event can still be handled by authored code — ok", "[semantic][persistence]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "extern event SaveCompleted:\n"
+                                                   "    slot: string\n"
+                                                   "trait Pos:\n"
+                                                   "    var x: float\n"
+                                                   "rule Handle:\n"
+                                                   "    filter:\n"
+                                                   "        Pos\n"
+                                                   "    on SaveCompleted as outcome:\n"
+                                                   "        x = 0.0\n"));
+}
+
 TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Pos:\n"
                                                    "    var x: float\n"

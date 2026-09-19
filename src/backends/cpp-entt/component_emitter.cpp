@@ -22,40 +22,6 @@ bool should_defer_to_raylib_enum(const std::string& name) {
     return name == "MouseButton" || name == "GamepadButton" || name == "GamepadAxis";
 }
 
-// Finds a trait field's declared `= expression` default directly from the
-// parsed AST, so the generated struct's default member initializer always
-// matches the DSL source of truth (the trait declaration) instead of a
-// backend-side copy that can silently drift from it. Trait names can collide
-// across modules (e.g. `WorldTransform` is declared once in
-// `std.transform.flat` and once in `std.transform.volume`, with different
-// field types), so this tracks the enclosing module while scanning rather
-// than matching on trait name alone.
-const ExprNode* find_field_default_expr(const ProgramNode* ast,
-                                        const std::string& module_name,
-                                        const std::string& trait_name,
-                                        const std::string& field_name) {
-    if (ast == nullptr) {
-        return nullptr;
-    }
-    std::string current_module;
-    for (const auto& decl : ast->declarations) {
-        if (const auto* mod = std::get_if<ModuleNode>(&decl)) {
-            current_module = mod->name;
-            continue;
-        }
-        const auto* trait_node = std::get_if<TraitNode>(&decl);
-        if (trait_node == nullptr || trait_node->name != trait_name || current_module != module_name) {
-            continue;
-        }
-        for (const auto& field : trait_node->fields) {
-            if (field.name == field_name) {
-                return field.default_value.has_value() ? field.default_value->get() : nullptr;
-            }
-        }
-    }
-    return nullptr;
-}
-
 }  // namespace
 
 std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, const DecoratedProgram& program) {
@@ -70,7 +36,7 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
     for (const auto& field : trait.fields) {
         out << "    " << entt_type_to_cpp(field.type) << " " << field.name;
         const auto* default_expr =
-            find_field_default_expr(program.ast, trait.module_name, trait.name, field.name);
+            EnttCodegenUtils::find_trait_field_default(program, trait.module_name, trait.name, field.name);
         if (default_expr == nullptr) {
             out << "{};\n";
             continue;

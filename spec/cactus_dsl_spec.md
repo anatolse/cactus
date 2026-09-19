@@ -193,6 +193,8 @@ trait Health:
     persist sync var health: int = 100
 ```
 
+`persist` marks a field as durable game-save state; it carries no format, storage, or scene-survival meaning of its own — see §7.6 for what it makes eligible and how a save is produced.
+
 ### 3.7 Entities and Templates
 
 The four load-time and runtime constructs and how they differ:
@@ -1331,6 +1333,77 @@ rule StartReload:
 ```
 
 `TimerOwner.owner` and `Weapon.reload_timer` are ordinary authored `entity_id` fields — the module supplies no implicit link between a timer and whatever it serves.
+
+### 7.6 World Persistence (`std.persistence`)
+
+World persistence is a small gameplay request surface plus a generated, format-independent snapshot — not a keyword, a template modifier, or a serializer authored in Cactus. Saving is entirely orthogonal to scene control (§5.2) and to `std.core.Persistent`: see "Persistence is not scene survival" below before reaching for either.
+
+**Eligibility.** An entity is captured in a world snapshot when a trait in its originating archetype's declared trait set contains a `persist` field, or a trait currently attached to it does. The first condition survives removal of that trait; the second means attaching a persistent trait at runtime can make an ephemeral entity eligible, and removing it again makes that entity ephemeral once more if its original archetype was never eligible on its own. No other entity is recorded — a particle template with many `spawn` overrides is not eligible just because its fields were overridden, and `sync` grants no eligibility (it is a replication concern, not a save concern).
+
+**Construction baseline vs. current value.** For an eligible entity, fields without `persist` are recorded at the value they held immediately after construction — the archetype default, or the evaluated `spawn`/template argument — never a later mutation. `persist` fields are recorded at their current value at capture time. A field only changes what a save reports at all if it carries `persist`; everything else is baseline provenance for reconstructing the same starting point.
+
+**Runtime structure.** The compiler generates one canonical schema descriptor and typed snapshot per program: entity records in creation order, document-local entity identities (so cycles and forward references need no live handle), canonical archetype/trait identity, final trait membership with reconstruction data, and parent links. This is generated data, not something authored in Cactus, and it excludes anything not reachable from a `persist` field or construction argument — event queues, physics solver internals, and random state are not implicitly captured.
+
+**Requesting a save.** `std.persistence` exposes an ordinary event, so a save is requested like any other gameplay event:
+
+```cactus
+use std.persistence as storage
+
+const:
+    SAVE_SLOT = "slot1"
+
+rule SaveGame:
+    on SavePressed:
+        emit storage.SaveRequested(slot = SAVE_SLOT, request_id = 1)
+
+rule ReportSaveResult:
+    on storage.SaveCompleted:
+        # storage.SaveCompleted.slot, storage.SaveCompleted.request_id
+        ...
+    on storage.SaveFailed:
+        # storage.SaveFailed.code, storage.SaveFailed.message
+        ...
+```
+
+`SaveCompleted`/`SaveFailed` are public extern events, delivered the same way `std.core.frame` is: as external activations, not synchronous return values. `request_id` is a caller-supplied correlation value, never deduplicated — two requests with the same ID still produce two outcomes. Accepted requests at one activation boundary are captured and written as a single frozen batch, in emission order, after that activation's handlers, event cascade, and structural commit have all finished; a `SaveCompleted`/`SaveFailed` handler that emits another `SaveRequested` always belongs to a later boundary, never the batch it ran inside of. `std.persistence` requires the graph-driven scheduler (a program with at least one `pub phase`); using it on the legacy frame path is a compile-time error, not a silently dropped request.
+
+**Storage adapters.** A registered adapter receives the generated schema descriptor and an owned typed snapshot to `write`, and returns an owned typed snapshot or an explicit error from `read` — never raw registry access, spawn capabilities, or entity reconstruction. This is what makes two adapters able to encode the same snapshot completely differently (JSON, a custom binary layout, cloud storage) and still round-trip to equal documents. The generated entry point registers a documented example file adapter by default, so a program built with no host C++ can request a save and get a file; a host supplying its own entry point registers whatever adapter it needs instead. A read whose stored schema descriptor does not match the running program's is rejected as incompatible, rather than partially applied — there is no cross-version migration in this baseline, only adapter-side rewriting of a document before it is submitted.
+
+**Writing a custom adapter.** A registered adapter is host C++, not Cactus — a struct of two functions matching the generated `PersistenceAdapter` contract, built with `CACTUS_GENERATED_NO_MAIN` so the host supplies its own `main()`:
+
+```cpp
+#define CACTUS_GENERATED_NO_MAIN
+#include "generated_program.cpp"
+
+// A toy adapter: one save slot, held in memory for the process lifetime.
+// A real adapter would write to cloud storage, a save-file format of its
+// own, or anywhere else — the contract never depends on where bytes end up.
+cactus::persistence::Snapshot g_slot;
+bool g_has_slot = false;
+
+int main() {
+    cactus::runtime::entt_backend::register_persistence_adapter(
+        cactus::runtime::entt_backend::PersistenceAdapter{
+            .write = [](const std::string&, const cactus::persistence::SchemaDescriptor&,
+                        const cactus::persistence::Snapshot& snapshot) {
+                g_slot = snapshot;
+                g_has_slot = true;
+                return cactus::runtime::entt_backend::PersistenceWriteResult{.ok = true};
+            },
+            .read = [](const std::string&, const cactus::persistence::SchemaDescriptor&) {
+                if (!g_has_slot) {
+                    return cactus::runtime::entt_backend::PersistenceReadResult{
+                        .ok = false, .code = "io_failure", .message = "no save yet"};
+                }
+                return cactus::runtime::entt_backend::PersistenceReadResult{.ok = true, .snapshot = g_slot};
+            }});
+    // ... rest of the host's main(), as documented for CACTUS_GENERATED_NO_MAIN.
+}
+```
+
+Both functions return their result explicitly; neither may let an exception escape, since the runtime never wraps an adapter call in its own handler. The registered adapter takes effect immediately and stays registered until the process replaces or clears it — there is no per-save adapter selection from Cactus.
+
+**Persistence is not scene survival.** `std.core.Persistent` (§5.2) only controls whether an entity survives a `load` scene transition; it has no bearing on whether that entity is written to a save file, and a `persist` field has no bearing on whether its entity survives a scene transition. An entity can carry `Persistent` and no `persist` field at all — it survives `load` but is absent from every save. The reverse is equally normal: a `persist`-bearing entity with no `Persistent` is captured in a save but is still destroyed like any other entity on the next `load`. Treat them as answers to two different questions — "does this outlive a scene change" and "does this outlive the process" — never as the same mechanism under two names.
 
 ## 8. Deferred and Migration Notes
 

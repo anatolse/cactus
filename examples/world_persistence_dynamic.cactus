@@ -1,0 +1,95 @@
+module world_persistence_dynamic
+
+use std.core
+
+# The other half of world_persistence.cactus. There, nothing ever gains a
+# durable field at runtime, so ephemeral entities cost a save nothing. Here a
+# rule can attach `Health` to any ember, so every archetype has to keep the
+# values it was built from — an ember that is ephemeral now may be saved later.
+
+event Awaken
+
+event Wither
+
+event Rekindle
+
+# ── Traits ────────────────────────────────────────────────────────────────────
+
+pub trait Health:
+    let maximum: int = 100
+    persist var current: int = 100
+
+trait Sparkle:
+    var lifetime: float = 0.2
+    var hue: float = 0.0
+
+# A marker: presence is the whole story, so a save records membership and
+# nothing else.
+trait Blessed
+
+trait Stage:
+    var pending_embers: int = 0
+    var awaken: int = 0
+    var wither: int = 0
+    var rekindle: int = 0
+
+# ── Archetypes ────────────────────────────────────────────────────────────────
+
+entity Director:
+    Stage
+
+entity Boss:
+    Health:
+        maximum = 500
+        current = 500
+
+template Ember:
+    Sparkle:
+        lifetime = 0.5
+
+# ── Rules ─────────────────────────────────────────────────────────────────────
+
+# One place turns test intent into events, so the rules below stay small.
+rule RunStage:
+    filter:
+        Stage as stage
+
+    on tick:
+        if stage.pending_embers > 0:
+            stage.pending_embers -= 1
+            spawn Ember:
+                Sparkle:
+                    hue = 0.7
+        if stage.awaken > 0:
+            stage.awaken -= 1
+            emit Awaken
+        if stage.wither > 0:
+            stage.wither -= 1
+            emit Wither
+        if stage.rekindle > 0:
+            stage.rekindle -= 1
+            emit Rekindle
+
+rule AwakenEmbers:
+    filter:
+        Sparkle as sparkle
+
+    on Awaken:
+        add Health:
+            current = 42
+        add Blessed
+
+rule WitherHealth:
+    filter:
+        Health as health
+
+    on Wither:
+        remove Health
+
+rule RekindleEmbers:
+    filter:
+        Sparkle as sparkle
+
+    on Rekindle:
+        add Health:
+            current = 7

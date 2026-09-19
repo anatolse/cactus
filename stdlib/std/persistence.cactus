@@ -1,0 +1,23 @@
+module std.persistence
+
+# A world save is a request/outcome round trip, not a synchronous call: an
+# author emits SaveRequested and later receives exactly one correlated
+# outcome. Request IDs are caller-supplied correlation values, never
+# deduplication keys — repeated IDs remain distinct requests.
+
+pub event SaveRequested:
+    slot: string
+    request_id: int
+
+# Outcomes are runtime-injected, like std.core.frame: an author never emits
+# these directly, only receives them via `on SaveCompleted:`/`on SaveFailed:`.
+
+pub extern event SaveCompleted:
+    slot: string
+    request_id: int
+
+pub extern event SaveFailed:
+    slot: string
+    request_id: int
+    code: string
+    message: string

@@ -124,11 +124,19 @@ The backend SHALL generate code for `RemoveTraitStmt` nodes. For the EnTT backen
 - **THEN** the generated code is `registry.remove<Frozen>(entity)`
 
 ### Requirement: Persist field serialization hooks
-The backend SHALL generate serialization functions for fields marked with `persist`, iterating over the registry view to serialize/deserialize marked components.
+The backend SHALL generate a working typed world capture entry point from persist field metadata and archetype construction metadata, implementing world-persistence and stdlib-persistence. Capturing marked component values SHALL be combined with eligible entity membership, construction baselines, current trait structure, hierarchy, and canonical identities. The generated public API SHALL expose the schema descriptor and owned typed snapshots to external adapters without choosing a serialization format or granting registry access. All supported creation and structural command paths SHALL preserve the provenance needed for capture, and generated `main()` SHALL register the example file adapter by default.
 
 #### Scenario: Persist field in EnTT context
 - **WHEN** a trait has `persist var health: int`
-- **THEN** the backend generates code that iterates `registry.view<Health>()` to save/load the health component
+- **THEN** the backend generates executable capture of health for eligible archetype instances rather than empty save/load stubs
+
+#### Scenario: Native spawn participates in persistence
+- **WHEN** a contracted extern handler creates an eligible entity using its generated spawn capability
+- **THEN** capture retains its archetype and evaluated construction overrides just as for an authored spawn
+
+#### Scenario: Generated integration remains C++20
+- **WHEN** a generated project links a custom persistence adapter
+- **THEN** its public generated API and runtime integration compile under the existing C++20 generated-code target
 
 ### Requirement: Sync field replication hooks
 The backend SHALL generate network replication stubs for fields marked with `sync`, using registry views to collect and apply delta updates.

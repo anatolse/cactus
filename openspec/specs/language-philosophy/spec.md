@@ -118,14 +118,20 @@ The following concerns SHALL be treated as backend or stdlib responsibilities ra
 | Physics integration | backend / physics stdlib |
 | Audio playback plumbing | backend / audio stdlib |
 | Entity validity guards | backend |
-| Serialization | generated from `persist` |
+| Serialization | world capture/restore generated from persist and archetype declarations; encoding and storage supplied by external adapters |
 | Network replication | generated from `sync` |
 | Input device mapping | `std.input` and runtime |
 | Scene lifecycle plumbing | backend runtime |
 
+Persistence SHALL let authors mark durable field state and request operations through stdlib events without writing entity reconstruction, reference remapping, or serialization loops. Format choice SHALL remain outside gameplay declarations.
+
 #### Scenario: Backend concern is not treated as core authoring syntax
 - **WHEN** an example requires rendering or UI behavior
 - **THEN** the project treats that concern as stdlib/backend-facing rather than as mandatory gameplay-core syntax
+
+#### Scenario: Custom storage does not change gameplay schema
+- **WHEN** a game switches its external persistence encoding
+- **THEN** its persist fields and archetype declarations retain the same capture/restore meaning
 
 ### Requirement: Device and execution-target placement is a backend decision, never authored
 

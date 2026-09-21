@@ -45,6 +45,51 @@ target_link_libraries(cactus_runtime_cpp_entt_headless_fake PUBLIC
 )
 set_property(TARGET cactus_runtime_cpp_entt_headless_fake PROPERTY CXX_CLANG_TIDY "")
 
+# ── Save/restore round-trip subprocess executables (add-world-snapshot-restore
+# tasks 7.1/7.2) ─────────────────────────────────────────────────────────────
+# Standalone, headless, argv-mode-selected executables (not Catch2 binaries):
+# a generated program driven by a hand-written main() that saves in one
+# invocation and restores in another. Launched twice by
+# test_persistence_roundtrip_subprocess.cpp as two genuinely separate OS
+# processes, so file-static runtime holders cannot leak between save and
+# restore the way they would in a second in-process run.
+cactus_add_persistence_roundtrip_subprocess(persistence_roundtrip_subprocess
+    CACTUS_SOURCE "examples/world_persistence.cactus"
+    BACKEND cpp-entt
+    MAIN_SOURCE persistence_roundtrip_subprocess_main.cpp
+)
+
+# A second round-trip subprocess executable built from persistence_references_
+# runtime.cactus (task 7.2): world_persistence.cactus already proves fields,
+# template-evaluated construction, and hierarchy across the process boundary;
+# this fixture is the one dedicated to entity_id references (mutual, absent,
+# and list-nested) and a canonical asset reference (Badge.icon), so reusing it
+# here proves those decode correctly through real file I/O in a fresh process
+# too, not just through the in-memory adapter the way test_persistence_
+# references_headless_behavior.cpp already does in-process.
+cactus_add_persistence_roundtrip_subprocess(persistence_references_roundtrip_subprocess
+    CACTUS_SOURCE "tests/fixtures/persistence_references_runtime.cactus"
+    BACKEND cpp-entt
+    MAIN_SOURCE persistence_references_roundtrip_subprocess_main.cpp
+)
+
+add_executable(test_persistence_roundtrip_subprocess test_persistence_roundtrip_subprocess.cpp)
+target_include_directories(test_persistence_roundtrip_subprocess PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_persistence_roundtrip_subprocess PRIVATE
+    cactus_runtime_common
+    EnTT::EnTT
+    Catch2::Catch2WithMain
+)
+target_compile_definitions(test_persistence_roundtrip_subprocess PRIVATE
+    CACTUS_ROUNDTRIP_EXE_PATH="$<TARGET_FILE:persistence_roundtrip_subprocess>"
+    CACTUS_REFERENCES_ROUNDTRIP_EXE_PATH="$<TARGET_FILE:persistence_references_roundtrip_subprocess>"
+)
+add_dependencies(test_persistence_roundtrip_subprocess
+    persistence_roundtrip_subprocess
+    persistence_references_roundtrip_subprocess
+)
+add_test(NAME PersistenceRoundtripSubprocessTests COMMAND test_persistence_roundtrip_subprocess)
+
 # Lexer tests
 add_executable(test_lexer test_lexer.cpp)
 target_link_libraries(test_lexer PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -89,6 +134,10 @@ add_test(NAME PersistenceDocumentTests COMMAND test_persistence_document)
 add_executable(test_persistence_provenance_codegen test_persistence_provenance_codegen.cpp)
 target_link_libraries(test_persistence_provenance_codegen PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME PersistenceProvenanceCodegenTests COMMAND test_persistence_provenance_codegen)
+
+add_executable(test_persistence_restore_codegen test_persistence_restore_codegen.cpp)
+target_link_libraries(test_persistence_restore_codegen PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME PersistenceRestoreCodegenTests COMMAND test_persistence_restore_codegen)
 
 # Module artifact tests
 add_executable(test_module_artifact test_module_artifact.cpp)
@@ -142,6 +191,10 @@ add_test(NAME RuntimeSapBroadphaseTests COMMAND test_runtime_sap_broadphase)
 add_executable(test_runtime_activation_scheduler test_runtime_activation_scheduler.cpp)
 target_link_libraries(test_runtime_activation_scheduler PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimeActivationSchedulerTests COMMAND test_runtime_activation_scheduler)
+
+add_executable(test_runtime_publication_reset test_runtime_publication_reset.cpp)
+target_link_libraries(test_runtime_publication_reset PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimePublicationResetTests COMMAND test_runtime_publication_reset)
 
 # Projected-trait tracker runtime tests (extract-codegen-runtime-scaffolding change)
 add_executable(test_runtime_projected_trait_tracker test_runtime_projected_trait_tracker.cpp)
@@ -347,6 +400,24 @@ cactus_add_headless_behavior_test(test_persistence_save_events_headless_behavior
     CACTUS_SOURCE examples/persistence_save_events.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_save_events_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_persistence_validation_headless_behavior
+    CACTUS_SOURCE tests/fixtures/persistence_references_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_validation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_persistence_hierarchy_headless_behavior
+    CACTUS_SOURCE tests/fixtures/persistence_hierarchy_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_hierarchy_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_persistence_references_headless_behavior
+    CACTUS_SOURCE tests/fixtures/persistence_references_runtime.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_references_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_persistence_save_on_load_headless_behavior

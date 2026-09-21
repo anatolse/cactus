@@ -1,0 +1,32 @@
+module persistence_hierarchy_runtime
+
+use std.core
+
+# A minimal fixture dedicated to hierarchy restoration where the parent is
+# itself eligible (unlike world_persistence.cactus's Formation/Member, which
+# only exercises an ineligible parent becoming a root), plus a destroyed
+# child that must not reappear after restore.
+
+trait Health:
+    persist var current: int = 100
+
+trait DoomedMarker
+
+entity Leader:
+    Health:
+        current = 500
+    children:
+        entity Follower:
+            Health:
+                current = 50
+        entity Doomed:
+            Health:
+                current = 1
+            DoomedMarker
+
+rule DestroyDoomedChild:
+    filter:
+        DoomedMarker
+
+    on load:
+        destroy self

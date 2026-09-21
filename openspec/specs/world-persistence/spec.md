@@ -122,3 +122,90 @@ Capture SHALL run outside any activation, after the originating activation's com
 #### Scenario: Capture does not disturb the world
 - **WHEN** a snapshot is captured
 - **THEN** the live world's entities, traits, and field values are unchanged afterwards
+
+### Requirement: Restore reconstructs recorded nodes with defined precedence
+Restore SHALL create only the nodes present in the document. For each record it SHALL apply archetype defaults, then evaluated original construction parameters and overrides, then the current trait incarnation's initialization values, then persist values. Spawn expressions and template arguments SHALL NOT be re-evaluated. Unmarked mutations made after construction SHALL NOT reappear. Restore SHALL NOT regenerate a template's other children.
+
+#### Scenario: Boss uses its archetype rather than trait defaults
+- **WHEN** a Health trait defaults maximum to 100, a Boss archetype sets it to 500, and current health was persistent
+- **THEN** restore sets maximum to 500 and current health to its saved value
+
+#### Scenario: Override restores initial rather than latest unmarked value
+- **WHEN** an eligible enemy was spawned with unmarked maximum 700 and maximum later became 900
+- **THEN** restore sets maximum to 700
+- **AND** an explicitly persistent field restores its latest saved value
+
+#### Scenario: Parameter expression is not replayed
+- **WHEN** a record carries a constructor argument evaluated from runtime state before the save
+- **THEN** restore uses the recorded value and does not evaluate that expression
+
+#### Scenario: Removed and re-added baseline trait restores its current incarnation
+- **WHEN** a record carries a baseline trait that was removed and later added again
+- **THEN** restore applies the recorded incarnation's initialization and persist state, not the removed incarnation's
+
+### Requirement: References resolve to fresh handles
+Restore SHALL allocate runtime handles for all records before applying any reference, so forward references and cycles among included records resolve. Document identities SHALL map to those handles, including references nested in structs, lists, and construction values. Recorded absent references SHALL restore as stale values on which total entity operations remain safe, preserving equality of repeated references to the same absent target. A reference naming an identity that the document does not include SHALL be rejected as malformed. Named authored entity bindings SHALL resolve to restored instances, or resolve stale when absent.
+
+#### Scenario: Mutual targets restore
+- **WHEN** two included enemies reference one another
+- **THEN** each restored target resolves to the other restored entity
+
+#### Scenario: Absent target stays stale
+- **WHEN** an included enemy references an excluded particle
+- **THEN** the restored reference is stale, total entity operations remain safe, and no particle is created
+
+#### Scenario: Dangling document reference is malformed
+- **WHEN** a reference names a document identity with no matching record
+- **THEN** validation rejects the document before the world is replaced
+
+### Requirement: Hierarchy and creation order are restored
+Restore SHALL reproduce included parent relationships, including runtime reparenting, and SHALL preserve the recorded relative creation order among restored entities. A record whose parent is absent SHALL become a root; no record SHALL be added for the missing parent, and the record SHALL NOT be discarded. Destroyed and excluded archetype children SHALL NOT be recreated.
+
+#### Scenario: Deleted child does not return
+- **WHEN** a hierarchical archetype child was destroyed before capture
+- **THEN** restoring the parent does not recreate that child
+
+#### Scenario: Saved child has an ephemeral parent
+- **WHEN** a saved child's parent had no persistence eligibility
+- **THEN** the child restores as a root
+
+#### Scenario: Ordering survives container changes
+- **WHEN** the restored backend assigns different native handles or storage positions
+- **THEN** creation-order-based selection among restored entities retains its previous relative order
+
+### Requirement: Documents are fully validated before the world changes
+Restore SHALL validate a decoded document before mutating the active world: canonical schema descriptor compatibility, known archetypes, traits, and fields, value kinds and ranges, construction completeness, unique document identities, legal trait combinations, absence of hierarchy cycles, resolvable references, and configured size and depth limits. Diagnostics SHALL accumulate and identify field paths rather than stopping at the first problem. Changed archetype defaults, renames, and field type changes SHALL fail compatibility unless an adapter explicitly migrated the document to the current descriptor.
+
+#### Scenario: Incompatible baseline is rejected
+- **WHEN** a document was captured against a different archetype default descriptor
+- **THEN** restore reports incompatible schema before changing the active world
+
+#### Scenario: Malformed document is diagnosed by field path
+- **WHEN** a document carries a value of the wrong kind and a duplicate identity
+- **THEN** restore reports both with their field paths and leaves the world unchanged
+
+### Requirement: Restore publishes an atomic replacement without gameplay creation effects
+Successful restore SHALL replace the complete active ECS world, including previously live ephemeral entities and entities carrying `std.core.Persistent`, with the reconstructed snapshot. An empty compatible document SHALL produce an empty world. Reconstruction SHALL be staged: validation, allocation, and runtime resource preparation failures SHALL leave the previous world and its usable resources intact and SHALL release staged resources. No staged entity or resource SHALL be observable before publication. Ordinary spawn, destroy, load, and unload gameplay handlers SHALL NOT run as a consequence of replacement, while backend resource preparation and cleanup SHALL still occur. Completion SHALL be observable only after references, named bindings, and runtime resources are usable.
+
+#### Scenario: Failed staging preserves the world
+- **WHEN** resource preparation fails while constructing a restored world
+- **THEN** the old world remains active, temporary resources are released, and restore reports failure with no gameplay lifecycle effects
+
+#### Scenario: Restore does not repeat spawn rewards
+- **WHEN** a saved entity's archetype has a spawn handler that creates loot
+- **THEN** restoration does not execute that handler or duplicate loot
+
+#### Scenario: Empty save replaces populated world
+- **WHEN** an empty compatible document is restored over a populated world
+- **THEN** no old ECS entity survives, including entities carrying `std.core.Persistent`
+
+### Requirement: Old-world entity handles are unobservable after publication
+Publication SHALL reset runtime state that holds entity handles from the replaced world, including pointer hover and capture state, pending-destruction sets, editor selection and camera state, and spatial or scheduler caches. No such handle SHALL be readable as a live entity of the restored world. This requirement SHALL be satisfied by resetting the holders; it SHALL NOT require restored entities to avoid reusing the numeric identifiers or versions of the replaced world.
+
+#### Scenario: Stale hover target does not select a restored entity
+- **WHEN** the pointer was hovering an entity in the replaced world
+- **THEN** after publication no hovered entity is reported, rather than a restored entity that happens to reuse the identifier
+
+#### Scenario: Ephemeral content is rebuilt by gameplay, not resurrected
+- **WHEN** a restored world contains no camera because no camera archetype was eligible
+- **THEN** gameplay can rebuild it in response to the restore outcome event, and nothing from the replaced world persists implicitly

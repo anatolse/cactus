@@ -680,6 +680,42 @@ TEST_CASE("program_linker: std.persistence with declared phases links without er
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("program_linker: a program using only RestoreRequested is also gated on the graph-driven scheduler",
+          "[linker][persistence]") {
+    // The graph-scheduler gate is keyed on the std.persistence module, not on
+    // SaveRequested by name — this confirms restore shares it rather than
+    // needing its own duplicate check.
+    auto build_dir = linker_build_dir() / "persistence_restore_legacy";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    DecoratedProgram program;
+    ResolvedEvent restore_requested;
+    restore_requested.name        = "RestoreRequested";
+    restore_requested.module_name = "std.persistence";
+    restore_requested.symbol_id   = linked_symbol(SymbolKind::Event, "std.persistence", "RestoreRequested");
+    restore_requested.is_pub      = true;
+    program.events["RestoreRequested"] = restore_requested;
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(program, "restore_legacy_app", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({build_dir / "restore_legacy_app.cmod"});
+
+    CHECK_FALSE(linked.has_value());
+    REQUIRE(link_errors.has_errors());
+    const bool found_diagnostic = std::ranges::any_of(link_errors.diagnostics(), [](const Diagnostic& diagnostic) {
+        return diagnostic.message.contains("std.persistence") && diagnostic.message.contains("phase");
+    });
+    CHECK(found_diagnostic);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("program_linker: linked handler cycles are rejected canonically", "[linker][runtime-graph][4.4]") {
     const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
     const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};

@@ -120,6 +120,21 @@ const FieldDescriptor* find_field_descriptor(const TraitDescriptor& trait, std::
     return found == trait.fields.end() ? nullptr : &*found;
 }
 
+const StructDescriptor* find_struct_descriptor(const SchemaDescriptor& schema, std::string_view name) {
+    const auto found = std::ranges::find(schema.structs, name, &StructDescriptor::name);
+    return found == schema.structs.end() ? nullptr : &*found;
+}
+
+const EnumDescriptor* find_enum_descriptor(const SchemaDescriptor& schema, std::string_view name) {
+    const auto found = std::ranges::find(schema.enums, name, &EnumDescriptor::name);
+    return found == schema.enums.end() ? nullptr : &*found;
+}
+
+const ArchetypeDescriptor* find_archetype_descriptor(const SchemaDescriptor& schema, std::string_view node) {
+    const auto found = std::ranges::find(schema.archetypes, node, &ArchetypeDescriptor::node);
+    return found == schema.archetypes.end() ? nullptr : &*found;
+}
+
 bool schema_accepts(const SchemaDescriptor& schema, const Snapshot& snapshot) noexcept {
     return schema.revision == snapshot.schema_revision && schema.fingerprint == snapshot.schema_fingerprint;
 }

@@ -67,6 +67,10 @@ entt::entity spawn_ember(entt::registry& registry) {
     return entity_with<Sparkle>(registry);
 }
 
+cactus::persistence::Snapshot capture(entt::registry& registry) {
+    return rt::generated_capture_world_snapshot(registry);
+}
+
 }  // namespace
 
 TEST_CASE("an ember records the values it was actually spawned with", "[runtime][persistence][provenance]") {
@@ -190,5 +194,73 @@ TEST_CASE("a durable trait on an entity with no provenance is reported, not sile
     const auto missing = rt::generated_entity_missing_provenance(registry);
     REQUIRE(missing.has_value());
     CHECK(*missing == bare);
+}
+
+// ── World restore (add-world-snapshot-restore) ──────────────────────────────
+
+TEST_CASE("restoring a marker trait recreates membership with no payload", "[runtime][persistence][restore]") {
+    World world;
+    auto& registry = world.registry;
+    spawn_ember(registry);
+
+    stage(registry).awaken = 1;
+    run_frames(registry, 1);
+    REQUIRE(registry.all_of<Blessed>(entity_with<Sparkle>(registry)));
+
+    const auto snapshot = capture(registry);
+    const auto outcome  = rt::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+
+    const auto restored_ember = entity_with<Sparkle>(registry);
+    CHECK(registry.all_of<Blessed>(restored_ember));
+    CHECK(registry.get<Health>(restored_ember).current == 42);
+}
+
+TEST_CASE("restoring after remove-and-readd uses the recorded incarnation, not the removed one",
+          "[runtime][persistence][restore]") {
+    World world;
+    auto& registry = world.registry;
+    spawn_ember(registry);
+
+    stage(registry).awaken = 1;
+    run_frames(registry, 1);
+    stage(registry).wither = 1;
+    run_frames(registry, 1);
+    stage(registry).rekindle = 1;
+    run_frames(registry, 1);
+    REQUIRE(registry.get<Health>(entity_with<Sparkle>(registry)).current == 7);
+
+    const auto snapshot = capture(registry);
+    const auto outcome  = rt::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+
+    const auto restored_ember = entity_with<Sparkle>(registry);
+    REQUIRE(registry.all_of<Health>(restored_ember));
+    CHECK(registry.get<Health>(restored_ember).current == 7);
+}
+
+TEST_CASE("restoring a removed baseline trait leaves it absent", "[runtime][persistence][restore]") {
+    World world;
+    auto& registry  = world.registry;
+    const auto boss = entity_with<Health>(registry);
+    REQUIRE(origin_of(registry, boss) == "world_persistence_dynamic.Boss");
+
+    stage(registry).wither = 1;
+    run_frames(registry, 1);
+    REQUIRE_FALSE(registry.all_of<Health>(boss));
+
+    const auto snapshot = capture(registry);
+    const auto outcome  = rt::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+
+    const auto view = registry.view<rt::ArchetypeOrigin>();
+    entt::entity restored_boss = entt::null;
+    for (const auto entity : view) {
+        if (origin_of(registry, entity) == "world_persistence_dynamic.Boss") {
+            restored_boss = entity;
+        }
+    }
+    REQUIRE(restored_boss != entt::entity{entt::null});
+    CHECK_FALSE(registry.all_of<Health>(restored_boss));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

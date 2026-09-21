@@ -6,6 +6,7 @@
 #include "backends/cpp-entt/component_emitter.hpp"
 #include "backends/cpp-entt/event_emitter.hpp"
 #include "backends/cpp-entt/persistence_emitter.hpp"
+#include "backends/cpp-entt/persistence_restore_emitter.hpp"
 #include "backends/cpp-entt/render_pass_emitter.hpp"
 #include "backends/cpp-entt/system_emitter.hpp"
 #include "backends/cpp-entt/type_utils.hpp"
@@ -646,6 +647,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "    static SchedulerState state;\n";
     out << "    return state;\n";
     out << "}\n\n";
+    // Wraps `generated_scheduler_state() = {};` behind a function so callers
+    // emitted earlier in the file (world restore's publication step) can
+    // forward-declare just the function, not the SchedulerState type itself.
+    out << "void generated_reset_scheduler_state() {\n";
+    out << "    generated_scheduler_state() = {};\n";
+    out << "}\n\n";
 
     out << "entt::entity generated_reserve_entity(entt::registry& registry) {\n";
     out << "    return reserve_entity(registry, generated_scheduler_state().activation);\n";
@@ -1106,6 +1113,12 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
         if (event->symbol_id.has_value() && event->name == "SaveRequested" &&
             event->symbol_id->module.name == "std.persistence") {
             out << "    generated_queue_save_request(occurrence.slot, occurrence.request_id);\n";
+        }
+        // RestoreRequested is the same runtime-owned effect domain as
+        // SaveRequested above, sharing its request queue and boundary.
+        if (event->symbol_id.has_value() && event->name == "RestoreRequested" &&
+            event->symbol_id->module.name == "std.persistence") {
+            out << "    generated_queue_restore_request(occurrence.slot, occurrence.request_id);\n";
         }
         bool emitted = false;
         for (const auto& identity : program.execution_graph.stable_topological_order) {
@@ -2545,16 +2558,21 @@ const ResolvedEvent* find_std_persistence_event(const DecoratedProgram& program,
     return nullptr;
 }
 
+// `use std.persistence` always brings all six events (the Save and Restore
+// triples) into program.events together, whether or not the program's own
+// code references every one by name — so finding any one std.persistence
+// event implies the module is imported and the rest are present too.
 bool program_uses_persistence(const DecoratedProgram& program) {
-    return find_std_persistence_event(program, "SaveRequested") != nullptr &&
-           find_std_persistence_event(program, "SaveCompleted") != nullptr &&
-           find_std_persistence_event(program, "SaveFailed") != nullptr;
+    return find_std_persistence_event(program, "SaveRequested") != nullptr ||
+           find_std_persistence_event(program, "RestoreRequested") != nullptr;
 }
 
-// Bridges the activation scheduler to world persistence: SaveRequested
-// occurrences accumulate in a runtime queue (see generated_queue_save_request)
-// rather than reaching gameplay handlers; this is the boundary decision-6
-// requires them frozen into a batch and processed at.
+// Bridges the activation scheduler to world persistence: SaveRequested/
+// RestoreRequested occurrences accumulate in one runtime queue (see
+// generated_queue_save_request/generated_queue_restore_request) rather than
+// reaching gameplay handlers; this is the boundary decision-6 requires them
+// frozen into a batch and processed at, in emission order regardless of kind
+// (dsl-stdlib-persistence "Save and restore share a batch").
 //
 // generated_drain_external_events unconditionally forward-declares and calls
 // this whenever the program is graph-driven at all (emit_graph_scheduler_state
@@ -2565,59 +2583,88 @@ std::string emit_persistence_boundary_processor(const DecoratedProgram& program)
     if (program.execution_graph.phases.empty()) {
         return {};  // not graph-driven: nothing forward-declares or calls this
     }
-    const auto* save_requested = find_std_persistence_event(program, "SaveRequested");
-    const auto* save_completed = find_std_persistence_event(program, "SaveCompleted");
-    const auto* save_failed    = find_std_persistence_event(program, "SaveFailed");
-    if (save_requested == nullptr || save_completed == nullptr || save_failed == nullptr) {
+    if (!program_uses_persistence(program)) {
         return "namespace cactus::runtime::entt_backend {\n\n"
               "inline void generated_process_persistence_boundary(entt::registry&) {}\n\n"
               "}  // namespace cactus::runtime::entt_backend\n\n";
     }
-    const auto completed_type = event_runtime_cpp_type(program, *save_completed->symbol_id);
-    const auto failed_type    = event_runtime_cpp_type(program, *save_failed->symbol_id);
-    const bool has_schema     = EnttPersistenceEmitter::program_retains_provenance(program);
+    const auto* save_completed    = find_std_persistence_event(program, "SaveCompleted");
+    const auto* save_failed       = find_std_persistence_event(program, "SaveFailed");
+    const auto* restore_completed = find_std_persistence_event(program, "RestoreCompleted");
+    const auto* restore_failed    = find_std_persistence_event(program, "RestoreFailed");
+    const auto save_completed_type    = event_runtime_cpp_type(program, *save_completed->symbol_id);
+    const auto save_failed_type       = event_runtime_cpp_type(program, *save_failed->symbol_id);
+    const auto restore_completed_type = event_runtime_cpp_type(program, *restore_completed->symbol_id);
+    const auto restore_failed_type    = event_runtime_cpp_type(program, *restore_failed->symbol_id);
+    const bool has_schema             = EnttPersistenceEmitter::program_retains_provenance(program);
 
     std::ostringstream out;
     out << "namespace cactus::runtime::entt_backend {\n\n";
     out << "inline void generated_process_persistence_boundary(entt::registry& registry) {\n";
     out << "    auto& persistence_state = generated_persistence_state();\n";
     out << "    if (persistence_state.processing_batch) { return; }\n";
-    out << "    auto batch = generated_freeze_save_request_batch();\n";
+    out << "    auto batch = generated_freeze_persistence_request_batch();\n";
     out << "    if (batch.empty()) { return; }\n";
     out << "    cactus::runtime::entt_backend::ScopedPersistenceBatch batch_guard(persistence_state);\n";
-    if (has_schema) {
-        out << "    const auto snapshot = generated_capture_world_snapshot(registry);\n";
-        out << "    const auto& schema = generated_schema;\n";
-    } else {
-        out << "    const cactus::persistence::Snapshot snapshot{};\n";
-        out << "    const cactus::persistence::SchemaDescriptor schema{};\n";
-    }
-    // Every request's write runs before any outcome is delivered (decision 6:
-    // "both captures and writes run before either outcome event is
-    // delivered"): a single generated_drain_external_events call after this
-    // loop delivers every injected outcome as one cascade, in request order,
-    // rather than draining (and so running that request's own gameplay
-    // handler) between each write. A write that throws — the adapter ABI is
-    // a host-supplied std::function, so a non-compliant custom adapter can
-    // throw even though the shipped example adapter never does — becomes
-    // that one request's io_failure outcome instead of aborting the rest of
-    // the batch or leaking past this boundary.
+    out << "    const auto& schema = " << (has_schema ? "generated_schema" : "cactus::persistence::SchemaDescriptor{}")
+        << ";\n";
+    // Every request runs to completion before any outcome is delivered
+    // (decision 6: "both captures and writes run before either outcome event
+    // is delivered"): a single generated_drain_external_events call after
+    // this loop delivers every injected outcome as one cascade, in request
+    // order, rather than draining (and so running that request's own
+    // gameplay handler) between each one. A save's snapshot is captured
+    // lazily and cached across the loop, invalidated only by a successful
+    // restore (the only thing here that can change `registry`), so N
+    // consecutive saves with no restore between them still capture once,
+    // while a save processed after a restore in the same batch observes the
+    // restored world rather than the one that existed when the boundary
+    // opened. A throw — the adapter ABI is a host-supplied std::function, so
+    // a non-compliant custom adapter can throw even though the shipped
+    // example adapter never does — becomes that one request's io_failure
+    // outcome instead of aborting the rest of the batch or leaking past this
+    // boundary.
+    out << "    std::optional<cactus::persistence::Snapshot> cached_snapshot;\n";
     out << "    for (const auto& request : batch) {\n";
     out << "        try {\n";
-    out << "            const auto outcome = generated_execute_save_request(request.slot, request.request_id, "
-           "schema, snapshot);\n";
-    out << "            if (outcome.ok) {\n";
-    out << "                generated_inject_external_event(" << completed_type
+    out << "            if (request.kind == PersistenceRequestKind::Save) {\n";
+    out << "                if (!cached_snapshot.has_value()) {\n";
+    out << "                    cached_snapshot = "
+        << (has_schema ? "generated_capture_world_snapshot(registry)" : "cactus::persistence::Snapshot{}") << ";\n";
+    out << "                }\n";
+    out << "                const auto outcome = generated_execute_save_request(request.slot, request.request_id, "
+           "schema, *cached_snapshot);\n";
+    out << "                if (outcome.ok) {\n";
+    out << "                    generated_inject_external_event(" << save_completed_type
         << "{.slot = outcome.slot, .request_id = outcome.request_id});\n";
-    out << "            } else {\n";
-    out << "                generated_inject_external_event(" << failed_type
+    out << "                } else {\n";
+    out << "                    generated_inject_external_event(" << save_failed_type
         << "{.slot = outcome.slot, .request_id = outcome.request_id, .code = outcome.code, .message = "
            "outcome.message});\n";
+    out << "                }\n";
+    out << "            } else {\n";
+    out << "                const auto outcome = generated_execute_restore_request(registry, request.slot, "
+           "request.request_id, schema);\n";
+    out << "                if (outcome.ok) {\n";
+    out << "                    cached_snapshot.reset();\n";
+    out << "                    generated_inject_external_event(" << restore_completed_type
+        << "{.slot = outcome.slot, .request_id = outcome.request_id});\n";
+    out << "                } else {\n";
+    out << "                    generated_inject_external_event(" << restore_failed_type
+        << "{.slot = outcome.slot, .request_id = outcome.request_id, .code = outcome.code, .message = "
+           "outcome.message});\n";
+    out << "                }\n";
     out << "            }\n";
     out << "        } catch (const std::exception& persistence_adapter_error) {\n";
-    out << "            generated_inject_external_event(" << failed_type
+    out << "            if (request.kind == PersistenceRequestKind::Save) {\n";
+    out << "                generated_inject_external_event(" << save_failed_type
         << "{.slot = request.slot, .request_id = request.request_id, .code = \"io_failure\", .message = "
            "persistence_adapter_error.what()});\n";
+    out << "            } else {\n";
+    out << "                generated_inject_external_event(" << restore_failed_type
+        << "{.slot = request.slot, .request_id = request.request_id, .code = \"io_failure\", .message = "
+           "persistence_adapter_error.what()});\n";
+    out << "            }\n";
     out << "        }\n";
     out << "    }\n";
     out << "    generated_drain_external_events(registry);\n";
@@ -2955,6 +3002,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << emit_projected_trait_registry_helpers(program);
 
     out << EnttPersistenceEmitter::emit_world_capture(program);
+    out << EnttRestoreEmitter::emit_world_restore(program);
 
     // Events
     if (program.ast != nullptr) {

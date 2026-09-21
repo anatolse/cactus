@@ -1354,7 +1354,9 @@ const:
 
 rule SaveGame:
     on SavePressed:
-        emit storage.SaveRequested(slot = SAVE_SLOT, request_id = 1)
+        emit storage.SaveRequested:
+            slot = SAVE_SLOT
+            request_id = 1
 
 rule ReportSaveResult:
     on storage.SaveCompleted:
@@ -1366,6 +1368,38 @@ rule ReportSaveResult:
 ```
 
 `SaveCompleted`/`SaveFailed` are public extern events, delivered the same way `std.core.frame` is: as external activations, not synchronous return values. `request_id` is a caller-supplied correlation value, never deduplicated — two requests with the same ID still produce two outcomes. Accepted requests at one activation boundary are captured and written as a single frozen batch, in emission order, after that activation's handlers, event cascade, and structural commit have all finished; a `SaveCompleted`/`SaveFailed` handler that emits another `SaveRequested` always belongs to a later boundary, never the batch it ran inside of. `std.persistence` requires the graph-driven scheduler (a program with at least one `pub phase`); using it on the legacy frame path is a compile-time error, not a silently dropped request.
+
+**Requesting a restore.** `RestoreRequested`/`RestoreCompleted`/`RestoreFailed` mirror `SaveRequested`/`SaveCompleted`/`SaveFailed` exactly — same ordinary-event request, same externally-delivered outcomes, same per-boundary frozen-batch ordering, same graph-driven-scheduler requirement. A save and a restore accepted at the same activation boundary share one ordered batch; each is processed in the emission order it was requested in, and a save processed after a restore in that batch captures the just-restored world, not the one that boundary started with.
+
+```cactus
+rule RestoreGame:
+    on LoadPressed:
+        emit storage.RestoreRequested:
+            slot = SAVE_SLOT
+            request_id = 1
+
+rule RebuildCameraAfterRestore:
+    on storage.RestoreCompleted:
+        spawn Camera()
+
+rule ReportRestoreResult:
+    on storage.RestoreFailed:
+        # storage.RestoreFailed.code, storage.RestoreFailed.message
+        ...
+```
+
+A successful restore fully replaces the active world: every entity reconstructs to what capture eligibility (above) says the document ought to contain, and nothing else survives. Reconstruction follows the same baseline capture already records — an entity comes back as its archetype default, then its evaluated construction/spawn arguments, then any `persist` field's captured value overlaid on top — so restore reproduces exactly the state a fresh spawn plus every `persist`-marked mutation would have produced, never a later unmarked mutation that capture never saw. Entity identity itself is not guaranteed stable across a restore (a restored entity may reuse a numeric id/version a since-destroyed entity held); code that needs to keep referring to "the same" entity across a restore should do so through a `persist`ed reference field, not a cached `entity_id`.
+
+Ineligible content — a camera, HUD, or any other entity with no `persist` field anywhere in reach — does not survive a restore, the same way it was never written to the document in the first place. This is gameplay's responsibility to rebuild, not the restore's: `RebuildCameraAfterRestore` above is the whole pattern, and it is the reason `RestoreCompleted` exists as a distinct event rather than restore silently leaving old ineligible entities in place. A program that requests restores but never rebuilds its camera in response gets a black screen on the next frame — a real failure mode this example is built to demonstrate, not just document.
+
+A rejected restore leaves the world untouched — no partial replacement, and nothing is published until every record has been validated and reconstructed in a staging area — and reports one of six standard codes on `RestoreFailed.code`:
+
+- `adapter_unavailable` — no adapter is registered to read from
+- `io_failure` — the adapter's `read` reported failure (missing slot, corrupt storage, and similar)
+- `invalid_data` — the document is structurally unsound (unknown archetype/trait/field, a dangling or duplicate identity, a hierarchy cycle, or a configured size/depth limit exceeded)
+- `incompatible_schema` — the document's schema descriptor does not match the running program's
+- `unsupported_value` — every field is structurally valid but some value cannot be represented (wrong kind, out of range, or an unknown enum variant)
+- `resource_preparation_failure` — the document is otherwise valid but names an asset or input declaration this build cannot resolve to a handle
 
 **Storage adapters.** A registered adapter receives the generated schema descriptor and an owned typed snapshot to `write`, and returns an owned typed snapshot or an explicit error from `read` — never raw registry access, spawn capabilities, or entity reconstruction. This is what makes two adapters able to encode the same snapshot completely differently (JSON, a custom binary layout, cloud storage) and still round-trip to equal documents. The generated entry point registers a documented example file adapter by default, so a program built with no host C++ can request a save and get a file; a host supplying its own entry point registers whatever adapter it needs instead. A read whose stored schema descriptor does not match the running program's is rejected as incompatible, rather than partially applied — there is no cross-version migration in this baseline, only adapter-side rewriting of a document before it is submitted.
 

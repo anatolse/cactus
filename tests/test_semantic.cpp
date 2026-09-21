@@ -539,6 +539,31 @@ TEST_CASE("Semantic: extern event can still be handled by authored code — ok",
                                                    "        x = 0.0\n"));
 }
 
+TEST_CASE("Semantic: restore's extern event cannot be emitted by authored code — error",
+          "[semantic][persistence]") {
+    // Same rule as SaveCompleted/SaveFailed above, applied to RestoreCompleted:
+    // the restriction is generic to extern events, not specific to save.
+    CHECK(analyze_has_errors(STDLIB_EVENTS + "extern event RestoreCompleted:\n"
+                                             "    slot: string\n"
+                                             "rule Bad:\n"
+                                             "    on tick:\n"
+                                             "        emit RestoreCompleted:\n"
+                                             "            slot = \"x\"\n"));
+}
+
+TEST_CASE("Semantic: restore's extern event can still be handled by authored code — ok",
+          "[semantic][persistence]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "extern event RestoreCompleted:\n"
+                                                   "    slot: string\n"
+                                                   "trait Pos:\n"
+                                                   "    var x: float\n"
+                                                   "rule Handle:\n"
+                                                   "    filter:\n"
+                                                   "        Pos\n"
+                                                   "    on RestoreCompleted as outcome:\n"
+                                                   "        x = 0.0\n"));
+}
+
 TEST_CASE("Semantic: tick handler — always valid", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Pos:\n"
                                                    "    var x: float\n"

@@ -10,6 +10,26 @@
 
 namespace cactus {
 
+// A trait world capture and world restore both walk, deduplicated by
+// canonical identity. Shared between the two emitters so they can never
+// disagree on which traits participate in persistence.
+struct PersistableTrait {
+    std::string canonical;
+    std::string cpp_name;
+    const ResolvedTrait* declaration = nullptr;
+};
+
+[[nodiscard]] std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program);
+
+// Drops Parent from a persistable_traits() listing when the program declares
+// it. Parent's field is an ordinary entity_id like any other trait field, so
+// it appears in persistable_traits() like everything else — but its
+// hierarchy meaning (root vs included parent) is already fully carried by
+// EntityRecord::parent, so the generic per-entity trait walk (both capture's
+// and restore's) must not also record or apply it as an ordinary trait.
+[[nodiscard]] std::vector<PersistableTrait> without_parent_trait(std::vector<PersistableTrait> traits,
+                                                                 const DecoratedProgram& program);
+
 // Creation-site provenance for world capture. Archetype creation, spawn
 // overrides and runtime trait adds are emitted from two translation units that
 // must agree on every answer below, so none of it lives in either one.
@@ -75,6 +95,20 @@ public:
     // recording, hierarchy, and creation-order snapshot assembly. Empty when
     // no archetype ever retains construction data.
     [[nodiscard]] static std::string emit_world_capture(const DecoratedProgram& program);
+
+    // Name -> handle lookups for declared assets and input actions, the
+    // inverse of the handle -> name tables emit_world_capture already builds.
+    // A shared entry point rather than a duplicated table walk, so restore
+    // codegen (persistence_restore_emitter) resolves a document's canonical
+    // asset/input names against exactly the same declaration order capture
+    // used to name them.
+    [[nodiscard]] static std::string emit_reference_name_reverse_lookups(const DecoratedProgram& program);
+
+    // Node string -> generated_archetype_nodes index, the inverse of the array
+    // emit_archetype_node_table already builds. Shares emit_reference_name_
+    // reverse_lookup's implementation with the asset/input lookups above
+    // rather than restore hand-rolling its own linear-scan lookup function.
+    [[nodiscard]] static std::string emit_archetype_node_reverse_lookup();
 };
 
 }  // namespace cactus

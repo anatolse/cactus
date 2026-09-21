@@ -234,6 +234,10 @@ struct SchemaDescriptor {
 
 [[nodiscard]] const TraitDescriptor* find_trait_descriptor(const SchemaDescriptor& schema, std::string_view trait);
 [[nodiscard]] const FieldDescriptor* find_field_descriptor(const TraitDescriptor& trait, std::string_view field);
+[[nodiscard]] const StructDescriptor* find_struct_descriptor(const SchemaDescriptor& schema, std::string_view name);
+[[nodiscard]] const EnumDescriptor* find_enum_descriptor(const SchemaDescriptor& schema, std::string_view name);
+[[nodiscard]] const ArchetypeDescriptor* find_archetype_descriptor(const SchemaDescriptor& schema,
+                                                                   std::string_view node);
 
 // First-version compatibility is exact: a document is readable only by a build
 // whose schema matches it in both revision and fingerprint.

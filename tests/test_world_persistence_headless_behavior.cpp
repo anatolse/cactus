@@ -422,4 +422,337 @@ TEST_CASE("the same real captured snapshot round-trips to equal documents throug
     CHECK(file_read.snapshot == original);
     CHECK(memory_read.snapshot == file_read.snapshot);
 }
+
+TEST_CASE("restoring the same document read back through either adapter produces equivalent worlds",
+          "[runtime][persistence][restore][adapter]") {
+    World world;
+    auto& registry = world.registry;
+
+    auto& boss_health   = registry.get<world_persistence__Health>(entity_with<world_persistence__Health>(registry));
+    boss_health.current = 321;
+    const auto original = capture(registry);
+    const auto& schema  = cactus::runtime::entt_backend::generated_schema;
+
+    cactus_test::InMemoryPersistenceAdapter memory_adapter;
+    REQUIRE(memory_adapter.as_adapter().write("slot1", schema, original).ok);
+    const auto memory_read = memory_adapter.as_adapter().read("slot1", schema);
+    REQUIRE(memory_read.ok);
+
+    cactus_test::ScopedTempDirectory dir;
+    const auto file_adapter = cactus::runtime::entt_backend::make_example_file_adapter(dir.path());
+    REQUIRE(file_adapter.write("slot1", schema, original).ok);
+    const auto file_read = file_adapter.read("slot1", schema);
+    REQUIRE(file_read.ok);
+
+    entt::registry memory_world;
+    init_and_load(memory_world);
+    const auto memory_outcome =
+        cactus::runtime::entt_backend::generated_restore_world(memory_world, memory_read.snapshot);
+    REQUIRE(memory_outcome.ok);
+
+    entt::registry file_world;
+    init_and_load(file_world);
+    const auto file_outcome = cactus::runtime::entt_backend::generated_restore_world(file_world, file_read.snapshot);
+    REQUIRE(file_outcome.ok);
+
+    auto& memory_boss = memory_world.get<world_persistence__Health>(entity_with<world_persistence__Health>(memory_world));
+    auto& file_boss    = file_world.get<world_persistence__Health>(entity_with<world_persistence__Health>(file_world));
+    CHECK(memory_boss.maximum == file_boss.maximum);
+    CHECK(memory_boss.current == file_boss.current);
+    CHECK(file_boss.current == 321);
+}
+
+// ── World restore (add-world-snapshot-restore) ──────────────────────────────
+
+TEST_CASE("restoring a captured snapshot reproduces the boss archetype baseline and its persisted value",
+          "[runtime][persistence][restore]") {
+    World world;
+    auto& registry = world.registry;
+
+    auto& boss_health    = registry.get<world_persistence__Health>(entity_with<world_persistence__Health>(registry));
+    boss_health.current  = 321;
+    const auto snapshot  = capture(registry);
+
+    // Mutate the live world so a correct restore has something real to undo.
+    boss_health.current = 999;
+    boss_health.maximum = 1;
+
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+
+    auto& restored_health = registry.get<world_persistence__Health>(entity_with<world_persistence__Health>(registry));
+    CHECK(restored_health.maximum == 500);
+    CHECK(restored_health.current == 321);
+}
+
+TEST_CASE("restoring an enemy reproduces its original spawn argument, not a later mutation",
+          "[runtime][persistence][restore]") {
+    World world;
+    auto& registry = world.registry;
+
+    queue_spawns(registry, 1, 0);
+    drive_frame(registry, kStep);
+    const auto enemy = *registry.view<world_persistence__Health, std_transform_flat__LocalTransform>().begin();
+    REQUIRE(registry.get<world_persistence__Health>(enemy).maximum == 700);
+
+    const auto snapshot = capture(registry);
+
+    // Mutate the unmarked field after capture: a correct restore must not
+    // re-evaluate the spawn expression or reflect this mutation.
+    registry.get<world_persistence__Health>(enemy).maximum = 12345;
+
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+
+    const auto restored_enemy =
+        *registry.view<world_persistence__Health, std_transform_flat__LocalTransform>().begin();
+    CHECK(registry.get<world_persistence__Health>(restored_enemy).maximum == 700);
+}
+
+TEST_CASE("restoring a hierarchical child with no captured parent restores it as a root",
+          "[runtime][persistence][restore]") {
+    World world;
+    auto& registry      = world.registry;
+    const auto snapshot = capture(registry);
+
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+
+    const auto view = registry.view<world_persistence__Badge>();
+    REQUIRE(std::ranges::distance(view.begin(), view.end()) == 1);
+    const auto member = *view.begin();
+    CHECK(registry.get<world_persistence__Badge>(member).rank == 1);
+    CHECK_FALSE(registry.all_of<std_core__Parent>(member));
+}
+
+TEST_CASE("a document captured by the existing save path restores to an equivalent world through the "
+          "in-memory adapter",
+          "[runtime][persistence][restore][adapter]") {
+    World world;
+    auto& registry = world.registry;
+
+    queue_spawns(registry, 1, 1);
+    drive_frame(registry, kStep);
+
+    const auto original = capture(registry);
+    REQUIRE_FALSE(original.entities.empty());
+
+    cactus_test::InMemoryPersistenceAdapter memory_adapter;
+    cactus_test::ScopedPersistenceAdapter scoped_adapter(memory_adapter.as_adapter());
+    const auto write_outcome = cactus::runtime::entt_backend::generated_execute_save_request(
+        "slot1", 1, cactus::runtime::entt_backend::generated_schema, original);
+    REQUIRE(write_outcome.ok);
+
+    const auto read_result = cactus::runtime::entt_backend::read_persistence_document(
+        "slot1", cactus::runtime::entt_backend::generated_schema);
+    REQUIRE(read_result.ok);
+
+    const auto restore_outcome =
+        cactus::runtime::entt_backend::generated_restore_world(registry, read_result.snapshot);
+    REQUIRE(restore_outcome.ok);
+
+    // A faithful restore recaptures to a snapshot equal to the original, up to
+    // one acknowledged asymmetry: a record whose *original* live parent was
+    // itself ineligible (Formation/Member here) captured a non-zero absent
+    // EntityRef id, taken from that specific ineligible entity's identity.
+    // Formation never exists in the restored world at all, so the restored
+    // root's absent parent has no entity to take an id from and recaptures as
+    // EntityRef{} (id 0). Both are "no parent, don't care about id" — the id
+    // of an absent reference was never meant to be compared — so entity-level
+    // equality here ignores id specifically where present is false.
+    const auto recaptured = capture(registry);
+    REQUIRE(recaptured.entities.size() == original.entities.size());
+    for (std::size_t i = 0; i < original.entities.size(); ++i) {
+        INFO("entity index " << i << " archetype " << original.entities[i].archetype);
+        CHECK(recaptured.entities[i].archetype == original.entities[i].archetype);
+        CHECK(recaptured.entities[i].id == original.entities[i].id);
+        CHECK(recaptured.entities[i].parent.present == original.entities[i].parent.present);
+        if (original.entities[i].parent.present) {
+            CHECK(recaptured.entities[i].parent.id == original.entities[i].parent.id);
+        }
+        CHECK(recaptured.entities[i].traits == original.entities[i].traits);
+    }
+}
+
+TEST_CASE("a successful restore drops the ineligible camera and RestoreCompleted lets gameplay rebuild it",
+          "[runtime][persistence][restore][headless]") {
+    World world;
+    auto& registry = world.registry;
+
+    cactus_test::InMemoryPersistenceAdapter memory_adapter;
+    cactus_test::ScopedPersistenceAdapter scoped_adapter(memory_adapter.as_adapter());
+
+    const auto snapshot       = capture(registry);
+    const auto write_outcome  = cactus::runtime::entt_backend::generated_execute_save_request(
+        "world_persistence", 0, cactus::runtime::entt_backend::generated_schema, snapshot);
+    REQUIRE(write_outcome.ok);
+
+    REQUIRE(registry.view<world_persistence__ActiveCamera>().size() == 1);
+    const auto original_camera = *registry.view<world_persistence__ActiveCamera>().begin();
+    // A distinguishing, non-default signal on the pre-restore camera: a
+    // rebuilt camera starts from ActiveCamera's declared default (1.0)
+    // again, so this proves a fresh entity rather than the old one
+    // surviving untouched. Comparing entity ids would not: publication
+    // resets the deferred-spawn reservation cursor (design decision 2), so
+    // the rebuilt camera can legitimately land on the same numeric id as
+    // the one it replaced.
+    registry.get<world_persistence__ActiveCamera>(original_camera).zoom = 5.0F;
+
+    auto& control = registry.get<world_persistence__RestoreControl>(
+        entity_with<world_persistence__RestoreControl>(registry));
+    control.pending_restore = 1;
+
+    drive_frame(registry, kStep);
+
+    // The camera has no persist field, so a full replacement drops it; only
+    // RebuildCameraAfterRestore's `on storage.RestoreCompleted:` handler
+    // creates the one that exists afterwards.
+    REQUIRE(registry.view<world_persistence__ActiveCamera>().size() == 1);
+    const auto restored_camera = *registry.view<world_persistence__ActiveCamera>().begin();
+    CHECK(registry.get<world_persistence__ActiveCamera>(restored_camera).zoom == 1.0F);
+}
+
+TEST_CASE("restoring an empty compatible document produces an empty world",
+          "[runtime][persistence][restore][publish]") {
+    World world;
+    auto& registry = world.registry;
+
+    queue_spawns(registry, 1, 1);
+    drive_frame(registry, kStep);
+    REQUIRE(registry.view<entt::entity>().size() > 0);
+
+    cactus::persistence::Snapshot empty;
+    empty.schema_revision    = cactus::runtime::entt_backend::generated_schema.revision;
+    empty.schema_fingerprint = cactus::runtime::entt_backend::generated_schema.fingerprint;
+    empty.module             = "world_persistence";
+
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, empty);
+    REQUIRE(outcome.ok);
+    CHECK(registry.view<entt::entity>().size() == 0);
+}
+
+TEST_CASE("entities carrying std.core.Persistent do not survive restore",
+          "[runtime][persistence][restore][publish]") {
+    World world;
+    auto& registry = world.registry;
+
+    queue_spawns(registry, 0, 1);
+    drive_frame(registry, kStep);
+    const auto survivors = registry.view<world_persistence__Sparkle, std_core__Persistent>();
+    REQUIRE(std::ranges::distance(survivors.begin(), survivors.end()) == 1);
+
+    const auto snapshot = capture(registry);
+    // The particle carries Persistent but no persist field anywhere in its
+    // trait set, so it is absent from the document — capture already proves
+    // this elsewhere. Restore replacing the live world is the new claim
+    // here: a full replacement is not scene-transition survival, so the
+    // live particle must not survive it either.
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+    CHECK(registry.view<std_core__Persistent>().size() == 0);
+}
+
+TEST_CASE("a successful restore discards old deferred events and fixed-step catch-up backlog",
+          "[runtime][persistence][restore][cancellation]") {
+    World world;
+    auto& registry = world.registry;
+
+    const auto snapshot = capture(registry);
+
+    auto& scheduler = cactus::runtime::entt_backend::generated_scheduler_state();
+    scheduler.activation.deferred_events.push_back(
+        cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__destroyEvent{}});
+    scheduler.std_core__fixed_tick.accumulator = 10.0;
+    REQUIRE_FALSE(scheduler.activation.deferred_events.empty());
+
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
+    REQUIRE(outcome.ok);
+
+    CHECK(scheduler.activation.deferred_events.empty());
+    CHECK(scheduler.std_core__fixed_tick.accumulator == 0.0);
+}
+
+TEST_CASE("a failed restore preserves old-world scheduler work untouched",
+          "[runtime][persistence][restore][cancellation]") {
+    World world;
+    auto& registry = world.registry;
+
+    cactus::persistence::Snapshot incompatible;
+    incompatible.schema_fingerprint = cactus::runtime::entt_backend::generated_schema.fingerprint + 1;
+
+    auto& scheduler = cactus::runtime::entt_backend::generated_scheduler_state();
+    scheduler.activation.deferred_events.push_back(
+        cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__destroyEvent{}});
+    scheduler.std_core__fixed_tick.accumulator = 10.0;
+
+    const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, incompatible);
+    REQUIRE_FALSE(outcome.ok);
+
+    CHECK(scheduler.activation.deferred_events.size() == 1);
+    CHECK(scheduler.std_core__fixed_tick.accumulator == 10.0);
+}
+
+TEST_CASE("a save and a restore accepted at the same boundary are both processed",
+          "[runtime][persistence][restore][scheduling]") {
+    World world;
+    auto& registry = world.registry;
+
+    cactus_test::InMemoryPersistenceAdapter memory_adapter;
+    cactus_test::ScopedPersistenceAdapter scoped_adapter(memory_adapter.as_adapter());
+
+    const auto snapshot = capture(registry);
+    REQUIRE(cactus::runtime::entt_backend::generated_execute_save_request(
+                "world_persistence", 0, cactus::runtime::entt_backend::generated_schema, snapshot)
+                .ok);
+
+    // Queued directly in emission order, as generated code would from two
+    // `emit storage.SaveRequested:`/`emit storage.RestoreRequested:`
+    // statements in the same activation.
+    cactus::runtime::entt_backend::generated_queue_save_request("save_check", 1);
+    cactus::runtime::entt_backend::generated_queue_restore_request("world_persistence", 2);
+
+    cactus::runtime::entt_backend::generated_process_persistence_boundary(registry);
+
+    const auto save_read = cactus::runtime::entt_backend::read_persistence_document(
+        "save_check", cactus::runtime::entt_backend::generated_schema);
+    CHECK(save_read.ok);
+}
+
+TEST_CASE("a save queued after a restore in the same batch does not reuse a save cached before the restore",
+          "[runtime][persistence][restore][scheduling]") {
+    World world;
+    auto& registry = world.registry;
+
+    cactus_test::InMemoryPersistenceAdapter memory_adapter;
+    cactus_test::ScopedPersistenceAdapter scoped_adapter(memory_adapter.as_adapter());
+
+    registry.get<world_persistence__Health>(entity_with<world_persistence__Health>(registry)).current = 111;
+    REQUIRE(cactus::runtime::entt_backend::generated_execute_save_request(
+                "restore_target", 0, cactus::runtime::entt_backend::generated_schema, capture(registry))
+                .ok);
+
+    registry.get<world_persistence__Health>(entity_with<world_persistence__Health>(registry)).current = 999;
+
+    // A boundary's persistence-request loop caches a save's snapshot across
+    // consecutive saves (so N saves with no restore between them capture
+    // once, not N times), invalidated only by a successful restore. The
+    // first save here (current == 999) must populate that cache; the
+    // restore must discard it; the second save must then observe the
+    // restored world (current == 111), not the cached pre-restore one.
+    cactus::runtime::entt_backend::generated_queue_save_request("cache_probe", 1);
+    cactus::runtime::entt_backend::generated_queue_restore_request("restore_target", 2);
+    cactus::runtime::entt_backend::generated_queue_save_request("after_restore_check", 3);
+
+    cactus::runtime::entt_backend::generated_process_persistence_boundary(registry);
+
+    const auto save_read = cactus::runtime::entt_backend::read_persistence_document(
+        "after_restore_check", cactus::runtime::entt_backend::generated_schema);
+    REQUIRE(save_read.ok);
+
+    const auto* boss = record_for_archetype(save_read.snapshot, "world_persistence.Boss");
+    REQUIRE(boss != nullptr);
+    const auto* health = trait_of(*boss, "world_persistence.Health");
+    REQUIRE(health != nullptr);
+    CHECK(int_field(health->persisted, "current") == 111);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

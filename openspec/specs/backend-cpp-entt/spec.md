@@ -1325,3 +1325,18 @@ nodes scheduled in that phase resolve to the same underlying function.
   activation and observable transform/propagation results are unchanged,
   since the duplicate call was idempotent
 
+### Requirement: Generated restore entry points and staged construction
+The backend SHALL generate a typed restore entry point that reconstructs recorded nodes from the same schema its capture path produces. Node initialization SHALL be reusable independently of whole-tree template spawn, so a single recorded child can be created without its siblings. Reconstruction SHALL build a staged registry and staged runtime resources, publish them atomically into the live world, and retire the replaced world's resources through backend cleanup without dispatching authored destroy handlers. Generated restore integration SHALL compile under the existing C++20 generated-code target.
+
+#### Scenario: Single recorded child is created without siblings
+- **WHEN** a document contains one child of a hierarchical archetype whose other children were destroyed
+- **THEN** the backend initializes that node alone rather than running the template's whole-tree creation
+
+#### Scenario: Publication retires old resources without gameplay dispatch
+- **WHEN** a staged world is published over a populated world
+- **THEN** the replaced world's runtime resources are released by backend cleanup and no authored destroy handler runs
+
+#### Scenario: Staged failure releases staged resources
+- **WHEN** staged resource preparation fails
+- **THEN** the staged registry and its resources are discarded and the live registry is untouched
+

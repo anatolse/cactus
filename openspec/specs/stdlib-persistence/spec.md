@@ -63,3 +63,45 @@ Save SHALL require neither a format declaration in Cactus nor a persist modifier
 #### Scenario: Scene survivor is not automatically saved
 - **WHEN** an entity has `std.core.Persistent` but no persistence eligibility
 - **THEN** it remains excluded from a world snapshot
+
+### Requirement: Typed restore requests and runtime outcomes
+The std.persistence module SHALL expose an ordinary `RestoreRequested` event with `slot: string` and `request_id: int` fields, and public extern `RestoreCompleted` and `RestoreFailed` events carrying the same correlation fields, with `RestoreFailed` additionally carrying `code: string` and `message: string`. Each accepted request SHALL produce exactly one outcome. Standard error codes SHALL cover unavailable adapter, I/O failure, invalid data, incompatible schema, unsupported value, and resource preparation failure. Restore requests SHALL share the save boundary and batch ordering rules.
+
+#### Scenario: Author requests a restore
+- **WHEN** a handler emits `RestoreRequested` with a slot constant and request ID
+- **THEN** the runtime restores that slot and reports one correlated outcome
+
+#### Scenario: Save and restore share a batch
+- **WHEN** a save then a restore request are accepted at the same boundary
+- **THEN** the save captures the world before the restore replaces it
+- **AND** their outcome events arrive in request order
+
+#### Scenario: Failed restore reports a code
+- **WHEN** a restore fails validation
+- **THEN** `RestoreFailed` carries the slot, request ID, an error code, and a message, and the world is unchanged
+
+### Requirement: Replacement cancels old gameplay work
+Successful restore SHALL discard pending old-world gameplay event cascades, deferred events, and periodic catch-up work, and SHALL reset frame-local projections and transient runtime caches. It SHALL preserve already accepted persistence requests and their outcome events. Failure SHALL preserve old-world work unchanged. New requests emitted by outcome handlers SHALL belong to a later boundary. Runtime clocks and pending events SHALL NOT be treated as world data.
+
+#### Scenario: Deferred event cannot mutate restored world
+- **WHEN** the old world has a deferred gameplay event and restore succeeds
+- **THEN** the old event is not delivered into the replacement world
+
+#### Scenario: Catch-up work does not carry over
+- **WHEN** a fixed-step phase had accumulated catch-up iterations before a successful restore
+- **THEN** that backlog is discarded rather than run against the restored world
+
+#### Scenario: Queued outcomes survive replacement
+- **WHEN** a batch contains a restore followed by another accepted request
+- **THEN** the later request and both outcomes are still delivered after replacement
+
+### Requirement: Adapters read documents without owning reconstruction
+An adapter's read SHALL return an owned typed document or an explicit error, and SHALL NOT construct entities, receive registry access, or bypass runtime validation. A document that an adapter reports as valid SHALL still be validated by the runtime before replacement.
+
+#### Scenario: Adapter-reported document is still validated
+- **WHEN** an adapter returns a document its own encoding considers valid but whose identities are duplicated
+- **THEN** the runtime rejects it and the world is unchanged
+
+#### Scenario: Two formats restore equivalent worlds
+- **WHEN** the same captured snapshot is written and read back through two different adapters
+- **THEN** each restores an equivalent persistent world without changing Cactus traits or handlers

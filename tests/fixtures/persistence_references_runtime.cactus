@@ -1,0 +1,55 @@
+module persistence_references_runtime
+
+use std.core
+
+# A minimal fixture dedicated to entity_id reference restoration: mutual
+# references between two included entities, and a reference to an ineligible
+# entity that must restore stale. Kept separate from world_persistence.cactus
+# so its own creation order and entity count stay untouched.
+
+trait Health:
+    persist var current: int = 100
+
+trait Rival:
+    persist var rival: entity_id
+
+# No persist field: never captured, the rival for the "absent" scenario.
+trait Cosmetic:
+    var hue: float = 0.0
+
+# An entity_id nested inside a list: proves reference decoding recurses
+# through list elements, not just bare trait fields.
+trait Roster:
+    persist var members: list[entity_id]
+
+asset Icon: texture = "icon.png"
+
+trait Badge:
+    persist var icon: texture_id
+
+template Warrior:
+    Health
+
+template Prop:
+    Cosmetic
+
+rule SetupRivals:
+    on load:
+        let rival_a = spawn Warrior()
+        let rival_b = spawn Warrior()
+        add Rival to rival_a:
+            rival = rival_b
+        add Rival to rival_b:
+            rival = rival_a
+        add Roster to rival_a:
+            members = [rival_a, rival_b]
+        add Badge to rival_a:
+            icon = Icon
+
+        let lonely = spawn Warrior()
+        let also_lonely = spawn Warrior()
+        let prop = spawn Prop()
+        add Rival to lonely:
+            rival = prop
+        add Rival to also_lonely:
+            rival = prop

@@ -1993,12 +1993,21 @@ void propagate_hierarchy(entt::registry& registry,
     }
 }
 
+namespace {
+
+std::pmr::unordered_set<entt::entity>& destroying_entities_storage() noexcept {
+    static std::pmr::unsynchronized_pool_resource destroying_resource;
+    static std::pmr::unordered_set<entt::entity> destroying_entities{&destroying_resource};
+    return destroying_entities;
+}
+
+}  // namespace
+
 void destroy_entity_recursive(
     entt::registry& registry,
     entt::entity entity,
     const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children) {
-    static std::pmr::unsynchronized_pool_resource destroying_resource;
-    static std::pmr::unordered_set<entt::entity> destroying_entities{&destroying_resource};
+    auto& destroying_entities = destroying_entities_storage();
     if (!registry.valid(entity) || destroying_entities.contains(entity)) {
         return;
     }
@@ -2015,6 +2024,8 @@ void destroy_entity_recursive(
     }
     destroying_entities.erase(entity);
 }
+
+void reset_pending_destruction_state() noexcept { destroying_entities_storage().clear(); }
 
 // ── Sweep-and-prune broad phase (spatial-broadphase-runtime capability) ────────
 
@@ -2996,6 +3007,10 @@ const std::vector<entt::entity>& editor_saved_viewports() noexcept {
 }
 entt::entity editor_rig_entity() noexcept {
     return camera_rig_entity_storage();
+}
+void reset_editor_camera_rig_state() noexcept {
+    camera_rig_entity_storage() = entt::entity{entt::null};
+    saved_viewports_storage().clear();
 }
 
 entt::entity editor_camera_enter(entt::registry& registry, bool use_3d) noexcept {

@@ -437,30 +437,34 @@ std::string EnttPersistenceEmitter::emit_schema_descriptor(const DecoratedProgra
 
 // ── World capture ───────────────────────────────────────────────────────────
 
-namespace {
-
-// A trait the generated capture walks, deduplicated by canonical identity.
-struct CaptureTrait {
-    std::string canonical;
-    std::string cpp_name;
-    const ResolvedTrait* declaration = nullptr;
-};
-
-std::vector<CaptureTrait> capture_traits(const DecoratedProgram& program) {
-    std::vector<CaptureTrait> traits;
+std::vector<PersistableTrait> persistable_traits(const DecoratedProgram& program) {
+    std::vector<PersistableTrait> traits;
     std::unordered_set<std::string> seen;
     for (const auto& [key, trait] : program.traits) {
         if (!seen.insert(declaration_identity(trait)).second) {
             continue;
         }
         traits.push_back(
-            CaptureTrait{.canonical   = declaration_identity(trait),
-                         .cpp_name    = EnttCodegenUtils::trait_cpp_name(trait.symbol_id, trait.name, program),
-                         .declaration = &trait});
+            PersistableTrait{.canonical   = declaration_identity(trait),
+                             .cpp_name    = EnttCodegenUtils::trait_cpp_name(trait.symbol_id, trait.name, program),
+                             .declaration = &trait});
     }
-    std::ranges::sort(traits, {}, &CaptureTrait::canonical);
+    std::ranges::sort(traits, {}, &PersistableTrait::canonical);
     return traits;
 }
+
+std::vector<PersistableTrait> without_parent_trait(std::vector<PersistableTrait> traits,
+                                                    const DecoratedProgram& program) {
+    const auto* parent_trait = EnttCodegenUtils::find_trait(program, "Parent");
+    if (parent_trait == nullptr) {
+        return traits;
+    }
+    const auto& canonical = declaration_identity(*parent_trait);
+    std::erase_if(traits, [&](const PersistableTrait& trait) { return trait.canonical == canonical; });
+    return traits;
+}
+
+namespace {
 
 std::string enum_variant_function(const std::string& enum_cpp) {
     return "generated_variant_" + enum_cpp;
@@ -527,6 +531,33 @@ void emit_reference_name_tables(std::ostringstream& out, const DecoratedProgram&
         out, "generated_input_button_names", "generated_input_button_name", "std::uint8_t", table.input_buttons, 0);
     emit_reference_name_lookup(
         out, "generated_input_axis_names", "generated_input_axis_name", "std::uint8_t", table.input_axes, 0);
+}
+
+// The inverse of emit_reference_name_lookup: a declared name back to its
+// numeric handle, nullopt when this build declares no such name. Reuses the
+// array emit_reference_name_lookup already emitted rather than rebuilding it.
+// Called once per restored AssetRef/InputRef/archetype field, so the lookup
+// itself is a function-local static hash map built once on first use (O(1)
+// thereafter) rather than a linear scan repeated on every call.
+void emit_reference_name_reverse_lookup(std::ostringstream& out,
+                                        const std::string& array_name,
+                                        const std::string& function_name,
+                                        const std::string& handle_type,
+                                        int base) {
+    out << "[[nodiscard]] inline std::optional<" << handle_type << "> " << function_name
+        << "(std::string_view name) {\n";
+    out << "    static const std::unordered_map<std::string_view, " << handle_type << "> lookup = [] {\n";
+    out << "        std::unordered_map<std::string_view, " << handle_type << "> map;\n";
+    out << "        map.reserve(" << array_name << ".size());\n";
+    out << "        for (std::size_t index = 0; index < " << array_name << ".size(); ++index) {\n";
+    out << "            map.emplace(" << array_name << "[index], static_cast<" << handle_type << ">(index + " << base
+        << "));\n";
+    out << "        }\n";
+    out << "        return map;\n";
+    out << "    }();\n";
+    out << "    const auto found = lookup.find(name);\n";
+    out << "    return found == lookup.end() ? std::nullopt : std::optional<" << handle_type << ">(found->second);\n";
+    out << "}\n\n";
 }
 
 // C++ text producing a persistence::Value for one field access. Empty when the
@@ -646,7 +677,7 @@ void emit_struct_capture_functions(std::ostringstream& out, const DecoratedProgr
     }
 }
 
-void emit_eligibility(std::ostringstream& out, const std::vector<CaptureTrait>& traits) {
+void emit_eligibility(std::ostringstream& out, const std::vector<PersistableTrait>& traits) {
     out << "// Eligible through the originating archetype's declared trait set, or\n";
     out << "// through a durable trait attached right now.\n";
     out << "[[nodiscard]] inline bool generated_entity_eligible(const entt::registry& registry, entt::entity "
@@ -693,7 +724,7 @@ SupportedFieldCounts count_supported_fields(const DecoratedProgram& program, con
 
 void emit_attached_traits(std::ostringstream& out,
                           const DecoratedProgram& program,
-                          const std::vector<CaptureTrait>& traits) {
+                          const std::vector<PersistableTrait>& traits) {
     out << "inline void generated_capture_traits(const entt::registry& registry,\n";
     out << "                                     entt::entity entity,\n";
     out << "                                     DocumentIdMap& ids,\n";
@@ -773,7 +804,7 @@ std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& p
     if (!program_retains_provenance(program)) {
         return {};
     }
-    const auto traits        = capture_traits(program);
+    const auto traits        = without_parent_trait(persistable_traits(program), program);
     const auto* parent_trait = EnttCodegenUtils::find_trait(program, "Parent");
 
     std::ostringstream out;
@@ -837,6 +868,31 @@ std::string EnttPersistenceEmitter::emit_world_capture(const DecoratedProgram& p
     out << "    snapshot.truncated = ids.limit_exceeded();\n";
     out << "    return snapshot;\n";
     out << "}\n\n";
+    out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    return out.str();
+}
+
+std::string EnttPersistenceEmitter::emit_reference_name_reverse_lookups(const DecoratedProgram& program) {
+    if (!program_retains_provenance(program)) {
+        return {};
+    }
+    std::ostringstream out;
+    out << "namespace cactus::runtime::entt_backend {\n\n";
+    emit_reference_name_reverse_lookup(
+        out, "generated_asset_names", "generated_asset_handle_for_name", "std::uint32_t", 1);
+    emit_reference_name_reverse_lookup(
+        out, "generated_input_button_names", "generated_input_button_handle_for_name", "std::uint8_t", 0);
+    emit_reference_name_reverse_lookup(
+        out, "generated_input_axis_names", "generated_input_axis_handle_for_name", "std::uint8_t", 0);
+    out << "}  // namespace cactus::runtime::entt_backend\n\n";
+    return out.str();
+}
+
+std::string EnttPersistenceEmitter::emit_archetype_node_reverse_lookup() {
+    std::ostringstream out;
+    out << "namespace cactus::runtime::entt_backend {\n\n";
+    emit_reference_name_reverse_lookup(
+        out, "generated_archetype_nodes", "generated_archetype_node_index", "std::uint32_t", 0);
     out << "}  // namespace cactus::runtime::entt_backend\n\n";
     return out.str();
 }

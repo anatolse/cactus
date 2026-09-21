@@ -28,10 +28,30 @@ TEST_CASE("queued requests accumulate in emission order", "[runtime][persistence
     generated_queue_save_request("slot1", 1);
     generated_queue_save_request("slot2", 2);
 
-    const auto batch = generated_freeze_save_request_batch();
+    const auto batch = generated_freeze_persistence_request_batch();
     REQUIRE(batch.size() == 2);
-    CHECK(batch[0] == PendingSaveRequest{.slot = "slot1", .request_id = 1});
-    CHECK(batch[1] == PendingSaveRequest{.slot = "slot2", .request_id = 2});
+    CHECK(batch[0] == PendingPersistenceRequest{
+                          .kind = PersistenceRequestKind::Save, .slot = "slot1", .request_id = 1});
+    CHECK(batch[1] == PendingPersistenceRequest{
+                          .kind = PersistenceRequestKind::Save, .slot = "slot2", .request_id = 2});
+}
+
+TEST_CASE("a save and a restore queued together keep their relative emission order",
+          "[runtime][persistence][scheduling]") {
+    ResetPersistenceState reset;
+
+    generated_queue_save_request("slot1", 1);
+    generated_queue_restore_request("slot2", 2);
+    generated_queue_save_request("slot3", 3);
+
+    const auto batch = generated_freeze_persistence_request_batch();
+    REQUIRE(batch.size() == 3);
+    CHECK(batch[0] == PendingPersistenceRequest{
+                          .kind = PersistenceRequestKind::Save, .slot = "slot1", .request_id = 1});
+    CHECK(batch[1] == PendingPersistenceRequest{
+                          .kind = PersistenceRequestKind::Restore, .slot = "slot2", .request_id = 2});
+    CHECK(batch[2] == PendingPersistenceRequest{
+                          .kind = PersistenceRequestKind::Save, .slot = "slot3", .request_id = 3});
 }
 
 TEST_CASE("repeated request IDs remain distinct queued entries", "[runtime][persistence][scheduling]") {
@@ -40,7 +60,7 @@ TEST_CASE("repeated request IDs remain distinct queued entries", "[runtime][pers
     generated_queue_save_request("a", 1);
     generated_queue_save_request("b", 1);
 
-    const auto batch = generated_freeze_save_request_batch();
+    const auto batch = generated_freeze_persistence_request_batch();
     REQUIRE(batch.size() == 2);
     CHECK(batch[0].slot == "a");
     CHECK(batch[1].slot == "b");
@@ -50,10 +70,10 @@ TEST_CASE("freezing a batch clears the queue for the next boundary", "[runtime][
     ResetPersistenceState reset;
 
     generated_queue_save_request("slot1", 1);
-    const auto first = generated_freeze_save_request_batch();
+    const auto first = generated_freeze_persistence_request_batch();
     REQUIRE(first.size() == 1);
 
-    const auto second = generated_freeze_save_request_batch();
+    const auto second = generated_freeze_persistence_request_batch();
     CHECK(second.empty());
 }
 

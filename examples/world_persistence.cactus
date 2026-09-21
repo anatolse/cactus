@@ -2,6 +2,7 @@ module world_persistence
 
 use std.core
 use std.transform.flat as tf
+use std.persistence as storage
 
 # A tiny world that exercises what a save has to preserve: an archetype
 # baseline, a field the author marked durable, values that only exist because
@@ -10,6 +11,7 @@ use std.transform.flat as tf
 const:
     BOSS_MAXIMUM = 500
     ENEMY_MAXIMUM = 700
+    SAVE_SLOT = "world_persistence"
 
 # ── Traits ────────────────────────────────────────────────────────────────────
 
@@ -88,7 +90,44 @@ template Particle:
     tf.LocalTransform
     Persistent
 
+# A camera has no persist field, so restore never recreates one: a full
+# replacement is a black screen unless gameplay rebuilds ephemeral content
+# itself in response to RestoreCompleted. This is the failure mode the
+# example demonstrates rather than leaves to documentation prose alone.
+trait ActiveCamera:
+    var zoom: float = 1.0
+
+template Camera:
+    ActiveCamera
+
+# Drives a RestoreRequested from ordinary gameplay state, the same pattern
+# SpawnWorld already uses for enemy/particle spawns.
+trait RestoreControl:
+    var pending_restore: int = 0
+
+entity Controller:
+    RestoreControl
+
 # ── Rules ─────────────────────────────────────────────────────────────────────
+
+rule SetupWorld:
+    on load:
+        spawn Camera()
+
+rule RestoreGame:
+    filter:
+        RestoreControl as control
+
+    on tick:
+        if control.pending_restore > 0:
+            control.pending_restore -= 1
+            emit storage.RestoreRequested:
+                slot = SAVE_SLOT
+                request_id = 1
+
+rule RebuildCameraAfterRestore:
+    on storage.RestoreCompleted:
+        spawn Camera()
 
 rule SpawnWorld:
     filter:

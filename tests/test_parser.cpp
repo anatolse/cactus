@@ -3364,4 +3364,42 @@ TEST_CASE("Parser: std.persistence save request is ordinary, outcomes are extern
     CHECK(failed.fields[2].name == "code");
     CHECK(failed.fields[3].name == "message");
 }
+
+TEST_CASE("Parser: std.persistence restore request is ordinary, outcomes are external",
+          "[parser][persistence]") {
+    auto prog = parse(
+        "pub event RestoreRequested:\n"
+        "    slot: string\n"
+        "    request_id: int\n"
+        "pub extern event RestoreCompleted:\n"
+        "    slot: string\n"
+        "    request_id: int\n"
+        "pub extern event RestoreFailed:\n"
+        "    slot: string\n"
+        "    request_id: int\n"
+        "    code: string\n"
+        "    message: string\n");
+
+    REQUIRE(prog.declarations.size() == 3);
+
+    const auto& requested = std::get<EventNode>(prog.declarations[0]);
+    CHECK(requested.name == "RestoreRequested");
+    CHECK(requested.is_pub);
+    CHECK_FALSE(requested.is_external);
+    REQUIRE(requested.fields.size() == 2);
+    CHECK(requested.fields[0].name == "slot");
+    CHECK(requested.fields[1].name == "request_id");
+
+    const auto& completed = std::get<EventNode>(prog.declarations[1]);
+    CHECK(completed.name == "RestoreCompleted");
+    CHECK(completed.is_external);
+    REQUIRE(completed.fields.size() == 2);
+
+    const auto& failed = std::get<EventNode>(prog.declarations[2]);
+    CHECK(failed.name == "RestoreFailed");
+    CHECK(failed.is_external);
+    REQUIRE(failed.fields.size() == 4);
+    CHECK(failed.fields[2].name == "code");
+    CHECK(failed.fields[3].name == "message");
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

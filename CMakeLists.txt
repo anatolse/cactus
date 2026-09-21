@@ -94,6 +94,7 @@ target_include_directories(cactus_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(cactus_runtime_common STATIC
     src/common/cactus_runtime.cpp
     src/common/persistence_document.cpp
+    src/common/persistence_validation.cpp
 )
 target_include_directories(cactus_runtime_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(cactus_runtime_common PUBLIC cactus_common raylib)
@@ -131,6 +132,7 @@ add_library(cactus_backend_cpp_entt STATIC
     src/backends/cpp-entt/event_emitter.cpp
     src/backends/cpp-entt/render_pass_emitter.cpp
     src/backends/cpp-entt/persistence_emitter.cpp
+    src/backends/cpp-entt/persistence_restore_emitter.cpp
     src/backends/cpp-entt/cpp_entt_codegen.cpp
 )
 target_include_directories(cactus_backend_cpp_entt PUBLIC
@@ -314,6 +316,65 @@ function(cactus_add_headless_behavior_test TARGET_NAME)
     # where add_test was called, i.e. build/tests) — run from the source
     # root so any example needing real file-backed assets resolves them.
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endfunction()
+
+# ── Save/restore round-trip subprocess executables ─────────────────────────
+# Parallel to cactus_add_headless_behavior_test, but for the standalone,
+# hand-written-main() executables that a driving Catch2 test launches twice as
+# two genuinely separate OS processes (save in one invocation, restore in the
+# next) — not a Catch2 binary itself, so no Catch2 link and no add_test.
+function(cactus_add_persistence_roundtrip_subprocess TARGET_NAME)
+    set(oneValueArgs CACTUS_SOURCE BACKEND MAIN_SOURCE)
+    cmake_parse_arguments(CACTUS_ROUNDTRIP
+        ""
+        "${oneValueArgs}"
+        ""
+        ${ARGN}
+    )
+
+    if(NOT CACTUS_ROUNDTRIP_CACTUS_SOURCE)
+        message(FATAL_ERROR "cactus_add_persistence_roundtrip_subprocess(${TARGET_NAME}) requires CACTUS_SOURCE")
+    endif()
+    if(NOT CACTUS_ROUNDTRIP_BACKEND)
+        message(FATAL_ERROR "cactus_add_persistence_roundtrip_subprocess(${TARGET_NAME}) requires BACKEND")
+    endif()
+    if(NOT CACTUS_ROUNDTRIP_MAIN_SOURCE)
+        message(FATAL_ERROR "cactus_add_persistence_roundtrip_subprocess(${TARGET_NAME}) requires MAIN_SOURCE")
+    endif()
+
+    set(cactus_source "${CMAKE_SOURCE_DIR}/${CACTUS_ROUNDTRIP_CACTUS_SOURCE}")
+    set(generated_output "${CACTUS_GENERATED_EXAMPLES_DIR}/${TARGET_NAME}.headless.generated.cpp")
+
+    add_custom_command(
+        OUTPUT "${generated_output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<SHELL_PATH:${CACTUS_GENERATED_EXAMPLES_DIR}>"
+        COMMAND $<TARGET_FILE:cactus>
+                "$<SHELL_PATH:${cactus_source}>"
+                --backend "${CACTUS_ROUNDTRIP_BACKEND}"
+                --output "$<SHELL_PATH:${generated_output}>"
+        DEPENDS cactus "${cactus_source}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Generating headless fixture for ${TARGET_NAME} (${CACTUS_ROUNDTRIP_BACKEND})"
+        VERBATIM
+    )
+    set_source_files_properties("${generated_output}" PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE)
+
+    add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL
+        "${CACTUS_ROUNDTRIP_MAIN_SOURCE}"
+        "${generated_output}"
+    )
+    target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
+    target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        CACTUS_HEADLESS_GENERATED_CPP="${generated_output}"
+    )
+    target_link_libraries(${TARGET_NAME} PRIVATE
+        cactus_runtime_cpp_entt_headless_fake
+        cactus_raylib_fake
+        raylib
+        EnTT::EnTT
+    )
+    set_property(TARGET ${TARGET_NAME} PROPERTY CXX_CLANG_TIDY "")
 endfunction()
 
 # ── Real-GL Render-Pass Visual Test Executables ────────────────────────────

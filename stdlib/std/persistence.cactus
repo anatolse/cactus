@@ -21,3 +21,23 @@ pub extern event SaveFailed:
     request_id: int
     code: string
     message: string
+
+# Restore shares the same request/outcome shape and the same save boundary:
+# an author emits RestoreRequested and later receives exactly one correlated
+# outcome. A successful restore fully replaces the active world; ineligible
+# content (a camera, HUD, or other entity with no persist field) does not
+# survive and is gameplay's job to rebuild in response to RestoreCompleted.
+
+pub event RestoreRequested:
+    slot: string
+    request_id: int
+
+pub extern event RestoreCompleted:
+    slot: string
+    request_id: int
+
+pub extern event RestoreFailed:
+    slot: string
+    request_id: int
+    code: string
+    message: string

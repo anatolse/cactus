@@ -2,6 +2,7 @@
 
 #include "common/cactus_runtime.hpp"
 #include "common/persistence_document.hpp"
+#include "common/persistence_validation.hpp"
 
 #include "backends/cpp-entt/raylib_io.hpp"
 #include "backends/cpp-entt/spatial_query.hpp"
@@ -509,6 +510,12 @@ void set_editor_saved_viewports(std::vector<entt::entity> viewports) noexcept;
 [[nodiscard]] const std::vector<entt::entity>& editor_saved_viewports() noexcept;
 [[nodiscard]] entt::entity editor_rig_entity() noexcept;
 
+// Clears saved viewports and the camera rig entity without invoking the
+// registered exit-impl callback: world replacement has already discarded
+// the registry those handles pointed into, so there is nothing left for
+// that callback to act on.
+void reset_editor_camera_rig_state() noexcept;
+
 entt::entity editor_camera_enter(entt::registry& registry, bool use_3d) noexcept;
 void editor_camera_exit(entt::registry& registry) noexcept;
 void editor_apply_camera_2d(entt::registry& registry, Vector2 view_center, float zoom) noexcept;
@@ -674,6 +681,90 @@ private:
     persistence::DocumentId next_ = 1;
 };
 
+// Resolves document-local identities to the handles restore allocated for
+// them in the staged registry — the read-side counterpart to DocumentIdMap.
+// Populated by an allocate-all-records pass before any reference is decoded,
+// so forward references and cycles among included records need no ordering.
+// An absent reference (persistence::EntityRef::present == false) and a
+// reference naming an id this map never allocated both resolve to entt::null:
+// a stale value on which every total entity_id operation is already a safe
+// no-op, so restore need not fabricate distinct stale handles per excluded
+// original target the way capture's DocumentIdMap does.
+class RestoreIdMap {
+public:
+    void allocate(persistence::DocumentId id, entt::entity entity) { entities_[id] = entity; }
+
+    [[nodiscard]] entt::entity resolve(const persistence::EntityRef& ref) const {
+        if (!ref.present) {
+            return entt::null;
+        }
+        const auto found = entities_.find(ref.id);
+        return found == entities_.end() ? entt::entity{entt::null} : found->second;
+    }
+
+    // Records that an AssetRef/InputRef field named a declaration this build
+    // does not have. Resource resolution can fail deep inside nested struct/
+    // list decode calls, so the failure is accumulated here — checked once
+    // after reconstruction and before publication — rather than threaded
+    // back through every decode function's return type. Only the first
+    // failure is kept: one resource-preparation failure is enough to reject
+    // the whole document.
+    void mark_resource_unresolved(std::string name) {
+        if (!unresolved_resource_.has_value()) {
+            unresolved_resource_ = std::move(name);
+        }
+    }
+
+    [[nodiscard]] bool resource_preparation_failed() const noexcept { return unresolved_resource_.has_value(); }
+    [[nodiscard]] const std::string& unresolved_resource_name() const noexcept { return *unresolved_resource_; }
+
+private:
+    std::unordered_map<persistence::DocumentId, entt::entity> entities_;
+    std::optional<std::string> unresolved_resource_;
+};
+
+// ── Field value decoding ────────────────────────────────────────────────────
+// The inverse of "Field value conversion" above: generated restore calls
+// these to turn a decoded persistence::Value back into the backend's native
+// representation. A caller must already know the field's kind matches (task
+// 4's validation gate is what guarantees that before any of this runs); a
+// mismatched variant access is a programming error, not a runtime condition.
+
+[[nodiscard]] inline bool generated_decode_bool(const persistence::Value& value) { return value.as_bool(); }
+[[nodiscard]] inline int generated_decode_int(const persistence::Value& value) { return value.as_int(); }
+[[nodiscard]] inline float generated_decode_float(const persistence::Value& value) { return value.as_float(); }
+[[nodiscard]] inline std::string generated_decode_string(const persistence::Value& value) {
+    return value.as_string();
+}
+
+[[nodiscard]] inline Vector2 generated_decode_vector2(const persistence::Value& value) {
+    const auto& vector = value.as_vector();
+    return Vector2{.x = vector.components[0], .y = vector.components[1]};
+}
+
+[[nodiscard]] inline Vector3 generated_decode_vector3(const persistence::Value& value) {
+    const auto& vector = value.as_vector();
+    return Vector3{.x = vector.components[0], .y = vector.components[1], .z = vector.components[2]};
+}
+
+[[nodiscard]] inline Quat generated_decode_quat(const persistence::Value& value) {
+    const auto& vector = value.as_vector();
+    return Quat{.x = vector.components[0], .y = vector.components[1], .z = vector.components[2],
+                .w = vector.components[3]};
+}
+
+[[nodiscard]] inline Color generated_decode_color(const persistence::Value& value) {
+    const auto& vector = value.as_vector();
+    return Color{.r = static_cast<unsigned char>(vector.components[0]),
+                 .g = static_cast<unsigned char>(vector.components[1]),
+                 .b = static_cast<unsigned char>(vector.components[2]),
+                 .a = static_cast<unsigned char>(vector.components[3])};
+}
+
+[[nodiscard]] inline entt::entity generated_decode_entity(const persistence::Value& value, const RestoreIdMap& ids) {
+    return ids.resolve(value.as_entity());
+}
+
 // ── Field value conversion ─────────────────────────────────────────────────
 // Program-independent, so generated capture calls these instead of restating
 // each backend representation inline.
@@ -736,15 +827,22 @@ static_assert(sizeof(Color::r) == 1, "PersistenceValueKind::Int color lanes assu
 // activation's boundary, so ordering and "later boundary" deferral are
 // properties of this queue, not of any one caller.
 
-struct PendingSaveRequest {
+// Save and restore share one ordered queue (dsl-stdlib-persistence "Save and
+// restore share a batch"): a save then a restore accepted at the same
+// boundary must process in that emission order, not all-saves-then-all-
+// restores, so the save observes the pre-restore world.
+enum class PersistenceRequestKind : std::uint8_t { Save, Restore };
+
+struct PendingPersistenceRequest {
+    PersistenceRequestKind kind = PersistenceRequestKind::Save;
     std::string slot;
     int request_id = 0;
 
-    friend bool operator==(const PendingSaveRequest&, const PendingSaveRequest&) = default;
+    friend bool operator==(const PendingPersistenceRequest&, const PendingPersistenceRequest&) = default;
 };
 
-// The result of processing one request.
-struct SaveOutcome {
+// The result of processing one request, whether a save or a restore.
+struct PersistenceOutcome {
     bool ok = false;
     std::string slot;
     int request_id = 0;
@@ -755,25 +853,35 @@ struct SaveOutcome {
 // ── Storage adapter contract (dsl-stdlib-persistence decision 7) ───────────
 // Reference for a host writing a custom PersistenceAdapter. An adapter owns
 // encoding and storage; it never receives registry access or spawn
-// capabilities, only a schema descriptor and an owned typed snapshot. Both
-// directions are part of the ABI now, even though only write is reached by
-// this change's own generated request-processing path (world snapshot ->
-// live entities is add-world-snapshot-restore's concern) — a document-level
-// write/read round trip through the same adapter is how this change
-// validates format independence without a restore path yet existing.
+// capabilities, only a schema descriptor and an owned typed snapshot. Read
+// backs restore (generated_execute_restore_request, persistence_restore_
+// emitter.cpp): the adapter only decodes a document, never touches the
+// registry — turning it into live entities is generated_restore_world's job.
 //
 // Error codes: `code`/`message` on PersistenceWriteResult/PersistenceReadResult
 // are free-form strings the adapter chooses, surfaced verbatim to gameplay as
-// `storage.SaveFailed.code`/`.message`. Two codes are runtime-owned and never
-// come from an adapter: "adapter_unavailable" (generated_execute_save_request/
-// read_persistence_document below, when no adapter or that direction's
-// function is registered) and "incompatible_schema" (read_persistence_document,
-// when persistence::schema_accepts rejects the decoded document — see that
+// `storage.SaveFailed.code`/`.message` (or the Restore* equivalents). Two
+// codes are runtime-owned and never come from an adapter: "adapter_unavailable"
+// (generated_execute_save_request/read_persistence_document below, when no
+// adapter or that direction's function is registered) and
+// "incompatible_schema" (read_persistence_document, when
+// persistence::schema_accepts rejects the decoded document — see that
 // function for the exact compatibility policy: exact revision+fingerprint
-// match, no partial or best-effort compatibility). An adapter reports
-// everything else about its own encoding/storage failure through its own
-// chosen code; "io_failure" is the convention the example file adapter below
-// uses and a reasonable default for a new adapter's own I/O errors.
+// match, no partial or best-effort compatibility). Restore adds three more
+// runtime-owned codes of its own, all from generated_restore_world: "invalid_
+// data" (cactus::persistence::validate_document reported a structural problem
+// — unknown archetype/trait/field, a dangling or duplicate identity, a
+// hierarchy cycle, or a configured size/depth limit), "unsupported_value"
+// (validate_document's problems were all value-kind/content problems, e.g. a
+// field holds the wrong kind or an out-of-range value, with the document's
+// own structure otherwise sound), and "resource_preparation_failure" (the
+// document validated and reconstructed, but an AssetRef/InputRef named a
+// declaration this build does not have — checked once after allocation,
+// before publication, so a preparation failure never mutates the live
+// world). An adapter reports everything else about its
+// own encoding/storage failure through its own chosen code; "io_failure" is
+// the convention the example file adapter below uses and a reasonable
+// default for a new adapter's own I/O errors.
 //
 // Numeric representation limits: the schema and snapshot report the backend's
 // actual storage width (see the ABI static_asserts above this section, and
@@ -806,6 +914,15 @@ struct PersistenceReadResult {
     std::string message;             // populated when !ok
 };
 
+// The result of generated_restore_world (persistence_restore_emitter.cpp):
+// ok on a completed reconstruction, otherwise a standard restore error code
+// (see cactus_dsl_spec.md's world-persistence restore section) and message.
+struct RestoreOutcome {
+    bool ok = false;
+    std::string code;     // populated when !ok
+    std::string message;  // populated when !ok
+};
+
 using PersistenceWriteFn = std::function<PersistenceWriteResult(
     const std::string& slot, const persistence::SchemaDescriptor& schema, const persistence::Snapshot& snapshot)>;
 using PersistenceReadFn =
@@ -820,9 +937,9 @@ struct PersistenceAdapter {
 };
 
 struct PersistenceRuntimeState {
-    std::vector<PendingSaveRequest> pending;  // frozen into a batch at the boundary
-    PersistenceAdapter adapter;               // unset: every request fails as adapter_unavailable
-    bool processing_batch = false;            // guards against reentrant boundary processing
+    std::vector<PendingPersistenceRequest> pending;  // frozen into a batch at the boundary
+    PersistenceAdapter adapter;                      // unset: every request fails as adapter_unavailable
+    bool processing_batch = false;                   // guards against reentrant boundary processing
 };
 
 [[nodiscard]] inline PersistenceRuntimeState& generated_persistence_state() {
@@ -865,36 +982,41 @@ inline void clear_persistence_adapter() {
 }
 
 inline void generated_queue_save_request(std::string slot, int request_id) {
-    generated_persistence_state().pending.push_back(
-        PendingSaveRequest{.slot = std::move(slot), .request_id = request_id});
+    generated_persistence_state().pending.push_back(PendingPersistenceRequest{
+        .kind = PersistenceRequestKind::Save, .slot = std::move(slot), .request_id = request_id});
+}
+
+inline void generated_queue_restore_request(std::string slot, int request_id) {
+    generated_persistence_state().pending.push_back(PendingPersistenceRequest{
+        .kind = PersistenceRequestKind::Restore, .slot = std::move(slot), .request_id = request_id});
 }
 
 // Extracts the current queue as one ordered batch and clears it, so requests
 // queued while this batch's outcomes are being delivered join a later batch
 // instead of the one currently frozen.
-[[nodiscard]] inline std::vector<PendingSaveRequest> generated_freeze_save_request_batch() {
-    std::vector<PendingSaveRequest> batch;
+[[nodiscard]] inline std::vector<PendingPersistenceRequest> generated_freeze_persistence_request_batch() {
+    std::vector<PendingPersistenceRequest> batch;
     std::swap(batch, generated_persistence_state().pending);
     return batch;
 }
 
-[[nodiscard]] inline SaveOutcome generated_execute_save_request(const std::string& slot,
-                                                                int request_id,
-                                                                const persistence::SchemaDescriptor& schema,
-                                                                const persistence::Snapshot& snapshot) {
+[[nodiscard]] inline PersistenceOutcome generated_execute_save_request(const std::string& slot,
+                                                                       int request_id,
+                                                                       const persistence::SchemaDescriptor& schema,
+                                                                       const persistence::Snapshot& snapshot) {
     const auto& write = generated_persistence_state().adapter.write;
     if (!write) {
-        return SaveOutcome{.ok         = false,
-                           .slot       = slot,
-                           .request_id = request_id,
-                           .code       = "adapter_unavailable",
-                           .message    = "no persistence adapter is registered"};
+        return PersistenceOutcome{.ok         = false,
+                                  .slot       = slot,
+                                  .request_id = request_id,
+                                  .code       = "adapter_unavailable",
+                                  .message    = "no persistence adapter is registered"};
     }
     const auto result = write(slot, schema, snapshot);
     if (result.ok) {
-        return SaveOutcome{.ok = true, .slot = slot, .request_id = request_id};
+        return PersistenceOutcome{.ok = true, .slot = slot, .request_id = request_id};
     }
-    return SaveOutcome{
+    return PersistenceOutcome{
         .ok = false, .slot = slot, .request_id = request_id, .code = result.code, .message = result.message};
 }
 
@@ -1261,6 +1383,12 @@ void destroy_entity_recursive(
     entt::registry& registry,
     entt::entity entity,
     const std::function<void(entt::entity, const std::function<void(entt::entity)>&)>& visit_children);
+
+// Clears the cascade re-entry guard destroy_entity_recursive keeps across
+// calls. Normally empty again by the time any top-level call returns; this
+// exists so world replacement can't leave it holding handles into a
+// replaced registry if an exception ever unwound through an active cascade.
+void reset_pending_destruction_state() noexcept;
 
 // ── Sweep-and-prune broad phase (spatial-broadphase-runtime capability) ────────
 // Runtime-owned, program-independent 2D/3D broad phase: proxies are plain

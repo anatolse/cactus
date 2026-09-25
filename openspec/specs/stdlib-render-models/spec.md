@@ -64,10 +64,10 @@ The `std.render.models` module SHALL provide a `pub trait ModelAnimator` with fi
 - **THEN** the model is drawn at its bind pose
 
 ### Requirement: ModelAnimation advances animation time
-The `std.render.models` module SHALL declare `extern rule ModelAnimation` filtered on `ModelRenderer` and `ModelAnimator`, recognized by the backend as an update-phase rule. Each update tick, for entities with `playing = true`, the backend SHALL advance `time` by `dt * speed` and wrap it into `[0, duration)` of the active clip, where `duration = keyframeCount / GLTF sampling rate` of that clip. When `playing = false`, `time` SHALL not be modified, freezing the pose. Authored writes to `clip`, `speed`, and `time` SHALL take effect the same frame.
+The `std.render.models` module SHALL declare `extern rule ModelAnimation` filtered on `ModelRenderer` and `ModelAnimator`, recognized by the backend as an update-phase rule. For entities without ModelPlayback, each update tick, for entities with `playing = true`, the backend SHALL advance `time` by `dt * speed` and wrap it into `[0, duration)` of the active clip, where `duration = keyframeCount / GLTF sampling rate` of that clip. When `playing = false`, `time` SHALL not be modified, freezing the pose. Authored writes to `clip`, `speed`, and `time` SHALL take effect the same frame. Entities with ModelPlayback SHALL instead follow the opt-in playback, cue-crossing and bounded-advancement requirements; Once playback SHALL clamp at its endpoint rather than wrap.
 
 #### Scenario: Playing animator advances and loops
-- **WHEN** an entity's `ModelAnimator` has `playing = true` and `time` reaches the end of the active clip
+- **WHEN** an entity without ModelPlayback has `ModelAnimator.playing = true` and `time` reaches the end of the active clip
 - **THEN** `time` wraps around and playback continues from the start of the clip
 
 #### Scenario: Paused animator freezes pose
@@ -75,8 +75,65 @@ The `std.render.models` module SHALL declare `extern rule ModelAnimation` filter
 - **THEN** `time` stops advancing and the rendered pose remains at the frame corresponding to the frozen `time`
 
 #### Scenario: Negative or scaled speed respected
-- **WHEN** `ModelAnimator.speed` is `2.0`
+- **WHEN** an entity without ModelPlayback has `ModelAnimator.speed` set to `2.0`
 - **THEN** `time` advances at twice real time
+
+### Requirement: Opt-in model playback control
+std.render.models SHALL provide ModelPlayback with mode: PlaybackMode = Loop and revision: int = 0, where PlaybackMode contains Loop and Once. Animators without it SHALL preserve their existing looping semantics. With Once, positive speed SHALL clamp at clip duration, negative speed at zero, stop playing and emit one targeted AnimationFinished(clip: int). Zero speed and paused playback SHALL emit nothing. Changing revision SHALL explicitly restart at the authored ModelAnimator.time and rearm completion; changing clip SHALL interrupt the previous clip and begin the new clip at authored time without synthesizing old completion.
+
+#### Scenario: One-shot completion
+- **WHEN** a forward Once animator crosses its end
+- **THEN** time clamps at duration, playing becomes false and one completion is queued
+
+#### Scenario: No duplicate completion
+- **WHEN** later updates observe the completed animator
+- **THEN** no second completion is emitted until restarted
+
+#### Scenario: Reverse once
+- **WHEN** a Once animator begins at duration and advances with negative speed through zero
+- **THEN** time clamps to zero and one completion is emitted
+
+#### Scenario: Legacy loop
+- **WHEN** ModelPlayback is absent
+- **THEN** existing looping and seek behavior remains unchanged
+
+### Requirement: Authored animation cues
+The model module SHALL provide AnimationCue with clip: int, time: float and name: string on direct child entities of a model owner. Valid cue times SHALL lie in (0, clip duration); invalid times or clip indices SHALL be ignored with a diagnostic once per cue revision. A cue revision SHALL be the tuple of owner, clip, time and name. The playback producer SHALL emit AnimationMarker(clip: int, name: string) to the owner for every cue crossed by playback, in traversal order with child creation order breaking equal-time ties. Forward intervals SHALL be (old, new]; reverse intervals SHALL be [new, old). Loops SHALL split at clip boundaries without double counting.
+
+#### Scenario: Multiple cues crossed
+- **WHEN** one update crosses two different cue times
+- **THEN** both markers arrive in crossing order
+
+#### Scenario: Loop crossing
+- **WHEN** looping playback crosses an end and then a cue in the next traversal
+- **THEN** each crossed cue is emitted exactly once per traversal
+
+#### Scenario: Shared model
+- **WHEN** two owners share an asset but have different times and cue children
+- **THEN** each receives only its own crossed markers
+
+#### Scenario: Explicit seek
+- **WHEN** authored code changes time without advancement across intermediate cues
+- **THEN** skipped cues are not replayed
+
+### Requirement: Animation event bounds and total failure behavior
+Lifecycle events SHALL be produced through the animation handler's declared graph contract after time advancement, with crossed markers ordered before completion. For opt-in playback, each update SHALL advance by at most 64 clip durations in either direction; excess requested advancement SHALL be discarded with a diagnostic, bounding event production by authored cue count. Invalid assets, invalid clips, non-finite playback inputs and non-positive durations SHALL produce no lifecycle events and follow the existing diagnostic/bind-pose path. Destroyed recipients SHALL follow total targeted-event semantics.
+
+#### Scenario: Large loop advance
+- **WHEN** an opt-in update requests more than 64 durations
+- **THEN** it advances only 64 durations, emits markers only for that advancement and records the cap diagnostic
+
+#### Scenario: Interruption
+- **WHEN** clip or revision changes before the old clip finishes
+- **THEN** no old completion is synthesized and future markers use the new traversal
+
+#### Scenario: Invalid clip
+- **WHEN** the active clip cannot be resolved
+- **THEN** no marker or completion is fabricated
+
+#### Scenario: Marker before finish
+- **WHEN** a Once update crosses a cue and then the clip end
+- **THEN** the marker is queued before completion for that owner
 
 ### Requirement: Animated models are rendered with GPU skinning
 For entities with `ModelRenderer` and `ModelAnimator` whose model has a skeleton (`boneCount > 0`), the backend SHALL compute bone matrices for the animator's `(clip, time)` and draw all submeshes with a GPU skinning shader that transforms both vertex positions and normals by the bone matrices, preserving the existing lighting model. Skinning SHALL NOT mutate or re-upload vertex buffers (no CPU skinning path). Models without a skeleton SHALL continue to render through the existing non-skinned shader path.

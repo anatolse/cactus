@@ -42,12 +42,14 @@ The graph SHALL connect an event producer to every consumer of that event regard
 - **THEN** one static event-flow edge connects the handlers and runtime routing selects the recipient
 
 ### Requirement: Commit-synthesized and scheduler-boundary producer edges
-Beyond handler-to-handler `EventFlowEdge`s, the execution graph SHALL represent two further event-producer kinds so every consumer node's trigger resolves to a declared producer:
+Every execution-graph event producer SHALL carry a typed producer kind rather than an implied handler identity. Beyond handler-to-handler production, the graph SHALL represent two further event-producer kinds so every consumer node's trigger resolves to a declared producer:
 
 - **Commit-synthesized producer**: an event produced by the activation commit step itself as a direct consequence of applying a buffered structural command (`std.core.spawn` for an applied `Spawn`; `std.core.destroy` for an applied `Destroy`). The producer is the commit step, not any `HandlerIdentity`.
 - **Scheduler-boundary producer**: an event injected exactly once by the scheduler at a fixed program boundary rather than per real-frame or per-command (`std.core.load` at the boot boundary, after initial entities exist and before the first frame occurrence; `std.core.unload` at the teardown boundary, after the last frame occurrence and before shutdown).
 
-These are distinct from the existing host-injected extern-event mechanism (`pub extern event`, e.g. `frame`), which is injected by the embedding application rather than synthesized by the graph's own commit/scheduler machinery.
+Producer kind SHALL be determined only from resolved canonical identities and contract metadata the graph already carries — the consumer's canonical trigger identity and the structural commands recorded on handler contracts. Rule names, import aliases, and source spelling SHALL NOT determine producer kind.
+
+Host-injected external events (`pub extern event`, e.g. `frame`) originate outside the graph's own commit and scheduler machinery. They remain distinct in origin from both kinds above and are represented as their own producer kind rather than folded into either.
 
 #### Scenario: Commit-synthesized edge for spawn
 - **WHEN** a rule declares `on spawn` and no handler in the program declares `emits: spawn`
@@ -61,9 +63,39 @@ These are distinct from the existing host-injected extern-event mechanism (`pub 
 - **WHEN** a handler declares `emits: EntityMoved` and another handler consumes `EntityMoved`
 - **THEN** the graph continues to record this as the existing handler-to-handler `EventFlowEdge`, unaffected by the new producer kinds
 
+#### Scenario: Producer kind is recoverable without re-deriving it
+- **WHEN** a consumer node's incoming producer edges are inspected
+- **THEN** each edge reports its producer kind directly, so a consumer activated by the commit step is distinguishable from a consumer activated by a handler emitting the same event
+
 #### Scenario: A consumed trigger with no producer of any kind is a distinguishable graph state
 - **WHEN** a handler's trigger is neither `frame`-like extern, commit-synthesized, scheduler-boundary, nor the target of any handler's `emits`
 - **THEN** the graph can identify that the trigger has zero producer edges of any kind (this requirement defines the representation only; a validation pass that rejects this state is not part of this change)
+
+### Requirement: Host external-event source producers
+The graph SHALL represent a host external-event source producer for every consumed event declared `pub extern`, attributing the event's injection to the embedding application rather than to any handler, commit step, or scheduler boundary. An event that is not declared external SHALL NOT receive a host external-event source producer.
+
+#### Scenario: Extern event consumer resolves to a host source
+- **WHEN** a rule declares `on frame` and `frame` is declared `pub extern event`
+- **THEN** the graph records a producer edge into that handler's node attributed to a host external source, distinct from a handler-emitted edge
+
+#### Scenario: Non-extern event gets no host source
+- **WHEN** a consumed event is declared without `extern`
+- **THEN** the graph attributes no host external-event source producer to it
+
+#### Scenario: External and handler production coexist
+- **WHEN** an event is declared `pub extern` and a handler also declares `emits:` for it
+- **THEN** the graph records both the host external-source producer edge and the handler-emitted edge into each consumer
+
+### Requirement: Producer records do not alter scheduling
+Event-producer records SHALL be additive graph data. Introducing or reading them SHALL NOT change per-activation schedule dependencies, stable topological order, dependency levels, phase barriers, or any reported diagnostic. Producer relations describe event activation and MAY participate in cycles; they SHALL NOT participate in schedule-cycle validation.
+
+#### Scenario: Schedule is unchanged by producer representation
+- **WHEN** the same program's execution graph is compared with and without producer records present
+- **THEN** its schedule edges, stable topological order, and dependency levels are identical
+
+#### Scenario: Producer cycles remain legal
+- **WHEN** a commit-synthesized `spawn` consumer emits an event whose consumer queues a further `Spawn` command
+- **THEN** the resulting producer and event-flow cycle is legal and no schedule cycle is reported
 
 ### Requirement: Contract conflict edges
 Handlers eligible in the same activation SHALL be serialized when one writes a trait the other reads or writes, or when they share an observable effect domain. Filters alone SHALL NOT create conflict edges.

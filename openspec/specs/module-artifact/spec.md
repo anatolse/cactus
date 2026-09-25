@@ -121,3 +121,18 @@ The module artifact binary format's serialized system-dependency section is rena
 #### Scenario: Rule dependency graph round-trips
 - **WHEN** a module containing rule `after:` ordering edges is saved to `.cmod` and reloaded
 - **THEN** the loaded program's rule dependency graph is identical to the original
+
+### Requirement: Event producer records in `.cmod` binary format
+The module artifact binary format SHALL serialize and deserialize typed event-producer records, preserving each producer's kind and the canonical identity of the event and consumer it relates, without collapsing non-handler producers into handler-emitted edges or discarding them. The `CURRENT_VERSION` constant SHALL be incremented to 13 to reflect this format change. Artifacts produced with version 12 or earlier SHALL be rejected when loaded.
+
+#### Scenario: Producer kinds round-trip
+- **WHEN** a program whose graph contains handler-emitted, host external-source, scheduler-boundary, and commit-synthesized producers is saved to a `.cmod` artifact and loaded back
+- **THEN** each producer edge returns with its kind, canonical event identity, and consumer identity intact
+
+#### Scenario: Old artifact version is rejected
+- **WHEN** a `.cmod` file with version byte `12` is loaded after this change
+- **THEN** the artifact loader reports an incompatible artifact version error and returns `nullopt`
+
+#### Scenario: Linked program preserves producer kinds
+- **WHEN** several module artifacts carrying producer records are linked into one program
+- **THEN** the merged execution graph reports the same producer kinds as single-module analysis of equivalent sources

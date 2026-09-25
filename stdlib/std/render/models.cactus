@@ -47,7 +47,8 @@ pub trait ModelAnimator:
     var time: float = 0.0
 
 # Advances `time` by dt * speed each update tick while `playing`, wrapping by
-# the active clip's duration so playback loops.
+# the active clip's duration so playback loops. Entities that add ModelPlayback
+# below opt into one-shot playback and lifecycle events instead.
 extern rule ModelAnimation:
     filter:
         ModelRenderer
@@ -56,10 +57,78 @@ extern rule ModelAnimation:
     on tick:
         reads:
             ModelRenderer
+            ModelPlayback
+            AnimationCue
         writes:
             ModelAnimator
+        emits:
+            AnimationMarker
+            AnimationFinished
         effects:
             graphics
+
+# ── Opt-in one-shot playback and lifecycle events ───────────────────────────────
+# Optional companion to ModelAnimator. Adding ModelPlayback does not change
+# ModelAnimator's default looping behavior by itself — Loop is the default
+# mode, matching what every ModelAnimator already does without ModelPlayback.
+#
+# AnimationMarker/AnimationFinished are presentation cues, not an authoritative
+# clock: they tell gameplay code when to react (play a footstep sound, clear an
+# "attacking" flag) to what the model is currently showing on screen. Combat or
+# other simulation logic that needs precise hit timing should keep its own
+# timer rather than gate damage on these events, since dropped frames, a large
+# dt, or the 64-duration cap below can shift exactly when a marker lands.
+#
+# Each update advances at most 64 clip durations regardless of dt or speed —
+# a guard against an unbounded marker/completion burst from an extreme value
+# of either. Requested advancement beyond that is silently discarded (not
+# queued for a later frame) and recorded as a diagnostic; ordinary gameplay
+# speeds never approach this bound.
+
+pub enum PlaybackMode:
+    Loop
+    # Clamps at the clip's endpoint (duration for forward speed, 0 for
+    # negative speed) instead of wrapping, stops playing, and emits one
+    # targeted AnimationFinished.
+    Once
+
+# mode:     Loop preserves ModelAnimator's default wrap-and-continue behavior;
+#           Once clamps at the endpoint (duration for positive speed, 0 for
+#           negative — reverse playback works the same as forward, just
+#           walking the clip and its cues from the other end) and completes.
+# revision: bump to explicitly restart at the current ModelAnimator.time and
+#           rearm completion — the only way to replay a finished Once clip.
+#           Writing ModelAnimator.time directly without bumping revision is a
+#           seek, not a restart: it moves the traversal baseline to the new
+#           value without replaying cues in between and without rearming a
+#           completed Once clip.
+pub trait ModelPlayback:
+    var mode: PlaybackMode = PlaybackMode.Loop
+    var revision: int = 0
+
+# A marker authored as a direct child entity of a ModelPlayback owner. Crossing
+# `time` while playing emits AnimationMarker(clip, name) to the owner; `time`
+# must lie strictly inside (0, clip duration) or the cue is ignored with a
+# diagnostic. Multiple cues, and multiple owners sharing one model asset, are
+# independent.
+pub trait AnimationCue:
+    var clip: int
+    var time: float
+    var name: string
+
+# Targeted at the ModelPlayback owner whose cue was crossed, in traversal order
+# (creation order breaks equal-time ties). Fires only for entities with
+# ModelPlayback; a plain ModelAnimator never produces this.
+pub event AnimationMarker:
+    clip: int
+    name: string
+
+# Targeted at the ModelPlayback owner whose Once clip reached its endpoint.
+# Fires exactly once per completion — not on every subsequent frame spent
+# parked at the endpoint, and not when interrupted by a clip or revision
+# change before finishing.
+pub event AnimationFinished:
+    clip: int
 
 # Number of animation clips in the model file (0 if the handle is unresolvable).
 # Triggers a lazy model load, so it works before the model's first draw.

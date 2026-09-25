@@ -1,0 +1,134 @@
+module model_animation_events
+
+# Demonstrates opt-in one-shot/looping model playback with authored cue
+# markers and a completion event (add-model-animation-lifecycle-events).
+# Entities without ModelPlayback keep looping silently, as ModelAnimator
+# always has — this module only covers the opt-in companion surface.
+
+use std.transform.volume as tv
+use std.render.models as models
+use std.camera.volume as cam3d
+use std.camera.viewport as vp
+
+asset SharedModel: model = "model-renderer/art/robot.glb"
+
+# Records what RecordPlaybackEvents observed for one owner, so a headless
+# test can assert on plain fields instead of re-deriving event delivery.
+# finished_count (not a bool) so a restarted owner can prove completion fired
+# again rather than just staying latched from the first time.
+trait PlaybackLog:
+    var marker_count: int = 0
+    var last_marker_name: string = ""
+    var last_marker_clip: int = -1
+    var finished_count: int = 0
+    var finished_clip: int = -1
+
+# clip 3 is Robot_Jump (~0.708s); Once stops at the end and never replays.
+entity Jumper:
+    tv.WorldTransform:
+        position = vec3(-2.0, 0.0, 0.0)
+    models.ModelRenderer:
+        model = SharedModel
+    models.ModelAnimator:
+        clip = 3
+        speed = 2.0
+    models.ModelPlayback:
+        mode = models.PlaybackMode.Once
+    PlaybackLog
+    children:
+        entity LiftoffCue:
+            models.AnimationCue:
+                clip = 3
+                time = 0.1
+                name = "liftoff"
+
+# clip 7 is Robot_Sitting (~0.417s); Loop keeps re-crossing its cue forever.
+# Shares SharedModel with Jumper but animates a different clip at a different
+# rate, so each owner's markers must stay independent of the other's.
+entity Sitter:
+    tv.WorldTransform:
+        position = vec3(2.0, 0.0, 0.0)
+    models.ModelRenderer:
+        model = SharedModel
+    models.ModelAnimator:
+        clip = 7
+        speed = 1.0
+    models.ModelPlayback:
+        mode = models.PlaybackMode.Loop
+    PlaybackLog
+    children:
+        entity LoopMarkCue:
+            models.AnimationCue:
+                clip = 7
+                time = 0.1
+                name = "loop-mark"
+
+rule RecordPlaybackEvents:
+    filter:
+        PlaybackLog as log
+
+    on models.AnimationMarker as marker:
+        log.marker_count += 1
+        log.last_marker_name = marker.name
+        log.last_marker_clip = marker.clip
+
+    on models.AnimationFinished as finished_event:
+        log.finished_count += 1
+        log.finished_clip = finished_event.clip
+
+# Drives Restarter through seek, clip interruption, and explicit restart at
+# fixed frame counts (a test-only stand-in for whatever gameplay logic would
+# normally trigger these authored writes).
+trait RestartControl:
+    var frame: int = 0
+
+# clip 3 (Robot_Jump) again, but this owner is driven through the full
+# seek/interruption/restart lifecycle rather than left to play out untouched.
+entity Restarter:
+    tv.WorldTransform:
+        position = vec3(0.0, 0.0, 0.0)
+    models.ModelRenderer:
+        model = SharedModel
+    models.ModelAnimator:
+        clip = 3
+        speed = 1.0
+    models.ModelPlayback:
+        mode = models.PlaybackMode.Once
+    PlaybackLog
+    RestartControl
+    children:
+        entity EarlyCue:
+            models.AnimationCue:
+                clip = 3
+                time = 0.05
+                name = "early"
+
+rule DriveRestartScenario:
+    filter:
+        RestartControl as ctrl
+        models.ModelPlayback as playback
+        models.ModelAnimator as anim
+
+    on tick:
+        ctrl.frame += 1
+        if ctrl.frame == 30:
+            # Explicit seek: authored time moves without bumping revision, so
+            # the already-crossed cue at 0.05 must not replay.
+            anim.time = 0.3
+        if ctrl.frame == 40:
+            # Interruption: switch clip mid-flight. clip 3 never reached its
+            # duration, so no completion is synthesized for it.
+            anim.clip = 7
+            anim.time = 0.0
+        if ctrl.frame == 80:
+            # Explicit restart: only a revision bump (plus resuming playback,
+            # since completion already stopped it) rearms completion.
+            playback.revision += 1
+            anim.time = 0.0
+            anim.playing = true
+
+entity MainCamera:
+    tv.WorldTransform:
+        position = vec3(0.0, 1.0, 6.0)
+    cam3d.Camera
+    vp.Viewport

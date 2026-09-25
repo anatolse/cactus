@@ -14,6 +14,7 @@
 #include <numbers>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <raymath.h>
 #include <rlgl.h>
 #include <string>
@@ -1133,6 +1134,12 @@ Model* ensure_model_resource(const int runtime_id) {
 
 // Lazily load clip data beside the model (dsl-model-animation D4). The load is
 // attempted once; a missing file or clip-less model leaves the count at zero.
+// LoadModelAnimations only parses the file's animation channels — no GPU
+// upload, no window — so it runs the same way under CACTUS_RAYLIB_FAKE as it
+// does for a real build (proved headless-without-a-window already by
+// model_animation_duration's own real-raylib unit tests); the fake model's
+// placeholder mesh (see fake_model_resource) is a separate, render-only
+// concern this doesn't touch.
 void ensure_model_animations(ModelResourceEntry& entry) {
     if (entry.animations_load_attempted) {
         return;
@@ -1142,18 +1149,10 @@ void ensure_model_animations(ModelResourceEntry& entry) {
     if (entry.path.empty() || !FileExists(resolved_path.c_str())) {
         return;
     }
-#ifdef CACTUS_RAYLIB_FAKE
-    // Fake models (see fake_model_resource) never carry animation clips —
-    // resolve_animation_clip already degrades gracefully (bind pose, one
-    // diagnostic) when animation_count stays 0, and clip playback isn't
-    // part of what headless behavioral tests assert.
-    return;
-#else
     entry.animations = LoadModelAnimations(resolved_path.c_str(), &entry.animation_count);
     if (entry.animations == nullptr) {
         entry.animation_count = 0;
     }
-#endif
 }
 
 // Resolve an animated submission's clip to animation data. Out-of-range or
@@ -1189,9 +1188,20 @@ void upload_skinned_pose(Model& model, const ModelAnimation* clip_anim, const fl
         // but time is writable and negative frames would index out of bounds
         // inside UpdateModelAnimation.
         const auto frame_count = static_cast<float>(clip_anim->keyframeCount);
-        float frame            = std::fmod(time * kGltfKeyframesPerSecond, frame_count);
-        if (frame < 0.0F) {
-            frame += frame_count;
+        const float raw_frame  = time * kGltfKeyframesPerSecond;
+        float frame            = 0.0F;
+        if (raw_frame >= frame_count && raw_frame < frame_count + 1.0F) {
+            // ModelPlayback's Once mode parks `time` exactly at duration on
+            // completion rather than wrapping it (add-model-animation-
+            // lifecycle-events); UpdateModelAnimation treats a frame of
+            // exactly frame_count as frame 0 (raylib wraps via modulo), which
+            // would render the clip's start pose instead of its end pose.
+            frame = frame_count - 1.0F;
+        } else {
+            frame = std::fmod(raw_frame, frame_count);
+            if (frame < 0.0F) {
+                frame += frame_count;
+            }
         }
         UpdateModelAnimation(model, *clip_anim, frame);
     } else {
@@ -1823,6 +1833,191 @@ float model_animation_duration(const AssetHandle model, const int clip) noexcept
         return 0.0F;
     }
     return static_cast<float>(entry->animations[clip].keyframeCount) / kGltfKeyframesPerSecond;
+}
+
+namespace {
+
+// The inclusive endpoint of a segment (segment_end below) may be the result
+// of subtracting a partial remaining delta, which accumulates ordinary float
+// rounding error — e.g. 0.3F - (1.0F - 0.9F) lands a few ULPs short of the
+// mathematical 0.2F. A cue authored at exactly that value must still be seen
+// as crossed, so only this bound tolerates a tiny slop, far below any spacing
+// a game would plausibly author between two distinct cues. The exclusive
+// endpoint (segment_start) is never widened: across consecutive per-frame
+// calls it is always the exact value the previous call returned, and
+// widening it would re-admit a cue that call already correctly crossed.
+constexpr float kPlaybackEpsilon = 1e-5F;
+
+// Forward: names crossed in (segment_start, segment_end], time-ascending.
+// Reverse: names crossed in [segment_end, segment_start), time-descending.
+// `cues` is already filtered to the active clip and sorted by time.
+void append_crossed_cues(const bool forward,
+                         const float segment_start,
+                         const float segment_end,
+                         const std::span<const AnimationCueEntry> cues,
+                         std::vector<std::string>& out) {
+    if (forward) {
+        for (const auto& cue : cues) {
+            if (cue.time > segment_start && cue.time <= segment_end + kPlaybackEpsilon) {
+                out.push_back(cue.name);
+            }
+        }
+        return;
+    }
+    for (const auto& cue : cues | std::views::reverse) {
+        if (cue.time >= segment_end - kPlaybackEpsilon && cue.time < segment_start) {
+            out.push_back(cue.name);
+        }
+    }
+}
+
+PlaybackAdvanceResult advance_once(const float old_time,
+                                   const float delta,
+                                   const float duration,
+                                   const std::span<const AnimationCueEntry> cues) {
+    const bool forward = delta > 0.0F;
+    float new_time      = old_time + delta;
+    bool hit_end         = false;
+    if (forward && new_time >= duration) {
+        new_time = duration;
+        // old_time != duration (not just < duration): an out-of-range seek
+        // past the endpoint must still complete exactly once, not stall
+        // forever because it was never "less than" duration to begin with.
+        // Idempotency against repeated calls once already parked at the
+        // endpoint still holds, since a resting old_time == duration exactly.
+        hit_end = old_time != duration;
+    } else if (!forward && new_time <= 0.0F) {
+        new_time = 0.0F;
+        hit_end  = old_time != 0.0F;
+    }
+    PlaybackAdvanceResult result;
+    append_crossed_cues(forward, old_time, new_time, cues, result.crossed_cue_names);
+    result.new_time  = new_time;
+    result.completed = hit_end;
+    return result;
+}
+
+// Normalizes into [0, duration) defensively (mirrors the legacy fmod wrap),
+// then walks one clip-boundary segment at a time — "split wrapping intervals"
+// — so each traversal's cues emit in crossing order. Each segment snaps
+// exactly to 0/duration when it consumes the full room to the boundary,
+// rather than trusting current +/- step to land there bit-exact.
+PlaybackAdvanceResult advance_loop(const float old_time,
+                                   const float delta,
+                                   const float duration,
+                                   const std::span<const AnimationCueEntry> cues) {
+    const bool forward = delta > 0.0F;
+    float current        = std::fmod(old_time, duration);
+    if (current < 0.0F) {
+        current += duration;
+    }
+
+    PlaybackAdvanceResult result;
+    float remaining = delta;
+    int guard        = 0;
+    while (remaining != 0.0F && guard <= kMaxPlaybackDurationsPerUpdate) {
+        ++guard;
+        if (forward) {
+            const float room = duration - current;
+            if (room <= 0.0F) {
+                current -= duration;
+                continue;
+            }
+            if (remaining >= room) {
+                append_crossed_cues(true, current, duration, cues, result.crossed_cue_names);
+                remaining -= room;
+                current = 0.0F;
+            } else {
+                const float next = current + remaining;
+                append_crossed_cues(true, current, next, cues, result.crossed_cue_names);
+                current   = next;
+                remaining = 0.0F;
+            }
+        } else {
+            const float room = current;
+            if (room <= 0.0F) {
+                current += duration;
+                continue;
+            }
+            const float need = -remaining;
+            if (need >= room) {
+                append_crossed_cues(false, current, 0.0F, cues, result.crossed_cue_names);
+                remaining += room;
+                // 0.0F, not duration: reaching the start normalizes into the
+                // canonical [0, duration) the same way the forward branch's
+                // matching case snaps to 0.0F, not duration, on wrap. If
+                // there's leftover budget, the next iteration's room <= 0.0F
+                // guard above performs the actual wrap to duration to keep
+                // walking backward.
+                current = 0.0F;
+            } else {
+                const float next = current - need;
+                append_crossed_cues(false, current, next, cues, result.crossed_cue_names);
+                current   = next;
+                remaining = 0.0F;
+            }
+        }
+    }
+    result.new_time = current;
+    return result;
+}
+
+}  // namespace
+
+PlaybackAdvanceResult advance_model_playback(const float old_time,
+                                             const float requested_delta,
+                                             const float duration,
+                                             const bool once,
+                                             const std::span<const AnimationCueEntry> cues) noexcept {
+    if (!(duration > 0.0F) || !std::isfinite(old_time) || !std::isfinite(requested_delta) || requested_delta == 0.0F) {
+        PlaybackAdvanceResult result;
+        result.new_time = old_time;
+        return result;
+    }
+
+    float delta                     = requested_delta;
+    const float max_delta_magnitude = static_cast<float>(kMaxPlaybackDurationsPerUpdate) * duration;
+    bool capped                     = false;
+    if (delta > max_delta_magnitude) {
+        delta  = max_delta_magnitude;
+        capped = true;
+    } else if (delta < -max_delta_magnitude) {
+        delta  = -max_delta_magnitude;
+        capped = true;
+    }
+
+    PlaybackAdvanceResult result =
+        once ? advance_once(old_time, delta, duration, cues) : advance_loop(old_time, delta, duration, cues);
+    result.capped = capped;
+    return result;
+}
+
+PlaybackBaseline resolve_playback_baseline(const int clip,
+                                           const int revision,
+                                           const float authored_time,
+                                           const ModelPlaybackBookkeeping& prior) noexcept {
+    const bool interrupted = clip != prior.prior_clip || revision != prior.prior_revision;
+    if (interrupted) {
+        return PlaybackBaseline{.time = authored_time, .completed = false};
+    }
+    if (authored_time != prior.prior_time) {
+        // Explicit seek: adopt the authored value; skipped cues are not replayed.
+        return PlaybackBaseline{.time = authored_time, .completed = prior.completed};
+    }
+    return PlaybackBaseline{.time = prior.prior_time, .completed = prior.completed};
+}
+
+void diagnose_invalid_animation_cue(const entt::entity owner, const int clip, const float time,
+                                    const std::string& name) noexcept {
+    render_debug_state_storage().model_diagnostics.push_back(
+        "invalid animation cue on entity " + std::to_string(entt::to_integral(owner)) + ": clip " +
+        std::to_string(clip) + " time " + std::to_string(time) + " name '" + name + "'");
+}
+
+void diagnose_capped_playback_advance(const entt::entity entity) noexcept {
+    render_debug_state_storage().model_diagnostics.push_back(
+        "model playback on entity " + std::to_string(entt::to_integral(entity)) +
+        " requested more than 64 clip durations of advancement in one update; clamped");
 }
 
 Vector3 model_bounds_size(const AssetHandle model) noexcept {

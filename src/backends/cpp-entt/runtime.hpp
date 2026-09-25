@@ -9,6 +9,7 @@
 
 #include <entt/entt.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -196,6 +197,88 @@ void submit_model(Vector3 position,
 /// Clip duration in seconds (keyframes / glTF sampling rate); 0 for a bad
 /// handle or index. The generated ModelAnimation rule wraps time by this.
 [[nodiscard]] float model_animation_duration(AssetHandle model, int clip) noexcept;
+
+// ── Opt-in model playback (std.render.models ModelPlayback/AnimationCue) ──────
+// The legacy no-ModelPlayback tick path (wrap-and-loop, no events) is untouched
+// elsewhere; this is the parallel opt-in surface for one-shot playback,
+// authored cue markers, and completion events. Every function here is pure —
+// no entt::registry dependency — so time arithmetic and baseline resolution
+// are unit-testable without any ECS or generated code involved, the same way
+// PointerCandidate's pure sort/blocking rules are below.
+
+/// Per-update bound on requested advancement, in multiples of clip duration
+/// (dsl-model-animation-events D4): guards against an unbounded marker/
+/// completion burst from an extreme dt or speed value.
+constexpr int kMaxPlaybackDurationsPerUpdate = 64;
+
+/// One authored marker cue, already resolved to the values that matter for
+/// interval crossing (child entity identity and diagnostic dedup live in
+/// AnimationCueCache below, not here).
+struct AnimationCueEntry {
+    int clip{};
+    float time{};
+    std::string name;
+
+    friend bool operator==(const AnimationCueEntry&, const AnimationCueEntry&) = default;
+};
+
+struct PlaybackAdvanceResult {
+    float new_time{};
+    bool completed{false};
+    bool capped{false};
+    std::vector<std::string> crossed_cue_names;
+};
+
+/// Advances a clip-relative time by `requested_delta` seconds (dt * speed;
+/// negative for reverse playback) within [0, duration). `once` clamps at the
+/// endpoint matching the direction of travel instead of wrapping; `completed`
+/// reports true only on the update that transitions onto that endpoint, so
+/// calling again from an already-clamped `old_time` is idempotent (no
+/// duplicate completion). `cues` must already be filtered to the active clip
+/// and stable-sorted by time, ties broken by caller-supplied order (child
+/// creation order). Non-finite inputs or a non-positive duration are total:
+/// `old_time` passes through unchanged and no cue or completion is reported.
+[[nodiscard]] PlaybackAdvanceResult advance_model_playback(float old_time,
+                                                           float requested_delta,
+                                                           float duration,
+                                                           bool once,
+                                                           std::span<const AnimationCueEntry> cues) noexcept;
+
+/// Per-owner playback bookkeeping the opt-in tick path persists between
+/// frames. `prior_clip` starts at -1 so the very first tick for an entity is
+/// always treated as an interruption (fresh baseline, latch cleared) without
+/// a separate "have we seen this entity before" flag.
+struct ModelPlaybackBookkeeping {
+    int prior_clip{-1};
+    int prior_revision{0};
+    float prior_time{0.0F};
+    bool completed{false};
+    // Sticks until a tick isn't capped, so a sustained extreme dt/speed only
+    // produces one diagnostic per streak instead of one every frame.
+    bool cap_diagnosed{false};
+};
+
+struct PlaybackBaseline {
+    float time{};
+    bool completed{false};
+};
+
+/// Resolves this tick's starting time and completion latch from authored
+/// state versus what the rule itself committed last tick: a clip or revision
+/// change interrupts (fresh baseline at the authored time, latch cleared); an
+/// authored time that no longer matches what was last committed is an
+/// explicit seek (adopts the new value without replaying skipped cues,
+/// latch untouched); otherwise playback continues from where it left off.
+[[nodiscard]] PlaybackBaseline resolve_playback_baseline(int clip,
+                                                         int revision,
+                                                         float authored_time,
+                                                         const ModelPlaybackBookkeeping& prior) noexcept;
+
+/// Records that an entity's requested advancement exceeded
+/// kMaxPlaybackDurationsPerUpdate and was clamped. Callers dedup via
+/// ModelPlaybackBookkeeping::cap_diagnosed so a sustained extreme dt/speed
+/// produces one diagnostic per streak instead of one every frame.
+void diagnose_capped_playback_advance(entt::entity entity) noexcept;
 
 /// Bind-pose AABB extents (max − min per axis) of the model. Triggers the
 /// model's lazy load, so it works before the first draw. Returns zero extents
@@ -607,6 +690,166 @@ void discard_construction(entt::registry& registry, entt::entity entity) {
 // worse than a reported failure.
 [[nodiscard]] inline bool has_capture_provenance(const entt::registry& registry, entt::entity entity) noexcept {
     return registry.valid(entity) && registry.all_of<ArchetypeOrigin>(entity);
+}
+
+// ── Authored-cue cache (std.render.models AnimationCue) ────────────────────────
+// Snapshot-compared against the owner's current AnimationCue children each
+// tick; rebuilt (re-validated and re-sorted) only when a child was added,
+// removed, reordered, or a cue's own fields changed, so a steady-state owner
+// pays a cheap equality check instead of a fresh scan/sort/diagnostic pass
+// every frame. Not trait-derived — like Construction<Trait> above — so EnTT's
+// sparse-set storage drops it automatically when the owner is destroyed.
+struct AnimationCueSnapshotEntry {
+    entt::entity child{entt::null};
+    AnimationCueEntry entry;
+
+    friend bool operator==(const AnimationCueSnapshotEntry&, const AnimationCueSnapshotEntry&) = default;
+};
+
+struct AnimationCueCache {
+    std::vector<AnimationCueSnapshotEntry> snapshot;
+    // Valid entries only, stable-sorted by (clip, time) so every clip's cues
+    // are one contiguous, already time-ordered run — see active_cues_for_clip.
+    std::vector<AnimationCueEntry> entries;
+};
+
+/// Diagnoses a cue whose time doesn't lie strictly inside its own clip's
+/// (0, duration) — including an out-of-range clip index, which
+/// model_animation_duration already degrades to a 0 duration for. Called only
+/// from refresh_animation_cue_cache's rebuild branch, which itself runs only
+/// on a snapshot change, giving the required "once per cue revision" dedup
+/// for free instead of needing a separate dedup set. Known gap: a sibling cue
+/// changing on the same owner also invalidates the snapshot and re-diagnoses
+/// this cue even though it didn't change; accepted rather than adding a
+/// separate persistent dedup set for what's expected to be author-time,
+/// rarely-mutated-at-runtime data.
+void diagnose_invalid_animation_cue(entt::entity owner, int clip, float time, const std::string& name) noexcept;
+
+/// Refreshes (or reuses) `owner`'s cached, validated AnimationCue list, sorted
+/// by (clip, time). `ParentComponent`/`AnimationCueComponent` are the
+/// program's generated component types for std.core.Parent /
+/// std.render.models.AnimationCue — this is a shared, program-independent
+/// algorithm parameterized over them, the same idiom Construction<Trait>
+/// above uses for arbitrary trait types.
+template <typename ParentComponent, typename AnimationCueComponent>
+const std::vector<AnimationCueEntry>& refresh_animation_cue_cache(entt::registry& registry,
+                                                                   entt::entity owner,
+                                                                   AssetHandle model,
+                                                                   AnimationCueCache& cache) {
+    std::vector<std::pair<std::uint64_t, entt::entity>> ordered;
+    for (auto child : registry.view<ParentComponent, AnimationCueComponent>()) {
+        if (registry.get<ParentComponent>(child).parent == owner) {
+            ordered.emplace_back(registry.get<CreationOrdinal>(child).value, child);
+        }
+    }
+    std::ranges::sort(ordered);
+
+    std::vector<AnimationCueSnapshotEntry> snapshot;
+    snapshot.reserve(ordered.size());
+    for (const auto& [ordinal, child] : ordered) {
+        const auto& cue = registry.get<AnimationCueComponent>(child);
+        snapshot.push_back(AnimationCueSnapshotEntry{
+            .child = child, .entry = AnimationCueEntry{.clip = cue.clip, .time = cue.time, .name = cue.name}});
+    }
+
+    if (snapshot == cache.snapshot) {
+        return cache.entries;
+    }
+
+    cache.entries.clear();
+    for (const auto& snap : snapshot) {
+        const float duration = model_animation_duration(model, snap.entry.clip);
+        if (!(snap.entry.time > 0.0F) || !(snap.entry.time < duration)) {
+            diagnose_invalid_animation_cue(owner, snap.entry.clip, snap.entry.time, snap.entry.name);
+            continue;
+        }
+        cache.entries.push_back(snap.entry);
+    }
+    std::ranges::stable_sort(cache.entries, {}, [](const AnimationCueEntry& e) { return std::pair{e.clip, e.time}; });
+    cache.snapshot = std::move(snapshot);
+    return cache.entries;
+}
+
+/// Zero-copy view of `entries`' contiguous run for `clip` (entries is sorted
+/// by (clip, time), so every clip's cues already form one time-ordered run).
+[[nodiscard]] inline std::span<const AnimationCueEntry> active_cues_for_clip(
+    const std::vector<AnimationCueEntry>& entries, const int clip) noexcept {
+    const auto first = std::ranges::lower_bound(entries, clip, {}, &AnimationCueEntry::clip);
+    const auto last  = std::ranges::upper_bound(entries, clip, {}, &AnimationCueEntry::clip);
+    const std::span<const AnimationCueEntry> all{entries};
+    return all.subspan(static_cast<std::size_t>(first - entries.begin()), static_cast<std::size_t>(last - first));
+}
+
+/// Result of one opt-in ModelPlayback tick, already translated from the
+/// pure playback math into what the generated tick body needs to apply:
+/// ModelAnimator field writes and which events to emit. Mirrors the shape
+/// compute_pointer_frame_transitions returns for RoutePointer below — codegen
+/// assigns fields and emits typed events in a loop, it doesn't make decisions.
+struct ModelPlaybackTickResult {
+    float new_time{};
+    bool new_playing{};
+    bool completed{};
+    std::vector<std::string> crossed_cue_names;
+};
+
+/// Runs one tick of the opt-in ModelPlayback surface for `entity`: resolves
+/// this frame's baseline (continuation, seek, or interruption/restart),
+/// advances it if playing and not already completed, and refreshes/queries
+/// the entity's authored cue cache. All per-entity state (bookkeeping latch,
+/// cue cache) is owned by `entity` itself via get_or_emplace, so callers don't
+/// need to know these types exist. `ParentComponent`/`AnimationCueComponent`
+/// are the program's generated types, as in refresh_animation_cue_cache.
+template <typename ParentComponent, typename AnimationCueComponent>
+ModelPlaybackTickResult tick_model_playback(entt::registry& registry,
+                                            entt::entity entity,
+                                            AssetHandle model,
+                                            int clip,
+                                            int revision,
+                                            float authored_time,
+                                            float requested_delta,
+                                            bool playing,
+                                            bool once) {
+    auto& state = registry.get_or_emplace<ModelPlaybackBookkeeping>(entity);
+
+    const auto baseline  = resolve_playback_baseline(clip, revision, authored_time, state);
+    state.prior_clip     = clip;
+    state.prior_revision = revision;
+    state.completed      = baseline.completed;
+
+    ModelPlaybackTickResult result;
+    result.new_time    = baseline.time;
+    result.new_playing = playing;
+    if (!playing || state.completed) {
+        state.prior_time = baseline.time;
+        return result;
+    }
+
+    const float duration = model_animation_duration(model, clip);
+    if (!(duration > 0.0F)) {
+        state.prior_time = baseline.time;
+        return result;
+    }
+
+    auto& cache             = registry.get_or_emplace<AnimationCueCache>(entity);
+    const auto& all_cues    = refresh_animation_cue_cache<ParentComponent, AnimationCueComponent>(registry, entity, model, cache);
+    const auto active_cues  = active_cues_for_clip(all_cues, clip);
+    const auto advance      = advance_model_playback(baseline.time, requested_delta, duration, once, active_cues);
+
+    state.prior_time         = advance.new_time;
+    result.new_time          = advance.new_time;
+    result.crossed_cue_names = advance.crossed_cue_names;
+    if (advance.completed) {
+        state.completed    = true;
+        result.completed   = true;
+        result.new_playing = false;
+    }
+    if (advance.capped && !state.cap_diagnosed) {
+        state.cap_diagnosed = true;
+        diagnose_capped_playback_advance(entity);
+    } else if (!advance.capped) {
+        state.cap_diagnosed = false;
+    }
+    return result;
 }
 
 // Hands out one document-local identity per referenced entity. Excluded targets

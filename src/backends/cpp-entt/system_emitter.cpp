@@ -4121,10 +4121,51 @@ EnttSystemEmitter::emit_extern_system(  // NOLINT(readability-function-cognitive
         out << "    view.each([&](entt::entity entity, const " << mr << "& " << mr << "_comp, " << manim << "& "
             << manim << "_comp) {\n";
         out << "        (void)entity;\n";
+        out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
+
+        // ModelPlayback is std.render.models' opt-in one-shot/cue/completion
+        // companion (add-model-animation-lifecycle-events); entities without it
+        // fall through to the legacy wrap-and-loop path below, unchanged. Guard
+        // on find_trait (mirrors is_model_render's ModelAnimator guard above)
+        // since a program can import std.render.models without ever declaring
+        // ModelPlayback. All decision logic (baseline resolution, cue lookup,
+        // interval advance, cap dedup) lives in tick_model_playback; this just
+        // applies its result, the same division is_pointer_router below uses
+        // for compute_pointer_frame_transitions.
+        if (EnttCodegenUtils::find_trait(program, "ModelPlayback") != nullptr) {
+            const std::string playback     = EnttCodegenUtils::trait_cpp_name("ModelPlayback", program);
+            const std::string cue          = EnttCodegenUtils::trait_cpp_name("AnimationCue", program);
+            const std::string parent_cpp   = EnttCodegenUtils::trait_cpp_name("Parent", program);
+            const std::string mode_cpp     = EnttCodegenUtils::enum_cpp_name("PlaybackMode", program);
+            const std::string marker_evt   = event_cpp_type("AnimationMarker", program);
+            const std::string finished_evt = event_cpp_type("AnimationFinished", program);
+            const std::string ns           = "cactus::runtime::entt_backend::";
+
+            out << "        if (const auto* playback = registry.try_get<" << playback << ">(entity)) {\n";
+            out << "            const auto result = " << ns << "tick_model_playback<" << parent_cpp << ", " << cue
+                << ">(\n";
+            out << "                registry, entity, " << mr << "_comp.model, " << manim << "_comp.clip, "
+                << "playback->revision, " << manim << "_comp.time,\n";
+            out << "                kFixedDt * " << manim << "_comp.speed, " << manim
+                << "_comp.playing, playback->mode == " << mode_cpp << "::Once);\n";
+            out << "            " << manim << "_comp.time    = result.new_time;\n";
+            out << "            " << manim << "_comp.playing = result.new_playing;\n";
+            out << "            for (const auto& crossed_name : result.crossed_cue_names) {\n";
+            out << "                " << ns << "generated_emit_targeted_event(\n";
+            out << "                    " << marker_evt << "{.clip = " << manim
+                << "_comp.clip, .name = crossed_name}, entity);\n";
+            out << "            }\n";
+            out << "            if (result.completed) {\n";
+            out << "                " << ns << "generated_emit_targeted_event(\n";
+            out << "                    " << finished_evt << "{.clip = " << manim << "_comp.clip}, entity);\n";
+            out << "            }\n";
+            out << "            return;\n";
+            out << "        }\n";
+        }
+
         out << "        if (!" << manim << "_comp.playing) {\n";
         out << "            return;\n";
         out << "        }\n";
-        out << "        constexpr float kFixedDt = 1.0F / 60.0F;\n";
         out << "        " << manim << "_comp.time += kFixedDt * " << manim << "_comp.speed;\n";
         out << "        const float duration = cactus::runtime::entt_backend::model_animation_duration(" << mr
             << "_comp.model, " << manim << "_comp.clip);\n";

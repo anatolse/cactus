@@ -1762,4 +1762,323 @@ TEST_CASE("Runtime stdlib: sequence reproducibility", "[runtime][stdlib][random]
         CHECK(va == Catch::Approx(vb));
     }
 }
+
+// ── Opt-in model playback: controlled fake-clip interval arithmetic ───────────
+// (add-model-animation-lifecycle-events). No asset loading, no ECS, no GL —
+// advance_model_playback/resolve_playback_baseline are pure functions over
+// caller-supplied durations/cues, exercised the same way PointerCandidate's
+// pure sort/blocking rules are above.
+
+namespace {
+using entt_backend::AnimationCueEntry;
+using entt_backend::ModelPlaybackBookkeeping;
+using entt_backend::PlaybackAdvanceResult;
+
+const std::vector<AnimationCueEntry> kLeftRightCues{
+    {.clip = 0, .time = 0.25F, .name = "left"},
+    {.clip = 0, .time = 0.75F, .name = "right"},
+};
+const std::vector<AnimationCueEntry> kMidCue{{.clip = 0, .time = 0.5F, .name = "mid"}};
+}  // namespace
+
+TEST_CASE("Runtime stdlib: model playback forward loop crosses multiple cues in order",
+          "[runtime][entt][dsl-model-animation-events]") {
+    const auto result = entt_backend::advance_model_playback(0.0F, 1.0F, 1.0F, false, kLeftRightCues);
+    REQUIRE(result.crossed_cue_names.size() == 2);
+    CHECK(result.crossed_cue_names[0] == "left");
+    CHECK(result.crossed_cue_names[1] == "right");
+    CHECK(result.new_time == Catch::Approx(0.0F).margin(1e-5));
+    CHECK_FALSE(result.completed);
+    CHECK_FALSE(result.capped);
+}
+
+TEST_CASE("Runtime stdlib: model playback reverse loop crosses cues back to front",
+          "[runtime][entt][dsl-model-animation-events]") {
+    // old_time=1.0 normalizes to 0.0 (the same loop phase); moving back a
+    // full duration returns to that same phase, i.e. 0.0, not 1.0.
+    const auto result = entt_backend::advance_model_playback(1.0F, -1.0F, 1.0F, false, kLeftRightCues);
+    REQUIRE(result.crossed_cue_names.size() == 2);
+    CHECK(result.crossed_cue_names[0] == "right");
+    CHECK(result.crossed_cue_names[1] == "left");
+    CHECK(result.new_time == Catch::Approx(0.0F).margin(1e-5));
+}
+
+TEST_CASE("Runtime stdlib: model playback loop crossing wraps and re-crosses next traversal's cue",
+          "[runtime][entt][dsl-model-animation-events]") {
+    // duration=1.0, old=0.9, delta=+0.3 => crosses 1.0 (wrap) then 0.2.
+    const std::vector<AnimationCueEntry> cues{{.clip = 0, .time = 0.2F, .name = "step"}};
+    const auto result = entt_backend::advance_model_playback(0.9F, 0.3F, 1.0F, false, cues);
+    REQUIRE(result.crossed_cue_names.size() == 1);
+    CHECK(result.crossed_cue_names[0] == "step");
+    CHECK(result.new_time == Catch::Approx(0.2F).margin(1e-5));
+    CHECK_FALSE(result.completed);
+}
+
+TEST_CASE("Runtime stdlib: model playback loop reverse wrap exactly to the start normalizes to zero, not duration",
+          "[runtime][entt][dsl-model-animation-events]") {
+    // Reaching exactly 0 from a reverse step must land in the canonical
+    // [0, duration) range, not the duration endpoint upload_skinned_pose
+    // treats as an Once-completion marker.
+    const auto result = entt_backend::advance_model_playback(0.5F, -0.5F, 1.0F, false, {});
+    CHECK(result.new_time == Catch::Approx(0.0F).margin(1e-5));
+
+    // With leftover budget, the wrap still continues walking backward from
+    // duration rather than getting stuck.
+    const std::vector<AnimationCueEntry> cues{{.clip = 0, .time = 0.8F, .name = "late"}};
+    const auto continued = entt_backend::advance_model_playback(0.3F, -0.5F, 1.0F, false, cues);
+    REQUIRE(continued.crossed_cue_names.size() == 1);
+    CHECK(continued.crossed_cue_names[0] == "late");
+    CHECK(continued.new_time == Catch::Approx(0.8F).margin(1e-5));
+}
+
+TEST_CASE("Runtime stdlib: model playback equal-time cues cross in caller-supplied (creation) order",
+          "[runtime][entt][dsl-model-animation-events]") {
+    const std::vector<AnimationCueEntry> cues{
+        {.clip = 0, .time = 0.5F, .name = "first-created"},
+        {.clip = 0, .time = 0.5F, .name = "second-created"},
+    };
+    const auto result = entt_backend::advance_model_playback(0.0F, 1.0F, 1.0F, false, cues);
+    REQUIRE(result.crossed_cue_names.size() == 2);
+    CHECK(result.crossed_cue_names[0] == "first-created");
+    CHECK(result.crossed_cue_names[1] == "second-created");
+}
+
+TEST_CASE("Runtime stdlib: model playback Once forward clamps at duration and completes once",
+          "[runtime][entt][dsl-model-animation-events]") {
+    const auto result = entt_backend::advance_model_playback(0.8F, 0.5F, 1.0F, true, kMidCue);
+    CHECK(result.new_time == Catch::Approx(1.0F));
+    CHECK(result.completed);
+    CHECK(result.crossed_cue_names.empty());
+
+    // Already parked at the endpoint: calling again must not re-fire completion.
+    const auto again = entt_backend::advance_model_playback(1.0F, 0.5F, 1.0F, true, kMidCue);
+    CHECK(again.new_time == Catch::Approx(1.0F));
+    CHECK_FALSE(again.completed);
+    CHECK(again.crossed_cue_names.empty());
+}
+
+TEST_CASE("Runtime stdlib: model playback Once crosses a cue and completes in the same update",
+          "[runtime][entt][dsl-model-animation-events]") {
+    // The cue sits between old_time and duration, so one update both crosses
+    // it and reaches the endpoint; the result must carry both, with the
+    // marker available to the caller before it looks at `completed` (the
+    // codegen call site emits crossed_cue_names first, then AnimationFinished
+    // — see is_model_animation in system_emitter.cpp).
+    const std::vector<AnimationCueEntry> cues{{.clip = 0, .time = 0.9F, .name = "landing"}};
+    const auto result = entt_backend::advance_model_playback(0.8F, 0.5F, 1.0F, true, cues);
+    REQUIRE(result.crossed_cue_names.size() == 1);
+    CHECK(result.crossed_cue_names[0] == "landing");
+    CHECK(result.completed);
+    CHECK(result.new_time == Catch::Approx(1.0F));
+}
+
+TEST_CASE("Runtime stdlib: model playback Once reverse clamps at zero and completes once",
+          "[runtime][entt][dsl-model-animation-events]") {
+    const std::vector<AnimationCueEntry> cues{};
+    const auto result = entt_backend::advance_model_playback(0.2F, -0.5F, 1.0F, true, cues);
+    CHECK(result.new_time == Catch::Approx(0.0F));
+    CHECK(result.completed);
+
+    const auto again = entt_backend::advance_model_playback(0.0F, -0.5F, 1.0F, true, cues);
+    CHECK(again.new_time == Catch::Approx(0.0F));
+    CHECK_FALSE(again.completed);
+}
+
+TEST_CASE("Runtime stdlib: model playback Once still completes from an out-of-range seek past the endpoint",
+          "[runtime][entt][dsl-model-animation-events]") {
+    // An authored seek can write ModelAnimator.time to anything, including
+    // past the clip's own duration/zero. The engine's own clamp never
+    // produces such a value, but a seek can, and completion must still fire
+    // exactly once rather than silently stalling forever (old_time was never
+    // "less than duration" to begin with).
+    const auto forward = entt_backend::advance_model_playback(2.0F, 0.5F, 1.0F, true, {});
+    CHECK(forward.new_time == Catch::Approx(1.0F));
+    CHECK(forward.completed);
+
+    const auto forward_again = entt_backend::advance_model_playback(1.0F, 0.5F, 1.0F, true, {});
+    CHECK_FALSE(forward_again.completed);
+
+    const auto reverse = entt_backend::advance_model_playback(-1.0F, -0.5F, 1.0F, true, {});
+    CHECK(reverse.new_time == Catch::Approx(0.0F));
+    CHECK(reverse.completed);
+
+    const auto reverse_again = entt_backend::advance_model_playback(0.0F, -0.5F, 1.0F, true, {});
+    CHECK_FALSE(reverse_again.completed);
+}
+
+TEST_CASE("Runtime stdlib: model playback paused or zero-speed advancement is a no-op",
+          "[runtime][entt][dsl-model-animation-events]") {
+    const auto result = entt_backend::advance_model_playback(0.3F, 0.0F, 1.0F, false, kMidCue);
+    CHECK(result.new_time == Catch::Approx(0.3F));
+    CHECK(result.crossed_cue_names.empty());
+    CHECK_FALSE(result.completed);
+    CHECK_FALSE(result.capped);
+}
+
+TEST_CASE("Runtime stdlib: model playback stays total on non-positive duration and non-finite inputs",
+          "[runtime][entt][dsl-model-animation-events]") {
+    const auto zero_duration = entt_backend::advance_model_playback(0.3F, 0.5F, 0.0F, false, kMidCue);
+    CHECK(zero_duration.new_time == Catch::Approx(0.3F));
+    CHECK(zero_duration.crossed_cue_names.empty());
+
+    const auto negative_duration = entt_backend::advance_model_playback(0.3F, 0.5F, -1.0F, false, kMidCue);
+    CHECK(negative_duration.new_time == Catch::Approx(0.3F));
+
+    const auto nan_delta = entt_backend::advance_model_playback(0.3F, std::nanf(""), 1.0F, false, kMidCue);
+    CHECK(nan_delta.new_time == Catch::Approx(0.3F));
+
+    const auto nan_time = entt_backend::advance_model_playback(std::nanf(""), 0.5F, 1.0F, false, kMidCue);
+    CHECK(nan_time.crossed_cue_names.empty());
+}
+
+TEST_CASE("Runtime stdlib: model playback caps loop advancement at 64 durations and flags it",
+          "[runtime][entt][dsl-model-animation-events]") {
+    const auto capped   = entt_backend::advance_model_playback(0.0F, 100.0F, 1.0F, false, kMidCue);
+    const auto expected = entt_backend::advance_model_playback(0.0F, 64.0F, 1.0F, false, kMidCue);
+    CHECK(capped.capped);
+    CHECK(capped.new_time == Catch::Approx(expected.new_time).margin(1e-4));
+    CHECK(capped.crossed_cue_names.size() == expected.crossed_cue_names.size());
+    CHECK_FALSE(expected.capped);
+}
+
+TEST_CASE("Runtime stdlib: model playback baseline resolution detects interruption, seek, and continuation",
+          "[runtime][entt][dsl-model-animation-events]") {
+    SECTION("first tick ever establishes the authored baseline") {
+        const ModelPlaybackBookkeeping fresh{};
+        const auto baseline = entt_backend::resolve_playback_baseline(0, 0, 0.3F, fresh);
+        CHECK(baseline.time == Catch::Approx(0.3F));
+        CHECK_FALSE(baseline.completed);
+    }
+
+    SECTION("normal continuation reuses the committed time and latch") {
+        const ModelPlaybackBookkeeping prior{.prior_clip = 2, .prior_revision = 0, .prior_time = 0.5F, .completed = false};
+        const auto baseline = entt_backend::resolve_playback_baseline(2, 0, 0.5F, prior);
+        CHECK(baseline.time == Catch::Approx(0.5F));
+        CHECK_FALSE(baseline.completed);
+    }
+
+    SECTION("authored time diverging from committed time is an explicit seek") {
+        const ModelPlaybackBookkeeping prior{.prior_clip = 2, .prior_revision = 0, .prior_time = 0.5F, .completed = false};
+        const auto baseline = entt_backend::resolve_playback_baseline(2, 0, 0.9F, prior);
+        CHECK(baseline.time == Catch::Approx(0.9F));
+        CHECK_FALSE(baseline.completed);
+    }
+
+    SECTION("a seek while completed leaves the completion latch alone") {
+        const ModelPlaybackBookkeeping prior{.prior_clip = 2, .prior_revision = 0, .prior_time = 1.0F, .completed = true};
+        const auto baseline = entt_backend::resolve_playback_baseline(2, 0, 0.1F, prior);
+        CHECK(baseline.time == Catch::Approx(0.1F));
+        CHECK(baseline.completed);
+    }
+
+    SECTION("clip interruption clears completion and restarts at authored time") {
+        const ModelPlaybackBookkeeping prior{.prior_clip = 2, .prior_revision = 0, .prior_time = 1.0F, .completed = true};
+        const auto baseline = entt_backend::resolve_playback_baseline(5, 0, 0.2F, prior);
+        CHECK(baseline.time == Catch::Approx(0.2F));
+        CHECK_FALSE(baseline.completed);
+    }
+
+    SECTION("revision restart clears completion and restarts at authored time") {
+        const ModelPlaybackBookkeeping prior{.prior_clip = 2, .prior_revision = 3, .prior_time = 1.0F, .completed = true};
+        const auto baseline = entt_backend::resolve_playback_baseline(2, 4, 0.0F, prior);
+        CHECK(baseline.time == Catch::Approx(0.0F));
+        CHECK_FALSE(baseline.completed);
+    }
+}
+
+namespace {
+struct CueTestParent {
+    entt::entity parent{entt::null};
+};
+struct CueTestAnimationCue {
+    int clip{};
+    float time{};
+    std::string name;
+};
+
+entt::entity spawn_cue_child(entt::registry& registry,
+                             const entt::entity owner,
+                             const int clip,
+                             const float time,
+                             const std::string& name) {
+    const auto child = registry.create();
+    registry.emplace<CueTestParent>(child, owner);
+    registry.emplace<CueTestAnimationCue>(child, clip, time, name);
+    registry.emplace<entt_backend::CreationOrdinal>(child, entt_backend::generated_next_creation_ordinal());
+    return child;
+}
+}  // namespace
+
+TEST_CASE("Runtime stdlib: animation cue cache validates, sorts, and only rebuilds on real change",
+          "[runtime][entt][dsl-model-animation-events]") {
+    auto& asset_registry = shared_asset_registry();
+    asset_registry.clear();
+    entt_backend::reset_render_debug_state();
+
+    const auto robot_path = (repo_root() / "examples/model-renderer/art/robot.glb").string();
+    REQUIRE(fs::exists(robot_path));
+    constexpr int kHandle = 210;
+    asset_registry.register_model(kHandle, robot_path, kHandle);
+
+    entt::registry registry;
+    const auto owner = registry.create();
+    entt_backend::AnimationCueCache cache;
+
+    SECTION("a valid interior cue is accepted and cached") {
+        spawn_cue_child(registry, owner, 3, 0.1F, "liftoff");
+        const auto& entries =
+            entt_backend::refresh_animation_cue_cache<CueTestParent, CueTestAnimationCue>(registry, owner, kHandle, cache);
+        REQUIRE(entries.size() == 1);
+        CHECK(entries[0].clip == 3);
+        CHECK(entries[0].name == "liftoff");
+        CHECK(entt_backend::render_debug_state().model_diagnostics.empty());
+    }
+
+    SECTION("an out-of-range cue time is diagnosed once per revision and excluded") {
+        spawn_cue_child(registry, owner, 3, 0.1F, "liftoff");
+        const auto invalid = spawn_cue_child(registry, owner, 3, 999.0F, "too-late");
+
+        const auto& first = entt_backend::refresh_animation_cue_cache<CueTestParent, CueTestAnimationCue>(
+            registry, owner, kHandle, cache);
+        REQUIRE(first.size() == 1);
+        CHECK(first[0].name == "liftoff");
+        REQUIRE(entt_backend::render_debug_state().model_diagnostics.size() == 1);
+
+        // Unchanged snapshot: no re-validation, no repeated diagnostic.
+        const auto& second = entt_backend::refresh_animation_cue_cache<CueTestParent, CueTestAnimationCue>(
+            registry, owner, kHandle, cache);
+        CHECK(second.size() == 1);
+        CHECK(entt_backend::render_debug_state().model_diagnostics.size() == 1);
+
+        // Value change (the cue's own field, not structural) makes it valid.
+        registry.get<CueTestAnimationCue>(invalid).time = 0.2F;
+        const auto& third = entt_backend::refresh_animation_cue_cache<CueTestParent, CueTestAnimationCue>(
+            registry, owner, kHandle, cache);
+        REQUIRE(third.size() == 2);
+        CHECK(entt_backend::render_debug_state().model_diagnostics.size() == 1);
+    }
+
+    SECTION("an invalid clip index degrades to a 0 duration and is diagnosed") {
+        spawn_cue_child(registry, owner, 999, 0.1F, "bad-clip");
+        const auto& entries = entt_backend::refresh_animation_cue_cache<CueTestParent, CueTestAnimationCue>(
+            registry, owner, kHandle, cache);
+        CHECK(entries.empty());
+        CHECK(entt_backend::render_debug_state().model_diagnostics.size() == 1);
+    }
+
+    SECTION("equal-time cues sort by child creation order") {
+        spawn_cue_child(registry, owner, 3, 0.3F, "first-created");
+        spawn_cue_child(registry, owner, 3, 0.1F, "second-created");
+        spawn_cue_child(registry, owner, 3, 0.3F, "third-created");
+        const auto& entries = entt_backend::refresh_animation_cue_cache<CueTestParent, CueTestAnimationCue>(
+            registry, owner, kHandle, cache);
+        REQUIRE(entries.size() == 3);
+        CHECK(entries[0].name == "second-created");
+        CHECK(entries[1].name == "first-created");
+        CHECK(entries[2].name == "third-created");
+    }
+
+    asset_registry.clear();
+    entt_backend::reset_render_debug_state();
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

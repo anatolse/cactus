@@ -276,6 +276,12 @@ cactus_add_headless_behavior_test(test_model_tint_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_tint_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_model_animation_events_headless_behavior
+    CACTUS_SOURCE examples/model_animation_events.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_animation_events_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_cursor_capture_headless_behavior
     CACTUS_SOURCE tests/fixtures/cursor_capture_runtime.cactus
     BACKEND cpp-entt

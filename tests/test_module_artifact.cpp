@@ -907,6 +907,45 @@ TEST_CASE("ModuleArtifact: contracts that omit project capabilities round-trip a
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][deferred-set]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto tick   = test_symbol(SymbolKind::Event, "tick");
+    const auto host   = test_symbol(SymbolKind::Rule, "Healer");
+    const auto health = test_symbol(SymbolKind::Trait, "Health");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
+    const std::vector<InferredHandlerCommand> commands{{.kind = HandlerCommandKind::Set, .target = health}};
+
+    InferredHandlerContract inferred;
+    inferred.rule     = host;
+    inferred.trigger  = trigger;
+    inferred.commands = commands;
+
+    DecoratedProgram program;
+    program.handler_contracts.push_back(inferred);
+    program.execution_graph.handlers.push_back(
+        HandlerNode{.identity = {.rule = host, .trigger = trigger},
+                    .contract = static_cast<const HandlerContract&>(inferred)});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    CHECK(loaded->handler_contracts.front().commands == commands);
+    REQUIRE(loaded->execution_graph.handlers.size() == 1);
+    CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 15);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: project capability serialization is deterministic", "[artifact][extern-rule][projects]") {
     auto build_dir = test_build_dir();
     std::error_code ec;

@@ -161,16 +161,6 @@ pub trait Bullet:
     var lifetime: float = 2.0
     var consumed: bool = false
 
-event CameraPose:
-    position: vec3
-    yaw: float
-    pitch: float
-
-event EnemyVisualPose:
-    position: vec3
-    yaw: float
-    pitch: float
-
 event SeparateActor:
     amount: vec3
 
@@ -183,19 +173,7 @@ event BulletContact:
 
 event EnemyHit
 event GameOver
-event GameOverPresentation
 event RestartCleanup
-event RestartSpawnPoint
-event RestartPresentation
-
-# Generic "switch this visual's clip and restart playback from the top"
-# trigger — used for the death transition and (see SeekPlayer) starting and
-# ending an enemy's vault-jump animation.
-event SetEnemyClip:
-    clip: int
-
-event EnemyDeathProgress:
-    alpha: float
 
 template BoxVisual:
     tv.WorldTransform:
@@ -264,7 +242,7 @@ template EnemyBase:
     # root's WorldTransform would float it half_height above the floor, so
     # the visible mesh lives on a child entity instead, with its own
     # WorldTransform authored each late_tick from the root's (mirroring
-    # PlayerBody/CameraRig's ComposeCameraPose/ApplyCameraPose below — not
+    # PlayerBody/CameraRig's ComposeCameraPose below — not
     # std.transform.volume's TransformPropagation, which only composes a
     # child against a parent that itself carries LocalTransform).
     children:
@@ -802,29 +780,17 @@ rule ComposeCameraPose:
             camera.FirstPersonCamera
 
     on late_tick:
-        emit CameraPose to rig:
+        let yaw = body.camera.FirstPersonCamera.yaw
+        let pitch = body.camera.FirstPersonCamera.pitch
+        set tv.WorldTransform on rig:
             position = body.tv.WorldTransform.position + vec3(0.0, CAMERA_EYE_HEIGHT, 0.0)
-            yaw = body.camera.FirstPersonCamera.yaw
-            pitch = body.camera.FirstPersonCamera.pitch
+            rotation = quat.compose(quat.from_euler(0.0, yaw, 0.0), quat.from_euler(pitch, 0.0, 0.0))
 
-rule ApplyCameraPose:
-    filter:
-        CameraRig
-        tv.WorldTransform as transform
-
-    on CameraPose as pose:
-        transform.position = pose.position
-        transform.rotation = quat.compose(quat.from_euler(0.0, pose.yaw, 0.0), quat.from_euler(pose.pitch, 0.0, 0.0))
-
-# Mirrors ComposeCameraPose/ApplyCameraPose above: the EnemyVisual child's
-# WorldTransform isn't auto-composed by std.transform.volume's
-# TransformPropagation (that only applies when the parent itself carries
-# LocalTransform, which the Enemy root deliberately doesn't — see EnemyBase),
-# so it's authored here instead, offset down by half_height from the
-# collision root's torso-height position. Rotation travels as yaw/pitch
-# floats rather than a quat event field to sidestep a compiler gap in event
-# quat-field codegen (see AnimateEnemyDeath's death_pitch, the same pattern
-# CameraPose already uses for the player's look rotation).
+# Mirrors ComposeCameraPose above: the EnemyVisual child's WorldTransform
+# isn't auto-composed by std.transform.volume's TransformPropagation (that
+# only applies when the parent itself carries LocalTransform, which the Enemy
+# root deliberately doesn't — see EnemyBase), so it's authored here instead,
+# offset down by half_height from the collision root's torso-height position.
 rule ComposeEnemyVisualPose:
     filter:
         Enemy as enemy
@@ -832,22 +798,12 @@ rule ComposeEnemyVisualPose:
 
     on late_tick:
         for visual in query.children[EnemyVisual](of = self):
-            emit EnemyVisualPose to visual:
+            # Single from_euler call (not a two-step compose like
+            # ComposeCameraPose) to exactly match how the root's own rotation
+            # is built in SeekPlayer/AnimateEnemyDeath.
+            set tv.WorldTransform on visual:
                 position = transform.position - vec3(0.0, ENEMY_HALF_HEIGHT, 0.0)
-                yaw = enemy.facing_yaw + enemy.visual_yaw_offset
-                pitch = enemy.death_pitch
-
-rule ApplyEnemyVisualPose:
-    filter:
-        EnemyVisual
-        tv.WorldTransform as transform
-
-    on EnemyVisualPose as pose:
-        transform.position = pose.position
-        # Single from_euler call (not a two-step compose like
-        # ApplyCameraPose) to exactly match how the root's own rotation is
-        # built in SeekPlayer/AnimateEnemyDeath.
-        transform.rotation = quat.from_euler(pose.pitch, pose.yaw, 0.0)
+                rotation = quat.from_euler(enemy.death_pitch, enemy.facing_yaw + enemy.visual_yaw_offset, 0.0)
 
 rule SpawnRobots:
     filter:
@@ -960,8 +916,9 @@ rule SeekPlayer:
                 KnightEnemy =>
                     run_clip = KNIGHT_RUN_CLIP
             for visual in query.children[EnemyVisual](of = self):
-                emit SetEnemyClip to visual:
+                set models.ModelAnimator on visual:
                     clip = run_clip
+                    time = 0.0
 
         let target_position = tv.world_position(player_entity)
         let delta = vec3(target_position.x - transform.position.x, 0.0, target_position.z - transform.position.z)
@@ -1050,8 +1007,9 @@ rule SeekPlayer:
                     KnightEnemy =>
                         jump_clip = KNIGHT_JUMP_CLIP
                 for visual in query.children[EnemyVisual](of = self):
-                    emit SetEnemyClip to visual:
+                    set models.ModelAnimator on visual:
                         clip = jump_clip
+                        time = 0.0
 
             # Priority order (small deflection, then large deflection,
             # alternating sides): flat guards instead of nested ifs so each
@@ -1187,8 +1145,9 @@ rule BeginRobotDeath:
         enemy.dying = true
         enemy.death_elapsed = 0.0
         for visual in query.children[EnemyVisual](of = self):
-            emit SetEnemyClip to visual:
+            set models.ModelAnimator on visual:
                 clip = ROBOT_DEATH_CLIP
+                time = 0.0
 
 rule BeginKnightDeath:
     filter:
@@ -1201,22 +1160,13 @@ rule BeginKnightDeath:
         enemy.dying = true
         enemy.death_elapsed = 0.0
         for visual in query.children[EnemyVisual](of = self):
-            emit SetEnemyClip to visual:
+            set models.ModelAnimator on visual:
                 clip = KNIGHT_DEATH_CLIP
-
-rule ApplySetEnemyClip:
-    filter:
-        EnemyVisual
-        models.ModelAnimator as animator
-
-    on SetEnemyClip as trigger:
-        animator.clip = trigger.clip
-        animator.time = 0.0
-        animator.playing = true
+                time = 0.0
 
 # Enemy is the collision/logic root (grounded at torso height, see
 # EnemyBase); the rendered model lives on a child EnemyVisual entity, so the
-# alpha fade computed here is applied there via EnemyDeathProgress.
+# alpha fade computed here is patched onto it.
 rule AnimateEnemyDeath:
     filter:
         Enemy as enemy
@@ -1228,25 +1178,15 @@ rule AnimateEnemyDeath:
         enemy.death_elapsed += tick.dt
         if enemy.death_elapsed >= DEATH_DURATION:
             # Destroying self cascades to the EnemyVisual child (Parent-based
-            # recursive destroy) — skip emitting to it this tick so nothing
-            # tries to apply EnemyDeathProgress against an entity destroyed
-            # in the same activation.
+            # recursive destroy).
             destroy
             return
         let progress = math.clamp(enemy.death_elapsed / DEATH_DURATION, 0.0, 1.0)
         enemy.death_pitch = progress * HALF_PI
         transform.rotation = quat.from_euler(enemy.death_pitch, enemy.facing_yaw, 0.0)
         for visual in query.children[EnemyVisual](of = self):
-            emit EnemyDeathProgress to visual:
-                alpha = 1.0 - progress
-
-rule ApplyEnemyDeathProgress:
-    filter:
-        EnemyVisual
-        models.ModelRenderer as renderer
-
-    on EnemyDeathProgress as progress:
-        renderer.color = color(1.0, 1.0, 1.0, progress.alpha)
+            set models.ModelRenderer on visual:
+                color = color(1.0, 1.0, 1.0, 1.0 - progress)
 
 rule DetectPlayerContact:
     pairs:
@@ -1276,27 +1216,10 @@ rule EndGame:
         game_over_count += 1
         cursor_captured = false
         inp.set_cursor_captured(false)
-        let crosshair = query.first[Crosshair]()
-        emit GameOverPresentation to crosshair
-        let label = query.first[GameOverLabel]()
-        emit GameOverPresentation to label
-
-rule HideCrosshairOnGameOver:
-    filter:
-        Crosshair
-        text.ScreenLabel as label
-
-    on GameOverPresentation:
-        label.visible = false
-
-rule ShowGameOverLabel:
-    filter:
-        GameOverLabel
-        text.ScreenLabel as label
-
-    on GameOverPresentation:
-        label.text = "GAME OVER"
-        label.visible = true
+        set text.ScreenLabel on query.first[Crosshair]():
+            visible = false
+        set text.ScreenLabel on query.first[GameOverLabel]():
+            visible = true
 
 rule RestartOnGameOver:
     filter:
@@ -1321,13 +1244,15 @@ rule RestartOnGameOver:
         for bullet in query.all[Bullet]():
             emit RestartCleanup to bullet
         for spawn_point in query.all[RobotSpawnPoint]():
-            emit RestartSpawnPoint to spawn_point
+            set RobotSpawnPoint on spawn_point:
+                countdown = 0.0
         for spawn_point in query.all[KnightSpawnPoint]():
-            emit RestartSpawnPoint to spawn_point
-        let crosshair = query.first[Crosshair]()
-        emit RestartPresentation to crosshair
-        let label = query.first[GameOverLabel]()
-        emit RestartPresentation to label
+            set KnightSpawnPoint on spawn_point:
+                countdown = 0.0
+        set text.ScreenLabel on query.first[Crosshair]():
+            visible = true
+        set text.ScreenLabel on query.first[GameOverLabel]():
+            visible = false
 
 rule RestartClearsEnemy:
     filter:
@@ -1342,33 +1267,3 @@ rule RestartClearsBullet:
 
     on RestartCleanup:
         destroy
-
-rule RestartResetsRobotSpawnPoint:
-    filter:
-        RobotSpawnPoint as spawn_point
-
-    on RestartSpawnPoint:
-        spawn_point.countdown = 0.0
-
-rule RestartResetsKnightSpawnPoint:
-    filter:
-        KnightSpawnPoint as spawn_point
-
-    on RestartSpawnPoint:
-        spawn_point.countdown = 0.0
-
-rule ShowCrosshairOnRestart:
-    filter:
-        Crosshair
-        text.ScreenLabel as label
-
-    on RestartPresentation:
-        label.visible = true
-
-rule HideGameOverLabelOnRestart:
-    filter:
-        GameOverLabel
-        text.ScreenLabel as label
-
-    on RestartPresentation:
-        label.visible = false

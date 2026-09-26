@@ -645,6 +645,39 @@ TEST_CASE("program_linker: std.persistence with no declared phases is rejected a
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("program_linker: set with no declared phases is rejected at link time", "[linker][deferred-set]") {
+    auto build_dir = linker_build_dir() / "set_legacy";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    DecoratedProgram program;
+    HandlerNode handler;
+    handler.identity = HandlerIdentity{
+        .rule    = linked_symbol(SymbolKind::Rule, "legacy_set", "Heal"),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = linked_symbol(SymbolKind::Event, "legacy_set", "pulse")}};
+    handler.contract.commands.push_back(InferredHandlerCommand{
+        .kind = HandlerCommandKind::Set, .target = linked_symbol(SymbolKind::Trait, "legacy_set", "Health")});
+    program.execution_graph.handlers.push_back(handler);
+
+    ErrorReporter save_errors;
+    ModuleArtifact artifact(save_errors);
+    REQUIRE(artifact.save(program, "legacy_set", build_dir));
+    REQUIRE_FALSE(save_errors.has_errors());
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({build_dir / "legacy_set.cmod"});
+
+    CHECK_FALSE(linked.has_value());
+    const bool found_diagnostic = std::ranges::any_of(link_errors.diagnostics(), [](const Diagnostic& diagnostic) {
+        return diagnostic.message.contains("`set` requires the graph-driven phase scheduler");
+    });
+    CHECK(found_diagnostic);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("program_linker: std.persistence with declared phases links without error", "[linker][persistence]") {
     auto build_dir = linker_build_dir() / "persistence_graph_driven";
     std::error_code ec;

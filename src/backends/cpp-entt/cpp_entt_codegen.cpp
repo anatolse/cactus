@@ -253,6 +253,41 @@ std::string emit_external_command_forward_declarations(const DecoratedProgram& p
     return out.str();
 }
 
+// Optional fields keep the capability queue-only: the callback names values
+// to write and never sees the current ones.
+void emit_external_set_capability(std::ostringstream& out,
+                                  const DecoratedProgram& program,
+                                  const InferredHandlerCommand& command,
+                                  const std::string& method_name) {
+    if (!command.target.has_value()) {
+        throw std::runtime_error("cpp-entt received an external set capability without a target");
+    }
+    const auto type            = EnttCodegenUtils::trait_cpp_name(*command.target);
+    const auto canonical_id    = make_canonical_id(*command.target);
+    const auto* resolved_trait = EnttCodegenUtils::find_trait(program, canonical_id);
+    if (resolved_trait == nullptr) {
+        throw std::runtime_error("cpp-entt cannot lower external set capability for missing trait '" + canonical_id +
+                                 "'");
+    }
+    const auto patch_type = type + "_patch";
+    out << "    struct " << patch_type << " {\n";
+    for (const auto& field : resolved_trait->fields) {
+        out << "        std::optional<decltype(" << type << "::" << field.name << ")> " << field.name << ";\n";
+    }
+    out << "    };\n";
+    out << "    void " << method_name << "(entt::entity target, " << patch_type << " patch) const {\n";
+    out << "        generated_queue_structural_command(StructuralCommand::Kind::Set,\n";
+    out << "            [target, patch = std::move(patch)](entt::registry& registry) {\n";
+    out << "                auto* value = ::durable_" << type << "(registry, target);\n";
+    out << "                if (value == nullptr) { return; }\n";
+    for (const auto& field : resolved_trait->fields) {
+        out << "                if (patch." << field.name << ") { value->" << field.name << " = *patch." << field.name
+            << "; }\n";
+    }
+    out << "            });\n";
+    out << "    }\n";
+}
+
 std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
     if (program.execution_graph.phases.empty()) {
         return {};
@@ -384,6 +419,9 @@ std::string emit_graph_external_handler_abi(const DecoratedProgram& program) {
                     out << "    }\n";
                     break;
                 }
+                case HandlerCommandKind::Set:
+                    emit_external_set_capability(out, program, command, method_name);
+                    break;
             }
         }
         for (const auto& effect : sorted_strings(node.contract.effects)) {
@@ -1222,6 +1260,10 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
             out << "[[maybe_unused]] " << cpp_name << "& project_" << cpp_name
                 << "(entt::registry& registry, entt::entity entity) {\n";
             out << "    return projected_" << cpp_name << ".project(registry, entity);\n";
+            out << "}\n\n";
+            out << "[[maybe_unused]] " << cpp_name << "* durable_" << cpp_name
+                << "(entt::registry& registry, entt::entity entity) {\n";
+            out << "    return projected_" << cpp_name << ".durable_value(registry, entity);\n";
             out << "}\n\n";
         }
         out << "[[maybe_unused]] void cancel_projected_" << cpp_name << "(entt::entity entity) {\n";

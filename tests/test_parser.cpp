@@ -1206,6 +1206,80 @@ TEST_CASE("Parser: remove statement with target", "[parser][dynamic-ecs]") {
     REQUIRE(remove->target_expr.has_value());
 }
 
+static bool has_diagnostic(const ErrorReporter& errors, const std::string& text) {
+    return std::ranges::any_of(errors.diagnostics(), [&](const auto& diagnostic) {
+        return diagnostic.message.find(text) != std::string::npos;
+    });
+}
+
+TEST_CASE("Parser: set statement with field block and target", "[parser][deferred-set]") {
+    auto prog = parse(
+        "rule Animate:\n"
+        "    on tick:\n"
+        "        set models.ModelAnimator on visual:\n"
+        "            clip = 3\n"
+        "            time = 0.0\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    auto* set = std::get_if<SetTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(set != nullptr);
+    CHECK(set->trait_name == "models.ModelAnimator");
+    REQUIRE(set->target_expr != nullptr);
+    auto* target = std::get_if<IdentExpr>(&set->target_expr->expr);
+    REQUIRE(target != nullptr);
+    CHECK(target->name == "visual");
+    REQUIRE(set->args.size() == 2);
+    CHECK(set->args[0].name == "clip");
+    CHECK(set->args[1].name == "time");
+}
+
+TEST_CASE("Parser: set statement on self", "[parser][deferred-set]") {
+    auto prog = parse(
+        "rule Heal:\n"
+        "    on tick:\n"
+        "        set Health on self:\n"
+        "            current = 10\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    auto* set = std::get_if<SetTraitStmt>(&sys.handlers[0].body[0]->stmt);
+    REQUIRE(set != nullptr);
+    CHECK(set->trait_name == "Health");
+    REQUIRE(set->target_expr != nullptr);
+    CHECK(std::holds_alternative<SelfExpr>(set->target_expr->expr));
+}
+
+TEST_CASE("Parser: set statement without target is rejected", "[parser][deferred-set]") {
+    auto errors = parse_expect_errors(
+        "rule Heal:\n"
+        "    on tick:\n"
+        "        set Health:\n"
+        "            current = 10\n");
+    CHECK(has_diagnostic(errors, "'set' requires an 'on <entity>' target"));
+}
+
+TEST_CASE("Parser: set statement with empty field block is rejected", "[parser][deferred-set]") {
+    auto errors = parse_expect_errors(
+        "rule Heal:\n"
+        "    on tick:\n"
+        "        set Health on self:\n"
+        "        destroy self\n");
+    CHECK(has_diagnostic(errors, "'set' needs at least one field assignment"));
+}
+
+TEST_CASE("Parser: set remains an ordinary identifier", "[parser][deferred-set]") {
+    auto prog = parse(
+        "trait Settings:\n"
+        "    var set: int = 0\n"
+        "rule Count:\n"
+        "    filter:\n"
+        "        Settings as settings\n"
+        "    on tick:\n"
+        "        let set = settings.set\n"
+        "        settings.set = set + 1\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[1]);
+    REQUIRE(sys.handlers[0].body.size() == 2);
+    CHECK(std::holds_alternative<LetStmt>(sys.handlers[0].body[0]->stmt));
+    CHECK(std::holds_alternative<VarAssign>(sys.handlers[0].body[1]->stmt));
+}
+
 // Task 4.11: marker trait (no body)
 TEST_CASE("Parser: marker trait without body", "[parser][dynamic-ecs]") {
     auto prog = parse("trait Persistent\n");
@@ -2550,6 +2624,20 @@ TEST_CASE("Parser: phases, external events, handler order, and external contract
     CHECK(contract.commands[1].kind == HandlerCommandKind::Destroy);
     CHECK(contract.commands[2].kind == HandlerCommandKind::Add);
     CHECK(contract.commands[3].kind == HandlerCommandKind::Remove);
+}
+
+TEST_CASE("Parser: extern handler set command", "[parser][deferred-set]") {
+    auto prog = parse(
+        "extern rule HostHeal:\n"
+        "    on pulse:\n"
+        "        commands:\n"
+        "            set Health\n");
+    const auto& external = std::get<ExternRuleNode>(prog.declarations[0]);
+    REQUIRE(external.handlers.size() == 1);
+    REQUIRE(external.handlers[0].commands.size() == 1);
+    CHECK(external.handlers[0].commands[0].kind == HandlerCommandKind::Set);
+    REQUIRE(external.handlers[0].commands[0].target.has_value());
+    CHECK(external.handlers[0].commands[0].target->spelling == "Health");
 }
 
 TEST_CASE("Parser: trait match statement single arm with alias", "[parser][trait-match]") {

@@ -401,6 +401,15 @@ struct ProjectTraitStmt {
     SourceLocation location;
 };
 
+// set TraitName on expr: ... — queue a field patch applied at the activation commit
+struct SetTraitStmt {
+    std::string trait_name;
+    std::optional<SymbolId> resolved_trait_id;  // set by semantic analysis; source spelling is preserved
+    std::vector<FieldAssignment> args;
+    std::unique_ptr<ExprNode> target_expr;  // null only after a parse error
+    SourceLocation location;
+};
+
 struct StmtNode {
     using Variant = std::variant<LetStmt,
                                  VarAssign,
@@ -411,6 +420,7 @@ struct StmtNode {
                                  AddTraitStmt,
                                  RemoveTraitStmt,
                                  ProjectTraitStmt,
+                                 SetTraitStmt,
                                  ReturnStmt,
                                  ExprStmt,
                                  IfStmt,
@@ -512,7 +522,7 @@ struct EventHandlerNode {
     SourceLocation location;
 };
 
-enum class HandlerCommandKind : std::uint8_t { Spawn, Destroy, Add, Remove };
+enum class HandlerCommandKind : std::uint8_t { Spawn, Destroy, Add, Remove, Set };
 
 [[nodiscard]] inline const char* handler_command_kind_name(HandlerCommandKind kind) {
     switch (kind) {
@@ -524,6 +534,8 @@ enum class HandlerCommandKind : std::uint8_t { Spawn, Destroy, Add, Remove };
             return "add";
         case HandlerCommandKind::Remove:
             return "remove";
+        case HandlerCommandKind::Set:
+            return "set";
     }
     return "unknown";
 }

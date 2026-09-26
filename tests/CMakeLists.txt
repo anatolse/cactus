@@ -300,6 +300,18 @@ cactus_add_headless_behavior_test(test_parameterized_templates_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_parameterized_templates_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_deferred_field_evaluation_headless_behavior
+    CACTUS_SOURCE examples/deferred_field_evaluation.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_deferred_field_evaluation_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_deferred_set_headless_behavior
+    CACTUS_SOURCE examples/deferred_set.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_deferred_set_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_hierarchy_query_headless_behavior
     CACTUS_SOURCE tests/fixtures/hierarchy_query_runtime.cactus
     BACKEND cpp-entt

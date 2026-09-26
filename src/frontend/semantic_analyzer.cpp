@@ -1626,6 +1626,14 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                         if (s.target_expr.has_value()) {
                             resolve_expr(**s.target_expr);
                         }
+                    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+                        s.resolved_trait_id = try_resolve_trait_ref_to_symbol(s.trait_name);
+                        if (s.target_expr != nullptr) {
+                            resolve_expr(*s.target_expr);
+                        }
+                        for (auto& arg : s.args) {
+                            resolve_expr(*arg.value);
+                        }
                     }
                 },
                 stmt->stmt);
@@ -3520,6 +3528,8 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
                         forbid_statement(node.location, "remove");
                     } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                         forbid_statement(node.location, "project");
+                    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+                        forbid_statement(node.location, "set");
                     } else if constexpr (std::is_same_v<S, ReturnStmt>) {
                         forbid_statement(node.location, "return");
                     } else if constexpr (std::is_same_v<S, ForeachStmt>) {
@@ -4098,7 +4108,19 @@ void SemanticAnalyzer::require_optional_entity_id_target(
     if (!target_expr.has_value()) {
         return;
     }
-    auto t = infer_expr_type(**target_expr, filter_bindings, locals, handler_event, pair_scope);
+    require_entity_id_target(
+        **target_expr, location, wrong_type_message, filter_bindings, locals, handler_event, pair_scope);
+}
+
+void SemanticAnalyzer::require_entity_id_target(
+    const ExprNode& target_expr,
+    const SourceLocation& location,
+    const std::string& wrong_type_message,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& locals,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) {
+    auto t = infer_expr_type(target_expr, filter_bindings, locals, handler_event, pair_scope);
     if (t.kind != TypeKind::EntityId && t.kind != TypeKind::Unknown) {
         errors_.error(location, wrong_type_message);
     }
@@ -4113,14 +4135,31 @@ void SemanticAnalyzer::validate_trait_field_supply(
     const std::unordered_map<std::string, TypeInfo>& locals,
     const ResolvedStruct* handler_event,
     const PairScope* pair_scope) {
+    validate_trait_field_values(trait, args, context_desc, filter_bindings, locals, handler_event, pair_scope);
+    for (const auto& field : trait.fields) {
+        const bool supplied = std::ranges::any_of(args, [&](const auto& arg) { return arg.name == field.name; });
+        if (!field.has_default && !supplied) {
+            errors_.error(required_field_location,
+                          "required field '" + field.name + "' must be supplied in " + context_desc);
+            break;
+        }
+    }
+}
+
+void SemanticAnalyzer::validate_trait_field_values(
+    const ResolvedTrait& trait,
+    const std::vector<FieldAssignment>& args,
+    const std::string& context_desc,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& locals,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) {
     std::unordered_map<std::string, const ResolvedField*> fields_by_name;
     for (const auto& field : trait.fields) {
         fields_by_name[field.name] = &field;
     }
 
-    std::unordered_set<std::string> supplied;
     for (const auto& arg : args) {
-        supplied.insert(arg.name);
         auto it = fields_by_name.find(arg.name);
         if (it == fields_by_name.end()) {
             errors_.error(arg.location, "unknown field '" + arg.name + "' in " + context_desc);
@@ -4131,14 +4170,6 @@ void SemanticAnalyzer::validate_trait_field_supply(
         const auto& expected = it->second->type;
         if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown && actual.kind != expected.kind) {
             errors_.error(arg.location, "type mismatch for field '" + arg.name + "' in " + context_desc);
-        }
-    }
-
-    for (const auto& field : trait.fields) {
-        if (!field.has_default && !supplied.contains(field.name)) {
-            errors_.error(required_field_location,
-                          "required field '" + field.name + "' must be supplied in " + context_desc);
-            break;
         }
     }
 }
@@ -4194,14 +4225,25 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         }
     };
 
-    auto validate_add = [this, &filter_bindings, &locals, handler_event, pair_scope](const AddTraitStmt& add) {
-        const auto* trait = find_resolved_trait(add.resolved_trait_id, add.trait_name);
+    auto find_trait_or_report = [this](const std::optional<SymbolId>& resolved_trait_id,
+                                       const std::string& trait_name,
+                                       const SourceLocation& location) -> const ResolvedTrait* {
+        const auto* trait = find_resolved_trait(resolved_trait_id, trait_name);
+        if (trait != nullptr) {
+            return trait;
+        }
+        const auto prev_errors = errors_.error_count();
+        (void)resolve_trait_ref_to_canonical(trait_name, location);
+        if (errors_.error_count() == prev_errors) {
+            errors_.error(location, "undeclared trait '" + trait_name + "'");
+        }
+        return nullptr;
+    };
+
+    auto validate_add = [this, &find_trait_or_report, &filter_bindings, &locals, handler_event, pair_scope](
+                            const AddTraitStmt& add) {
+        const auto* trait = find_trait_or_report(add.resolved_trait_id, add.trait_name, add.location);
         if (trait == nullptr) {
-            const auto prev_errors = errors_.error_count();
-            (void)resolve_trait_ref_to_canonical(add.trait_name, add.location);
-            if (errors_.error_count() == prev_errors) {
-                errors_.error(add.location, "undeclared trait '" + add.trait_name + "'");
-            }
             return;
         }
 
@@ -4227,14 +4269,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
     };
 
     auto validate_project =
-        [this, &filter_bindings, &locals, handler_event, pair_scope](const ProjectTraitStmt& project) {
-            const auto* trait = find_resolved_trait(project.resolved_trait_id, project.trait_name);
+        [this, &find_trait_or_report, &filter_bindings, &locals, handler_event, pair_scope](
+            const ProjectTraitStmt& project) {
+            const auto* trait = find_trait_or_report(project.resolved_trait_id, project.trait_name, project.location);
             if (trait == nullptr) {
-                const auto prev_errors = errors_.error_count();
-                (void)resolve_trait_ref_to_canonical(project.trait_name, project.location);
-                if (errors_.error_count() == prev_errors) {
-                    errors_.error(project.location, "undeclared trait '" + project.trait_name + "'");
-                }
                 return;
             }
 
@@ -4273,14 +4311,9 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                         pair_scope);
         };
 
-    auto validate_remove = [this, &filter_bindings, &locals, handler_event, pair_scope](const RemoveTraitStmt& remove) {
-        if (find_resolved_trait(remove.resolved_trait_id, remove.trait_name) == nullptr) {
-            const auto prev_errors = errors_.error_count();
-            (void)resolve_trait_ref_to_canonical(remove.trait_name, remove.location);
-            if (errors_.error_count() == prev_errors) {
-                errors_.error(remove.location, "undeclared trait '" + remove.trait_name + "'");
-            }
-        }
+    auto validate_remove = [this, &find_trait_or_report, &filter_bindings, &locals, handler_event, pair_scope](
+                               const RemoveTraitStmt& remove) {
+        (void)find_trait_or_report(remove.resolved_trait_id, remove.trait_name, remove.location);
         if (pair_scope != nullptr && !remove.target_expr.has_value()) {
             errors_.error(
                 remove.location,
@@ -4293,6 +4326,29 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                           locals,
                                           handler_event,
                                           pair_scope);
+    };
+
+    auto validate_set = [this, &find_trait_or_report, &filter_bindings, &locals, handler_event, pair_scope](
+                            const SetTraitStmt& set) {
+        if (set.target_expr != nullptr) {
+            require_entity_id_target(*set.target_expr,
+                                     set.location,
+                                     "`set` target must be of type `entity_id`",
+                                     filter_bindings,
+                                     locals,
+                                     handler_event,
+                                     pair_scope);
+        }
+        const auto* trait = find_trait_or_report(set.resolved_trait_id, set.trait_name, set.location);
+        if (trait == nullptr) {
+            return;
+        }
+        if (trait->fields.empty()) {
+            errors_.error(set.location, "`set` needs a trait with fields; '" + set.trait_name + "' is a marker trait");
+            return;
+        }
+        validate_trait_field_values(
+            *trait, set.args, "`set " + set.trait_name + "`", filter_bindings, locals, handler_event, pair_scope);
     };
 
     auto validate_destroy = [this, &filter_bindings, &locals, handler_event, pair_scope](const DestroyStmt& destroy) {
@@ -4434,6 +4490,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
         }
         if (const auto* remove_stmt = std::get_if<RemoveTraitStmt>(&stmt->stmt)) {
             validate_remove(*remove_stmt);
+            continue;
+        }
+        if (const auto* set_stmt = std::get_if<SetTraitStmt>(&stmt->stmt)) {
+            validate_set(*set_stmt);
             continue;
         }
         if (const auto* destroy_stmt = std::get_if<DestroyStmt>(&stmt->stmt)) {
@@ -4937,6 +4997,15 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                         add_command(HandlerCommandKind::Remove, node.resolved_trait_id);
                         if (node.target_expr.has_value()) {
                             visit_expr(**node.target_expr, locals);
+                        }
+                    } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+                        // The patch lands after the commit, so it is a command, not a write.
+                        add_command(HandlerCommandKind::Set, node.resolved_trait_id);
+                        if (node.target_expr != nullptr) {
+                            visit_expr(*node.target_expr, locals);
+                        }
+                        for (const auto& field : node.args) {
+                            visit_expr(*field.value, locals);
                         }
                     } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                         if (node.resolved_trait_id.has_value()) {
@@ -8474,7 +8543,8 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                 if constexpr (std::is_same_v<S, SpawnStmt> || std::is_same_v<S, DestroyStmt> ||
                               std::is_same_v<S, LoadStmt> || std::is_same_v<S, AddTraitStmt> ||
                               std::is_same_v<S, RemoveTraitStmt> || std::is_same_v<S, ProjectTraitStmt> ||
-                              std::is_same_v<S, ForeachStmt> || std::is_same_v<S, TraitMatchStmt>) {
+                              std::is_same_v<S, SetTraitStmt> || std::is_same_v<S, ForeachStmt> ||
+                              std::is_same_v<S, TraitMatchStmt>) {
                     if (!in_rule_handler) {
                         // Determine which keyword is used
                         std::string kw;
@@ -8488,6 +8558,8 @@ void SemanticAnalyzer::validate_context_stmts(  // NOLINT(readability-function-c
                             kw = "add";
                         } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                             kw = "project";
+                        } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+                            kw = "set";
                         } else if constexpr (std::is_same_v<S, ForeachStmt>) {
                             kw = "for";
                         } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {

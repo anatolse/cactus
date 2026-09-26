@@ -320,6 +320,7 @@ std::optional<DecoratedProgram> ProgramLinker::link(const std::vector<std::files
     }
 
     validate_persistence_requires_graph_scheduler(merged);
+    validate_set_requires_graph_scheduler(merged);
 
     if (errors_.has_errors()) {
         return std::nullopt;
@@ -337,6 +338,22 @@ void ProgramLinker::validate_persistence_requires_graph_scheduler(const Decorate
     errors_.error({},
                   "std.persistence requires the graph-driven scheduler (this program declares no `pub phase`); "
                   "a save request on the legacy frame path would never be processed");
+}
+
+void ProgramLinker::validate_set_requires_graph_scheduler(const DecoratedProgram& program) {
+    if (!program.execution_graph.phases.empty()) {
+        return;
+    }
+    for (const auto& handler : program.execution_graph.handlers) {
+        const bool uses_set = std::ranges::any_of(handler.contract.commands, [](const InferredHandlerCommand& command) {
+            return command.kind == HandlerCommandKind::Set;
+        });
+        if (uses_set) {
+            errors_.error(handler.location,
+                          "`set` requires the graph-driven phase scheduler (this program declares no `pub phase`); "
+                          "the legacy frame path has no activation commit to apply the patch at");
+        }
+    }
 }
 
 }  // namespace cactus

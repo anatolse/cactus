@@ -1,0 +1,69 @@
+module deferred_field_evaluation
+
+# Deferred field blocks (`add` and `spawn` overrides) take their values when
+# the statement runs, even though the entity changes land at the activation
+# commit. Every field below is read before `self` moves, so every recorded
+# value is 1.0, not 99.0.
+
+use std.core
+use std.transform.volume as tv
+
+trait Probe:
+    var done: bool = false
+
+trait AddResult:
+    var from_field: float = -1.0
+    var from_extern: float = -1.0
+
+trait SpawnResult:
+    var from_field: float = -1.0
+    var from_extern: float = -1.0
+
+trait FamilyResult:
+    var from_field: float = -1.0
+    var from_extern: float = -1.0
+
+trait ChildResult:
+    var from_field: float = -1.0
+    var from_extern: float = -1.0
+
+template Spawned:
+    SpawnResult
+
+template Family:
+    FamilyResult
+    children:
+        entity Kid:
+            ChildResult
+
+entity Subject:
+    tv.WorldTransform:
+        position = vec3(1.0, 0.0, 0.0)
+    Probe
+
+rule Snapshot:
+    filter:
+        Probe as probe
+        tv.WorldTransform as transform
+
+    on tick:
+        if probe.done:
+            return
+        probe.done = true
+        add AddResult to self:
+            from_field = transform.position.x
+            from_extern = tv.world_position(self).x
+        spawn Spawned:
+            SpawnResult:
+                from_field = transform.position.x
+                from_extern = tv.world_position(self).x
+        spawn Family:
+            FamilyResult:
+                from_field = transform.position.x
+                from_extern = tv.world_position(self).x
+            children:
+                Kid:
+                    ChildResult:
+                        from_field = transform.position.x
+                        from_extern = tv.world_position(self).x
+        transform.position = vec3(99.0, 0.0, 0.0)

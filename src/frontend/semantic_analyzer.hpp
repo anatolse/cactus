@@ -858,11 +858,26 @@ private:
                                            const std::unordered_map<std::string, TypeInfo>& locals,
                                            const ResolvedStruct* handler_event,
                                            const PairScope* pair_scope = nullptr);
+    void require_entity_id_target(const ExprNode& target_expr,
+                                  const SourceLocation& location,
+                                  const std::string& wrong_type_message,
+                                  const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                  const std::unordered_map<std::string, TypeInfo>& locals,
+                                  const ResolvedStruct* handler_event,
+                                  const PairScope* pair_scope = nullptr);
 
-    /// Shared by validate_event_stmts's validate_add/validate_project lambdas:
-    /// validates a trait's supplied field arguments (unknown-field detection,
-    /// per-field type mismatch) and required-field coverage, reporting
-    /// "... in <context_desc>" (e.g. "`add Foo`") for each kind of failure.
+    /// Unknown-field and per-field type checks for a trait field block,
+    /// reporting "... in <context_desc>" (e.g. "`set Foo`").
+    void validate_trait_field_values(const ResolvedTrait& trait,
+                                     const std::vector<FieldAssignment>& args,
+                                     const std::string& context_desc,
+                                     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                     const std::unordered_map<std::string, TypeInfo>& locals,
+                                     const ResolvedStruct* handler_event,
+                                     const PairScope* pair_scope);
+
+    /// validate_trait_field_values plus required-field coverage, for blocks
+    /// that construct the trait (`add`, `project`).
     void validate_trait_field_supply(const ResolvedTrait& trait,
                                      const std::vector<FieldAssignment>& args,
                                      const std::string& context_desc,

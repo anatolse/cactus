@@ -15,8 +15,7 @@ void cactus_external__external_handler_linking__NativeMovement__on__external_han
     const cactus::runtime::entt_backend::
         Capabilities__external_handler_linking__NativeMovement__on__external_handler_linking__fixed_tick&
             capabilities) {
-    (void)entity;
-    (void)capabilities;
+    capabilities.command_set_external_handler_linking__Heading(entity, {.angle = 1.0F});
     write_external_handler_linking__Velocity.value +=
         read_external_handler_linking__Position.value * static_cast<float>(trigger.dt);
 }

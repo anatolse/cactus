@@ -140,6 +140,8 @@ private:
     AddTraitStmt parse_add_trait_stmt();
     RemoveTraitStmt parse_remove_trait_stmt();
     ProjectTraitStmt parse_project_trait_stmt();
+    SetTraitStmt parse_set_trait_stmt();
+    [[nodiscard]] bool at_indented_block() const;
     ForeachStmt parse_foreach_stmt();
     TraitMatchStmt parse_trait_match_stmt();
     LetStmt parse_let_stmt();

@@ -1839,6 +1839,63 @@ TEST_CASE("regular handler contracts infer canonical capabilities independently"
     CHECK(contract_for("Once", "frame").is_selectionless());
 }
 
+TEST_CASE("regular handler contracts infer set as a command, not a write", "[semantic][handler-contract][deferred-set]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.contracts\n"
+        "extern event frame:\n"
+        "    dt: float\n"
+        "trait Health:\n"
+        "    var current: int = 10\n"
+        "trait Aim:\n"
+        "    var other: entity_id\n"
+        "rule Heal:\n"
+        "    filter:\n"
+        "        Aim as aim\n"
+        "    on frame:\n"
+        "        set Health on aim.other:\n"
+        "            current = 5\n");
+
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    REQUIRE(decorated.handler_contracts.size() == 1);
+    const auto& contract = decorated.handler_contracts.front();
+    const auto health    = make_symbol_id(SymbolKind::Trait, "game.contracts", "Health");
+    CHECK(contract.commands ==
+          std::vector<InferredHandlerCommand>{{.kind = HandlerCommandKind::Set, .target = health}});
+    CHECK_FALSE(contract.writes.contains(health));
+    CHECK_FALSE(contract.reads.contains(health));
+}
+
+TEST_CASE("external set commands resolve canonically", "[semantic][modules][extern-rule][deferred-set]") {
+    ProgramNode prog = make_program_with_module("game.host");
+    EventNode pulse;
+    pulse.name = "pulse";
+    prog.declarations.emplace_back(std::move(pulse));
+    TraitNode health;
+    health.name = "Health";
+    prog.declarations.emplace_back(std::move(health));
+
+    ExternRuleNode rule;
+    rule.name = "HostHeal";
+    ExternHandlerNode handler;
+    handler.trigger_name = "pulse";
+    handler.commands.push_back(HandlerCommandNode{
+        .kind = HandlerCommandKind::Set, .target = LocatedName{.spelling = "Health", .location = {}}, .location = {}});
+    handler.commands.push_back(HandlerCommandNode{
+        .kind = HandlerCommandKind::Set, .target = LocatedName{.spelling = "Missing", .location = {}}, .location = {}});
+    rule.handlers.push_back(std::move(handler));
+    prog.declarations.emplace_back(std::move(rule));
+
+    ErrorReporter errors;
+    SemanticAnalyzer analyzer(errors);
+    const auto result = analyzer.analyze(prog);
+
+    CHECK(has_diagnostic(errors, "set command target 'Missing' is not a trait"));
+    const auto& resolved = std::get<ExternRuleNode>(prog.declarations.back()).handlers.front().commands.front();
+    CHECK(resolved.resolved_target_id == make_symbol_id(SymbolKind::Trait, "game.host", "Health"));
+    (void)result;
+}
+
 TEST_CASE("regular handler contracts infer extern function effect summaries", "[semantic][handler-contract][effects]") {
     auto imported_func = [](const std::string& name,
                             std::optional<std::unordered_set<std::string>> effects = std::nullopt) {

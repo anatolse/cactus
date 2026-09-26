@@ -30,6 +30,8 @@ trait Sparkle:
 trait Spawner:
     var pending_enemies: int = 0
     var pending_particles: int = 0
+    var pending_patch: int = 0
+    var patch_target: entity_id
 
 # A structural grouping with no durable field of its own: eligibility for the
 # hierarchy below comes entirely from Member's Badge, not from Formation.
@@ -147,3 +149,10 @@ rule SpawnWorld:
                     hue = 0.3
                 tf.LocalTransform:
                     position = vec2(1.0, 2.0)
+        # A deferred patch is a mutation, not construction: a save keeps the
+        # spawn-time `maximum` and records the patched `current`.
+        if spawner.pending_patch > 0:
+            spawner.pending_patch -= 1
+            set Health on spawner.patch_target:
+                maximum = 900
+                current = 42

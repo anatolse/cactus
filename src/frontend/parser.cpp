@@ -752,9 +752,13 @@ std::vector<HandlerCommandNode> Parser::parse_command_block() {
         } else if (match(TokenType::REMOVE)) {
             command.kind   = HandlerCommandKind::Remove;
             command.target = parse_located_name();
+        } else if (check(TokenType::IDENTIFIER) && peek().value == "set") {
+            advance();
+            command.kind   = HandlerCommandKind::Set;
+            command.target = parse_located_name();
         } else {
             errors_.error(peek().location,
-                          "expected command form: spawn Template, destroy, add Trait, or remove Trait");
+                          "expected command form: spawn Template, destroy, add Trait, remove Trait, or set Trait");
             synchronize();
             continue;
         }
@@ -2037,6 +2041,38 @@ ProjectTraitStmt Parser::parse_project_trait_stmt() {
     return stmt;
 }
 
+bool Parser::at_indented_block() const {
+    auto index = current_;
+    while (index < tokens_.size() && tokens_[index].type == TokenType::NEWLINE) {
+        ++index;
+    }
+    return index < tokens_.size() && tokens_[index].type == TokenType::INDENT;
+}
+
+SetTraitStmt Parser::parse_set_trait_stmt() {
+    SetTraitStmt stmt;
+    stmt.location = advance().location;
+    stmt.trait_name = parse_dotted_name();
+
+    if (match(TokenType::ON)) {
+        stmt.target_expr = parse_expression();
+    } else {
+        errors_.error(peek().location, "'set' requires an 'on <entity>' target");
+    }
+
+    consume(TokenType::COLON, "expected ':' after set target");
+    if (!at_indented_block()) {
+        errors_.error(stmt.location, "'set' needs at least one field assignment");
+        expect_newline();
+        return stmt;
+    }
+    stmt.args = parse_field_assignment_block();
+    if (stmt.args.empty()) {
+        errors_.error(stmt.location, "'set' needs at least one field assignment");
+    }
+    return stmt;
+}
+
 ForeachStmt Parser::parse_foreach_stmt() {
     auto loc = peek().location;
     consume(TokenType::FOR, "expected 'for'");
@@ -2360,6 +2396,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
     if (check(TokenType::PROJECT)) {
         auto project = parse_project_trait_stmt();
         return std::make_unique<StmtNode>(StmtNode::Variant{std::move(project)}, loc);
+    }
+    // `set` is contextual: two adjacent identifiers are never a valid expression.
+    if (check(TokenType::IDENTIFIER) && peek().value == "set" && peek_next().type == TokenType::IDENTIFIER) {
+        auto set = parse_set_trait_stmt();
+        return std::make_unique<StmtNode>(StmtNode::Variant{std::move(set)}, loc);
     }
 
     return parse_assign_or_expr_stmt();

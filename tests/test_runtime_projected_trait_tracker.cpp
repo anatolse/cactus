@@ -148,4 +148,49 @@ TEST_CASE("ProjectedTraitTracker: a projected entity destroyed mid-frame is skip
 
     CHECK_NOTHROW(tracker.clear(registry));
 }
+
+TEST_CASE("ProjectedTraitTracker: durable_value under a projection is the remembered value, so a patch "
+          "survives clear without changing the overlay",
+          "[runtime][projected-trait][deferred-set]") {
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<DataComponent>(entity, DataComponent{.value = 10});
+
+    ProjectedTraitTracker<DataComponent> tracker;
+    tracker.project(registry, entity).value = 99;
+
+    auto* durable = tracker.durable_value(registry, entity);
+    REQUIRE(durable != nullptr);
+    durable->value = 7;
+    CHECK(registry.get<DataComponent>(entity).value == 99);
+
+    tracker.clear(registry);
+    CHECK(registry.get<DataComponent>(entity).value == 7);
+}
+
+TEST_CASE("ProjectedTraitTracker: durable_value is null for a projection-only component",
+          "[runtime][projected-trait][deferred-set]") {
+    entt::registry registry;
+    const auto entity = registry.create();
+
+    ProjectedTraitTracker<DataComponent> tracker;
+    tracker.project(registry, entity).value = 99;
+
+    CHECK(tracker.durable_value(registry, entity) == nullptr);
+}
+
+TEST_CASE("ProjectedTraitTracker: durable_value without a projection is the live component, or null when absent",
+          "[runtime][projected-trait][deferred-set]") {
+    entt::registry registry;
+    const auto with_component    = registry.create();
+    const auto without_component = registry.create();
+    registry.emplace<DataComponent>(with_component, DataComponent{.value = 10});
+
+    ProjectedTraitTracker<DataComponent> tracker;
+    CHECK(tracker.durable_value(registry, with_component) == &registry.get<DataComponent>(with_component));
+    CHECK(tracker.durable_value(registry, without_component) == nullptr);
+
+    registry.destroy(with_component);
+    CHECK(tracker.durable_value(registry, with_component) == nullptr);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

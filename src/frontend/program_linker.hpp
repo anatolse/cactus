@@ -47,6 +47,8 @@ private:
     // rebuild_execution_graph, once program.events and
     // program.execution_graph.phases reflect every linked module.
     void validate_persistence_requires_graph_scheduler(const DecoratedProgram& program);
+    // A `set` patch applies at the activation commit, which the legacy frame path lacks.
+    void validate_set_requires_graph_scheduler(const DecoratedProgram& program);
 
     std::vector<ScheduleEdge> linked_explicit_edges_;
 

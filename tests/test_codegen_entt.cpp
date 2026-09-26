@@ -297,6 +297,62 @@ extern rule Monitor:
     CHECK(generated.find("void game__Monitor__tick(entt::registry& registry)") == std::string::npos);
 }
 
+TEST_CASE("cpp-entt lowers an external set command to a queue-only typed patch capability",
+          "[codegen-entt][external-handler][deferred-set]") {
+    const auto source = R"(
+module game
+
+pub extern event frame:
+    dt: float
+
+trait Health:
+    var current: int = 10
+    var max: int = 10
+
+trait Aim:
+    var other: entity_id
+
+phase simulate:
+    from:
+        frame
+
+extern rule Heal:
+    filter:
+        Aim
+    on simulate:
+        reads:
+            Aim
+        commands:
+            set Health
+)";
+    ProgramNode ast;
+    auto program = full_pipeline(source, ast);
+
+    const auto generated    = CppEnttCodegen::generate(program);
+    const auto capabilities = generated.find("struct Capabilities__game__Heal__on__game__simulate");
+    REQUIRE(capabilities != std::string::npos);
+    const auto capabilities_end = generated.find("\n};\n\n", capabilities);
+    REQUIRE(capabilities_end != std::string::npos);
+    const auto surface = generated.substr(capabilities, capabilities_end - capabilities);
+
+    CHECK(surface.find("struct game__Health_patch {") != std::string::npos);
+    CHECK(surface.find("std::optional<decltype(game__Health::current)> current;") != std::string::npos);
+    CHECK(surface.find("std::optional<decltype(game__Health::max)> max;") != std::string::npos);
+    CHECK(surface.find("void command_set_game__Health(entt::entity target, game__Health_patch patch) const") !=
+          std::string::npos);
+    CHECK(surface.find("StructuralCommand::Kind::Set") != std::string::npos);
+    CHECK(surface.find("::durable_game__Health(registry, target)") != std::string::npos);
+    CHECK(surface.find("cancel_projected_") == std::string::npos);
+    CHECK(surface.find("retain_construction") == std::string::npos);
+    CHECK(surface.find("game__Health&") == std::string::npos);
+    CHECK(surface.find("game__Health*") == std::string::npos);
+
+    const auto callback = generated.find("void cactus_external__game__Heal__on__game__simulate(");
+    REQUIRE(callback != std::string::npos);
+    const auto callback_signature = generated.substr(callback, generated.find(')', callback) - callback);
+    CHECK(callback_signature.find("game__Health") == std::string::npos);
+}
+
 // A field's default member initializer must come from the trait's own `=
 // expression` in the parsed AST (the DSL source of truth), not a backend-side
 // copy that can silently drift from it — so `emit_component` takes the
@@ -5604,6 +5660,43 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
     CHECK(legacy_code.find("auto " + legacy_spawned_name + " = create_particle(registry);") != std::string::npos);
     CHECK(legacy_code.find("generated_reserve_entity") == std::string::npos);
     CHECK(legacy_code.find("generated_queue_structural_command") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: set queues a durable-value patch without projection cancel or baseline retain",
+          "[codegen-entt][phase-runtime][commands][deferred-set]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline("module game.patch\n"
+                                         "pub extern event frame:\n"
+                                         "    dt: float\n"
+                                         "trait Health:\n"
+                                         "    var current: int = 10\n"
+                                         "    var max: int = 10\n"
+                                         "trait Aim:\n"
+                                         "    var other: entity_id\n"
+                                         "phase tick:\n"
+                                         "    from:\n"
+                                         "        frame\n"
+                                         "rule Patch:\n"
+                                         "    filter:\n"
+                                         "        Aim as aim\n"
+                                         "    on tick:\n"
+                                         "        set Health on aim.other:\n"
+                                         "            current = 1\n",
+                                         program);
+
+    const auto code  = CppEnttCodegen::generate(decorated);
+    const auto start = code.find("StructuralCommand::Kind::Set");
+    REQUIRE(start != std::string::npos);
+    const auto end = code.find("});", start);
+    REQUIRE(end != std::string::npos);
+    const auto command = code.substr(start, end - start);
+
+    CHECK(command.find("durable_Health(registry, ") != std::string::npos);
+    CHECK(command.find("->current = ") != std::string::npos);
+    CHECK(command.find("max") == std::string::npos);
+    CHECK(command.find("cancel_projected_") == std::string::npos);
+    CHECK(command.find("retain_construction") == std::string::npos);
+    CHECK(command.find("emplace") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: compiler-owned contracted effects execute only through stable graph dispatch",

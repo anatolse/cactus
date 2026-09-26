@@ -98,6 +98,8 @@ true    false   and     or      not
 fixed_tick late_tick
 ```
 
+`set` is a contextual keyword: it starts a `set_stmt` (§3.16) only at statement start when followed by a trait reference, and is an ordinary identifier everywhere else.
+
 ### 2.5 Literals
 
 - integers: `0`, `42`
@@ -631,7 +633,8 @@ contract_clause     = ( "reads" | "writes" | "emits" | "effects" | "projects" ) 
 command_capability  = "spawn" dotted_name
                     | "destroy"
                     | "add" dotted_name
-                    | "remove" dotted_name ;
+                    | "remove" dotted_name
+                    | "set" dotted_name ;
 ```
 
 ```cactus
@@ -658,6 +661,8 @@ extern rule InputSource:
 An extern handler is **selectionless** when its owner has neither `filter:` nor `exclude:` and therefore runs once per trigger occurrence. Any filter or exclude clause creates an entity-selection pass. Selection does not itself grant read access: every component access by an extern handler must appear in `reads:` or `writes:`. `writes:` includes read access to the same trait.
 
 `projects:` declares, per trait, that the handler's generated callback capability object exposes a target-safe frame-local projection call for that trait — the same `project` overlay semantics `project_stmt` (§3.16) gives authored Cactus code, but reachable from a native/compiler-owned callback instead. A trait entry cannot appear in both `writes:` and `projects:` on the same handler, and duplicate entries within `projects:` are rejected. This is a generic capability for external producers (e.g. a future pointer/render-adjacent native adapter); Standard UI's own `MeasureUi`/`ArrangeUi` project `DesiredSize`/`ComputedLayout` through ordinary authored `project` statements and do not need it.
+
+A `set Trait` command capability exposes a queue-only patch operation for that trait (the `set_stmt` semantics of §3.16). It grants no read or write access to the trait; a handler that also needs to read it must list it in `reads:` or `writes:`. For regular handlers, `set Trait` is inferred into `commands` and does not add the trait to `reads` or `writes`.
 
 ### 3.11 Events and Phases
 
@@ -832,7 +837,7 @@ Every query call returns an immutable, finite snapshot taken once at the call si
 
 ```ebnf
 statement       = let_decl | var_decl | var_assign | emit_stmt | destroy_stmt
-                | load_stmt | add_stmt | remove_stmt | return_stmt
+                | load_stmt | add_stmt | remove_stmt | set_stmt | return_stmt
                  | project_stmt | foreach_stmt | expr_stmt | if_stmt | trait_match_stmt ;
 
 let_decl        = "let" IDENTIFIER [ ":" type_ref ] "=" expression NEWLINE ;
@@ -853,6 +858,10 @@ add_stmt        = "add" IDENTIFIER [ "to" expression ] NEWLINE
                   DEDENT ;
 
 remove_stmt     = "remove" IDENTIFIER [ "from" expression ] NEWLINE ;
+
+set_stmt        = "set" dotted_name "on" expression ":" NEWLINE INDENT
+                  field_assignment { field_assignment }
+                  DEDENT ;
 
 project_stmt    = "project" IDENTIFIER [ "to" expression ] NEWLINE
                 | "project" IDENTIFIER [ "to" expression ] ":" NEWLINE INDENT
@@ -889,6 +898,9 @@ add Invincible:
 project DamageFlash:
     color = #FF3333
 
+set Health on target:
+    current = 1
+
 remove Frozen
 destroy bullet
 load levels.level2
@@ -896,12 +908,17 @@ load levels.level2
 
 `emit` (like `add` and `project`) may omit the `:` payload block entirely when the event has no fields to set (e.g. a zero-field `pub event StartBump`) or when every field should take its default; `to expression` is still allowed without a block for a targeted zero-field emit.
 
+`set T on e:` queues a patch of the named fields of trait `T` on entity `e`, applied at the activation commit (§5.3). It is allowed only inside rule event handlers (including pair handlers, against either binding) of programs that use the graph-driven phase scheduler. The `on` target is required and must be an `entity_id`; `set T on self` is valid and still deferred. The block needs at least one field, `T` must declare fields, and each value must match its field type. When applied, the patch overwrites only the named fields of `e`'s existing durable `T`. It does nothing if `e` is stale or does not carry `T` durably; it never attaches `T`, fires no lifecycle notifications, and does not change the persistence construction baseline. If `T` is currently projected over a durable value, the patch updates the durable value that frame-end cleanup restores, and the visible projection is unchanged for the rest of the frame. Use `add` to attach a trait and `set` to change fields of a trait an entity may or may not carry.
+
+Field values and the target expression of `add`, `spawn` override blocks (including `children:` overrides), and `set` are evaluated exactly once, in source order, when the statement runs — the same as `emit` payloads — even though the command applies later at the activation commit. Later writes in the same activation, and calls to extern functions that read world state, do not change the values the command applies.
+
 Bounded foreach is allowed only inside rule event handlers. The iterable expression is evaluated once before the loop and must have type `list[T]`; the loop variable is a read-only binding scoped to the loop body. Cactus still does not support `while`, numeric/indexed `for`, `break`, or `continue`.
 
 `project` mirrors `add` field-initialization syntax but writes to a frame-local projected trait overlay instead of durable ECS component storage. If no `to` target is provided, the target is `self`. Projected traits are coalesced by `(entity, trait)`, visible to later `filter:` / `exclude:` matching during the same rendered frame, and cleared at the frame boundary after render processing. Use:
 
 - `emit` for occurrence-oriented messages, especially when multiple occurrences matter;
 - `add` / `remove` for durable entity state;
+- `set` to change fields of a trait on an entity the handler did not select;
 - `project` for current-frame facts such as grounded/contact facts, interaction availability, tint overrides, damage flashes, outlines, or other render/VFX hints.
 
 Traits with `persist` or `sync` fields cannot be projected because those modifiers describe durable storage behavior.
@@ -977,6 +994,7 @@ The canonical documented runtime trait mutation model is:
 - `add TraitName`
 - `add TraitName:` with block initialization
 - `remove TraitName`
+- `set TraitName on e:` to patch fields of a trait `e` already carries
 
 This is the preferred model for temporary gameplay states such as freeze, stun, invincibility, targeting, and similar state transitions.
 
@@ -1076,7 +1094,7 @@ Scene loading does not synthesize handlers by trigger spelling. Projects that ne
 
 ### 5.3 Structural Changes
 
-`spawn`, `destroy`, `add`, and `remove` are buffered in an activation-local deterministic command list. An activation runs its phase handlers, dispatches emitted events, and drains the bounded event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection midway through an activation. A spawn committed after periodic repetition N is selectable in repetition N+1.
+`spawn`, `destroy`, `add`, `remove`, and `set` are buffered in an activation-local deterministic command list, applied in handler execution-graph order, then entity iteration order, then statement order. Each command acts on the entity state at its position in the list: `add` then `set` patches the added trait, `remove` then `set` does nothing, and when several `set`s name the same field of the same entity the last one wins. An activation runs its phase handlers, dispatches emitted events, and drains the bounded event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection midway through an activation. A spawn committed after periodic repetition N is selectable in repetition N+1.
 
 Events emitted during an activation are delivered in deterministic queue order. Event handlers follow their own stable graph schedule and may emit further events. Feedback cycles are allowed, but cascade depth is bounded; overflow occurrences are deferred to a later activation. Commands produced by deferred delivery belong to that later activation. Effect calls happen when their handler executes and are not rolled back; matching effect domains are serialized by graph order.
 

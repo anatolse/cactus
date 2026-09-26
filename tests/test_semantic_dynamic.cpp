@@ -1367,4 +1367,105 @@ TEST_CASE("Semantic: child from undefined template rejected", "[semantic][hierar
     CHECK(err.find("undefined template 'NoSuchTemplate'") != std::string::npos);
 }
 
+// ── Deferred set ────────────────────────────────────────────────────────────
+
+static const std::string SET_TRAITS =
+    "trait Health:\n"
+    "    var current: int = 10\n"
+    "    var max: int = 10\n"
+    "trait Frozen\n"
+    "trait Target:\n"
+    "    var other: entity_id\n";
+
+TEST_CASE("Semantic: set with known trait and fields is valid", "[semantic][deferred-set]") {
+    CHECK(first_error(SET_TRAITS +
+                      "rule Heal:\n"
+                      "    filter:\n"
+                      "        Target as aim\n"
+                      "    on tick:\n"
+                      "        set Health on aim.other:\n"
+                      "            current = 5\n") == "");
+}
+
+TEST_CASE("Semantic: set with unknown trait is rejected", "[semantic][deferred-set]") {
+    auto err = first_error(SET_TRAITS +
+                           "rule Heal:\n"
+                           "    on tick:\n"
+                           "        set Missing on self:\n"
+                           "            current = 5\n");
+    CHECK(err.find("undeclared trait 'Missing'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: set with unknown field is rejected", "[semantic][deferred-set]") {
+    auto err = first_error(SET_TRAITS +
+                           "rule Heal:\n"
+                           "    on tick:\n"
+                           "        set Health on self:\n"
+                           "            armor = 5\n");
+    CHECK(err.find("unknown field 'armor'") != std::string::npos);
+    CHECK(err.find("Health") != std::string::npos);
+}
+
+TEST_CASE("Semantic: set on a marker trait is rejected", "[semantic][deferred-set]") {
+    auto err = first_error(SET_TRAITS +
+                           "rule Thaw:\n"
+                           "    on tick:\n"
+                           "        set Frozen on self:\n"
+                           "            current = 5\n");
+    CHECK(err.find("`set` needs a trait with fields") != std::string::npos);
+}
+
+TEST_CASE("Semantic: set with a mismatched field type is rejected", "[semantic][deferred-set]") {
+    auto err = first_error(SET_TRAITS +
+                           "rule Heal:\n"
+                           "    on tick:\n"
+                           "        set Health on self:\n"
+                           "            current = true\n");
+    CHECK(err.find("type mismatch for field 'current'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: set does not require unnamed fields", "[semantic][deferred-set]") {
+    CHECK(first_error("trait Pose:\n"
+                      "    var x: float\n"
+                      "    var y: float\n"
+                      "rule Move:\n"
+                      "    on tick:\n"
+                      "        set Pose on self:\n"
+                      "            x = 1.0\n") == "");
+}
+
+TEST_CASE("Semantic: set with a non-entity target is rejected", "[semantic][deferred-set]") {
+    auto err = first_error(SET_TRAITS +
+                           "rule Heal:\n"
+                           "    on tick:\n"
+                           "        set Health on 5:\n"
+                           "            current = 5\n");
+    CHECK(err.find("`set` target must be of type `entity_id`") != std::string::npos);
+}
+
+TEST_CASE("Semantic: set inside a func is rejected", "[semantic][deferred-set]") {
+    auto err = first_error(SET_TRAITS +
+                           "func heal(e: entity_id):\n"
+                           "    set Health on e:\n"
+                           "        current = 5\n");
+    CHECK(err.find("`set` only allowed inside rule event handlers") != std::string::npos);
+}
+
+TEST_CASE("Semantic: set on a pair binding is accepted", "[semantic][deferred-set]") {
+    CHECK(first_error("trait Push:\n"
+                      "    var amount: float = 0.0\n"
+                      "trait Collider:\n"
+                      "    var mask: int = 1\n"
+                      "rule Shove:\n"
+                      "    pairs:\n"
+                      "        a:\n"
+                      "            Collider\n"
+                      "            Push\n"
+                      "        b:\n"
+                      "            Collider\n"
+                      "    on tick:\n"
+                      "        set Push on a:\n"
+                      "            amount = a.Push.amount + 1.0\n") == "");
+}
+
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -1,0 +1,210 @@
+module deferred_set
+
+# `set T on e:` patches fields of a trait another handler did not select.
+# The patch takes its values when the statement runs and lands at the
+# activation commit, in command order.
+
+use std.core
+use std.transform.volume as tv
+
+trait Health:
+    var current: int = 10
+    var max: int = 10
+
+trait Animator:
+    var clip: int = 0
+    var time: float = 0.0
+    var speed: float = 2.0
+
+trait Watch:
+    var first: int = -1
+    var second: int = -1
+
+trait Snapshot:
+    var from_field: float = -1.0
+    var from_extern: float = -1.0
+
+trait Probe:
+    var done: bool = false
+
+trait Push:
+    var amount: float = 0.0
+
+trait Ball
+
+trait Tint:
+    var level: int = 1
+
+trait TintSeen:
+    var late: int = -1
+
+trait Highlight:
+    var level: int = 0
+
+trait Director:
+    var watched: entity_id
+    var contested: entity_id
+    var animated: entity_id
+    var bare: entity_id
+    var doomed: entity_id
+    var fresh: entity_id
+    var stripped: entity_id
+    var tinted: entity_id
+    var glowing: entity_id
+
+template Target:
+    Health
+    Animator
+
+template Watched:
+    Health
+    Watch
+
+template Bare:
+    Animator
+
+template Tinted:
+    Tint
+    TintSeen
+
+template Stage:
+    Probe
+
+template Mover:
+    Ball
+    Push
+
+entity Subject:
+    tv.WorldTransform:
+        position = vec3(1.0, 0.0, 0.0)
+    Snapshot
+    Probe
+
+rule Setup:
+    on load:
+        let watched = spawn Watched()
+        let contested = spawn Target()
+        let animated = spawn Target()
+        let bare = spawn Bare()
+        let doomed = spawn Target()
+        let fresh = spawn Bare()
+        let stripped = spawn Target()
+        let tinted = spawn Tinted()
+        let glowing = spawn Bare()
+        spawn Mover()
+        spawn Mover()
+        spawn Mover()
+        let stage = spawn Stage()
+        add Director to stage:
+            watched = watched
+            contested = contested
+            animated = animated
+            bare = bare
+            doomed = doomed
+            fresh = fresh
+            stripped = stripped
+            tinted = tinted
+            glowing = glowing
+
+rule TakeSnapshot:
+    filter:
+        Snapshot
+        Probe as probe
+        tv.WorldTransform as transform
+
+    on tick:
+        if probe.done:
+            return
+        probe.done = true
+        set Snapshot on self:
+            from_field = transform.position.x
+            from_extern = tv.world_position(self).x
+        transform.position = vec3(99.0, 0.0, 0.0)
+
+rule FirstWriter:
+    filter:
+        Director as director
+        Probe as probe
+
+    on tick:
+        if probe.done:
+            return
+        set Health on director.watched:
+            current = 1
+        set Health on director.contested:
+            current = 5
+        set Animator on director.animated:
+            clip = 3
+        set Health on director.bare:
+            current = 1
+        destroy director.doomed
+        set Health on director.doomed:
+            current = 1
+        add Health to director.fresh:
+            current = 3
+        set Health on director.fresh:
+            current = 8
+        remove Health from director.stripped
+        set Health on director.stripped:
+            current = 1
+        project Tint to director.tinted:
+            level = 2
+        set Tint on director.tinted:
+            level = 3
+        project Highlight to director.glowing:
+            level = 1
+        set Highlight on director.glowing:
+            level = 5
+
+rule SecondWriter:
+    filter:
+        Director as director
+        Probe as probe
+    after:
+        FirstWriter
+
+    on tick:
+        if probe.done:
+            return
+        probe.done = true
+        set Health on director.contested:
+            current = 7
+        set Animator on director.animated:
+            time = 0.5
+
+rule Observe:
+    filter:
+        Health as health
+        Watch as watch
+    after:
+        SecondWriter
+
+    on tick:
+        if watch.first < 0:
+            watch.first = health.current
+            return
+        if watch.second < 0:
+            watch.second = health.current
+
+rule Shove:
+    pairs:
+        a:
+            Ball
+            Push
+        b:
+            Ball
+    where:
+        a != b
+
+    on tick:
+        set Push on a:
+            amount = a.Push.amount + 1.0
+
+rule SeeTint:
+    filter:
+        Tint as tint
+        TintSeen as seen
+
+    on late_tick:
+        if seen.late < 0:
+            seen.late = tint.level

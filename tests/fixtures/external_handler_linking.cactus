@@ -12,6 +12,10 @@ trait Position:
 trait Velocity:
     var value: float = 1.0
 
+trait Heading:
+    var angle: float = 0.0
+    var turns: int = 0
+
 phase fixed_tick:
     from:
         frame
@@ -20,6 +24,7 @@ phase fixed_tick:
 entity Mover:
     Position
     Velocity
+    Heading
 
 extern rule NativeMovement:
     filter:
@@ -30,6 +35,8 @@ extern rule NativeMovement:
             Position
         writes:
             Velocity
+        commands:
+            set Heading
     on Reset:
         reads:
             Velocity

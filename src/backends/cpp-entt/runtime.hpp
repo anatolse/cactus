@@ -1292,7 +1292,7 @@ inline void generated_queue_restore_request(std::string slot, int request_id) {
 // dependency on the program's EventOccurrence type, so it stays a plain,
 // non-template struct.
 struct StructuralCommand {
-    enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove };
+    enum class Kind : std::uint8_t { Spawn, Destroy, Add, Remove, Set };
     Kind kind{};
     std::function<void(entt::registry&)> apply;
 };
@@ -1362,7 +1362,7 @@ template <typename Occurrence>
     throw std::runtime_error("cactus deferred entity identifier space exhausted");
 }
 
-// Queues a structural command (spawn/destroy/add/remove) to apply once the
+// Queues a structural command (spawn/destroy/add/remove/set) to apply once the
 // current activation commits; throws if called outside an activation, which
 // would otherwise silently drop the command.
 template <typename Occurrence>
@@ -1580,6 +1580,21 @@ public:
     // than durable structure, which world capture must not record.
     [[nodiscard]] bool is_projected(entt::entity entity) const {
         return previous_.contains(entity);
+    }
+
+    // The value a deferred field patch must write: the remembered
+    // pre-projection value while projected, so clear() keeps the patch;
+    // null when the entity has no durable component.
+    [[nodiscard]] Component* durable_value(entt::registry& registry, entt::entity entity)
+        requires(!std::is_empty_v<Component>)
+    {
+        if (!registry.valid(entity)) {
+            return nullptr;
+        }
+        if (const auto previous_it = previous_.find(entity); previous_it != previous_.end()) {
+            return previous_it->second.has_value() ? &*previous_it->second : nullptr;
+        }
+        return registry.try_get<Component>(entity);
     }
 
     // Restores or removes every tracked entity's component per the recorded

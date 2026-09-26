@@ -1540,9 +1540,58 @@ static std::string trait_cpp_from_entry(const ArchetypeTraitEntry& entry, const 
     return EnttCodegenUtils::trait_cpp_name(entry.resolved_trait_id, entry.trait_name, program);
 }
 
+static std::string deferred_field_value_name(const FieldAssignment& assignment) {
+    return gen_temp_name("field", assignment.location);
+}
+
+// Deferred field blocks take their values when the statement runs, so a
+// registry-reading call sees the same moment as a trait read.
+static void emit_deferred_field_values(std::ostringstream& out,
+                                       const std::string& ind,
+                                       const std::string& cpp_name,
+                                       const std::vector<FieldAssignment>& assignments,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_set<std::string>& pointer_aliases,
+                                       const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                       const PairCodegenScope* pair_scope) {
+    for (const auto& assignment : assignments) {
+        out << ind << "const decltype(" << cpp_name << "::" << assignment.name << ") "
+            << deferred_field_value_name(assignment) << " = "
+            << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
+            << ";\n";
+    }
+}
+
+static void emit_deferred_override_values(std::ostringstream& out,
+                                          const std::string& ind,
+                                          const std::vector<ArchetypeTraitEntry>& overrides,
+                                          const std::vector<ChildOverrideNode>& child_overrides,
+                                          const std::vector<std::string>& trait_names,
+                                          const DecoratedProgram& program,
+                                          const std::unordered_set<std::string>& pointer_aliases,
+                                          const PairCodegenScope* pair_scope) {
+    for (const auto& entry : overrides) {
+        emit_deferred_field_values(out,
+                                   ind,
+                                   trait_cpp_from_entry(entry, program),
+                                   entry.assignments,
+                                   trait_names,
+                                   program,
+                                   pointer_aliases,
+                                   {},
+                                   pair_scope);
+    }
+    for (const auto& child : child_overrides) {
+        emit_deferred_override_values(
+            out, ind, child.traits, child.children, trait_names, program, pointer_aliases, pair_scope);
+    }
+}
+
 // An override is evaluated once at construction, so when the spawned node's
 // creation path retains provenance the override belongs to the construction
-// data rather than counting as a later mutation.
+// data rather than counting as a later mutation. `deferred` overrides read the
+// values emit_deferred_override_values hoisted before the command was queued.
 static std::string emit_spawn_overrides(const std::string& entity_name,
                                         const std::vector<ArchetypeTraitEntry>& overrides,
                                         int indent,
@@ -1550,7 +1599,8 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
                                         const DecoratedProgram& program,
                                         const std::unordered_set<std::string>& pointer_aliases,
                                         const PairCodegenScope* pair_scope,
-                                        bool retain_construction) {
+                                        bool retain_construction,
+                                        bool deferred) {
     const std::string ind(static_cast<std::size_t>(indent) * 4U, ' ');
     std::ostringstream out;
     for (const auto& override_entry : overrides) {
@@ -1568,7 +1618,9 @@ static std::string emit_spawn_overrides(const std::string& entity_name,
             << cpp_name << "{};\n";
         for (const auto& assignment : override_entry.assignments) {
             out << ind << "    " << value_name << "." << assignment.name << " = "
-                << rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, {}, pair_scope) << ";\n";
+                << (deferred ? deferred_field_value_name(assignment)
+                             : rewrite_expr(*assignment.value, trait_names, program, pointer_aliases, {}, pair_scope))
+                << ";\n";
         }
         out << ind << "    registry.emplace_or_replace<" << cpp_name << ">(" << entity_name << ", " << value_name
             << ");\n";
@@ -1631,7 +1683,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                                        const DecoratedProgram& program,
                                        const std::unordered_set<std::string>& pointer_aliases,
                                        const PairCodegenScope* pair_scope,
-                                       const std::string& arguments) {
+                                       const std::string& arguments,
+                                       bool deferred) {
     static const std::vector<ChildOverrideNode> NO_OVERRIDES;
     std::size_t index = 0;
     for (const auto& child : children) {
@@ -1661,7 +1714,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                 program,
                 pointer_aliases,
                 pair_scope,
-                EnttPersistenceEmitter::node_retains_construction(program, archetype, role_path));
+                EnttPersistenceEmitter::node_retains_construction(program, archetype, role_path),
+                deferred);
         }
 
         emit_spawn_child_expansion(out,
@@ -1677,7 +1731,8 @@ static void emit_spawn_child_expansion(std::ostringstream& out,
                                    program,
                                    pointer_aliases,
                                    pair_scope,
-                                   arguments);
+                                   arguments,
+                                   deferred);
         role_path.pop_back();
         ++index;
     }
@@ -1733,9 +1788,12 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                     program,
                                     pointer_aliases,
                                     pair_scope,
-                                    EnttPersistenceEmitter::node_retains_construction(program, template_id));
+                                    EnttPersistenceEmitter::node_retains_construction(program, template_id),
+                                    graph_runtime);
     };
     if (graph_runtime) {
+        emit_deferred_override_values(
+            out, "    ", root_overrides, child_overrides, trait_names, program, pointer_aliases, pair_scope);
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
@@ -1762,7 +1820,8 @@ static std::string emit_hierarchical_spawn_expansion(const SymbolId& template_id
                                program,
                                pointer_aliases,
                                pair_scope,
-                               arguments);
+                               arguments,
+                               graph_runtime);
     if (graph_runtime) {
         out << "        });\n";
     }
@@ -1826,7 +1885,8 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
     out << "([&]() {\n";
     const auto arguments =
         emit_template_bindings(out, spawn.arguments, "    ", trait_names, program, pointer_aliases, pair_scope);
-    const auto overrides = [&](int indent) {
+    const bool graph_runtime = !program.execution_graph.phases.empty();
+    const auto overrides     = [&](int indent) {
         return emit_spawn_overrides(spawned_name,
                                     spawn.overrides,
                                     indent,
@@ -1834,9 +1894,12 @@ static std::string emit_spawn_expression(const SpawnExpr& spawn,
                                     program,
                                     pointer_aliases,
                                     pair_scope,
-                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id));
+                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id),
+                                    graph_runtime);
     };
-    if (!program.execution_graph.phases.empty()) {
+    if (graph_runtime) {
+        emit_deferred_override_values(
+            out, "    ", spawn.overrides, {}, trait_names, program, pointer_aliases, pair_scope);
         out << "    auto " << spawned_name << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         out << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         out << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Spawn,\n";
@@ -2728,7 +2791,8 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
     result << ind << "{\n";
     const auto arguments =
         emit_template_bindings(result, s.arguments, ind + "    ", trait_names, program, pointer_aliases, pair_scope);
-    const auto overrides = [&](int override_indent) {
+    const bool graph_runtime = !program.execution_graph.phases.empty();
+    const auto overrides     = [&](int override_indent) {
         return emit_spawn_overrides(spawned_name,
                                     s.overrides,
                                     override_indent,
@@ -2736,9 +2800,12 @@ static std::string emit_spawn_stmt(const SpawnStmt& s,
                                     program,
                                     pointer_aliases,
                                     pair_scope,
-                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id));
+                                    EnttPersistenceEmitter::node_retains_construction(program, tmpl_id),
+                                    graph_runtime);
     };
-    if (!program.execution_graph.phases.empty()) {
+    if (graph_runtime) {
+        emit_deferred_override_values(
+            result, ind + "    ", s.overrides, {}, trait_names, program, pointer_aliases, pair_scope);
         result << ind << "    auto " << spawned_name
                << " = cactus::runtime::entt_backend::generated_reserve_entity(registry);\n";
         result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
@@ -2788,6 +2855,8 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
         std::ostringstream result;
         result << ind << "{\n";
         result << ind << "    const auto " << target_name << " = " << target << ";\n";
+        emit_deferred_field_values(
+            result, ind + "    ", cpp, s.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
         result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
         result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Add,\n";
         result << ind << "        [=](entt::registry& registry) mutable {\n";
@@ -2802,8 +2871,7 @@ static std::string emit_add_trait_stmt(const AddTraitStmt& s,
                    << " : " << cpp << "{};\n";
             for (const auto& arg : s.args) {
                 result << ind << "            " << value_name << "." << arg.name << " = "
-                       << rewrite_expr(*arg.value, trait_names, program, pointer_aliases, cpp_overrides, pair_scope)
-                       << ";\n";
+                       << deferred_field_value_name(arg) << ";\n";
             }
             result << ind << "            registry.emplace_or_replace<" << cpp << ">(" << target_name << ", "
                    << value_name << ");\n";
@@ -2889,6 +2957,42 @@ static std::string emit_remove_trait_stmt(const RemoveTraitStmt& s,
     return ind + "cancel_projected_" + cpp + "(" + target + ");\n" + ind + "if (registry.all_of<" + cpp + ">(" +
            target + ")) {\n" + ind + "    registry.remove<" + cpp + ">(" + target + ");\n" +
            discard_line(target, ind + "    ") + ind + "}\n";
+}
+
+// A pure patch: no attach, no projection cancel, no construction baseline.
+static std::string emit_set_trait_stmt(const SetTraitStmt& s,
+                                       int indent,
+                                       const std::vector<std::string>& trait_names,
+                                       const DecoratedProgram& program,
+                                       const std::unordered_set<std::string>& pointer_aliases,
+                                       const std::unordered_map<std::string, std::string>& cpp_overrides,
+                                       const PairCodegenScope* pair_scope) {
+    if (program.execution_graph.phases.empty()) {
+        throw std::runtime_error("cpp-entt backend: `set` requires the graph-driven phase scheduler");
+    }
+    const std::string ind(static_cast<size_t>(indent) * 4, ' ');
+    const std::string cpp         = EnttCodegenUtils::trait_cpp_name(s.resolved_trait_id, s.trait_name, program);
+    const std::string target_name = gen_temp_name("target", s.location);
+    const std::string value_name  = gen_temp_name("value", s.location);
+    std::ostringstream result;
+    result << ind << "{\n";
+    result << ind << "    const auto " << target_name << " = "
+           << rewrite_expr(*s.target_expr, trait_names, program, pointer_aliases, cpp_overrides, pair_scope) << ";\n";
+    emit_deferred_field_values(
+        result, ind + "    ", cpp, s.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+    result << ind << "    cactus::runtime::entt_backend::generated_queue_structural_command(\n";
+    result << ind << "        cactus::runtime::entt_backend::StructuralCommand::Kind::Set,\n";
+    result << ind << "        [=](entt::registry& registry) {\n";
+    result << ind << "            auto* " << value_name << " = durable_" << cpp << "(registry, " << target_name
+           << ");\n";
+    result << ind << "            if (" << value_name << " == nullptr) { return; }\n";
+    for (const auto& arg : s.args) {
+        result << ind << "            " << value_name << "->" << arg.name << " = " << deferred_field_value_name(arg)
+               << ";\n";
+    }
+    result << ind << "        });\n";
+    result << ind << "}\n";
+    return result.str();
 }
 
 static std::string emit_project_trait_stmt(const ProjectTraitStmt& s,
@@ -3119,6 +3223,8 @@ static std::string rewrite_stmt(const StmtNode& stmt,
             } else if constexpr (std::is_same_v<S, RemoveTraitStmt>) {
                 return emit_remove_trait_stmt(
                     s, indent, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
+            } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+                return emit_set_trait_stmt(s, indent, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);
             } else if constexpr (std::is_same_v<S, ProjectTraitStmt>) {
                 return emit_project_trait_stmt(
                     s, indent, trait_names, program, pointer_aliases, cpp_overrides, pair_scope);

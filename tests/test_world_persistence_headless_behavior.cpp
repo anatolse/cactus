@@ -160,6 +160,33 @@ TEST_CASE("a world snapshot records an enemy's original spawn argument, not its 
     CHECK(int_field(health->persisted, "current") == 42);
 }
 
+TEST_CASE("a set patch keeps an unmarked field's construction value and saves a persist field's patched value",
+          "[runtime][persistence][capture][deferred-set]") {
+    World world;
+    auto& registry = world.registry;
+
+    queue_spawns(registry, 1, 0);
+    drive_frame(registry, kStep);
+    const auto view = registry.view<world_persistence__Health, std_transform_flat__LocalTransform>();
+    REQUIRE(view.begin() != view.end());
+    const auto enemy = *view.begin();
+
+    auto& spawner         = registry.get<world_persistence__Spawner>(entity_with<world_persistence__Spawner>(registry));
+    spawner.patch_target  = enemy;
+    spawner.pending_patch = 1;
+    drive_frame(registry, kStep);
+    REQUIRE(registry.get<world_persistence__Health>(enemy).maximum == 900);
+    REQUIRE(registry.get<world_persistence__Health>(enemy).current == 42);
+
+    const auto snapshot = capture(registry);
+    const auto* record  = record_for_archetype(snapshot, "world_persistence.Enemy");
+    REQUIRE(record != nullptr);
+    const auto* health = trait_of(*record, "world_persistence.Health");
+    REQUIRE(health != nullptr);
+    CHECK(int_field(health->construction, "maximum") == 700);
+    CHECK(int_field(health->persisted, "current") == 42);
+}
+
 TEST_CASE("customized particles stay out of a world snapshot", "[runtime][persistence][capture]") {
     World world;
     auto& registry = world.registry;

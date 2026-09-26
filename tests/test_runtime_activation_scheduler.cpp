@@ -218,4 +218,19 @@ TEST_CASE("commit_activation loops while an OnSpawn hook keeps producing new com
     CHECK(spawn_count == 1);
     CHECK(activation.commands.empty());
 }
+
+TEST_CASE("notify_structural_command fires no lifecycle notification for a Set command",
+          "[runtime][activation][deferred-set]") {
+    ActivationRuntime<TestOccurrence> activation;
+    int spawn_notified   = 0;
+    int destroy_notified = 0;
+    auto on_spawn        = [&](ActivationRuntime<TestOccurrence>&) { ++spawn_notified; };
+    auto on_destroy      = [&](ActivationRuntime<TestOccurrence>&) { ++destroy_notified; };
+
+    const StructuralCommand command{.kind = StructuralCommand::Kind::Set, .apply = [](entt::registry&) {}};
+    notify_structural_command(activation, command, on_spawn, on_destroy);
+
+    CHECK(spawn_notified == 0);
+    CHECK(destroy_notified == 0);
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity)

@@ -127,7 +127,7 @@ TEST_CASE(
 
     entt::registry registry;
 
-    // DriveRestartScenario (examples/model_animation_events.cactus) drives
+    // DriveRestartScenario (examples/stdlib-fixtures/model_animation_events.cactus) drives
     // Restarter through: normal Once playback on clip 3 (frames 1-29), an
     // explicit seek to time=0.3 at frame 30 (must not replay the 0.05s cue
     // already crossed around frame 3), an interruption to clip 7 at time=0.0

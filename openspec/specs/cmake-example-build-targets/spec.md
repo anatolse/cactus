@@ -50,7 +50,7 @@ The build configuration SHALL call the reusable example-registration function fo
 
 #### Scenario: Top-level standalone examples are registered
 - **WHEN** CMake configures example targets
-- **THEN** it registers targets for `examples/shooter-slice.cactus` and `examples/stdlib_extern_coverage.cactus`
+- **THEN** it registers targets for `examples/shooter-slice/main.cactus` and `examples/stdlib-fixtures/stdlib_extern_coverage.cactus`
 
 #### Scenario: Directory-based examples are registered
 - **WHEN** CMake configures example targets

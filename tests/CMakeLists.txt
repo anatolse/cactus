@@ -54,7 +54,7 @@ set_property(TARGET cactus_runtime_cpp_entt_headless_fake PROPERTY CXX_CLANG_TID
 # processes, so file-static runtime holders cannot leak between save and
 # restore the way they would in a second in-process run.
 cactus_add_persistence_roundtrip_subprocess(persistence_roundtrip_subprocess
-    CACTUS_SOURCE "examples/world_persistence.cactus"
+    CACTUS_SOURCE "examples/stdlib-fixtures/world_persistence.cactus"
     BACKEND cpp-entt
     MAIN_SOURCE persistence_roundtrip_subprocess_main.cpp
 )
@@ -226,7 +226,7 @@ add_test(NAME RuntimePersistenceFileAdapterTests COMMAND test_runtime_persistenc
 # fixture. Reads the generated .cpp as plain text rather than compiling/running it,
 # since generated main() opens a real window (see cactus_add_headless_behavior_test's
 # CACTUS_GENERATED_NO_MAIN, used by every other persistence test instead).
-set(persistence_default_main_source "${CMAKE_SOURCE_DIR}/examples/persistence_save_events.cactus")
+set(persistence_default_main_source "${CMAKE_SOURCE_DIR}/examples/stdlib-fixtures/persistence_save_events.cactus")
 set(persistence_default_main_generated
     "${CACTUS_GENERATED_EXAMPLES_DIR}/test_persistence_default_main_registration.generated.cpp")
 add_custom_command(
@@ -277,7 +277,7 @@ cactus_add_headless_behavior_test(test_model_tint_headless_behavior
 )
 
 cactus_add_headless_behavior_test(test_model_animation_events_headless_behavior
-    CACTUS_SOURCE examples/model_animation_events.cactus
+    CACTUS_SOURCE examples/stdlib-fixtures/model_animation_events.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_model_animation_events_headless_behavior.cpp
 )
@@ -385,25 +385,25 @@ cactus_add_headless_behavior_test(test_bouncy_bubbles_headless_behavior
 )
 
 cactus_add_headless_behavior_test(test_gameplay_timers_headless_behavior
-    CACTUS_SOURCE examples/gameplay_timers.cactus
+    CACTUS_SOURCE examples/stdlib-fixtures/gameplay_timers.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_gameplay_timers_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_world_persistence_headless_behavior
-    CACTUS_SOURCE examples/world_persistence.cactus
+    CACTUS_SOURCE examples/stdlib-fixtures/world_persistence.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_world_persistence_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_world_persistence_dynamic_headless_behavior
-    CACTUS_SOURCE examples/world_persistence_dynamic.cactus
+    CACTUS_SOURCE examples/stdlib-fixtures/world_persistence_dynamic.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_world_persistence_dynamic_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_persistence_save_events_headless_behavior
-    CACTUS_SOURCE examples/persistence_save_events.cactus
+    CACTUS_SOURCE examples/stdlib-fixtures/persistence_save_events.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_save_events_headless_behavior.cpp
 )
@@ -427,7 +427,7 @@ cactus_add_headless_behavior_test(test_persistence_references_headless_behavior
 )
 
 cactus_add_headless_behavior_test(test_persistence_save_on_load_headless_behavior
-    CACTUS_SOURCE examples/persistence_save_on_load.cactus
+    CACTUS_SOURCE examples/stdlib-fixtures/persistence_save_on_load.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_save_on_load_headless_behavior.cpp
 )
@@ -476,7 +476,7 @@ target_compile_definitions(test_example_cpp_compilation PRIVATE
     CACTUS_EXAMPLE_BLUE_SQUARE_GENERATED_CPP="${BLUE_SQUARE_GENERATED_CPP}"
     CACTUS_EXAMPLE_BLUE_SQUARE_TARGET="example_blue_square_generated"
 
-    CACTUS_EXAMPLE_STDLIB_EXTERN_SOURCE="examples/stdlib_extern_coverage.cactus"
+    CACTUS_EXAMPLE_STDLIB_EXTERN_SOURCE="examples/stdlib-fixtures/stdlib_extern_coverage.cactus"
     CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_GENERATED_CPP="${STDLIB_EXTERN_ENTT_GENERATED_CPP}"
     CACTUS_EXAMPLE_STDLIB_EXTERN_ENTT_TARGET="example_stdlib_extern_entt_generated"
 

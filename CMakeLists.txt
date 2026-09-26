@@ -543,7 +543,7 @@ cactus_add_example(example_bouncy_balls_3d_generated
 )
 
 cactus_add_example(example_stdlib_extern_entt_generated
-    SOURCE "examples/stdlib_extern_coverage.cactus"
+    SOURCE "examples/stdlib-fixtures/stdlib_extern_coverage.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${STDLIB_EXTERN_ENTT_GENERATED_CPP}"
 )
@@ -580,7 +580,7 @@ cactus_add_example(example_platformer_generated
 )
 
 cactus_add_example(example_shooter_slice_generated
-    SOURCE "examples/shooter-slice.cactus"
+    SOURCE "examples/shooter-slice/main.cactus"
     BACKEND "cpp-entt"
     OUTPUT "${SHOOTER_SLICE_GENERATED_CPP}"
     EXCLUDE_FROM_ALL

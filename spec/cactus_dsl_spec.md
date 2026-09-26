@@ -1276,7 +1276,7 @@ Not part of the current Standard UI surface: keyboard/gamepad focus, text entry/
 
 ### 7.5 Lifetime and Timers (`std.time`)
 
-`std.time` is an ordinary ECS capability, not core-language syntax: entity lifetime and one-shot delays are traits, targeted events, and rules, with no delayed-event keyword, coroutine, callback storage, or hidden scheduler. See `examples/gameplay_timers.cactus` for a complete program.
+`std.time` is an ordinary ECS capability, not core-language syntax: entity lifetime and one-shot delays are traits, targeted events, and rules, with no delayed-event keyword, coroutine, callback storage, or hidden scheduler. See `examples/stdlib-fixtures/gameplay_timers.cactus` for a complete program.
 
 **Traits.**
 

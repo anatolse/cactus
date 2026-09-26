@@ -243,7 +243,8 @@ loop body, rather than reflexively applying the early-return transform.
 New stdlib/example additions are evaluated against gameplay-core teachability: if it
 can't be explained to a beginner in a sentence, it likely belongs in a different
 layer. Prefer existing stdlib primitives (math/physics/transform/camera/render/ui)
-over hand-rolled logic in example or game code.
+over hand-rolled logic in game code and showcase examples (teaching examples are the
+exception — see `examples/CLAUDE.md`).
 
 ## Generated code performance
 

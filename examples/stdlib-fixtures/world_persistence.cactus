@@ -90,7 +90,7 @@ template Enemy(maximum: int):
 template Particle:
     Sparkle
     tf.LocalTransform
-    Persistent
+    KeepOnLoad
 
 # A camera has no persist field, so restore never recreates one: a full
 # replacement is a black screen unless gameplay rebuilds ephemeral content

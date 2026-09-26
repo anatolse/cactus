@@ -2,9 +2,10 @@ module std.core
 
 # ── Standard Traits ───────────────────────────────────────────────────────────
 
-# Marker trait: entities with Persistent survive scene transitions.
-# Apply this to units/templates that should NOT be destroyed on `load`.
-pub trait Persistent
+# Marker trait: entities with KeepOnLoad survive scene transitions.
+# Apply this to entities/templates that should NOT be destroyed on `load`.
+# It is unrelated to `persist` fields, which decide what a save records.
+pub trait KeepOnLoad
 
 # Parent-child hierarchy relationship.
 # Entities without Parent are treated as hierarchy roots.
@@ -53,10 +54,9 @@ pub event unload
 
 # ── Standard Rules ───────────────────────────────────────────────────────────
 
-# SceneCleanup destroys all non-persistent entities on scene unload.
-# Entities carrying the `Persistent` trait are excluded via `exclude: Persistent`.
+# SceneCleanup destroys every entity without KeepOnLoad on scene unload.
 rule SceneCleanup:
     exclude:
-        Persistent
+        KeepOnLoad
     on unload:
         destroy

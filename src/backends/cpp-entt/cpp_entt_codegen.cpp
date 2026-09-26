@@ -3120,29 +3120,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
     }
 
-    // Sync replication stubs
-    out << "// ── Sync Replication ─────────────────────────────────────────────────\n\n";
-    for (const auto& [name, t] : program.traits) {
-        bool has_sync = false;
-        for (const auto& f : t.fields) {
-            if (f.is_sync) {
-                has_sync = true;
-                break;
-            }
-        }
-        if (has_sync) {
-            const std::string cpp_name = canonical_to_cpp_name(t.module_name, t.name);
-            out << "void replicate_" << cpp_name << "(const " << cpp_name << "& comp) {\n";
-            out << "    (void)comp;\n";
-            for (const auto& f : t.fields) {
-                if (f.is_sync) {
-                    out << "    // send delta for comp." << f.name << "\n";
-                }
-            }
-            out << "}\n\n";
-        }
-    }
-
     // Entity creation from flattened templates and entities (inline and template-backed)
     if (program.ast != nullptr) {
         out << "// ── Entity Creation ─────────────────────────────────────────────────\n\n";

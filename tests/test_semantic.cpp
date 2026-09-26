@@ -444,18 +444,6 @@ TEST_CASE("Semantic: persist on let — rejected", "[semantic]") {
                            "    persist let data: int = 0\n"));
 }
 
-TEST_CASE("Semantic: sync on let — rejected", "[semantic]") {
-    CHECK(
-        analyze_has_errors("trait Bad:\n"
-                           "    sync let data: int = 0\n"));
-}
-
-TEST_CASE("Semantic: persist sync on var — allowed", "[semantic]") {
-    CHECK_FALSE(
-        analyze_has_errors("trait Net:\n"
-                           "    persist sync var pos: float\n"));
-}
-
 TEST_CASE("Semantic: rule filter — valid trait", "[semantic]") {
     CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS + "trait Pos:\n"
                                                    "    var x: float\n"
@@ -1427,7 +1415,7 @@ TEST_CASE("Semantic: vec2 compound assignment on a handler-local var", "[semanti
                                    "    filter:\n"
                                    "        Position as p\n"
                                    "    on tick:\n"
-                                   "        let accel = vec2(0.0)\n"
+                                   "        var accel = vec2(0.0)\n"
                                    "        accel += p.pos2\n"
                                    "        accel *= tick.dt\n"));
 }
@@ -1708,6 +1696,119 @@ TEST_CASE("Semantic: bounded foreach over list binds read-only element", "[seman
                                               "        for value in values:\n"
                                               "            value = 2\n") ==
           "foreach loop variable 'value' is read-only");
+}
+
+static std::vector<std::string> analyze_messages(const std::string& source) {
+    const std::string src = "module test\n" + STDLIB_EVENTS + source;
+    ErrorReporter errors;
+    Lexer lexer(src, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    Parser parser(std::move(tokens), errors);
+    auto program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(program);
+    std::vector<std::string> messages;
+    for (const auto& d : errors.diagnostics()) {
+        messages.push_back(d.message);
+    }
+    return messages;
+}
+
+static bool has_message(const std::vector<std::string>& messages, const std::string& text) {
+    return std::ranges::any_of(messages, [&](const std::string& m) { return m.find(text) != std::string::npos; });
+}
+
+TEST_CASE("Semantic: let locals are immutable", "[semantic][locals]") {
+    CHECK(has_message(analyze_messages("rule R:\n"
+                                       "    on tick:\n"
+                                       "        let speed = 5.0\n"
+                                       "        speed = 6.0\n"),
+                      "cannot reassign immutable binding 'speed'"));
+    CHECK(has_message(analyze_messages("rule R:\n"
+                                       "    on tick:\n"
+                                       "        let total = 0\n"
+                                       "        total += 1\n"),
+                      "cannot reassign immutable binding 'total'"));
+    CHECK(has_message(analyze_messages("rule R:\n"
+                                       "    on tick:\n"
+                                       "        let v = vec2(0.0, 0.0)\n"
+                                       "        v.x = 1.0\n"),
+                      "cannot reassign immutable binding 'v'"));
+    CHECK(has_message(analyze_messages("func f() int:\n"
+                                       "    let x = 1\n"
+                                       "    x = 2\n"
+                                       "    return x\n"),
+                      "cannot reassign immutable binding 'x'"));
+}
+
+TEST_CASE("Semantic: trait write through a let entity binding is not a rebinding", "[semantic][locals]") {
+    const auto messages = analyze_messages("trait Health:\n"
+                                           "    var hp: int = 10\n"
+                                           "trait Player\n"
+                                           "rule R:\n"
+                                           "    on tick:\n"
+                                           "        let e = query.first[Player]()\n"
+                                           "        e.Health.hp = 3\n");
+    CHECK_FALSE(has_message(messages, "immutable binding"));
+}
+
+TEST_CASE("Semantic: var locals are reassignable", "[semantic][locals]") {
+    CHECK(analyze_messages("rule R:\n"
+                           "    on tick:\n"
+                           "        var count = 0\n"
+                           "        count = count + 1\n"
+                           "        count += 1\n"
+                           "        var v: vec2 = vec2(0.0, 0.0)\n"
+                           "        v.x = 1.0\n")
+              .empty());
+    CHECK(analyze_messages("func f() int:\n"
+                           "    var x = 1\n"
+                           "    x = 2\n"
+                           "    return x\n")
+              .empty());
+}
+
+TEST_CASE("Semantic: local redeclaration in the same scope is rejected", "[semantic][locals]") {
+    CHECK(has_message(analyze_messages("rule R:\n"
+                                       "    on tick:\n"
+                                       "        let speed = 5.0\n"
+                                       "        let speed = 6.0\n"),
+                      "redeclaration of local 'speed' in the same scope"));
+    CHECK(has_message(analyze_messages("func f() int:\n"
+                                       "    var x = 1\n"
+                                       "    let x = 2\n"
+                                       "    return x\n"),
+                      "redeclaration of local 'x' in the same scope"));
+    CHECK(analyze_messages("rule R:\n"
+                           "    on tick:\n"
+                           "        if true:\n"
+                           "            let t = 1\n"
+                           "        else:\n"
+                           "            let t = 2\n")
+              .empty());
+}
+
+TEST_CASE("Semantic: assignment does not declare a local", "[semantic][locals]") {
+    CHECK(has_message(analyze_messages("rule R:\n"
+                                       "    on tick:\n"
+                                       "        score = 3\n"),
+                      "assignment to undeclared local 'score'; declare it with `var`"));
+    CHECK(has_message(analyze_messages("func f() int:\n"
+                                       "    score = 3\n"
+                                       "    return 0\n"),
+                      "assignment to undeclared local 'score'; declare it with `var`"));
+}
+
+TEST_CASE("Semantic: typed local initializer must match its annotation", "[semantic][locals]") {
+    CHECK(analyze_messages("rule R:\n"
+                           "    on tick:\n"
+                           "        var t: float = 1.0\n")
+              .empty());
+    CHECK(has_message(analyze_messages("rule R:\n"
+                                       "    on tick:\n"
+                                       "        var t: float = 1\n"),
+                      "local 't' is declared as 'float' but initialized with 'int'"));
 }
 
 TEST_CASE("Semantic: range() intrinsic types the loop variable as int", "[semantic][foreach][range]") {

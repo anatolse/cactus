@@ -172,14 +172,12 @@ TEST_CASE("Codegen EnTT: component struct from trait", "[codegen-entt]") {
                             .is_let     = false,
                             .is_var     = true,
                             .is_persist = false,
-                            .is_sync    = false,
                             .is_pub     = false});
     trait.fields.push_back({.name       = "y",
                             .type       = {.kind = TypeKind::Float, .name = "float"},
                             .is_let     = false,
                             .is_var     = true,
                             .is_persist = false,
-                            .is_sync    = false,
                             .is_pub     = false});
 
     auto code = EnttComponentEmitter::emit_component(trait);
@@ -619,7 +617,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     auto decorated = full_pipeline(
         "event tick: \n"
         "    dt: float\n"
-        "trait Pos:\n    persist sync var x: float\n    persist sync var y: float\n"
+        "trait Pos:\n    persist var x: float\n    persist var y: float\n"
         "rule Move:\n"
         "    filter:\n"
         "        Pos\n"
@@ -663,8 +661,7 @@ TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
     CHECK(code.find("save_Pos") != std::string::npos);
     CHECK(code.find("load_Pos") != std::string::npos);
 
-    // Sync hooks
-    CHECK(code.find("replicate_Pos") != std::string::npos);
+    CHECK(code.find("replicate_") == std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: std.input mouse button actions and mouse_position lower to runtime helpers",
@@ -2488,10 +2485,10 @@ TEST_CASE("Codegen EnTT: nested control flow mutates visible lexical locals with
         "    filter:\n"
         "        Values\n"
         "    on Collision as c:\n"
-        "        let sum = 0\n"
-        "        let maximum = 0\n"
-        "        let count = 0\n"
-        "        let cursor = 1\n"
+        "        var sum = 0\n"
+        "        var maximum = 0\n"
+        "        var count = 0\n"
+        "        var cursor = 1\n"
         "        for value in items:\n"
         "            sum += value\n"
         "            count += 1\n"
@@ -6655,6 +6652,7 @@ TEST_CASE("Codegen EnTT: vec2 int arguments are wrapped in static_cast<float> (V
         "    dt: float\n"
         "rule Demo:\n"
         "    on tick:\n"
+        "        var v = vec2(0.0, 0.0)\n"
         "        for k in range(0, 1):\n"
         "            v = vec2(k, 0.0)\n",
         program);

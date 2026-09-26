@@ -181,11 +181,11 @@ func stretched_axis_size(slot_size: float, anchor_min: float, anchor_max: float,
 rule MeasureUi:
     on core.input:
         for item in query.hierarchy_postorder[Node]():
-            let preferred_minimum = vec2(0.0, 0.0)
+            var preferred_minimum = vec2(0.0, 0.0)
             match item:
                 PreferredSize as preferred =>
                     preferred_minimum = normalized_size(preferred.min_size)
-            let intrinsic = vec2(0.0, 0.0)
+            var intrinsic = vec2(0.0, 0.0)
             match item:
                 Text as text =>
                     intrinsic = normalized_size(text_size(text.value, at_least_one(text.font_size)))
@@ -195,14 +195,14 @@ rule MeasureUi:
             match item:
                 Button as button =>
                     intrinsic = max_size(intrinsic, button_intrinsic(text_size(button.label, 16), button.padding))
-            let measured = intrinsic
-            let used_container = false
+            var measured = intrinsic
+            var used_container = false
             match item:
                 Stack as stack =>
                     used_container = true
-                    let cursor = 0.0
-                    let cross = 0.0
-                    let child_count = 0
+                    var cursor = 0.0
+                    var cross = 0.0
+                    var child_count = 0
                     for child in query.children[Node](of = item):
                         match child:
                             DesiredSize as desired =>
@@ -227,15 +227,15 @@ rule MeasureUi:
                         used_container = true
                         let column_count = at_least_one(grid.columns)
                         let safe_gap = normalized_size(grid.gap)
-                        let cell = normalized_size(grid.cell_size)
-                        let occupied_columns = column_count
-                        let occupied_rows = 0
-                        let automatic_index = 0
+                        var cell = normalized_size(grid.cell_size)
+                        var occupied_columns = column_count
+                        var occupied_rows = 0
+                        var automatic_index = 0
                         for child in query.children[Node](of = item):
-                            let column = automatic_index % column_count
-                            let row = automatic_index / column_count
-                            let column_span = 1
-                            let row_span = 1
+                            var column = automatic_index % column_count
+                            var row = automatic_index / column_count
+                            var column_span = 1
+                            var row_span = 1
                             match child:
                                 GridItem as placement =>
                                     column_span = at_least_one(placement.column_span)
@@ -263,19 +263,19 @@ rule MeasureUi:
                                     if needed_cell_height > cell.y:
                                         cell.y = needed_cell_height
                             automatic_index += 1
-                        let content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
+                        var content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
                         if occupied_columns > 1:
                             content.x += safe_gap.x * (occupied_columns - 1)
                         if occupied_rows > 1:
                             content.y += safe_gap.y * (occupied_rows - 1)
                         measured = padded_size(content, grid.padding)
             if not used_container:
-                let child_maximum = vec2(0.0, 0.0)
+                var child_maximum = vec2(0.0, 0.0)
                 for child in query.children[Node](of = item):
                     match child:
                         DesiredSize as desired =>
                             child_maximum = max_size(child_maximum, desired.size)
-                let overlay_padding = vec2(0.0, 0.0)
+                var overlay_padding = vec2(0.0, 0.0)
                 match item:
                     Overlay as overlay =>
                         overlay_padding = overlay.padding
@@ -286,11 +286,11 @@ rule MeasureUi:
 
     on core.late_tick:
         for item in query.hierarchy_postorder[Node]():
-            let preferred_minimum = vec2(0.0, 0.0)
+            var preferred_minimum = vec2(0.0, 0.0)
             match item:
                 PreferredSize as preferred =>
                     preferred_minimum = normalized_size(preferred.min_size)
-            let intrinsic = vec2(0.0, 0.0)
+            var intrinsic = vec2(0.0, 0.0)
             match item:
                 Text as text =>
                     intrinsic = normalized_size(text_size(text.value, at_least_one(text.font_size)))
@@ -300,14 +300,14 @@ rule MeasureUi:
             match item:
                 Button as button =>
                     intrinsic = max_size(intrinsic, button_intrinsic(text_size(button.label, 16), button.padding))
-            let measured = intrinsic
-            let used_container = false
+            var measured = intrinsic
+            var used_container = false
             match item:
                 Stack as stack =>
                     used_container = true
-                    let cursor = 0.0
-                    let cross = 0.0
-                    let child_count = 0
+                    var cursor = 0.0
+                    var cross = 0.0
+                    var child_count = 0
                     for child in query.children[Node](of = item):
                         match child:
                             DesiredSize as desired =>
@@ -330,15 +330,15 @@ rule MeasureUi:
                         used_container = true
                         let column_count = at_least_one(grid.columns)
                         let safe_gap = normalized_size(grid.gap)
-                        let cell = normalized_size(grid.cell_size)
-                        let occupied_columns = column_count
-                        let occupied_rows = 0
-                        let automatic_index = 0
+                        var cell = normalized_size(grid.cell_size)
+                        var occupied_columns = column_count
+                        var occupied_rows = 0
+                        var automatic_index = 0
                         for child in query.children[Node](of = item):
-                            let column = automatic_index % column_count
-                            let row = automatic_index / column_count
-                            let column_span = 1
-                            let row_span = 1
+                            var column = automatic_index % column_count
+                            var row = automatic_index / column_count
+                            var column_span = 1
+                            var row_span = 1
                             match child:
                                 GridItem as placement =>
                                     column_span = at_least_one(placement.column_span)
@@ -366,19 +366,19 @@ rule MeasureUi:
                                     if needed_cell_height > cell.y:
                                         cell.y = needed_cell_height
                             automatic_index += 1
-                        let content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
+                        var content = vec2(cell.x * occupied_columns, cell.y * occupied_rows)
                         if occupied_columns > 1:
                             content.x += safe_gap.x * (occupied_columns - 1)
                         if occupied_rows > 1:
                             content.y += safe_gap.y * (occupied_rows - 1)
                         measured = padded_size(content, grid.padding)
             if not used_container:
-                let child_maximum = vec2(0.0, 0.0)
+                var child_maximum = vec2(0.0, 0.0)
                 for child in query.children[Node](of = item):
                     match child:
                         DesiredSize as desired =>
                             child_maximum = max_size(child_maximum, desired.size)
-                let overlay_padding = vec2(0.0, 0.0)
+                var overlay_padding = vec2(0.0, 0.0)
                 match item:
                     Overlay as overlay =>
                         overlay_padding = overlay.padding
@@ -391,13 +391,13 @@ rule ArrangeUi:
     on core.input:
         let root_size = window_size()
         for item in query.hierarchy_preorder[Node]():
-            let slot_position = vec2(0.0, 0.0)
-            let slot_size = normalized_size(root_size)
-            let inherited_visible = true
-            let inherited_enabled = true
-            let inherited_opacity = 1.0
-            let clip_min = vec2(0.0, 0.0)
-            let clip_max = normalized_size(root_size)
+            var slot_position = vec2(0.0, 0.0)
+            var slot_size = normalized_size(root_size)
+            var inherited_visible = true
+            var inherited_enabled = true
+            var inherited_opacity = 1.0
+            var clip_min = vec2(0.0, 0.0)
+            var clip_max = normalized_size(root_size)
             let parent = query.parent(of = item)
             match parent:
                 ComputedLayout as parent_layout =>
@@ -408,16 +408,16 @@ rule ArrangeUi:
                     inherited_opacity = parent_layout.effective_opacity
                     clip_min = parent_layout.clip_min
                     clip_max = parent_layout.clip_max
-                    let used_parent_container = false
+                    var used_parent_container = false
                     match parent:
                         Stack as stack =>
                             used_parent_container = true
                             let padding = normalized_size(stack.padding)
                             let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
                             let content_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
-                            let cursor = 0.0
+                            var cursor = 0.0
                             for sibling in query.children[Node](of = parent):
-                                let sibling_size = vec2(0.0, 0.0)
+                                var sibling_size = vec2(0.0, 0.0)
                                 match sibling:
                                     DesiredSize as desired =>
                                         sibling_size = normalized_size(desired.size)
@@ -452,10 +452,10 @@ rule ArrangeUi:
                                 let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
                                 let column_count = at_least_one(grid.columns)
                                 let safe_gap = normalized_size(grid.gap)
-                                let cell = normalized_size(grid.cell_size)
+                                var cell = normalized_size(grid.cell_size)
                                 for sibling in query.children[Node](of = parent):
-                                    let column_span = 1
-                                    let row_span = 1
+                                    var column_span = 1
+                                    var row_span = 1
                                     match sibling:
                                         GridItem as placement =>
                                             column_span = at_least_one(placement.column_span)
@@ -465,12 +465,12 @@ rule ArrangeUi:
                                             let needed_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
                                             let needed_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
                                             cell = max_size(cell, vec2(needed_width, needed_height))
-                                let automatic_index = 0
+                                var automatic_index = 0
                                 for sibling in query.children[Node](of = parent):
-                                    let column = automatic_index % column_count
-                                    let row = automatic_index / column_count
-                                    let column_span = 1
-                                    let row_span = 1
+                                    var column = automatic_index % column_count
+                                    var row = automatic_index / column_count
+                                    var column_span = 1
+                                    var row_span = 1
                                     match sibling:
                                         GridItem as placement =>
                                             column_span = at_least_one(placement.column_span)
@@ -484,17 +484,17 @@ rule ArrangeUi:
                                         slot_size = vec2(cell.x * column_span + safe_gap.x * (column_span - 1), cell.y * row_span + safe_gap.y * (row_span - 1))
                                     automatic_index += 1
                     if not used_parent_container:
-                        let padding = vec2(0.0, 0.0)
+                        var padding = vec2(0.0, 0.0)
                         match parent:
                             Overlay as overlay =>
                                 padding = normalized_size(overlay.padding)
                         slot_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
                         slot_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
-            let position = slot_position
-            let size = normalized_size(slot_size)
+            var position = slot_position
+            var size = normalized_size(slot_size)
             match item:
                 Anchors as anchors =>
-                    let desired = vec2(0.0, 0.0)
+                    var desired = vec2(0.0, 0.0)
                     match item:
                         DesiredSize as desired_size =>
                             desired = normalized_size(desired_size.size)
@@ -511,8 +511,8 @@ rule ArrangeUi:
                         position.y = stretched_axis_position(slot_position.y, slot_size.y, anchors.min.y, anchors.offset.y, anchors.margin_min.y)
                         size.y = stretched_axis_size(slot_size.y, anchors.min.y, anchors.max.y, anchors.margin_min.y, anchors.margin_max.y)
             size = normalized_size(size)
-            let visible = inherited_visible
-            let enabled = inherited_enabled
+            var visible = inherited_visible
+            var enabled = inherited_enabled
             match item:
                 Node as node =>
                     visible = visible and node.visible
@@ -521,7 +521,7 @@ rule ArrangeUi:
                         clip_min = max_size(clip_min, position)
                         clip_max = vec2(min_scalar(clip_max.x, position.x + size.x), min_scalar(clip_max.y, position.y + size.y))
                         clip_max = max_size(clip_min, clip_max)
-            let opacity = inherited_opacity
+            var opacity = inherited_opacity
             match item:
                 Visual as visual =>
                     opacity = opacity * visual.opacity
@@ -538,13 +538,13 @@ rule ArrangeUi:
     on core.late_tick:
         let root_size = window_size()
         for item in query.hierarchy_preorder[Node]():
-            let slot_position = vec2(0.0, 0.0)
-            let slot_size = normalized_size(root_size)
-            let inherited_visible = true
-            let inherited_enabled = true
-            let inherited_opacity = 1.0
-            let clip_min = vec2(0.0, 0.0)
-            let clip_max = normalized_size(root_size)
+            var slot_position = vec2(0.0, 0.0)
+            var slot_size = normalized_size(root_size)
+            var inherited_visible = true
+            var inherited_enabled = true
+            var inherited_opacity = 1.0
+            var clip_min = vec2(0.0, 0.0)
+            var clip_max = normalized_size(root_size)
             let parent = query.parent(of = item)
             match parent:
                 ComputedLayout as parent_layout =>
@@ -555,16 +555,16 @@ rule ArrangeUi:
                     inherited_opacity = parent_layout.effective_opacity
                     clip_min = parent_layout.clip_min
                     clip_max = parent_layout.clip_max
-                    let used_parent_container = false
+                    var used_parent_container = false
                     match parent:
                         Stack as stack =>
                             used_parent_container = true
                             let padding = normalized_size(stack.padding)
                             let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
                             let content_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
-                            let cursor = 0.0
+                            var cursor = 0.0
                             for sibling in query.children[Node](of = parent):
-                                let sibling_size = vec2(0.0, 0.0)
+                                var sibling_size = vec2(0.0, 0.0)
                                 match sibling:
                                     DesiredSize as desired =>
                                         sibling_size = normalized_size(desired.size)
@@ -599,10 +599,10 @@ rule ArrangeUi:
                                 let content_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
                                 let column_count = at_least_one(grid.columns)
                                 let safe_gap = normalized_size(grid.gap)
-                                let cell = normalized_size(grid.cell_size)
+                                var cell = normalized_size(grid.cell_size)
                                 for sibling in query.children[Node](of = parent):
-                                    let column_span = 1
-                                    let row_span = 1
+                                    var column_span = 1
+                                    var row_span = 1
                                     match sibling:
                                         GridItem as placement =>
                                             column_span = at_least_one(placement.column_span)
@@ -612,12 +612,12 @@ rule ArrangeUi:
                                             let needed_width = (nonnegative(desired.size.x) - safe_gap.x * (column_span - 1)) / column_span
                                             let needed_height = (nonnegative(desired.size.y) - safe_gap.y * (row_span - 1)) / row_span
                                             cell = max_size(cell, vec2(needed_width, needed_height))
-                                let automatic_index = 0
+                                var automatic_index = 0
                                 for sibling in query.children[Node](of = parent):
-                                    let column = automatic_index % column_count
-                                    let row = automatic_index / column_count
-                                    let column_span = 1
-                                    let row_span = 1
+                                    var column = automatic_index % column_count
+                                    var row = automatic_index / column_count
+                                    var column_span = 1
+                                    var row_span = 1
                                     match sibling:
                                         GridItem as placement =>
                                             column_span = at_least_one(placement.column_span)
@@ -631,17 +631,17 @@ rule ArrangeUi:
                                         slot_size = vec2(cell.x * column_span + safe_gap.x * (column_span - 1), cell.y * row_span + safe_gap.y * (row_span - 1))
                                     automatic_index += 1
                     if not used_parent_container:
-                        let padding = vec2(0.0, 0.0)
+                        var padding = vec2(0.0, 0.0)
                         match parent:
                             Overlay as overlay =>
                                 padding = normalized_size(overlay.padding)
                         slot_position = vec2(parent_layout.position.x + padding.x, parent_layout.position.y + padding.y)
                         slot_size = vec2(nonnegative(parent_layout.size.x - padding.x - padding.x), nonnegative(parent_layout.size.y - padding.y - padding.y))
-            let position = slot_position
-            let size = normalized_size(slot_size)
+            var position = slot_position
+            var size = normalized_size(slot_size)
             match item:
                 Anchors as anchors =>
-                    let desired = vec2(0.0, 0.0)
+                    var desired = vec2(0.0, 0.0)
                     match item:
                         DesiredSize as desired_size =>
                             desired = normalized_size(desired_size.size)
@@ -658,8 +658,8 @@ rule ArrangeUi:
                         position.y = stretched_axis_position(slot_position.y, slot_size.y, anchors.min.y, anchors.offset.y, anchors.margin_min.y)
                         size.y = stretched_axis_size(slot_size.y, anchors.min.y, anchors.max.y, anchors.margin_min.y, anchors.margin_max.y)
             size = normalized_size(size)
-            let visible = inherited_visible
-            let enabled = inherited_enabled
+            var visible = inherited_visible
+            var enabled = inherited_enabled
             match item:
                 Node as node =>
                     visible = visible and node.visible
@@ -668,7 +668,7 @@ rule ArrangeUi:
                         clip_min = max_size(clip_min, position)
                         clip_max = vec2(min_scalar(clip_max.x, position.x + size.x), min_scalar(clip_max.y, position.y + size.y))
                         clip_max = max_size(clip_min, clip_max)
-            let opacity = inherited_opacity
+            var opacity = inherited_opacity
             match item:
                 Visual as visual =>
                     opacity = opacity * visual.opacity

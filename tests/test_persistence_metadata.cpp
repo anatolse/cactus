@@ -163,22 +163,6 @@ TEST_CASE("an archetype whose declared trait set has a persist field is eligible
     CHECK_FALSE(particle->declares_persistent_trait);
 }
 
-TEST_CASE("sync alone never makes an archetype eligible", "[persistence][metadata][eligibility]") {
-    const auto unit = compile(R"(module world
-
-trait Replicated:
-    sync var position: vec2
-
-template Ghost:
-    Replicated
-)");
-    REQUIRE_FALSE(unit->errors.has_errors());
-
-    const auto* ghost = archetype(unit->program, SymbolKind::Template, "world", "Ghost");
-    REQUIRE(ghost != nullptr);
-    CHECK_FALSE(ghost->declares_persistent_trait);
-}
-
 TEST_CASE("a program with no persistence-bearing add path claims no runtime attachment",
           "[persistence][metadata][bound]") {
     const auto unit = compile(kBossSource);

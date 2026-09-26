@@ -14,15 +14,15 @@ enum PlayerState:
     Shopping
 
 trait Position:
-    persist sync var position: vec3
-    persist sync var rotation: quat
+    persist var position: vec3
+    persist var rotation: quat
 
 trait Health:
-    persist sync var health: int = 100
+    persist var health: int = 100
     let max_health: int = 100
 
 trait Wallet:
-    persist sync var coins: int = 50
+    persist var coins: int = 50
 
 trait PlayerController:
     var state: PlayerState

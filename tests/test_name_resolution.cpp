@@ -122,8 +122,6 @@ static void collect_unresolved_expr(const ExprNode& expr, std::vector<std::strin
                 for (const auto& arg : e.args) {
                     collect_unresolved_expr(*arg, out);
                 }
-            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                collect_unresolved_expr(*e.body, out);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 collect_unresolved_expr(*e.subject, out);
                 for (const auto& arm : e.arms) {

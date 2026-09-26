@@ -580,6 +580,39 @@ static ImportedSymbols pub_symbols_from(const std::string& module_name, const De
     return syms;
 }
 
+TEST_CASE("integration: std.core exports KeepOnLoad, not Persistent", "[integration][stdlib][scene-loading]") {
+    const std::vector<fs::path> search_paths{stdlib_dir()};
+    const auto core_path = ModuleResolver::locate_file("std.core", search_paths);
+    REQUIRE_FALSE(core_path.empty());
+
+    ErrorReporter errors;
+    const auto core = compile_file(core_path, errors);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(core.has_value());
+    REQUIRE(core->traits.contains("KeepOnLoad"));
+    CHECK(core->traits.at("KeepOnLoad").is_pub);
+    CHECK_FALSE(core->traits.contains("Persistent"));
+
+    ModuleImports imports;
+    imports.add("std.core", pub_symbols_from("std.core", *core), {}, core->non_pub_templates);
+    const auto entity_with = [&imports](const std::string& trait, ErrorReporter& app_errors) {
+        ProgramNode app;
+        return compile_source("module app\n"
+                              "use std.core\n"
+                              "pub entity Keeper:\n"
+                              "    " +
+                                  trait + "\n",
+                              "app.cactus",
+                              app,
+                              app_errors,
+                              imports);
+    };
+    ErrorReporter keep_errors;
+    CHECK(entity_with("KeepOnLoad", keep_errors).has_value());
+    ErrorReporter old_errors;
+    CHECK_FALSE(entity_with("Persistent", old_errors).has_value());
+}
+
 /// Mirrors src/main.cpp's multi-module pipeline: resolve against the real
 /// stdlib, compile+save each module in topo order, link the artifacts, and
 /// attach the merged codegen AST plus root module name.

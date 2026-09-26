@@ -273,17 +273,57 @@ TEST_CASE("Parser: trait with var fields", "[parser]") {
     CHECK(decl.fields[1].name == "max_health");
 }
 
-TEST_CASE("Parser: trait with persist sync modifiers", "[parser]") {
+TEST_CASE("Parser: trait with persist modifier", "[parser]") {
     auto prog = parse(
-        "trait Position:\n"
-        "    persist sync var x: float\n"
-        "    persist sync var y: float\n");
+        "trait Player:\n"
+        "    persist var health: int = 100\n"
+        "    var position: vec3\n");
     auto& decl = std::get<TraitNode>(prog.declarations[0]);
     REQUIRE(decl.fields.size() == 2);
     CHECK(decl.fields[0].modifiers.is_persist);
-    CHECK(decl.fields[0].modifiers.is_sync);
     CHECK(decl.fields[0].modifiers.is_var);
-    CHECK(decl.fields[0].name == "x");
+    CHECK(decl.fields[0].name == "health");
+    CHECK_FALSE(decl.fields[1].modifiers.is_persist);
+}
+
+TEST_CASE("Parser: lambda expression is a syntax error", "[parser]") {
+    auto errors = parse_expect_errors(
+        "func f() int:\n"
+        "    let g = x => x * 2\n"
+        "    return 0\n");
+    CHECK(errors.has_errors());
+}
+
+TEST_CASE("Parser: match expression arms still use =>", "[parser]") {
+    auto prog = parse(
+        "func f(c: int) int:\n"
+        "    let v = match c:\n"
+        "        0 => 10\n"
+        "        _ => 1\n");
+    auto& func      = std::get<FuncNode>(prog.declarations[0]);
+    const auto* let = std::get_if<LetStmt>(&func.body[0]->stmt);
+    REQUIRE(let != nullptr);
+    const auto* match = std::get_if<MatchExpr>(&let->value->expr);
+    REQUIRE(match != nullptr);
+    CHECK(match->arms.size() == 2);
+}
+
+TEST_CASE("Parser: event handler in trait body is rejected", "[parser]") {
+    auto errors = parse_expect_errors(
+        "trait Damageable:\n"
+        "    var hp: int = 1\n"
+        "    on damage:\n"
+        "        hp -= 1\n");
+    REQUIRE_FALSE(errors.diagnostics().empty());
+    CHECK(errors.diagnostics().front().message ==
+          "event handlers are not allowed in trait bodies; declare a rule instead");
+}
+
+TEST_CASE("Parser: sync is not a field modifier", "[parser]") {
+    auto errors = parse_expect_errors(
+        "trait Player:\n"
+        "    sync var position: vec3\n");
+    CHECK(errors.has_errors());
 }
 
 TEST_CASE("Parser: pub entity with nested trait blocks", "[parser]") {
@@ -1278,6 +1318,47 @@ TEST_CASE("Parser: set remains an ordinary identifier", "[parser][deferred-set]"
     REQUIRE(sys.handlers[0].body.size() == 2);
     CHECK(std::holds_alternative<LetStmt>(sys.handlers[0].body[0]->stmt));
     CHECK(std::holds_alternative<VarAssign>(sys.handlers[0].body[1]->stmt));
+}
+
+TEST_CASE("Parser: let and var locals in handler bodies", "[parser][locals]") {
+    auto prog = parse(
+        "rule Count:\n"
+        "    on tick:\n"
+        "        let a = 1\n"
+        "        var b = 2\n"
+        "        var c: int = 3\n");
+    auto& rule = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(rule.handlers[0].body.size() == 3);
+    const auto* a = std::get_if<LetStmt>(&rule.handlers[0].body[0]->stmt);
+    const auto* b = std::get_if<LetStmt>(&rule.handlers[0].body[1]->stmt);
+    const auto* c = std::get_if<LetStmt>(&rule.handlers[0].body[2]->stmt);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    REQUIRE(c != nullptr);
+    CHECK_FALSE(a->is_mutable);
+    CHECK_FALSE(a->type.has_value());
+    CHECK(b->is_mutable);
+    CHECK(b->name == "b");
+    CHECK(c->is_mutable);
+    REQUIRE(c->type.has_value());
+    CHECK(c->type->name == "int");
+}
+
+TEST_CASE("Parser: let and var locals in func bodies", "[parser][locals]") {
+    auto prog = parse(
+        "func f() int:\n"
+        "    let x: float = 1.0\n"
+        "    var y = 2\n"
+        "    return y\n");
+    auto& func = std::get<FuncNode>(prog.declarations[0]);
+    const auto* x = std::get_if<LetStmt>(&func.body[0]->stmt);
+    const auto* y = std::get_if<LetStmt>(&func.body[1]->stmt);
+    REQUIRE(x != nullptr);
+    REQUIRE(y != nullptr);
+    CHECK_FALSE(x->is_mutable);
+    REQUIRE(x->type.has_value());
+    CHECK(x->type->name == "float");
+    CHECK(y->is_mutable);
 }
 
 // Task 4.11: marker trait (no body)

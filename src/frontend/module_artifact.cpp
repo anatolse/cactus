@@ -97,7 +97,6 @@ void ModuleArtifact::write_type_info(std::ostream& out, const TypeInfo& t) {
     write_str(out, t.name);
     write_bool(out, t.is_let);
     write_bool(out, t.is_persist);
-    write_bool(out, t.is_sync);
     write_bool(out, t.is_pub);
 
     // Optional canonical symbol identity (for Enum/Struct field types)
@@ -132,7 +131,6 @@ void ModuleArtifact::write_field(std::ostream& out, const ResolvedField& field) 
     write_bool(out, field.is_let);
     write_bool(out, field.is_var);
     write_bool(out, field.is_persist);
-    write_bool(out, field.is_sync);
     write_bool(out, field.is_pub);
     write_bool(out, field.has_default);
     write_bool(out, field.is_synthesized);
@@ -578,7 +576,6 @@ TypeInfo ModuleArtifact::read_type_info(std::istream& in) {
     t.name       = read_str(in);
     t.is_let     = read_bool(in);
     t.is_persist = read_bool(in);
-    t.is_sync    = read_bool(in);
     t.is_pub     = read_bool(in);
 
     bool has_symbol_id = read_bool(in);
@@ -615,7 +612,6 @@ ResolvedField ModuleArtifact::read_field(std::istream& in) {
     field.is_let             = read_bool(in);
     field.is_var             = read_bool(in);
     field.is_persist         = read_bool(in);
-    field.is_sync            = read_bool(in);
     field.is_pub             = read_bool(in);
     field.has_default        = read_bool(in);
     field.is_synthesized     = read_bool(in);
@@ -1298,20 +1294,18 @@ template <std::size_t Index, typename Alternative>
 constexpr bool expr_alternative_is = std::is_same_v<std::variant_alternative_t<Index, ExprNode::Variant>, Alternative>;
 static_assert(expr_alternative_is<0, LiteralExpr>);
 static_assert(expr_alternative_is<1, IdentExpr>);
-// 2, 12 and 13 have no encoding; expression_is_serializable rejects them by
+// 2, 10 and 11 have no encoding; expression_is_serializable rejects them by
 // type, so their indices are pinned too.
 static_assert(expr_alternative_is<2, SelfExpr>);
-static_assert(expr_alternative_is<12, SpawnExpr>);
-static_assert(expr_alternative_is<13, QueryCallExpr>);
+static_assert(expr_alternative_is<10, SpawnExpr>);
+static_assert(expr_alternative_is<11, QueryCallExpr>);
 static_assert(expr_alternative_is<3, BinaryExpr>);
 static_assert(expr_alternative_is<4, UnaryExpr>);
 static_assert(expr_alternative_is<5, CallExpr>);
 static_assert(expr_alternative_is<6, MemberExpr>);
-static_assert(expr_alternative_is<7, LambdaExpr>);
-static_assert(expr_alternative_is<8, PipelineExpr>);
-static_assert(expr_alternative_is<9, MatchExpr>);
-static_assert(expr_alternative_is<10, IfExpr>);
-static_assert(expr_alternative_is<11, ListExpr>);
+static_assert(expr_alternative_is<7, MatchExpr>);
+static_assert(expr_alternative_is<8, IfExpr>);
+static_assert(expr_alternative_is<9, ListExpr>);
 
 namespace {
 
@@ -1389,25 +1383,12 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_expression(out, *node.else_expr);
         } else if constexpr (std::is_same_v<Node, ListExpr>) {
             expressions(node.elements);
-        } else if constexpr (std::is_same_v<Node, LambdaExpr>) {
-            write_u32(out, static_cast<uint32_t>(node.params.size()));
-            for (const auto& name : node.params) {
-                write_str(out, name);
-            }
-            write_expression(out, *node.body);
         } else if constexpr (std::is_same_v<Node, MatchExpr>) {
             write_expression(out, *node.subject);
             write_u32(out, static_cast<uint32_t>(node.arms.size()));
             for (const auto& arm : node.arms) {
                 write_expression(out, *arm.pattern);
                 write_expression(out, *arm.body);
-            }
-        } else if constexpr (std::is_same_v<Node, PipelineExpr>) {
-            write_expression(out, *node.source);
-            write_u32(out, static_cast<uint32_t>(node.operations.size()));
-            for (const auto& operation : node.operations) {
-                write_str(out, operation.method);
-                expressions(operation.args);
             }
         } else {
             out.setstate(std::ios::failbit);
@@ -1482,27 +1463,6 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             return wrap(std::move(node));
         }
         case 7: {
-            LambdaExpr node;
-            const auto count = read_u32(in);
-            for (uint32_t i = 0; i < count && in.good(); ++i) {
-                node.params.push_back(read_str(in));
-            }
-            node.body = read_expression(in);
-            return wrap(std::move(node));
-        }
-        case 8: {
-            PipelineExpr node;
-            node.source = read_expression(in);
-            const auto count = read_u32(in);
-            for (uint32_t i = 0; i < count && in.good(); ++i) {
-                PipelineExpr::PipelineOp operation;
-                operation.method = read_str(in);
-                operation.args = expressions();
-                node.operations.push_back(std::move(operation));
-            }
-            return wrap(std::move(node));
-        }
-        case 9: {
             MatchExpr node;
             node.subject = read_expression(in);
             const auto count = read_u32(in);
@@ -1515,14 +1475,14 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             }
             return wrap(std::move(node));
         }
-        case 10: {
+        case 8: {
             IfExpr node;
             node.condition = read_expression(in);
             node.then_expr = read_expression(in);
             node.else_expr = read_expression(in);
             return wrap(std::move(node));
         }
-        case 11:
+        case 9:
             return wrap(ListExpr{.elements = expressions()});
         default:
             in.setstate(std::ios::failbit);

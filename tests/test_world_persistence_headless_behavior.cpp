@@ -213,14 +213,30 @@ TEST_CASE("a scene survivor with no persist field is not automatically eligible"
     queue_spawns(registry, 0, 1);
     drive_frame(registry, kStep);
 
-    // Particle carries std.core.Persistent (scene survival) but no persist
+    // Particle carries std.core.KeepOnLoad (scene survival) but no persist
     // field anywhere in its trait set — the two mechanisms are independent,
     // so surviving a scene transition grants no save eligibility.
-    const auto survivors = registry.view<world_persistence__Sparkle, std_core__Persistent>();
+    const auto survivors = registry.view<world_persistence__Sparkle, std_core__KeepOnLoad>();
     REQUIRE(std::ranges::distance(survivors.begin(), survivors.end()) == 1);
 
     const auto snapshot = capture(registry);
     CHECK(count_for_archetype(snapshot, "world_persistence.Particle") == 0);
+}
+
+TEST_CASE("std.core.KeepOnLoad entities survive SceneCleanup on unload", "[runtime][scene-loading]") {
+    World world;
+    auto& registry = world.registry;
+
+    queue_spawns(registry, 1, 1);
+    drive_frame(registry, kStep);
+    REQUIRE(registry.view<std_core__KeepOnLoad>().size() == 1);
+    REQUIRE(registry.view<entt::entity>().size() > 1);
+
+    cactus_headless_test::dispatch_unload_event(registry);
+
+    CHECK(registry.view<entt::entity>().size() == 1);
+    const auto survivors = registry.view<world_persistence__Sparkle, std_core__KeepOnLoad>();
+    CHECK(std::ranges::distance(survivors.begin(), survivors.end()) == 1);
 }
 
 TEST_CASE("a hierarchical child with an ineligible parent is recorded as a root",
@@ -658,25 +674,25 @@ TEST_CASE("restoring an empty compatible document produces an empty world",
     CHECK(registry.view<entt::entity>().size() == 0);
 }
 
-TEST_CASE("entities carrying std.core.Persistent do not survive restore",
+TEST_CASE("entities carrying std.core.KeepOnLoad do not survive restore",
           "[runtime][persistence][restore][publish]") {
     World world;
     auto& registry = world.registry;
 
     queue_spawns(registry, 0, 1);
     drive_frame(registry, kStep);
-    const auto survivors = registry.view<world_persistence__Sparkle, std_core__Persistent>();
+    const auto survivors = registry.view<world_persistence__Sparkle, std_core__KeepOnLoad>();
     REQUIRE(std::ranges::distance(survivors.begin(), survivors.end()) == 1);
 
     const auto snapshot = capture(registry);
-    // The particle carries Persistent but no persist field anywhere in its
+    // The particle carries KeepOnLoad but no persist field anywhere in its
     // trait set, so it is absent from the document — capture already proves
     // this elsewhere. Restore replacing the live world is the new claim
     // here: a full replacement is not scene-transition survival, so the
     // live particle must not survive it either.
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, snapshot);
     REQUIRE(outcome.ok);
-    CHECK(registry.view<std_core__Persistent>().size() == 0);
+    CHECK(registry.view<std_core__KeepOnLoad>().size() == 0);
 }
 
 TEST_CASE("a successful restore discards old deferred events and fixed-step catch-up backlog",

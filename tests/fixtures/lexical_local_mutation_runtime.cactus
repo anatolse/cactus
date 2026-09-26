@@ -20,10 +20,10 @@ rule AccumulateNestedLocals:
         Results
 
     on tick:
-        let running_sum = 0
-        let running_max = 0
-        let running_count = 0
-        let running_cursor = 1
+        var running_sum = 0
+        var running_max = 0
+        var running_count = 0
+        var running_cursor = 1
         let values = [2, 5, 3]
 
         for value in values:

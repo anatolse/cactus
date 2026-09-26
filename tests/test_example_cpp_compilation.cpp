@@ -357,7 +357,7 @@ TEST_CASE("integration: explicit std.core import with lifecycle handler generate
             << "pub entity CounterEntity:\n"
             << "    Counter:\n"
             << "        value = 0\n"
-            << "    Persistent\n\n"
+            << "    KeepOnLoad\n\n"
             << "rule CountTicks:\n"
             << "    filter:\n"
             << "        Counter\n\n"

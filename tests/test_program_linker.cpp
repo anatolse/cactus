@@ -134,7 +134,7 @@ TEST_CASE("program_linker: same simple pub trait name from different modules is 
 }
 
 TEST_CASE("program_linker: merging same module twice is idempotent", "[linker][std-core]") {
-    auto std_core = make_program("Persistent", true);
+    auto std_core = make_program("KeepOnLoad", true);
 
     ErrorReporter errors;
     ProgramLinker linker(errors);
@@ -144,7 +144,7 @@ TEST_CASE("program_linker: merging same module twice is idempotent", "[linker][s
     REQUIRE(linker.merge_into(merged, std_core, "std.core"));
 
     CHECK_FALSE(errors.has_errors());
-    CHECK(merged.traits.count("Persistent") == 1);
+    CHECK(merged.traits.count("KeepOnLoad") == 1);
 }
 
 TEST_CASE("program_linker: same simple enum name from different modules is accepted", "[linker][4.4]") {

@@ -479,24 +479,6 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                                 .resolved_enum_member = e.resolved_enum_member,
                                 .location             = e.location};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
-            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                LambdaExpr copy{.params = e.params, .body = clone_expr(*e.body), .location = e.location};
-                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
-            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                PipelineExpr copy;
-                copy.source   = clone_expr(*e.source);
-                copy.location = e.location;
-                copy.operations.reserve(e.operations.size());
-                for (const auto& op : e.operations) {
-                    PipelineExpr::PipelineOp copied_op;
-                    copied_op.method = op.method;
-                    copied_op.args.reserve(op.args.size());
-                    for (const auto& arg : op.args) {
-                        copied_op.args.push_back(clone_expr(*arg));
-                    }
-                    copy.operations.push_back(std::move(copied_op));
-                }
-                return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 MatchExpr copy;
                 copy.subject  = clone_expr(*e.subject);
@@ -1051,7 +1033,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     check_const_strings(program);
     check_func_purity(program);
     check_no_recursion(program);
-    check_persist_sync(program);
+    check_persist(program);
     validate_rule_filters(program);
     validate_where_clauses(program);
     validate_phase_declarations(program);
@@ -1252,7 +1234,6 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                         rf.is_let      = true;
                         rf.is_var      = false;
                         rf.is_persist  = f.modifiers.is_persist;
-                        rf.is_sync     = f.modifiers.is_sync;
                         rf.is_pub      = f.modifiers.is_pub;
                         rf.has_default = f.default_value.has_value();
                         rs.fields.push_back(rf);
@@ -1359,7 +1340,6 @@ void SemanticAnalyzer::resolve_all_types(ProgramNode& program) {
                         rf.is_let      = f.modifiers.is_let;
                         rf.is_var      = f.modifiers.is_var;
                         rf.is_persist  = f.modifiers.is_persist;
-                        rf.is_sync     = f.modifiers.is_sync;
                         rf.is_pub      = f.modifiers.is_pub;
                         rf.has_default = f.default_value.has_value();
                         rt.fields.push_back(std::move(rf));
@@ -1499,15 +1479,6 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     // Enum member chains (`Key.A`, `inp.Key.A`, `std.input.Key.A`)
                     // resolve here; non-enum chains fall through untouched.
                     resolve_enum_member_expr(e, expr.location);
-                } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                    resolve_expr(*e.body);
-                } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                    resolve_expr(*e.source);
-                    for (auto& op : e.operations) {
-                        for (auto& arg : op.args) {
-                            resolve_expr(*arg);
-                        }
-                    }
                 } else if constexpr (std::is_same_v<E, MatchExpr>) {
                     resolve_expr(*e.subject);
                     for (auto& arm : e.arms) {
@@ -2134,23 +2105,20 @@ void SemanticAnalyzer::check_no_recursion(ProgramNode& program) {
     }
 }
 
-// ── Phase 3d: Persist/Sync Validation ───────────────────────────────────────
+// ── Phase 3d: Persist Validation ────────────────────────────────────────────
 
-void SemanticAnalyzer::check_persist_sync(ProgramNode& program) {
+void SemanticAnalyzer::check_persist(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* trait = std::get_if<TraitNode>(&decl)) {
             for (auto& field : trait->fields) {
                 if (field.modifiers.is_persist && field.modifiers.is_let) {
                     errors_.error(field.location, "persist modifier can only be used on 'var' fields, not 'let'");
                 }
-                if (field.modifiers.is_sync && field.modifiers.is_let) {
-                    errors_.error(field.location, "sync modifier can only be used on 'var' fields, not 'let'");
-                }
             }
         } else if (auto* event = std::get_if<EventNode>(&decl)) {
             for (auto& field : event->fields) {
                 if (field.modifiers.is_let || field.modifiers.is_var || field.modifiers.is_persist ||
-                    field.modifiers.is_sync || field.modifiers.is_pub) {
+                    field.modifiers.is_pub) {
                     errors_.error(field.location,
                                   "event fields use bare `name: type` syntax; trait field modifiers are not allowed in "
                                   "event declarations");
@@ -3448,15 +3416,6 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
                     }
                 } else if constexpr (std::is_same_v<E, MemberExpr>) {
                     visit_expr(*node.object);
-                } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                    visit_expr(*node.body);
-                } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                    visit_expr(*node.source);
-                    for (const auto& operation : node.operations) {
-                        for (const auto& arg : operation.args) {
-                            visit_expr(*arg);
-                        }
-                    }
                 } else if constexpr (std::is_same_v<E, MatchExpr>) {
                     visit_expr(*node.subject);
                     for (const auto& arm : node.arms) {
@@ -3679,7 +3638,7 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
             validate_filter_clause_traits(rule->filter, "rule '" + rule->name + "'");
 
             // task 11.12: if rule has no filter traits, handler bodies cannot
-            // access trait fields (VarAssign is always a trait-field mutation).
+            // access trait fields through a dotted assignment.
             // Pair rules get their own read-only/no-implicit-entity diagnostics
             // instead of this generic "no filter clause" message.
             bool has_filter = !rule->filter.entries.empty() || !rule->filter.trait_names.empty();
@@ -3694,7 +3653,7 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
                         handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
                         continue;
                     }
-                    check_no_field_access(handler.body, rule->name);
+                    check_no_field_access(handler.body, rule->name, {});
                 }
             }
 
@@ -3987,6 +3946,15 @@ void SemanticAnalyzer::validate_external_handler_contracts(ProgramNode& program)
 void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cognitive-complexity)
     ProgramNode& program) {
     for (auto& decl : program.declarations) {
+        if (const auto* func = std::get_if<FuncNode>(&decl); func != nullptr && !func->is_extern) {
+            std::unordered_map<std::string, TypeInfo> params;
+            if (const auto resolved = result_.funcs.find(func->name); resolved != result_.funcs.end()) {
+                for (const auto& param : resolved->second.params) {
+                    params[param.name] = param.type;
+                }
+            }
+            validate_event_stmts(func->body, {}, params, nullptr, "");
+        }
         if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
             for (const auto& handler : rule->handlers) {
                 for (const auto& emitted : handler.emits) {
@@ -4185,6 +4153,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
     const PairScope* pair_scope) {
     (void)rule_name;
     auto locals = local_bindings;
+    std::unordered_set<std::string> declared_in_block;
 
     auto validate_emit = [this, &filter_bindings, &locals, handler_event, pair_scope](const EmitStmt& emit) {
         const auto event_symbol = emit.resolved_event_id.has_value() ? emit.resolved_event_id
@@ -4282,11 +4251,6 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                   "trait '" + project.trait_name + "' has persistent fields and cannot be projected");
                     break;
                 }
-                if (field.is_sync) {
-                    errors_.error(project.location,
-                                  "trait '" + project.trait_name + "' has synced fields and cannot be projected");
-                    break;
-                }
             }
 
             if (pair_scope != nullptr && !project.target_expr.has_value()) {
@@ -4373,8 +4337,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             continue;
         }
         if (const auto* let_stmt = std::get_if<LetStmt>(&stmt->stmt)) {
-            locals[let_stmt->name] =
-                infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event, pair_scope);
+            declare_local(*let_stmt,
+                          infer_expr_type(*let_stmt->value, filter_bindings, locals, handler_event, pair_scope),
+                          locals,
+                          declared_in_block);
             if (const auto* spawn = std::get_if<SpawnExpr>(&let_stmt->value->expr)) {
                 validate_spawn_expr(*spawn, let_stmt->location);
             }
@@ -4418,10 +4384,8 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                   "binding");
                 }
                 target_rejected = true;
-            } else if (auto local_it = locals.find(assign_stmt->name);
-                       local_it != locals.end() && local_it->second.is_let) {
-                errors_.error(assign_stmt->location, "foreach loop variable '" + assign_stmt->name + "' is read-only");
-                target_rejected = true;
+            } else {
+                target_rejected = reject_local_assignment(*assign_stmt, filter_bindings, locals);
             }
 
             // Rebuild the assignment target as a member-access chain (e.g. `hp.health`
@@ -4521,8 +4485,10 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                 TypeInfo element_type = make_int_type();
                 element_type.is_let   = true;
                 range_locals[foreach_stmt->var_name] = std::move(element_type);
+                foreach_variables_.push_back(foreach_stmt->var_name);
                 validate_event_stmts(
                     foreach_stmt->body, filter_bindings, range_locals, handler_event, rule_name, pair_scope);
+                foreach_variables_.pop_back();
                 continue;
             }
 
@@ -4537,10 +4503,66 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             TypeInfo element_type = iterable_type.element != nullptr ? *iterable_type.element : make_unknown_type();
             element_type.is_let   = true;
             loop_locals[foreach_stmt->var_name] = std::move(element_type);
+            foreach_variables_.push_back(foreach_stmt->var_name);
             validate_event_stmts(
                 foreach_stmt->body, filter_bindings, loop_locals, handler_event, rule_name, pair_scope);
+            foreach_variables_.pop_back();
         }
     }
+}
+
+void SemanticAnalyzer::declare_local(const LetStmt& stmt,
+                                     TypeInfo inferred,
+                                     std::unordered_map<std::string, TypeInfo>& locals,
+                                     std::unordered_set<std::string>& declared_in_block) {
+    if (!declared_in_block.insert(stmt.name).second) {
+        errors_.error(stmt.location, "redeclaration of local '" + stmt.name + "' in the same scope");
+    }
+    if (stmt.type.has_value()) {
+        auto declared = resolve_type_ref(*stmt.type);
+        if (declared.kind != TypeKind::Unknown && inferred.kind != TypeKind::Unknown &&
+            !same_type(declared, inferred)) {
+            errors_.error(stmt.location,
+                          "local '" + stmt.name + "' is declared as '" + declared.name + "' but initialized with '" +
+                              inferred.name + "'");
+        }
+        inferred = std::move(declared);
+    }
+    inferred.is_let   = !stmt.is_mutable;
+    locals[stmt.name] = std::move(inferred);
+}
+
+bool SemanticAnalyzer::reject_local_assignment(
+    const VarAssign& stmt,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& locals) {
+    const auto local_it = locals.find(stmt.name);
+    if (local_it != locals.end()) {
+        if (!local_it->second.is_let) {
+            return false;
+        }
+        if (std::ranges::contains(foreach_variables_, stmt.name)) {
+            errors_.error(stmt.location, "foreach loop variable '" + stmt.name + "' is read-only");
+            return true;
+        }
+        // `e.Trait.field = ...` writes the entity, not the binding.
+        if (local_it->second.kind == TypeKind::EntityId && !stmt.path.empty()) {
+            return false;
+        }
+        errors_.error(stmt.location, "cannot reassign immutable binding '" + stmt.name + "'");
+        return true;
+    }
+    if (!stmt.path.empty()) {
+        return false;
+    }
+    const bool is_filter_field = std::ranges::any_of(filter_bindings, [&stmt](const auto& binding) {
+        return binding.second != nullptr && find_field_in(binding.second->fields, stmt.name) != nullptr;
+    });
+    if (is_filter_field) {
+        return false;
+    }
+    errors_.error(stmt.location, "assignment to undeclared local '" + stmt.name + "'; declare it with `var`");
+    return true;
 }
 
 void SemanticAnalyzer::validate_trait_match_stmt(
@@ -4874,17 +4896,6 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
                 // Not resolved directly by resolve_read above; walk the object.
                 visit(*node.object, locals);
-            } else if constexpr (std::is_same_v<E, LambdaExpr>) {
-                auto lambda_locals = locals;
-                lambda_locals.insert(node.params.begin(), node.params.end());
-                visit(*node.body, lambda_locals);
-            } else if constexpr (std::is_same_v<E, PipelineExpr>) {
-                visit(*node.source, locals);
-                for (const auto& operation : node.operations) {
-                    for (const auto& arg : operation.args) {
-                        visit(*arg, locals);
-                    }
-                }
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 visit(*node.subject, locals);
                 for (const auto& arm : node.arms) {
@@ -8703,24 +8714,28 @@ void SemanticAnalyzer::validate_stmt_contexts(ProgramNode& program) {
 // ── Task 11.12: Check no field access in no-filter rule bodies ───────────────
 
 void SemanticAnalyzer::check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts,
-                                             const std::string& rule_name) {
+                                             const std::string& rule_name,
+                                             std::unordered_set<std::string> locals) {
     for (const auto& stmt : stmts) {
         std::visit(
-            [this, &rule_name](const auto& s) {
+            [this, &rule_name, &locals](const auto& s) {
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, LetStmt>) {
-                    // local binding is allowed without filter access checks
+                    locals.insert(s.name);
                 } else if constexpr (std::is_same_v<S, VarAssign>) {
-                    // All VarAssign statements in rule handlers are trait-field accesses
+                    // Bare names are locals; validate_event_stmts reports undeclared ones.
+                    if (s.path.empty() || locals.contains(s.name)) {
+                        return;
+                    }
                     errors_.error(s.location,
                                   "trait field '" + s.name + "' is not accessible in rule '" + rule_name +
                                       "': no filter clause declares this trait");
                 } else if constexpr (std::is_same_v<S, IfStmt>) {
-                    check_no_field_access(s.then_body, rule_name);
+                    check_no_field_access(s.then_body, rule_name, locals);
                     for (const auto& branch : s.else_if_branches) {
-                        check_no_field_access(branch.body, rule_name);
+                        check_no_field_access(branch.body, rule_name, locals);
                     }
-                    check_no_field_access(s.else_body, rule_name);
+                    check_no_field_access(s.else_body, rule_name, locals);
                 }
                 // emit, spawn, destroy, load, add, remove, return, expr: all allowed
             },

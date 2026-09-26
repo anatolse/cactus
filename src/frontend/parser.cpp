@@ -534,9 +534,6 @@ FieldModifiers Parser::parse_field_modifiers() {
         if (check(TokenType::PERSIST)) {
             advance();
             mods.is_persist = true;
-        } else if (check(TokenType::SYNC)) {
-            advance();
-            mods.is_sync = true;
         } else if (check(TokenType::PUB)) {
             advance();
             mods.is_pub = true;
@@ -586,7 +583,6 @@ bool is_event_field_modifier_token(TokenType type) {
         case TokenType::LET:
         case TokenType::VAR:
         case TokenType::PERSIST:
-        case TokenType::SYNC:
         case TokenType::PUB:
             return true;
         default:
@@ -2159,9 +2155,14 @@ TraitMatchStmt Parser::parse_trait_match_stmt() {
 }
 
 LetStmt Parser::parse_let_stmt() {
-    auto loc = peek().location;
-    consume(TokenType::LET, "expected 'let'");
+    auto loc              = peek().location;
+    const bool is_mutable = check(TokenType::VAR);
+    advance();
     auto name = consume(TokenType::IDENTIFIER, "expected binding name").value;
+    std::optional<TypeRef> type;
+    if (match(TokenType::COLON)) {
+        type = parse_type_ref();
+    }
     consume(TokenType::ASSIGN, "expected '='");
     auto value = parse_expression();
     // Block-structured spawn expressions consume their own newline/dedents.
@@ -2169,9 +2170,11 @@ LetStmt Parser::parse_let_stmt() {
         expect_newline();
     }
     LetStmt let_stmt;
-    let_stmt.name     = name;
-    let_stmt.value    = std::move(value);
-    let_stmt.location = loc;
+    let_stmt.name       = name;
+    let_stmt.is_mutable = is_mutable;
+    let_stmt.type       = std::move(type);
+    let_stmt.value      = std::move(value);
+    let_stmt.location   = loc;
     return let_stmt;
 }
 
@@ -2356,7 +2359,7 @@ std::unique_ptr<StmtNode> Parser::parse_assign_or_expr_stmt() {
 std::unique_ptr<StmtNode> Parser::parse_statement() {
     auto loc = peek().location;
 
-    if (check(TokenType::LET)) {
+    if (check(TokenType::LET) || check(TokenType::VAR)) {
         return std::make_unique<StmtNode>(StmtNode::Variant{parse_let_stmt()}, loc);
     }
     if (check(TokenType::EMIT)) {
@@ -2831,21 +2834,8 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(self_expr)}, loc);
     }
 
-    // Identifier — possibly lambda (ident => expr)
     if (check(TokenType::IDENTIFIER)) {
         auto name = advance().value;
-
-        // Lambda: ident => expr
-        if (check(TokenType::FAT_ARROW)) {
-            advance();
-            auto body = parse_expression();
-            LambdaExpr lambda;
-            lambda.params   = {name};
-            lambda.body     = std::move(body);
-            lambda.location = loc;
-            return std::make_unique<ExprNode>(ExprNode::Variant{std::move(lambda)}, loc);
-        }
-
         IdentExpr ident;
         ident.name     = name;
         ident.location = loc;

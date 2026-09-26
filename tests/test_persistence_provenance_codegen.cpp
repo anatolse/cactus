@@ -121,20 +121,6 @@ template Particle:
     CHECK_FALSE(contains(unit->code, "generated_archetype_nodes"));
 }
 
-TEST_CASE("sync fields alone emit no creation provenance", "[codegen-entt][persistence][provenance]") {
-    const auto unit = generate(R"(module world
-
-trait Replicated:
-    sync var position: vec2
-
-template Ghost:
-    Replicated
-)");
-
-    CHECK_FALSE(contains(unit->code, "ArchetypeOrigin"));
-    CHECK_FALSE(contains(unit->code, "retain_construction"));
-}
-
 TEST_CASE("an eligible archetype retains its construction values at creation",
           "[codegen-entt][persistence][provenance]") {
     const auto unit = generate(kDeclarations);

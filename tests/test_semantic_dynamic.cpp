@@ -785,7 +785,7 @@ TEST_CASE("Semantic: field access in no-filter rule body — error (task 11.12)"
         "    var x: float = 0.0\n"
         "rule GlobalSystem:\n"
         "    on tick:\n"
-        "        x = x + tick.dt\n");  // 'x' is a trait field, rule has no filter
+        "        Position.x = 1.0\n");  // rule has no filter
     CHECK(err.find("not accessible") != std::string::npos);
 }
 

@@ -103,7 +103,7 @@ trait PlayerMotion:
     var jump_requested: bool
 
 trait Health:
-    persist sync var health: int
+    persist var health: int
     persist var lives: int
     let max_health: int = 3
     var invincible_timer: float
@@ -207,7 +207,7 @@ pub entity Player:
         health = START_HEALTH
         lives = START_LIVES
         invincible_timer = 0.0
-    Persistent
+    KeepOnLoad
 
 pub entity GroundPlatform:
     tf.WorldTransform:

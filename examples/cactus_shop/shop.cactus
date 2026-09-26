@@ -87,9 +87,6 @@ pub entity GoldenCactus:
 func can_afford(coins: int, price: int) bool:
     return coins >= price
 
-func calculate_total(items: list[ShopItem]) int:
-    return items.map(i => i.price).reduce(0, acc, p => acc + p)
-
 rule ShopInteraction:
     filter:
         Position as p

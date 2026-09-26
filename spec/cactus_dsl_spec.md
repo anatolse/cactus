@@ -88,7 +88,7 @@ Single-line comments start with `#` and extend to the end of the line.
 ```text
 module  use     const   struct  enum    trait   entity  template
 rule    event   phase   func    extern  asset   input
-let     var     persist sync    pub
+let     var     persist pub
 on      emit    if      else    match   return
 filter  exclude order   by      after   as      every  max
 reads   writes  emits   commands effects
@@ -177,7 +177,7 @@ trait_decl      = [ "pub" ] "trait" IDENTIFIER
 
 field_decl      = field_modifiers ( "let" | "var" ) IDENTIFIER ":" type_ref
                   [ "=" expression ] NEWLINE ;
-field_modifiers = { "persist" | "sync" | "pub" } ;
+field_modifiers = { "persist" | "pub" } ;
 ```
 
 Marker traits have no body:
@@ -192,7 +192,7 @@ Data traits carry fields:
 ```cactus
 trait Health:
     let max_health: int = 100
-    persist sync var health: int = 100
+    persist pub var health: int = 100
 ```
 
 `persist` marks a field as durable game-save state; it carries no format, storage, or scene-survival meaning of its own — see §7.6 for what it makes eligible and how a save is produced.
@@ -277,6 +277,8 @@ entity SecondWalker from WalkerEnemy:
     Position:
         pos = vec2(800.0, 568.0)
 ```
+
+Composition rule: body-level `use` composes a new shape and may add traits; `entity X from T:` places an instance of an existing shape and may only override fields.
 
 `WalkerEnemy` is a composed blueprint: it receives `EnemyBase`'s trait initializers before applying its own `Position` block. `FirstWalker` uses a body-level `use` (compile-time composition). `SecondWalker` uses the `from` clause (template-backed entity): it starts from `WalkerEnemy`'s flattened archetype and overrides only `Position.pos`. Neither performs a runtime spawn.
 
@@ -778,7 +780,7 @@ multiplicative_expr = unary_expr { ( "*" | "/" | "%" ) unary_expr } ;
 unary_expr      = ( "not" | "-" ) unary_expr | postfix_expr ;
 postfix_expr    = primary_expr { "." IDENTIFIER [ "(" [ arg_list ] ")" ] } ;
 primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
-                | lambda_expr | match_expr | if_expr | list_literal | spawn_expr ;
+                | match_expr | if_expr | list_literal | spawn_expr ;
 ```
 
 `spawn` is both an expression and a statement surface:
@@ -906,6 +908,8 @@ destroy bullet
 load levels.level2
 ```
 
+`let` declares an immutable local and `var` declares a mutable one, in handler and `func` bodies alike. Reassigning a `let` local, including a compound assignment or a member write such as `v.x = 1.0`, is an error. A trait write through an `entity_id` local (`e.Health.hp = 3`) targets the entity, not the binding, so the immutability rule does not apply to it. Assignment never declares a local: assigning to an undeclared name is an error, and declaring the same name twice in one block is an error. An optional type annotation must match the initializer's type.
+
 `emit` (like `add` and `project`) may omit the `:` payload block entirely when the event has no fields to set (e.g. a zero-field `pub event StartBump`) or when every field should take its default; `to expression` is still allowed without a block for a targeted zero-field emit.
 
 `set T on e:` queues a patch of the named fields of trait `T` on entity `e`, applied at the activation commit (§5.3). It is allowed only inside rule event handlers (including pair handlers, against either binding) of programs that use the graph-driven phase scheduler. The `on` target is required and must be an `entity_id`; `set T on self` is valid and still deferred. The block needs at least one field, `T` must declare fields, and each value must match its field type. When applied, the patch overwrites only the named fields of `e`'s existing durable `T`. It does nothing if `e` is stale or does not carry `T` durably; it never attaches `T`, fires no lifecycle notifications, and does not change the persistence construction baseline. If `T` is currently projected over a durable value, the patch updates the durable value that frame-end cleanup restores, and the visible projection is unchanged for the rest of the frame. Use `add` to attach a trait and `set` to change fields of a trait an entity may or may not carry.
@@ -921,7 +925,7 @@ Bounded foreach is allowed only inside rule event handlers. The iterable express
 - `set` to change fields of a trait on an entity the handler did not select;
 - `project` for current-frame facts such as grounded/contact facts, interaction availability, tint overrides, damage flashes, outlines, or other render/VFX hints.
 
-Traits with `persist` or `sync` fields cannot be projected because those modifiers describe durable storage behavior.
+Traits with `persist` fields cannot be projected because that modifier describes durable storage behavior.
 
 ### 3.17 Trait Match Statements
 
@@ -1016,7 +1020,7 @@ String literals are only allowed in:
 - `filter:` selects entities
 - `exclude:` removes entities from consideration
 - a leading handler `after:` names canonical handler identities and constrains order for that trigger
-- legacy rule-level `after:` expands only between handlers with the same canonical trigger and never creates cross-trigger edges
+- rule-level `after:` is shorthand for ordering the rule's handlers after the named rule's handlers with the same canonical trigger; it never creates cross-trigger edges
 - `order by:` constrains iteration order for a rule pass
 - `filter:` and `exclude:` select entities but do not imply component reads
 - regular handler contracts are inferred from their bodies; extern handler contracts are declared explicitly
@@ -1083,14 +1087,28 @@ alpha = accumulator / every
 
 Subtracting `due` deliberately drops capped whole steps while preserving the fractional remainder, so `0 <= alpha < 1` and backlog cannot grow permanently. Each repetition is a separate activation and commit boundary.
 
-### 5.2 Scene Loading
+### 5.2 Scene Loading and Lifecycle Events
 
 `load module.name` transitions to another module-as-scene. Conceptually:
 
-1. remove old scene entities
-2. instantiate new scene entities
+1. `unload` fires, and `std.core`'s `SceneCleanup` rule destroys every entity without `KeepOnLoad`
+2. the new scene's entities are instantiated
+3. `load` fires
 
-Scene loading does not synthesize handlers by trigger spelling. Projects that need initialization work model it with an explicit runtime event or phase.
+`std.core.KeepOnLoad` is a marker trait: an entity that carries it survives the cleanup in step 1. It is unrelated to `persist` fields, which decide what a save records (§7.6). An explicit `destroy` still removes a `KeepOnLoad` entity.
+
+`std.core` declares four lifecycle events. Rules handle them like any other event (`on load:`, `on destroy:`):
+
+| Event | Fires |
+|---|---|
+| `load` | at program start, after the entry module's entities exist, and after each scene load |
+| `unload` | before a scene transition, and once at program teardown |
+| `spawn` | once per applied `spawn` command, at the activation commit |
+| `destroy` | once per applied `destroy` command, at the activation commit, after the entity is removed |
+
+`spawn` and `destroy` are untargeted occurrences. A rule with a `filter:` runs its `on spawn` or `on destroy` handler for every entity that matches the filter when the occurrence is delivered, not only for the created or removed entity. The removed entity is already gone, so an `on destroy` handler cannot read its fields. Entities declared with `entity` are created at load and do not fire `spawn`.
+
+The cpp-entt backend does not lower the `load` statement yet, so today `load` fires only at program start and `unload` only at teardown.
 
 ### 5.3 Structural Changes
 
@@ -1354,9 +1372,9 @@ rule StartReload:
 
 ### 7.6 World Persistence (`std.persistence`)
 
-World persistence is a small gameplay request surface plus a generated, format-independent snapshot — not a keyword, a template modifier, or a serializer authored in Cactus. Saving is entirely orthogonal to scene control (§5.2) and to `std.core.Persistent`: see "Persistence is not scene survival" below before reaching for either.
+World persistence is a small gameplay request surface plus a generated, format-independent snapshot — not a keyword, a template modifier, or a serializer authored in Cactus. Saving is independent of scene control and of `std.core.KeepOnLoad` (§5.2).
 
-**Eligibility.** An entity is captured in a world snapshot when a trait in its originating archetype's declared trait set contains a `persist` field, or a trait currently attached to it does. The first condition survives removal of that trait; the second means attaching a persistent trait at runtime can make an ephemeral entity eligible, and removing it again makes that entity ephemeral once more if its original archetype was never eligible on its own. No other entity is recorded — a particle template with many `spawn` overrides is not eligible just because its fields were overridden, and `sync` grants no eligibility (it is a replication concern, not a save concern).
+**Eligibility.** An entity is captured in a world snapshot when a trait in its originating archetype's declared trait set contains a `persist` field, or a trait currently attached to it does. The first condition survives removal of that trait; the second means attaching a persistent trait at runtime can make an ephemeral entity eligible, and removing it again makes that entity ephemeral once more if its original archetype was never eligible on its own. No other entity is recorded — a particle template with many `spawn` overrides is not eligible just because its fields were overridden.
 
 **Construction baseline vs. current value.** For an eligible entity, fields without `persist` are recorded at the value they held immediately after construction — the archetype default, or the evaluated `spawn`/template argument — never a later mutation. `persist` fields are recorded at their current value at capture time. A field only changes what a save reports at all if it carries `persist`; everything else is baseline provenance for reconstructing the same starting point.
 
@@ -1455,8 +1473,6 @@ int main() {
 
 Both functions return their result explicitly; neither may let an exception escape, since the runtime never wraps an adapter call in its own handler. The registered adapter takes effect immediately and stays registered until the process replaces or clears it — there is no per-save adapter selection from Cactus.
 
-**Persistence is not scene survival.** `std.core.Persistent` (§5.2) only controls whether an entity survives a `load` scene transition; it has no bearing on whether that entity is written to a save file, and a `persist` field has no bearing on whether its entity survives a scene transition. An entity can carry `Persistent` and no `persist` field at all — it survives `load` but is absent from every save. The reverse is equally normal: a `persist`-bearing entity with no `Persistent` is captured in a save but is still destroyed like any other entity on the next `load`. Treat them as answers to two different questions — "does this outlive a scene change" and "does this outlive the process" — never as the same mechanism under two names.
-
 ## 8. Deferred and Migration Notes
 
 ### 8.1 Deferred Features
@@ -1486,7 +1502,8 @@ Prefer:
 - `emit EventName:` with payload block syntax
 - explicit `extern event` roots and `phase` declarations
 - `on tick:` / `tick.dt` where `tick` resolves to a declared phase
-- explicit extern handler contracts and handler-level `after:`
+- explicit extern handler contracts
+- rule-level `after:` for same-trigger ordering between rules, and handler-level `after:` for exact handler dependencies
 - `add` / `remove`
 
 ### 8.3 Example Hygiene

@@ -35,7 +35,6 @@ static DecoratedProgram make_test_program() {
     fx.type       = make_float_type();
     fx.is_var     = true;
     fx.is_persist = true;
-    fx.is_sync    = true;
     ResolvedField fy;
     fy.name                 = "y";
     fy.type                 = make_float_type();
@@ -213,7 +212,6 @@ TEST_CASE("ModuleArtifact: round-trip save and load", "[artifact]") {
     CHECK(pos.fields[0].name == "x");
     CHECK(pos.fields[0].is_var);
     CHECK(pos.fields[0].is_persist);
-    CHECK(pos.fields[0].is_sync);
     CHECK(pos.fields[0].type.kind == TypeKind::Float);
 
     // Verify non-pub trait
@@ -941,7 +939,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 15);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 17);
 
     fs::remove_all(build_dir, ec);
 }

@@ -32,7 +32,6 @@ struct FieldModifiers {
     bool is_let     = false;
     bool is_var     = false;
     bool is_persist = false;
-    bool is_sync    = false;
     bool is_pub     = false;
 };
 
@@ -208,22 +207,6 @@ struct MemberExpr {
     SourceLocation location;
 };
 
-struct LambdaExpr {
-    std::vector<std::string> params;  // single or multiple param names
-    std::unique_ptr<ExprNode> body;
-    SourceLocation location;
-};
-
-struct PipelineExpr {
-    std::unique_ptr<ExprNode> source;
-    struct PipelineOp {
-        std::string method;  // "map", "filter", "reduce"
-        std::vector<std::unique_ptr<ExprNode>> args;
-    };
-    std::vector<PipelineOp> operations;
-    SourceLocation location;
-};
-
 struct MatchArm {
     std::unique_ptr<ExprNode> pattern;
     std::unique_ptr<ExprNode> body;
@@ -256,8 +239,6 @@ struct ExprNode {
                                  UnaryExpr,
                                  CallExpr,
                                  MemberExpr,
-                                 LambdaExpr,
-                                 PipelineExpr,
                                  MatchExpr,
                                  IfExpr,
                                  ListExpr,
@@ -290,6 +271,8 @@ struct VarAssign {
 
 struct LetStmt {
     std::string name;
+    bool is_mutable = false;  // `var` declaration; `let` is immutable
+    std::optional<TypeRef> type;
     std::unique_ptr<ExprNode> value;
     SourceLocation location;
 };

@@ -611,7 +611,7 @@ rule MovePlayer:
     on fixed_tick:
         if game_over:
             return
-        let move = vec3(0.0, 0.0, 0.0)
+        var move = vec3(0.0, 0.0, 0.0)
         let forward = quat.forward(transform.rotation)
         let right = quat.right(transform.rotation)
         if input.down(MoveForward):
@@ -812,7 +812,7 @@ rule SpawnRobots:
 
     on fixed_tick:
         let player_entity = query.first[Player]()
-        let active = false
+        var active = false
         match player_entity:
             Player as player =>
                 active = not player.game_over
@@ -821,7 +821,7 @@ rule SpawnRobots:
         spawn_point.countdown -= fixed_tick.dt
         if spawn_point.countdown > 0.0:
             return
-        let model_scale = 1.0
+        var model_scale = 1.0
         let bounds = models.bounds_size(Robot)
         if bounds.y > 0.0:
             model_scale = CHARACTER_HEIGHT / bounds.y
@@ -849,7 +849,7 @@ rule SpawnKnights:
 
     on fixed_tick:
         let player_entity = query.first[Player]()
-        let active = false
+        var active = false
         match player_entity:
             Player as player =>
                 active = not player.game_over
@@ -858,7 +858,7 @@ rule SpawnKnights:
         spawn_point.countdown -= fixed_tick.dt
         if spawn_point.countdown > 0.0:
             return
-        let model_scale = 1.0
+        var model_scale = 1.0
         let bounds = models.bounds_size(Knight)
         if bounds.y > 0.0:
             model_scale = CHARACTER_HEIGHT / bounds.y
@@ -896,7 +896,7 @@ rule SeekPlayer:
         if enemy.dying:
             return
         let player_entity = query.first[Player]()
-        let active = false
+        var active = false
         match player_entity:
             Player as player =>
                 active = not player.game_over
@@ -911,7 +911,7 @@ rule SeekPlayer:
         # GroundCandidate-event cascade within the same tick.
         if enemy.is_vaulting and actor.grounded:
             enemy.is_vaulting = false
-            let run_clip = ROBOT_RUN_CLIP
+            var run_clip = ROBOT_RUN_CLIP
             match self:
                 KnightEnemy =>
                     run_clip = KNIGHT_RUN_CLIP
@@ -934,22 +934,22 @@ rule SeekPlayer:
         # the common case and the only one steering/vaulting ever needs — the
         # deflected candidates and vault-clearance probe below are wasted
         # work on a tick where the direct path is already clear.
-        let direct_blocked = false
+        var direct_blocked = false
         for wall in solid_walls:
-            let wall_position = vec3(0.0, 0.0, 0.0)
-            let wall_rotation = quat.identity()
+            var wall_position = vec3(0.0, 0.0, 0.0)
+            var wall_rotation = quat.identity()
             match wall:
                 tv.WorldTransform as wall_transform =>
                     wall_position = wall_transform.position
                     wall_rotation = wall_transform.rotation
-            let wall_size = vec3(1.0, 1.0, 1.0)
+            var wall_size = vec3(1.0, 1.0, 1.0)
             match wall:
                 physics.BoxCollider as wall_box =>
                     wall_size = wall_box.size
             if not direct_blocked and is_probe_blocked(probe_direct, wall_position, wall_size, wall_rotation):
                 direct_blocked = true
 
-        let direction = direct_direction
+        var direction = direct_direction
         if direct_blocked:
             let candidate_left_small = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_SMALL)
             let candidate_right_small = v3.rotate(direct_direction, up, ENEMY_STEER_ANGLE_SMALL * -1.0)
@@ -963,19 +963,19 @@ rule SeekPlayer:
             # obstacle that blocks here too is too tall to vault.
             let probe_direct_high = vec3(probe_direct.x, transform.position.y + ENEMY_VAULT_CLEARANCE_HEIGHT, probe_direct.z)
 
-            let direct_high_blocked = false
-            let left_small_blocked = false
-            let right_small_blocked = false
-            let left_large_blocked = false
-            let right_large_blocked = false
+            var direct_high_blocked = false
+            var left_small_blocked = false
+            var right_small_blocked = false
+            var left_large_blocked = false
+            var right_large_blocked = false
             for wall in solid_walls:
-                let wall_position = vec3(0.0, 0.0, 0.0)
-                let wall_rotation = quat.identity()
+                var wall_position = vec3(0.0, 0.0, 0.0)
+                var wall_rotation = quat.identity()
                 match wall:
                     tv.WorldTransform as wall_transform =>
                         wall_position = wall_transform.position
                         wall_rotation = wall_transform.rotation
-                let wall_size = vec3(1.0, 1.0, 1.0)
+                var wall_size = vec3(1.0, 1.0, 1.0)
                 match wall:
                     physics.BoxCollider as wall_box =>
                         wall_size = wall_box.size
@@ -1002,7 +1002,7 @@ rule SeekPlayer:
                 actor.vertical_velocity = JUMP_VELOCITY
                 actor.grounded = false
                 enemy.is_vaulting = true
-                let jump_clip = ROBOT_JUMP_CLIP
+                var jump_clip = ROBOT_JUMP_CLIP
                 match self:
                     KnightEnemy =>
                         jump_clip = KNIGHT_JUMP_CLIP
@@ -1049,7 +1049,7 @@ rule FireBullet:
 
     on input:
         let player_entity = query.first[Player]()
-        let active = false
+        var active = false
         match player_entity:
             Player as player =>
                 active = not player.game_over

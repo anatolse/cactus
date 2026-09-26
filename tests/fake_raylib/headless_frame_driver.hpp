@@ -17,17 +17,27 @@ namespace cactus_headless_test {
 // silently no-ops every `on load` handler — invisible for blue-square
 // (no `on load` rules) but not for examples that spawn or configure state
 // at load time.
-inline void dispatch_load_event(entt::registry& registry) {
+// Mirrors generated main()'s load/unload boundary: a SaveRequested emitted
+// from the handler is processed at this same boundary, not deferred.
+template <typename Occurrence>
+void dispatch_boundary_event(entt::registry& registry, const Occurrence& occurrence) {
     auto& boundary_activation  = cactus::runtime::entt_backend::generated_scheduler_state().activation;
     boundary_activation.active = true;
-    cactus::runtime::entt_backend::generated_dispatch_event(registry, std_core__loadEvent{});
+    cactus::runtime::entt_backend::generated_dispatch_event(registry, occurrence);
     cactus::runtime::entt_backend::generated_drain_event_cascade(registry);
     cactus::runtime::entt_backend::generated_commit_activation(registry);
-    // Mirrors generated main()'s load boundary (add-world-save-restore task
-    // 4.4): a SaveRequested emitted from `on load:` is processed at this same
-    // boundary, not deferred to the first frame.
     cactus::runtime::entt_backend::generated_process_persistence_boundary(registry);
     boundary_activation.active = false;
+}
+
+inline void dispatch_load_event(entt::registry& registry) {
+    dispatch_boundary_event(registry, std_core__loadEvent{});
+}
+
+// Runs `on unload` handlers (e.g. std.core's SceneCleanup), as a scene
+// transition does before the next load.
+inline void dispatch_unload_event(entt::registry& registry) {
+    dispatch_boundary_event(registry, std_core__unloadEvent{});
 }
 
 // Brings a fresh registry up to the state a generated main() reaches just

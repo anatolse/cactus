@@ -35,7 +35,6 @@ struct ResolvedField {
     bool is_let             = false;
     bool is_var             = false;
     bool is_persist         = false;
-    bool is_sync            = false;
     bool is_pub             = false;
     bool has_default        = false;
     bool is_synthesized     = false;
@@ -585,7 +584,7 @@ private:
     void check_func_purity_stmt(const StmtNode& stmt, const std::string& func_name);
     void check_func_purity_expr(const ExprNode& expr, const std::string& func_name);
     void check_no_recursion(ProgramNode& program);
-    void check_persist_sync(ProgramNode& program);
+    void check_persist(ProgramNode& program);
     // Runs after flatten_template_compositions, so every archetype node's trait
     // set is already the composed baseline.
     void build_persistence_metadata(const ProgramNode& program);
@@ -679,6 +678,14 @@ private:
                               const ResolvedStruct* handler_event,
                               const std::string& rule_name,
                               const PairScope* pair_scope = nullptr);
+    void declare_local(const LetStmt& stmt,
+                       TypeInfo inferred,
+                       std::unordered_map<std::string, TypeInfo>& locals,
+                       std::unordered_set<std::string>& declared_in_block);
+    // Returns true when the assignment target was rejected.
+    bool reject_local_assignment(const VarAssign& stmt,
+                                 const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                 const std::unordered_map<std::string, TypeInfo>& locals);
     void validate_trait_match_stmt(const TraitMatchStmt& stmt,
                                    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
                                    const std::unordered_map<std::string, TypeInfo>& local_bindings,
@@ -747,7 +754,9 @@ private:
     void validate_exclude_clause(const auto& node);
 
     // task 11.12: field access not allowed in rules with no filter clause
-    void check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts, const std::string& rule_name);
+    void check_no_field_access(const std::vector<std::unique_ptr<StmtNode>>& stmts,
+                               const std::string& rule_name,
+                               std::unordered_set<std::string> locals);
 
     // Dynamic ECS helpers
     bool is_trait_declared(const std::string& name) const;
@@ -1209,6 +1218,9 @@ private:
 
     // Event declarations as struct-like field maps for emit payload validation.
     std::unordered_map<std::string, ResolvedStruct> event_structs_;
+
+    // Loop variables in scope, innermost last; they keep their own read-only diagnostic.
+    std::vector<std::string> foreach_variables_;
 };
 
 }  // namespace cactus

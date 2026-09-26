@@ -49,7 +49,6 @@ struct TypeInfo {
     std::shared_ptr<TypeInfo> ret;      // for Func: return type
     bool is_let     = false;
     bool is_persist = false;
-    bool is_sync    = false;
     bool is_pub     = false;
     [[nodiscard]] bool is_primitive() const {
         return kind == TypeKind::Int || kind == TypeKind::Float || kind == TypeKind::Bool || kind == TypeKind::String ||

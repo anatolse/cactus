@@ -3148,9 +3148,7 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     // Dotted assignment target (`alias.field...`): reconstruct the
                     // equivalent member-access chain and lower it through the same
                     // path ordinary reads use, so `hp.health = x` resolves `hp` as
-                    // the already-in-scope filter-alias/field reference instead of
-                    // falling into the bare-identifier "new local" branch below,
-                    // which would shadow-redeclare it.
+                    // the already-in-scope filter-alias/field reference.
                     ExprNode chain(ExprNode::Variant{IdentExpr{s.name, s.location}}, s.location);
                     for (const auto& segment : s.path) {
                         chain = ExprNode(
@@ -3160,29 +3158,17 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     }
                     lhs = rewrite_expr(
                         chain, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
-                } else if (lexical_locals != nullptr && lexical_locals->contains(s.name)) {
-                    lhs = s.name;
-                } else if (known_fields.contains(s.name)) {
-                    auto comp = find_comp_for_field(s.name, trait_names, program);
-                    if (!comp.empty()) {
+                } else {
+                    const bool is_field = known_fields.contains(s.name) &&
+                                          (lexical_locals == nullptr || !lexical_locals->contains(s.name));
+                    const auto comp     = is_field ? find_comp_for_field(s.name, trait_names, program) : std::string{};
+                    if (comp.empty()) {
+                        lhs = s.name;
+                    } else {
                         const auto ovr = cpp_overrides.find(comp);
                         const auto& cpp =
                             ovr != cpp_overrides.end() ? ovr->second : EnttCodegenUtils::trait_cpp_name(comp, program);
                         lhs = cpp + "_comp." + s.name;
-                    } else {
-                        lhs = s.name;
-                    }
-                } else {
-                    // A first bare `=` preserves the backend's existing mutable-local
-                    // declaration behavior. Compound assignment is only meaningful for
-                    // an already-visible lexical binding and therefore never declares.
-                    if (s.op == "=") {
-                        lhs = "auto " + s.name;
-                        if (lexical_locals != nullptr) {
-                            lexical_locals->insert(s.name);
-                        }
-                    } else {
-                        lhs = s.name;
                     }
                 }
                 if (const auto* call = std::get_if<CallExpr>(&s.value->expr)) {

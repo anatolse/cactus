@@ -56,14 +56,21 @@ TEST_CASE("Lexer: keywords are recognized", "[lexer]") {
 }
 
 TEST_CASE("Lexer: modifier keywords", "[lexer]") {
-    auto tokens = lex("let var persist sync pub");
+    auto tokens = lex("let var persist pub");
     auto types  = token_types(tokens);
-    REQUIRE(types.size() == 5);
+    REQUIRE(types.size() == 4);
     CHECK(types[0] == TokenType::LET);
     CHECK(types[1] == TokenType::VAR);
     CHECK(types[2] == TokenType::PERSIST);
-    CHECK(types[3] == TokenType::SYNC);
-    CHECK(types[4] == TokenType::PUB);
+    CHECK(types[3] == TokenType::PUB);
+}
+
+TEST_CASE("Lexer: sync and map are identifiers", "[lexer]") {
+    auto tokens = lex("sync map");
+    auto types  = token_types(tokens);
+    REQUIRE(types.size() >= 2);
+    CHECK(types[0] == TokenType::IDENTIFIER);
+    CHECK(types[1] == TokenType::IDENTIFIER);
 }
 
 TEST_CASE("Lexer: keyword vs identifier", "[lexer]") {

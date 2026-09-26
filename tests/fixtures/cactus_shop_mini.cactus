@@ -13,7 +13,7 @@ struct Item:
     rarity: Rarity
 
 trait Wallet:
-    persist sync var coins: int = 50
+    persist var coins: int = 50
 
 trait Inventory:
     persist var items: list[Item]

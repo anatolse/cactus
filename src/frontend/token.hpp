@@ -30,7 +30,6 @@ enum class TokenType : std::uint8_t {
     LET,
     VAR,
     PERSIST,
-    SYNC,
     PUB,
 
     // Keywords — control / actions
@@ -68,7 +67,6 @@ enum class TokenType : std::uint8_t {
     EFFECTS,
 
     // Keywords — functional
-    MAP,
     REDUCE,
 
     // Keywords — literals / logic
@@ -191,8 +189,6 @@ inline const char* token_type_to_string(TokenType t) {
             return "VAR";
         case TokenType::PERSIST:
             return "PERSIST";
-        case TokenType::SYNC:
-            return "SYNC";
         case TokenType::PUB:
             return "PUB";
         case TokenType::ON:
@@ -255,8 +251,6 @@ inline const char* token_type_to_string(TokenType t) {
             return "COMMANDS";
         case TokenType::EFFECTS:
             return "EFFECTS";
-        case TokenType::MAP:
-            return "MAP";
         case TokenType::REDUCE:
             return "REDUCE";
         case TokenType::TRUE_LIT:

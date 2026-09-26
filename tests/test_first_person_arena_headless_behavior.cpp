@@ -73,15 +73,6 @@ entt::entity enemy_visual_of(entt::registry& registry, const entt::entity enemy)
     return entt::null;
 }
 
-void dispatch_unload(entt::registry& registry) {
-    auto& activation  = cactus::runtime::entt_backend::generated_scheduler_state().activation;
-    activation.active = true;
-    cactus::runtime::entt_backend::generated_dispatch_event(registry, std_core__unloadEvent{});
-    cactus::runtime::entt_backend::generated_drain_event_cascade(registry);
-    cactus::runtime::entt_backend::generated_commit_activation(registry);
-    activation.active = false;
-}
-
 }  // namespace
 
 TEST_CASE("first-person arena headless: authored arena, player camera, HUD, and initial wave load",
@@ -549,7 +540,7 @@ TEST_CASE("first-person arena headless: unloading also releases cursor",
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
     REQUIRE(cactus_raylib_fake::cursor_captured());
-    dispatch_unload(registry);
+    cactus_headless_test::dispatch_unload_event(registry);
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
 }
 

@@ -72,10 +72,9 @@ std::string decode_expression(const DecoratedProgram& program, const TypeInfo& t
             if (type.element == nullptr) {
                 return {};
             }
-            // type_to_cpp() maps EntityId to "uint32_t" for sync's replication
-            // representation, not the registry's live entt::entity storage —
-            // a list of entity_id needs the latter to hold what
-            // generated_decode_entity() actually returns.
+            // type_to_cpp() maps EntityId to "uint32_t", not the registry's live
+            // entt::entity storage — a list of entity_id needs the latter to hold
+            // what generated_decode_entity() actually returns.
             const auto element_cpp = type.element->kind == TypeKind::EntityId
                                          ? std::string("entt::entity")
                                          : EnttCodegenUtils::type_to_cpp(*type.element);

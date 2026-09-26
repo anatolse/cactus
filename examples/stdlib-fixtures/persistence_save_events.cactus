@@ -5,8 +5,9 @@ use std.persistence as storage
 
 # Exercises the save request/outcome round trip in isolation: an author emits
 # SaveRequested and later receives exactly one correlated SaveCompleted or
-# SaveFailed outcome. Nothing here touches world capture or an adapter — this
-# fixture is only about the request/outcome event surface itself.
+# SaveFailed outcome, and a restore requested after a completed save reports
+# one correlated RestoreCompleted or RestoreFailed. Nothing here is
+# persistable, so a restore replaces nothing.
 
 const:
     SAVE_SLOT = "slot1"
@@ -26,6 +27,13 @@ trait SaveStatus:
     # Guards resubmission from ObserveSaveFailed to one attempt, so the fixture
     # cannot loop forever while still proving a deferred-boundary resubmit.
     var resubmitted: bool = false
+    var restore_after_save: bool = false
+    var pending_restores: int = 0
+    var restore_completed_count: int = 0
+    var last_restore_completed_id: int = 0
+    var restore_failed_count: int = 0
+    var last_restore_failed_id: int = 0
+    var last_restore_code: string = ""
 
 entity Tracker:
     SaveStatus
@@ -51,6 +59,12 @@ rule RequestSave:
             emit storage.SaveRequested:
                 slot = SAVE_SLOT
                 request_id = status.requests_sent
+        if status.pending_restores > 0:
+            status.pending_restores -= 1
+            status.requests_sent += 1
+            emit storage.RestoreRequested:
+                slot = SAVE_SLOT
+                request_id = status.requests_sent
 
 rule ObserveSaveCompleted:
     filter:
@@ -60,6 +74,12 @@ rule ObserveSaveCompleted:
         status.completed_count += 1
         status.last_completed_slot = outcome.slot
         status.last_completed_id = outcome.request_id
+        if status.restore_after_save:
+            status.restore_after_save = false
+            status.requests_sent += 1
+            emit storage.RestoreRequested:
+                slot = SAVE_SLOT
+                request_id = status.requests_sent
 
 rule ObserveSaveFailed:
     filter:
@@ -77,3 +97,20 @@ rule ObserveSaveFailed:
             emit storage.SaveRequested:
                 slot = SAVE_SLOT
                 request_id = status.requests_sent
+
+rule ObserveRestoreCompleted:
+    filter:
+        SaveStatus as status
+
+    on storage.RestoreCompleted as outcome:
+        status.restore_completed_count += 1
+        status.last_restore_completed_id = outcome.request_id
+
+rule ObserveRestoreFailed:
+    filter:
+        SaveStatus as status
+
+    on storage.RestoreFailed as outcome:
+        status.restore_failed_count += 1
+        status.last_restore_failed_id = outcome.request_id
+        status.last_restore_code = outcome.code

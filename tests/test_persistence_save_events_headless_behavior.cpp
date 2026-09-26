@@ -233,4 +233,47 @@ TEST_CASE("a request emitted from an outcome handler is deferred to a later boun
     // The resubmitted request's outcome arrives at the next boundary.
     CHECK(status.failed_count == 2);
 }
+
+TEST_CASE("a restore after a completed save is a correlated no-op with nothing persistable",
+          "[runtime][persistence][restore][headless]") {
+    World world;
+    auto& registry = world.registry;
+
+    const auto tracker = entity_with<persistence_save_events__SaveStatus>(registry);
+    auto& status       = registry.get<persistence_save_events__SaveStatus>(tracker);
+    status.restore_after_save = true;
+    status.pending_requests   = 1;
+
+    cactus_test::InMemoryPersistenceAdapter storage;
+    cactus_test::ScopedPersistenceAdapter scoped_adapter(storage.as_adapter());
+
+    drive_frame(registry, kStep);
+    REQUIRE(status.completed_count == 1);
+    drive_frame(registry, kStep);
+
+    CHECK(status.restore_completed_count == 1);
+    CHECK(status.last_restore_completed_id == 2);
+    CHECK(status.restore_failed_count == 0);
+    // The world was not replaced: the same tracker entity, and still only one.
+    CHECK(registry.valid(tracker));
+    CHECK(&registry.get<persistence_save_events__SaveStatus>(tracker) == &status);
+    CHECK(registry.view<persistence_save_events__SaveStatus>().size() == 1);
+}
+
+TEST_CASE("a restore with nothing persistable fails as adapter_unavailable when no adapter is registered",
+          "[runtime][persistence][restore][headless]") {
+    World world;
+    auto& registry = world.registry;
+
+    auto& status = registry.get<persistence_save_events__SaveStatus>(
+        entity_with<persistence_save_events__SaveStatus>(registry));
+    status.pending_restores = 1;
+
+    drive_frame(registry, kStep);
+
+    CHECK(status.restore_completed_count == 0);
+    CHECK(status.restore_failed_count == 1);
+    CHECK(status.last_restore_failed_id == 1);
+    CHECK(status.last_restore_code == "adapter_unavailable");
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

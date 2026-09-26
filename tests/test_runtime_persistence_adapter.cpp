@@ -152,4 +152,42 @@ TEST_CASE("a write-then-read round trip through the same adapter preserves the e
     // one originally captured, field for field.
     CHECK(result.snapshot == snapshot);
 }
+
+TEST_CASE("a no-op restore of an empty-schema document succeeds", "[runtime][persistence][adapter]") {
+    ResetPersistenceState reset;
+
+    register_persistence_adapter(PersistenceAdapter{
+        .read = [](const std::string&, const persistence::SchemaDescriptor&) {
+            return PersistenceReadResult{.ok = true, .snapshot = persistence::Snapshot{}};
+        }});
+
+    const auto outcome = execute_noop_restore_request("slot1", 7, persistence::SchemaDescriptor{});
+    CHECK(outcome.ok);
+    CHECK(outcome.slot == "slot1");
+    CHECK(outcome.request_id == 7);
+}
+
+TEST_CASE("a no-op restore with no registered adapter fails as adapter_unavailable",
+          "[runtime][persistence][adapter]") {
+    ResetPersistenceState reset;
+
+    const auto outcome = execute_noop_restore_request("slot1", 7, persistence::SchemaDescriptor{});
+    CHECK_FALSE(outcome.ok);
+    CHECK(outcome.slot == "slot1");
+    CHECK(outcome.request_id == 7);
+    CHECK(outcome.code == "adapter_unavailable");
+}
+
+TEST_CASE("a no-op restore rejects a document with a non-empty schema", "[runtime][persistence][adapter]") {
+    ResetPersistenceState reset;
+
+    register_persistence_adapter(PersistenceAdapter{
+        .read = [](const std::string&, const persistence::SchemaDescriptor&) {
+            return PersistenceReadResult{.ok = true, .snapshot = sample_snapshot()};
+        }});
+
+    const auto outcome = execute_noop_restore_request("slot1", 7, persistence::SchemaDescriptor{});
+    CHECK_FALSE(outcome.ok);
+    CHECK(outcome.code == "incompatible_schema");
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison)

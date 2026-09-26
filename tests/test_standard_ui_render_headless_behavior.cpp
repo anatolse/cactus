@@ -169,7 +169,7 @@ TEST_CASE("Standard UI render skips invisible and fully-clipped entities, and ti
     const auto* translucent_draw = cactus_raylib_fake::find_call<cactus_raylib_fake::RecordedDrawRectangleRec>(
         log, [](const auto& r) { return r.color.r == 10 && r.color.g == 20 && r.color.b == 30; });
     REQUIRE(translucent_draw != nullptr);
-    CHECK(translucent_draw->color.a == 127);  // 255 * 0.5, truncated
+    CHECK(translucent_draw->color.a == 128);  // 255 * 0.5, rounded
 
     // The one surviving entity's scissor bounds must exactly bracket its draw.
     CHECK(cactus_raylib_fake::ordered_subsequence(

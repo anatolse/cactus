@@ -2685,8 +2685,10 @@ std::string emit_persistence_boundary_processor(const DecoratedProgram& program)
            "outcome.message});\n";
     out << "                }\n";
     out << "            } else {\n";
-    out << "                const auto outcome = generated_execute_restore_request(registry, request.slot, "
-           "request.request_id, schema);\n";
+    out << "                const auto outcome = "
+        << (has_schema ? "generated_execute_restore_request(registry, request.slot, request.request_id, schema)"
+                       : "execute_noop_restore_request(request.slot, request.request_id, schema)")
+        << ";\n";
     out << "                if (outcome.ok) {\n";
     out << "                    cached_snapshot.reset();\n";
     out << "                    generated_inject_external_event(" << restore_completed_type

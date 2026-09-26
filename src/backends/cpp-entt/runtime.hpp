@@ -1286,6 +1286,19 @@ inline void generated_queue_restore_request(std::string slot, int request_id) {
     return result;
 }
 
+// Restore for a program with nothing persistable: the document is still read
+// so adapter and schema errors surface, but there is no world to replace.
+[[nodiscard]] inline PersistenceOutcome execute_noop_restore_request(const std::string& slot,
+                                                                     int request_id,
+                                                                     const persistence::SchemaDescriptor& schema) {
+    const auto read = read_persistence_document(slot, schema);
+    if (!read.ok) {
+        return PersistenceOutcome{
+            .ok = false, .slot = slot, .request_id = request_id, .code = read.code, .message = read.message};
+    }
+    return PersistenceOutcome{.ok = true, .slot = slot, .request_id = request_id};
+}
+
 // ── Activation/event-scheduler machinery (extract-codegen-runtime-scaffolding)
 // Structural command queued during an activation (entity spawn/destroy,
 // trait add/remove) and applied once the activation commits. Has no

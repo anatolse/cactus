@@ -10,7 +10,7 @@ use std.render.models as models
 use std.camera.volume as cam3d
 use std.camera.viewport as vp
 
-asset SharedModel: model = "model-renderer/art/robot.glb"
+asset SharedModel: model = "../model-renderer/art/robot.glb"
 
 # Records what RecordPlaybackEvents observed for one owner, so a headless
 # test can assert on plain fields instead of re-deriving event delivery.

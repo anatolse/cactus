@@ -5,7 +5,7 @@ Define the `after:` clause on rule declarations for expressing execution orderin
 ## Requirements
 
 ### Requirement: `after:` clause on rule declarations
-A rule-level `after:` clause SHALL be compatibility shorthand over handler nodes. For each named predecessor rule, it SHALL order only pairs of handlers with the same resolved phase or event trigger. A handler MAY additionally declare a leading `after:` block for exact canonical handler dependencies.
+A rule-level `after:` clause SHALL be shorthand over handler nodes and is a supported, non-deprecated form. For each named predecessor rule, it SHALL order only pairs of handlers with the same resolved phase or event trigger. A handler MAY additionally declare a leading `after:` block for exact canonical handler dependencies.
 
 #### Scenario: Rule with no `after:` clause is valid
 - **WHEN** a `rule` declaration contains no `after:` block

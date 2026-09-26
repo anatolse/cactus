@@ -138,13 +138,6 @@ The backend SHALL generate a working typed world capture entry point from persis
 - **WHEN** a generated project links a custom persistence adapter
 - **THEN** its public generated API and runtime integration compile under the existing C++20 generated-code target
 
-### Requirement: Sync field replication hooks
-The backend SHALL generate network replication stubs for fields marked with `sync`, using registry views to collect and apply delta updates.
-
-#### Scenario: Sync field in EnTT context
-- **WHEN** a trait has `sync var position: vec3`
-- **THEN** the backend generates code that iterates the Position view to collect/apply network deltas
-
 ### Requirement: Raylib integration in generated code
 The backend SHALL support a standard runtime-driven game loop for EnTT projects, with EnTT registry and dispatcher initialized before frame execution. The default compiled-project integration SHALL be realized through generated project output that embeds a backend-generated `main()` and links against the standard Cactus EnTT backend/runtime library.
 
@@ -1339,4 +1332,3 @@ The backend SHALL generate a typed restore entry point that reconstructs recorde
 #### Scenario: Staged failure releases staged resources
 - **WHEN** staged resource preparation fails
 - **THEN** the staged registry and its resources are discarded and the live registry is untouched
-

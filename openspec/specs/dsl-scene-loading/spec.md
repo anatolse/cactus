@@ -1,6 +1,6 @@
 ## Purpose
 
-Define scene loading and transition semantics, including the three-phase `load` statement, module-as-scene execution model, `on load()`/`on unload()` lifecycle handlers, and the `std.core` `Persistent`/`SceneCleanup` traits.
+Define scene loading and transition semantics, including the three-phase `load` statement, module-as-scene execution model, `on load()`/`on unload()` lifecycle handlers, and the `std.core` `KeepOnLoad` trait and `SceneCleanup` rule.
 
 ## Requirements
 
@@ -81,27 +81,31 @@ The compiler SHALL produce a `<module>_data.bin` binary file for each compiled m
 - **THEN** the runtime SHALL reject the file and report a clear error: "data file version mismatch: expected <N>, got <M>"
 
 ### Requirement: `on unload()` lifecycle handler fires before scene instantiation
-Rules MAY declare an `on unload():` handler. This handler fires during the first phase of a `load` transition — before any new entities are instantiated from the data file.
+Rules MAY declare an `on unload():` handler. This handler SHALL fire during the first phase of a `load` transition — before any new entities are instantiated from the data file.
 
 #### Scenario: on unload fires before new entities are created
 - **WHEN** `load levels.level2` is triggered
 - **THEN** `on unload()` fires while only the old scene's entities exist (no new entities yet)
 
 #### Scenario: on unload runs in rules matching current entities
-- **WHEN** a rule with `exclude: std.Persistent` has `on unload()` with `destroy`
-- **THEN** all non-persistent entities are destroyed before the new scene loads
+- **WHEN** a rule with `exclude: std.core.KeepOnLoad` has `on unload()` with `destroy`
+- **THEN** all entities without `KeepOnLoad` are destroyed before the new scene loads
 
-### Requirement: `std.core` module provides `Persistent` and `SceneCleanup`
-The standard library module `std.core` SHALL export `pub trait Persistent` (a marker trait) and `pub rule SceneCleanup` (an exclude-Persistent rule that destroys non-persistent entities on `on unload()`). Projects import this with `use std.core`.
+### Requirement: `std.core` module provides `KeepOnLoad` and `SceneCleanup`
+The standard library module `std.core` SHALL export `pub trait KeepOnLoad` (a marker trait) and a `SceneCleanup` rule (an exclude-`KeepOnLoad` rule that destroys all other entities on `on unload()`). Projects import this with `use std.core`. `std.core` SHALL NOT export a trait named `Persistent`.
 
-#### Scenario: Project with std.core — non-persistent entities cleaned up on load
+#### Scenario: Project with std.core — entities without KeepOnLoad cleaned up on load
 - **WHEN** `use std.core` is imported and `load levels.level2` fires
-- **THEN** `std.SceneCleanup.on_unload()` destroys all entities without `Persistent` active
+- **THEN** `std.core.SceneCleanup`'s `on unload` handler destroys all entities without `KeepOnLoad` attached
 
 #### Scenario: Project without std.core — no automatic cleanup
 - **WHEN** `std.core` is NOT imported and `load levels.level2` fires
 - **THEN** no entities are destroyed; the developer is responsible for custom cleanup
 
-#### Scenario: Disabled Persistent does not protect
-- **WHEN** an entity has `Persistent` in its `apply:` block but `Persistent` is currently disabled
-- **THEN** `SceneCleanup`'s `exclude: Persistent` no longer excludes it; the entity IS destroyed on unload
+#### Scenario: Removed KeepOnLoad does not protect
+- **WHEN** an entity's template includes `KeepOnLoad` but gameplay has executed `remove KeepOnLoad` on it
+- **THEN** `SceneCleanup`'s `exclude: KeepOnLoad` no longer excludes it; the entity IS destroyed on unload
+
+#### Scenario: Old Persistent name is rejected
+- **WHEN** a module references `Persistent` or `std.core.Persistent` without declaring its own trait of that name
+- **THEN** the compiler reports an unknown-trait error

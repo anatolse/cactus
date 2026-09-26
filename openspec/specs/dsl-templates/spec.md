@@ -69,8 +69,8 @@ The language SHALL support a `destroy` statement inside rule event handlers. `de
 - **THEN** the compiler SHALL report an error: "`destroy` only allowed inside rule event handlers"
 
 #### Scenario: Destroy on persistent entity
-- **WHEN** `destroy` is called on an entity that has the `Persistent` trait active
-- **THEN** the entity SHALL still be destroyed — `Persistent` only protects against `load`-triggered cleanup
+- **WHEN** `destroy` is called on an entity that has the `KeepOnLoad` trait attached
+- **THEN** the entity SHALL still be destroyed — `KeepOnLoad` only protects against `load`-triggered cleanup
 
 ### Requirement: `on spawn()` lifecycle handler on rules
 Rules MAY declare an `on spawn():` handler. This handler fires once for each new entity that matches the rule's `filter:` (and does not match `exclude:`), after all of the entity's fields have been initialized.

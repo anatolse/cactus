@@ -54,26 +54,15 @@ The type system SHALL support user-defined `struct` (value objects, fields only)
 - **THEN** the type system registers an Enum type with symbol identity `game.ai.State` and three integer-valued variants
 
 ### Requirement: Field modifier flags
-The type system SHALL track field modifiers as boolean flags on TypeInfo: `is_let`, `is_persist`, `is_sync`, and `is_pub`.
+The type system SHALL track field modifiers as boolean flags on TypeInfo: `is_let`, `is_persist`, and `is_pub`.
 
 #### Scenario: Combined modifiers
-- **WHEN** a field is declared as `persist sync pub var score: int`
-- **THEN** the TypeInfo has is_persist=true, is_sync=true, is_pub=true, is_let=false
+- **WHEN** a field is declared as `persist pub var score: int`
+- **THEN** the TypeInfo has is_persist=true, is_pub=true, is_let=false
 
 #### Scenario: Let field immutability
 - **WHEN** a field is declared as `let max_health: int = 100`
 - **THEN** the TypeInfo has is_let=true and the field cannot be reassigned after creation
-
-### Requirement: Type inference for expressions
-The type system SHALL infer types for expressions, including lambda parameters inferred from context, binary operation result types, and function call return types.
-
-#### Scenario: Lambda parameter inference
-- **WHEN** `items.map(i => i.price)` is used where `items` is `list[Item]` and `Item` has field `price: int`
-- **THEN** the type system infers parameter `i` as type `Item` and the map result as `list[int]`
-
-#### Scenario: Binary operation type
-- **WHEN** the expression `health - damage` is evaluated where both are `int`
-- **THEN** the type system infers the result type as `int`
 
 ### Requirement: String type rvalue constraint
 The `string` type SHALL be rvalue-only — it can appear in `const` blocks or as computed expressions, but never as inline literals in logic blocks. String literals ARE permitted in `asset` declarations as resource path values; this is the sole exception to this rule.
@@ -145,3 +134,13 @@ The type system SHALL define two built-in handle types for input action declarat
 - **WHEN** the type system is initialized
 - **THEN** `InputButton` and `InputAxis` are pre-registered as built-in opaque types
 
+### Requirement: Expression type inference
+The type system SHALL infer types for expressions, including binary operation result types and function call return types.
+
+#### Scenario: Binary operation type
+- **WHEN** the expression `health - damage` is evaluated where both are `int`
+- **THEN** the type system infers the result type as `int`
+
+#### Scenario: Function call return type
+- **WHEN** the expression `math.abs(delta)` is evaluated where `delta` is `float`
+- **THEN** the type system infers the result type as `float`

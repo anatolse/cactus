@@ -58,10 +58,10 @@ Generated `main()` SHALL register the example file adapter by default so that an
 - **THEN** the same gameplay declarations save through that adapter instead
 
 ### Requirement: Persistence stays separate from scene control
-Save SHALL require neither a format declaration in Cactus nor a persist modifier on templates. Existing `load` scene semantics and `std.core.Persistent` scene-survival semantics SHALL remain separate from snapshot eligibility. Documentation SHALL include an author fixture and a custom adapter example.
+Save SHALL require neither a format declaration in Cactus nor a persist modifier on templates. Existing `load` scene semantics and `std.core.KeepOnLoad` scene-survival semantics SHALL remain separate from snapshot eligibility. Documentation SHALL include an author fixture and a custom adapter example.
 
 #### Scenario: Scene survivor is not automatically saved
-- **WHEN** an entity has `std.core.Persistent` but no persistence eligibility
+- **WHEN** an entity has `std.core.KeepOnLoad` but no persistence eligibility
 - **THEN** it remains excluded from a world snapshot
 
 ### Requirement: Typed restore requests and runtime outcomes

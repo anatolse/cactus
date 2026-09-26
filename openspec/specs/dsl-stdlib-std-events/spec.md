@@ -55,7 +55,7 @@ The compiler's module resolver SHALL pre-load `std.core` pub symbols before anal
 
 #### Scenario: explicit std.core import is idempotent
 - **WHEN** a user module explicitly declares `use std.core` and also uses lifecycle handlers such as `on tick:`
-- **THEN** semantic analysis and program linking succeed without duplicate-symbol diagnostics for `std.core.Persistent`, `std.core.Parent`, or lifecycle events
+- **THEN** semantic analysis and program linking succeed without duplicate-symbol diagnostics for `std.core.KeepOnLoad`, `std.core.Parent`, or lifecycle events
 
 #### Scenario: same std.core module is not imported twice through preloading and explicit use
 - **WHEN** `std.core` has already been preloaded for a user module and the same module also explicitly imports `std.core`

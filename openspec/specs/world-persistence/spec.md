@@ -5,7 +5,7 @@ Define format-independent capture of live archetype instances, persistent values
 ## Requirements
 
 ### Requirement: Explicit fields determine entity eligibility
-A live entity SHALL be captured if a trait in its originating archetype's declared trait set declares at least one persist field, or if a currently attached trait declares one. Construction overrides, marker traits, `sync` fields, and `std.core.Persistent` SHALL NOT grant eligibility. Archetype eligibility SHALL survive removal of its persistence-bearing traits. No record SHALL be emitted for an ineligible entity.
+A live entity SHALL be captured if a trait in its originating archetype's declared trait set declares at least one persist field, or if a currently attached trait declares one. Construction overrides, marker traits, and `std.core.KeepOnLoad` SHALL NOT grant eligibility. Archetype eligibility SHALL survive removal of its persistence-bearing traits. No record SHALL be emitted for an ineligible entity.
 
 #### Scenario: Customized particles remain ephemeral
 - **WHEN** a particle has spawn position, color, and lifetime overrides but neither its archetype's traits nor its attached traits has a persist field
@@ -21,7 +21,7 @@ A live entity SHALL be captured if a trait in its originating archetype's declar
 - **AND** removing the trait makes it ephemeral again if no other eligibility condition holds
 
 #### Scenario: Scene survivor is not automatically eligible
-- **WHEN** an entity carries `std.core.Persistent` but no persistence-bearing trait
+- **WHEN** an entity carries `std.core.KeepOnLoad` but no persistence-bearing trait
 - **THEN** capture emits no record for it
 
 ### Requirement: Records carry archetype identity and evaluated construction data
@@ -185,7 +185,7 @@ Restore SHALL validate a decoded document before mutating the active world: cano
 - **THEN** restore reports both with their field paths and leaves the world unchanged
 
 ### Requirement: Restore publishes an atomic replacement without gameplay creation effects
-Successful restore SHALL replace the complete active ECS world, including previously live ephemeral entities and entities carrying `std.core.Persistent`, with the reconstructed snapshot. An empty compatible document SHALL produce an empty world. Reconstruction SHALL be staged: validation, allocation, and runtime resource preparation failures SHALL leave the previous world and its usable resources intact and SHALL release staged resources. No staged entity or resource SHALL be observable before publication. Ordinary spawn, destroy, load, and unload gameplay handlers SHALL NOT run as a consequence of replacement, while backend resource preparation and cleanup SHALL still occur. Completion SHALL be observable only after references, named bindings, and runtime resources are usable.
+Successful restore SHALL replace the complete active ECS world, including previously live ephemeral entities and entities carrying `std.core.KeepOnLoad`, with the reconstructed snapshot. An empty compatible document SHALL produce an empty world. Reconstruction SHALL be staged: validation, allocation, and runtime resource preparation failures SHALL leave the previous world and its usable resources intact and SHALL release staged resources. No staged entity or resource SHALL be observable before publication. Ordinary spawn, destroy, load, and unload gameplay handlers SHALL NOT run as a consequence of replacement, while backend resource preparation and cleanup SHALL still occur. Completion SHALL be observable only after references, named bindings, and runtime resources are usable.
 
 #### Scenario: Failed staging preserves the world
 - **WHEN** resource preparation fails while constructing a restored world
@@ -197,7 +197,7 @@ Successful restore SHALL replace the complete active ECS world, including previo
 
 #### Scenario: Empty save replaces populated world
 - **WHEN** an empty compatible document is restored over a populated world
-- **THEN** no old ECS entity survives, including entities carrying `std.core.Persistent`
+- **THEN** no old ECS entity survives, including entities carrying `std.core.KeepOnLoad`
 
 ### Requirement: Old-world entity handles are unobservable after publication
 Publication SHALL reset runtime state that holds entity handles from the replaced world, including pointer hover and capture state, pending-destruction sets, editor selection and camera state, and spatial or scheduler caches. No such handle SHALL be readable as a live entity of the restored world. This requirement SHALL be satisfied by resetting the holders; it SHALL NOT require restored entities to avoid reusing the numeric identifiers or versions of the replaced world.

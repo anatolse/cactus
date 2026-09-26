@@ -20,9 +20,9 @@ The lexer SHALL maintain an indent stack and emit explicit INDENT and DEDENT tok
 - **THEN** the lexer reports an error with the source location
 
 ### Requirement: Keyword recognition
-The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `entity`, `rule`, `view`, `event`, `func`, `let`, `var`, `persist`, `sync`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `filter`, `target`, `map`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`, `extern`.
+The lexer SHALL recognize all Cactus keywords and produce the corresponding TokenType: `module`, `use`, `const`, `struct`, `enum`, `trait`, `entity`, `rule`, `view`, `event`, `func`, `let`, `var`, `persist`, `pub`, `on`, `emit`, `if`, `else`, `match`, `return`, `filter`, `target`, `reduce`, `true`, `false`, `as`, `and`, `or`, `not`, `extern`.
 
-The legacy `unit` spelling is no longer part of the active top-level declaration surface; implementations MAY reserve it to provide a targeted migration diagnostic, but authors SHALL use `entity`. The `system` spelling is no longer a keyword; it lexes as `IDENTIFIER`.
+The legacy `unit` spelling is no longer part of the active top-level declaration surface; implementations MAY reserve it to provide a targeted migration diagnostic, but authors SHALL use `entity`. The `system`, `sync`, and `map` spellings are not keywords; they lex as `IDENTIFIER`.
 
 #### Scenario: Keyword vs identifier
 - **WHEN** the source contains the text `rule`
@@ -47,6 +47,10 @@ The legacy `unit` spelling is no longer part of the active top-level declaration
 #### Scenario: system used as identifier
 - **WHEN** the source contains `system` as a field name or identifier inside a valid declaration
 - **THEN** the lexer produces a token with type IDENTIFIER, and the parser accepts it as an ordinary identifier without error
+
+#### Scenario: sync and map lex as identifiers
+- **WHEN** the source contains the text `sync` or `map`
+- **THEN** the lexer produces a token with type IDENTIFIER
 
 ### Requirement: Numeric literal tokenization
 The lexer SHALL distinguish integer literals from float literals. A number containing a decimal point SHALL be tokenized as FLOAT_LITERAL; otherwise as INT_LITERAL.

@@ -73,17 +73,6 @@ trait_decl = [ "pub" ] "trait" IDENTIFIER
 - **WHEN** `trait Health:` followed by an indented body appears
 - **THEN** the parser parses it as a normal data trait (existing behavior)
 
-### Requirement: Trait parsing with field modifiers
-The parser SHALL parse `trait Name:` blocks containing fields with modifiers (`let`, `var`, `persist`, `sync`, `pub`) and event handlers (`on event_name(params):`). Fields SHALL support default value expressions.
-
-#### Scenario: Trait with persist and sync fields
-- **WHEN** the source contains `trait Player:` with fields `persist var health: int = 100` and `sync var position: vec3`
-- **THEN** the parser produces a TraitNode with two FieldNodes, the first having persist=true and the second having sync=true
-
-#### Scenario: Trait with event handler
-- **WHEN** the source contains `trait Damageable:` with `on damage(amount: int):` block
-- **THEN** the parser produces a TraitNode containing an EventHandlerNode with event_name "damage"
-
 ### Requirement: Entity parsing with nested archetype entries
 The parser SHALL parse `[pub] entity Name:` blocks as a sequence of archetype entries. Each entry is either a body-level `use TemplateName` entry, a bare trait name for a marker trait, or a trait name followed by `:` and an indented field-assignment block. `apply:` and `config:` blocks are not part of entity syntax.
 
@@ -473,17 +462,6 @@ input_prop = IDENTIFIER "=" expression NEWLINE ;
 - **WHEN** an axis input includes `invert = true`
 - **THEN** the parser produces an `InputProp` with `key = "invert"` and a `BoolLiteral(true)` value expression
 
-### Requirement: Expression parsing with precedence
-The parser SHALL parse expressions using precedence climbing, supporting binary operators, unary operators, member access, function calls, lambda expressions, and spawn expressions.
-
-#### Scenario: Binary expression with correct precedence
-- **WHEN** the source contains `a + b * c`
-- **THEN** the parser produces a BinaryExpr with `+` at the root and `*` as the right child
-
-#### Scenario: Lambda expression
-- **WHEN** the source contains `x => x * 2`
-- **THEN** the parser produces a LambdaExpr with parameter "x" and a BinaryExpr body
-
 ### Requirement: Func parsing with purity contract
 The parser SHALL parse `[pub] func name(params) [type]:` blocks with a body of statements. The parser SHALL additionally parse `[pub] extern func name(params) [type]` declarations without a colon or body. The `is_extern` flag on `FuncNode` distinguishes the two forms. The `->` arrow token is **not used** in function declarations; the return type follows the closing `)` directly.
 
@@ -593,7 +571,6 @@ The keyword `after` is added to the lexer keyword set with token type `AFTER`.
 #### Scenario: Empty `after:` block is a parse error
 - **WHEN** a rule body contains `after:` with an empty indented block
 - **THEN** the parser reports an error: "after: block must contain at least one rule name"
-
 
 ### Requirement: `order by:` clause parsing in rule declarations
 The parser SHALL recognize an optional `order by:` block in rule declarations, positioned between the `filter:`/`exclude:` clauses and the event handler list. The `order by:` block contains one or more sort key lines, each consisting of a dotted alias-field expression followed by an optional direction keyword.
@@ -913,3 +890,32 @@ compiled behavior of the same chain written using the legacy nested `else:` +
 - **WHEN** a rule handler contains a three-branch `else if` chain, and an equivalent handler is written using nested `else:` + `if` for the same conditions and bodies
 - **THEN** both compiled programs select the same branch for the same input values, for every combination of condition outcomes
 
+### Requirement: Trait field modifier parsing
+The parser SHALL parse `trait Name:` blocks containing fields with modifiers (`let`, `var`, `persist`, `pub`). Fields SHALL support default value expressions. Traits are data-only; an event handler in a trait body SHALL be a syntax error.
+
+#### Scenario: Trait with persist field
+- **WHEN** the source contains `trait Player:` with fields `persist var health: int = 100` and `var position: vec3`
+- **THEN** the parser produces a TraitNode with two FieldNodes, the first having persist=true and the second having persist=false
+
+#### Scenario: sync is not a field modifier
+- **WHEN** the source contains `trait Player:` with a field `sync var position: vec3`
+- **THEN** the parser reports a syntax error at `sync`
+
+#### Scenario: Event handler in trait rejected
+- **WHEN** the source contains `trait Damageable:` with an `on damage:` block
+- **THEN** the parser reports "event handlers are not allowed in trait bodies; declare a rule instead"
+
+### Requirement: Precedence-climbing expression parsing
+The parser SHALL parse expressions using precedence climbing, supporting binary operators, unary operators, member access, function calls, and spawn expressions. The expression grammar SHALL NOT include lambda expressions; `=>` SHALL be accepted only inside `match` arms.
+
+#### Scenario: Binary expression with correct precedence
+- **WHEN** the source contains `a + b * c`
+- **THEN** the parser produces a BinaryExpr with `+` at the root and `*` as the right child
+
+#### Scenario: Lambda expression rejected
+- **WHEN** the source contains `x => x * 2` as an expression outside a `match` arm
+- **THEN** the parser reports a syntax error
+
+#### Scenario: Match arm arrow still accepted
+- **WHEN** the source contains a `match` expression with arms `Color.Red => 0` and `_ => 1`
+- **THEN** the parser produces a MatchExpr with two arms

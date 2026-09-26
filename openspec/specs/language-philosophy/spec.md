@@ -119,9 +119,10 @@ The following concerns SHALL be treated as backend or stdlib responsibilities ra
 | Audio playback plumbing | backend / audio stdlib |
 | Entity validity guards | backend |
 | Serialization | world capture/restore generated from persist and archetype declarations; encoding and storage supplied by external adapters |
-| Network replication | generated from `sync` |
 | Input device mapping | `std.input` and runtime |
 | Scene lifecycle plumbing | backend runtime |
+
+Network replication has no authored surface yet. A future networking design SHALL be specified on its own and SHALL NOT be implied by a field modifier.
 
 Persistence SHALL let authors mark durable field state and request operations through stdlib events without writing entity reconstruction, reference remapping, or serialization loops. Format choice SHALL remain outside gameplay declarations.
 
@@ -187,4 +188,3 @@ All proposed changes to the language SHALL be evaluated against the following cr
 - **THEN** it MUST provide strong justification for why the existing gameplay model, bounded foreach, events, and projected facts are insufficient
 
 Projected traits and bounded foreach SHALL be evaluated as restricted gameplay constructs: `project` states current-frame facts for ECS filtering, while bounded foreach consumes finite query/list snapshots. Neither construct SHALL be treated as permission to add open-ended imperative scripting features by default.
-

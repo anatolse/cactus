@@ -94,21 +94,6 @@ The semantic analyzer SHALL detect recursive calls in non-extern `func` declarat
 - **WHEN** a user func calls an extern func of the same name (e.g. wrapping it)
 - **THEN** the analyzer does NOT report a recursion error
 
-### Requirement: Persist and sync modifier validation
-The semantic analyzer SHALL validate that `persist` and `sync` modifiers are only applied to `var` fields (not `let` fields). Using `persist` or `sync` on a `let` field SHALL produce a compile error.
-
-#### Scenario: Persist on var accepted
-- **WHEN** a trait field is declared as `persist var health: int`
-- **THEN** the analyzer accepts it and sets is_persist=true on the TypeInfo
-
-#### Scenario: Persist on let rejected
-- **WHEN** a trait field is declared as `persist let name: string`
-- **THEN** the analyzer reports an error "persist modifier can only be used on var fields"
-
-#### Scenario: Sync on var accepted
-- **WHEN** a trait field is declared as `sync var position: vec3`
-- **THEN** the analyzer accepts it and sets is_sync=true on the TypeInfo
-
 ### Requirement: Rule filter validation
 The semantic analyzer SHALL verify that all trait names referenced in rule `filter:` clauses correspond to declared traits (local or imported).
 
@@ -251,19 +236,39 @@ The semantic analyzer SHALL accept trait field access within rule handler bodies
 - **THEN** the analyzer accepts the access and resolves `x` to `Position.x`
 
 ### Requirement: Local variable scope in rule handlers
-The semantic analyzer SHALL maintain a per-handler local variable scope. `let` declarations introduce immutable bindings; `var` declarations introduce mutable bindings. Re-declaration of an existing local in the same scope SHALL produce an error.
+The semantic analyzer SHALL maintain a per-handler and per-`func` local variable scope. `let` declarations introduce immutable bindings; `var` declarations introduce mutable bindings. Re-declaration of an existing local in the same scope SHALL produce an error. Assigning to a name that is not a declared local, trait alias, or other writable binding in scope SHALL produce an error; assignment SHALL NOT implicitly declare a local. For a `let` binding, any assignment whose target is the binding itself or a member path into its value (`v.x = ...`) SHALL be rejected. A trait-field write through an `entity_id`-typed `let` binding (`e.Trait.field = ...`) is a write to that entity, not a rebinding, and is governed by the ordinary trait-write rules.
 
 #### Scenario: Let binding immutable after declaration
 - **WHEN** a handler declares `let speed = 5.0` and then assigns `speed = 6.0`
 - **THEN** the analyzer reports an error: "cannot reassign immutable binding 'speed'"
 
+#### Scenario: Compound assignment to let rejected
+- **WHEN** a handler declares `let total = 0` and then executes `total += 1`
+- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'total'"
+
+#### Scenario: Member write into let value rejected
+- **WHEN** a handler declares `let v = vec2(0.0, 0.0)` and then assigns `v.x = 1.0`
+- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'v'"
+
+#### Scenario: Trait write through let entity binding allowed
+- **WHEN** a handler declares `let e = query.first[Player]()` and, where the ordinary trait-write rules permit it, assigns `e.Health.hp = 3`
+- **THEN** the analyzer does not report an immutable-binding error
+
 #### Scenario: Var binding reassignable
 - **WHEN** a handler declares `var count = 0` and then assigns `count = count + 1`
 - **THEN** the analyzer accepts both statements
 
+#### Scenario: Let rules apply in func bodies
+- **WHEN** a `func` body declares `let x = 1` and then assigns `x = 2`
+- **THEN** the analyzer reports an error: "cannot reassign immutable binding 'x'"
+
 #### Scenario: Re-declaration in same scope rejected
 - **WHEN** a handler declares `let speed = 5.0` and later declares `let speed = 6.0` in the same block
 - **THEN** the analyzer reports an error: "redeclaration of local 'speed' in the same scope"
+
+#### Scenario: Assignment to undeclared name rejected
+- **WHEN** a handler assigns `score = 3` and no local, alias, or writable binding named `score` is in scope
+- **THEN** the analyzer reports an error: "assignment to undeclared local 'score'; declare it with `var`"
 
 ### Requirement: Implicit event variable binding in event handlers
 The semantic analyzer SHALL introduce one implicit read-only local variable in every event handler body:
@@ -302,17 +307,6 @@ This replaces the previous `event` implicit object (for user events) and the pre
 #### Scenario: Spawn handler body has no accessible event fields
 - **WHEN** `on spawn:` handler body contains `spawn.dt`
 - **THEN** the analyzer reports an error: "event 'spawn' has no field 'dt'"
-
-### Requirement: Trait field modifiers are invalid on event fields
-The semantic analyzer SHALL reject trait-oriented field modifiers when they appear in an `event` declaration body. `let`, `var`, `persist`, `sync`, and other trait field modifiers MUST NOT be accepted as event-field metadata.
-
-#### Scenario: let event field rejected
-- **WHEN** `event Tick:` contains `let dt: float`
-- **THEN** the compiler reports an error indicating event fields use bare `name: type` syntax
-
-#### Scenario: sync event field rejected
-- **WHEN** `event NetMessage:` contains `sync var sequence: int`
-- **THEN** the compiler reports an error indicating trait field modifiers are not allowed in event declarations
 
 ### Requirement: Targeted emit validation
 The semantic analyzer SHALL verify that the expression in an `emit ... to expression` statement evaluates to type `entity_id`.
@@ -657,7 +651,6 @@ The semantic analyzer SHALL populate the `after_rules` field of each `RuleInfo` 
 - **WHEN** a rule has no `after:` clause
 - **THEN** `RuleInfo.after_rules` is an empty vector
 
-
 ### Requirement: `ResolvedFunc` produced in `DecoratedProgram`
 The semantic analyzer SHALL populate a `funcs` map in `DecoratedProgram` containing a `ResolvedFunc` entry for every `func` and `extern func` declaration in the analyzed program. The `ResolvedFunc` struct SHALL include: `name`, `is_pub`, `is_extern`, resolved parameter types, and resolved return type.
 
@@ -809,17 +802,6 @@ The semantic analyzer SHALL validate `project` statements similarly to `add` sta
 #### Scenario: Unknown projected field rejected
 - **WHEN** a handler projects `GroundContact` with an assignment to an undeclared field
 - **THEN** the semantic analyzer reports an unknown field error
-
-### Requirement: Semantic analyzer rejects incompatible projected traits
-Projecting a trait with `persist` or `sync` fields SHALL be rejected in v1 because those modifiers describe durable storage behavior and are incompatible with transient projected overlays.
-
-#### Scenario: Persist projected trait rejected
-- **WHEN** a trait has a `persist` field and authored code attempts to `project` that trait
-- **THEN** the semantic analyzer reports that persistent traits cannot be projected
-
-#### Scenario: Sync projected trait rejected
-- **WHEN** a trait has a `sync` field and authored code attempts to `project` that trait
-- **THEN** the semantic analyzer reports that synced traits cannot be projected
 
 ### Requirement: Semantic analyzer models projected trait filter access
 When a rule filters on a trait, semantic analysis SHALL treat the alias type the same whether the trait is supplied by durable storage or projected overlay storage at runtime. Projected overlays do not change the static field type of the alias.
@@ -974,3 +956,31 @@ The semantic analyzer SHALL preserve source declaration order among inline entit
 - **WHEN** a module declares `entity A:`, then `entity B from T:`, then `entity C:`
 - **THEN** the decorated program records the entities in the source declaration order `A`, `B`, `C`
 
+### Requirement: Persist modifier validation
+The semantic analyzer SHALL validate that the `persist` modifier is only applied to `var` fields (not `let` fields). Using `persist` on a `let` field SHALL produce a compile error.
+
+#### Scenario: Persist on var accepted
+- **WHEN** a trait field is declared as `persist var health: int`
+- **THEN** the analyzer accepts it and sets is_persist=true on the TypeInfo
+
+#### Scenario: Persist on let rejected
+- **WHEN** a trait field is declared as `persist let name: string`
+- **THEN** the analyzer reports an error "persist modifier can only be used on var fields"
+
+### Requirement: Event fields reject trait field modifiers
+The semantic analyzer SHALL reject trait-oriented field modifiers when they appear in an `event` declaration body. `let`, `var`, `persist`, and other trait field modifiers MUST NOT be accepted as event-field metadata.
+
+#### Scenario: let event field rejected
+- **WHEN** `event Tick:` contains `let dt: float`
+- **THEN** the compiler reports an error indicating event fields use bare `name: type` syntax
+
+#### Scenario: persist event field rejected
+- **WHEN** `event NetMessage:` contains `persist var sequence: int`
+- **THEN** the compiler reports an error indicating trait field modifiers are not allowed in event declarations
+
+### Requirement: Semantic analyzer rejects projecting persistent traits
+Projecting a trait with `persist` fields SHALL be rejected in v1 because that modifier describes durable storage behavior and is incompatible with transient projected overlays.
+
+#### Scenario: Persist projected trait rejected
+- **WHEN** a trait has a `persist` field and authored code attempts to `project` that trait
+- **THEN** the semantic analyzer reports that persistent traits cannot be projected

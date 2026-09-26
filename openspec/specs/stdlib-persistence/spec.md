@@ -67,6 +67,8 @@ Save SHALL require neither a format declaration in Cactus nor a persist modifier
 ### Requirement: Typed restore requests and runtime outcomes
 The std.persistence module SHALL expose an ordinary `RestoreRequested` event with `slot: string` and `request_id: int` fields, and public extern `RestoreCompleted` and `RestoreFailed` events carrying the same correlation fields, with `RestoreFailed` additionally carrying `code: string` and `message: string`. Each accepted request SHALL produce exactly one outcome. Standard error codes SHALL cover unavailable adapter, I/O failure, invalid data, incompatible schema, unsupported value, and resource preparation failure. Restore requests SHALL share the save boundary and batch ordering rules.
 
+A program with nothing persistable SHALL still build and accept restore requests. Such a restore SHALL read the slot through the adapter with the same adapter and schema checks as any restore. If the read succeeds, it SHALL report `RestoreCompleted` and leave the world, its pending gameplay work, and its runtime state unchanged.
+
 #### Scenario: Author requests a restore
 - **WHEN** a handler emits `RestoreRequested` with a slot constant and request ID
 - **THEN** the runtime restores that slot and reports one correlated outcome
@@ -79,6 +81,15 @@ The std.persistence module SHALL expose an ordinary `RestoreRequested` event wit
 #### Scenario: Failed restore reports a code
 - **WHEN** a restore fails validation
 - **THEN** `RestoreFailed` carries the slot, request ID, an error code, and a message, and the world is unchanged
+
+#### Scenario: Restore with nothing persistable is a no-op
+- **WHEN** a program with nothing persistable saves a slot and then emits `RestoreRequested` for it
+- **THEN** it reports one correlated `RestoreCompleted`
+- **AND** the world is unchanged
+
+#### Scenario: Restore with nothing persistable still reports adapter errors
+- **WHEN** a program with nothing persistable emits `RestoreRequested` with no registered adapter
+- **THEN** `RestoreFailed` identifies adapter unavailability
 
 ### Requirement: Replacement cancels old gameplay work
 Successful restore SHALL discard pending old-world gameplay event cascades, deferred events, and periodic catch-up work, and SHALL reset frame-local projections and transient runtime caches. It SHALL preserve already accepted persistence requests and their outcome events. Failure SHALL preserve old-world work unchanged. New requests emitted by outcome handlers SHALL belong to a later boundary. Runtime clocks and pending events SHALL NOT be treated as world data.

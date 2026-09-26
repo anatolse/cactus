@@ -130,6 +130,8 @@ Standard UI SHALL render Panel, Image, Text, and Button visuals in the order rep
 
 Within one entity, the standard primitive order SHALL be background, image, button fill, text or button label, then border. `ImageFit.Cover` SHALL crop to the destination bounds, while `Contain` SHALL preserve the complete image inside them.
 
+Effective opacity SHALL scale each drawn color's alpha channel, and the resulting 8-bit alpha SHALL be rounded to the nearest integer, not truncated.
+
 #### Scenario: Visual topmost matches pointer topmost
 - **WHEN** two enabled sibling buttons overlap
 - **THEN** the button painted last is also the first window-space pointer candidate at their overlap
@@ -137,6 +139,10 @@ Within one entity, the standard primitive order SHALL be background, image, butt
 #### Scenario: UI overlays world rendering
 - **WHEN** a window-space Panel overlaps a rendered world object
 - **THEN** the Panel is drawn after the world content
+
+#### Scenario: Half opacity rounds alpha
+- **WHEN** an opaque Panel background (alpha 255) is drawn with effective opacity 0.5
+- **THEN** the drawn background alpha is 128
 
 ### Requirement: Standard UI provides frame and visual animation traits
 The `std.ui` module SHALL expose `FrameAnimation` for image frame progression and `BumpAnimation` plus a targeted `StartBump` event for reusable Visual scale animation. The shipped animation policy SHALL be authored as ordinary Cactus rules. Frame animation SHALL use a documented horizontal-strip frame convention in the initial capability, clamp invalid frame counts to one, and leave non-playing animations unchanged.

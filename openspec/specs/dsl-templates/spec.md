@@ -105,3 +105,14 @@ The language SHALL support `entity Name from TemplateName:` as the load-time cou
 #### Scenario: Template-backed entity is distinct from spawn
 - **WHEN** `entity FirstWalker from WalkerEnemy:` is declared at the top level
 - **THEN** the entity is created during module/scene load rather than during handler execution, and no `entity_id` expression is produced at the declaration site
+
+### Requirement: `spawn` override values are evaluated when the statement runs
+Every field value expression in a `spawn` statement's override blocks, including nested `children:` overrides, SHALL be evaluated exactly once, in source order, when the `spawn` statement executes, even though entity creation applies later at the activation commit. Later changes in the same activation to anything those expressions read SHALL NOT change the values the new entity receives. This SHALL hold equally for trait field reads, handler locals, and calls to extern functions that read world state.
+
+#### Scenario: Trait read and extern call see the same moment
+- **WHEN** a handler runs `spawn Spawned:` with a `SpawnResult:` override block setting `from_field = transform.position.x` and `from_extern = tv.world_position(self).x` while position x is 1.0, then assigns position x = 99.0 in the same handler
+- **THEN** after the commit the spawned entity's `SpawnResult.from_field` and `SpawnResult.from_extern` both equal 1.0
+
+#### Scenario: Child override is evaluated at the statement
+- **WHEN** a `spawn` statement's `children:` override sets a child field from `tv.world_position(self).x` and the handler later moves `self`
+- **THEN** the created child receives the position read when the `spawn` statement ran

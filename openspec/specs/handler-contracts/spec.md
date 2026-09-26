@@ -141,8 +141,16 @@ A handler with neither positive filter entries nor exclude entries SHALL execute
 - **THEN** it executes for every non-Persistent selected entity rather than once globally
 
 ### Requirement: Command vocabulary and validation
-Handler commands SHALL use the forms `spawn Template`, `destroy`, `add Trait`, and `remove Trait`. Regular inference and external declarations SHALL store canonical template/trait identities, and an external implementation MUST NOT issue a command absent from its handler contract.
+Handler commands SHALL use the forms `spawn Template`, `destroy`, `add Trait`, `remove Trait`, and `set Trait`. Regular inference and external declarations SHALL store canonical template/trait identities, and an external implementation MUST NOT issue a command absent from its handler contract. A `set Trait` command SHALL be recorded only in `commands`; it SHALL NOT add the trait to the handler's `reads` or `writes`, because the patch applies after the activation commit. An external handler that declares `set Trait` SHALL receive a patch capability for that trait only, and it SHALL NOT receive read or write access to that trait through it.
 
 #### Scenario: Contracted structural changes validate
-- **WHEN** an external handler declares `spawn Particle`, `destroy`, `add Disabled`, and `remove Active`
-- **THEN** all names resolve and the four operations are available to that callback
+- **WHEN** an external handler declares `spawn Particle`, `destroy`, `add Disabled`, `remove Active`, and `set Health`
+- **THEN** all names resolve and the five operations are available to that callback
+
+#### Scenario: Set is inferred as a command, not a write
+- **WHEN** a regular handler contains `set Health on target:`
+- **THEN** its contract lists `set Health` in `commands` and does not list `Health` in `writes`
+
+#### Scenario: Extern set capability is limited to the declared trait
+- **WHEN** an external handler declares `set Health` under `commands:` and no `reads:` or `writes:` for `Health`
+- **THEN** its generated callback can queue a `Health` patch on a target entity and cannot read or directly mutate `Health`

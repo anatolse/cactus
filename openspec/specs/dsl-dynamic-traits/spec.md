@@ -78,3 +78,10 @@ The `add` and `remove` statements SHALL only appear inside rule event handler bo
 #### Scenario: add outside event handler is invalid
 - **WHEN** `add Frozen` appears inside a `func` body
 - **THEN** the semantic analyzer SHALL report an error that `add` is only allowed inside rule event handlers
+
+### Requirement: `add` field values are evaluated when the statement runs
+Every field value expression in an `add TraitName:` block, and the `to` target expression, SHALL be evaluated exactly once, in source order, when the `add` statement executes, even though the attachment applies later at the activation commit. Later changes in the same activation to anything those expressions read SHALL NOT change the values attached. This SHALL hold equally for trait field reads, handler locals, and calls to extern functions that read world state.
+
+#### Scenario: Trait read and extern call see the same moment
+- **WHEN** a handler runs `add Result to self:` with `from_field = transform.position.x` and `from_extern = tv.world_position(self).x` while position x is 1.0, then assigns position x = 99.0 in the same handler
+- **THEN** after the commit `Result.from_field` and `Result.from_extern` both equal 1.0

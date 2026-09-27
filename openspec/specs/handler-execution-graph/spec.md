@@ -98,7 +98,7 @@ Event-producer records SHALL be additive graph data. Introducing or reading them
 - **THEN** the resulting producer and event-flow cycle is legal and no schedule cycle is reported
 
 ### Requirement: Contract conflict edges
-Handlers eligible in the same activation SHALL be serialized when one writes a trait the other reads or writes, or when they share an observable effect domain. Filters alone SHALL NOT create conflict edges.
+Handlers eligible in the same activation SHALL be serialized when one writes a trait field the other reads or writes, or when they share an observable effect domain. Two handlers conflict on a trait only when their field accesses to it overlap; an access that covers all fields of a trait overlaps every field of it. A projected output SHALL keep producing a conflict with a handler that selects the projected trait, as before. Filters alone SHALL NOT create conflict edges. A data conflict edge SHALL name each overlapping trait and, for each, the overlapping fields or that the overlap covers all fields.
 
 Pair direction SHALL be chosen by explicit handler ordering first; otherwise a one-way writer-to-reader dependency SHALL run writer first; reciprocal or write/write/effect conflicts SHALL use stable declaration order. The tie-break SHALL be deterministic across builds.
 
@@ -114,12 +114,28 @@ Pair direction SHALL be chosen by explicit handler ordering first; otherwise a o
 - **WHEN** two render handlers declare `effects: graphics` without explicit ordering
 - **THEN** their conflict is oriented by stable declaration order
 
+#### Scenario: Disjoint fields of one trait do not conflict
+- **WHEN** in the same activation one handler writes `Match.over`, a second writes `Match.score`, and a third reads `Match.over`
+- **THEN** the graph adds exactly one data conflict edge, from the `Match.over` writer to the `Match.over` reader
+
+#### Scenario: Whole-trait access conflicts with every field
+- **WHEN** one handler writes `Match.score` and an `extern rule` handler in the same activation lists `Match` under `reads:`
+- **THEN** the graph orders the writer before the extern reader
+
+#### Scenario: Edge names overlapping fields
+- **WHEN** a handler writes `Match.over` and `Match.score` and another reads only `Match.over`
+- **THEN** the conflict edge names `Match` with the field `over` only
+
 ### Requirement: Pair contracts participate in conservative conflicts
-Graph conflict construction SHALL use the conservative trait reads, durable writes, projected outputs, commands, and effects inferred for pair handlers. Binding-qualified reads SHALL be retained as provenance but SHALL NOT weaken correctness by removing conservative conflicts.
+Graph conflict construction SHALL use the conservative trait-field reads, durable writes, projected outputs, commands, and effects inferred for pair handlers. Binding-qualified reads SHALL be retained as provenance but SHALL NOT weaken correctness by removing conservative conflicts.
 
 #### Scenario: Pair reader follows unary writer
 - **WHEN** a unary handler writes Transform and a pair handler reads Transform on either binding in the same activation
 - **THEN** the graph adds the same writer-before-reader dependency required for unary consumers
+
+#### Scenario: Pair reader of another field does not conflict
+- **WHEN** a unary handler writes only `Collider.mask` and a pair handler reads only `Collider.radius` in the same activation
+- **THEN** no data conflict edge is added between them
 
 ### Requirement: Explicit handler ordering
 A handler SHALL accept an optional leading `after:` block naming canonical or qualified handler nodes. The referenced node MUST be eligible under the same trigger or activation context. Existing rule-level `after:` SHALL remain compatibility shorthand that creates edges only between matching triggers on the referenced and dependent rules.

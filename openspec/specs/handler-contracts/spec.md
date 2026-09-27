@@ -154,3 +154,45 @@ Handler commands SHALL use the forms `spawn Template`, `destroy`, `add Trait`, `
 #### Scenario: Extern set capability is limited to the declared trait
 - **WHEN** an external handler declares `set Health` under `commands:` and no `reads:` or `writes:` for `Health`
 - **THEN** its generated callback can queue a `Health` patch on a target entity and cannot read or directly mutate `Health`
+
+### Requirement: Contracts record trait access per field
+Every handler contract SHALL record, for each trait in its reads and writes, which fields of that trait are accessed, or that all fields are accessed. Precision SHALL stop at the trait's own fields: an access to a nested member of a field (`transform.position.x`) SHALL count as an access to that field (`position`). A write to a field SHALL also count as a read of that field, matching the existing rule that contract writes are read/write capabilities. The trait-level reads, writes, and projected outputs SHALL keep their existing meaning, and each trait in them SHALL have a field-level entry.
+
+#### Scenario: Field read through a filter alias
+- **WHEN** a unary handler filters `Match as m` and reads `m.over`
+- **THEN** its contract records a read of `Match.over` and no other `Match` field
+
+#### Scenario: Nested member access stops at the trait field
+- **WHEN** a handler assigns `transform.position.x = 1.0` through a `WorldTransform as transform` alias
+- **THEN** its contract records a write, and a read, of `WorldTransform.position` only
+
+#### Scenario: Bare field name resolves to its field
+- **WHEN** a handler filters `Player` and reads the bare identifier `game_over`, which resolves to `Player.game_over`
+- **THEN** its contract records a read of `Player.game_over`
+
+#### Scenario: Pair bound read is recorded per field
+- **WHEN** a pair handler reads `body.Collider.radius`
+- **THEN** its conservative read set records `Collider.radius`, and its binding-qualified read still names the `body` binding and `Collider`
+
+### Requirement: Unnarrowable accesses cover all fields
+A contract SHALL record access to all fields of a trait when the access cannot be narrowed to named fields. This SHALL include: using a trait alias as a whole value (passing it to a `func`, assigning the alias itself); a trait-match arm on that trait; an `extern rule` `reads:` or `writes:` entry; a projected output; and any field access whose field the compiler cannot resolve. Structural commands (`spawn`, `destroy`, `add`, `remove`, `set`) SHALL continue to add no reads or writes.
+
+#### Scenario: Whole-alias use reads all fields
+- **WHEN** a handler passes its `Match as m` alias to a `func`
+- **THEN** its contract records a read of all fields of `Match`
+
+#### Scenario: Extern declaration covers all fields
+- **WHEN** an `extern rule` handler lists `Match` under `writes:`
+- **THEN** its contract records a write, and a read, of all fields of `Match`
+
+#### Scenario: Trait-match arm covers all fields
+- **WHEN** a handler contains `match target:` with an arm `Health as h =>`
+- **THEN** its contract records a read of all fields of `Health`
+
+#### Scenario: Projection covers all fields
+- **WHEN** a handler projects `Highlight`
+- **THEN** its contract records `Highlight` as a projected output covering all fields
+
+#### Scenario: Set remains a command without field access
+- **WHEN** a handler contains `set Health on target:` assigning only `hp`
+- **THEN** its contract lists `set Health` in `commands` and records no read or write of any `Health` field

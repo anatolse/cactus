@@ -90,7 +90,7 @@ The `extract_pub_symbols` function SHALL read the funcs section and include `pub
 - **THEN** `ImportedSymbols.funcs["lerp"]` is present with `is_extern = true` and correct signature
 
 ### Requirement: Execution declarations and graph round-trip
-Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler domain variants, pair binding names and trait identities, binding-qualified reads, projected outputs, remaining contract capabilities, explicit ordering, and handler execution-graph edges without collapsing them into rule-level summaries. The artifact format version SHALL be incremented.
+Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler domain variants, pair binding names and trait identities, binding-qualified reads, projected outputs, field-level read and write access, remaining contract capabilities, explicit ordering, and handler execution-graph edges including their field-level provenance, without collapsing them into rule-level summaries. The artifact format version SHALL be incremented.
 
 #### Scenario: Handler graph survives round-trip
 - **WHEN** a module containing selectionless, unary, and pair handlers is saved and loaded
@@ -100,8 +100,12 @@ Module artifacts SHALL serialize and deserialize external-event provenance, publ
 - **WHEN** a pair binding selects a trait through a module alias
 - **THEN** the loaded artifact retains its canonical trait identity without requiring the source alias
 
+#### Scenario: Field-level access survives round-trip
+- **WHEN** a module has one handler that writes `Match.over` and one that reads all fields of `Match`, and it is saved and loaded
+- **THEN** the loaded contracts record the `Match.over` write and the all-fields read, and the conflict edge's field provenance is identical
+
 #### Scenario: Old artifact version is rejected
-- **WHEN** the linker reads an artifact predating relation-domain serialization
+- **WHEN** the linker reads an artifact predating field-level contract serialization
 - **THEN** it reports an incompatible artifact version and requests recompilation
 
 ### Requirement: Public runtime symbols export through artifacts

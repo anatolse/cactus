@@ -31,7 +31,7 @@ A pair handler contract SHALL record each trait read with its relation binding a
 - **THEN** its precise contract contains two bound reads and its conservative read set contains Collider
 
 ### Requirement: where: reads are folded into handler contracts
-Every trait read reachable from a handler's `where:` predicates SHALL be folded into that handler's contract with the same precision as reads reachable from the handler body: binding-qualified (`bound_reads`) for a pair handler, canonical for a unary handler, in both cases also contributing to the contract's conservative `reads` union. Scheduling SHALL see identical data dependencies whether a condition is expressed in `where:` or as a leading `if` in the handler body.
+Every trait read reachable from a handler's `where:` predicates SHALL be folded into that handler's contract with the same precision as reads reachable from the handler body: binding-qualified (`bound_reads`) for a pair handler, canonical for a unary handler, in both cases also contributing to the contract's conservative `reads` union and its per-field read access. This SHALL hold whether or not the rule declares `limit:`, even though a limited rule evaluates `where:` as a filter before any limit slot is taken rather than as part of the handler body. Scheduling SHALL see identical data dependencies whether a condition is expressed in `where:` or as a leading `if` in the handler body.
 
 #### Scenario: where: read is recorded like a body read
 - **WHEN** a unary handler's `where:` predicate reads `ball.velocity`
@@ -40,6 +40,29 @@ Every trait read reachable from a handler's `where:` predicates SHALL be folded 
 #### Scenario: where: bound read distinguishes pair binding roles
 - **WHEN** a pair handler's `where:` predicate reads `Collider` through both the `body` and `wall` bindings
 - **THEN** its contract's `bound_reads` records two binding-qualified reads and its conservative `reads` set contains Collider once
+
+#### Scenario: where: read on a limited unary rule is recorded
+- **WHEN** a unary rule declares `filter: Health as h`, `where: h.hp < 20`, and `limit: 3`
+- **THEN** each of its handlers' contracts records a read of `Health.hp`, identically to the same rule without `limit:`
+
+#### Scenario: where: bound read on a limited pair rule is recorded
+- **WHEN** a pair rule with bindings `actor` and `surface` declares `where: surface.Solid.top <= actor.Actor.feet_y` and `limit: 1 per actor`
+- **THEN** each of its handlers' contracts records binding-qualified reads of `Solid` through `surface` and `Actor` through `actor`, and reads of `Solid.top` and `Actor.feet_y`
+
+#### Scenario: A writer orders against a limited where: reader in either declaration order
+- **WHEN** one rule's handler writes `Health.hp`, and another rule's handler under `limit:` reads `Health.hp` only in its `where:` predicate
+- **THEN** a contract conflict edge on `Health.hp` connects the two handlers, whichever rule is declared first
+
+### Requirement: limit: count reads are folded into handler contracts
+Every trait read reachable from a rule's `limit:` count expression SHALL be folded into each of the rule's handler contracts with the same precision as reads reachable from the handler body: binding-qualified (`bound_reads`) for the `per` binding of a pair handler, and also contributing to the contract's conservative `reads` union and per-field read access. A count that reads only constants SHALL add no trait read.
+
+#### Scenario: Per-binding limit count read is recorded
+- **WHEN** a pair rule declares `limit: actor.Actor.slots per actor`
+- **THEN** each of its handlers' contracts records a binding-qualified read of `Actor` through `actor` and a read of `Actor.slots`
+
+#### Scenario: Constant limit count adds no read
+- **WHEN** a rule declares `limit: 3` and nothing else in the rule reads `Actor`
+- **THEN** its handler contracts record no read of `Actor`
 
 ### Requirement: order by: reads are folded into handler contracts
 Every trait read reachable from a handler's `order by:` sort key expressions SHALL be folded into that handler's contract with the same precision as reads reachable from the handler body: binding-qualified (`bound_reads`) for a pair handler, canonical for a unary handler, in both cases also contributing to the contract's conservative `reads` union. Scheduling SHALL see identical data dependencies whether a read occurs in an `order by:` key, a `where:` predicate, or the handler body.

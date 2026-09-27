@@ -5111,7 +5111,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             auto inferred = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
                                                    : infer_regular_handler_contract(rule, handler);
             inferred.spatial_join = spatial_join;
-            fold_rule_clause_named_reads(rule, inferred);
+            fold_when_clause_named_reads(rule, inferred);
             result_.handler_contracts.push_back(inferred);
 
             HandlerNode node;
@@ -5578,6 +5578,27 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
     visit_stmts(body, std::move(handler_locals));
 }
 
+// Clause expressions the handler body walk never sees but whose binding reads
+// still belong in the contract. A limited rule keeps where: out of the body.
+static std::vector<const ExprNode*> rule_clause_read_roots(const RuleNode& rule) {
+    std::vector<const ExprNode*> roots;
+    for (const auto& key : rule.order_by) {
+        roots.push_back(key.expression.get());
+    }
+    if (!rule.limit.has_value()) {
+        return roots;
+    }
+    if (rule.limit->count != nullptr) {
+        roots.push_back(rule.limit->count.get());
+    }
+    if (rule.where_clause.has_value()) {
+        for (const auto& predicate : rule.where_clause->predicates) {
+            roots.push_back(predicate.get());
+        }
+    }
+    return roots;
+}
+
 InferredHandlerContract
 SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-function-cognitive-complexity) -- still 57
                                                    // after AST-walker extraction (aliases/trait_for_field
@@ -5691,12 +5712,8 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     };
     auto add_projection = [&add_write](const SymbolId& symbol) { add_write(symbol, std::nullopt); };
 
-    // An order by: key is an ordinary expression, so its reads resolve through
-    // the same walk and the same resolve_read strategy the handler body uses —
-    // a computed key reading a trait the body never mentions still reaches the
-    // contract (handler-contracts).
-    for (const auto& key : rule.order_by) {
-        walk_expression_reads(*key.expression, LocalNames{}, contract, resolve_read);
+    for (const auto* root : rule_clause_read_roots(rule)) {
+        walk_expression_reads(*root, LocalNames{}, contract, resolve_read);
     }
     LocalNames handler_locals;
     handler_locals.insert(handler.event_name);
@@ -5708,23 +5725,14 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     return contract;
 }
 
-// when: and limit: run outside the handler body, so the body walk never sees
-// them; their named reads still gate and order every handler of the rule.
-void SemanticAnalyzer::fold_rule_clause_named_reads(const RuleNode& rule, HandlerContract& contract) const {
+// when: has no bindings, so only its named reads can reach the contract.
+void SemanticAnalyzer::fold_when_clause_named_reads(const RuleNode& rule, HandlerContract& contract) const {
+    if (!rule.when_clause.has_value()) {
+        return;
+    }
     const auto no_other_reads = [](const ExprNode&, const LocalNames&) { return false; };
-    if (rule.when_clause.has_value()) {
-        for (const auto& predicate : rule.when_clause->predicates) {
-            walk_expression_reads(*predicate, LocalNames{}, contract, no_other_reads);
-        }
-    }
-    if (rule.limit.has_value() && rule.limit->count != nullptr) {
-        walk_expression_reads(*rule.limit->count, LocalNames{}, contract, no_other_reads);
-    }
-    // A limited rule keeps its where: out of the body, so the body walk never saw it.
-    if (rule.limit.has_value() && rule.where_clause.has_value()) {
-        for (const auto& predicate : rule.where_clause->predicates) {
-            walk_expression_reads(*predicate, LocalNames{}, contract, no_other_reads);
-        }
+    for (const auto& predicate : rule.when_clause->predicates) {
+        walk_expression_reads(*predicate, LocalNames{}, contract, no_other_reads);
     }
 }
 
@@ -5818,11 +5826,8 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
     };
     auto on_project_trait  = [&contract](const SymbolId& trait) { contract.projects.insert(trait); };
 
-    // Same walk and same pair-read primitive as the handler body, so a sort
-    // key reading through both bindings records both binding-qualified reads
-    // (handler-contracts).
-    for (const auto& key : rule.order_by) {
-        walk_expression_reads(*key.expression, LocalNames{}, contract, resolve_read);
+    for (const auto* root : rule_clause_read_roots(rule)) {
+        walk_expression_reads(*root, LocalNames{}, contract, resolve_read);
     }
 
     LocalNames handler_locals;

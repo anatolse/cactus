@@ -1166,7 +1166,7 @@ private:
     void add_contract_call_effects(HandlerContract& contract, const std::optional<SymbolId>& callee) const;
 
     InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule, const EventHandlerNode& handler) const;
-    void fold_rule_clause_named_reads(const RuleNode& rule, HandlerContract& contract) const;
+    void fold_when_clause_named_reads(const RuleNode& rule, HandlerContract& contract) const;
 
     // Phase 3: std.text.format validation
     bool is_std_text_format_callee(const ExprNode& callee) const;

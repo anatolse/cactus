@@ -4303,6 +4303,7 @@ static const std::string PAIR_FIELD_TRAITS =
     "trait Actor:\n"
     "    var grounded: bool = false\n"
     "    var height: float = 0.0\n"
+    "    var slots: int = 1\n"
     "trait Surface:\n"
     "    var top: float = 0.0\n";
 
@@ -4374,6 +4375,76 @@ TEST_CASE("Contract fields: where and order by reads record fields", "[semantic]
         "    on tick:\n"
         "        let x = 1\n");
     CHECK(unary.read_fields.at(test_trait("Collider")) == fields_of({"mask", "radius"}));
+}
+
+TEST_CASE("Contract fields: where on a limited unary rule records its reads",
+          "[semantic][handler-contracts][where-clause][rule-limit]") {
+    const auto contract = only_contract(
+        "rule Pick:\n"
+        "    filter:\n"
+        "        Health as h\n"
+        "    where:\n"
+        "        h.hp < 20\n"
+        "    limit: 3\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    const auto health = test_trait("Health");
+    CHECK(contract.reads.contains(health));
+    CHECK(contract.read_fields.at(health) == fields_of({"hp"}));
+}
+
+TEST_CASE("Contract fields: where on a limited pair rule records its bound reads",
+          "[semantic][handler-contracts][where-clause][rule-limit][pair-relations]") {
+    const auto contract = only_pair_contract(
+        "rule Land:\n"
+        "    pairs:\n"
+        "        actor:\n"
+        "            Actor\n"
+        "        surface:\n"
+        "            Surface\n"
+        "    where:\n"
+        "        surface.Surface.top <= actor.Actor.height\n"
+        "    limit: 1 per actor\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    const auto actor   = test_trait("Actor");
+    const auto surface = test_trait("Surface");
+    const BoundTraitAccess actor_read{.binding_index = 0, .trait = actor};
+    const BoundTraitAccess surface_read{.binding_index = 1, .trait = surface};
+    CHECK(std::ranges::find(contract.bound_reads, actor_read) != contract.bound_reads.end());
+    CHECK(std::ranges::find(contract.bound_reads, surface_read) != contract.bound_reads.end());
+    CHECK(contract.read_fields.at(actor) == fields_of({"height"}));
+    CHECK(contract.read_fields.at(surface) == fields_of({"top"}));
+}
+
+TEST_CASE("Contract fields: a per-binding limit count records its bound read",
+          "[semantic][handler-contracts][rule-limit][pair-relations]") {
+    const auto contract = only_pair_contract(
+        "rule Land:\n"
+        "    pairs:\n"
+        "        actor:\n"
+        "            Actor\n"
+        "        surface:\n"
+        "            Surface\n"
+        "    limit: actor.Actor.slots per actor\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    const auto actor = test_trait("Actor");
+    const BoundTraitAccess actor_read{.binding_index = 0, .trait = actor};
+    CHECK(std::ranges::find(contract.bound_reads, actor_read) != contract.bound_reads.end());
+    CHECK(contract.read_fields.at(actor) == fields_of({"slots"}));
+}
+
+TEST_CASE("Contract fields: a constant limit count adds no read", "[semantic][handler-contracts][rule-limit]") {
+    const auto contract = only_pair_contract(
+        "rule Pick:\n"
+        "    filter:\n"
+        "        Surface as s\n"
+        "    limit: 3\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    CHECK(contract.reads.empty());
+    CHECK(contract.read_fields.empty());
 }
 
 TEST_CASE("Contract fields: extern rule declarations cover all fields", "[semantic][handler-contracts][extern-rule]") {

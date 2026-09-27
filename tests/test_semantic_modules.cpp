@@ -3243,6 +3243,37 @@ TEST_CASE("handler graph adds no conflict between disjoint fields of one trait",
     CHECK(edges[0].orientation == ScheduleEdgeOrientation::WriterBeforeReader);
 }
 
+TEST_CASE("handler graph orders a field writer before a limited where: reader in either declaration order",
+          "[semantic][handler-graph][handler-contracts][rule-limit]") {
+    const std::string writer = "rule AddScore:\n"
+                               "    filter:\n"
+                               "        Match as m\n"
+                               "    on tick:\n"
+                               "        m.score = 1\n";
+    const std::string reader = "rule PickLeaders:\n"
+                               "    filter:\n"
+                               "        Match as m\n"
+                               "    where:\n"
+                               "        m.score > 0\n"
+                               "    limit: 3\n"
+                               "    on tick:\n"
+                               "        let y = 1\n";
+    const auto match = make_symbol_id(SymbolKind::Trait, "game.fields", "Match");
+    for (const auto& rules : {writer + reader, reader + writer}) {
+        const auto [decorated, diagnostics] = analyze_source(FIELD_GRAPH_HEADER + rules);
+        INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+        REQUIRE(diagnostics.empty());
+
+        const auto edges = data_edges(decorated);
+        REQUIRE(edges.size() == 1);
+        CHECK(edges[0].before == field_graph_handler("AddScore"));
+        CHECK(edges[0].after == field_graph_handler("PickLeaders"));
+        REQUIRE(edges[0].field_provenance.size() == 1);
+        CHECK(edges[0].field_provenance[0].trait == match);
+        CHECK(edges[0].field_provenance[0].access == FieldAccess{.all = false, .fields = {"score"}});
+    }
+}
+
 TEST_CASE("handler graph orders a field writer before an extern whole-trait reader",
           "[semantic][handler-graph][handler-contracts]") {
     const auto [decorated, diagnostics] = analyze_source(FIELD_GRAPH_HEADER +

@@ -90,7 +90,7 @@ The `extract_pub_symbols` function SHALL read the funcs section and include `pub
 - **THEN** `ImportedSymbols.funcs["lerp"]` is present with `is_extern = true` and correct signature
 
 ### Requirement: Execution declarations and graph round-trip
-Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler domain variants, pair binding names and trait identities, binding-qualified reads, projected outputs, field-level read and write access, remaining contract capabilities, explicit ordering, and handler execution-graph edges including their field-level provenance, without collapsing them into rule-level summaries. The artifact format version SHALL be incremented.
+Module artifacts SHALL serialize and deserialize external-event provenance, public phase declarations, phase dependencies and fields, canonical handler identities, per-handler domain variants, pair binding names and trait identities, binding-qualified reads, projected outputs, field-level read and write access, named-entity accesses and implicit requirements, remaining contract capabilities, explicit ordering, and handler execution-graph edges including their field-level provenance, without collapsing them into rule-level summaries. Public entities and their trait sets SHALL round-trip. Named-entity expressions in the serialized AST (template blueprints) SHALL round-trip with their canonical entity and trait identities. Rule bodies and `when:` clauses are not serialized; their named reads and implicit requirements reach the artifact through the handler contracts. The artifact format version SHALL be incremented.
 
 #### Scenario: Handler graph survives round-trip
 - **WHEN** a module containing selectionless, unary, and pair handlers is saved and loaded
@@ -104,8 +104,16 @@ Module artifacts SHALL serialize and deserialize external-event provenance, publ
 - **WHEN** a module has one handler that writes `Match.over` and one that reads all fields of `Match`, and it is saved and loaded
 - **THEN** the loaded contracts record the `Match.over` write and the all-fields read, and the conflict edge's field provenance is identical
 
+#### Scenario: Named-entity access and when: survive round-trip
+- **WHEN** a module has a rule with `when: not Game.Match.over` whose handler writes `Game.Match.score`, and it is saved and loaded
+- **THEN** the loaded handler contract keeps the named read from `when:`, the named write, and the requirement on `(Game, Match)`, all with `Game`'s and `Match`'s canonical identities
+
+#### Scenario: Public entities and entity values survive round-trip
+- **WHEN** a module declares `pub entity Game` carrying `Match`, and a `pub template` overrides `rival = Boss`, and it is saved and loaded
+- **THEN** the imported symbols list `Game` with its canonical identity and trait set, and the template blueprint's `rival` value keeps `Boss`'s canonical identity
+
 #### Scenario: Old artifact version is rejected
-- **WHEN** the linker reads an artifact predating field-level contract serialization
+- **WHEN** the linker reads an artifact predating named-entity access serialization
 - **THEN** it reports an incompatible artifact version and requests recompilation
 
 ### Requirement: Public runtime symbols export through artifacts

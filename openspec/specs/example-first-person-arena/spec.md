@@ -213,7 +213,7 @@ The example SHALL render a centered crosshair during play. When a live enemy rea
 - **AND** the cursor is no longer captured
 
 ### Requirement: Player can restart the game after game over
-While in the game-over state, pressing "R" SHALL restart the game: all live enemies and in-flight bullets SHALL be removed, the player SHALL return to its original spawn position and orientation with `game_over` cleared, spawn points SHALL resume producing enemies on the same immediate-first-wave schedule as a fresh game start, and the crosshair/game-over HUD and cursor capture SHALL return to their start-of-game state. Restarting SHALL NOT reset the player's accumulated game-over count.
+While in the game-over state, pressing "R" SHALL restart the game: all live enemies and in-flight bullets SHALL be removed, the player SHALL return to its original spawn position and orientation, `Game`'s over flag SHALL be cleared, spawn points SHALL resume producing enemies on the same immediate-first-wave schedule as a fresh game start, and the crosshair/game-over HUD and cursor capture SHALL return to their start-of-game state. Restarting SHALL NOT reset `Game`'s accumulated game-over count.
 
 #### Scenario: Restart clears live enemies and bullets
 - **WHEN** "R" is pressed while the game is over
@@ -221,7 +221,7 @@ While in the game-over state, pressing "R" SHALL restart the game: all live enem
 
 #### Scenario: Restart returns the player to a playable state
 - **WHEN** "R" is pressed while the game is over
-- **THEN** `game_over` becomes false
+- **THEN** `Game`'s over flag becomes false
 - **AND** the player is positioned and oriented at its original spawn transform
 - **AND** the cursor is captured again
 
@@ -236,8 +236,22 @@ While in the game-over state, pressing "R" SHALL restart the game: all live enem
 
 #### Scenario: Restart does not reset the death counter
 - **WHEN** "R" is pressed after at least one prior game over
-- **THEN** the player's accumulated game-over count is unchanged by the restart
+- **THEN** `Game`'s accumulated game-over count is unchanged by the restart
 
 #### Scenario: "R" has no effect during active play
 - **WHEN** "R" is pressed while the game is not in the game-over state
 - **THEN** no restart occurs and ongoing gameplay is unaffected
+
+### Requirement: Game-wide state lives on a named entity
+The example SHALL keep its game-over state (`over` and the accumulated game-over count) on a named
+`Game` entity, not on the `Player` trait. Rules that stop during game over SHALL gate on it with
+`when:` instead of looking up the player with a world query. The example SHALL address its HUD
+entities by name instead of with marker-trait world queries.
+
+#### Scenario: Game-over state is read from Game
+- **WHEN** enemy contact triggers game over
+- **THEN** `Game`'s over flag becomes true, its game-over count increments by one, and the `Player` trait carries no game-over field
+
+#### Scenario: Gated rules do not run during game over
+- **WHEN** the game is over
+- **THEN** the rules gated with `when:` on `Game`'s over flag do not run, and enemy spawning, movement, player look, movement, and firing stay stopped

@@ -196,3 +196,34 @@ A contract SHALL record access to all fields of a trait when the access cannot b
 #### Scenario: Set remains a command without field access
 - **WHEN** a handler contains `set Health on target:` assigning only `hp`
 - **THEN** its contract lists `set Health` in `commands` and records no read or write of any `Health` field
+
+### Requirement: Contracts record named-entity access
+A handler contract SHALL record every named field read and write reachable from the handler body
+and from its rule's clauses (`when:`, `where:`, `order by:`, `limit:`). Each access SHALL name the
+canonical entity and trait and follow the per-field rules of "Contracts record trait access per
+field". Each access SHALL also add the trait and field to the contract's ordinary `reads`/`writes`,
+so scheduling orders it against every other handler that touches that trait field, whatever entity
+that handler touches. The contract SHALL record the set of `(entity, trait)` pairs that form the
+handler's implicit requirement. A contract with at least one named write SHALL be marked as not
+splittable per entity. Using an entity name only as a value (`set T on Name`, `emit E to Name`,
+comparisons) SHALL add no named access and no requirement.
+
+#### Scenario: Named read is recorded with entity and field
+- **WHEN** a handler's rule declares `when: not Game.Match.over`
+- **THEN** the contract records a named read of `Game`'s `Match.over`, a read of `Match.over`, and the requirement `(Game, Match)`
+
+#### Scenario: Named write orders against filter readers
+- **WHEN** handler A writes `Game.Match.over`, and handler B filters `Match as m` and reads `m.over`
+- **THEN** a contract conflict edge on `Match.over` connects A and B
+
+#### Scenario: Disjoint named fields do not conflict
+- **WHEN** handler A writes `Game.Match.score`, and handler B only reads `Game.Match.over`
+- **THEN** no contract conflict edge connects A and B
+
+#### Scenario: Named write marks the handler unsplittable
+- **WHEN** a filter handler runs `Game.Match.score += 1`
+- **THEN** its contract is marked as not splittable per entity
+
+#### Scenario: Name as a value adds no access
+- **WHEN** a handler runs `set text.ScreenLabel on CrosshairHud:`
+- **THEN** its contract lists the `set` command and records no named access and no requirement

@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 
 using namespace cactus;
@@ -3182,5 +3183,181 @@ TEST_CASE("dsl-render-passes: render-pass stage triggers are rejected on extern 
 
     (void)decorated;
     CHECK(has_diagnostic(errors, "render-pass stage triggers are not valid on 'extern rule' declarations"));
+}
+
+// ── Field-level conflict edges (handler-execution-graph) ────────────────────
+
+static const std::string FIELD_GRAPH_HEADER =
+    "module game.fields\n"
+    "event tick\n"
+    "trait Match:\n"
+    "    var over: bool = false\n"
+    "    var score: int = 0\n"
+    "trait Collider:\n"
+    "    var radius: float = 1.0\n"
+    "    var mask: int = 0\n"
+    "trait Solid:\n"
+    "    var active: bool = true\n";
+
+static HandlerIdentity field_graph_handler(const std::string& rule) {
+    return HandlerIdentity{
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.fields", rule),
+        .trigger = ResolvedHandlerTrigger{.kind   = HandlerTriggerKind::Event,
+                                          .symbol = make_symbol_id(SymbolKind::Event, "game.fields", "tick")}};
+}
+
+static std::vector<ScheduleEdge> data_edges(const DecoratedProgram& decorated) {
+    std::vector<ScheduleEdge> edges;
+    std::ranges::copy_if(decorated.execution_graph.schedule_edges, std::back_inserter(edges), [](const auto& edge) {
+        return edge.kind == ScheduleEdgeKind::DataConflict;
+    });
+    return edges;
+}
+
+TEST_CASE("handler graph adds no conflict between disjoint fields of one trait",
+          "[semantic][handler-graph][handler-contracts]") {
+    const auto [decorated, diagnostics] = analyze_source(FIELD_GRAPH_HEADER +
+                                                         "rule EndMatch:\n"
+                                                         "    filter:\n"
+                                                         "        Match as m\n"
+                                                         "    on tick:\n"
+                                                         "        m.over = true\n"
+                                                         "rule AddScore:\n"
+                                                         "    filter:\n"
+                                                         "        Match as m\n"
+                                                         "    on tick:\n"
+                                                         "        m.score = m.score + 1\n"
+                                                         "rule WatchOver:\n"
+                                                         "    filter:\n"
+                                                         "        Match as m\n"
+                                                         "    on tick:\n"
+                                                         "        if m.over:\n"
+                                                         "            let y = 1\n");
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto edges = data_edges(decorated);
+    REQUIRE(edges.size() == 1);
+    CHECK(edges[0].before == field_graph_handler("EndMatch"));
+    CHECK(edges[0].after == field_graph_handler("WatchOver"));
+    CHECK(edges[0].orientation == ScheduleEdgeOrientation::WriterBeforeReader);
+}
+
+TEST_CASE("handler graph orders a field writer before an extern whole-trait reader",
+          "[semantic][handler-graph][handler-contracts]") {
+    const auto [decorated, diagnostics] = analyze_source(FIELD_GRAPH_HEADER +
+                                                         "rule AddScore:\n"
+                                                         "    filter:\n"
+                                                         "        Match as m\n"
+                                                         "    on tick:\n"
+                                                         "        m.score = 1\n"
+                                                         "extern rule Scoreboard:\n"
+                                                         "    on tick:\n"
+                                                         "        reads:\n"
+                                                         "            Match\n");
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto edges = data_edges(decorated);
+    REQUIRE(edges.size() == 1);
+    CHECK(edges[0].before == field_graph_handler("AddScore"));
+    CHECK(edges[0].after == field_graph_handler("Scoreboard"));
+    const auto match = make_symbol_id(SymbolKind::Trait, "game.fields", "Match");
+    REQUIRE(edges[0].field_provenance.size() == 1);
+    CHECK(edges[0].field_provenance[0].trait == match);
+    CHECK(edges[0].field_provenance[0].access == FieldAccess{.all = false, .fields = {"score"}});
+}
+
+TEST_CASE("handler graph adds no conflict between a unary field writer and a pair reader of another field",
+          "[semantic][handler-graph][pair-relations][handler-contracts]") {
+    const auto [decorated, diagnostics] = analyze_source(FIELD_GRAPH_HEADER +
+                                                         "rule SetMask:\n"
+                                                         "    filter:\n"
+                                                         "        Collider as c\n"
+                                                         "    on tick:\n"
+                                                         "        c.mask = 2\n"
+                                                         "rule Touch:\n"
+                                                         "    pairs:\n"
+                                                         "        body:\n"
+                                                         "            Collider\n"
+                                                         "        wall:\n"
+                                                         "            Solid\n"
+                                                         "    on tick:\n"
+                                                         "        if body.Collider.radius > 0.0:\n"
+                                                         "            let y = 1\n");
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    CHECK(data_edges(decorated).empty());
+}
+
+TEST_CASE("handler graph edge names only the overlapping fields", "[semantic][handler-graph][handler-contracts]") {
+    const auto [decorated, diagnostics] = analyze_source(FIELD_GRAPH_HEADER +
+                                                         "rule Finish:\n"
+                                                         "    filter:\n"
+                                                         "        Match as m\n"
+                                                         "    on tick:\n"
+                                                         "        m.over = true\n"
+                                                         "        m.score = 0\n"
+                                                         "rule WatchOver:\n"
+                                                         "    filter:\n"
+                                                         "        Match as m\n"
+                                                         "    on tick:\n"
+                                                         "        if m.over:\n"
+                                                         "            let y = 1\n");
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto edges = data_edges(decorated);
+    REQUIRE(edges.size() == 1);
+    const auto match = make_symbol_id(SymbolKind::Trait, "game.fields", "Match");
+    CHECK(edges[0].trait_provenance == std::vector<SymbolId>{match});
+    REQUIRE(edges[0].field_provenance.size() == 1);
+    CHECK(edges[0].field_provenance[0].trait == match);
+    CHECK(edges[0].field_provenance[0].access == FieldAccess{.all = false, .fields = {"over"}});
+}
+
+TEST_CASE("handler graph treats a projection as covering every field of its trait",
+          "[semantic][handler-graph][handler-contracts]") {
+    const auto [decorated, diagnostics] = analyze_source(FIELD_GRAPH_HEADER +
+                                                         "extern rule Highlight:\n"
+                                                         "    filter:\n"
+                                                         "        Match\n"
+                                                         "    on tick:\n"
+                                                         "        projects:\n"
+                                                         "            Match\n"
+                                                         "rule WatchOver:\n"
+                                                         "    pairs:\n"
+                                                         "        game:\n"
+                                                         "            Match\n"
+                                                         "        wall:\n"
+                                                         "            Solid\n"
+                                                         "    on tick:\n"
+                                                         "        if game.Match.over:\n"
+                                                         "            let y = 1\n"
+                                                         "rule WatchScore:\n"
+                                                         "    pairs:\n"
+                                                         "        game:\n"
+                                                         "            Match\n"
+                                                         "        wall:\n"
+                                                         "            Solid\n"
+                                                         "    on tick:\n"
+                                                         "        if game.Match.score > 0:\n"
+                                                         "            let y = 1\n");
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+
+    const auto match = make_symbol_id(SymbolKind::Trait, "game.fields", "Match");
+    const auto edges = data_edges(decorated);
+    REQUIRE(edges.size() == 2);
+    for (const auto& [reader, field] :
+         std::vector<std::pair<std::string, std::string>>{{"WatchOver", "over"}, {"WatchScore", "score"}}) {
+        const auto edge = std::ranges::find_if(
+            edges, [&](const ScheduleEdge& candidate) { return candidate.after == field_graph_handler(reader); });
+        REQUIRE(edge != edges.end());
+        CHECK(edge->before == field_graph_handler("Highlight"));
+        REQUIRE(edge->field_provenance.size() == 1);
+        CHECK(edge->field_provenance[0].trait == match);
+        CHECK(edge->field_provenance[0].access == FieldAccess{.all = false, .fields = {field}});
+    }
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

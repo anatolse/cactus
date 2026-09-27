@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -244,6 +245,14 @@ struct SpatialJoinPlan {
     friend bool operator==(const SpatialJoinPlan&, const SpatialJoinPlan&) = default;
 };
 
+// Which fields of one trait a contract touches.
+struct FieldAccess {
+    bool all = false;
+    std::set<std::string> fields;  // ignored when `all`
+
+    friend bool operator==(const FieldAccess&, const FieldAccess&) = default;
+};
+
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
     std::vector<SymbolId> selection;             // Unary domain: positive traits
@@ -260,7 +269,10 @@ struct HandlerContract {
     std::unordered_set<SymbolId> reads;         // conservative canonical read union
     std::vector<BoundTraitAccess> bound_reads;  // precise pair binding + trait reads
     std::unordered_set<SymbolId> writes;        // durable trait writes
-    std::unordered_set<SymbolId> projects;      // projected (transient) trait outputs
+    // Keyed exactly like `reads`/`writes`; a trait with no entry counts as all fields.
+    std::unordered_map<SymbolId, FieldAccess> read_fields;
+    std::unordered_map<SymbolId, FieldAccess> write_fields;
+    std::unordered_set<SymbolId> projects;  // projected (transient) trait outputs
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
     std::unordered_set<std::string> effects;
@@ -274,6 +286,19 @@ struct HandlerContract {
         return produced;
     }
 };
+
+// The only way inference adds a trait read or write, so the trait sets and
+// field tables stay in step. `field` covers all fields when it is nullopt or
+// names no field of `declaration` (null when the trait is not resolvable).
+// A write also records the same read.
+void record_read(HandlerContract& contract,
+                 const SymbolId& trait,
+                 const std::optional<std::string>& field,
+                 const ResolvedTrait* declaration);
+void record_write(HandlerContract& contract,
+                  const SymbolId& trait,
+                  const std::optional<std::string>& field,
+                  const ResolvedTrait* declaration);
 
 /// Transitional inference result retained for focused semantic tests and old
 /// consumers while HandlerNode becomes the authoritative execution record.
@@ -320,12 +345,21 @@ struct PhasePlan {
 enum class ScheduleEdgeKind : std::uint8_t { ExplicitHandler, ExplicitRule, DataConflict, EffectConflict };
 enum class ScheduleEdgeOrientation : std::uint8_t { Explicit, WriterBeforeReader, DeclarationOrder };
 
+// The fields of one trait that made a data conflict.
+struct FieldProvenance {
+    SymbolId trait;
+    FieldAccess access;
+
+    friend bool operator==(const FieldProvenance&, const FieldProvenance&) = default;
+};
+
 struct ScheduleEdge {
     HandlerIdentity before;
     HandlerIdentity after;
     ScheduleEdgeKind kind               = ScheduleEdgeKind::DataConflict;
     ScheduleEdgeOrientation orientation = ScheduleEdgeOrientation::DeclarationOrder;
     std::vector<SymbolId> trait_provenance;
+    std::vector<FieldProvenance> field_provenance;  // one per `trait_provenance` entry, same order
     std::vector<std::string> effect_provenance;
 };
 
@@ -917,9 +951,9 @@ private:
     // contract writes are read/write capabilities, `reads` too. Every other
     // pair-binding assignment was already rejected by validate_event_stmts
     // and contributes nothing.
-    static void record_pair_binding_write(const VarAssign& node,
-                                          const PairScope& pair_scope,
-                                          InferredHandlerContract& contract);
+    void record_pair_binding_write(const VarAssign& node,
+                                   const PairScope& pair_scope,
+                                   InferredHandlerContract& contract) const;
     // dsl-where-clause / spatial-broadphase-runtime: read-only pattern-match
     // over an already-validated `where:` predicate list for a direct,
     // unwrapped circles_overlap/spheres_overlap call, or an equivalent manual

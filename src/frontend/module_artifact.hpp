@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 17;
+    static constexpr uint8_t CURRENT_VERSION = 18;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -98,6 +98,8 @@ private:
     static void write_string_set(std::ostream& out, const std::unordered_set<std::string>& values);
     static void write_symbol_set(std::ostream& out, const std::unordered_set<SymbolId>& values);
     static void write_symbol_vector(std::ostream& out, const std::vector<SymbolId>& values);
+    static void write_field_access(std::ostream& out, const FieldAccess& access);
+    static void write_field_table(std::ostream& out, const std::unordered_map<SymbolId, FieldAccess>& table);
     static void write_string_vector(std::ostream& out, const std::vector<std::string>& values);
     static void write_dep_graph(std::ostream& out, const std::vector<RuleDependency>& graph);
     static void write_contract(std::ostream& out, const HandlerContract& contract);
@@ -131,6 +133,8 @@ private:
     static std::unordered_set<std::string> read_string_set(std::istream& in);
     static std::unordered_set<SymbolId> read_symbol_set(std::istream& in);
     static std::vector<SymbolId> read_symbol_vector(std::istream& in);
+    static FieldAccess read_field_access(std::istream& in);
+    static std::unordered_map<SymbolId, FieldAccess> read_field_table(std::istream& in);
     static std::vector<std::string> read_string_vector(std::istream& in);
     static std::vector<RuleDependency> read_dep_graph(std::istream& in);
     static HandlerContract read_contract(std::istream& in);

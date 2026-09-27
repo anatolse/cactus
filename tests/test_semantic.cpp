@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <set>
 
 using namespace cactus;
 
@@ -4060,5 +4061,342 @@ TEST_CASE("Semantic: a provably-limited pair write conflicts with a unary read o
         return c.domain_kind != HandlerDomainKind::Pair && c.reads.contains(actor_trait);
     });
     REQUIRE(reader != result.handler_contracts.end());
+}
+
+// ── Field-level contract access (handler-contracts) ─────────────────────────
+
+static ResolvedTrait match_trait_declaration() {
+    ResolvedTrait trait;
+    trait.name   = "Match";
+    trait.fields = {ResolvedField{.name = "over"}, ResolvedField{.name = "score"}};
+    return trait;
+}
+
+static FieldAccess fields_of(std::initializer_list<std::string> names) {
+    return FieldAccess{.all = false, .fields = std::set<std::string>(names)};
+}
+
+static const FieldAccess ALL_FIELDS{.all = true, .fields = {}};
+
+TEST_CASE("Contract field access: a named declared field is recorded alone", "[semantic][handler-contracts]") {
+    const auto match       = make_symbol_id(SymbolKind::Trait, "test", "Match");
+    const auto declaration = match_trait_declaration();
+    HandlerContract contract;
+    record_read(contract, match, "over", &declaration);
+
+    CHECK(contract.reads.contains(match));
+    CHECK(contract.read_fields.at(match) == fields_of({"over"}));
+    CHECK(contract.writes.empty());
+    CHECK(contract.write_fields.empty());
+}
+
+TEST_CASE("Contract field access: nullopt covers all fields and absorbs named fields",
+          "[semantic][handler-contracts]") {
+    const auto match       = make_symbol_id(SymbolKind::Trait, "test", "Match");
+    const auto declaration = match_trait_declaration();
+    HandlerContract contract;
+    record_read(contract, match, "over", &declaration);
+    record_read(contract, match, std::nullopt, &declaration);
+    record_read(contract, match, "score", &declaration);
+
+    CHECK(contract.read_fields.at(match) == ALL_FIELDS);
+}
+
+TEST_CASE("Contract field access: an undeclared field name falls back to all fields", "[semantic][handler-contracts]") {
+    const auto match       = make_symbol_id(SymbolKind::Trait, "test", "Match");
+    const auto declaration = match_trait_declaration();
+    HandlerContract contract;
+    record_read(contract, match, "missing", &declaration);
+    CHECK(contract.read_fields.at(match) == ALL_FIELDS);
+
+    HandlerContract undeclared_trait;
+    record_read(undeclared_trait, match, "over", nullptr);
+    CHECK(undeclared_trait.read_fields.at(match) == ALL_FIELDS);
+}
+
+TEST_CASE("Contract field access: a write also records the read of the same field", "[semantic][handler-contracts]") {
+    const auto match       = make_symbol_id(SymbolKind::Trait, "test", "Match");
+    const auto declaration = match_trait_declaration();
+    HandlerContract contract;
+    record_read(contract, match, "score", &declaration);
+    record_write(contract, match, "over", &declaration);
+
+    CHECK(contract.writes.contains(match));
+    CHECK(contract.reads.contains(match));
+    CHECK(contract.write_fields.at(match) == fields_of({"over"}));
+    CHECK(contract.read_fields.at(match) == fields_of({"over", "score"}));
+}
+
+TEST_CASE("Contract field access: trait sets and field tables keep the same keys", "[semantic][handler-contracts]") {
+    const auto match       = make_symbol_id(SymbolKind::Trait, "test", "Match");
+    const auto health      = make_symbol_id(SymbolKind::Trait, "test", "Health");
+    const auto declaration = match_trait_declaration();
+    HandlerContract contract;
+    record_read(contract, health, std::nullopt, nullptr);
+    record_write(contract, match, "score", &declaration);
+
+    CHECK(contract.read_fields.size() == contract.reads.size());
+    CHECK(contract.write_fields.size() == contract.writes.size());
+    for (const auto& trait : contract.reads) {
+        CHECK(contract.read_fields.contains(trait));
+    }
+    for (const auto& trait : contract.writes) {
+        CHECK(contract.write_fields.contains(trait));
+    }
+}
+
+static const std::string FIELD_TRAITS =
+    "struct Point:\n"
+    "    x: float\n"
+    "    y: float\n"
+    "trait Match:\n"
+    "    var over: bool = false\n"
+    "    var score: int = 0\n"
+    "trait Body:\n"
+    "    var position: Point\n"
+    "    var speed: float = 0.0\n"
+    "trait Player:\n"
+    "    var game_over: bool = false\n"
+    "    var lives: int = 3\n"
+    "trait Health:\n"
+    "    var hp: int = 10\n"
+    "    var armor: int = 0\n"
+    "trait Target:\n"
+    "    var other: entity_id\n"
+    "event Hit:\n"
+    "    other: entity_id\n";
+
+static InferredHandlerContract only_contract(const std::string& rules) {
+    auto result = analyze(STDLIB_EVENTS + FIELD_TRAITS + rules);
+    REQUIRE(result.handler_contracts.size() == 1);
+    return result.handler_contracts[0];
+}
+
+static SymbolId test_trait(const std::string& name) {
+    return make_symbol_id(SymbolKind::Trait, "test", name);
+}
+
+TEST_CASE("Contract fields: an alias member read records that field", "[semantic][handler-contracts]") {
+    const auto contract = only_contract(
+        "rule ReadOver:\n"
+        "    filter:\n"
+        "        Match as m\n"
+        "    on tick:\n"
+        "        let x = m.over\n");
+    CHECK(contract.read_fields.at(test_trait("Match")) == fields_of({"over"}));
+    CHECK(contract.write_fields.empty());
+}
+
+TEST_CASE("Contract fields: a nested alias member write stops at the trait field", "[semantic][handler-contracts]") {
+    const auto contract = only_contract(
+        "rule Nudge:\n"
+        "    filter:\n"
+        "        Body as b\n"
+        "    on tick:\n"
+        "        b.position.x = 1.0\n");
+    CHECK(contract.write_fields.at(test_trait("Body")) == fields_of({"position"}));
+    CHECK(contract.read_fields.at(test_trait("Body")) == fields_of({"position"}));
+}
+
+TEST_CASE("Contract fields: a bare field identifier records its field", "[semantic][handler-contracts]") {
+    const auto contract = only_contract(
+        "rule Check:\n"
+        "    filter:\n"
+        "        Player\n"
+        "    on tick:\n"
+        "        let x = game_over\n");
+    CHECK(contract.read_fields.at(test_trait("Player")) == fields_of({"game_over"}));
+}
+
+TEST_CASE("Contract fields: a bare field assignment records its field", "[semantic][handler-contracts]") {
+    const auto contract = only_contract(
+        "rule End:\n"
+        "    filter:\n"
+        "        Player\n"
+        "    on tick:\n"
+        "        game_over = true\n");
+    CHECK(contract.write_fields.at(test_trait("Player")) == fields_of({"game_over"}));
+}
+
+TEST_CASE("Contract fields: a trait-rooted assignment records the field after the trait",
+          "[semantic][handler-contracts]") {
+    const auto via_alias = only_contract(
+        "rule End:\n"
+        "    filter:\n"
+        "        Match\n"
+        "    on tick:\n"
+        "        Match.over = true\n");
+    CHECK(via_alias.write_fields.at(test_trait("Match")) == fields_of({"over"}));
+
+    const auto via_leading_trait = only_contract(
+        "rule End:\n"
+        "    filter:\n"
+        "        Match as m\n"
+        "    on tick:\n"
+        "        foo.Match.over = true\n");
+    CHECK(via_leading_trait.write_fields.at(test_trait("Match")) == fields_of({"over"}));
+}
+
+TEST_CASE("Contract fields: a trait_for_field fallback assignment covers all fields", "[semantic][handler-contracts]") {
+    const auto contract = only_contract(
+        "rule End:\n"
+        "    filter:\n"
+        "        Match as m\n"
+        "    on tick:\n"
+        "        foo.over = true\n");
+    CHECK(contract.write_fields.at(test_trait("Match")) == ALL_FIELDS);
+    CHECK(contract.read_fields.at(test_trait("Match")) == ALL_FIELDS);
+}
+
+TEST_CASE("Contract fields: a bare alias used as a value reads all fields", "[semantic][handler-contracts]") {
+    const auto as_argument = only_contract(
+        "func pick(e: entity_id) int:\n"
+        "    return 1\n"
+        "rule Pass:\n"
+        "    filter:\n"
+        "        Match as m\n"
+        "    on tick:\n"
+        "        let y = pick(m)\n");
+    CHECK(as_argument.read_fields.at(test_trait("Match")) == ALL_FIELDS);
+    CHECK(as_argument.write_fields.empty());
+
+    const auto as_local = only_contract(
+        "rule Keep:\n"
+        "    filter:\n"
+        "        Match as m\n"
+        "    on tick:\n"
+        "        let y = m\n");
+    CHECK(as_local.read_fields.at(test_trait("Match")) == ALL_FIELDS);
+}
+
+TEST_CASE("Contract fields: a trait-match arm reads all fields of its trait", "[semantic][handler-contracts]") {
+    const auto contract = only_contract(
+        "rule Strike:\n"
+        "    on Hit as h:\n"
+        "        match h.other:\n"
+        "            Health as victim =>\n"
+        "                let x = victim.hp\n");
+    CHECK(contract.read_fields.at(test_trait("Health")) == ALL_FIELDS);
+}
+
+TEST_CASE("Contract fields: set stays a command with no field access", "[semantic][handler-contracts][deferred-set]") {
+    const auto contract = only_contract(
+        "rule Heal:\n"
+        "    filter:\n"
+        "        Target as aim\n"
+        "    on tick:\n"
+        "        set Health on aim.other:\n"
+        "            hp = 5\n");
+    const auto health = test_trait("Health");
+    const InferredHandlerCommand set_health{.kind = HandlerCommandKind::Set, .target = health};
+    CHECK(std::ranges::find(contract.commands, set_health) != contract.commands.end());
+    CHECK_FALSE(contract.reads.contains(health));
+    CHECK_FALSE(contract.writes.contains(health));
+    CHECK_FALSE(contract.read_fields.contains(health));
+    CHECK_FALSE(contract.write_fields.contains(health));
+    CHECK(contract.read_fields.at(test_trait("Target")) == fields_of({"other"}));
+}
+
+static const std::string PAIR_FIELD_TRAITS =
+    "trait Collider:\n"
+    "    var radius: float = 1.0\n"
+    "    var mask: int = 0\n"
+    "trait Actor:\n"
+    "    var grounded: bool = false\n"
+    "    var height: float = 0.0\n"
+    "trait Surface:\n"
+    "    var top: float = 0.0\n";
+
+static InferredHandlerContract only_pair_contract(const std::string& rules) {
+    auto result = analyze(STDLIB_EVENTS + PAIR_FIELD_TRAITS + rules);
+    REQUIRE(result.handler_contracts.size() == 1);
+    return result.handler_contracts[0];
+}
+
+TEST_CASE("Contract fields: a pair bound read records its field and keeps the bound read",
+          "[semantic][handler-contracts][pair-relations]") {
+    const auto contract = only_pair_contract(
+        "rule Touch:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            Collider\n"
+        "        wall:\n"
+        "            Surface\n"
+        "    on tick:\n"
+        "        if body.Collider.radius > 0.0:\n"
+        "            let x = 1\n");
+    const auto collider = test_trait("Collider");
+    CHECK(contract.read_fields.at(collider) == fields_of({"radius"}));
+    const BoundTraitAccess body_collider{.binding_index = 0, .trait = collider};
+    CHECK(std::ranges::find(contract.bound_reads, body_collider) != contract.bound_reads.end());
+}
+
+TEST_CASE("Contract fields: a provably-limited pair write records its field",
+          "[semantic][handler-contracts][pair-relations][rule-limit]") {
+    const auto contract = only_pair_contract(
+        "rule Ground:\n"
+        "    pairs:\n"
+        "        actor:\n"
+        "            Actor\n"
+        "        surface:\n"
+        "            Surface\n"
+        "    limit: 1 per actor\n"
+        "    on tick:\n"
+        "        actor.Actor.grounded = true\n");
+    const auto actor = test_trait("Actor");
+    CHECK(contract.write_fields.at(actor) == fields_of({"grounded"}));
+    CHECK(contract.read_fields.at(actor) == fields_of({"grounded"}));
+}
+
+TEST_CASE("Contract fields: where and order by reads record fields", "[semantic][handler-contracts][where-clause]") {
+    const auto pair = only_pair_contract(
+        "rule Rank:\n"
+        "    pairs:\n"
+        "        a:\n"
+        "            Collider\n"
+        "        b:\n"
+        "            Collider\n"
+        "    order by:\n"
+        "        b.Collider.mask desc\n"
+        "    where:\n"
+        "        a.Collider.radius > 0.0\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    CHECK(pair.read_fields.at(test_trait("Collider")) == fields_of({"mask", "radius"}));
+
+    const auto unary = only_pair_contract(
+        "rule Rank:\n"
+        "    filter:\n"
+        "        Collider as c\n"
+        "    order by:\n"
+        "        c.mask desc\n"
+        "    where:\n"
+        "        c.radius > 0.0\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    CHECK(unary.read_fields.at(test_trait("Collider")) == fields_of({"mask", "radius"}));
+}
+
+TEST_CASE("Contract fields: extern rule declarations cover all fields", "[semantic][handler-contracts][extern-rule]") {
+    auto result        = analyze(STDLIB_EVENTS + FIELD_TRAITS +
+                                 "extern rule Scoreboard:\n"
+                                 "    filter:\n"
+                                 "        Match as m\n"
+                                 "    order by:\n"
+                                 "        m.score desc\n"
+                                 "    on tick:\n"
+                                 "        reads:\n"
+                                 "            Player\n"
+                                 "        writes:\n"
+                                 "            Health\n");
+    const auto handler = std::ranges::find_if(result.execution_graph.handlers, [](const HandlerNode& node) {
+        return node.identity.rule.local_name == "Scoreboard";
+    });
+    REQUIRE(handler != result.execution_graph.handlers.end());
+    const auto& contract = handler->contract;
+    CHECK(contract.read_fields.at(test_trait("Player")) == ALL_FIELDS);
+    CHECK(contract.write_fields.at(test_trait("Health")) == ALL_FIELDS);
+    CHECK(contract.read_fields.at(test_trait("Health")) == ALL_FIELDS);
+    CHECK(contract.read_fields.at(test_trait("Match")) == fields_of({"score"}));
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

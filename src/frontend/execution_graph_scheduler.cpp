@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <iterator>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,6 +27,49 @@ bool declaration_precedes(const HandlerNode& left, const HandlerNode& right) {
         return lhs.handler_index < rhs.handler_index;
     }
     return left.identity.canonical_id() < right.identity.canonical_id();
+}
+
+const FieldAccess ALL_FIELDS{.all = true, .fields = {}};
+
+const FieldAccess& field_access(const std::unordered_map<SymbolId, FieldAccess>& table, const SymbolId& trait) {
+    const auto found = table.find(trait);
+    return found == table.end() ? ALL_FIELDS : found->second;
+}
+
+std::optional<FieldAccess> overlapping_fields(const FieldAccess& left, const FieldAccess& right) {
+    if (left.all) {
+        return right.all || !right.fields.empty() ? std::optional(right) : std::nullopt;
+    }
+    if (right.all) {
+        return left.fields.empty() ? std::nullopt : std::optional(left);
+    }
+    FieldAccess shared;
+    std::ranges::set_intersection(left.fields, right.fields, std::inserter(shared.fields, shared.fields.end()));
+    return shared.fields.empty() ? std::nullopt : std::optional(shared);
+}
+
+// The fields of `trait` that `producer` makes and `consumer` observes, if any.
+std::optional<FieldAccess> produced_overlap(const HandlerNode& producer,
+                                            const HandlerNode& consumer,
+                                            const SymbolId& trait) {
+    const bool projected = producer.contract.projects.contains(trait);
+    if (projected && !consumer.contract.projects.contains(trait) &&
+        std::ranges::find(consumer.contract.selection, trait) != consumer.contract.selection.end()) {
+        return ALL_FIELDS;
+    }
+    if (!consumer.contract.reads.contains(trait)) {
+        return std::nullopt;
+    }
+    const FieldAccess& produced = projected ? ALL_FIELDS : field_access(producer.contract.write_fields, trait);
+    return overlapping_fields(produced, field_access(consumer.contract.read_fields, trait));
+}
+
+void merge_field_access(FieldAccess& into, const FieldAccess& from) {
+    if (into.all || from.all) {
+        into = ALL_FIELDS;
+        return;
+    }
+    into.fields.insert(from.fields.begin(), from.fields.end());
 }
 
 }  // namespace
@@ -118,35 +163,34 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
                 continue;
             }
 
-            std::vector<SymbolId> trait_provenance;
-            bool left_writes_right = false;
-            bool right_writes_left = false;
-            const auto add_trait   = [&](const SymbolId& trait) {
-                if (std::ranges::find(trait_provenance, trait) == trait_provenance.end()) {
-                    trait_provenance.push_back(trait);
+            std::vector<FieldProvenance> field_provenance;
+            const auto add_overlaps = [&](const HandlerNode& producer,
+                                          const HandlerNode& consumer,
+                                          const std::unordered_set<SymbolId>& produced) {
+                bool found_any = false;
+                for (const auto& trait : produced) {
+                    const auto overlap = produced_overlap(producer, consumer, trait);
+                    if (!overlap.has_value()) {
+                        continue;
+                    }
+                    found_any           = true;
+                    const auto existing = std::ranges::find(field_provenance, trait, &FieldProvenance::trait);
+                    if (existing == field_provenance.end()) {
+                        field_provenance.push_back(FieldProvenance{.trait = trait, .access = *overlap});
+                    } else {
+                        merge_field_access(existing->access, *overlap);
+                    }
                 }
+                return found_any;
             };
-            for (const auto& trait : produced_by_handler[left_index]) {
-                const bool projected_match_consumer =
-                    left.contract.projects.contains(trait) && !right.contract.projects.contains(trait) &&
-                    std::ranges::find(right.contract.selection, trait) != right.contract.selection.end();
-                if (right.contract.reads.contains(trait) || projected_match_consumer) {
-                    left_writes_right = true;
-                    add_trait(trait);
-                }
-            }
-            for (const auto& trait : produced_by_handler[right_index]) {
-                const bool projected_match_consumer =
-                    right.contract.projects.contains(trait) && !left.contract.projects.contains(trait) &&
-                    std::ranges::find(left.contract.selection, trait) != left.contract.selection.end();
-                if (left.contract.reads.contains(trait) || projected_match_consumer) {
-                    right_writes_left = true;
-                    add_trait(trait);
-                }
-            }
-            std::ranges::sort(trait_provenance, [](const SymbolId& a, const SymbolId& b) {
-                return make_canonical_id(a) < make_canonical_id(b);
+            const bool left_writes_right = add_overlaps(left, right, produced_by_handler[left_index]);
+            const bool right_writes_left = add_overlaps(right, left, produced_by_handler[right_index]);
+            std::ranges::sort(field_provenance, [](const FieldProvenance& a, const FieldProvenance& b) {
+                return make_canonical_id(a.trait) < make_canonical_id(b.trait);
             });
+            std::vector<SymbolId> trait_provenance;
+            trait_provenance.reserve(field_provenance.size());
+            std::ranges::transform(field_provenance, std::back_inserter(trait_provenance), &FieldProvenance::trait);
 
             std::vector<std::string> effect_provenance;
             for (const auto& effect : left.contract.effects) {
@@ -186,7 +230,8 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
                                                             .after            = after->identity,
                                                             .kind             = ScheduleEdgeKind::DataConflict,
                                                             .orientation      = orientation,
-                                                            .trait_provenance = std::move(trait_provenance)});
+                                                            .trait_provenance = std::move(trait_provenance),
+                                                            .field_provenance = std::move(field_provenance)});
             }
             if (!effect_provenance.empty()) {
                 graph.schedule_edges.push_back(ScheduleEdge{.before            = before->identity,

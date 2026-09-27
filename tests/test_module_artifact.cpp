@@ -3,8 +3,8 @@
 #include "common/error_reporter.hpp"
 #include "common/template_metadata.hpp"
 #include "common/types.hpp"
-#include "frontend/module_artifact.hpp"
 #include "frontend/lexer.hpp"
+#include "frontend/module_artifact.hpp"
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -939,7 +940,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 17);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 18);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1177,6 +1178,129 @@ TEST_CASE("ModuleArtifact: invalid magic rejected", "[artifact]") {
     std::string name;
     auto result = artifact.load(path, name);
     CHECK_FALSE(result.has_value());
+    CHECK(errors.has_errors());
+
+    fs::remove_all(build_dir, ec);
+}
+
+// ── Field-level contract access (module-artifact) ───────────────────────────
+
+static DecoratedProgram field_access_program(bool reverse_insertion) {
+    const auto tick   = test_symbol(SymbolKind::Event, "tick");
+    const auto match  = test_symbol(SymbolKind::Trait, "Match");
+    const auto health = test_symbol(SymbolKind::Trait, "Health");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Event, .symbol = tick};
+    const HandlerIdentity writer{.rule = test_symbol(SymbolKind::Rule, "EndMatch"), .trigger = trigger};
+    const HandlerIdentity reader{.rule = test_symbol(SymbolKind::Rule, "Scoreboard"), .trigger = trigger};
+
+    InferredHandlerContract writes_over;
+    writes_over.rule    = writer.rule;
+    writes_over.trigger = trigger;
+    writes_over.reads   = {match, health};
+    writes_over.writes  = {match};
+    if (reverse_insertion) {
+        writes_over.read_fields[health] = FieldAccess{.all = false, .fields = {"hp", "armor"}};
+        writes_over.read_fields[match]  = FieldAccess{.all = false, .fields = {"over"}};
+    } else {
+        writes_over.read_fields[match]  = FieldAccess{.all = false, .fields = {"over"}};
+        writes_over.read_fields[health] = FieldAccess{.all = false, .fields = {"armor", "hp"}};
+    }
+    writes_over.write_fields[match] = FieldAccess{.all = false, .fields = {"over"}};
+
+    HandlerContract reads_all;
+    reads_all.reads              = {match};
+    reads_all.read_fields[match] = FieldAccess{.all = true, .fields = {}};
+
+    DecoratedProgram program;
+    program.handler_contracts.push_back(writes_over);
+    program.execution_graph.handlers.push_back(
+        HandlerNode{.identity = writer, .contract = static_cast<const HandlerContract&>(writes_over)});
+    program.execution_graph.handlers.push_back(
+        HandlerNode{.identity = reader, .implementation = HandlerImplementationKind::External, .contract = reads_all});
+    program.execution_graph.schedule_edges.push_back(
+        ScheduleEdge{.before           = writer,
+                     .after            = reader,
+                     .kind             = ScheduleEdgeKind::DataConflict,
+                     .orientation      = ScheduleEdgeOrientation::WriterBeforeReader,
+                     .trait_provenance = {match},
+                     .field_provenance = {
+                         FieldProvenance{.trait = match, .access = FieldAccess{.all = false, .fields = {"over"}}}}});
+    return program;
+}
+
+static std::string read_file_bytes(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+TEST_CASE("ModuleArtifact: field-level contract access and edge provenance round-trip",
+          "[artifact][handler-contracts]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto program = field_access_program(false);
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    CHECK(loaded->handler_contracts[0].read_fields == program.handler_contracts[0].read_fields);
+    CHECK(loaded->handler_contracts[0].write_fields == program.handler_contracts[0].write_fields);
+    REQUIRE(loaded->execution_graph.handlers.size() == 2);
+    for (std::size_t index = 0; index < 2; ++index) {
+        const auto& expected = program.execution_graph.handlers[index].contract;
+        const auto& actual   = loaded->execution_graph.handlers[index].contract;
+        CHECK(actual.read_fields == expected.read_fields);
+        CHECK(actual.write_fields == expected.write_fields);
+    }
+    REQUIRE(loaded->execution_graph.schedule_edges.size() == 1);
+    CHECK(loaded->execution_graph.schedule_edges[0].field_provenance ==
+          program.execution_graph.schedule_edges[0].field_provenance);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[artifact][handler-contracts]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(field_access_program(false), "first", build_dir));
+    REQUIRE(artifact.save(field_access_program(true), "second", build_dir));
+    const auto first  = read_file_bytes(build_dir / "first.cmod");
+    const auto second = read_file_bytes(build_dir / "second.cmod");
+    // The module name differs; everything after it must match.
+    CHECK(first.substr(first.find("first") + 5) == second.substr(second.find("second") + 6));
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 18);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "trait-level.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 17;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
     CHECK(errors.has_errors());
 
     fs::remove_all(build_dir, ec);

@@ -322,6 +322,30 @@ void ModuleArtifact::write_symbol_vector(std::ostream& out, const std::vector<Sy
     }
 }
 
+void ModuleArtifact::write_field_access(std::ostream& out, const FieldAccess& access) {
+    write_bool(out, access.all);
+    write_u32(out, static_cast<uint32_t>(access.fields.size()));
+    for (const auto& field : access.fields) {
+        write_str(out, field);
+    }
+}
+
+void ModuleArtifact::write_field_table(std::ostream& out, const std::unordered_map<SymbolId, FieldAccess>& table) {
+    std::vector<const std::pair<const SymbolId, FieldAccess>*> ordered;
+    ordered.reserve(table.size());
+    for (const auto& entry : table) {
+        ordered.push_back(&entry);
+    }
+    std::ranges::sort(ordered, [](const auto* left, const auto* right) {
+        return make_canonical_id(left->first) < make_canonical_id(right->first);
+    });
+    write_u32(out, static_cast<uint32_t>(ordered.size()));
+    for (const auto* entry : ordered) {
+        write_symbol_id(out, entry->first);
+        write_field_access(out, entry->second);
+    }
+}
+
 void ModuleArtifact::write_string_vector(std::ostream& out, const std::vector<std::string>& values) {
     write_u32(out, static_cast<uint32_t>(values.size()));
     for (const auto& value : values) {
@@ -374,6 +398,8 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
         write_symbol_id(out, access.trait);
     }
     write_symbol_set(out, contract.writes);
+    write_field_table(out, contract.read_fields);
+    write_field_table(out, contract.write_fields);
     write_symbol_set(out, contract.projects);
     write_symbol_set(out, contract.emits);
     write_u32(out, static_cast<uint32_t>(contract.commands.size()));
@@ -466,6 +492,11 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
         write_u8(out, static_cast<uint8_t>(edge.kind));
         write_u8(out, static_cast<uint8_t>(edge.orientation));
         write_symbol_vector(out, edge.trait_provenance);
+        write_u32(out, static_cast<uint32_t>(edge.field_provenance.size()));
+        for (const auto& provenance : edge.field_provenance) {
+            write_symbol_id(out, provenance.trait);
+            write_field_access(out, provenance.access);
+        }
         write_u32(out, static_cast<uint32_t>(edge.effect_provenance.size()));
         for (const auto& effect : edge.effect_provenance) {
             write_str(out, effect);
@@ -817,6 +848,26 @@ std::vector<SymbolId> ModuleArtifact::read_symbol_vector(std::istream& in) {
     return values;
 }
 
+FieldAccess ModuleArtifact::read_field_access(std::istream& in) {
+    FieldAccess access;
+    access.all       = read_bool(in);
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        access.fields.insert(read_str(in));
+    }
+    return access;
+}
+
+std::unordered_map<SymbolId, FieldAccess> ModuleArtifact::read_field_table(std::istream& in) {
+    std::unordered_map<SymbolId, FieldAccess> table;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        auto trait   = read_symbol_id(in);
+        table[trait] = read_field_access(in);
+    }
+    return table;
+}
+
 std::vector<std::string> ModuleArtifact::read_string_vector(std::istream& in) {
     std::vector<std::string> values;
     const auto count = read_u32(in);
@@ -890,6 +941,8 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     }
 
     contract.writes          = read_symbol_set(in);
+    contract.read_fields     = read_field_table(in);
+    contract.write_fields    = read_field_table(in);
     contract.projects        = read_symbol_set(in);
     contract.emits           = read_symbol_set(in);
     const auto command_count = read_u32(in);
@@ -1008,6 +1061,13 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
         edge.kind               = static_cast<ScheduleEdgeKind>(read_u8(in));
         edge.orientation        = static_cast<ScheduleEdgeOrientation>(read_u8(in));
         edge.trait_provenance   = read_symbol_vector(in);
+        const auto field_count  = read_u32(in);
+        edge.field_provenance.reserve(field_count);
+        for (uint32_t j = 0; j < field_count && in.good(); ++j) {
+            auto trait = read_symbol_id(in);
+            edge.field_provenance.push_back(
+                FieldProvenance{.trait = std::move(trait), .access = read_field_access(in)});
+        }
         const auto effect_count = read_u32(in);
         edge.effect_provenance.reserve(effect_count);
         for (uint32_t j = 0; j < effect_count; ++j) {

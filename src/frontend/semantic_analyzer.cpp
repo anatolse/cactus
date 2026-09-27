@@ -4759,10 +4759,11 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
         contract.domain_kind = contract.selection.empty() && contract.exclusion.empty()
                                    ? HandlerDomainKind::Selectionless
                                    : HandlerDomainKind::Unary;
-        contract.reads.insert(handler.resolved_reads.begin(), handler.resolved_reads.end());
+        for (const auto& read : handler.resolved_reads) {
+            record_read(contract, read, std::nullopt, nullptr);
+        }
         for (const auto& write : handler.resolved_writes) {
-            contract.reads.insert(write);
-            contract.writes.insert(write);
+            record_write(contract, write, std::nullopt, nullptr);
         }
         contract.projects.insert(handler.resolved_projects.begin(), handler.resolved_projects.end());
         // An extern rule declares its body reads explicitly, so the only
@@ -4782,7 +4783,11 @@ void SemanticAnalyzer::collect_extern_rule_dependency(const ExternRuleNode& rule
             if (found == filter_aliases.end()) {
                 return false;
             }
-            contract.reads.insert(found->second);
+            const auto* member = std::get_if<MemberExpr>(&expr.expr);
+            record_read(contract,
+                        found->second,
+                        member == nullptr ? std::nullopt : std::optional<std::string>(member->member),
+                        find_resolved_trait(found->second));
             return true;
         };
         for (const auto& sort_key : rule.order_by) {
@@ -4828,6 +4833,47 @@ void SemanticAnalyzer::build_dependency_graph(ProgramNode& program) {
 }
 
 // ── Shared AST walk for handler-contract inference (regular + pair rules) ──
+
+namespace {
+
+void add_field_access(FieldAccess& access, const std::optional<std::string>& field, const ResolvedTrait* declaration) {
+    if (access.all) {
+        return;
+    }
+    const bool declared = field.has_value() && declaration != nullptr &&
+                          std::ranges::any_of(declaration->fields, [&field](const ResolvedField& candidate) {
+                              return candidate.name == *field;
+                          });
+    if (!declared) {
+        access.all = true;
+        access.fields.clear();
+        return;
+    }
+    access.fields.insert(*field);
+}
+
+std::optional<std::string> segment_at(const std::vector<std::string>& path, std::size_t index) {
+    return index < path.size() ? std::optional<std::string>(path[index]) : std::nullopt;
+}
+
+}  // namespace
+
+void record_read(HandlerContract& contract,
+                 const SymbolId& trait,
+                 const std::optional<std::string>& field,
+                 const ResolvedTrait* declaration) {
+    contract.reads.insert(trait);
+    add_field_access(contract.read_fields[trait], field, declaration);
+}
+
+void record_write(HandlerContract& contract,
+                  const SymbolId& trait,
+                  const std::optional<std::string>& field,
+                  const ResolvedTrait* declaration) {
+    record_read(contract, trait, field, declaration);
+    contract.writes.insert(trait);
+    add_field_access(contract.write_fields[trait], field, declaration);
+}
 
 void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
                                             HandlerCommandKind kind,
@@ -5051,7 +5097,7 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                         visit_expr(*node.subject, locals);
                         for (const auto& arm : node.arms) {
                             if (arm.resolved_trait_id.has_value()) {
-                                contract.reads.insert(*arm.resolved_trait_id);
+                                record_read(contract, *arm.resolved_trait_id, std::nullopt, nullptr);
                             }
                             auto arm_locals = locals;
                             if (arm.alias.has_value()) {
@@ -5123,25 +5169,29 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
         }
         return match;
     };
-    auto add_write = [&contract](const SymbolId& symbol) {
-        // Contract writes are read/write capabilities, not write-only access.
-        contract.reads.insert(symbol);
-        contract.writes.insert(symbol);
+    auto add_read = [this, &contract](const SymbolId& symbol, const std::optional<std::string>& field) {
+        record_read(contract, symbol, field, find_resolved_trait(symbol));
+    };
+    auto add_write = [this, &contract](const SymbolId& symbol, const std::optional<std::string>& field) {
+        record_write(contract, symbol, field, find_resolved_trait(symbol));
     };
 
     auto resolve_read = [&](const ExprNode& expr, const LocalNames& locals) -> bool {
         if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
-            if (!locals.contains(ident->name)) {
-                if (auto trait = trait_for_field(ident->name); trait.has_value()) {
-                    contract.reads.insert(*trait);
-                }
+            if (locals.contains(ident->name)) {
+                return true;
+            }
+            if (auto alias = aliases.find(ident->name); alias != aliases.end()) {
+                add_read(alias->second, std::nullopt);
+            } else if (auto trait = trait_for_field(ident->name); trait.has_value()) {
+                add_read(*trait, ident->name);
             }
             return true;
         }
         if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
             if (const auto* owner = std::get_if<IdentExpr>(&member->object->expr);
                 owner != nullptr && aliases.contains(owner->name)) {
-                contract.reads.insert(aliases.at(owner->name));
+                add_read(aliases.at(owner->name), member->member);
                 return true;
             }
         }
@@ -5152,7 +5202,7 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
             return;
         }
         if (auto alias = aliases.find(node.name); alias != aliases.end()) {
-            add_write(alias->second);
+            add_write(alias->second, segment_at(node.path, 0));
         } else if (!node.path.empty()) {
             // Dotted assignment whose base identifier isn't itself a bound
             // filter alias (e.g. a binding-relative trait path, per
@@ -5169,14 +5219,16 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
             // treating the trailing segment as a field name on one of the
             // rule's aliased traits.
             if (auto trait = try_resolve_trait_ref_to_symbol(node.path.front()); trait.has_value()) {
-                add_write(*trait);
+                add_write(*trait, segment_at(node.path, 1));
             } else if (auto field_trait = trait_for_field(node.path.back()); field_trait.has_value()) {
-                add_write(*field_trait);
+                // The trailing segment only guesses the trait, so the field is unproven.
+                add_write(*field_trait, std::nullopt);
             }
         } else if (auto trait = trait_for_field(node.name); trait.has_value()) {
-            add_write(*trait);
+            add_write(*trait, node.name);
         }
     };
+    auto add_projection = [&add_write](const SymbolId& symbol) { add_write(symbol, std::nullopt); };
 
     // An order by: key is an ordinary expression, so its reads resolve through
     // the same walk and the same resolve_read strategy the handler body uses —
@@ -5190,13 +5242,14 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     if (handler.alias.has_value()) {
         handler_locals.insert(*handler.alias);
     }
-    walk_handler_body(handler.body, std::move(handler_locals), contract, resolve_read, handle_var_assign, add_write);
+    walk_handler_body(
+        handler.body, std::move(handler_locals), contract, resolve_read, handle_var_assign, add_projection);
     return contract;
 }
 
 void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
                                                  const PairScope& pair_scope,
-                                                 InferredHandlerContract& contract) {
+                                                 InferredHandlerContract& contract) const {
     if (node.path.empty()) {
         return;
     }
@@ -5212,8 +5265,10 @@ void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
     if (std::ranges::find(contract.bound_reads, access) == contract.bound_reads.end()) {
         contract.bound_reads.push_back(access);
     }
-    contract.reads.insert(resolved->trait_id);
-    contract.writes.insert(resolved->trait_id);
+    record_write(contract,
+                 resolved->trait_id,
+                 segment_at(node.path, resolved->consumed_segments),
+                 find_resolved_trait(resolved->trait_id));
 }
 
 InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const RuleNode& rule,
@@ -5255,7 +5310,10 @@ InferredHandlerContract SemanticAnalyzer::infer_pair_handler_contract(const Rule
             if (std::ranges::find(contract.bound_reads, access) == contract.bound_reads.end()) {
                 contract.bound_reads.push_back(access);
             }
-            contract.reads.insert(resolved->trait_id);
+            record_read(contract,
+                        resolved->trait_id,
+                        segment_at(segments, resolved->consumed_segments),
+                        find_resolved_trait(resolved->trait_id));
         }
         return true;
     };

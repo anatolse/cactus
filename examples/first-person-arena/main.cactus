@@ -114,17 +114,19 @@ pub trait Stair
 pub trait Solid
 pub trait Walkable
 pub trait CameraRig
-pub trait Crosshair
-pub trait GameOverLabel
 pub trait Threat
 pub trait RobotEnemy
 pub trait KnightEnemy
 pub trait EnemyVisual
 
 pub trait Player:
-    var game_over: bool = false
-    var game_over_count: int = 0
     var cursor_captured: bool = true
+
+# Game-wide state, held by the named `Game` entity. Rules that stop during game
+# over gate on it with `when:`.
+pub trait Match:
+    var over: bool = false
+    var over_count: int = 0
 
 pub trait KinematicActor:
     var radius: float = 0.35
@@ -545,7 +547,6 @@ entity CrosshairHud:
         font_size = 32
         color = #FFFFFFFF
         visible = true
-    Crosshair
 
 entity GameOverHud:
     text.ScreenLabel:
@@ -554,7 +555,9 @@ entity GameOverHud:
         font_size = 48
         color = #FFFFFFFF
         visible = false
-    GameOverLabel
+
+entity Game:
+    Match
 
 entity Sun:
     meshes.DirectionalLight:
@@ -579,9 +582,10 @@ rule ReadPlayerLook:
         camera.FirstPersonCamera as first_person
         tv.WorldTransform as transform
 
+    when:
+        not Game.Match.over
+
     on input:
-        if game_over:
-            return
         let delta = inp.mouse_delta()
         first_person.yaw = first_person.yaw - delta.x * first_person.sensitivity
         first_person.pitch = math.clamp(first_person.pitch - delta.y * first_person.sensitivity, -1.45, 1.45)
@@ -591,9 +595,10 @@ rule CursorCaptureToggle:
     filter:
         Player
 
+    when:
+        not Game.Match.over
+
     on input:
-        if game_over:
-            return
         if cursor_captured and input.pressed(ReleaseCursor):
             cursor_captured = false
             inp.set_cursor_captured(false)
@@ -608,9 +613,10 @@ rule MovePlayer:
         Player
         tv.WorldTransform as transform
 
+    when:
+        not Game.Match.over
+
     on fixed_tick:
-        if game_over:
-            return
         var move = vec3(0.0, 0.0, 0.0)
         let forward = quat.forward(transform.rotation)
         let right = quat.right(transform.rotation)
@@ -636,9 +642,10 @@ rule ApplyJump:
         Player
         KinematicActor as actor
 
+    when:
+        not Game.Match.over
+
     on input:
-        if game_over:
-            return
         if actor.grounded and input.pressed(Jump):
             actor.vertical_velocity = JUMP_VELOCITY
             actor.grounded = false
@@ -810,14 +817,10 @@ rule SpawnRobots:
         RobotSpawnPoint as spawn_point
         tv.WorldTransform as transform
 
+    when:
+        not Game.Match.over
+
     on fixed_tick:
-        let player_entity = query.first[Player]()
-        var active = false
-        match player_entity:
-            Player as player =>
-                active = not player.game_over
-        if not active:
-            return
         spawn_point.countdown -= fixed_tick.dt
         if spawn_point.countdown > 0.0:
             return
@@ -847,14 +850,10 @@ rule SpawnKnights:
         KnightSpawnPoint as spawn_point
         tv.WorldTransform as transform
 
+    when:
+        not Game.Match.over
+
     on fixed_tick:
-        let player_entity = query.first[Player]()
-        var active = false
-        match player_entity:
-            Player as player =>
-                active = not player.game_over
-        if not active:
-            return
         spawn_point.countdown -= fixed_tick.dt
         if spawn_point.countdown > 0.0:
             return
@@ -891,16 +890,11 @@ rule SeekPlayer:
         Threat
         KinematicActor as actor
         tv.WorldTransform as transform
+    when:
+        not Game.Match.over
 
     on fixed_tick:
         if enemy.dying:
-            return
-        let player_entity = query.first[Player]()
-        var active = false
-        match player_entity:
-            Player as player =>
-                active = not player.game_over
-        if not active:
             return
 
         # actor.grounded reflects the end of the *previous* tick's grounding
@@ -920,7 +914,7 @@ rule SeekPlayer:
                     clip = run_clip
                     time = 0.0
 
-        let target_position = tv.world_position(player_entity)
+        let target_position = tv.world_position(PlayerBody)
         let delta = vec3(target_position.x - transform.position.x, 0.0, target_position.z - transform.position.z)
         let distance = v3.length(delta)
         if distance <= 0.0:
@@ -1046,15 +1040,10 @@ rule FireBullet:
         tv.WorldTransform as transform
     after:
         CursorCaptureToggle
+    when:
+        not Game.Match.over
 
     on input:
-        let player_entity = query.first[Player]()
-        var active = false
-        match player_entity:
-            Player as player =>
-                active = not player.game_over
-        if not active:
-            return
         if not input.pressed(Fire) or shooter.cooldown > 0.0:
             return
         let direction = quat.forward(transform.rotation)
@@ -1199,26 +1188,27 @@ rule DetectPlayerContact:
             Player
             KinematicActor
             tv.WorldTransform
+    when:
+        not Game.Match.over
 
     on fixed_tick:
-        if not enemy.Enemy.dying and not player.Player.game_over:
-            if collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius):
-                emit GameOver to player
+        if not enemy.Enemy.dying and collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius):
+            emit GameOver to player
 
 rule EndGame:
     filter:
         Player
+    when:
+        not Game.Match.over
 
     on GameOver:
-        if game_over:
-            return
-        game_over = true
-        game_over_count += 1
+        Game.Match.over = true
+        Game.Match.over_count += 1
         cursor_captured = false
         inp.set_cursor_captured(false)
-        set text.ScreenLabel on query.first[Crosshair]():
+        set text.ScreenLabel on CrosshairHud:
             visible = false
-        set text.ScreenLabel on query.first[GameOverLabel]():
+        set text.ScreenLabel on GameOverHud:
             visible = true
 
 rule RestartOnGameOver:
@@ -1226,13 +1216,13 @@ rule RestartOnGameOver:
         Player
         tv.WorldTransform as transform
         camera.FirstPersonCamera as first_person
+    when:
+        Game.Match.over
 
     on input:
-        if not game_over:
-            return
         if not input.pressed(RestartGame):
             return
-        game_over = false
+        Game.Match.over = false
         transform.position = vec3(0.0, PLAYER_HALF_HEIGHT, 10.0)
         transform.rotation = quat.identity()
         first_person.yaw = 0.0
@@ -1249,9 +1239,9 @@ rule RestartOnGameOver:
         for spawn_point in query.all[KnightSpawnPoint]():
             set KnightSpawnPoint on spawn_point:
                 countdown = 0.0
-        set text.ScreenLabel on query.first[Crosshair]():
+        set text.ScreenLabel on CrosshairHud:
             visible = true
-        set text.ScreenLabel on query.first[GameOverLabel]():
+        set text.ScreenLabel on GameOverHud:
             visible = false
 
 rule RestartClearsEnemy:

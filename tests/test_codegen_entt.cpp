@@ -3261,10 +3261,10 @@ TEST_CASE("Codegen EnTT: mixed entity creation order preserved", "[codegen-entt]
         program);
 
     auto code = CppEnttCodegen::generate(decorated);
-    // A, B, C should appear in that order in the init function
-    const auto pos_a = code.find("create_a(registry)");
-    const auto pos_b = code.find("create_b(registry)");
-    const auto pos_c = code.find("create_c(registry)");
+    // A, B, C should be filled in that order in the init function
+    const auto pos_a = code.find("create_a_at(registry, generated_named_slots().test__A)");
+    const auto pos_b = code.find("create_b_at(registry, generated_named_slots().test__B)");
+    const auto pos_c = code.find("create_c_at(registry, generated_named_slots().test__C)");
     REQUIRE(pos_a != std::string::npos);
     REQUIRE(pos_b != std::string::npos);
     REQUIRE(pos_c != std::string::npos);
@@ -4701,8 +4701,10 @@ TEST_CASE("Codegen EnTT: hierarchical load-time entity creates descendants in se
                                     program);
     const auto code = CppEnttCodegen::generate(decorated);
 
-    // generated_init_project creates the whole tree through the entity wrapper.
-    CHECK(code.find("create_rig1(registry);") != std::string::npos);
+    // generated_init_project fills the pre-allocated root through the entity wrapper, which expands the tree.
+    CHECK(code.find("create_rig1_at(registry, generated_named_slots().test__Rig1);") != std::string::npos);
+    const auto at_wrapper = generated_function(code, "entt::entity create_rig1_at(entt::registry& registry");
+    CHECK(at_wrapper.find("create_rig1__node__socket(registry)") != std::string::npos);
     const auto wrapper = generated_function(code, "entt::entity create_rig1(entt::registry& registry)");
     CHECK(wrapper.find("create_rig1__node__socket(registry)") != std::string::npos);
     CHECK(wrapper.find("registry.emplace_or_replace<Parent>(child_0, Parent{.parent = entity});") != std::string::npos);
@@ -7315,6 +7317,154 @@ TEST_CASE("Codegen EnTT: a global limit also gates recipient-targeted delivery",
     REQUIRE(broadcast_start != std::string::npos);
     const auto recipient_block = code.substr(recipient_start, broadcast_start - recipient_start);
     CHECK(recipient_block.find(" > 0)") != std::string::npos);
+}
+
+// ── Named entity access (dsl-named-entity-access, dsl-when-clause) ─────────
+
+static const std::string NAMED_CODEGEN_SOURCE =
+    "event tick:\n"
+    "    dt: float\n"
+    "event Hit\n"
+    "trait Match:\n"
+    "    var over: bool = false\n"
+    "    var score: int = 0\n"
+    "trait Stats:\n"
+    "    var ticks: int = 0\n"
+    "trait Enemy:\n"
+    "    var steps: int = 0\n"
+    "trait Rival:\n"
+    "    var rival: entity_id\n"
+    "entity Game:\n"
+    "    Match\n"
+    "    Stats\n"
+    "entity Nemesis:\n"
+    "    Rival:\n"
+    "        rival = Boss\n"
+    "entity Boss:\n"
+    "    Rival:\n"
+    "        rival = Nemesis\n"
+    "rule Move:\n"
+    "    filter:\n"
+    "        Enemy as enemy\n"
+    "    when:\n"
+    "        not Game.Match.over\n"
+    "    on tick:\n"
+    "        enemy.steps += 1\n"
+    "        Game.Stats.ticks += 1\n"
+    "rule Score:\n"
+    "    on Hit:\n"
+    "        Game.Match.score += 1\n"
+    "        emit Hit to Boss\n";
+
+static std::string named_codegen(DecoratedProgram& decorated, ProgramNode& program) {
+    decorated     = full_pipeline(NAMED_CODEGEN_SOURCE, program);
+    decorated.ast = &program;
+    return CppEnttCodegen::generate(decorated);
+}
+
+static std::string named_rule_code(const std::string& rule_name) {
+    ProgramNode program;
+    auto decorated = full_pipeline(NAMED_CODEGEN_SOURCE, program);
+    for (auto& decl : program.declarations) {
+        auto* sys = std::get_if<RuleNode>(&decl);
+        if (sys != nullptr && sys->name == rule_name) {
+            return EnttSystemEmitter::emit_system(*sys, decorated);
+        }
+    }
+    FAIL("rule '" + rule_name + "' not found");
+    return {};
+}
+
+TEST_CASE("Codegen EnTT: each declared entity gets a named slot", "[codegen-entt][named-entity]") {
+    ProgramNode program;
+    DecoratedProgram decorated;
+    const auto code = named_codegen(decorated, program);
+    for (const auto* name : {"Game", "Nemesis", "Boss"}) {
+        CHECK(count_occurrences(code,
+                                std::string("    entt::entity test__") + name + " = entt::null;") ==
+              1);
+    }
+}
+
+TEST_CASE("Codegen EnTT: module entities are allocated before any initializer runs", "[codegen-entt][named-entity]") {
+    ProgramNode program;
+    DecoratedProgram decorated;
+    const auto code = named_codegen(decorated, program);
+    const auto init = generated_function(code, "void generated_init_project(entt::registry& registry)");
+    REQUIRE_FALSE(init.empty());
+    const auto last_allocation = init.find("generated_named_slots().test__Boss = registry.create();");
+    const auto first_create    = init.find("(registry, generated_named_slots().test__Game);");
+    REQUIRE(last_allocation != std::string::npos);
+    REQUIRE(first_create != std::string::npos);
+    CHECK(last_allocation < first_create);
+    CHECK(init.find("generated_named_slots().test__Nemesis = registry.create();") < last_allocation);
+    CHECK(init.find("(registry, generated_named_slots().test__Nemesis);") <
+          init.find("(registry, generated_named_slots().test__Boss);"));
+}
+
+TEST_CASE("Codegen EnTT: an entity name as an override value reads its slot", "[codegen-entt][named-entity]") {
+    ProgramNode program;
+    DecoratedProgram decorated;
+    const auto code = named_codegen(decorated, program);
+    CHECK(code.find("component.rival = generated_named_slots().test__Boss;") != std::string::npos);
+    CHECK(code.find("component.rival = generated_named_slots().test__Nemesis;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a named handler guards the pass, checks when:, and hoists trait references",
+          "[codegen-entt][named-entity][when-clause]") {
+    const auto code = named_rule_code("Move");
+    INFO(code);
+    const auto guard =
+        code.find("if (!cactus::runtime::entt_backend::named_alive<Stats, Match>(registry, generated_named_slots().test__Game)) {");
+    const auto match_ref = code.find("auto& named_ref__test__Game__Match = registry.get<Match>(generated_named_slots().test__Game);");
+    const auto stats_ref = code.find("auto& named_ref__test__Game__Stats = registry.get<Stats>(generated_named_slots().test__Game);");
+    const auto when      = code.find("if (!(!named_ref__test__Game__Match.over)) {");
+    const auto loop      = code.find("steps");
+    REQUIRE(guard != std::string::npos);
+    REQUIRE(match_ref != std::string::npos);
+    REQUIRE(stats_ref != std::string::npos);
+    REQUIRE(when != std::string::npos);
+    CHECK(guard < match_ref);
+    CHECK(match_ref < when);
+    CHECK(when < loop);
+    CHECK(code.find("named_ref__test__Game__Stats.ticks += 1;") != std::string::npos);
+    CHECK(count_occurrences(code, "registry.get<Match>(generated_named_slots().test__Game)") == 1);
+}
+
+TEST_CASE("Codegen EnTT: a named read in a limited rule's where: is guarded and hoisted",
+          "[codegen-entt][named-entity][rule-limit]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(NAMED_CODEGEN_SOURCE +
+                                       "rule Pick:\n"
+                                       "    filter:\n"
+                                       "        Enemy as enemy\n"
+                                       "    where:\n"
+                                       "        enemy.steps < Game.Stats.ticks\n"
+                                       "    limit: 3\n"
+                                       "    on tick:\n"
+                                       "        enemy.steps += 1\n",
+                                   program);
+    std::string code;
+    for (auto& decl : program.declarations) {
+        if (auto* sys = std::get_if<RuleNode>(&decl); sys != nullptr && sys->name == "Pick") {
+            code = EnttSystemEmitter::emit_system(*sys, decorated);
+        }
+    }
+    INFO(code);
+    CHECK(code.find("named_alive<Stats>(registry, generated_named_slots().test__Game)") != std::string::npos);
+    const auto declared = code.find("auto& named_ref__test__Game__Stats = registry.get<Stats>(");
+    const auto used     = code.find("< named_ref__test__Game__Stats.ticks");
+    REQUIRE(declared != std::string::npos);
+    REQUIRE(used != std::string::npos);
+    CHECK(declared < used);
+}
+
+TEST_CASE("Codegen EnTT: an event handler writes by name and targets a name", "[codegen-entt][named-entity]") {
+    const auto code = named_rule_code("Score");
+    CHECK(code.find("named_alive<Match>(registry, generated_named_slots().test__Game)") != std::string::npos);
+    CHECK(code.find("named_ref__test__Game__Match.score += 1;") != std::string::npos);
+    CHECK(code.find("generated_named_slots().test__Boss") != std::string::npos);
+    CHECK(code.find("named_alive<Rival>") == std::string::npos);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

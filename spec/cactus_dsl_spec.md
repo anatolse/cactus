@@ -286,6 +286,8 @@ Template-backed entities (`entity Name from Template:`) are the declarative load
 
 Deferred grouped syntax (`entities from Template:` with multiple named instances in one block) is not part of this version of the language.
 
+**An entity's name is a value.** In handler bodies, rule clauses, and archetype-body override values, the name of an `entity` declaration is an `entity_id` expression bound to that entity's current instance (§4.3): `set text.ScreenLabel on CrosshairHud:`, `emit Hit to Boss`, `target == Boss`, or an override such as `Rival: rival = Boss`. A `pub entity` is reachable from importing modules through the module qualifier (`hud.CrosshairHud`). Every entity of a module has its handle allocated before any of the module's initializers run, so override values may name entities declared later in the module, or each other. Children declared under `children:` have no name of their own. A `template` name is not a value; `spawn` it instead. Named field access through an entity's name is described in §4.2.
+
 Templates may declare typed immutable parameters. Applications bind named arguments only; parameter names are not arbitrary trait fields. Parameter and argument lists may span lines. Explicit arguments evaluate exactly once in source order, followed by omitted defaults in parameter declaration order. Defaults are pure expressions using constants and earlier parameters; later or cyclic references are errors.
 
 Bound values are reused by the root, composed templates, and descendants. Trait and child structure remains static. Instance override bodies win field-by-field after binding, even when an override makes an argument's value unused; every supplied argument is still evaluated once.
@@ -389,6 +391,7 @@ rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   [ after_clause ]
                   [ where_clause ]
                   [ limit_clause ]
+                  [ when_clause ]
                   { event_handler }
                   DEDENT ;
 
@@ -578,6 +581,35 @@ rule GroundActor:
 **Selection is deterministic.** With `order by:`, sort keys are evaluated against the rule's snapshot and equal keys break ties by stable creation order. Without `order by:`, `limit:` takes the domain's existing stable iteration order — for a pair domain, the left-binding-major snapshot order of §3.8.1. Each partition of a `per` limit resolves independently of every other. A conforming backend's physical strategy must not change which rows this selects.
 
 **A provably-one `per` limit makes its binding writable.** When a `limit: <expr> per <binding>`'s count expression is the literal `1`, or a name whose `const:` initializer is literally `1`, the compiler proves that at most one tuple per `<binding>` value can run — and `<binding>` becomes an ordinary mutable assignment target inside that rule's handlers, carved out of §3.8.1's pair read-only rule. The proof is deliberately syntactic: any other expression, including one that always evaluates to `1` at runtime (`2 - 1`, a non-constant field read), is not provable. The rule's other binding stays read-only, a global `limit:` grants no writability on either binding, and trait-matching directly on a pair binding stays rejected regardless of any `limit:` — only ordinary dotted-path assignment is admitted. Such a write is inferred into the handler's contract exactly like a write through a unary `filter:` alias, so scheduling sees the same read/write conflict information.
+
+#### 3.8.4 When Clause
+
+`when:` switches a whole rule on or off from game-wide state. It holds one or more pure `bool` predicates that form a conjunction; when any predicate is false, a handler pass does nothing — no entity or tuple is visited, the body does not run, and no writes or commands are produced. `when` is recognized contextually at the rule-clause position, after `where:` and `limit:`; it is not a reserved keyword elsewhere. It applies to every handler of the rule, including event handlers and rules with no `filter:` or `pairs:`, and it is rejected on `extern rule` declarations.
+
+```ebnf
+when_clause     = "when" ":" NEWLINE INDENT
+                  expression NEWLINE
+                  { expression NEWLINE }
+                  DEDENT ;
+```
+
+```cactus
+rule SeekPlayer:
+    filter:
+        Enemy as enemy
+        tv.WorldTransform as transform
+    when:
+        not Game.Match.over
+
+    on fixed_tick:
+        ...
+```
+
+**`when:` reads only game-wide values.** A predicate may use literals, constants, named field reads (`Game.Match.over`, §4.2), entity names as values (§4.3), operators, and calls to functions proven pure. It must not read a filter, pair, or `self` binding, an event or phase payload, or a handler local — a condition on the current entity or tuple belongs in `where:`. It has the same purity rules as `where:` (§3.8.2).
+
+**`when:` evaluates once per pass.** A pass is one phase activation of a handler, or one delivered event occurrence. The runtime evaluates `when:` after the implicit named-entity requirement holds (§4.2) and before the first entity or tuple. It sees immediate writes made earlier in the same activation by handlers scheduled before it, and it is not re-evaluated during the pass: a write that closes the gate mid-pass affects only later passes.
+
+**Its reads count as named field access.** Every named field read in `when:` adds the same requirement and the same contract read as a read in the handler body, for every handler of the rule.
 
 ### 3.9 Event Handlers
 
@@ -987,9 +1019,27 @@ Bare (unqualified) trait-field access is accepted when it resolves to exactly on
 
 Pair handlers (§3.8.1) use a third, binding-qualified form instead of a filter alias: `binding.Trait.field`, `binding.module_alias.Trait.field`, or `binding.alias.field` for a binding-local `as` alias. Pair-bound access is read-only, except through a binding a provably-one `limit: ... per` made writable (§3.8.3).
 
+**Named field access** reaches a declared entity's traits by name, with the same `Name.Trait.field` shape: `Game.Match.over`, `Game.Transform.position.x`, or `Hud.text.ScreenLabel.visible` for an imported trait. The trait segment is required, and the entity's archetype must declare the trait. A read returns the current value; `=` and compound assignment write immediately, like a write through `self`. Named field access is allowed in rule handlers and rule clauses, and rejected in `func` bodies, `const` blocks, and archetype bodies. This is how game-wide state works: keep it on an ordinary named entity.
+
+```cactus
+entity Game:
+    Match
+
+rule CollectCoins:
+    filter:
+        Coin as coin
+
+    on tick:
+        Game.Match.score += coin.value
+```
+
+**Named access is an implicit requirement.** For every `(Name, Trait)` a handler accesses by name — in its body or in any clause of its rule — the handler runs a pass only while `Name` is alive and carries `Trait`. The runtime checks this once per pass, before `when:` and before any entity or tuple; when it fails the pass does nothing, and no error is raised. The requirement covers the **whole handler**, even when the name appears only in one branch: move such a branch into its own rule if the rest of the handler must keep running. Because `destroy` and `remove` apply at the activation commit, a requirement that holds at the start of a pass holds for the whole pass. A handler that writes a named entity runs as one sequential pass over its domain; a backend never splits it per entity.
+
 ### 4.3 `entity_id` Semantics
 
 `entity_id` is an opaque handle. There is no null sentinel in the language surface. Operations using `entity_id` are total: stale handles produce safe no-ops or no-match behavior rather than forcing author-side null checks.
+
+An entity's name (§3.7) is an `entity_id` bound to its current instance. It binds when its module's entities are instantiated (program start for the entry module), and after a restore it binds to the restored record whose origin is that declaration. Once the instance is destroyed — including by scene cleanup — or when a restored document has no record for it, the name is stale: `set` and `emit` targeting it do nothing, and handlers that access its fields by name do not run. Using a name only as a value adds no requirement.
 
 ### 4.4 Runtime Trait Mutation
 

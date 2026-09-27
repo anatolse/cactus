@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -667,6 +668,41 @@ struct Construction {
 struct ArchetypeOrigin {
     std::uint32_t node{};
 };
+
+// ── Named entities ───────────────────────────────────────────────────────
+
+// A handler that reaches `slot`'s traits by name runs a pass only while this holds.
+template <typename... Traits>
+[[nodiscard]] bool named_alive(const entt::registry& registry, entt::entity slot) {
+    return registry.valid(slot) && registry.all_of<Traits...>(slot);
+}
+
+// Creation functions take a hint: a spawn reserves a free identifier, while
+// module load pre-allocates every named handle so initializers can refer to
+// each other, then fills each one in.
+[[nodiscard]] inline entt::entity adopt_or_create(entt::registry& registry, entt::entity hint) {
+    return registry.valid(hint) ? hint : registry.create(hint);
+}
+
+struct NamedSlotOrigin {
+    std::uint32_t node{};
+    entt::entity* slot{};
+};
+
+// Points each slot at the first live instance of its declaration node, or
+// entt::null, in one pass over the origins.
+inline void rebind_named_slots(const entt::registry& registry, std::initializer_list<NamedSlotOrigin> slots) {
+    for (const auto& entry : slots) {
+        *entry.slot = entt::null;
+    }
+    for (const auto [entity, origin] : registry.view<const ArchetypeOrigin>().each()) {
+        const auto match = std::ranges::find_if(
+            slots, [&](const NamedSlotOrigin& entry) { return entry.node == origin.node && *entry.slot == entt::null; });
+        if (match != slots.end()) {
+            *match->slot = entity;
+        }
+    }
+}
 
 // Takes the value directly when the caller already has it (e.g. the value it
 // just emplaced), avoiding a redundant sparse-set lookup on every persisted

@@ -253,6 +253,17 @@ struct FieldAccess {
     friend bool operator==(const FieldAccess&, const FieldAccess&) = default;
 };
 
+// A handler pass runs only while `entity` is alive and carries `trait`.
+struct NamedRequirement {
+    SymbolId entity;
+    SymbolId trait;
+
+    friend bool operator==(const NamedRequirement&, const NamedRequirement&) = default;
+};
+
+// entity -> trait -> accessed fields.
+using NamedFieldTable = std::unordered_map<SymbolId, std::unordered_map<SymbolId, FieldAccess>>;
+
 struct HandlerContract {
     HandlerDomainKind domain_kind = HandlerDomainKind::Selectionless;
     std::vector<SymbolId> selection;             // Unary domain: positive traits
@@ -273,9 +284,18 @@ struct HandlerContract {
     std::unordered_map<SymbolId, FieldAccess> read_fields;
     std::unordered_map<SymbolId, FieldAccess> write_fields;
     std::unordered_set<SymbolId> projects;  // projected (transient) trait outputs
+    // Named-entity access (`Game.Match.over`); every entry is also in reads/writes above.
+    NamedFieldTable named_reads;
+    NamedFieldTable named_writes;
+    std::vector<NamedRequirement> named_requirements;  // first-use order, no duplicates
     std::unordered_set<SymbolId> emits;
     std::vector<InferredHandlerCommand> commands;
     std::unordered_set<std::string> effects;
+
+    // A handler that writes a named entity runs as one sequential pass.
+    [[nodiscard]] bool splittable_per_entity() const {
+        return named_writes.empty();
+    }
 
     // Conflict detection treats a projected trait as production of that trait
     // for ordering purposes, same as a durable write, without collapsing the
@@ -299,6 +319,16 @@ void record_write(HandlerContract& contract,
                   const SymbolId& trait,
                   const std::optional<std::string>& field,
                   const ResolvedTrait* declaration);
+// Named access: records the requirement, the named table entry, and the
+// ordinary trait read/write.
+void record_named_read(HandlerContract& contract,
+                       const NamedTraitRef& ref,
+                       const std::optional<std::string>& field,
+                       const ResolvedTrait* declaration);
+void record_named_write(HandlerContract& contract,
+                        const NamedTraitRef& ref,
+                        const std::optional<std::string>& field,
+                        const ResolvedTrait* declaration);
 
 /// Transitional inference result retained for focused semantic tests and old
 /// consumers while HandlerNode becomes the authoritative execution record.
@@ -413,6 +443,16 @@ struct ResolvedTemplateParameter {
     SourceLocation location;
 };
 
+/// Canonical identity and composed trait set of a declared entity.
+struct ImportedEntity {
+    std::string name;
+    std::string module_name;
+    SymbolId symbol_id;
+    std::vector<SymbolId> traits;
+
+    friend bool operator==(const ImportedEntity&, const ImportedEntity&) = default;
+};
+
 struct DecoratedProgram {
     std::string module_name;  // this program's explicit declaring module name
     // Map key: simple local declaration name. Each declaration still carries a non-empty
@@ -429,6 +469,7 @@ struct DecoratedProgram {
     std::unordered_map<std::string, std::vector<ResolvedTemplateParameter>> template_parameters;
     std::unordered_map<std::string, std::shared_ptr<TemplateNode>> template_blueprints;
     std::unordered_set<std::string> pub_events;  // pub event names (for ImportedSymbols export)
+    std::unordered_map<std::string, ImportedEntity> pub_entities;  // for ImportedSymbols export
     std::vector<RuleDependency> dependency_graph;
     std::vector<InferredHandlerContract> handler_contracts;
     ExecutionGraph execution_graph;
@@ -507,6 +548,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ImportedRule> rules;                 // rules with canonical identity
     std::unordered_map<std::string, ImportedFunc> func_symbols;          // pub funcs with canonical identity
     std::unordered_map<std::string, ImportedTemplate> template_symbols;  // pub templates with canonical identity
+    std::unordered_map<std::string, ImportedEntity> entities;            // pub entities with their traits
 };
 
 // ── Module Imports (aggregate for one compilation unit) ────────────────────
@@ -670,17 +712,58 @@ private:
     // bare `pairs:` clause.
     [[nodiscard]] static PairScope build_pair_scope(const RuleNode& rule);
     // dsl-where-clause: requires an existing filter:/pairs: domain, type-checks
-    // every predicate as bool, and enforces purity via check_where_purity_expr
-    // — the same recursive deny-list shape as check_func_purity_expr, reused
-    // for a predicate-expression list rather than a func's statement body.
+    // every predicate as bool, and enforces purity via check_clause_purity_expr.
     void validate_where_clauses(ProgramNode& program);
-    void check_where_purity_expr(const ExprNode& expr);
-    // dsl-rule-order-by: same purity requirement as a where: predicate,
-    // reported under order-by's own diagnostic.
-    void check_order_by_purity_expr(const ExprNode& expr);
-    // dsl-rule-limit: same purity requirement again, reported under limit's
-    // own diagnostic.
-    void check_limit_purity_expr(const ExprNode& expr);
+    // Purity check shared by where:, when:, order by:, and limit: expressions;
+    // `message` is the clause's own diagnostic.
+    void check_clause_purity_expr(const ExprNode& expr, const char* message);
+    // `when:` predicates are pure, `bool`, and read no binding, `self`, or event payload.
+    void validate_when_clauses(ProgramNode& program);
+
+    // Archetype bodies resolve before template flattening so the clones carry the
+    // annotations; rule bodies after it, so each entity's composed trait set is known.
+    enum class NamedAccessContext : std::uint8_t { Rule, Archetype, Elsewhere };
+    void resolve_archetype_entity_values(ProgramNode& program);
+    void collect_named_entities(const ProgramNode& program);
+    void resolve_named_entity_access(ProgramNode& program);
+    void resolve_named_access_expr(ExprNode& expr,
+                                   const std::unordered_set<std::string>& shadowed,
+                                   NamedAccessContext context);
+    // Returns true when the chain is rooted at an entity name (and so needs no further walk).
+    bool resolve_named_access_chain(MemberExpr& member,
+                                    const std::unordered_set<std::string>& shadowed,
+                                    NamedAccessContext context);
+    void resolve_named_access_stmts(std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                    std::unordered_set<std::string> shadowed,
+                                    NamedAccessContext context);
+    void resolve_named_access_entries(std::vector<ArchetypeTraitEntry>& entries,
+                                      const std::unordered_set<std::string>& shadowed,
+                                      NamedAccessContext context);
+    void resolve_named_access_overrides(std::vector<ChildOverrideNode>& overrides,
+                                        const std::unordered_set<std::string>& shadowed,
+                                        NamedAccessContext context);
+    void resolve_named_access_children(std::vector<ChildArchetypeNode>& children,
+                                       const std::unordered_set<std::string>& shadowed);
+    // The entity a member chain starts with (`Game` or `hud.Game`) and how many segments name it.
+    [[nodiscard]] std::optional<std::pair<SymbolId, std::size_t>> find_named_entity_root(
+        const std::vector<std::string>& chain) const;
+    // A chain rooted at an entity name: the bare entity, or its trait (unset once an error is reported).
+    struct NamedPath {
+        SymbolId entity;
+        bool bare = false;
+        std::optional<NamedTraitRef> trait;
+    };
+    [[nodiscard]] std::optional<NamedPath> resolve_named_path(const std::vector<std::string>& chain,
+                                                              NamedAccessContext context,
+                                                              const SourceLocation& location);
+    [[nodiscard]] const ImportedEntity* find_named_entity(const SymbolId& entity) const;
+    std::optional<NamedTraitRef> resolve_named_trait_path(const SymbolId& entity,
+                                                          const std::vector<std::string>& chain,
+                                                          std::size_t entity_segments,
+                                                          const SourceLocation& location);
+    [[nodiscard]] TypeInfo named_field_type(const NamedTraitRef& ref, const std::vector<std::string>& fields) const;
+    // Names a rule's handlers bind: filter aliases and fields, pair bindings, triggers and their aliases.
+    [[nodiscard]] std::unordered_set<std::string> rule_binding_names(const RuleNode& rule) const;
     // dsl-rule-limit: `limit:` needs a filter:/pairs: domain, `per <binding>`
     // needs a pairs: domain naming one of its bindings, and the count
     // expression is pure, `int`-typed, and scoped to the `per` binding alone
@@ -692,12 +775,11 @@ private:
     // a name whose `const:` initializer is literally `1`. Nothing else — an
     // arithmetic expression that happens to evaluate to 1 is not provable.
     [[nodiscard]] bool limit_count_is_provably_one(const ExprNode& count) const;
-    // The recursive deny-list walk shared (in shape) by check_func_purity_expr,
-    // check_where_purity_expr, and check_order_by_purity_expr: every impure
-    // expression form funnels through this one traversal, and each caller
-    // supplies hooks for the node kinds whose impurity diagnostic differs
-    // (a call to a function with effects; a spawn; a world query) — the
-    // traversal itself is identical across all three.
+    // The recursive deny-list walk shared by check_func_purity_expr and
+    // check_clause_purity_expr: every impure expression form funnels through
+    // this one traversal, and each caller supplies hooks for the node kinds
+    // whose impurity diagnostic differs (a call to a function with effects; a
+    // spawn; a world query).
     static void check_purity_deny_list(const ExprNode& expr,
                                 const std::function<void(const CallExpr&)>& on_call,
                                 const std::function<void(const SpawnExpr&)>& on_spawn,
@@ -1084,6 +1166,7 @@ private:
     void add_contract_call_effects(HandlerContract& contract, const std::optional<SymbolId>& callee) const;
 
     InferredHandlerContract infer_regular_handler_contract(const RuleNode& rule, const EventHandlerNode& handler) const;
+    void fold_rule_clause_named_reads(const RuleNode& rule, HandlerContract& contract) const;
 
     // Phase 3: std.text.format validation
     bool is_std_text_format_callee(const ExprNode& callee) const;
@@ -1235,6 +1318,8 @@ private:
     // Separate sets for templates vs entities (spawn only works on templates)
     std::unordered_set<std::string> template_names_;
     std::unordered_set<std::string> entity_names_;
+    // Local entities with their composed trait sets, filled after template flattening.
+    std::unordered_map<std::string, ImportedEntity> named_entities_;
 
     // Module names/aliases declared via `use` (for `load` reachability check)
     std::unordered_set<std::string> use_names_;

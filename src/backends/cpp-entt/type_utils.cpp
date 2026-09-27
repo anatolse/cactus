@@ -270,6 +270,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 if (e.template_slot.has_value()) {
                     return initializer_slot_name(*e.template_slot);
                 }
+                if (e.resolved_entity_id.has_value()) {
+                    return named_slot_name(*e.resolved_entity_id);
+                }
                 if (is_input_action_name(ast, e.name)) {
                     return input_action_constant_name(e.name);
                 }
@@ -306,6 +309,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 }
                 return result + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (e.resolved_entity_id.has_value()) {
+                    return named_slot_name(*e.resolved_entity_id);
+                }
                 if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
                         return ident->name + "::" + e.member;
@@ -410,6 +416,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 return EnttCodegenUtils::emit_expr(*e.callee, program) + "(" +
                        EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (auto named = named_member_cpp(e, program)) {
+                    return *std::move(named);
+                }
                 // Three-level: alias.EnumType.Variant → canonical_EnumType::Variant
                 if (const auto* inner_member = std::get_if<MemberExpr>(&e.object->expr)) {
                     if (EnttCodegenUtils::find_enum(program, inner_member->member) != nullptr) {
@@ -436,6 +445,39 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
 
 std::string EnttCodegenUtils::symbol_cpp_name(const SymbolId& symbol) {
     return canonical_to_cpp_name(symbol);
+}
+
+std::string EnttCodegenUtils::named_slot_name(const SymbolId& entity) {
+    return "generated_named_slots()." + canonical_to_cpp_name(entity);
+}
+
+std::string EnttCodegenUtils::named_trait_ref_name(const NamedTraitRef& ref, const DecoratedProgram& program) {
+    return "named_ref__" + canonical_to_cpp_name(ref.entity) + "__" +
+           trait_cpp_name(ref.trait, ref.trait.local_name, program);
+}
+
+std::optional<std::string> EnttCodegenUtils::named_member_cpp(const MemberExpr& member,
+                                                              const DecoratedProgram& program) {
+    if (member.resolved_entity_id.has_value()) {
+        return named_slot_name(*member.resolved_entity_id);
+    }
+    if (member.resolved_named_trait.has_value()) {
+        return named_trait_ref_name(*member.resolved_named_trait, program);
+    }
+    return std::nullopt;
+}
+
+std::vector<const EntityNode*> EnttCodegenUtils::declared_entities(const DecoratedProgram& program) {
+    std::vector<const EntityNode*> entities;
+    if (program.ast == nullptr) {
+        return entities;
+    }
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* entity = std::get_if<EntityNode>(&decl)) {
+            entities.push_back(entity);
+        }
+    }
+    return entities;
 }
 
 std::string EnttCodegenUtils::trait_cpp_name(const SymbolId& symbol) {

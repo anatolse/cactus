@@ -128,6 +128,9 @@ private:
     [[nodiscard]] bool at_pairs_clause() const;
     WhereClause parse_where_clause();
     [[nodiscard]] bool at_where_clause() const;
+    WhenClause parse_when_clause();
+    [[nodiscard]] bool at_when_clause() const;
+    std::vector<std::unique_ptr<ExprNode>> parse_predicate_block(const SourceLocation& loc, const char* clause_name);
     LimitClause parse_limit_clause();
     [[nodiscard]] bool at_limit_clause() const;
     std::vector<LocatedName> parse_name_block(TokenType keyword, const char* clause_name);

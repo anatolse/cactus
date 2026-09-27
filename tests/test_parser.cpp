@@ -2307,6 +2307,87 @@ TEST_CASE("Parser: where clause on extern rule is rejected", "[parser][where-cla
     REQUIRE(errors.has_errors());
 }
 
+// ── When clause (dsl-when-clause) ───────────────────────────────────────────
+
+TEST_CASE("Parser: when clause on a selectionless rule is parsed", "[parser][when-clause]") {
+    auto prog = parse(
+        "rule Spawn:\n"
+        "    when:\n"
+        "        not Game.Match.over\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.when_clause.has_value());
+    REQUIRE(sys.when_clause->predicates.size() == 1);
+    CHECK(std::holds_alternative<UnaryExpr>(sys.when_clause->predicates[0]->expr));
+    CHECK_FALSE(sys.where_clause.has_value());
+    CHECK(sys.handlers.size() == 1);
+}
+
+TEST_CASE("Parser: multiple when lines after filter, after and where are parsed in order", "[parser][when-clause]") {
+    auto prog = parse(
+        "rule Move:\n"
+        "    filter:\n"
+        "        Enemy as enemy\n"
+        "    after:\n"
+        "        Spawn\n"
+        "    where:\n"
+        "        enemy.speed > 0.0\n"
+        "    when:\n"
+        "        not Game.Match.over\n"
+        "        Game.Match.wave > 0\n"
+        "    on tick:\n"
+        "        x = 1\n");
+
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.where_clause.has_value());
+    REQUIRE(sys.when_clause.has_value());
+    REQUIRE(sys.when_clause->predicates.size() == 2);
+    CHECK(std::holds_alternative<UnaryExpr>(sys.when_clause->predicates[0]->expr));
+    const auto* second = std::get_if<BinaryExpr>(&sys.when_clause->predicates[1]->expr);
+    REQUIRE(second != nullptr);
+    CHECK(second->op == ">");
+    CHECK(sys.after_rules == std::vector<std::string>{"Spawn"});
+}
+
+TEST_CASE("Parser: when remains a contextual identifier outside clause position", "[parser][when-clause]") {
+    auto prog = parse(
+        "rule UsesWhenLocal:\n"
+        "    on tick:\n"
+        "        let when = 1\n"
+        "        x = when\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    CHECK_FALSE(sys.when_clause.has_value());
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].body.size() == 2);
+}
+
+TEST_CASE("Parser: empty when clause is rejected", "[parser][when-clause]") {
+    auto errors = parse_expect_errors(
+        "rule Bad:\n"
+        "    when:\n"
+        "    on tick:\n"
+        "        x = 1\n");
+    REQUIRE(errors.has_errors());
+}
+
+TEST_CASE("Parser: when clause on extern rule is rejected", "[parser][when-clause]") {
+    auto errors = parse_expect_errors(
+        "extern rule Bad:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    when:\n"
+        "        true\n"
+        "    on tick:\n"
+        "        reads:\n"
+        "            Position\n");
+    REQUIRE(errors.has_errors());
+    CHECK(std::ranges::any_of(errors.diagnostics(), [](const Diagnostic& diagnostic) {
+        return diagnostic.message.find("'when:' is only allowed on regular rules") != std::string::npos;
+    }));
+}
+
 // ── Limit clause (dsl-rule-limit) ───────────────────────────────────────────
 
 TEST_CASE("Parser: global limit on a pairs rule is parsed", "[parser][rule-limit]") {

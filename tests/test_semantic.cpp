@@ -2132,8 +2132,8 @@ TEST_CASE("Semantic: template-backed entity missing required field rejected", "[
     CHECK(err.find("x") != std::string::npos);
 }
 
-TEST_CASE("Semantic: entity name is not an entity_id expression", "[semantic][entity]") {
-    auto err = analyze_first_error(STDLIB_EVENTS +
+TEST_CASE("Semantic: entity name is an entity_id expression", "[semantic][entity]") {
+    CHECK_FALSE(analyze_has_errors(STDLIB_EVENTS +
                                    "trait Shape:\n"
                                    "    var size: float = 16.0\n"
                                    "template BlueGem:\n"
@@ -2142,8 +2142,7 @@ TEST_CASE("Semantic: entity name is not an entity_id expression", "[semantic][en
                                    "    Shape\n"
                                    "rule S:\n"
                                    "    on tick:\n"
-                                   "        let x = Gem1\n");
-    CHECK(err.find("Gem1") != std::string::npos);
+                                   "        let x: entity_id = Gem1\n"));
 }
 
 TEST_CASE("Semantic: mixed inline and template-backed entity order preserved", "[semantic][entity]") {
@@ -4398,5 +4397,518 @@ TEST_CASE("Contract fields: extern rule declarations cover all fields", "[semant
     CHECK(contract.write_fields.at(test_trait("Health")) == ALL_FIELDS);
     CHECK(contract.read_fields.at(test_trait("Health")) == ALL_FIELDS);
     CHECK(contract.read_fields.at(test_trait("Match")) == fields_of({"score"}));
+}
+// ── Named entity access (dsl-named-entity-access, dsl-when-clause) ─────────
+
+namespace {
+
+const std::string NAMED_HEADER =
+    "const:\n"
+    "    LIMIT = 3\n"
+    "trait Match:\n"
+    "    var over: bool = false\n"
+    "    var score: int = 0\n"
+    "trait Pos:\n"
+    "    var value: vec2 = vec2(0.0, 0.0)\n"
+    "trait Enemy:\n"
+    "    var dying: bool = false\n"
+    "    var aim: entity_id\n"
+    "trait Rival:\n"
+    "    var rival: entity_id\n"
+    "trait Tag:\n"
+    "    var id: int = 0\n"
+    "trait Label:\n"
+    "    var visible: bool = true\n"
+    "trait Player\n"
+    "event Hit:\n"
+    "    source: entity_id\n"
+    "func half(value: int) int:\n"
+    "    return value / 2\n"
+    "template Grunt:\n"
+    "    Enemy\n"
+    "template Base:\n"
+    "    Match\n"
+    "    Pos\n"
+    "entity Game from Base:\n"
+    "    Match\n"
+    "entity Hud:\n"
+    "    Label\n"
+    "entity Boss:\n"
+    "    Rival:\n"
+    "        rival = Nemesis\n"
+    "entity Nemesis:\n"
+    "    Rival:\n"
+    "        rival = Boss\n";
+
+std::vector<std::string> named_messages(const std::string& source) {
+    return analyze_messages(NAMED_HEADER + source);
+}
+
+// Parses and analyzes, keeping the AST so tests can inspect annotations.
+struct AnalyzedProgram {
+    ProgramNode ast;
+    std::vector<std::string> messages;
+};
+
+AnalyzedProgram analyze_named_program(const std::string& source) {
+    const std::string src = "module test\n" + STDLIB_EVENTS + NAMED_HEADER + source;
+    ErrorReporter errors;
+    Lexer lexer(src, "test.cactus", errors);
+    Parser parser(lexer.tokenize(), errors);
+    AnalyzedProgram result{.ast = parser.parse_program(), .messages = {}};
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    analyzer.analyze(result.ast);
+    for (const auto& diagnostic : errors.diagnostics()) {
+        result.messages.push_back(diagnostic.message);
+    }
+    return result;
+}
+
+const RuleNode& rule_named(const ProgramNode& program, const std::string& name) {
+    for (const auto& decl : program.declarations) {
+        if (const auto* rule = std::get_if<RuleNode>(&decl); rule != nullptr && rule->name == name) {
+            return *rule;
+        }
+    }
+    FAIL("no rule " << name);
+    std::unreachable();
+}
+
+SymbolId test_entity(const std::string& name) {
+    return make_symbol_id(SymbolKind::Entity, "test", name);
+}
+
+}  // namespace
+
+TEST_CASE("Semantic: an entity name is an entity_id value in handler bodies", "[semantic][named-entity]") {
+    const auto messages = named_messages("rule R:\n"
+                                         "    filter:\n"
+                                         "        Enemy as enemy\n"
+                                         "    on tick:\n"
+                                         "        let aim_at: entity_id = Game\n"
+                                         "        let same = self == Boss\n"
+                                         "        set Label on Hud:\n"
+                                         "            visible = false\n"
+                                         "        emit Hit to Boss:\n"
+                                         "            source = Game\n"
+                                         "        enemy.aim = Nemesis\n");
+    INFO((messages.empty() ? "" : messages.front()));
+    CHECK(messages.empty());
+}
+
+TEST_CASE("Semantic: an entity name is typed entity_id", "[semantic][named-entity]") {
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    on tick:\n"
+                                     "        let wrong: int = Game\n"),
+                      "is declared as 'int' but initialized with 'entity_id'"));
+}
+
+TEST_CASE("Semantic: an entity name value is annotated with its canonical identity", "[semantic][named-entity]") {
+    const auto analyzed = analyze_named_program("rule R:\n"
+                                                "    on tick:\n"
+                                                "        let aim_at = Game\n");
+    REQUIRE(analyzed.messages.empty());
+    const auto& body  = rule_named(analyzed.ast, "R").handlers[0].body;
+    const auto& let   = std::get<LetStmt>(body[0]->stmt);
+    const auto& ident = std::get<IdentExpr>(let.value->expr);
+    REQUIRE(ident.resolved_entity_id.has_value());
+    CHECK(*ident.resolved_entity_id == test_entity("Game"));
+}
+
+TEST_CASE("Semantic: an entity name is a value in rule clauses", "[semantic][named-entity]") {
+    const auto messages = named_messages("rule R:\n"
+                                         "    filter:\n"
+                                         "        Enemy as enemy\n"
+                                         "    where:\n"
+                                         "        enemy.aim == Boss\n"
+                                         "    when:\n"
+                                         "        Game != Boss\n"
+                                         "    on tick:\n"
+                                         "        enemy.dying = true\n");
+    INFO((messages.empty() ? "" : messages.front()));
+    CHECK(messages.empty());
+}
+
+TEST_CASE("Semantic: an entity name is an archetype override value", "[semantic][named-entity]") {
+    CHECK(named_messages("").empty());
+    CHECK(has_message(named_messages("entity Wrong:\n"
+                                     "    Tag:\n"
+                                     "        id = Boss\n"),
+                      "type mismatch for field 'id'"));
+}
+
+TEST_CASE("Semantic: a template name is not an entity_id value", "[semantic][named-entity]") {
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    on tick:\n"
+                                     "        let aim_at = Grunt\n"),
+                      "template 'Grunt' is not an entity_id value"));
+}
+
+TEST_CASE("Semantic: a local shadows an entity name", "[semantic][named-entity]") {
+    const auto messages = named_messages("rule R:\n"
+                                         "    on tick:\n"
+                                         "        let Game = 5\n"
+                                         "        let count: int = Game\n");
+    INFO((messages.empty() ? "" : messages.front()));
+    CHECK(messages.empty());
+}
+
+TEST_CASE("Semantic: named field reads are typed by the field", "[semantic][named-entity]") {
+    const auto messages = named_messages("rule R:\n"
+                                         "    on tick:\n"
+                                         "        let over: bool = Game.Match.over\n"
+                                         "        let x: float = Game.Pos.value.x\n"
+                                         "        let v: vec2 = Game.Pos.value\n"
+                                         "        if Game.Match.score > half(LIMIT):\n"
+                                         "            let y = 1\n");
+    INFO((messages.empty() ? "" : messages.front()));
+    CHECK(messages.empty());
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    on tick:\n"
+                                     "        let wrong: int = Game.Match.over\n"),
+                      "is declared as 'int' but initialized with 'bool'"));
+}
+
+TEST_CASE("Semantic: named field reads and writes are annotated with entity and trait", "[semantic][named-entity]") {
+    const auto analyzed = analyze_named_program("rule R:\n"
+                                                "    on tick:\n"
+                                                "        let over = Game.Match.over\n"
+                                                "        Game.Match.score += 1\n");
+    REQUIRE(analyzed.messages.empty());
+    const auto& body       = rule_named(analyzed.ast, "R").handlers[0].body;
+    const auto& field_expr = std::get<MemberExpr>(std::get<LetStmt>(body[0]->stmt).value->expr);
+    const auto& trait_expr = std::get<MemberExpr>(field_expr.object->expr);
+    REQUIRE(trait_expr.resolved_named_trait.has_value());
+    CHECK(trait_expr.resolved_named_trait->entity == test_entity("Game"));
+    CHECK(trait_expr.resolved_named_trait->trait == make_symbol_id(SymbolKind::Trait, "test", "Match"));
+
+    const auto& assign = std::get<VarAssign>(body[1]->stmt);
+    REQUIRE(assign.named_target.has_value());
+    CHECK(assign.named_target->entity == test_entity("Game"));
+    CHECK(assign.named_target->trait == make_symbol_id(SymbolKind::Trait, "test", "Match"));
+    CHECK(assign.named_target->trait_segments == 1);
+}
+
+TEST_CASE("Semantic: named writes and compound writes are accepted in unary and pair handlers",
+          "[semantic][named-entity]") {
+    const auto messages = named_messages("rule R:\n"
+                                         "    filter:\n"
+                                         "        Enemy as enemy\n"
+                                         "    on tick:\n"
+                                         "        Game.Match.over = true\n"
+                                         "        Game.Match.score += 1\n"
+                                         "        Game.Pos.value.x -= 1.0\n"
+                                         "rule P:\n"
+                                         "    pairs:\n"
+                                         "        a:\n"
+                                         "            Enemy\n"
+                                         "        b:\n"
+                                         "            Enemy\n"
+                                         "    on tick:\n"
+                                         "        Game.Match.score += 1\n");
+    INFO((messages.empty() ? "" : messages.front()));
+    CHECK(messages.empty());
+}
+
+TEST_CASE("Semantic: named access to a trait the archetype does not declare is rejected",
+          "[semantic][named-entity]") {
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    on tick:\n"
+                                     "        let id = Game.Tag.id\n"),
+                      "entity 'Game' does not declare trait 'Tag'"));
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    on tick:\n"
+                                     "        Hud.Match.over = true\n"),
+                      "entity 'Hud' does not declare trait 'Match'"));
+}
+
+TEST_CASE("Semantic: named access to an unknown field is rejected", "[semantic][named-entity]") {
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    on tick:\n"
+                                     "        let nope = Game.Match.nope\n"),
+                      "trait 'Match' has no field 'nope'"));
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    on tick:\n"
+                                     "        let whole = Game.Match\n"),
+                      "named field access needs a field after 'Game.Match'"));
+}
+
+TEST_CASE("Semantic: named field access is rejected outside rules", "[semantic][named-entity]") {
+    CHECK(has_message(named_messages("func peek() bool:\n"
+                                     "    return Game.Match.over\n"),
+                      "named field access is only allowed in rules"));
+    CHECK(has_message(named_messages("const:\n"
+                                     "    START = Game.Match.score\n"),
+                      "named field access is only allowed in rules"));
+    CHECK(has_message(named_messages("entity Copy:\n"
+                                     "    Tag:\n"
+                                     "        id = Game.Match.score\n"),
+                      "named field access is only allowed in rules"));
+}
+
+TEST_CASE("Semantic: when: accepts named reads, constants, and pure calls", "[semantic][when-clause]") {
+    const auto messages = named_messages("rule Idle:\n"
+                                         "    when:\n"
+                                         "        not Game.Match.over\n"
+                                         "        Game.Match.score > half(LIMIT)\n"
+                                         "    on tick:\n"
+                                         "        Game.Match.score += 1\n"
+                                         "rule Hits:\n"
+                                         "    filter:\n"
+                                         "        Enemy as enemy\n"
+                                         "    when:\n"
+                                         "        not Game.Match.over\n"
+                                         "    on Hit:\n"
+                                         "        enemy.dying = true\n");
+    INFO((messages.empty() ? "" : messages.front()));
+    CHECK(messages.empty());
+}
+
+TEST_CASE("Semantic: a non-bool when: predicate is rejected", "[semantic][when-clause]") {
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    when:\n"
+                                     "        Game.Match.score\n"
+                                     "    on tick:\n"
+                                     "        let y = 1\n"),
+                      "when: predicate must be of type 'bool'"));
+}
+
+TEST_CASE("Semantic: when: cannot read bindings, self, or event payloads", "[semantic][when-clause]") {
+    const auto binding = named_messages("rule R:\n"
+                                        "    filter:\n"
+                                        "        Enemy as enemy\n"
+                                        "    when:\n"
+                                        "        enemy.dying\n"
+                                        "    on tick:\n"
+                                        "        enemy.dying = false\n");
+    CHECK(has_message(binding, "when: cannot read 'enemy'"));
+    CHECK(has_message(binding, "use where:"));
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    filter:\n"
+                                     "        Enemy\n"
+                                     "    when:\n"
+                                     "        dying\n"
+                                     "    on tick:\n"
+                                     "        let y = 1\n"),
+                      "when: cannot read 'dying'"));
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    filter:\n"
+                                     "        Enemy\n"
+                                     "    when:\n"
+                                     "        self != Game\n"
+                                     "    on tick:\n"
+                                     "        let y = 1\n"),
+                      "when: cannot read 'self'"));
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    when:\n"
+                                     "        tick.dt > 0.0\n"
+                                     "    on tick:\n"
+                                     "        let y = 1\n"),
+                      "when: cannot read 'tick'"));
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    filter:\n"
+                                     "        Enemy\n"
+                                     "    when:\n"
+                                     "        hit.source == Game\n"
+                                     "    on Hit as hit:\n"
+                                     "        let y = 1\n"),
+                      "when: cannot read 'hit'"));
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    pairs:\n"
+                                     "        a:\n"
+                                     "            Enemy\n"
+                                     "        b:\n"
+                                     "            Enemy\n"
+                                     "    when:\n"
+                                     "        a != b\n"
+                                     "    on tick:\n"
+                                     "        let y = 1\n"),
+                      "when: cannot read 'a'"));
+}
+
+TEST_CASE("Semantic: when: predicates must be pure", "[semantic][when-clause]") {
+    CHECK(has_message(named_messages("rule R:\n"
+                                     "    when:\n"
+                                     "        query.first[Player]() == Game\n"
+                                     "    on tick:\n"
+                                     "        let y = 1\n"),
+                      "when: predicates must be pure"));
+}
+// ── Named entity access in handler contracts (handler-contracts) ──────────
+
+namespace {
+
+const HandlerContract& named_contract(const DecoratedProgram& program, const std::string& rule) {
+    const auto handler = std::ranges::find_if(program.execution_graph.handlers, [&](const HandlerNode& node) {
+        return node.identity.rule.local_name == rule;
+    });
+    REQUIRE(handler != program.execution_graph.handlers.end());
+    return handler->contract;
+}
+
+DecoratedProgram analyze_named(const std::string& rules) {
+    return analyze(STDLIB_EVENTS + NAMED_HEADER + rules);
+}
+
+std::vector<const ScheduleEdge*> data_edges_between(const DecoratedProgram& program,
+                                                    const std::string& first,
+                                                    const std::string& second) {
+    std::vector<const ScheduleEdge*> edges;
+    for (const auto& edge : program.execution_graph.schedule_edges) {
+        const auto& before = edge.before.rule.local_name;
+        const auto& after  = edge.after.rule.local_name;
+        if (edge.kind == ScheduleEdgeKind::DataConflict &&
+            ((before == first && after == second) || (before == second && after == first))) {
+            edges.push_back(&edge);
+        }
+    }
+    return edges;
+}
+
+const NamedRequirement GAME_MATCH{.entity = make_symbol_id(SymbolKind::Entity, "test", "Game"),
+                                  .trait  = make_symbol_id(SymbolKind::Trait, "test", "Match")};
+
+}  // namespace
+
+TEST_CASE("Contract: a named read in when: is recorded with entity, field, and requirement",
+          "[semantic][handler-contracts][named-entity]") {
+    const auto program   = analyze_named("rule R:\n"
+                                         "    filter:\n"
+                                         "        Enemy as enemy\n"
+                                         "    when:\n"
+                                         "        not Game.Match.over\n"
+                                         "    on tick:\n"
+                                         "        enemy.dying = true\n");
+    const auto& contract = named_contract(program, "R");
+    const auto game      = test_entity("Game");
+    const auto match     = test_trait("Match");
+    REQUIRE(contract.named_reads.contains(game));
+    CHECK(contract.named_reads.at(game).at(match) == fields_of({"over"}));
+    CHECK(contract.read_fields.at(match) == fields_of({"over"}));
+    CHECK(contract.named_requirements == std::vector<NamedRequirement>{GAME_MATCH});
+    CHECK(contract.named_writes.empty());
+    CHECK(contract.splittable_per_entity());
+}
+
+TEST_CASE("Contract: named reads and writes in a body record fields and one requirement",
+          "[semantic][handler-contracts][named-entity]") {
+    const auto program   = analyze_named("rule R:\n"
+                                         "    on tick:\n"
+                                         "        if Game.Match.over:\n"
+                                         "            Game.Match.score += 1\n"
+                                         "        let x = Game.Pos.value.x\n");
+    const auto& contract = named_contract(program, "R");
+    const auto game      = test_entity("Game");
+    CHECK(contract.named_reads.at(game).at(test_trait("Match")) == fields_of({"over", "score"}));
+    CHECK(contract.named_writes.at(game).at(test_trait("Match")) == fields_of({"score"}));
+    CHECK(contract.named_reads.at(game).at(test_trait("Pos")) == fields_of({"value"}));
+    CHECK(contract.write_fields.at(test_trait("Match")) == fields_of({"score"}));
+    const std::vector<NamedRequirement> expected{
+        GAME_MATCH, NamedRequirement{.entity = game, .trait = test_trait("Pos")}};
+    CHECK(contract.named_requirements == expected);
+}
+
+TEST_CASE("Contract: a named write orders against a filter reader of the same field",
+          "[semantic][handler-contracts][named-entity]") {
+    const auto program = analyze_named("rule End:\n"
+                                       "    on tick:\n"
+                                       "        Game.Match.over = true\n"
+                                       "rule Watch:\n"
+                                       "    filter:\n"
+                                       "        Match as m\n"
+                                       "    on tick:\n"
+                                       "        if m.over:\n"
+                                       "            let y = 1\n");
+    const auto edges = data_edges_between(program, "End", "Watch");
+    REQUIRE(edges.size() == 1);
+    REQUIRE(edges[0]->field_provenance.size() == 1);
+    CHECK(edges[0]->field_provenance[0].trait == test_trait("Match"));
+    CHECK(edges[0]->field_provenance[0].access == fields_of({"over"}));
+}
+
+TEST_CASE("Contract: disjoint named fields do not conflict", "[semantic][handler-contracts][named-entity]") {
+    const auto program = analyze_named("rule Score:\n"
+                                       "    on tick:\n"
+                                       "        Game.Match.score += 1\n"
+                                       "rule Watch:\n"
+                                       "    on tick:\n"
+                                       "        if Game.Match.over:\n"
+                                       "            let y = 1\n");
+    CHECK(data_edges_between(program, "Score", "Watch").empty());
+}
+
+TEST_CASE("Contract: a named write marks a filter handler unsplittable",
+          "[semantic][handler-contracts][named-entity]") {
+    const auto program   = analyze_named("rule Count:\n"
+                                         "    filter:\n"
+                                         "        Enemy\n"
+                                         "    on tick:\n"
+                                         "        Game.Match.score += 1\n");
+    const auto& contract = named_contract(program, "Count");
+    CHECK_FALSE(contract.splittable_per_entity());
+    CHECK(contract.named_requirements == std::vector<NamedRequirement>{GAME_MATCH});
+}
+
+TEST_CASE("Contract: an entity name used as a value adds no named access",
+          "[semantic][handler-contracts][named-entity]") {
+    const auto program   = analyze_named("rule Hide:\n"
+                                         "    on tick:\n"
+                                         "        set Label on Hud:\n"
+                                         "            visible = false\n"
+                                         "        emit Hit to Boss:\n"
+                                         "            source = Game\n");
+    const auto& contract = named_contract(program, "Hide");
+    CHECK(contract.named_reads.empty());
+    CHECK(contract.named_writes.empty());
+    CHECK(contract.named_requirements.empty());
+    CHECK(std::ranges::any_of(contract.commands, [](const InferredHandlerCommand& command) {
+        return command.kind == HandlerCommandKind::Set;
+    }));
+}
+
+TEST_CASE("Contract: a named read in where: on a limited rule records its requirement",
+          "[semantic][handler-contracts][named-entity][rule-limit]") {
+    const auto unary = analyze_named("rule Pick:\n"
+                                     "    filter:\n"
+                                     "        Enemy as enemy\n"
+                                     "    where:\n"
+                                     "        enemy.dying == Game.Match.over\n"
+                                     "    limit: 3\n"
+                                     "    on tick:\n"
+                                     "        let y = 1\n");
+    const auto& unary_contract = named_contract(unary, "Pick");
+    CHECK(unary_contract.named_requirements == std::vector<NamedRequirement>{GAME_MATCH});
+    CHECK(unary_contract.named_reads.at(test_entity("Game")).at(test_trait("Match")) == fields_of({"over"}));
+
+    const auto pair = analyze_named("rule Touch:\n"
+                                    "    pairs:\n"
+                                    "        a:\n"
+                                    "            Enemy\n"
+                                    "        b:\n"
+                                    "            Enemy\n"
+                                    "    where:\n"
+                                    "        Game.Match.score > 0\n"
+                                    "    limit: 1 per a\n"
+                                    "    on tick:\n"
+                                    "        let y = 1\n");
+    CHECK(named_contract(pair, "Touch").named_requirements == std::vector<NamedRequirement>{GAME_MATCH});
+}
+
+TEST_CASE("Contract: named reads in a pair handler record a requirement", "[semantic][handler-contracts][named-entity]") {
+    const auto program   = analyze_named("rule Touch:\n"
+                                         "    pairs:\n"
+                                         "        a:\n"
+                                         "            Enemy\n"
+                                         "        b:\n"
+                                         "            Enemy\n"
+                                         "    when:\n"
+                                         "        not Game.Match.over\n"
+                                         "    on tick:\n"
+                                         "        Game.Match.score += 1\n");
+    const auto& contract = named_contract(program, "Touch");
+    CHECK(contract.named_requirements == std::vector<NamedRequirement>{GAME_MATCH});
+    CHECK(contract.named_writes.at(test_entity("Game")).at(test_trait("Match")) == fields_of({"score"}));
+    CHECK_FALSE(contract.splittable_per_entity());
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

@@ -2,7 +2,6 @@ module main
 
 use std.input as inp
 use std.math.quat as quat
-use std.query as query
 use std.text as text
 use std.transform.volume as tv
 use std.render.meshes as meshes
@@ -270,7 +269,6 @@ rule UpdateHud:
 
     on tick:
         if index == selected:
-            let hud = query.first[rtext.ScreenLabel]()
-            project rtext.ScreenLabel to hud:
+            project rtext.ScreenLabel to Hud:
                 position = vec2(16.0, 16.0)
                 text = text.format("Character {} - {}", index + 1, models.animation_name(model, clip))

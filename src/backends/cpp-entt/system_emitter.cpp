@@ -2269,6 +2269,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 if (e.template_slot.has_value()) {
                     return initializer_slot_name(*e.template_slot);
                 }
+                if (e.resolved_entity_id.has_value()) {
+                    return EnttCodegenUtils::named_slot_name(*e.resolved_entity_id);
+                }
                 if (is_input_action_name(program, e.name)) {
                     return input_action_constant_name(e.name);
                 }
@@ -2482,6 +2485,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                            e.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                        ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (auto named = EnttCodegenUtils::named_member_cpp(e, program)) {
+                    return *std::move(named);
+                }
                 // Pair-bound member chain (e.g. `body.tf.WorldTransform.position`):
                 // consume leading segments against the binding's resolved trait
                 // namespace using the same longest-prefix rule as the semantic
@@ -3144,7 +3150,12 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                 return result;
             } else if constexpr (std::is_same_v<S, VarAssign>) {
                 std::string lhs;
-                if (!s.path.empty()) {
+                if (s.named_target.has_value()) {
+                    lhs = EnttCodegenUtils::named_trait_ref_name(*s.named_target, program);
+                    for (const auto& field : named_target_fields(s)) {
+                        lhs += "." + field;
+                    }
+                } else if (!s.path.empty()) {
                     // Dotted assignment target (`alias.field...`): reconstruct the
                     // equivalent member-access chain and lower it through the same
                     // path ordinary reads use, so `hp.health = x` resolves `hp` as
@@ -3891,6 +3902,50 @@ static void emit_fallback_handler_body(std::ostringstream& out,
     out << "    }\n";
 }
 
+// Structural changes are buffered to the commit, so the hoisted references stay valid all pass.
+static void emit_named_requirements(std::ostringstream& out,
+                                    const HandlerContract* contract,
+                                    const DecoratedProgram& program) {
+    if (contract == nullptr || contract->named_requirements.empty()) {
+        return;
+    }
+    std::vector<std::pair<SymbolId, std::string>> trait_lists;
+    for (const auto& requirement : contract->named_requirements) {
+        const auto trait = EnttCodegenUtils::trait_cpp_name(requirement.trait, requirement.trait.local_name, program);
+        auto found = std::ranges::find(trait_lists, requirement.entity, &std::pair<SymbolId, std::string>::first);
+        if (found == trait_lists.end()) {
+            trait_lists.emplace_back(requirement.entity, trait);
+        } else {
+            found->second += ", " + trait;
+        }
+    }
+    for (const auto& [entity, traits] : trait_lists) {
+        out << "    if (!cactus::runtime::entt_backend::named_alive<" << traits << ">(registry, "
+            << EnttCodegenUtils::named_slot_name(entity) << ")) {\n";
+        out << "        return;\n";
+        out << "    }\n";
+    }
+    for (const auto& requirement : contract->named_requirements) {
+        const NamedTraitRef ref{.entity = requirement.entity, .trait = requirement.trait};
+        out << "    [[maybe_unused]] auto& " << EnttCodegenUtils::named_trait_ref_name(ref, program) << " = registry.get<"
+            << EnttCodegenUtils::trait_cpp_name(requirement.trait, requirement.trait.local_name, program) << ">("
+            << EnttCodegenUtils::named_slot_name(requirement.entity) << ");\n";
+    }
+}
+
+static void emit_when_gate(std::ostringstream& out, const RuleNode& sys, const DecoratedProgram& program) {
+    if (!sys.when_clause.has_value() || sys.when_clause->predicates.empty()) {
+        return;
+    }
+    std::string gate;
+    for (const auto& predicate : sys.when_clause->predicates) {
+        gate += (gate.empty() ? "!(" : " || !(") + rewrite_expr(*predicate, {}, program, {}, {}, nullptr, nullptr) + ")";
+    }
+    out << "    if (" << gate << ") {\n";
+    out << "        return;\n";
+    out << "    }\n";
+}
+
 std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
     const auto filter_bindings_list = filter_bindings(sys.filter, program);
@@ -3948,6 +4003,8 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         out << ") {\n";
         out << "    (void)" << trigger_binding << ";\n";
         out << "    (void)cactus_recipient;\n";
+        emit_named_requirements(out, contract, program);
+        emit_when_gate(out, sys, program);
 
         if (is_pair) {
             emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);

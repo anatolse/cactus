@@ -159,7 +159,7 @@ TEST_CASE("std.time timers arm, expire once, and relay through their own entity"
     const auto reload_timer = entity_with<gameplay_timers__ReloadChannel>(registry);
     const auto shield_timer = entity_with<gameplay_timers__ShieldChannel>(registry);
 
-    // BindTimerOwners resolved each channel's authored recipient at load.
+    // Each timer names its owner directly in its declaration.
     CHECK(registry.get<gameplay_timers__TimerOwner>(reload_timer).owner == player);
     CHECK(registry.get<gameplay_timers__TimerOwner>(shield_timer).owner == player);
 

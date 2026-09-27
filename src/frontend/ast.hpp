@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -161,11 +162,23 @@ struct LiteralExpr {
     SourceLocation location;
 };
 
+// A named entity's trait reached by name (`Game.Match`, `hud.Hud.ui.Label`).
+// The segment counts say how many dotted segments spell the entity and the trait.
+struct NamedTraitRef {
+    SymbolId entity;
+    SymbolId trait;
+    std::size_t entity_segments = 1;
+    std::size_t trait_segments  = 1;
+
+    friend bool operator==(const NamedTraitRef&, const NamedTraitRef&) = default;
+};
+
 struct IdentExpr {
     std::string name;
     SourceLocation location;
     std::optional<std::size_t> template_slot;
     TypeInfo template_type;
+    std::optional<SymbolId> resolved_entity_id;  // set by semantic analysis when the name is a declared entity
 };
 
 struct SelfExpr {
@@ -205,6 +218,12 @@ struct MemberExpr {
     std::string member;
     std::optional<ResolvedEnumMember> resolved_enum_member;  // set by semantic analysis
     SourceLocation location;
+    // Set by semantic analysis: this chain is a module-qualified entity name
+    // (`hud.Crosshair`) used as a value.
+    std::optional<SymbolId> resolved_entity_id;
+    // Set by semantic analysis on the node whose chain ends at the trait of a
+    // named field access (`Game.Match` in `Game.Match.over`).
+    std::optional<NamedTraitRef> resolved_named_trait;
 };
 
 struct MatchArm {
@@ -267,7 +286,45 @@ struct VarAssign {
     std::vector<std::string> path;
     std::unique_ptr<ExprNode> value;
     SourceLocation location;
+    // Set by semantic analysis for `Game.Match.field = ...`: `name` (or its
+    // module qualifier plus the first path segment) is the entity, then
+    // `trait_segments` path segments spell the trait.
+    std::optional<NamedTraitRef> named_target;
 };
+
+// For a named field read such as `Game.Match.pos.x`: the ref on its
+// `Game.Match` node and the field path after it (["pos", "x"]).
+inline std::optional<std::pair<const NamedTraitRef*, std::vector<std::string>>> named_field_path(
+    const MemberExpr& member) {
+    const MemberExpr* node = &member;
+    std::size_t depth      = 0;
+    while (!node->resolved_named_trait.has_value()) {
+        node = std::get_if<MemberExpr>(&node->object->expr);
+        if (node == nullptr) {
+            return std::nullopt;
+        }
+        ++depth;
+    }
+    std::vector<std::string> fields(depth);
+    const MemberExpr* field_node = &member;
+    for (auto index = depth; index > 0; --index) {
+        fields[index - 1] = field_node->member;
+        field_node        = std::get_if<MemberExpr>(&field_node->object->expr);
+    }
+    return std::pair{&*node->resolved_named_trait, std::move(fields)};
+}
+
+// The field path a named write targets (["over"] for `Game.Match.over = ...`).
+inline std::vector<std::string> named_target_fields(const VarAssign& assign) {
+    if (!assign.named_target.has_value()) {
+        return {};
+    }
+    const auto skip = assign.named_target->entity_segments + assign.named_target->trait_segments - 1;
+    if (skip >= assign.path.size()) {
+        return {};
+    }
+    return {assign.path.begin() + static_cast<std::ptrdiff_t>(skip), assign.path.end()};
+}
 
 struct LetStmt {
     std::string name;
@@ -707,6 +764,13 @@ struct WhereClause {
     SourceLocation location;
 };
 
+// `when:` block on a regular rule — one or more pure boolean predicates over
+// game-wide values, forming a conjunction evaluated once per handler pass.
+struct WhenClause {
+    std::vector<std::unique_ptr<ExprNode>> predicates;  // at least one; validated by the parser
+    SourceLocation location;
+};
+
 // ── Limit Clause (dsl-rule-limit) ───────────────────────────────────────────
 
 // `limit:` block on a regular rule — a pure `int` count expression, optionally
@@ -733,6 +797,7 @@ struct RuleNode {
     std::optional<PairClause> pairs;                // set when this rule uses a binary pair domain
     std::optional<WhereClause> where_clause;         // set when this rule declares a where: clause
     std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
+    std::optional<WhenClause> when_clause;           // set when this rule declares a when: clause
     std::vector<SortKey> order_by;
     std::vector<std::string> after_rules;  // explicit ordering: this rule runs after these
     std::vector<EventHandlerNode> handlers;

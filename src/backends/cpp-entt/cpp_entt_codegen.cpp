@@ -1671,6 +1671,47 @@ std::string pad_to_width(const std::string& value, std::size_t width) {
     return value + std::string(width - value.size(), ' ');
 }
 
+SymbolId entity_symbol(const EntityNode& entity, const DecoratedProgram& program) {
+    return resolved_or_local_symbol(SymbolKind::Entity, entity.resolved_entity_id, program.module_name, entity.name);
+}
+
+// A slot follows the restored record whose archetype origin is its declaration,
+// and is stale when the document has none.
+std::string emit_named_slots(const DecoratedProgram& program) {
+    const auto entities = EnttCodegenUtils::declared_entities(program);
+    if (entities.empty()) {
+        return {};
+    }
+    std::ostringstream out;
+    out << "// ── Named Entities ─────────────────────────────────────────────────\n\n";
+    out << "struct GeneratedNamedSlots {\n";
+    for (const auto* entity : entities) {
+        out << "    entt::entity " << canonical_to_cpp_name(entity_symbol(*entity, program)) << " = entt::null;\n";
+    }
+    out << "};\n\n";
+    out << "inline GeneratedNamedSlots& generated_named_slots() {\n";
+    out << "    static GeneratedNamedSlots slots;\n";
+    out << "    return slots;\n";
+    out << "}\n";
+    out << "\ninline void generated_rebind_named_slots([[maybe_unused]] entt::registry& registry) {\n";
+    std::string origins;
+    for (const auto* entity : entities) {
+        const auto symbol = entity_symbol(*entity, program);
+        const auto origin = EnttPersistenceEmitter::archetype_origin_index(program, symbol);
+        if (origin.has_value()) {
+            origins += (origins.empty() ? "{" : ", {") + std::to_string(*origin) + ", &" +
+                       EnttCodegenUtils::named_slot_name(symbol) + "}";
+        } else {
+            out << "    " << EnttCodegenUtils::named_slot_name(symbol) << " = entt::null;\n";
+        }
+    }
+    if (!origins.empty()) {
+        out << "    cactus::runtime::entt_backend::rebind_named_slots(registry, {" << origins << "});\n";
+    }
+    out << "}\n\n";
+    return out.str();
+}
+
 std::string archetype_create_function_name(const std::string& module_name, const std::string& archetype_name) {
     return "create_" + canonical_to_cpp_name(module_name, snake_case(archetype_name));
 }
@@ -1745,7 +1786,7 @@ std::string emit_archetype_creation_function(const std::string& archetype_name,
     const auto at_name     = archetype_create_at_function_name(program.module_name, archetype_name);
     const auto create_name = archetype_create_function_name(program.module_name, archetype_name);
     out << "entt::entity " << at_name << "(entt::registry& registry, entt::entity hint) {\n";
-    out << "    auto entity = registry.create(hint);\n";
+    out << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
     emit_archetype_trait_initializers(
         out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
     out << "    return entity;\n";
@@ -1872,7 +1913,7 @@ std::string emit_planned_creation_functions(const std::string& name,
     const auto node_create = archetype_node_create_function_name(program.module_name, name, role_path);
     out << "static entt::entity " << node_at << "(entt::registry& registry, entt::entity hint" << all_parameters
         << ") {\n";
-    out << "    auto entity = registry.create(hint);\n";
+    out << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
     emit_archetype_trait_initializers(
         out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
     out << "    return entity;\n}\n";
@@ -1914,7 +1955,7 @@ std::string emit_archetype_creation_functions(const std::string& archetype_name,
     const auto node_at_name = archetype_node_create_at_function_name(program.module_name, archetype_name, role_path);
     const auto node_name    = archetype_node_create_function_name(program.module_name, archetype_name, role_path);
     out << "static entt::entity " << node_at_name << "(entt::registry& registry, entt::entity hint) {\n";
-    out << "    auto entity = registry.create(hint);\n";
+    out << "    auto entity = cactus::runtime::entt_backend::adopt_or_create(registry, hint);\n";
     emit_archetype_trait_initializers(
         out, traits, program, "entity", 1, EnttPersistenceEmitter::archetype_origin_index(program, archetype));
     out << "    return entity;\n";
@@ -3020,6 +3061,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         out << EnttComponentEmitter::emit_component(t, program) << "\n";
     }
 
+    out << emit_named_slots(program);
     out << EnttPersistenceEmitter::emit_schema_descriptor(program);
     out << EnttPersistenceEmitter::emit_archetype_node_table(program);
     out << EnttPersistenceEmitter::emit_missing_provenance_probe(program);
@@ -3345,10 +3387,14 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
                 }
             }
         }
-        for (auto& decl : program.ast->declarations) {
-            if (auto* entity = std::get_if<EntityNode>(&decl)) {
-                out << "    " << archetype_create_function_name(program.module_name, entity->name) << "(registry);\n";
-            }
+        // Every handle first, so initializers can name any entity of the module.
+        for (const auto* entity : EnttCodegenUtils::declared_entities(program)) {
+            out << "    " << EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program))
+                << " = registry.create();\n";
+        }
+        for (const auto* entity : EnttCodegenUtils::declared_entities(program)) {
+            out << "    " << archetype_create_at_function_name(program.module_name, entity->name) << "(registry, "
+                << EnttCodegenUtils::named_slot_name(entity_symbol(*entity, program)) << ");\n";
         }
     }
     // ── Editor runtime glue ───────────────────────────────────────────────────

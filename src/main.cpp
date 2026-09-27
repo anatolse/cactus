@@ -97,6 +97,7 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
                                                    const cactus::DecoratedProgram& prog) {
     cactus::ImportedSymbols syms;
     syms.module_name = module_name;
+    syms.entities    = prog.pub_entities;
     for (const auto& [name, trait] : prog.traits) {
         if (trait.is_pub) {
             auto exported = trait;

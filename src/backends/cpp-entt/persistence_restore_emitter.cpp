@@ -312,6 +312,9 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     // runtime state (fixed-step accumulators and catch-up counters) also
     // holds backlog that must not carry into the restored world.
     out << "    generated_reset_scheduler_state();\n";
+    if (!EnttCodegenUtils::declared_entities(program).empty()) {
+        out << "    ::generated_rebind_named_slots(registry);\n";
+    }
     out << "    return RestoreOutcome{.ok = true};\n";
     out << "}\n\n";
 

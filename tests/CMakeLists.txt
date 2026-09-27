@@ -196,6 +196,10 @@ add_executable(test_runtime_publication_reset test_runtime_publication_reset.cpp
 target_link_libraries(test_runtime_publication_reset PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME RuntimePublicationResetTests COMMAND test_runtime_publication_reset)
 
+add_executable(test_runtime_named_slots test_runtime_named_slots.cpp)
+target_link_libraries(test_runtime_named_slots PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME RuntimeNamedSlotsTests COMMAND test_runtime_named_slots)
+
 # Projected-trait tracker runtime tests (extract-codegen-runtime-scaffolding change)
 add_executable(test_runtime_projected_trait_tracker test_runtime_projected_trait_tracker.cpp)
 target_link_libraries(test_runtime_projected_trait_tracker PRIVATE cactus_runtime_common cactus_runtime_cpp_entt Catch2::Catch2WithMain)
@@ -310,6 +314,18 @@ cactus_add_headless_behavior_test(test_deferred_set_headless_behavior
     CACTUS_SOURCE examples/deferred_set.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_deferred_set_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_named_entity_access_headless_behavior
+    CACTUS_SOURCE examples/named_entity_access.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_named_entity_access_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_persistence_named_entity_headless_behavior
+    CACTUS_SOURCE examples/named_entity_access.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_persistence_named_entity_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_hierarchy_query_headless_behavior

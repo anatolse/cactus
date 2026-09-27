@@ -3,7 +3,9 @@
 #include "frontend/ast.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace cactus {
 
@@ -28,6 +30,13 @@ public:
     // Canonical generated names. These overloads are the codegen-facing path:
     // resolved SymbolIds are lowered directly without alias/module lookup.
     static std::string symbol_cpp_name(const SymbolId& symbol);
+    // Named entities: the global handle slot, and the per-pass reference a
+    // handler hoists for one of its traits.
+    static std::string named_slot_name(const SymbolId& entity);
+    static std::string named_trait_ref_name(const NamedTraitRef& ref, const DecoratedProgram& program);
+    // The slot or hoisted reference a resolved named member chain lowers to.
+    static std::optional<std::string> named_member_cpp(const MemberExpr& member, const DecoratedProgram& program);
+    static std::vector<const EntityNode*> declared_entities(const DecoratedProgram& program);
     static std::string trait_cpp_name(const SymbolId& symbol);
     static std::string struct_cpp_name(const SymbolId& symbol);
     static std::string enum_cpp_name(const SymbolId& symbol);

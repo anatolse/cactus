@@ -1,7 +1,6 @@
 module gameplay_timers
 
 use std.core
-use std.query as query
 use std.time as time
 
 const:
@@ -81,14 +80,16 @@ entity Player:
 
 entity ReloadTimer:
     time.Timer
-    TimerOwner
+    TimerOwner:
+        owner = Player
     ReloadChannel
     TimerRequests:
         first_duration = RELOAD_SECONDS
 
 entity ShieldTimer:
     time.Timer
-    TimerOwner
+    TimerOwner:
+        owner = Player
     ShieldChannel
     TimerRequests:
         first_duration = SHIELD_SECONDS
@@ -97,13 +98,6 @@ entity MetronomeTimer:
     time.Timer
     Metronome
     TimerRequests
-
-rule BindTimerOwners:
-    filter:
-        TimerOwner as link
-
-    on load:
-        link.owner = query.first[Weapon]()
 
 rule RelayReload:
     filter:

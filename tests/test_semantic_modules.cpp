@@ -3360,4 +3360,65 @@ TEST_CASE("handler graph treats a projection as covering every field of its trai
         CHECK(edge->field_provenance[0].access == FieldAccess{.all = false, .fields = {field}});
     }
 }
+
+// ── Named entity access across modules (dsl-named-entity-access) ───────────
+
+static ModuleImports imports_with_pub_game_entity() {
+    ImportedSymbols syms = make_module_with_trait("game.state", "Match");
+    auto& match          = syms.traits["Match"];
+    match.symbol_id      = make_symbol_id(SymbolKind::Trait, "game.state", "Match");
+    match.fields.push_back(ResolvedField{.name = "over", .type = make_bool_type(), .is_var = true, .has_default = true});
+    syms.traits["Label"]           = make_module_with_trait("game.state", "Label").traits["Label"];
+    syms.traits["Label"].symbol_id = make_symbol_id(SymbolKind::Trait, "game.state", "Label");
+    syms.traits["Label"].fields.push_back(
+        ResolvedField{.name = "visible", .type = make_bool_type(), .is_var = true, .has_default = true});
+    syms.entities["Game"] = ImportedEntity{.name        = "Game",
+                                           .module_name = "game.state",
+                                           .symbol_id   = make_symbol_id(SymbolKind::Entity, "game.state", "Game"),
+                                           .traits      = {*match.symbol_id}};
+    ModuleImports imports;
+    imports.add("state", std::move(syms));
+    return imports;
+}
+
+TEST_CASE("semantic_modules: a pub entity is a value and a named-access root through its module qualifier",
+          "[semantic][modules][named-entity]") {
+    const auto [decorated, diagnostics] = analyze_source("module test.module\n"
+                                                         "event tick\n"
+                                                         "rule R:\n"
+                                                         "    when:\n"
+                                                         "        not state.Game.state.Match.over\n"
+                                                         "    on tick:\n"
+                                                         "        let game: entity_id = state.Game\n"
+                                                         "        let over: bool = state.Game.state.Match.over\n"
+                                                         "        state.Game.state.Match.over = true\n",
+                                                         imports_with_pub_game_entity());
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    CHECK(diagnostics.empty());
+}
+
+TEST_CASE("semantic_modules: named access through a qualifier checks the entity's traits",
+          "[semantic][modules][named-entity]") {
+    const auto [decorated, diagnostics] = analyze_source("module test.module\n"
+                                                         "event tick\n"
+                                                         "rule R:\n"
+                                                         "    on tick:\n"
+                                                         "        let visible = state.Game.state.Label.visible\n",
+                                                         imports_with_pub_game_entity());
+    CHECK(has_diagnostic(diagnostics, "entity 'Game' does not declare trait 'state.Label'"));
+}
+
+TEST_CASE("semantic_modules: named access through an import-qualified trait", "[semantic][modules][named-entity]") {
+    const auto [decorated, diagnostics] = analyze_source("module test.module\n"
+                                                         "event tick\n"
+                                                         "entity Hud:\n"
+                                                         "    state.Label\n"
+                                                         "rule R:\n"
+                                                         "    on tick:\n"
+                                                         "        Hud.state.Label.visible = false\n"
+                                                         "        let shown: bool = Hud.state.Label.visible\n",
+                                                         imports_with_pub_game_entity());
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    CHECK(diagnostics.empty());
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

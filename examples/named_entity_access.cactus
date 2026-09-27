@@ -1,0 +1,294 @@
+module named_entity_access
+
+# Game-wide state lives on an ordinary named entity. Rules read and write it
+# by name (`Game.Match.over`), use names as entity values (`set ... on Hud:`),
+# and switch whole passes off with `when:`.
+
+use std.core
+
+trait Match:
+    var over: bool = false
+    var score: int = 0
+    var coins: int = 0
+    var wave: int = 1
+    persist var best: int = 0
+
+trait Stats:
+    var ticks: int = 0
+
+# The test flips these flags to drive one scenario at a time.
+trait Control:
+    var end_game: bool = false
+    var close_mid_pass: bool = false
+    var add_score: bool = false
+    var hide_hud: bool = false
+    var hit_boss: bool = false
+    var hit_attempts: int = 0
+    var destroy_boss: bool = false
+    var destroy_game: bool = false
+    var strip_match: bool = false
+    var destroy_then_read: bool = false
+    var read_after_destroy: int = -1
+
+trait Probe:
+    persist var restores: int = 0
+    var over_seen: bool = false
+    var score_seen: int = -1
+    var wave_ticks: int = 0
+    var gated_pings: int = 0
+    var match_passes: int = 0
+    var stats_passes: int = 0
+    var branch_passes: int = 0
+    var branch_flag: bool = false
+
+trait Enemy:
+    var steps: int = 0
+    var closer_visits: int = 0
+
+trait Coin:
+    var value: int = 1
+
+trait Label:
+    var visible: bool = true
+
+trait Health:
+    var value: int = 10
+    var marked: bool = false
+    var was_boss: bool = false
+    var from_switch: bool = false
+
+trait Rival:
+    var rival: entity_id
+
+trait Link:
+    var other: entity_id
+
+trait Tag:
+    var id: int = 0
+
+event Ping
+
+event Hit:
+    source: entity_id
+
+template Grunt:
+    Enemy
+
+entity Game:
+    Match
+    Stats
+
+entity Switch:
+    Control
+    Probe
+
+entity Hud:
+    Label
+
+# Nemesis names Boss before Boss is declared.
+entity Nemesis:
+    Tag:
+        id = 2
+    Health
+    Rival:
+        rival = Boss
+
+entity Boss:
+    Tag:
+        id = 1
+    Health
+    Rival:
+        rival = Nemesis
+
+entity LinkA:
+    Tag:
+        id = 3
+    Link:
+        other = LinkB
+
+entity LinkB:
+    Tag:
+        id = 4
+    Link:
+        other = LinkA
+
+rule SpawnGrunts:
+    on load:
+        spawn Grunt()
+        spawn Grunt()
+        spawn Grunt()
+
+# Declared before MoveEnemies so it runs first and closes its gate in the
+# same activation.
+rule EndGameOnRequest:
+    filter:
+        Control as control
+
+    on tick:
+        if control.end_game:
+            Game.Match.over = true
+
+rule MoveEnemies:
+    filter:
+        Enemy as enemy
+    when:
+        not Game.Match.over
+
+    on tick:
+        enemy.steps += 1
+
+# Closing the gate on the first entity must not stop the pass.
+rule CloseGateMidPass:
+    filter:
+        Enemy as enemy
+    when:
+        Switch.Control.close_mid_pass
+        not Game.Match.over
+
+    on tick:
+        enemy.closer_visits += 1
+        Game.Match.over = true
+
+rule CountActiveWaveTicks:
+    when:
+        not Game.Match.over
+        Game.Match.wave > 0
+
+    on tick:
+        Switch.Probe.wave_ticks += 1
+
+rule SendPing:
+    on tick:
+        emit Ping
+
+rule CountPings:
+    filter:
+        Probe as probe
+    when:
+        not Game.Match.over
+
+    on Ping:
+        probe.gated_pings += 1
+
+rule ReadOver:
+    filter:
+        Probe as probe
+
+    on tick:
+        probe.over_seen = Game.Match.over
+
+rule AddScore:
+    filter:
+        Control as control
+
+    on tick:
+        if control.add_score:
+            Game.Match.score += 1
+
+rule ObserveScore:
+    filter:
+        Probe as probe
+    after:
+        AddScore
+
+    on tick:
+        probe.score_seen = Game.Match.score
+
+rule CollectCoins:
+    filter:
+        Coin as coin
+
+    on tick:
+        Game.Match.coins += coin.value
+
+rule HideHud:
+    filter:
+        Control as control
+
+    on tick:
+        if control.hide_hud:
+            set Label on Hud:
+                visible = false
+
+rule HitBoss:
+    filter:
+        Control as control
+
+    on tick:
+        if not control.hit_boss:
+            return
+        control.hit_attempts += 1
+        emit Hit to Boss:
+            source = Switch
+        set Health on Boss:
+            marked = true
+
+rule TakeHit:
+    filter:
+        Health as health
+
+    on Hit as hit:
+        health.value -= 1
+        health.was_boss = self == Boss
+        health.from_switch = hit.source == Switch
+
+rule DestroyBoss:
+    filter:
+        Control as control
+
+    on tick:
+        if control.destroy_boss:
+            destroy Boss
+
+rule DestroyGame:
+    filter:
+        Control as control
+
+    on tick:
+        if control.destroy_game:
+            destroy Game
+
+rule StripMatch:
+    filter:
+        Control as control
+
+    on tick:
+        if control.strip_match:
+            remove Match from Game
+
+rule DestroyThenRead:
+    filter:
+        Control as control
+
+    on tick:
+        if not control.destroy_then_read:
+            return
+        destroy Game
+        control.read_after_destroy = Game.Match.score
+
+rule CountMatchPasses:
+    filter:
+        Probe as probe
+
+    on tick:
+        probe.match_passes += 1
+        if Game.Match.wave < 0:
+            probe.branch_flag = true
+
+rule CountStatsPasses:
+    filter:
+        Probe as probe
+
+    on tick:
+        probe.stats_passes += 1
+        Game.Stats.ticks += 1
+
+# The name appears in one branch only, yet it gates the whole pass.
+rule CountBranchPasses:
+    filter:
+        Probe as probe
+
+    on tick:
+        probe.branch_passes += 1
+        if probe.branch_passes > 1000000:
+            probe.branch_flag = Game.Match.over

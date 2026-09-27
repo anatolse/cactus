@@ -409,6 +409,18 @@ std::optional<std::vector<std::string>> member_chain_segments(const MemberExpr& 
     return std::nullopt;
 }
 
+// `segments[begin..end)` joined with dots.
+std::string join_segments(const std::vector<std::string>& segments, std::size_t begin, std::size_t end) {
+    std::string joined;
+    for (auto index = begin; index < end; ++index) {
+        if (!joined.empty()) {
+            joined += '.';
+        }
+        joined += segments[index];
+    }
+    return joined;
+}
+
 /// Split a dotted source reference ("phys.Body") into resolver segments.
 std::vector<std::string> dotted_segments(const std::string& ref) {
     std::vector<std::string> segments;
@@ -444,6 +456,14 @@ std::vector<ChildOverrideNode> clone_child_override_nodes(const std::vector<Chil
 ChildArchetypeNode clone_child_archetype_node(const ChildArchetypeNode& node);
 std::vector<ChildArchetypeNode> clone_child_archetype_nodes(const std::vector<ChildArchetypeNode>& nodes);
 
+bool names_entity(const ExprNode& expr) {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->resolved_entity_id.has_value();
+    }
+    const auto* member = std::get_if<MemberExpr>(&expr.expr);
+    return member != nullptr && member->resolved_entity_id.has_value();
+}
+
 bool expr_contains_self(const ExprNode& expr) {
     bool found = false;
     visit_expression(expr, [&found](const ExprNode& node) { found |= std::holds_alternative<SelfExpr>(node.expr); });
@@ -477,7 +497,9 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                 MemberExpr copy{.object               = clone_expr(*e.object),
                                 .member               = e.member,
                                 .resolved_enum_member = e.resolved_enum_member,
-                                .location             = e.location};
+                                .location             = e.location,
+                                .resolved_entity_id   = e.resolved_entity_id,
+                                .resolved_named_trait = e.resolved_named_trait};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 MatchExpr copy;
@@ -991,6 +1013,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     call_graph_.clear();
     template_names_.clear();
     entity_names_.clear();
+    named_entities_.clear();
     use_names_.clear();
     archetype_traits_.clear();
     archetype_children_.clear();
@@ -1034,8 +1057,18 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     check_func_purity(program);
     check_no_recursion(program);
     check_persist(program);
+    // Flattened before rule validation so named field access sees each
+    // entity's composed trait set.
+    resolve_archetype_entity_values(program);
+    validate_template_unit_declarations(program);
+    validate_template_applications(program);
+    validate_template_use_cycles(program);
+    flatten_template_compositions(program);
+    collect_named_entities(program);
+    resolve_named_entity_access(program);
     validate_rule_filters(program);
     validate_where_clauses(program);
+    validate_when_clauses(program);
     validate_phase_declarations(program);
     // dsl-render-passes: descriptor-field *value* validation needs
     // resolved_enum_member, populated by resolve_all_types above, so it runs
@@ -1050,10 +1083,6 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_text_format_calls(program);
 
     // Phase 3: Dynamic ECS checks (dynamic-ecs-language change)
-    validate_template_unit_declarations(program);
-    validate_template_applications(program);
-    validate_template_use_cycles(program);
-    flatten_template_compositions(program);
     validate_template_backed_entity_overrides(program);
     validate_hierarchical_entities(program);
     validate_spawn_sites(program);
@@ -2574,14 +2603,7 @@ std::string member_chain_spelling(const ExprNode& expr) {
     if (!chain.has_value()) {
         return {};
     }
-    std::string joined;
-    for (const auto& segment : *chain) {
-        if (!joined.empty()) {
-            joined += '.';
-        }
-        joined += segment;
-    }
-    return joined;
+    return join_segments(*chain, 0, chain->size());
 }
 
 /// The binding a member-chain sort key reads through, or empty when the key
@@ -2637,7 +2659,7 @@ void SemanticAnalyzer::validate_order_by_key(
     // typing it first would surface its own diagnostics (e.g. a query's
     // "requires world access") ahead of the more fundamental rejection.
     const auto error_count_before = errors_.error_count();
-    check_order_by_purity_expr(*key.expression);
+    check_clause_purity_expr(*key.expression, "order by: sort keys must be pure");
     if (errors_.error_count() > error_count_before) {
         return;
     }
@@ -2763,24 +2785,6 @@ std::unordered_set<std::string> unary_domain_scope_names(
 
 }  // namespace
 
-void SemanticAnalyzer::check_limit_purity_expr(const ExprNode& expr) {
-    check_purity_deny_list(
-        expr,
-        /*on_call=*/
-        [this](const CallExpr& e) {
-            if (e.resolved_callee_id.has_value()) {
-                const auto* function = find_resolved_func(*e.resolved_callee_id);
-                if (function != nullptr &&
-                    (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
-                    errors_.error(e.location, "limit: count expressions must be pure");
-                }
-            }
-        },
-        /*on_spawn=*/[this](const SpawnExpr& e) { errors_.error(e.location, "limit: count expressions must be pure"); },
-        /*on_query=*/
-        [this](const QueryCallExpr& e) { errors_.error(e.location, "limit: count expressions must be pure"); });
-}
-
 bool SemanticAnalyzer::limit_count_is_provably_one(const ExprNode& count) const {
     const auto is_literal_one = [](const ExprNode& expr) {
         const auto* literal = std::get_if<LiteralExpr>(&expr.expr);
@@ -2878,7 +2882,7 @@ void SemanticAnalyzer::validateLimitClause(RuleNode& rule) {
     // first: an impure count is invalid whatever its type, and typing it
     // would surface its own diagnostics ahead of the more fundamental one.
     const auto error_count_before = errors_.error_count();
-    check_limit_purity_expr(*limit.count);
+    check_clause_purity_expr(*limit.count, "limit: count expressions must be pure");
     if (errors_.error_count() > error_count_before) {
         return;
     }
@@ -3680,37 +3684,20 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
 // purity comes from the callee's already-computed ResolvedFunc::effect_summary
 // (empty = pure, non-empty or unknown = impure), the same source contract
 // inference's add_call_effects already trusts.
-void SemanticAnalyzer::check_where_purity_expr(const ExprNode& expr) {
+void SemanticAnalyzer::check_clause_purity_expr(const ExprNode& expr, const char* message) {
     check_purity_deny_list(
         expr,
         /*on_call=*/
-        [this](const CallExpr& e) {
+        [this, message](const CallExpr& e) {
             if (e.resolved_callee_id.has_value()) {
                 const auto* function = find_resolved_func(*e.resolved_callee_id);
                 if (function != nullptr && (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
-                    errors_.error(e.location, "where: predicates must be pure");
+                    errors_.error(e.location, message);
                 }
             }
         },
-        /*on_spawn=*/[this](const SpawnExpr& e) { errors_.error(e.location, "where: predicates must be pure"); },
-        /*on_query=*/[this](const QueryCallExpr& e) { errors_.error(e.location, "where: predicates must be pure"); });
-}
-
-void SemanticAnalyzer::check_order_by_purity_expr(const ExprNode& expr) {
-    check_purity_deny_list(
-        expr,
-        /*on_call=*/
-        [this](const CallExpr& e) {
-            if (e.resolved_callee_id.has_value()) {
-                const auto* function = find_resolved_func(*e.resolved_callee_id);
-                if (function != nullptr && (!function->effect_summary.has_value() || !function->effect_summary->empty())) {
-                    errors_.error(e.location, "order by: sort keys must be pure");
-                }
-            }
-        },
-        /*on_spawn=*/[this](const SpawnExpr& e) { errors_.error(e.location, "order by: sort keys must be pure"); },
-        /*on_query=*/
-        [this](const QueryCallExpr& e) { errors_.error(e.location, "order by: sort keys must be pure"); });
+        /*on_spawn=*/[this, message](const SpawnExpr& e) { errors_.error(e.location, message); },
+        /*on_query=*/[this, message](const QueryCallExpr& e) { errors_.error(e.location, message); });
 }
 
 void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
@@ -3737,7 +3724,7 @@ void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
             // own diagnostics (e.g. a query's "requires world access") ahead
             // of the more fundamental "must be pure" rejection.
             const auto error_count_before = errors_.error_count();
-            check_where_purity_expr(*predicate);
+            check_clause_purity_expr(*predicate, "where: predicates must be pure");
             if (errors_.error_count() > error_count_before) {
                 continue;
             }
@@ -3746,6 +3733,440 @@ void SemanticAnalyzer::validate_where_clauses(ProgramNode& program) {
                 errors_.error(predicate->location, "where: predicate must be of type 'bool'");
             }
         }
+    }
+}
+
+// ── When Clause ─────────────────────────────────────────────────────────
+
+void SemanticAnalyzer::validate_when_clauses(ProgramNode& program) {
+    for (const auto& decl : program.declarations) {
+        const auto* rule = std::get_if<RuleNode>(&decl);
+        if (rule == nullptr || !rule->when_clause.has_value()) {
+            continue;
+        }
+        const auto bindings        = rule_binding_names(*rule);
+        const auto report_binding = [this](const std::string& name, const SourceLocation& location) {
+            errors_.error(location, "when: cannot read '" + name + "'; use where: for per-entity conditions");
+        };
+        for (const auto& predicate : rule->when_clause->predicates) {
+            const auto error_count_before = errors_.error_count();
+            check_clause_purity_expr(*predicate, "when: predicates must be pure");
+            visit_expression(*predicate, [&](const ExprNode& node) {
+                if (std::holds_alternative<SelfExpr>(node.expr)) {
+                    report_binding("self", node.location);
+                } else if (const auto* ident = std::get_if<IdentExpr>(&node.expr);
+                           ident != nullptr && !ident->resolved_entity_id.has_value() &&
+                           bindings.contains(ident->name)) {
+                    report_binding(ident->name, node.location);
+                }
+            });
+            if (errors_.error_count() > error_count_before) {
+                continue;
+            }
+            const auto predicate_type = infer_expr_type(*predicate, {}, {}, nullptr, nullptr);
+            if (predicate_type.kind != TypeKind::Bool && predicate_type.kind != TypeKind::Unknown) {
+                errors_.error(predicate->location, "when: predicate must be of type 'bool'");
+            }
+        }
+    }
+}
+
+std::unordered_set<std::string> SemanticAnalyzer::rule_binding_names(const RuleNode& rule) const {
+    auto names = unary_domain_scope_names(build_filter_bindings(rule.filter));
+    if (rule.pairs.has_value()) {
+        for (const auto& binding : rule.pairs->bindings) {
+            names.insert(binding.name);
+            for (const auto& entry : binding.traits) {
+                if (entry.alias.has_value()) {
+                    names.insert(*entry.alias);
+                }
+            }
+        }
+    }
+    for (const auto& handler : rule.handlers) {
+        names.insert(handler.event_name);
+        if (handler.alias.has_value()) {
+            names.insert(*handler.alias);
+        }
+    }
+    return names;
+}
+
+// ── Named Entity Access ──────────────────────────────────────────────────
+
+void SemanticAnalyzer::resolve_archetype_entity_values(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        if (auto* entity = std::get_if<EntityNode>(&decl)) {
+            resolve_named_access_entries(entity->traits, {}, NamedAccessContext::Archetype);
+            resolve_named_access_children(entity->children, {});
+            resolve_named_access_overrides(entity->child_overrides, {}, NamedAccessContext::Archetype);
+        } else if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            std::unordered_set<std::string> parameters;
+            for (const auto& parameter : tmpl->parameters) {
+                parameters.insert(parameter.name);
+            }
+            resolve_named_access_entries(tmpl->traits, parameters, NamedAccessContext::Archetype);
+            resolve_named_access_children(tmpl->children, parameters);
+        }
+    }
+}
+
+void SemanticAnalyzer::collect_named_entities(const ProgramNode& program) {
+    for (const auto& decl : program.declarations) {
+        const auto* entity = std::get_if<EntityNode>(&decl);
+        if (entity == nullptr) {
+            continue;
+        }
+        ImportedEntity named{.name        = entity->name,
+                             .module_name = current_module_name_,
+                             .symbol_id   = make_symbol_id(SymbolKind::Entity, current_module_id_, entity->name),
+                             .traits      = {}};
+        for (const auto& entry : entity->traits) {
+            auto trait = entry.resolved_trait_id.has_value() ? entry.resolved_trait_id
+                                                              : try_resolve_trait_ref_to_symbol(entry.trait_name);
+            if (trait.has_value()) {
+                named.traits.push_back(std::move(*trait));
+            }
+        }
+        if (entity->is_pub) {
+            result_.pub_entities[entity->name] = named;
+        }
+        named_entities_[entity->name] = std::move(named);
+    }
+}
+
+void SemanticAnalyzer::resolve_named_entity_access(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        if (auto* rule = std::get_if<RuleNode>(&decl)) {
+            const auto bindings = rule_binding_names(*rule);
+            const auto clause   = [&](ExprNode& expr) {
+                resolve_named_access_expr(expr, bindings, NamedAccessContext::Rule);
+            };
+            if (rule->where_clause.has_value()) {
+                std::ranges::for_each(rule->where_clause->predicates, [&](auto& predicate) { clause(*predicate); });
+            }
+            if (rule->when_clause.has_value()) {
+                std::ranges::for_each(rule->when_clause->predicates, [&](auto& predicate) { clause(*predicate); });
+            }
+            std::ranges::for_each(rule->order_by, [&](SortKey& key) { clause(*key.expression); });
+            if (rule->limit.has_value() && rule->limit->count != nullptr) {
+                clause(*rule->limit->count);
+            }
+            for (auto& handler : rule->handlers) {
+                resolve_named_access_stmts(handler.body, bindings, NamedAccessContext::Rule);
+            }
+        } else if (auto* func = std::get_if<FuncNode>(&decl)) {
+            std::unordered_set<std::string> parameters;
+            for (const auto& parameter : func->params) {
+                parameters.insert(parameter.name);
+            }
+            resolve_named_access_stmts(func->body, std::move(parameters), NamedAccessContext::Elsewhere);
+        } else if (auto* consts = std::get_if<ConstBlockNode>(&decl)) {
+            for (auto& assignment : consts->assignments) {
+                resolve_named_access_expr(*assignment.value, {}, NamedAccessContext::Elsewhere);
+            }
+        }
+    }
+}
+
+std::optional<std::pair<SymbolId, std::size_t>> SemanticAnalyzer::find_named_entity_root(
+    const std::vector<std::string>& chain) const {
+    if (entity_names_.contains(chain.front())) {
+        return std::pair{make_symbol_id(SymbolKind::Entity, current_module_id_, chain.front()), std::size_t{1}};
+    }
+    if (chain.size() < 2) {
+        return std::nullopt;
+    }
+    const auto module = imports_.modules.find(chain.front());
+    if (module == imports_.modules.end()) {
+        return std::nullopt;
+    }
+    const auto entity = module->second.entities.find(chain[1]);
+    if (entity == module->second.entities.end()) {
+        return std::nullopt;
+    }
+    return std::pair{entity->second.symbol_id, std::size_t{2}};
+}
+
+const ImportedEntity* SemanticAnalyzer::find_named_entity(const SymbolId& entity) const {
+    if (entity.module.name == current_module_name_) {
+        const auto found = named_entities_.find(entity.local_name);
+        return found == named_entities_.end() ? nullptr : &found->second;
+    }
+    for (const auto& [_, symbols] : imports_.modules) {
+        if (symbols.module_name != entity.module.name) {
+            continue;
+        }
+        if (const auto found = symbols.entities.find(entity.local_name); found != symbols.entities.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
+std::optional<NamedTraitRef> SemanticAnalyzer::resolve_named_trait_path(const SymbolId& entity,
+                                                                        const std::vector<std::string>& chain,
+                                                                        std::size_t entity_segments,
+                                                                        const SourceLocation& location) {
+    const auto* declared = find_named_entity(entity);
+    for (std::size_t trait_segments = 1; trait_segments <= 2; ++trait_segments) {
+        const auto trait_end = entity_segments + trait_segments;
+        if (trait_end > chain.size()) {
+            break;
+        }
+        const auto spelling = join_segments(chain, entity_segments, trait_end);
+        auto trait          = try_resolve_trait_ref_to_symbol(spelling);
+        if (!trait.has_value()) {
+            continue;
+        }
+        if (declared == nullptr || !std::ranges::contains(declared->traits, *trait)) {
+            errors_.error(location, "entity '" + entity.local_name + "' does not declare trait '" + spelling + "'");
+            return std::nullopt;
+        }
+        if (trait_end == chain.size()) {
+            errors_.error(location, "named field access needs a field after '" + join_segments(chain, 0, trait_end) + "'");
+            return std::nullopt;
+        }
+        const auto* resolved = find_resolved_trait(*trait);
+        if (resolved != nullptr && find_field_in(resolved->fields, chain[trait_end]) == nullptr) {
+            errors_.error(location, "trait '" + spelling + "' has no field '" + chain[trait_end] + "'");
+            return std::nullopt;
+        }
+        return NamedTraitRef{.entity          = entity,
+                             .trait           = std::move(*trait),
+                             .entity_segments = entity_segments,
+                             .trait_segments  = trait_segments};
+    }
+    errors_.error(location,
+                  "entity '" + entity.local_name + "' does not declare trait '" + chain[entity_segments] + "'");
+    return std::nullopt;
+}
+
+TypeInfo SemanticAnalyzer::named_field_type(const NamedTraitRef& ref, const std::vector<std::string>& fields) const {
+    const auto* trait = find_resolved_trait(ref.trait);
+    if (trait == nullptr || fields.empty()) {
+        return make_unknown_type();
+    }
+    return descend_vector_color_members(find_field_type_in(trait->fields, fields.front()), fields, 1);
+}
+
+bool SemanticAnalyzer::resolve_named_access_chain(MemberExpr& member,
+                                                  const std::unordered_set<std::string>& shadowed,
+                                                  NamedAccessContext context) {
+    const auto chain = member_chain_segments(member);
+    if (!chain.has_value() || shadowed.contains(chain->front())) {
+        return false;
+    }
+    auto path = resolve_named_path(*chain, context, member.location);
+    if (!path.has_value()) {
+        return false;
+    }
+    if (path->bare) {
+        if (context != NamedAccessContext::Elsewhere) {
+            member.resolved_entity_id = path->entity;
+        }
+        return true;
+    }
+    if (!path->trait.has_value()) {
+        return true;
+    }
+    MemberExpr* trait_node = &member;
+    for (auto depth = chain->size(); depth > path->trait->entity_segments + path->trait->trait_segments; --depth) {
+        trait_node = &std::get<MemberExpr>(trait_node->object->expr);
+    }
+    trait_node->resolved_named_trait = std::move(path->trait);
+    return true;
+}
+
+std::optional<SemanticAnalyzer::NamedPath> SemanticAnalyzer::resolve_named_path(const std::vector<std::string>& chain,
+                                                                                NamedAccessContext context,
+                                                                                const SourceLocation& location) {
+    const auto root = find_named_entity_root(chain);
+    if (!root.has_value()) {
+        return std::nullopt;
+    }
+    const auto& [entity, entity_segments] = *root;
+    NamedPath path{.entity = entity, .bare = entity_segments == chain.size(), .trait = std::nullopt};
+    if (path.bare) {
+        return path;
+    }
+    if (context != NamedAccessContext::Rule) {
+        errors_.error(location, "named field access is only allowed in rules");
+        return path;
+    }
+    path.trait = resolve_named_trait_path(entity, chain, entity_segments, location);
+    return path;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- one arm per ExprNode kind
+void SemanticAnalyzer::resolve_named_access_expr(ExprNode& expr,
+                                                 const std::unordered_set<std::string>& shadowed,
+                                                 NamedAccessContext context) {
+    const auto walk = [&](ExprNode& child) { resolve_named_access_expr(child, shadowed, context); };
+    std::visit(
+        [&](auto& e) {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, IdentExpr>) {
+                if (e.template_slot.has_value() || shadowed.contains(e.name)) {
+                    return;
+                }
+                if (entity_names_.contains(e.name) && context != NamedAccessContext::Elsewhere) {
+                    e.resolved_entity_id = make_symbol_id(SymbolKind::Entity, current_module_id_, e.name);
+                } else if (template_names_.contains(e.name) && context == NamedAccessContext::Rule) {
+                    errors_.error(e.location, "template '" + e.name + "' is not an entity_id value; spawn it instead");
+                }
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (!resolve_named_access_chain(e, shadowed, context)) {
+                    walk(*e.object);
+                }
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                walk(*e.operand);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                walk(*e.left);
+                walk(*e.right);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                if (!std::holds_alternative<IdentExpr>(e.callee->expr)) {
+                    walk(*e.callee);
+                }
+                std::ranges::for_each(e.args, [&](auto& arg) { walk(*arg); });
+            } else if constexpr (std::is_same_v<E, MatchExpr>) {
+                walk(*e.subject);
+                for (auto& arm : e.arms) {
+                    walk(*arm.pattern);
+                    walk(*arm.body);
+                }
+            } else if constexpr (std::is_same_v<E, IfExpr>) {
+                walk(*e.condition);
+                walk(*e.then_expr);
+                walk(*e.else_expr);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                std::ranges::for_each(e.elements, [&](auto& element) { walk(*element); });
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                std::ranges::for_each(e.arguments.values, [&](FieldAssignment& argument) { walk(*argument.value); });
+                resolve_named_access_entries(e.overrides, shadowed, context);
+                resolve_named_access_overrides(e.child_overrides, shadowed, context);
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                std::ranges::for_each(e.named_args, [&](FieldAssignment& argument) { walk(*argument.value); });
+            }
+        },
+        expr.expr);
+}
+
+void SemanticAnalyzer::resolve_named_access_entries(std::vector<ArchetypeTraitEntry>& entries,
+                                                    const std::unordered_set<std::string>& shadowed,
+                                                    NamedAccessContext context) {
+    for (auto& entry : entries) {
+        for (auto& assignment : entry.assignments) {
+            if (assignment.value != nullptr) {
+                resolve_named_access_expr(*assignment.value, shadowed, context);
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::resolve_named_access_overrides(std::vector<ChildOverrideNode>& overrides,
+                                                      const std::unordered_set<std::string>& shadowed,
+                                                      NamedAccessContext context) {
+    for (auto& override_node : overrides) {
+        resolve_named_access_entries(override_node.traits, shadowed, context);
+        resolve_named_access_overrides(override_node.children, shadowed, context);
+    }
+}
+
+void SemanticAnalyzer::resolve_named_access_children(std::vector<ChildArchetypeNode>& children,
+                                                     const std::unordered_set<std::string>& shadowed) {
+    for (auto& child : children) {
+        resolve_named_access_entries(child.traits, shadowed, NamedAccessContext::Archetype);
+        resolve_named_access_children(child.children, shadowed);
+        resolve_named_access_overrides(child.child_overrides, shadowed, NamedAccessContext::Archetype);
+    }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- one arm per StmtNode kind
+void SemanticAnalyzer::resolve_named_access_stmts(std::vector<std::unique_ptr<StmtNode>>& stmts,
+                                                  std::unordered_set<std::string> shadowed,
+                                                  NamedAccessContext context) {
+    const auto walk = [&](const std::unique_ptr<ExprNode>& expr) {
+        if (expr != nullptr) {
+            resolve_named_access_expr(*expr, shadowed, context);
+        }
+    };
+    const auto walk_optional = [&](const std::optional<std::unique_ptr<ExprNode>>& expr) {
+        if (expr.has_value()) {
+            walk(*expr);
+        }
+    };
+    const auto walk_fields = [&](std::vector<FieldAssignment>& fields) {
+        std::ranges::for_each(fields, [&](const FieldAssignment& field) { walk(field.value); });
+    };
+    const auto walk_block = [&](std::vector<std::unique_ptr<StmtNode>>& body, const std::string* bound) {
+        auto inner = shadowed;
+        if (bound != nullptr) {
+            inner.insert(*bound);
+        }
+        resolve_named_access_stmts(body, std::move(inner), context);
+    };
+    for (auto& stmt : stmts) {
+        std::visit(
+            [&](auto& s) {
+                using S = std::decay_t<decltype(s)>;
+                if constexpr (std::is_same_v<S, LetStmt>) {
+                    walk(s.value);
+                    shadowed.insert(s.name);
+                } else if constexpr (std::is_same_v<S, VarAssign>) {
+                    walk(s.value);
+                    if (s.path.empty() || shadowed.contains(s.name)) {
+                        return;
+                    }
+                    if (!entity_names_.contains(s.name) && !imports_.modules.contains(s.name)) {
+                        return;
+                    }
+                    std::vector<std::string> chain{s.name};
+                    chain.insert(chain.end(), s.path.begin(), s.path.end());
+                    if (auto path = resolve_named_path(chain, context, s.location); path.has_value()) {
+                        s.named_target = std::move(path->trait);
+                    }
+                } else if constexpr (std::is_same_v<S, EmitStmt>) {
+                    walk_optional(s.target);
+                    walk_fields(s.payload);
+                } else if constexpr (std::is_same_v<S, SpawnStmt>) {
+                    walk_fields(s.arguments.values);
+                    resolve_named_access_entries(s.overrides, shadowed, context);
+                    resolve_named_access_overrides(s.child_overrides, shadowed, context);
+                } else if constexpr (std::is_same_v<S, DestroyStmt> || std::is_same_v<S, RemoveTraitStmt>) {
+                    walk_optional(s.target_expr);
+                } else if constexpr (std::is_same_v<S, AddTraitStmt> || std::is_same_v<S, ProjectTraitStmt>) {
+                    walk_fields(s.args);
+                    walk_optional(s.target_expr);
+                } else if constexpr (std::is_same_v<S, SetTraitStmt>) {
+                    walk_fields(s.args);
+                    walk(s.target_expr);
+                } else if constexpr (std::is_same_v<S, ReturnStmt>) {
+                    walk_optional(s.value);
+                } else if constexpr (std::is_same_v<S, ExprStmt>) {
+                    walk(s.expr);
+                } else if constexpr (std::is_same_v<S, IfStmt>) {
+                    walk(s.condition);
+                    walk_block(s.then_body, nullptr);
+                    for (auto& branch : s.else_if_branches) {
+                        walk(branch.condition);
+                        walk_block(branch.body, nullptr);
+                    }
+                    walk_block(s.else_body, nullptr);
+                } else if constexpr (std::is_same_v<S, ForeachStmt>) {
+                    walk(s.iterable);
+                    walk_block(s.body, &s.var_name);
+                } else if constexpr (std::is_same_v<S, TraitMatchStmt>) {
+                    walk(s.subject);
+                    for (auto& arm : s.arms) {
+                        walk_block(arm.body, arm.alias.has_value() ? &*arm.alias : nullptr);
+                    }
+                    if (s.wildcard.has_value()) {
+                        walk_block(s.wildcard->body, nullptr);
+                    }
+                }
+            },
+            stmt->stmt);
     }
 }
 
@@ -4365,7 +4786,9 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             // of doing anything (dsl-rule-limit).
             const bool writable_target = bound != nullptr && bound->writability == PairBindingWritability::Writable &&
                                          !assign_stmt->path.empty();
-            if (pair_scope != nullptr && !writable_target) {
+            // A named write targets its entity, never the handler's domain.
+            const bool named_write = assign_stmt->named_target.has_value();
+            if (!named_write && pair_scope != nullptr && !writable_target) {
                 if (bound != nullptr && bound->writability == PairBindingWritability::Writable) {
                     errors_.error(assign_stmt->location,
                                   "pair-bound durable traits are read-only; assign a dotted trait path through '" +
@@ -4384,7 +4807,7 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
                                   "binding");
                 }
                 target_rejected = true;
-            } else {
+            } else if (!named_write) {
                 target_rejected = reject_local_assignment(*assign_stmt, filter_bindings, locals);
             }
 
@@ -4397,7 +4820,9 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             // in generated C++. This also gives compound-assignment operator/type
             // validation below the target's real type for both bare and dotted targets.
             TypeInfo target_type = make_unknown_type();
-            if (!target_rejected) {
+            if (named_write) {
+                target_type = named_field_type(*assign_stmt->named_target, named_target_fields(*assign_stmt));
+            } else if (!target_rejected) {
                 ExprNode chain(
                     ExprNode::Variant{IdentExpr{.name = assign_stmt->name, .location = assign_stmt->location}},
                     assign_stmt->location);
@@ -4686,6 +5111,7 @@ void SemanticAnalyzer::collect_rule_dependency(const RuleNode& rule, std::size_t
             auto inferred = rule.pairs.has_value() ? infer_pair_handler_contract(rule, handler, pair_scope)
                                                    : infer_regular_handler_contract(rule, handler);
             inferred.spatial_join = spatial_join;
+            fold_rule_clause_named_reads(rule, inferred);
             result_.handler_contracts.push_back(inferred);
 
             HandlerNode node;
@@ -4875,6 +5301,27 @@ void record_write(HandlerContract& contract,
     add_field_access(contract.write_fields[trait], field, declaration);
 }
 
+void record_named_read(HandlerContract& contract,
+                       const NamedTraitRef& ref,
+                       const std::optional<std::string>& field,
+                       const ResolvedTrait* declaration) {
+    const NamedRequirement requirement{.entity = ref.entity, .trait = ref.trait};
+    if (!std::ranges::contains(contract.named_requirements, requirement)) {
+        contract.named_requirements.push_back(requirement);
+    }
+    add_field_access(contract.named_reads[ref.entity][ref.trait], field, declaration);
+    record_read(contract, ref.trait, field, declaration);
+}
+
+void record_named_write(HandlerContract& contract,
+                        const NamedTraitRef& ref,
+                        const std::optional<std::string>& field,
+                        const ResolvedTrait* declaration) {
+    record_named_read(contract, ref, field, declaration);
+    add_field_access(contract.named_writes[ref.entity][ref.trait], field, declaration);
+    record_write(contract, ref.trait, field, declaration);
+}
+
 void SemanticAnalyzer::add_contract_command(HandlerContract& contract,
                                             HandlerCommandKind kind,
                                             std::optional<SymbolId> target) {
@@ -4907,6 +5354,13 @@ void SemanticAnalyzer::walk_expression_reads(  // NOLINT(readability-function-co
     const LocalNames& locals,
     HandlerContract& contract,
     const std::function<bool(const ExprNode&, const LocalNames&)>& resolve_read) const {
+    if (const auto* member = std::get_if<MemberExpr>(&expr.expr)) {
+        if (const auto named = named_field_path(*member); named.has_value()) {
+            const auto& [ref, fields] = *named;
+            record_named_read(contract, *ref, segment_at(fields, 0), find_resolved_trait(ref->trait));
+            return;
+        }
+    }
     if (resolve_read(expr, locals)) {
         return;
     }
@@ -5015,7 +5469,14 @@ void SemanticAnalyzer::walk_handler_body(  // NOLINT(readability-function-cognit
                         locals.insert(node.name);
                     } else if constexpr (std::is_same_v<S, VarAssign>) {
                         visit_expr(*node.value, locals);
-                        handle_var_assign(node, locals);
+                        if (node.named_target.has_value()) {
+                            record_named_write(contract,
+                                               *node.named_target,
+                                               segment_at(named_target_fields(node), 0),
+                                               find_resolved_trait(node.named_target->trait));
+                        } else {
+                            handle_var_assign(node, locals);
+                        }
                     } else if constexpr (std::is_same_v<S, EmitStmt>) {
                         if (node.resolved_event_id.has_value()) {
                             contract.emits.insert(*node.resolved_event_id);
@@ -5245,6 +5706,26 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     walk_handler_body(
         handler.body, std::move(handler_locals), contract, resolve_read, handle_var_assign, add_projection);
     return contract;
+}
+
+// when: and limit: run outside the handler body, so the body walk never sees
+// them; their named reads still gate and order every handler of the rule.
+void SemanticAnalyzer::fold_rule_clause_named_reads(const RuleNode& rule, HandlerContract& contract) const {
+    const auto no_other_reads = [](const ExprNode&, const LocalNames&) { return false; };
+    if (rule.when_clause.has_value()) {
+        for (const auto& predicate : rule.when_clause->predicates) {
+            walk_expression_reads(*predicate, LocalNames{}, contract, no_other_reads);
+        }
+    }
+    if (rule.limit.has_value() && rule.limit->count != nullptr) {
+        walk_expression_reads(*rule.limit->count, LocalNames{}, contract, no_other_reads);
+    }
+    // A limited rule keeps its where: out of the body, so the body walk never saw it.
+    if (rule.limit.has_value() && rule.where_clause.has_value()) {
+        for (const auto& predicate : rule.where_clause->predicates) {
+            walk_expression_reads(*predicate, LocalNames{}, contract, no_other_reads);
+        }
+    }
 }
 
 void SemanticAnalyzer::record_pair_binding_write(const VarAssign& node,
@@ -6845,6 +7326,9 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& local_bindings,
     const PairScope* pair_scope) const {
+    if (ident.resolved_entity_id.has_value()) {
+        return make_entity_id_type();
+    }
     if (ident.template_slot.has_value()) {
         return ident.template_type;
     }
@@ -6898,7 +7382,8 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
         return input_it->second == TypeKind::InputAxis ? make_input_axis_type() : make_input_button_type();
     }
     if (entity_names_.contains(ident.name)) {
-        errors_.error(location, "entity '" + ident.name + "' is not an entity_id expression");
+        errors_.error(location,
+                      "entity '" + ident.name + "' is an entity_id value only inside rules and archetype bodies");
         return make_unknown_type();
     }
     if (ident.name == "break" || ident.name == "continue") {
@@ -6947,6 +7432,12 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     // Resolved enum member access (`inp.Key.A`) types as its enum (D3/2.2).
     if (member.resolved_enum_member.has_value()) {
         return make_resolved_user_type(TypeKind::Enum, member.resolved_enum_member->enum_id);
+    }
+    if (member.resolved_entity_id.has_value()) {
+        return make_entity_id_type();
+    }
+    if (const auto named = named_field_path(member); named.has_value()) {
+        return named_field_type(*named->first, named->second);
     }
     if (pair_scope != nullptr) {
         // Flatten a (possibly nested) member-access chain rooted at a pair
@@ -7394,6 +7885,12 @@ void SemanticAnalyzer::validate_trait_override_assignments(const std::vector<con
                 errors_.error(
                     assign.location,
                     "unknown field '" + assign.name + "' for trait '" + entry->trait_name + "' in " + context_desc);
+            }
+            const auto* field = find_field_in(trait->fields, assign.name);
+            if (field != nullptr && field->type.kind != TypeKind::EntityId && names_entity(*assign.value)) {
+                errors_.error(assign.location,
+                              "type mismatch for field '" + assign.name + "' in " + context_desc +
+                                  ": an entity name is an entity_id value");
             }
             if (check_self && expr_contains_self(*assign.value)) {
                 errors_.error(assign.location, "`self` only allowed inside rule event handlers");
@@ -8782,7 +9279,9 @@ void SemanticAnalyzer::check_no_field_access(const std::vector<std::unique_ptr<S
                     locals.insert(s.name);
                 } else if constexpr (std::is_same_v<S, VarAssign>) {
                     // Bare names are locals; validate_event_stmts reports undeclared ones.
-                    if (s.path.empty() || locals.contains(s.name)) {
+                    // Named writes, including failed ones already reported, are not self field access.
+                    if (s.path.empty() || s.named_target.has_value() || locals.contains(s.name) ||
+                        entity_names_.contains(s.name) || imports_.modules.contains(s.name)) {
                         return;
                     }
                     errors_.error(s.location,

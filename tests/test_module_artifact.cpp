@@ -940,7 +940,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 18);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 19);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1283,7 +1283,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 18);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 19);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1294,6 +1294,158 @@ TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejecte
         std::ofstream out(path, std::ios::binary);
         out.write("CMOD", 4);
         const char previous_version = 17;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    CHECK(errors.has_errors());
+
+    fs::remove_all(build_dir, ec);
+}
+// ── Named entity access (module-artifact) ───────────────────────────────────
+
+static DecoratedProgram named_access_program(ProgramNode& ast, ErrorReporter& errors) {
+    Lexer lexer(R"(module library
+event tick
+pub trait Match:
+    var over: bool = false
+    var score: int = 0
+pub trait Rival:
+    var rival: entity_id
+pub entity Game:
+    Match
+pub entity Boss:
+    Rival
+pub template Minion:
+    Rival:
+        rival = Boss
+rule Score:
+    when:
+        not Game.Match.over
+    on tick:
+        Game.Match.score += 1
+)",
+                "library.cactus",
+                errors);
+    Parser parser(lexer.tokenize(), errors);
+    ast = parser.parse_program();
+    SemanticAnalyzer analyzer(errors);
+    return analyzer.analyze(ast);
+}
+
+TEST_CASE("ModuleArtifact: named-entity contract data, pub entities, and entity values round-trip",
+          "[artifact][named-entity]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ProgramNode ast;
+    const auto program = named_access_program(ast, errors);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(program.handler_contracts.size() == 1);
+    const auto& source_contract = program.handler_contracts[0];
+    REQUIRE_FALSE(source_contract.named_requirements.empty());
+
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "library.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+
+    const auto game  = make_symbol_id(SymbolKind::Entity, "library", "Game");
+    const auto match = make_symbol_id(SymbolKind::Trait, "library", "Match");
+    REQUIRE(loaded->handler_contracts.size() == 1);
+    const auto& contract = loaded->handler_contracts[0];
+    CHECK(contract.named_reads == source_contract.named_reads);
+    CHECK(contract.named_writes == source_contract.named_writes);
+    CHECK(contract.named_requirements == std::vector<NamedRequirement>{{.entity = game, .trait = match}});
+    CHECK(contract.named_reads.at(game).at(match) == FieldAccess{.all = false, .fields = {"over", "score"}});
+    CHECK(contract.named_writes.at(game).at(match) == FieldAccess{.all = false, .fields = {"score"}});
+    REQUIRE(loaded->execution_graph.handlers.size() == 1);
+    CHECK(loaded->execution_graph.handlers[0].contract.named_requirements == contract.named_requirements);
+    CHECK_FALSE(loaded->execution_graph.handlers[0].contract.splittable_per_entity());
+
+    CHECK(loaded->pub_entities == program.pub_entities);
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE(symbols.has_value());
+    REQUIRE(symbols->entities.contains("Game"));
+    CHECK(symbols->entities.at("Game").symbol_id == game);
+    CHECK(symbols->entities.at("Game").traits == std::vector<SymbolId>{match});
+
+    REQUIRE(symbols->templates.contains("Minion"));
+    const auto& blueprint = symbols->templates.at("Minion").blueprint;
+    REQUIRE(blueprint != nullptr);
+    REQUIRE(blueprint->traits.size() == 1);
+    const auto& value = std::get<IdentExpr>(blueprint->traits[0].assignments[0].value->expr);
+    CHECK(value.resolved_entity_id == make_symbol_id(SymbolKind::Entity, "library", "Boss"));
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: named field references in expressions round-trip", "[artifact][named-entity]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto game  = make_symbol_id(SymbolKind::Entity, "library", "Game");
+    const auto match = make_symbol_id(SymbolKind::Trait, "library", "Match");
+    auto blueprint   = std::make_shared<TemplateNode>();
+    blueprint->name  = "Probe";
+    auto trait_node  = std::make_unique<ExprNode>(
+        ExprNode::Variant{MemberExpr{
+            .object = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "Game"}}, SourceLocation{}),
+            .member = "Match",
+            .resolved_named_trait = NamedTraitRef{.entity = game, .trait = match}}},
+        SourceLocation{});
+    auto qualified = std::make_unique<ExprNode>(
+        ExprNode::Variant{MemberExpr{
+            .object = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "state"}}, SourceLocation{}),
+            .member             = "Game",
+            .resolved_entity_id = game}},
+        SourceLocation{});
+    ArchetypeTraitEntry entry{.trait_name = "Rival"};
+    entry.assignments.push_back(FieldAssignment{.name = "named", .value = std::move(trait_node)});
+    entry.assignments.push_back(FieldAssignment{.name = "qualified", .value = std::move(qualified)});
+    blueprint->traits.push_back(std::move(entry));
+
+    DecoratedProgram program;
+    program.pub_templates.insert("Probe");
+    program.template_parameters["Probe"] = {};
+    program.template_blueprints["Probe"] = blueprint;
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+    const auto& loaded      = symbols->templates.at("Probe").blueprint;
+    REQUIRE(loaded != nullptr);
+    const auto& assignments = loaded->traits.at(0).assignments;
+    CHECK(std::get<MemberExpr>(assignments.at(0).value->expr).resolved_named_trait ==
+          NamedTraitRef{.entity = game, .trait = match});
+    CHECK(std::get<MemberExpr>(assignments.at(1).value->expr).resolved_entity_id == game);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 19);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "unnamed.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 18;
         out.write(&previous_version, 1);
     }
 

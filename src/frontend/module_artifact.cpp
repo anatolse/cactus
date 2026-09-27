@@ -346,6 +346,49 @@ void ModuleArtifact::write_field_table(std::ostream& out, const std::unordered_m
     }
 }
 
+void ModuleArtifact::write_named_field_table(std::ostream& out, const NamedFieldTable& table) {
+    std::vector<const NamedFieldTable::value_type*> ordered;
+    ordered.reserve(table.size());
+    for (const auto& entry : table) {
+        ordered.push_back(&entry);
+    }
+    std::ranges::sort(ordered, [](const auto* left, const auto* right) {
+        return make_canonical_id(left->first) < make_canonical_id(right->first);
+    });
+    write_u32(out, static_cast<uint32_t>(ordered.size()));
+    for (const auto* entry : ordered) {
+        write_symbol_id(out, entry->first);
+        write_field_table(out, entry->second);
+    }
+}
+
+void ModuleArtifact::write_optional_named_trait(std::ostream& out, const std::optional<NamedTraitRef>& ref) {
+    write_bool(out, ref.has_value());
+    if (!ref.has_value()) {
+        return;
+    }
+    write_symbol_id(out, ref->entity);
+    write_symbol_id(out, ref->trait);
+    write_u64(out, static_cast<uint64_t>(ref->entity_segments));
+    write_u64(out, static_cast<uint64_t>(ref->trait_segments));
+}
+
+void ModuleArtifact::write_entities(std::ostream& out, const std::unordered_map<std::string, ImportedEntity>& entities) {
+    std::vector<const ImportedEntity*> ordered;
+    ordered.reserve(entities.size());
+    for (const auto& entry : entities) {
+        ordered.push_back(&entry.second);
+    }
+    std::ranges::sort(ordered, [](const auto* left, const auto* right) { return left->name < right->name; });
+    write_u32(out, static_cast<uint32_t>(ordered.size()));
+    for (const auto* entity : ordered) {
+        write_str(out, entity->name);
+        write_str(out, entity->module_name);
+        write_symbol_id(out, entity->symbol_id);
+        write_symbol_vector(out, entity->traits);
+    }
+}
+
 void ModuleArtifact::write_string_vector(std::ostream& out, const std::vector<std::string>& values) {
     write_u32(out, static_cast<uint32_t>(values.size()));
     for (const auto& value : values) {
@@ -401,6 +444,13 @@ void ModuleArtifact::write_contract(std::ostream& out, const HandlerContract& co
     write_field_table(out, contract.read_fields);
     write_field_table(out, contract.write_fields);
     write_symbol_set(out, contract.projects);
+    write_named_field_table(out, contract.named_reads);
+    write_named_field_table(out, contract.named_writes);
+    write_u32(out, static_cast<uint32_t>(contract.named_requirements.size()));
+    for (const auto& requirement : contract.named_requirements) {
+        write_symbol_id(out, requirement.entity);
+        write_symbol_id(out, requirement.trait);
+    }
     write_symbol_set(out, contract.emits);
     write_u32(out, static_cast<uint32_t>(contract.commands.size()));
     for (const auto& command : contract.commands) {
@@ -868,6 +918,40 @@ std::unordered_map<SymbolId, FieldAccess> ModuleArtifact::read_field_table(std::
     return table;
 }
 
+NamedFieldTable ModuleArtifact::read_named_field_table(std::istream& in) {
+    NamedFieldTable table;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        auto entity   = read_symbol_id(in);
+        table[entity] = read_field_table(in);
+    }
+    return table;
+}
+
+std::optional<NamedTraitRef> ModuleArtifact::read_optional_named_trait(std::istream& in) {
+    if (!read_bool(in)) {
+        return std::nullopt;
+    }
+    NamedTraitRef ref{.entity = read_symbol_id(in), .trait = read_symbol_id(in)};
+    ref.entity_segments = static_cast<std::size_t>(read_u64(in));
+    ref.trait_segments  = static_cast<std::size_t>(read_u64(in));
+    return ref;
+}
+
+std::unordered_map<std::string, ImportedEntity> ModuleArtifact::read_entities(std::istream& in) {
+    std::unordered_map<std::string, ImportedEntity> entities;
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        ImportedEntity entity;
+        entity.name           = read_str(in);
+        entity.module_name    = read_str(in);
+        entity.symbol_id      = read_symbol_id(in);
+        entity.traits         = read_symbol_vector(in);
+        entities[entity.name] = std::move(entity);
+    }
+    return entities;
+}
+
 std::vector<std::string> ModuleArtifact::read_string_vector(std::istream& in) {
     std::vector<std::string> values;
     const auto count = read_u32(in);
@@ -944,6 +1028,13 @@ HandlerContract ModuleArtifact::read_contract(std::istream& in) {
     contract.read_fields     = read_field_table(in);
     contract.write_fields    = read_field_table(in);
     contract.projects        = read_symbol_set(in);
+    contract.named_reads     = read_named_field_table(in);
+    contract.named_writes    = read_named_field_table(in);
+    const auto requirement_count = read_u32(in);
+    for (uint32_t i = 0; i < requirement_count && in.good(); ++i) {
+        NamedRequirement requirement{.entity = read_symbol_id(in), .trait = read_symbol_id(in)};
+        contract.named_requirements.push_back(std::move(requirement));
+    }
     contract.emits           = read_symbol_set(in);
     const auto command_count = read_u32(in);
     contract.commands.reserve(command_count);
@@ -1160,6 +1251,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_string_set(out, program.pub_templates);
     write_string_set(out, program.non_pub_templates);
     write_string_set(out, program.pub_events);
+    write_entities(out, program.pub_entities);
     write_dep_graph(out, program.dependency_graph);
     write_handler_contracts(out, program.handler_contracts);
     write_execution_graph(out, program.execution_graph);
@@ -1208,6 +1300,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     program.pub_templates     = read_string_set(in);
     program.non_pub_templates = read_string_set(in);
     program.pub_events        = read_string_set(in);
+    program.pub_entities      = read_entities(in);
     program.dependency_graph  = read_dep_graph(in);
     program.handler_contracts = read_handler_contracts(in);
     program.execution_graph   = read_execution_graph(in);
@@ -1304,6 +1397,8 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
         rule.after_rules             = dep.after_rules;
         symbols.rules[dep.rule_name] = rule;
     }
+
+    symbols.entities = program->pub_entities;
 
     for (const auto& [name, event] : program->events) {
         if (!event.is_pub) {
@@ -1422,6 +1517,7 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_bool(out, node.template_slot.has_value());
             write_u64(out, node.template_slot.value_or(0));
             write_type_info(out, node.template_type);
+            write_optional_symbol_id(out, node.resolved_entity_id);
         } else if constexpr (std::is_same_v<Node, BinaryExpr>) {
             write_str(out, node.op);
             write_expression(out, *node.left);
@@ -1437,6 +1533,8 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_expression(out, *node.object);
             write_str(out, node.member);
             write_enum_member(out, node.resolved_enum_member);
+            write_optional_symbol_id(out, node.resolved_entity_id);
+            write_optional_named_trait(out, node.resolved_named_trait);
         } else if constexpr (std::is_same_v<Node, IfExpr>) {
             write_expression(out, *node.condition);
             write_expression(out, *node.then_expr);
@@ -1487,6 +1585,7 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
                 node.template_slot = static_cast<std::size_t>(index);
             }
             node.template_type = read_type_info(in);
+            node.resolved_entity_id = read_optional_symbol_id(in);
             return wrap(std::move(node));
         }
         case 3: {
@@ -1520,6 +1619,8 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
                 member.index = static_cast<int32_t>(read_i64(in));
                 node.resolved_enum_member = std::move(member);
             }
+            node.resolved_entity_id = read_optional_symbol_id(in);
+            node.resolved_named_trait = read_optional_named_trait(in);
             return wrap(std::move(node));
         }
         case 7: {

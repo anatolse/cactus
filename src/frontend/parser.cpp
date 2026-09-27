@@ -1344,6 +1344,15 @@ RuleNode Parser::parse_rule() {
         }
     }
 
+    skip_newlines();
+    if (at_when_clause()) {
+        auto error_count_before = errors_.error_count();
+        node.when_clause        = parse_when_clause();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+        }
+    }
+
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
@@ -1561,22 +1570,44 @@ bool Parser::at_where_clause() const {
 }
 
 WhereClause Parser::parse_where_clause() {
-    auto loc = peek().location;
+    WhereClause clause;
+    clause.location   = peek().location;
     advance();  // consume contextual 'where' identifier
+    clause.predicates = parse_predicate_block(clause.location, "where");
+    return clause;
+}
+
+bool Parser::at_when_clause() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "when" && peek_next().type == TokenType::COLON;
+}
+
+WhenClause Parser::parse_when_clause() {
+    WhenClause clause;
+    clause.location   = peek().location;
+    advance();  // consume contextual 'when' identifier
+    clause.predicates = parse_predicate_block(clause.location, "when");
+    return clause;
+}
+
+// The `: NEWLINE INDENT expr NEWLINE ... DEDENT` body shared by where: and when:.
+std::vector<std::unique_ptr<ExprNode>> Parser::parse_predicate_block(const SourceLocation& loc,
+                                                                     const char* clause_name) {
     consume(TokenType::COLON, "expected ':'");
     expect_newline();
+
+    std::vector<std::unique_ptr<ExprNode>> predicates;
+    if (!check(TokenType::INDENT)) {
+        errors_.error(loc, std::string(clause_name) + ": block must contain at least one predicate");
+        return predicates;
+    }
     expect_indent();
-
-    WhereClause clause;
-    clause.location = loc;
-
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
         skip_newlines();
         if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
             break;
         }
         auto error_count_before = errors_.error_count();
-        clause.predicates.push_back(parse_expression());
+        predicates.push_back(parse_expression());
         expect_newline();
         if (errors_.error_count() > error_count_before) {
             synchronize();
@@ -1584,11 +1615,10 @@ WhereClause Parser::parse_where_clause() {
     }
     expect_dedent();
 
-    if (clause.predicates.empty()) {
-        errors_.error(loc, "where: block must contain at least one predicate");
+    if (predicates.empty()) {
+        errors_.error(loc, std::string(clause_name) + ": block must contain at least one predicate");
     }
-
-    return clause;
+    return predicates;
 }
 
 bool Parser::at_limit_clause() const {
@@ -3005,6 +3035,14 @@ ExternRuleNode Parser::parse_extern_rule() {
         if (errors_.error_count() > error_count_before) {
             synchronize();
         }
+    }
+
+    skip_newlines();
+    if (at_when_clause()) {
+        auto when_loc = peek().location;
+        parse_when_clause();  // parsed and discarded; when: is regular-rule-only
+        errors_.error(when_loc, "'when:' is only allowed on regular rules");
+        synchronize();
     }
 
     while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {

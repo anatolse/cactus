@@ -31,6 +31,27 @@ std::size_t count(entt::registry& registry) {
     return registry.view<Trait>().size();
 }
 
+// Game-wide state lives on the named `Game` entity, not on the player.
+template <typename Trait>
+constexpr bool carries_game_over = requires(Trait trait) { trait.game_over; } || requires(Trait trait) {
+    trait.game_over_count;
+};
+static_assert(!carries_game_over<main__Player>);
+
+main__Match& match_state(entt::registry& registry) {
+    const auto game = generated_named_slots().main__Game;
+    REQUIRE(registry.all_of<main__Match>(game));
+    return registry.get<main__Match>(game);
+}
+
+entt::entity crosshair_hud() {
+    return generated_named_slots().main__CrosshairHud;
+}
+
+entt::entity game_over_hud() {
+    return generated_named_slots().main__GameOverHud;
+}
+
 entt::entity isolate_single_enemy(entt::registry& registry) {
     const auto enemies = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
     REQUIRE(enemies.begin() != enemies.end());
@@ -114,8 +135,8 @@ TEST_CASE("first-person arena headless: authored arena, player camera, HUD, and 
     CHECK(same_color(building.template get<std_render_meshes__Renderer>(*building.begin()).color,
                      Color{.r = 128, .g = 80, .b = 32, .a = 255}));
 
-    const auto crosshair = only_entity<main__Crosshair>(registry);
-    const auto game_over = only_entity<main__GameOverLabel>(registry);
+    const auto crosshair = crosshair_hud();
+    const auto game_over = game_over_hud();
     CHECK(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
     CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(game_over).visible);
 }
@@ -475,12 +496,12 @@ TEST_CASE("first-person arena headless: game over is exactly once, terminal, and
     enemy_transform.position = player_transform.position;
     cactus_headless_test::drive_frame(registry, kFrameDt);
 
-    const auto& state = registry.get<main__Player>(player);
-    CHECK(state.game_over);
-    CHECK(state.game_over_count == 1);
+    const auto& state = match_state(registry);
+    CHECK(state.over);
+    CHECK(state.over_count == 1);
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
-    const auto crosshair = only_entity<main__Crosshair>(registry);
-    const auto label     = only_entity<main__GameOverLabel>(registry);
+    const auto crosshair = crosshair_hud();
+    const auto label     = game_over_hud();
     CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
     CHECK(registry.get<std_render_text__ScreenLabel>(label).visible);
     CHECK(registry.get<std_render_text__ScreenLabel>(label).text == "GAME OVER");
@@ -495,7 +516,7 @@ TEST_CASE("first-person arena headless: game over is exactly once, terminal, and
     CHECK(horizontal_distance(enemy_transform.position, frozen_enemy) == Catch::Approx(0.0F));
     CHECK(count<main__Bullet>(registry) == 0);
     CHECK(count<main__Enemy>(registry) == frozen_enemy_count);
-    CHECK(registry.get<main__Player>(player).game_over_count == 1);
+    CHECK(match_state(registry).over_count == 1);
 }
 
 TEST_CASE("first-person arena headless: camera world pose follows the player's position, yaw, and pitch",
@@ -559,7 +580,7 @@ TEST_CASE("first-person arena headless: Escape releases cursor capture without e
 
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
     CHECK_FALSE(registry.get<main__Player>(player).cursor_captured);
-    CHECK_FALSE(registry.get<main__Player>(player).game_over);
+    CHECK_FALSE(match_state(registry).over);
 }
 
 TEST_CASE("first-person arena headless: a primary click while released recaptures the cursor without also firing",
@@ -608,7 +629,7 @@ TEST_CASE("first-person arena headless: cursor_captured stays consistent with ac
     enemy_transform.position = player_transform.position;
     cactus_headless_test::drive_frame(registry, kFrameDt);
 
-    REQUIRE(registry.get<main__Player>(player).game_over);
+    REQUIRE(match_state(registry).over);
     CHECK_FALSE(cactus_raylib_fake::cursor_captured());
     CHECK_FALSE(registry.get<main__Player>(player).cursor_captured);
 }
@@ -636,8 +657,8 @@ TEST_CASE("first-person arena headless: pressing R after game over fully restart
     const auto pre_restart_enemy = *registry.view<main__Enemy, std_transform_volume__WorldTransform>().begin();
     registry.get<std_transform_volume__WorldTransform>(pre_restart_enemy).position = player_transform.position;
     cactus_headless_test::drive_frame(registry, kFrameDt);
-    REQUIRE(registry.get<main__Player>(player).game_over);
-    REQUIRE(registry.get<main__Player>(player).game_over_count == 1);
+    REQUIRE(match_state(registry).over);
+    REQUIRE(match_state(registry).over_count == 1);
 
     // Disturb the player's transform/camera as if they'd wandered before
     // dying, proving restart actually resets it instead of it already
@@ -651,10 +672,10 @@ TEST_CASE("first-person arena headless: pressing R after game over fully restart
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_R, false);
 
-    const auto& state = registry.get<main__Player>(player);
-    CHECK_FALSE(state.game_over);
-    CHECK(state.game_over_count == 1);
-    CHECK(state.cursor_captured);
+    const auto& state = match_state(registry);
+    CHECK_FALSE(state.over);
+    CHECK(state.over_count == 1);
+    CHECK(registry.get<main__Player>(player).cursor_captured);
     CHECK(cactus_raylib_fake::cursor_captured());
     CHECK(player_transform.position.x == Catch::Approx(spawn_position.x));
     CHECK(player_transform.position.y == Catch::Approx(spawn_position.y));
@@ -674,8 +695,8 @@ TEST_CASE("first-person arena headless: pressing R after game over fully restart
     CHECK(count<main__Bullet>(registry) == 0);
     CHECK(count<main__Enemy>(registry) == 4);
 
-    const auto crosshair = only_entity<main__Crosshair>(registry);
-    const auto label     = only_entity<main__GameOverLabel>(registry);
+    const auto crosshair = crosshair_hud();
+    const auto label     = game_over_hud();
     CHECK(registry.get<std_render_text__ScreenLabel>(crosshair).visible);
     CHECK_FALSE(registry.get<std_render_text__ScreenLabel>(label).visible);
 }
@@ -695,7 +716,7 @@ TEST_CASE("first-person arena headless: R has no effect while the game is not ov
     cactus_headless_test::drive_frame(registry, kFrameDt);
     cactus_raylib_fake::set_key_pressed_this_frame(KEY_R, false);
 
-    CHECK_FALSE(registry.get<main__Player>(player).game_over);
+    CHECK_FALSE(match_state(registry).over);
     CHECK(player_transform.position.x == Catch::Approx(5.0F));
     CHECK(player_transform.position.z == Catch::Approx(-3.0F));
     CHECK(count<main__Enemy>(registry) == enemy_count_before);
@@ -707,10 +728,9 @@ TEST_CASE("first-person arena headless: overlapping live enemies of any kind are
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    // Mark the player game-over so SeekPlayer no-ops and only
-    // DetectEnemySeparation moves these two enemies below.
-    const auto player = only_entity<main__Player>(registry);
-    registry.get<main__Player>(player).game_over = true;
+    // End the game so SeekPlayer no-ops and only DetectEnemySeparation
+    // moves these two enemies below.
+    match_state(registry).over = true;
 
     const auto robot  = *registry.view<main__RobotEnemy, std_transform_volume__WorldTransform>().begin();
     const auto knight = *registry.view<main__KnightEnemy, std_transform_volume__WorldTransform>().begin();
@@ -737,8 +757,7 @@ TEST_CASE("first-person arena headless: a dying enemy does not participate in se
     entt::registry registry;
     cactus_headless_test::drive_one_frame(registry, kFrameDt);
 
-    const auto player = only_entity<main__Player>(registry);
-    registry.get<main__Player>(player).game_over = true;
+    match_state(registry).over = true;
 
     const auto enemies      = registry.view<main__Enemy, std_transform_volume__WorldTransform>();
     auto iterator            = enemies.begin();

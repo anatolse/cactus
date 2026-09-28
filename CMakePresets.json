@@ -67,6 +67,19 @@
                 "CMAKE_CXX_COMPILER": "clang++",
                 "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -g"
             }
+        },
+        {
+            "name": "clang-coverage",
+            "displayName": "Clang Coverage (Debug)",
+            "description": "Debug build using Clang with source-based coverage instrumentation for coverage_check",
+            "binaryDir": "${sourceDir}/build-clang-coverage",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CACTUS_ENABLE_COVERAGE": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -81,6 +94,10 @@
         {
             "name": "clang-o3-release",
             "configurePreset": "clang-o3-release"
+        },
+        {
+            "name": "clang-coverage",
+            "configurePreset": "clang-coverage"
         }
     ],
     "testPresets": [

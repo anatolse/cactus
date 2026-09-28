@@ -25,3 +25,11 @@ context: |
 #       - Always include a "Non-goals" section
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
+rules:
+  tasks:
+    - >-
+      End every tasks.md with a final task that runs the coverage gate
+      (`cmake --preset clang-coverage` then
+      `cmake --build --preset clang-coverage --target coverage_check`). If it
+      fails, add test cases for the uncovered lines until it passes; never lower
+      CACTUS_COVERAGE_THRESHOLD.

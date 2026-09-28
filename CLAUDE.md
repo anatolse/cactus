@@ -23,7 +23,11 @@ A substantive change goes through, in order:
 3. **Apply** (`/opsx:apply`) — implement the tasks, TDD per "Testing" below.
 4. **Clean up** — run `/simplify` in subagent.
 5. **Verify** (`/opsx:verify`) — confirm the cleanup pass didn't drift from
-   the artifacts or regress behavior.
+   the artifacts or regress behavior. Also run the coverage gate:
+   `cmake --preset clang-coverage` then
+   `cmake --build --preset clang-coverage --target coverage_check`. It must pass.
+   If gated line coverage is below the threshold, add test cases for the uncovered
+   lines (the HTML report it prints shows them). Never lower the threshold.
 6. **Archive** (`/opsx:archive`) — sync specs and move the change into
    `openspec/changes/archive/`.
 

@@ -44,6 +44,7 @@ target_link_libraries(cactus_runtime_cpp_entt_headless_fake PUBLIC
     cactus_raylib_fake
 )
 set_property(TARGET cactus_runtime_cpp_entt_headless_fake PROPERTY CXX_CLANG_TIDY "")
+cactus_enable_coverage(cactus_runtime_cpp_entt_headless_fake)
 
 # ── Save/restore round-trip subprocess executables (add-world-snapshot-restore
 # tasks 7.1/7.2) ─────────────────────────────────────────────────────────────
@@ -89,6 +90,40 @@ add_dependencies(test_persistence_roundtrip_subprocess
     persistence_references_roundtrip_subprocess
 )
 add_test(NAME PersistenceRoundtripSubprocessTests COMMAND test_persistence_roundtrip_subprocess)
+
+# Coverage gate threshold evaluation (no instrumented build needed)
+function(cactus_add_coverage_threshold_case CASE_NAME)
+    cmake_parse_arguments(CASE "TESTS_FAILED" "SUMMARY;THRESHOLD;EXPECT;EXPECT_OUTPUT" "" ${ARGN})
+    add_test(NAME CoverageThreshold.${CASE_NAME}
+        COMMAND "${CMAKE_COMMAND}"
+                "-DCHECK_SCRIPT=${CMAKE_SOURCE_DIR}/cmake/CactusCoverageCheck.cmake"
+                "-DSUMMARY_JSON=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coverage/${CASE_SUMMARY}"
+                "-DTHRESHOLD=${CASE_THRESHOLD}"
+                "-DTESTS_FAILED=${CASE_TESTS_FAILED}"
+                "-DEXPECT=${CASE_EXPECT}"
+                "-DEXPECT_OUTPUT=${CASE_EXPECT_OUTPUT}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/coverage_threshold_case.cmake"
+    )
+endfunction()
+
+cactus_add_coverage_threshold_case(below
+    SUMMARY summary_below_90.json THRESHOLD 90
+    EXPECT fail EXPECT_OUTPUT "89\\.5%.*threshold 90%")
+cactus_add_coverage_threshold_case(at
+    SUMMARY summary_at_90.json THRESHOLD 90
+    EXPECT pass EXPECT_OUTPUT "90%.*threshold 90%")
+cactus_add_coverage_threshold_case(above
+    SUMMARY summary_above_90.json THRESHOLD 90
+    EXPECT pass EXPECT_OUTPUT "91\\.25%.*threshold 90%")
+cactus_add_coverage_threshold_case(lowered_threshold
+    SUMMARY summary_below_90.json THRESHOLD 85
+    EXPECT pass EXPECT_OUTPUT "89\\.5%.*threshold 85%")
+cactus_add_coverage_threshold_case(raised_threshold
+    SUMMARY summary_above_90.json THRESHOLD 95
+    EXPECT fail EXPECT_OUTPUT "91\\.25%.*threshold 95%")
+cactus_add_coverage_threshold_case(tests_failed
+    SUMMARY summary_above_90.json THRESHOLD 90 TESTS_FAILED
+    EXPECT fail EXPECT_OUTPUT "91\\.25%.*threshold 90%.*tests failed")
 
 # Lexer tests
 add_executable(test_lexer test_lexer.cpp)
@@ -580,3 +615,14 @@ add_test(NAME ExampleCppCompilationTests COMMAND test_example_cpp_compilation)
 #     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 #     COMMENT "Running focused example C++ compilation integration check"
 # )
+
+# Every executable defined in this directory is a test or a test subprocess, so
+# collecting them here keeps coverage_check's list in step with new tests.
+get_directory_property(cactus_test_dir_targets BUILDSYSTEM_TARGETS)
+foreach(target_name IN LISTS cactus_test_dir_targets)
+    get_target_property(target_type ${target_name} TYPE)
+    if(target_type STREQUAL "EXECUTABLE")
+        cactus_enable_coverage(${target_name})
+        set_property(GLOBAL APPEND PROPERTY CACTUS_TEST_EXECUTABLES ${target_name})
+    endif()
+endforeach()

@@ -39,3 +39,6 @@ experiments/
 __pycache__/
 /build-msvc-verify/
 /build-clang-verify/
+build-clang-coverage/
+*.profraw
+*.profdata

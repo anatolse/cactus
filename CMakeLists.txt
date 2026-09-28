@@ -11,6 +11,30 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ── Coverage (opt-in, Clang source-based) ──────────────────────────────────────
+option(CACTUS_ENABLE_COVERAGE "Instrument project targets for Clang source-based coverage" OFF)
+set(CACTUS_COVERAGE_THRESHOLD "90" CACHE STRING "Minimum gated line coverage percent for coverage_check")
+
+if(CACTUS_ENABLE_COVERAGE AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR
+        "CACTUS_ENABLE_COVERAGE requires Clang (found '${CMAKE_CXX_COMPILER_ID}'); use the clang-coverage preset")
+endif()
+
+set(CACTUS_COVERAGE_PROFRAW_DIR "${CMAKE_BINARY_DIR}/coverage/profraw")
+
+# The =path form must be on the compile step: on the MSVC target a link-only
+# path is ignored and profiles fall back to default.profraw in the cwd.
+function(cactus_enable_coverage TARGET_NAME)
+    if(NOT CACTUS_ENABLE_COVERAGE)
+        return()
+    endif()
+    target_compile_options(${TARGET_NAME} PRIVATE
+        "-fprofile-instr-generate=${CACTUS_COVERAGE_PROFRAW_DIR}/%p-%m.profraw"
+        -fcoverage-mapping
+    )
+    target_link_options(${TARGET_NAME} PRIVATE -fprofile-instr-generate)
+endfunction()
+
 # ── FetchContent Dependencies ───────────────────────────────────────────────────
 include(FetchContent)
 
@@ -156,6 +180,16 @@ target_compile_definitions(cactus PRIVATE
     CACTUS_STDLIB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/stdlib"
     CACTUS_CLANG_FORMAT_EXE_PATH="${CACTUS_CLANG_FORMAT_EXE}"
 )
+
+foreach(target_name IN ITEMS
+        cactus_common
+        cactus_runtime_common
+        cactus_runtime_cpp_entt
+        cactus_frontend
+        cactus_backend_cpp_entt
+        cactus)
+    cactus_enable_coverage(${target_name})
+endforeach()
 
 # ── Generated Example Executables ─────────────────────────────────────────────
 set(CACTUS_GENERATED_EXAMPLES_DIR "${CMAKE_BINARY_DIR}/generated_examples")
@@ -655,3 +689,35 @@ cactus_add_example(example_gradient_square_generated
 # ── Tests ───────────────────────────────────────────────────────────────────────
 enable_testing()
 add_subdirectory(tests)
+
+# ── Coverage gate ──────────────────────────────────────────────────────────────
+if(CACTUS_ENABLE_COVERAGE)
+    get_filename_component(cactus_compiler_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(LLVM_PROFDATA_EXE NAMES llvm-profdata HINTS "${cactus_compiler_dir}" REQUIRED)
+    find_program(LLVM_COV_EXE NAMES llvm-cov HINTS "${cactus_compiler_dir}" REQUIRED)
+
+    get_property(cactus_test_executables GLOBAL PROPERTY CACTUS_TEST_EXECUTABLES)
+    set(cactus_coverage_objects "$<TARGET_FILE:cactus>")
+    foreach(target_name IN LISTS cactus_test_executables)
+        string(APPEND cactus_coverage_objects "\n$<TARGET_FILE:${target_name}>")
+    endforeach()
+    set(cactus_coverage_objects_file "${CMAKE_BINARY_DIR}/coverage/objects.txt")
+    file(GENERATE OUTPUT "${cactus_coverage_objects_file}" CONTENT "${cactus_coverage_objects}\n")
+
+    add_custom_target(coverage_check
+        COMMAND "${CMAKE_COMMAND}"
+                "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+                "-DBINARY_DIR=${CMAKE_BINARY_DIR}"
+                "-DPROFRAW_DIR=${CACTUS_COVERAGE_PROFRAW_DIR}"
+                "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+                "-DLLVM_PROFDATA=${LLVM_PROFDATA_EXE}"
+                "-DLLVM_COV=${LLVM_COV_EXE}"
+                "-DOBJECTS_FILE=${cactus_coverage_objects_file}"
+                "-DTHRESHOLD=${CACTUS_COVERAGE_THRESHOLD}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/CactusCoverageCheck.cmake"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        USES_TERMINAL
+        VERBATIM
+    )
+    add_dependencies(coverage_check cactus ${cactus_test_executables})
+endif()

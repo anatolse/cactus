@@ -28,7 +28,11 @@ build-clang-o3-release/
 build-remove-cpp-manual/
 openspec/changes/archive/*
 openspec/changes/*
-.claude/
+.claude/*
+!.claude/rules/
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/debug-rendering/
 .cline/
 .clinerules/
 .codex/

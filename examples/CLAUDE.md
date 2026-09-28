@@ -1,6 +1,6 @@
 # Example authoring rules (`examples/`)
 
-These add to the "Cactus DSL authoring rules" in the root `CLAUDE.md`.
+These add to the Cactus DSL authoring rules in `.claude/rules/cactus-dsl.md`.
 
 ## No duplication inside an example
 

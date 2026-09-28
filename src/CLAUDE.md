@@ -6,10 +6,8 @@ clang-tidy disabled independently.
 
 ## Hard constraints
 
-`.clang-tidy` enables `bugprone-*`, `modernize-*`, `performance-*`, `readability-*`,
-`cppcoreguidelines-*` (each with a few explicit exclusions below), plus
-`readability-braces-around-statements` forced back on. `WarningsAsErrors: '*'` — every
-enabled check is a build-breaking error, not a suggestion, whenever
+`.clang-tidy` has `WarningsAsErrors: '*'` — every enabled check is a build-breaking
+error, not a suggestion, whenever
 `CACTUS_ENABLE_BUILD_CLANG_TIDY` is on. Write code that's clean by construction; don't
 rely on the flag being off locally.
 
@@ -23,18 +21,8 @@ the tree mark reviewed, deliberate exceptions, not a template to reach for.
 
 ## Explicit exceptions
 
-Deliberately disabled in `.clang-tidy` — don't hand-apply the guidance below anyway:
-
-- `readability-magic-numbers`, `cppcoreguidelines-avoid-magic-numbers` — bare numeric
-  literals, no named-constant requirement.
-- `readability-identifier-length` — short names (`i`, `n`, `ok`) allowed.
-- `cppcoreguidelines-pro-bounds-*` — raw pointer arithmetic/indexing, no
-  `gsl::span`/`at()` requirement.
-- `cppcoreguidelines-owning-memory` — raw owning pointers, no `gsl::owner<T>`
-  requirement.
-- `modernize-use-trailing-return-type` — ordinary `ReturnType foo()` signatures, not
-  required to convert.
-- `bugprone-easily-swappable-parameters` — adjacent same-type parameters allowed.
+Checks disabled in `.clang-tidy` are deliberate — don't hand-apply their guidance
+anyway (no forced named constants, `gsl::span`/`gsl::owner`, or trailing return types).
 
 ## Avoid duplication
 
@@ -51,8 +39,8 @@ close before writing a fresh implementation.
   side by side — divergent copies are how one gets the next bug fix and the other
   doesn't.
 
-For `.cactus` source (`stdlib/`, `examples/`), see "Avoid duplication" under Cactus
-DSL authoring rules in the root `CLAUDE.md` — same stance, different module boundary.
+For `.cactus` source (`stdlib/`, `examples/`), see "Avoid duplication" in
+`.claude/rules/cactus-dsl.md` — same stance, different module boundary.
 
 ## Control-flow nesting
 
@@ -75,8 +63,8 @@ Flatten instead of stacking:
 toward failing the build (`WarningsAsErrors: '*'`) as nesting piles up — this rule is
 the authoring discipline that keeps you from hitting it, not a new mechanism.
 
-For `.cactus` source (`stdlib/`, `examples/`), see "Control-flow nesting" under Cactus
-DSL authoring rules in the root `CLAUDE.md` — same principle, different syntax, plus a Cactus-specific
+For `.cactus` source (`stdlib/`, `examples/`), see "Control-flow nesting" in
+`.claude/rules/cactus-dsl.md` — same principle, different syntax, plus a Cactus-specific
 correctness trap around `return` in bounded loops.
 
 ## Evaluate as a compiler pass
@@ -108,3 +96,16 @@ general C++23 feature survey.
   diagnostic-collector pattern, which accumulates multiple diagnostics across a whole
   compile pass rather than short-circuiting on the first error — keep using
   `ErrorReporter` for anything that reports to the user.
+
+## Generated code performance
+
+Generated output (the cpp-entt backend's emitted code and the 3 targets that compile
+it) stays exempt from lint/style rules — unchanged. But the backend's codegen
+*strategy* is judged on the runtime speed of the code it emits above all else.
+Priority order when a change trades one against another: generated-code runtime speed
+first, compiler-developer velocity second, the compiler's own compile time a distant
+third.
+
+Shared, program-independent logic (helpers, operators) belongs in
+`cactus_runtime.hpp`/`.cpp` rather than emitted text — codegen should call it, not
+duplicate it.

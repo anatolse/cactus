@@ -1,0 +1,62 @@
+module commit_notify_loop_runtime
+
+use std.core
+
+# An `on spawn` handler that always spawns one more entity. Commit rounds
+# share the cascade-depth bound, so each activation commits a bounded number
+# of spawns and defers the rest instead of looping forever.
+
+trait Offspring
+
+template Minion:
+    Offspring
+
+# `budget` only stops a regressed, unbounded loop so the test fails instead
+# of hanging.
+trait Spawner:
+    var budget: int = 10000
+
+entity Nursery:
+    Spawner
+
+rule Seed:
+    on load:
+        spawn Minion()
+
+rule Respawn:
+    filter:
+        Spawner as spawner
+
+    on spawn:
+        if spawner.budget <= 0:
+            return
+        spawner.budget = spawner.budget - 1
+        spawn Minion()
+
+# A targeted event that re-emits itself to its recipient overflows the
+# cascade bound; the deferred occurrence must reach only that recipient.
+
+event Knock
+
+trait Door:
+    var knocks: int = 0
+
+entity Front:
+    Door
+
+entity Back:
+    Door
+
+rule FirstKnock:
+    on load:
+        emit Knock to Front
+
+rule Answer:
+    filter:
+        Door as door
+
+    on Knock:
+        if door.knocks >= 1000:
+            return
+        door.knocks = door.knocks + 1
+        emit Knock to self

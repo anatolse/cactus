@@ -1794,6 +1794,49 @@ TEST_CASE("Codegen EnTT: commit emits a destroy notification only when an on des
     CHECK(commit_fn.find("spawnEvent") == std::string::npos);
 }
 
+TEST_CASE("Codegen EnTT: a deferred internal event runs as its own activation with its target",
+          "[codegen-entt][graph-driven-lifecycle-events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "pub extern event frame:\n"
+        "    dt: float\n"
+        "phase tick:\n"
+        "    from:\n"
+        "        frame\n"
+        "event ping\n"
+        "trait Pos:\n"
+        "    var x: float = 0.0\n"
+        "rule Pong:\n"
+        "    filter:\n"
+        "        Pos\n"
+        "    on ping:\n"
+        "        x = x + 1.0\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto root_fn = generated_function(
+        code, "void generated_process_root_event(entt::registry& registry, const pingEvent& root_event");
+    CHECK(root_fn.find("std::optional<entt::entity> target") != std::string::npos);
+    const auto guard    = root_fn.find("if (target.has_value() && !registry.valid(*target)) {");
+    const auto dispatch = root_fn.find("generated_dispatch_event(registry, root_event, target);");
+    const auto drain    = root_fn.find("generated_drain_event_cascade(registry);");
+    const auto commit   = root_fn.find("generated_commit_activation(registry);");
+    REQUIRE(guard != std::string::npos);
+    REQUIRE(dispatch != std::string::npos);
+    REQUIRE(drain != std::string::npos);
+    REQUIRE(commit != std::string::npos);
+    CHECK(guard < dispatch);
+    CHECK(dispatch < drain);
+    CHECK(drain < commit);
+
+    const auto drain_fn = generated_function(code, "void generated_drain_external_events");
+    CHECK(drain_fn.find("generated_process_root_event(registry, occurrence, queued.target);") != std::string::npos);
+
+    // Every event has a real processor, so no silent no-op fallback remains.
+    CHECK(code.find("void generated_process_root_event(entt::registry&, const Occurrence&) {}") == std::string::npos);
+}
+
 TEST_CASE("Codegen EnTT: programs without spawn/destroy handlers emit no commit notification codegen",
           "[codegen-entt][graph-driven-lifecycle-events]") {
     ProgramNode program;
@@ -5473,7 +5516,7 @@ TEST_CASE("Codegen EnTT: graph-driven render flush wires per-frame housekeeping 
     // clear_projected_traits() fires after the render phase batch, both
     // within the frame-typed root-event handler.
     const auto root_event_fn =
-        code.find("void generated_process_root_event(entt::registry& registry, const frameEvent& root_event)");
+        code.find("void generated_process_root_event(entt::registry& registry, const frameEvent& root_event,");
     REQUIRE(root_event_fn != std::string::npos);
     const auto reset_call = code.find("reset_consumed_input();", root_event_fn);
     const auto input_call =

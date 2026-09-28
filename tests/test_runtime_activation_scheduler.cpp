@@ -4,8 +4,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <type_traits>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -16,8 +18,15 @@ namespace {
 
 struct SpawnNotify {};
 struct DestroyNotify {};
+struct ChainEvent {};
 
-using TestOccurrence = std::variant<SpawnNotify, DestroyNotify>;
+using TestOccurrence = std::variant<SpawnNotify, DestroyNotify, ChainEvent>;
+
+// Stops a regressed, unbounded commit loop from hanging the test run.
+constexpr int kRunawayGuard = 10'000;
+
+template <typename Event, typename Occurrence>
+constexpr bool is_event_v = std::is_same_v<std::decay_t<Occurrence>, Event>;
 
 }  // namespace
 
@@ -217,6 +226,121 @@ TEST_CASE("commit_activation loops while an OnSpawn hook keeps producing new com
     CHECK(applied == 2);
     CHECK(spawn_count == 1);
     CHECK(activation.commands.empty());
+}
+
+TEST_CASE("commit_activation terminates when every spawn notification queues another spawn",
+          "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.active = true;
+
+    int applied   = 0;
+    int delivered = 0;
+    std::vector<std::size_t> delivery_depths;
+    auto dispatch = [&](entt::registry&, const auto& occurrence, std::optional<entt::entity>) {
+        if constexpr (is_event_v<SpawnNotify, decltype(occurrence)>) {
+            ++delivered;
+            delivery_depths.push_back(activation.current_cascade_depth);
+            if (delivered < kRunawayGuard) {
+                queue_structural_command(
+                    activation, StructuralCommand::Kind::Spawn, [&](entt::registry&) { ++applied; });
+            }
+        }
+    };
+    auto drain_cascade = [&](entt::registry& reg) { drain_event_cascade(activation, reg, dispatch); };
+    auto on_spawn      = [](ActivationRuntime<TestOccurrence>& act) { emit_event(act, SpawnNotify{}); };
+
+    activation.commands.push_back(
+        StructuralCommand{.kind = StructuralCommand::Kind::Spawn, .apply = [&](entt::registry&) { ++applied; }});
+
+    commit_activation(activation, registry, drain_cascade, on_spawn);
+
+    CHECK(delivered == static_cast<int>(kMaxEventCascadeDepth));
+    CHECK(applied == static_cast<int>(kMaxEventCascadeDepth) + 1);
+    CHECK(activation.commands.empty());
+    REQUIRE(activation.deferred_events.size() == 1);
+    CHECK(std::holds_alternative<SpawnNotify>(activation.deferred_events.front().occurrence));
+    CHECK(activation.current_cascade_depth == 0);
+
+    SECTION("round r's notification is dispatched at cascade depth r") {
+        REQUIRE(delivery_depths.size() == kMaxEventCascadeDepth);
+        for (std::size_t round = 1; round <= delivery_depths.size(); ++round) {
+            CHECK(delivery_depths[round - 1] == round);
+        }
+    }
+}
+
+TEST_CASE("commit_activation terminates when every destroy notification queues another destroy",
+          "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.active = true;
+
+    int applied   = 0;
+    int delivered = 0;
+    auto dispatch = [&](entt::registry&, const auto& occurrence, std::optional<entt::entity>) {
+        if constexpr (is_event_v<DestroyNotify, decltype(occurrence)>) {
+            ++delivered;
+            if (delivered < kRunawayGuard) {
+                queue_structural_command(
+                    activation, StructuralCommand::Kind::Destroy, [&](entt::registry&) { ++applied; });
+            }
+        }
+    };
+    auto drain_cascade = [&](entt::registry& reg) { drain_event_cascade(activation, reg, dispatch); };
+    auto on_destroy    = [](ActivationRuntime<TestOccurrence>& act) { emit_event(act, DestroyNotify{}); };
+
+    activation.commands.push_back(
+        StructuralCommand{.kind = StructuralCommand::Kind::Destroy, .apply = [&](entt::registry&) { ++applied; }});
+
+    commit_activation(activation, registry, drain_cascade, NoNotify{}, on_destroy);
+
+    CHECK(delivered == static_cast<int>(kMaxEventCascadeDepth));
+    CHECK(applied == static_cast<int>(kMaxEventCascadeDepth) + 1);
+    REQUIRE(activation.deferred_events.size() == 1);
+    CHECK(std::holds_alternative<DestroyNotify>(activation.deferred_events.front().occurrence));
+    CHECK(activation.current_cascade_depth == 0);
+}
+
+TEST_CASE("commit_activation shares the cascade-depth budget between rounds and their event chains",
+          "[runtime][activation][scheduler]") {
+    entt::registry registry;
+    ActivationRuntime<TestOccurrence> activation;
+    activation.active = true;
+
+    // Round 1's notification queues one more spawn; round 2's notification
+    // (depth 2) starts an endless ChainEvent chain, which must defer past the
+    // bound instead of getting a fresh budget.
+    int spawn_notifications = 0;
+    int chain_delivered     = 0;
+    auto dispatch = [&](entt::registry&, const auto& occurrence, std::optional<entt::entity>) {
+        if constexpr (is_event_v<SpawnNotify, decltype(occurrence)>) {
+            ++spawn_notifications;
+            if (spawn_notifications == 1) {
+                queue_structural_command(activation, StructuralCommand::Kind::Spawn, [](entt::registry&) {});
+            } else {
+                emit_event(activation, ChainEvent{});
+            }
+        } else if constexpr (is_event_v<ChainEvent, decltype(occurrence)>) {
+            ++chain_delivered;
+            if (chain_delivered < kRunawayGuard) {
+                emit_event(activation, ChainEvent{});
+            }
+        }
+    };
+    auto drain_cascade = [&](entt::registry& reg) { drain_event_cascade(activation, reg, dispatch); };
+    auto on_spawn      = [](ActivationRuntime<TestOccurrence>& act) { emit_event(act, SpawnNotify{}); };
+
+    activation.commands.push_back(
+        StructuralCommand{.kind = StructuralCommand::Kind::Spawn, .apply = [](entt::registry&) {}});
+
+    commit_activation(activation, registry, drain_cascade, on_spawn);
+
+    CHECK(spawn_notifications == 2);
+    CHECK(chain_delivered == static_cast<int>(kMaxEventCascadeDepth) - 2);
+    REQUIRE(activation.deferred_events.size() == 1);
+    CHECK(std::holds_alternative<ChainEvent>(activation.deferred_events.front().occurrence));
+    CHECK(activation.current_cascade_depth == 0);
 }
 
 TEST_CASE("notify_structural_command fires no lifecycle notification for a Set command",

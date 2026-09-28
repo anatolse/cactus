@@ -731,13 +731,9 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     } else {
         const auto spawn_type   = has_spawn_handler ? event_runtime_cpp_type(program, *spawn_event->symbol_id) : "";
         const auto destroy_type = has_destroy_handler ? event_runtime_cpp_type(program, *destroy_event->symbol_id) : "";
-        // Looping until no new commands were queued lets an `on spawn`/`on
-        // destroy` handler that issues further spawn/destroy commands have
-        // those commands applied within the same activation, bounded by the
-        // existing kMaxEventCascadeDepth cap (emit_event defers instead of
-        // enqueuing once the cascade depth is exceeded, so no new commands
-        // get queued from a deferred notification and commit_activation's
-        // internal loop terminates).
+        // commit_activation loops so spawn/destroy commands issued by an `on
+        // spawn`/`on destroy` handler apply in the same activation; its
+        // commit rounds consume cascade depth, so the loop always ends.
         out << "    commit_activation(\n";
         out << "        activation, registry, &generated_drain_event_cascade,\n";
         if (has_spawn_handler) {
@@ -779,9 +775,6 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
             << "},\n";
     }
     out << "}};\n\n";
-
-    out << "template <typename Occurrence>\n";
-    out << "void generated_process_root_event(entt::registry&, const Occurrence&) {}\n\n";
 
     // Emits the render phase's dispatch call. When the program links
     // std.camera.viewport, the dispatch runs once per active viewport —
@@ -915,21 +908,21 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         out << "}\n\n";
     }
 
-    // The concrete per-event generated_dispatch_event overload (defined later,
-    // once per event in program.events) must already be declared here: this
-    // function is not a template, so the fallback call below would otherwise
-    // resolve to the generic no-op default declared above instead of the real
-    // handler dispatch, silently dropping every `on <ExternEvent>:` handler.
-    for (const auto* event : external_events) {
+    // The per-event generated_dispatch_event overloads are defined later in
+    // the file but called by the root-event processors below.
+    for (const auto* event : all_events) {
         out << "void generated_dispatch_event(entt::registry&, const "
             << event_runtime_cpp_type(program, *event->symbol_id) << "&, std::optional<entt::entity> = std::nullopt);\n";
     }
     out << "\n";
 
-    for (const auto* event : external_events) {
+    // Every event gets a processor, not only external ones: a cascade-deferred
+    // occurrence of any event is re-queued as a root event.
+    for (const auto* event : all_events) {
         const auto root_type     = event_runtime_cpp_type(program, *event->symbol_id);
         const bool is_frame_root = event == frame_event;
-        out << "void generated_process_root_event(entt::registry& registry, const " << root_type << "& root_event) {\n";
+        out << "void generated_process_root_event(entt::registry& registry, const " << root_type
+            << "& root_event, std::optional<entt::entity> target = std::nullopt) {\n";
         // Input-consumption reset fires once per real (display) frame, before
         // any phase batch observes input — mirrors the legacy
         // generated_update_project ordering.
@@ -949,14 +942,19 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                 }
             }
         }
-        if (!routed_to_phase) {
+        if (routed_to_phase) {
+            out << "    (void)target;\n";
+        } else {
             // No phase claims this event as its root (e.g. std.persistence's
-            // save outcomes): it is still its own activation on injection —
-            // dispatch its `on <Event>:` handlers, drain whatever cascade
-            // they queue, then commit, exactly like a phase batch does for
-            // its root event.
+            // save outcomes, or a deferred internal event): it is still its
+            // own activation — dispatch its `on <Event>:` handlers, drain
+            // whatever cascade they queue, then commit, exactly like a phase
+            // batch does for its root event.
+            out << "    if (target.has_value() && !registry.valid(*target)) {\n";
+            out << "        return;\n";
+            out << "    }\n";
             out << "    generated_scheduler_state().activation.active = true;\n";
-            out << "    generated_dispatch_event(registry, root_event);\n";
+            out << "    generated_dispatch_event(registry, root_event, target);\n";
             out << "    generated_drain_event_cascade(registry);\n";
             out << "    generated_commit_activation(registry);\n";
             out << "    generated_scheduler_state().activation.active = false;\n";
@@ -979,7 +977,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "    while (!queue.empty()) {\n";
     out << "        auto queued = std::move(queue.front());\n";
     out << "        queue.pop_front();\n";
-    out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence); },\n";
+    out << "        std::visit([&](const auto& occurrence) { generated_process_root_event(registry, occurrence, queued.target); },\n";
     out << "                   queued.occurrence);\n";
     out << "    }\n";
     // Persistence requests are processed only once this drain's own root
@@ -1126,14 +1124,10 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
                       [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
     for (const auto* event : events) {
         const auto event_type = event_runtime_cpp_type(program, *event->symbol_id);
-        // External events already got a forward declaration in
-        // emit_graph_scheduler_state (with the default argument) so
-        // generated_process_root_event's fallback there could call them
-        // before this definition exists in the file; repeating the default
-        // here would be an illegal redefinition of it.
-        const bool default_already_declared = event->is_external;
+        // The default argument lives on the forward declaration emitted by
+        // emit_graph_scheduler_state; repeating it here would be a redefinition.
         out << "void generated_dispatch_event(entt::registry& registry, const " << event_type << "& occurrence, "
-            << "std::optional<entt::entity> target" << (default_already_declared ? "" : " = std::nullopt") << ") {\n";
+            << "std::optional<entt::entity> target) {\n";
         out << "    (void)occurrence;\n";
         out << "    (void)target;\n";
         // std.persistence.SaveRequested is a runtime-owned effect domain

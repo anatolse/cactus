@@ -1042,6 +1042,8 @@ This requirement does not apply to synthesized periodic-phase fields (`dt`, `alp
 ### Requirement: Activation command buffer and event cascade
 The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary. When the linked program has at least one handler triggered by `std.core.spawn` (respectively `std.core.destroy`), commit SHALL emit a `std.core.spawn` (respectively `std.core.destroy`) occurrence back into the same activation's cascade for each applied `Spawn` (respectively `Destroy`) command, subject to the same cascade-depth rule already applied to handler-emitted events. Programs with no handler triggered by `std.core.spawn`/`std.core.destroy` SHALL NOT emit this notification code path.
 
+Commit applies commands in rounds: a round applies every queued command, emits that round's notifications, and drains the resulting cascade; commands queued by that cascade form the next round. The notifications of round *r* (counting from 1) of one activation's commit SHALL be emitted at cascade depth *r*, so commit rounds and the event cascades they trigger share one cascade-depth budget for that activation. A notification whose depth would exceed the bound SHALL be deferred to a later activation exactly like an overflowing handler-emitted occurrence; its handlers, and any commands they queue, SHALL belong to that later activation. Commit SHALL therefore terminate for every program, including one whose notification handlers always issue further spawn or destroy commands.
+
 #### Scenario: Structural command is deferred to commit
 - **WHEN** a fixed_tick handler issues `spawn Particle`
 - **THEN** the entity is created at the repetition commit and is selectable by the next activation
@@ -1061,6 +1063,29 @@ The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands durin
 #### Scenario: No spawn/destroy handler means no notification codegen
 - **WHEN** the linked program declares no handler triggered by `std.core.spawn` or `std.core.destroy`
 - **THEN** `generated_commit_activation` applies commands without emitting either notification, and no dispatch overload for `std_core__spawnEvent`/`std_core__destroyEvent` is generated
+
+#### Scenario: Self-respawning spawn handler terminates
+- **WHEN** an `on spawn` handler issues one further `spawn` every time it runs, and one spawn commits
+- **THEN** the activation's commit delivers spawn notifications for at most the cascade-depth bound's number of rounds, the first round past the bound still applies its commands but defers its notification instead of delivering it, and the commit returns
+
+#### Scenario: Deferred notification runs in a later activation
+- **WHEN** a spawn notification was deferred because its round exceeded the bound
+- **THEN** its `on spawn` handler runs in a later activation, and a `spawn` it issues is applied at that later activation's commit, not the earlier one
+
+#### Scenario: Commit rounds share depth with event cascades
+- **WHEN** a round-*r* spawn notification's handler emits an event whose handler emits further events
+- **THEN** those events are emitted at depths above *r*, and a chain that would exceed the bound is deferred under the same rule as any other occurrence
+
+### Requirement: Deferred occurrences are delivered in a later activation
+The cpp-entt backend SHALL deliver every occurrence deferred by the cascade-depth bound in a later activation, whatever event it is. `generated_drain_external_events` SHALL re-queue deferred occurrences as root events together with their stored recipient. An occurrence whose event no phase claims as its runtime root SHALL run as its own activation: dispatch its handlers, drain the resulting cascade, and commit. A re-queued targeted occurrence SHALL be dropped when its recipient is no longer valid, and otherwise SHALL be delivered only to that recipient, never broadcast.
+
+#### Scenario: Deferred internal event runs next drain
+- **WHEN** an occurrence of a program-declared (non-external) event is deferred past the cascade-depth bound
+- **THEN** the next `generated_drain_external_events` call dispatches its handlers, and the commands they queue are applied at that activation's commit
+
+#### Scenario: Deferred targeted event keeps its recipient
+- **WHEN** a targeted occurrence is deferred and later re-queued as a root event
+- **THEN** its handlers run only for the original recipient, and not at all if that recipient is no longer valid
 
 ### Requirement: Activation and event-scheduler machinery is implemented as shared runtime helpers
 The cpp-entt backend SHALL implement its per-frame activation/event-scheduler machinery — entity reservation, structural command queuing and commit, event emission (including targeted emission), and event-cascade draining — using helpers templated on the program's `EventOccurrence` type and hosted in the backend runtime, rather than emitting an independent copy of this machinery as per-program generated text. Generated per-program output SHALL be limited to declaring the program's concrete `EventOccurrence` type and its program-specific hooks (spawn/destroy notification synthesis, event dispatch to handlers), calling through to the shared runtime helpers for the scheduler logic itself.

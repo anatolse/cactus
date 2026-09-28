@@ -1511,10 +1511,11 @@ void notify_structural_command(ActivationRuntime<Occurrence>& activation,
 }
 
 // Applies every queued structural command, looping while an OnSpawn/OnDestroy
-// hook keeps producing more (bounded by kMaxEventCascadeDepth, same as
-// today's inline codegen: a deferred notification queues no new command, so
-// the loop terminates). `drain_cascade` is called once per command batch,
-// after the whole batch has applied — not per command — so an entire wave of
+// hook keeps producing more. Each round starts one cascade level deeper, so
+// rounds and their event cascades share kMaxEventCascadeDepth; past it the
+// notification defers, queues no command, and the loop ends.
+// `drain_cascade` is called once per command batch, after the whole batch
+// has applied — not per command — so an entire wave of
 // structural commands (e.g. every entity in one spawn burst) is fully
 // materialized before any spawn/destroy handler observes the registry,
 // matching the original inline behavior exactly. It takes a callable rather
@@ -1545,15 +1546,17 @@ void commit_activation(ActivationRuntime<Occurrence>& activation,
             command.apply(registry);
         }
     } else {
-        while (!activation.commands.empty()) {
+        for (std::size_t depth = 0; !activation.commands.empty(); ++depth) {
             auto commands = std::move(activation.commands);
             activation.commands.clear();
+            activation.current_cascade_depth = depth;
             for (auto& command : commands) {
                 command.apply(registry);
                 notify_structural_command(activation, command, on_spawn, on_destroy);
             }
             drain_cascade(registry);
         }
+        activation.current_cascade_depth = 0;
     }
 }
 

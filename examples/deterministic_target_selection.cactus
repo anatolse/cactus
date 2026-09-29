@@ -1,0 +1,111 @@
+module deterministic_target_selection
+
+use std.core
+use std.math.vec2 as v2
+
+# Each tower picks its nearest visible enemy in range every fixed tick.
+# Reset clears the flag, Select sets it again only when a candidate survives,
+# and Consume acts only while the flag is set. A tower with no candidate this
+# tick therefore never acts on an old selection.
+
+trait Position:
+    var pos: vec2
+
+trait Tower:
+    var range: float
+
+trait Enemy:
+    var cloaked: bool = false
+    var hits: int = 0
+
+trait Target:
+    var selected: entity_id
+    var has_target: bool = false
+
+event Damage
+
+rule ResetTarget:
+    filter:
+        Target as slot
+
+    on fixed_tick:
+        slot.has_target = false
+
+rule SelectTarget:
+    pairs:
+        tower:
+            Tower
+            Position
+            Target
+        enemy:
+            Enemy
+            Position
+    order by:
+        v2.distance(tower.Position.pos, enemy.Position.pos) asc
+    after:
+        ResetTarget
+    where:
+        not enemy.Enemy.cloaked
+        v2.distance(tower.Position.pos, enemy.Position.pos) <= tower.Tower.range
+    limit: 1 per tower
+
+    on fixed_tick:
+        tower.Target.selected = enemy
+        tower.Target.has_target = true
+
+rule ConsumeTarget:
+    filter:
+        Target as slot
+    after:
+        SelectTarget
+
+    on fixed_tick:
+        if slot.has_target:
+            emit Damage to slot.selected
+
+rule ApplyDamage:
+    filter:
+        Enemy as foe
+
+    on Damage:
+        foe.hits = foe.hits + 1
+
+template Turret(at: vec2, range: float):
+    Position:
+        pos = at
+    Tower:
+        range = range
+    Target
+
+template Foe(at: vec2):
+    Position:
+        pos = at
+    Enemy
+
+# Nearest wins; the nearer Shadow is cloaked and must be skipped.
+entity NearTower from Turret(at = vec2(0.0, 0.0), range = 100.0):
+    Target:
+        selected = NearTower
+entity Shadow from Foe(at = vec2(10.0, 0.0)):
+    Enemy:
+        cloaked = true
+entity Near from Foe(at = vec2(30.0, 0.0))
+entity Far from Foe(at = vec2(50.0, 0.0))
+
+# TieFirst and TieSecond are equally far; the earlier-created one wins.
+entity TieTower from Turret(at = vec2(200.0, 0.0), range = 100.0):
+    Target:
+        selected = TieTower
+entity TieFirst from Foe(at = vec2(200.0, 40.0))
+entity TieSecond from Foe(at = vec2(200.0, -40.0))
+
+# Lone is this tower's only candidate; the test destroys it.
+entity LoneTower from Turret(at = vec2(500.0, 0.0), range = 50.0):
+    Target:
+        selected = LoneTower
+entity Lone from Foe(at = vec2(520.0, 0.0))
+
+# Nothing is in range, so this tower never gets a target.
+entity EmptyTower from Turret(at = vec2(1000.0, 0.0), range = 50.0):
+    Target:
+        selected = EmptyTower

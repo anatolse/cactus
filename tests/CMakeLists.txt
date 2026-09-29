@@ -441,6 +441,12 @@ cactus_add_headless_behavior_test(test_pairs_limit_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_pairs_limit_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_deterministic_target_selection_headless_behavior
+    CACTUS_SOURCE examples/deterministic_target_selection.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_deterministic_target_selection_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_collision_predicates_headless_behavior
     CACTUS_SOURCE tests/fixtures/collision_predicates_runtime.cactus
     BACKEND cpp-entt

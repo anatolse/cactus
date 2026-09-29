@@ -8,16 +8,6 @@ namespace cactus {
 
 namespace {
 
-std::string entt_type_to_cpp(const TypeInfo& type) {
-    if (type.kind == TypeKind::EntityId) {
-        return "entt::entity";
-    }
-    if (type.kind == TypeKind::List && type.element != nullptr) {
-        return "std::vector<" + entt_type_to_cpp(*type.element) + ">";
-    }
-    return EnttCodegenUtils::type_to_cpp(type);
-}
-
 bool should_defer_to_raylib_enum(const std::string& name) {
     return name == "MouseButton" || name == "GamepadButton" || name == "GamepadAxis";
 }
@@ -34,7 +24,7 @@ std::string EnttComponentEmitter::emit_component(const ResolvedTrait& trait, con
 
     out << "struct " << cpp_name << " {\n";
     for (const auto& field : trait.fields) {
-        out << "    " << entt_type_to_cpp(field.type) << " " << field.name;
+        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name;
         const auto* default_expr =
             EnttCodegenUtils::find_trait_field_default(program, trait.module_name, trait.name, field.name);
         if (default_expr == nullptr) {
@@ -64,7 +54,7 @@ std::string EnttComponentEmitter::emit_pod_struct(const ResolvedStruct& s) {
     std::ostringstream out;
     out << "struct " << cpp_name << " {\n";
     for (const auto& field : s.fields) {
-        out << "    " << entt_type_to_cpp(field.type) << " " << field.name << ";\n";
+        out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name << ";\n";
     }
     out << "};\n";
     return out.str();

@@ -14,6 +14,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -845,6 +846,51 @@ TEST_CASE("integration: a handler on a dotted cross-module event trigger resolve
     // The aliased event occurrence's own field is readable, instead of
     // erroring ("self only allowed..." also gated event-field lookup).
     CHECK(code.find("click.position.x") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("integration: every merged-AST event has a linked resolved event", "[integration][events]") {
+    auto build_dir = integration_build_dir() / "merged_ast_events_resolved";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const std::string source =
+        "module event_lookup_app\n"
+        "use std.pointer as pointer\n"
+        "\n"
+        "event Turn:\n"
+        "    rotation: quat\n"
+        "\n"
+        "trait Marker\n"
+        "\n"
+        "rule Listen:\n"
+        "    filter:\n"
+        "        Marker\n"
+        "    on pointer.Click as click:\n"
+        "        emit Turn\n";
+
+    ProgramNode merged_ast;
+    auto merged = link_with_stdlib(source, "event_lookup_app", build_dir, merged_ast);
+    REQUIRE(merged.has_value());
+
+    std::size_t local_events    = 0;
+    std::size_t imported_events = 0;
+    for (const auto& decl : merged_ast.declarations) {
+        const auto* event = std::get_if<EventNode>(&decl);
+        if (event == nullptr) {
+            continue;
+        }
+        INFO(event->name);
+        REQUIRE(event->resolved_event_id.has_value());
+        const auto found = std::ranges::any_of(merged->events, [&](const auto& entry) {
+            return entry.second.symbol_id.has_value() && *entry.second.symbol_id == *event->resolved_event_id;
+        });
+        CHECK(found);
+        ++(event->resolved_event_id->module.name == "event_lookup_app" ? local_events : imported_events);
+    }
+    CHECK(local_events == 1);
+    CHECK(imported_events > 0);
 
     fs::remove_all(build_dir, ec);
 }

@@ -1,0 +1,6 @@
+module event_payload_combat
+
+# Imported by event_payload_reads.cactus for its module-qualified trigger read.
+
+pub event Hit:
+    amount: int

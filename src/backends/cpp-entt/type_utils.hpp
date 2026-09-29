@@ -20,6 +20,8 @@ struct WorldTransformUsage {
 class EnttCodegenUtils {
 public:
     static std::string type_to_cpp(const TypeInfo& type);
+    // Stored-value type: entity ids use the live registry entity type.
+    static std::string value_type_to_cpp(const TypeInfo& type);
     static std::string emit_enum(const ResolvedEnum& e);
     static std::string emit_expr(const ExprNode& expr, const ProgramNode* ast = nullptr);
     static std::string emit_expr(const ExprNode& expr, const DecoratedProgram& program);

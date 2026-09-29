@@ -16,6 +16,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace cactus {
@@ -391,6 +392,58 @@ std::string handler_trigger_suffix(const EventHandlerNode& handler) {
 
 std::string handler_trigger_binding(const EventHandlerNode& handler) {
     return handler.alias.value_or(snake_case(handler_trigger_suffix(handler)));
+}
+
+// Scoped, not a parameter: rewrite_expr's recursive calls pass only partial context.
+struct HandlerTriggerSpelling {
+    std::string spelling;  // as written after `on`, e.g. "Turn" or "combat.Hit"
+    std::string binding;   // the handler's payload parameter
+};
+
+const HandlerTriggerSpelling*& active_handler_trigger() {
+    thread_local const HandlerTriggerSpelling* active = nullptr;
+    return active;
+}
+
+class HandlerTriggerScope {
+public:
+    explicit HandlerTriggerScope(const HandlerTriggerSpelling& trigger)
+        : previous_(std::exchange(active_handler_trigger(), &trigger)) {}
+    HandlerTriggerScope(const HandlerTriggerScope&)            = delete;
+    HandlerTriggerScope& operator=(const HandlerTriggerScope&) = delete;
+    HandlerTriggerScope(HandlerTriggerScope&&)                 = delete;
+    HandlerTriggerScope& operator=(HandlerTriggerScope&&)      = delete;
+    ~HandlerTriggerScope() { active_handler_trigger() = previous_; }
+
+private:
+    const HandlerTriggerSpelling* previous_;
+};
+
+// Reconstructs "a.b.c" from nested MemberExpr/IdentExpr chains.
+std::string expr_to_dotted_path(const ExprNode& expr) {
+    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
+        return ident->name;
+    }
+    if (const auto* mem = std::get_if<MemberExpr>(&expr.expr)) {
+        const auto obj = expr_to_dotted_path(*mem->object);
+        if (obj.empty()) {
+            return "";
+        }
+        return obj + "." + mem->member;
+    }
+    return "";
+}
+
+// The payload parameter when `expr` spells the active handler's trigger name.
+std::optional<std::string> lowered_trigger_reference(const ExprNode& expr) {
+    const auto* trigger = active_handler_trigger();
+    if (trigger == nullptr) {
+        return std::nullopt;
+    }
+    if (expr_to_dotted_path(expr) != trigger->spelling) {
+        return std::nullopt;
+    }
+    return trigger->binding;
 }
 
 const HandlerContract* graph_handler_contract(const RuleNode& rule,
@@ -2155,21 +2208,6 @@ static std::string lower_ui_query_call(const QueryCallExpr& qcall,
     return "/* unsupported std.ui func: " + func_name + " */";
 }
 
-// Reconstructs "a.b.c" from nested MemberExpr/IdentExpr chains.
-static std::string expr_to_dotted_path(const ExprNode& expr) {
-    if (const auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
-        return ident->name;
-    }
-    if (const auto* mem = std::get_if<MemberExpr>(&expr.expr)) {
-        const auto obj = expr_to_dotted_path(*mem->object);
-        if (obj.empty()) {
-            return "";
-        }
-        return obj + "." + mem->member;
-    }
-    return "";
-}
-
 static std::string lower_query_call_expr(const QueryCallExpr& qcall,
                                          const DecoratedProgram& program,
                                          const auto& emit_arg) {
@@ -2271,6 +2309,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 }
                 if (e.resolved_entity_id.has_value()) {
                     return EnttCodegenUtils::named_slot_name(*e.resolved_entity_id);
+                }
+                if (auto lowered = lowered_trigger_reference(expr)) {
+                    return *std::move(lowered);
                 }
                 if (is_input_action_name(program, e.name)) {
                     return input_action_constant_name(e.name);
@@ -2485,6 +2526,12 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                            e.args, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                        ")";
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (auto lowered = lowered_trigger_reference(expr)) {
+                    return *std::move(lowered);
+                }
+                if (auto lowered = lowered_trigger_reference(*e.object)) {
+                    return *std::move(lowered) + "." + e.member;
+                }
                 if (auto named = EnttCodegenUtils::named_member_cpp(e, program)) {
                     return *std::move(named);
                 }
@@ -3992,6 +4039,8 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         const bool is_pair = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
         const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();
         const auto trigger_binding = handler_trigger_binding(handler);
+        const HandlerTriggerSpelling trigger{.spelling = handler.event_name, .binding = trigger_binding};
+        const HandlerTriggerScope trigger_scope(trigger);
         out << "void " << system_function_name(program.module_name, sys.name, handler_trigger_suffix(handler))
             << "(entt::registry& registry";
         out << ", const " << handler_trigger_cpp_type(handler, program) << "& " << trigger_binding;

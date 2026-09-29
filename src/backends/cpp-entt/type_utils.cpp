@@ -169,6 +169,16 @@ std::string event_cpp_type_name(const SymbolId& event_id) {
     return canonical_to_cpp_name(event_id) + "Event";
 }
 
+std::string EnttCodegenUtils::value_type_to_cpp(const TypeInfo& type) {
+    if (type.kind == TypeKind::EntityId) {
+        return "entt::entity";
+    }
+    if (type.kind == TypeKind::List && type.element != nullptr) {
+        return "std::vector<" + value_type_to_cpp(*type.element) + ">";
+    }
+    return type_to_cpp(type);
+}
+
 std::string EnttCodegenUtils::type_to_cpp(const TypeInfo& type) {
     switch (type.kind) {
         case TypeKind::Int:

@@ -429,6 +429,12 @@ cactus_add_headless_behavior_test(test_commit_notify_loop_headless_behavior
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_commit_notify_loop_headless_behavior.cpp
 )
 
+cactus_add_headless_behavior_test(test_event_payload_reads_headless_behavior
+    CACTUS_SOURCE examples/stdlib-fixtures/event_payload_reads.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_event_payload_reads_headless_behavior.cpp
+)
+
 cactus_add_headless_behavior_test(test_pairs_limit_headless_behavior
     CACTUS_SOURCE tests/fixtures/pairs_limit_runtime.cactus
     BACKEND cpp-entt

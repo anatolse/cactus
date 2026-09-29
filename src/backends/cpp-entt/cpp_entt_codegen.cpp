@@ -73,11 +73,50 @@ bool has_extern_funcs(const DecoratedProgram& program) {
     return std::ranges::any_of(program.funcs, [](const auto& entry) { return entry.second.is_extern; });
 }
 
-std::string runtime_value_cpp_type(const TypeInfo& type) {
-    if (type.kind == TypeKind::EntityId) {
-        return "entt::entity";
+std::string ast_event_cpp_name(const EventNode& node, const DecoratedProgram& program) {
+    const auto& module = node.module_name.empty() ? program.module_name : node.module_name;
+    return canonical_to_cpp_name(module, node.name) + "Event";
+}
+
+std::string resolved_event_cpp_name(const ResolvedEvent& event) {
+    return canonical_to_cpp_name(event.module_name, event.name) + "Event";
+}
+
+// AST declaration order when an AST exists, canonical-id order otherwise.
+std::string emit_event_structs(const DecoratedProgram& program) {
+    std::ostringstream out;
+    if (program.ast != nullptr) {
+        std::unordered_map<std::string, const ResolvedEvent*> by_canonical_id;
+        by_canonical_id.reserve(program.events.size());
+        for (const auto& [_, event] : program.events) {
+            by_canonical_id.emplace(event.canonical_id, &event);
+        }
+        for (const auto& decl : program.ast->declarations) {
+            const auto* node = std::get_if<EventNode>(&decl);
+            if (node == nullptr) {
+                continue;
+            }
+            const auto found = node->resolved_event_id.has_value()
+                                   ? by_canonical_id.find(make_canonical_id(*node->resolved_event_id))
+                                   : by_canonical_id.end();
+            if (found == by_canonical_id.end()) {
+                throw std::runtime_error("cpp-entt event '" + node->name + "' has no resolved event declaration");
+            }
+            out << EnttEventEmitter::emit_event(*found->second, ast_event_cpp_name(*node, program)) << "\n";
+        }
+        return out.str();
     }
-    return EnttCodegenUtils::type_to_cpp(type);
+
+    std::vector<const ResolvedEvent*> events;
+    events.reserve(program.events.size());
+    for (const auto& [_, event] : program.events) {
+        events.push_back(&event);
+    }
+    std::ranges::sort(events, {}, &ResolvedEvent::canonical_id);
+    for (const auto* event : events) {
+        out << EnttEventEmitter::emit_event(*event, resolved_event_cpp_name(*event)) << "\n";
+    }
+    return out.str();
 }
 
 std::string event_runtime_cpp_type(const DecoratedProgram& program, const SymbolId& event) {
@@ -85,15 +124,14 @@ std::string event_runtime_cpp_type(const DecoratedProgram& program, const Symbol
         for (const auto& decl : program.ast->declarations) {
             if (const auto* node = std::get_if<EventNode>(&decl);
                 node != nullptr && node->resolved_event_id.has_value() && *node->resolved_event_id == event) {
-                const auto& module = node->module_name.empty() ? program.module_name : node->module_name;
-                return canonical_to_cpp_name(module, node->name) + "Event";
+                return ast_event_cpp_name(*node, program);
             }
         }
     }
     const auto canonical = make_canonical_id(event);
     for (const auto& [_, resolved] : program.events) {
         if ((resolved.symbol_id.has_value() && *resolved.symbol_id == event) || resolved.canonical_id == canonical) {
-            return canonical_to_cpp_name(resolved.module_name, resolved.name) + "Event";
+            return resolved_event_cpp_name(resolved);
         }
     }
     return event_cpp_type_name(event);
@@ -534,16 +572,6 @@ void emit_external_handler_call(std::ostringstream& out,
     out << indent << "}\n";
 }
 
-std::string emit_resolved_event(const ResolvedEvent& event) {
-    std::ostringstream out;
-    out << "struct " << canonical_to_cpp_name(event.module_name, event.name) << "Event {\n";
-    for (const auto& field : event.fields) {
-        out << "    " << runtime_value_cpp_type(field.type) << " " << field.name << "{};\n";
-    }
-    out << "};\n";
-    return out.str();
-}
-
 std::string cpp_double_literal(double value) {
     std::ostringstream literal;
     literal << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
@@ -669,7 +697,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
             if (field.is_completion_only) {
                 continue;
             }
-            out << "    " << runtime_value_cpp_type(field.type) << " " << field.name << "{};\n";
+            out << "    " << EnttCodegenUtils::value_type_to_cpp(field.type) << " " << field.name << "{};\n";
         }
         out << "};\n\n";
     }
@@ -879,7 +907,7 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
                     continue;
                 }
                 const auto& binding   = *field.source_binding;
-                const auto field_type = runtime_value_cpp_type(field.type);
+                const auto field_type = EnttCodegenUtils::value_type_to_cpp(field.type);
                 if (binding.kind == PhaseFieldSource::Kind::RootEvent) {
                     used_root_event = true;
                     out << "    phase." << field.name << " = static_cast<" << field_type << ">(root_event."
@@ -3084,25 +3112,7 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << EnttPersistenceEmitter::emit_world_capture(program);
     out << EnttRestoreEmitter::emit_world_restore(program);
 
-    // Events
-    if (program.ast != nullptr) {
-        for (auto& decl : program.ast->declarations) {
-            if (auto* event = std::get_if<EventNode>(&decl)) {
-                out << EnttEventEmitter::emit_event(*event, program) << "\n";
-            }
-        }
-    } else {
-        std::vector<const ResolvedEvent*> events;
-        events.reserve(program.events.size());
-        for (const auto& [_, event] : program.events) {
-            events.push_back(&event);
-        }
-        std::ranges::sort(events,
-                          [](const auto* left, const auto* right) { return left->canonical_id < right->canonical_id; });
-        for (const auto* event : events) {
-            out << emit_resolved_event(*event) << "\n";
-        }
-    }
+    out << emit_event_structs(program);
 
     out << emit_external_command_forward_declarations(program);
     out << emit_graph_scheduler_state(program);

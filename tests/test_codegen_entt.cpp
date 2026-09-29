@@ -33,6 +33,18 @@ static std::string generated_function(const std::string& code, const std::string
     return code.substr(start, end - start + 3);
 }
 
+// The payload parameter name of a generated handler function, whatever its spelling.
+static std::string handler_payload_param(const std::string& function) {
+    const std::string signature_prefix = "(entt::registry& registry, const ";
+    const auto type_start              = function.find(signature_prefix);
+    REQUIRE(type_start != std::string::npos);
+    const auto name_start = function.find("& ", type_start + signature_prefix.size());
+    REQUIRE(name_start != std::string::npos);
+    const auto name_end = function.find(',', name_start);
+    REQUIRE(name_end != std::string::npos);
+    return function.substr(name_start + 2, name_end - name_start - 2);
+}
+
 // system_emitter.cpp's gen_temp_name()/foreach_temp_name() mangle compiler-generated
 // temporaries with a per-call-site line/column suffix (e.g. "cactus_gen_spawned_12_5") so they
 // can never collide with a user-authored DSL identifier spliced into the same scope. Test
@@ -550,21 +562,30 @@ TEST_CASE("Codegen EnTT: filtered handler body is emitted once and both dispatch
     }
 }
 
+static std::string generated_struct(const std::string& code, const std::string& name) {
+    const auto start = code.find("struct " + name + " {");
+    REQUIRE(start != std::string::npos);
+    const auto end = code.find("\n};\n", start);
+    REQUIRE(end != std::string::npos);
+    return code.substr(start, end - start + 4);
+}
+
 TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
+    ResolvedEvent event;
+    event.name = "Damage";
+    event.fields.push_back({.name = "amount", .type = {.kind = TypeKind::Int, .name = "int"}});
+
+    const auto code = EnttEventEmitter::emit_event(event, "DamageEvent");
+    CHECK(code == "struct DamageEvent {\n    int amount{};\n};\n");
+
     ProgramNode program;
     auto decorated = full_pipeline(
         "event Damage:\n"
         "   amount: int\n",
         program);
-
     for (auto& decl : program.declarations) {
-        if (auto* event = std::get_if<EventNode>(&decl)) {
-            auto code = EnttEventEmitter::emit_event(*event, decorated);
-            CHECK(code.find("struct DamageEvent") != std::string::npos);
-            CHECK(code.find("int amount;") != std::string::npos);
-
-            DecoratedProgram prog;
-            auto sink = EnttEventEmitter::emit_sink_connection(*event, prog);
+        if (auto* node = std::get_if<EventNode>(&decl)) {
+            auto sink = EnttEventEmitter::emit_sink_connection(*node, decorated);
             CHECK(sink.find("dispatcher.sink<DamageEvent>") != std::string::npos);
         }
     }
@@ -572,44 +593,105 @@ TEST_CASE("Codegen EnTT: event struct", "[codegen-entt]") {
 
 TEST_CASE("Codegen EnTT: CollisionEnter event supports entity and vector payload fields",
           "[codegen-entt][stdlib][physics]") {
-    EventNode event;
+    ResolvedEvent event;
     event.name = "CollisionEnter";
-    event.fields.push_back({.name = "other", .type = {.name = "entity_id"}});
-    event.fields.push_back({.name = "overlap", .type = {.name = "vec2"}});
+    event.fields.push_back({.name = "other", .type = {.kind = TypeKind::EntityId, .name = "entity_id"}});
+    event.fields.push_back({.name = "overlap", .type = {.kind = TypeKind::Vec2, .name = "vec2"}});
 
-    DecoratedProgram program;
-    const auto code = EnttEventEmitter::emit_event(event, program);
-    CHECK(code.find("entt::entity other;") != std::string::npos);
-    CHECK(code.find("Vector2 overlap;") != std::string::npos);
+    const auto code = EnttEventEmitter::emit_event(event, "CollisionEnterEvent");
+    CHECK(code.find("entt::entity other{};") != std::string::npos);
+    CHECK(code.find("Vector2 overlap{};") != std::string::npos);
 }
 
-// event field type resolution previously matched field.type.name against a hardcoded
-// primitive list plus program.structs, with no program.enums branch — an enum-typed event
-// field silently fell through to the int fallback instead of resolving to its (possibly
-// module-prefixed) generated enum class type. Module name is set explicitly here so the
-// expected type is prefixed ("std_editor__GizmoMode"), which a naive bare-name fallback
-// (no program.enums lookup) would not produce.
 TEST_CASE("Codegen EnTT: enum-typed event field resolves to its generated enum class type",
           "[codegen-entt][events][enum]") {
-    ResolvedEnum gizmo_mode;
-    gizmo_mode.name        = "GizmoMode";
-    gizmo_mode.module_name = "std.editor";
-    gizmo_mode.variants    = {"Select", "Translate", "Rotate", "Scale", "Place"};
-
-    DecoratedProgram program;
-    program.enums["GizmoMode"] = gizmo_mode;
-
-    EventNode event;
+    const auto gizmo_mode = make_symbol_id(SymbolKind::Enum, "std.editor", "GizmoMode");
+    ResolvedEvent event;
     event.name        = "EditorModeChanged";
     event.module_name = "std.editor";
-    event.fields.push_back({.name = "previous_mode", .type = {.name = "GizmoMode"}});
-    event.fields.push_back({.name = "current_mode", .type = {.name = "GizmoMode"}});
+    event.fields.push_back(
+        {.name = "previous_mode", .type = {.kind = TypeKind::Enum, .name = "GizmoMode", .symbol_id = gizmo_mode}});
+    event.fields.push_back(
+        {.name = "current_mode", .type = {.kind = TypeKind::Enum, .name = "GizmoMode", .symbol_id = gizmo_mode}});
 
-    const auto code = EnttEventEmitter::emit_event(event, program);
-    CHECK(code.find("std_editor__GizmoMode previous_mode;") != std::string::npos);
-    CHECK(code.find("std_editor__GizmoMode current_mode;") != std::string::npos);
-    CHECK(code.find("int previous_mode;") == std::string::npos);
-    CHECK(code.find("int current_mode;") == std::string::npos);
+    const auto code = EnttEventEmitter::emit_event(event, "std_editor__EditorModeChangedEvent");
+    CHECK(code.find("std_editor__GizmoMode previous_mode{};") != std::string::npos);
+    CHECK(code.find("std_editor__GizmoMode current_mode{};") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: quat event field gets the backend quaternion type", "[codegen-entt][events]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "event Turn:\n"
+        "    rotation: quat\n"
+        "    amount: int\n",
+        program);
+
+    const auto turn = generated_struct(CppEnttCodegen::generate(decorated), "TurnEvent");
+    CHECK(turn == "struct TurnEvent {\n    Quat rotation{};\n    int amount{};\n};\n");
+}
+
+TEST_CASE("Codegen EnTT: struct, enum, and entity_id event fields use the trait field types",
+          "[codegen-entt][events]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "struct Stats:\n"
+        "    hp: int\n"
+        "enum Mode:\n"
+        "    Calm\n"
+        "    Angry\n"
+        "trait Holder:\n"
+        "    var stats: Stats\n"
+        "    var mode: Mode\n"
+        "    var who: entity_id\n"
+        "event Changed:\n"
+        "    stats: Stats\n"
+        "    mode: Mode\n"
+        "    who: entity_id\n",
+        program);
+
+    const auto code    = CppEnttCodegen::generate(decorated);
+    const auto holder  = generated_struct(code, "Holder");
+    const auto changed = generated_struct(code, "ChangedEvent");
+    const auto field_type = [](const std::string& text, const std::string& field) {
+        const auto end = text.find(" " + field + "{");
+        REQUIRE(end != std::string::npos);
+        const auto start = text.rfind("    ", end) + 4;
+        return text.substr(start, end - start);
+    };
+    for (const auto* field : {"stats", "mode", "who"}) {
+        INFO(field);
+        CHECK(field_type(changed, field) == field_type(holder, field));
+    }
+    CHECK(field_type(changed, "who") == "entt::entity");
+    CHECK(field_type(changed, "stats") != "int");
+    CHECK(field_type(changed, "mode") != "int");
+}
+
+TEST_CASE("Codegen EnTT: an AST event with no resolved event is an internal error", "[codegen-entt][events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Turn:\n"
+        "    amount: int\n",
+        program);
+    decorated.events.clear();
+
+    CHECK_THROWS_AS(CppEnttCodegen::generate(decorated), std::runtime_error);
+}
+
+TEST_CASE("Codegen EnTT: an event struct is the same with and without an AST", "[codegen-entt][events]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(
+        "event Turn:\n"
+        "    rotation: quat\n"
+        "    amount: int\n",
+        program);
+    decorated.module_name = "test";
+
+    const auto with_ast = generated_struct(CppEnttCodegen::generate(decorated), "test__TurnEvent");
+    decorated.ast       = nullptr;
+    const auto without_ast = generated_struct(CppEnttCodegen::generate(decorated), "test__TurnEvent");
+    CHECK(with_ast == without_ast);
 }
 
 TEST_CASE("Codegen EnTT: full pipeline", "[codegen-entt]") {
@@ -5595,7 +5677,10 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
     // handler-emitted events through the runtime helper by call name.
     CHECK(code.find("ActivationRuntime<EventOccurrence> activation;") != std::string::npos);
     CHECK(code.find("generated_emit_event(ContactEvent{.amount = 1});") != std::string::npos);
-    CHECK(code.find("generated_emit_event(ReactionEvent{.amount = Contact.amount});") != std::string::npos);
+    CHECK(code.find("Contact.amount") == std::string::npos);
+    const auto first_contact = generated_function(code, "void first_contact_Contact(");
+    CHECK(first_contact.find("generated_emit_event(ReactionEvent{.amount = " + handler_payload_param(first_contact) +
+                             ".amount});") != std::string::npos);
     CHECK(code.find("generated_drain_event_cascade(registry);") != std::string::npos);
     CHECK(code.find("generated_dispatch_event(reg, occurrence, target);") != std::string::npos);
 
@@ -5607,6 +5692,114 @@ TEST_CASE("Codegen EnTT: phase activations drain stable bounded event cascades",
     REQUIRE(first_call != std::string::npos);
     REQUIRE(second_call != std::string::npos);
     CHECK(first_call < second_call);
+}
+
+TEST_CASE("Codegen EnTT: trigger-name reads lower to the handler payload parameter",
+          "[codegen-entt][events][trigger-name]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "event tick:\n"
+        "    dt: float\n"
+        "event Turn:\n"
+        "    amount: int\n"
+        "trait Holder:\n"
+        "    var amount: int\n"
+        "    var elapsed: float\n"
+        "rule ReadFiltered:\n"
+        "    filter:\n"
+        "        Holder as h\n"
+        "    on Turn:\n"
+        "        h.amount = Turn.amount\n"
+        "rule ReadSelectionless:\n"
+        "    on Turn:\n"
+        "        let sample = Turn.amount + 1\n"
+        "rule ReadAliased:\n"
+        "    filter:\n"
+        "        Holder as h\n"
+        "    on Turn as t:\n"
+        "        h.amount = t.amount + Turn.amount\n"
+        "rule ReadTick:\n"
+        "    filter:\n"
+        "        Holder as h\n"
+        "    on tick:\n"
+        "        h.elapsed = h.elapsed + tick.dt\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("Turn.amount") == std::string::npos);
+
+    const auto filtered = generated_function(code, "void read_filtered_Turn(");
+    CHECK(filtered.find("h.amount = " + handler_payload_param(filtered) + ".amount;") != std::string::npos);
+
+    const auto selectionless = generated_function(code, "void read_selectionless_Turn(");
+    CHECK(selectionless.find(handler_payload_param(selectionless) + ".amount + 1") != std::string::npos);
+
+    const auto aliased = generated_function(code, "void read_aliased_Turn(");
+    CHECK(handler_payload_param(aliased) == "t");
+    CHECK(aliased.find("h.amount = (t.amount + t.amount);") != std::string::npos);
+
+    const auto tick = generated_function(code, "void read_tick_tick(");
+    CHECK(handler_payload_param(tick) == "tick");
+    CHECK(tick.find("h.elapsed = (h.elapsed + tick.dt);") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a module-qualified trigger name lowers to the handler payload parameter",
+          "[codegen-entt][events][trigger-name]") {
+    ImportedSymbols combat;
+    combat.module_name         = "game.combat";
+    combat.event_symbols["Hit"] = ImportedEvent{
+        .name   = "Hit",
+        .fields = {ResolvedField{.name = "amount", .type = {.kind = TypeKind::Int, .name = "int"}}},
+    };
+    ModuleImports imports;
+    imports.add("combat", std::move(combat));
+
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "use game.combat as combat\n"
+        "trait Holder:\n"
+        "    var amount: int\n"
+        "rule ReadQualified:\n"
+        "    filter:\n"
+        "        Holder as h\n"
+        "    on combat.Hit:\n"
+        "        h.amount = combat.Hit.amount\n",
+        program,
+        imports);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("combat.Hit") == std::string::npos);
+    const auto handler = generated_function(code, "void read_qualified_");
+    CHECK(handler.find("h.amount = " + handler_payload_param(handler) + ".amount;") != std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: a pair handler reads its trigger name through the payload parameter",
+          "[codegen-entt][events][trigger-name][pair-relations]") {
+    ProgramNode program;
+    const auto decorated = full_pipeline(
+        "event Turn:\n"
+        "    amount: int\n"
+        "trait Transform:\n"
+        "    var x: float\n"
+        "trait Solid\n"
+        "event Contact:\n"
+        "    other: entity_id\n"
+        "rule PairRead:\n"
+        "    pairs:\n"
+        "        body:\n"
+        "            Transform\n"
+        "        wall:\n"
+        "            Solid\n"
+        "    on Turn:\n"
+        "        if Turn.amount > 0:\n"
+        "            emit Contact:\n"
+        "                other = wall\n",
+        program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+    CHECK(code.find("Turn.amount") == std::string::npos);
+    const auto handler = generated_function(code, "void pair_read_Turn(");
+    CHECK(handler.find(handler_payload_param(handler) + ".amount > 0") != std::string::npos);
 }
 
 TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and between fixed repetitions",

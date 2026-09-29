@@ -1,0 +1,56 @@
+module event_payload_reads
+
+use std.core
+use std.math.quat as quat
+use event_payload_combat as combat
+
+# Handlers read the payload through the trigger name, bare or module-qualified,
+# with no `as` alias.
+
+event Turn:
+    rotation: quat
+    amount: int
+
+event Echo:
+    amount: int
+
+trait Reading:
+    var rotation: quat = quat.identity()
+    var amount: int = 0
+    var echoed: int = 0
+    var hit: int = 0
+
+entity Probe:
+    Reading
+
+rule Start:
+    on load:
+        emit Turn:
+            rotation = quat.from_euler(0.0, 1.0, 0.0)
+            amount = 3
+        emit combat.Hit:
+            amount = 5
+
+rule ReadTurn:
+    filter:
+        Reading as reading
+
+    on Turn:
+        reading.rotation = Turn.rotation
+        reading.amount = Turn.amount
+        emit Echo:
+            amount = Turn.amount
+
+rule ReadEcho:
+    filter:
+        Reading as reading
+
+    on Echo:
+        reading.echoed = Echo.amount
+
+rule ReadHit:
+    filter:
+        Reading as reading
+
+    on combat.Hit:
+        reading.hit = combat.Hit.amount

@@ -36,7 +36,7 @@ The cpp-entt backend SHALL consume resolved typed symbol identities for all modu
 - **THEN** cpp-entt treats it as `game.custom.WorldTransform` and does not apply stdlib transform behavior unless the resolved symbol identity is the stdlib symbol
 
 ### Requirement: Registry-based system generation
-The backend SHALL generate system functions that iterate over the EnTT registry and apply declared filter clauses. For ordinary generated systems with non-empty filters, the backend SHALL use `entt::registry::view<Components...>()`-style iteration so filtering is performed by EnTT rather than by scanning every entity with early-exit guards. When `exclude:` clauses are present, the backend SHALL use native EnTT exclusion where possible. For each event handler the backend SHALL emit a second parameter `const EventType& <name>` where `<name>` is the handler alias if present, otherwise the event name. The backend SHALL NOT emit individual field parameters (e.g., `float dt`) — handler body code accesses fields via the event variable (e.g., `tick.dt`).
+The backend SHALL generate system functions that iterate over the EnTT registry and apply declared filter clauses. For ordinary generated systems with non-empty filters, the backend SHALL use `entt::registry::view<Components...>()`-style iteration so filtering is performed by EnTT rather than by scanning every entity with early-exit guards. When `exclude:` clauses are present, the backend SHALL use native EnTT exclusion where possible. For each event handler the backend SHALL emit a second parameter `const EventType& <name>` where `<name>` is the handler alias if present, otherwise a C++ identifier derived from the trigger name. In the handler body, every reference to the trigger name — bare, or module-qualified as written after `on` — and every reference to the alias SHALL lower to that parameter. The backend SHALL NOT emit individual field parameters (e.g., `float dt`) — handler body code accesses fields via the event variable (e.g., `tick.dt`).
 
 Projected traits SHALL participate in this same registry-based filtering by being materialized as registry components during the current frame.
 
@@ -58,11 +58,50 @@ Projected traits SHALL participate in this same registry-based filtering by bein
 
 #### Scenario: User event handler uses event name as variable
 - **WHEN** `on PlayerDamaged:` handler body contains `h.health -= PlayerDamaged.amount`
-- **THEN** the generated handler function receives `const PlayerDamagedEvent& PlayerDamaged` and the expression accesses `.amount`
+- **THEN** the generated C++ compiles, and the expression reads `amount` from the handler's `PlayerDamagedEvent` parameter
+
+#### Scenario: Trigger-name reference in an emit field value
+- **WHEN** an `on Contact:` handler contains `emit Reaction:` with the field value `amount = Contact.amount`
+- **THEN** the emitted `Reaction` occurrence carries the `amount` of the `Contact` occurrence that ran the handler
+
+#### Scenario: Trigger name and alias both reach the payload
+- **WHEN** an `on PlayerDamaged as dmg:` handler body reads both `dmg.amount` and `PlayerDamaged.amount`
+- **THEN** both reads lower to the same handler parameter and yield the same value
+
+#### Scenario: Module-qualified trigger name reaches the payload
+- **WHEN** a module imports `combat` and a handler `on combat.Hit:` reads `combat.Hit.amount`
+- **THEN** the read lowers to the handler's `Hit` event parameter and the generated C++ compiles
+
+#### Scenario: Trigger-name read at runtime
+- **WHEN** a headless program emits `Turn` with `amount = 3` and a filtered `on Turn:` handler stores `Turn.amount` into a trait field
+- **THEN** the trait field holds `3` after the activation completes
 
 #### Scenario: Marker lifecycle event handler receives empty-struct parameter
 - **WHEN** a rule has `on spawn:` handler (no fields)
 - **THEN** the generated handler function signature is `void RuleName_spawn(entt::registry& registry, const SpawnEvent& spawn)` with an empty `SpawnEvent` struct
+
+### Requirement: Event struct fields use resolved types
+The backend SHALL generate each event struct's field types from the types the semantic analyzer resolved for that event's fields, using the same type mapping as trait component fields (with `entity_id` mapped to the backend entity type). Every event field type the analyzer accepts SHALL produce its matching C++ type; the backend SHALL NOT substitute a different type for a field type it does not special-case. Each event struct SHALL be generated once, whether or not the program carries an AST.
+
+#### Scenario: Quaternion event field
+- **WHEN** a module declares `event Turn:` with field `rotation: quat`
+- **THEN** the generated `Turn` event struct declares `rotation` with the backend quaternion type, and an `emit Turn:` that assigns a `quat` value to `rotation` compiles
+
+#### Scenario: Quaternion payload survives delivery
+- **WHEN** a headless program emits `Turn` with `rotation = quat.from_euler(0.0, 1.0, 0.0)` and an `on Turn:` handler stores `Turn.rotation` into a `quat` trait field
+- **THEN** the trait field equals that quaternion after the activation completes
+
+#### Scenario: Struct, enum, and entity_id event fields
+- **WHEN** an event declares fields of a user struct type, a user enum type, and `entity_id`
+- **THEN** the generated event struct declares them with the struct's C++ type, the enum's C++ type, and the backend entity type
+
+#### Scenario: Event fields are value-initialized
+- **WHEN** an event struct is generated
+- **THEN** each field is value-initialized, so an `emit` that omits a field delivers that field's type default
+
+#### Scenario: Same struct with and without an AST
+- **WHEN** the same event is generated once from a program with an AST and once from a linked program without one
+- **THEN** both produce the same event struct text
 
 ### Requirement: EnTT dispatcher event generation
 The backend SHALL generate event structs and configure `entt::dispatcher` for event routing. `emit` statements SHALL map to `dispatcher.trigger<EventType>(...)`.

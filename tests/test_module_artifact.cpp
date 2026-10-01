@@ -940,7 +940,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 19);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1283,7 +1283,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 19);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1434,8 +1434,110 @@ TEST_CASE("ModuleArtifact: named field references in expressions round-trip", "[
     fs::remove_all(build_dir, ec);
 }
 
+static DecoratedProgram make_lifecycle_program(HandlerTriggerKind kind) {
+    const auto rule = test_symbol(SymbolKind::Rule, "StartDying");
+    const ResolvedHandlerTrigger trigger{.kind = kind, .symbol = test_symbol(SymbolKind::Trait, "Dying")};
+    DecoratedProgram prog;
+    InferredHandlerContract contract;
+    contract.rule    = rule;
+    contract.trigger = trigger;
+    prog.handler_contracts.push_back(contract);
+    prog.execution_graph.handlers.push_back(
+        HandlerNode{.identity = HandlerIdentity{.rule = rule, .trigger = trigger}, .location = {"test.cactus", 3, 5}});
+    return prog;
+}
+
+TEST_CASE("ModuleArtifact: lifecycle triggers round-trip", "[artifact][trait-lifecycle]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    for (const auto kind : {HandlerTriggerKind::TraitAdded, HandlerTriggerKind::TraitRemoved}) {
+        const auto prog = make_lifecycle_program(kind);
+        ErrorReporter errors;
+        ModuleArtifact artifact(errors);
+        REQUIRE(artifact.save(prog, "test", build_dir));
+        std::string module_name;
+        auto loaded = artifact.load(build_dir / "test.cmod", module_name);
+        REQUIRE_FALSE(errors.has_errors());
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->handler_contracts.size() == 1);
+        CHECK(loaded->handler_contracts[0].trigger == prog.handler_contracts[0].trigger);
+        REQUIRE(loaded->execution_graph.handlers.size() == 1);
+        CHECK(loaded->execution_graph.handlers[0].identity == prog.execution_graph.handlers[0].identity);
+        CHECK(loaded->execution_graph.handlers[0].identity.canonical_id() ==
+              prog.execution_graph.handlers[0].identity.canonical_id());
+    }
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-lifecycle]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(make_lifecycle_program(HandlerTriggerKind::TraitAdded), "added", build_dir));
+    REQUIRE(artifact.save(make_lifecycle_program(HandlerTriggerKind::TraitRemoved), "removed", build_dir));
+    const auto added   = read_file_bytes(build_dir / "added.cmod");
+    const auto removed = read_file_bytes(build_dir / "removed.cmod");
+
+    // The files differ only in the module name and the trigger-kind bytes; patch the kind bytes.
+    auto corrupt           = removed;
+    const auto added_kind  = static_cast<char>(HandlerTriggerKind::TraitAdded);
+    const auto removed_kind = static_cast<char>(HandlerTriggerKind::TraitRemoved);
+    REQUIRE(added.size() + 2 == removed.size());
+    std::size_t patched = 0;
+    for (std::size_t index = removed.size() - added.size(); index < removed.size(); ++index) {
+        const auto added_byte = added[index - (removed.size() - added.size())];
+        if (removed[index] == removed_kind && added_byte == added_kind) {
+            corrupt[index] = static_cast<char>(0x7F);
+            ++patched;
+        }
+    }
+    REQUIRE(patched > 0);
+    {
+        std::ofstream out(build_dir / "removed.cmod", std::ios::binary | std::ios::trunc);
+        out.write(corrupt.data(), static_cast<std::streamsize>(corrupt.size()));
+    }
+
+    std::string module_name;
+    CHECK_FALSE(artifact.load(build_dir / "removed.cmod", module_name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics().back().message.find("malformed") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "old.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 19;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 19);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

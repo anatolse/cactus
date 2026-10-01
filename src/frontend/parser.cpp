@@ -611,7 +611,11 @@ LocatedName Parser::parse_located_name() {
 EventHandlerNode Parser::parse_event_handler() {
     auto loc = peek().location;
     consume(TokenType::ON, "expected 'on'");
-    // Accept lifecycle keywords (spawn/destroy/load/unload) as event names
+    auto trigger_form = HandlerTriggerForm::Event;
+    if (check(TokenType::IDENTIFIER) && peek_next().type == TokenType::IDENTIFIER &&
+        (peek().value == "added" || peek().value == "removed")) {
+        trigger_form = advance().value == "added" ? HandlerTriggerForm::Added : HandlerTriggerForm::Removed;
+    }
     const auto trigger_location = peek().location;
     auto event_name             = parse_lifecycle_event_name();
 
@@ -653,6 +657,7 @@ EventHandlerNode Parser::parse_event_handler() {
     expect_dedent();
 
     EventHandlerNode handler;
+    handler.trigger_form     = trigger_form;
     handler.event_name       = event_name;
     handler.trigger_location = trigger_location;
     handler.alias            = alias;

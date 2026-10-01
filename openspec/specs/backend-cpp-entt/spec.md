@@ -76,9 +76,9 @@ Projected traits SHALL participate in this same registry-based filtering by bein
 - **WHEN** a headless program emits `Turn` with `amount = 3` and a filtered `on Turn:` handler stores `Turn.amount` into a trait field
 - **THEN** the trait field holds `3` after the activation completes
 
-#### Scenario: Marker lifecycle event handler receives empty-struct parameter
-- **WHEN** a rule has `on spawn:` handler (no fields)
-- **THEN** the generated handler function signature is `void RuleName_spawn(entt::registry& registry, const SpawnEvent& spawn)` with an empty `SpawnEvent` struct
+#### Scenario: Marker event handler receives empty-struct parameter
+- **WHEN** the program declares `event ping` (no fields) and a rule `Init` has an `on ping:` handler
+- **THEN** the generated handler function signature begins `void init_ping(entt::registry& registry, const pingEvent& ping,` where `pingEvent` is an empty struct
 
 ### Requirement: Event struct fields use resolved types
 The backend SHALL generate each event struct's field types from the types the semantic analyzer resolved for that event's fields, using the same type mapping as trait component fields (with `entity_id` mapped to the backend entity type). Every event field type the analyzer accepts SHALL produce its matching C++ type; the backend SHALL NOT substitute a different type for a field type it does not special-case. Each event struct SHALL be generated once, whether or not the program carries an AST.
@@ -853,25 +853,6 @@ The cpp-entt backend SHALL allocate a single plane mesh (XY-oriented, 1×1 world
 ### Requirement: cpp-entt backend lowers world query expressions to registry queries
 The cpp-entt backend SHALL compile recognized `std.query` expressions to direct `entt::registry` queries rather than reflective or name-based lookup logic. The backend SHALL distinguish these from ordinary extern-function calls using semantic metadata that marks the call as a recognized query expression and carries the parsed trait filters.
 
-### Requirement: cpp-entt implements std.input cursor capture
-The cpp-entt backend SHALL lower the resolved std.input.set_cursor_captured function to a concrete Raylib-backed runtime operation. A true value SHALL disable and capture the cursor for relative mouse motion; a false value SHALL enable and release it. Lowering SHALL use resolved canonical function identity rather than source alias spelling.
-
-#### Scenario: True captures the Raylib cursor
-- **WHEN** a cpp-entt project calls std.input.set_cursor_captured(true)
-- **THEN** the runtime requests Raylib's captured cursor state
-
-#### Scenario: False releases the Raylib cursor
-- **WHEN** a cpp-entt project calls std.input.set_cursor_captured(false)
-- **THEN** the runtime restores Raylib's ordinary cursor state
-
-#### Scenario: Alias spelling uses the same binding
-- **WHEN** one program calls inp.set_cursor_captured after alias-importing std.input and another uses the canonical qualifier
-- **THEN** both calls lower to the same cpp-entt runtime behavior
-
-#### Scenario: Fake Raylib exposes capture transitions
-- **WHEN** a headless test calls the generated capture and release paths
-- **THEN** fake Raylib records the resulting cursor-captured state and transition calls
-
 #### Scenario: Exists query compiles to registry/view check
 - **WHEN** authored code uses `query.exists[Boss]()`
 - **THEN** the backend generates code that checks whether any live entity currently satisfies the `Boss` filter
@@ -895,6 +876,25 @@ The cpp-entt backend SHALL lower the resolved std.input.set_cursor_captured func
 #### Scenario: Parent query returns stale handle when relationship missing
 - **WHEN** authored code uses `query.parent(of = root_id)` and no parent relationship exists
 - **THEN** the generated code returns an `entity_id` value for which `registry.valid(id)` is false or which otherwise behaves as stale/non-live under total handle semantics
+
+### Requirement: cpp-entt implements std.input cursor capture
+The cpp-entt backend SHALL lower the resolved std.input.set_cursor_captured function to a concrete Raylib-backed runtime operation. A true value SHALL disable and capture the cursor for relative mouse motion; a false value SHALL enable and release it. Lowering SHALL use resolved canonical function identity rather than source alias spelling.
+
+#### Scenario: True captures the Raylib cursor
+- **WHEN** a cpp-entt project calls std.input.set_cursor_captured(true)
+- **THEN** the runtime requests Raylib's captured cursor state
+
+#### Scenario: False releases the Raylib cursor
+- **WHEN** a cpp-entt project calls std.input.set_cursor_captured(false)
+- **THEN** the runtime restores Raylib's ordinary cursor state
+
+#### Scenario: Alias spelling uses the same binding
+- **WHEN** one program calls inp.set_cursor_captured after alias-importing std.input and another uses the canonical qualifier
+- **THEN** both calls lower to the same cpp-entt runtime behavior
+
+#### Scenario: Fake Raylib exposes capture transitions
+- **WHEN** a headless test calls the generated capture and release paths
+- **THEN** fake Raylib records the resulting cursor-captured state and transition calls
 
 ### Requirement: cpp-entt backend returns stale handle sentinel for empty single-entity queries
 For recognized single-entity query expressions such as `first` and `nearest`, the cpp-entt backend SHALL return an `entity_id` value that behaves as stale/non-live when no live entity matches.
@@ -1079,9 +1079,9 @@ This requirement does not apply to synthesized periodic-phase fields (`dt`, `alp
 - **THEN** its synthesized `dt` and `alpha` fields continue to be populated by the existing accumulator/catch-up logic, not by initializer-binding assignment
 
 ### Requirement: Activation command buffer and event cascade
-The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary. When the linked program has at least one handler triggered by `std.core.spawn` (respectively `std.core.destroy`), commit SHALL emit a `std.core.spawn` (respectively `std.core.destroy`) occurrence back into the same activation's cascade for each applied `Spawn` (respectively `Destroy`) command, subject to the same cascade-depth rule already applied to handler-emitted events. Programs with no handler triggered by `std.core.spawn`/`std.core.destroy` SHALL NOT emit this notification code path.
+The cpp-entt backend SHALL buffer spawn, destroy, add, and remove commands during an activation, drain emitted event cascades under the configured depth rule, and apply buffered commands deterministically at that activation's commit boundary. When the linked program declares at least one trait lifecycle trigger (`on added T` or `on removed T`), commit SHALL deliver those triggers, as specified by `dsl-trait-lifecycle-triggers`, back into the same activation's cascade after each commit round, subject to the same cascade-depth rule already applied to handler-emitted events. Programs with no lifecycle trigger SHALL NOT emit this delivery code path.
 
-Commit applies commands in rounds: a round applies every queued command, emits that round's notifications, and drains the resulting cascade; commands queued by that cascade form the next round. The notifications of round *r* (counting from 1) of one activation's commit SHALL be emitted at cascade depth *r*, so commit rounds and the event cascades they trigger share one cascade-depth budget for that activation. A notification whose depth would exceed the bound SHALL be deferred to a later activation exactly like an overflowing handler-emitted occurrence; its handlers, and any commands they queue, SHALL belong to that later activation. Commit SHALL therefore terminate for every program, including one whose notification handlers always issue further spawn or destroy commands.
+Commit applies commands in rounds: a round applies every queued command, delivers that round's lifecycle triggers, and drains the resulting cascade; commands queued by that cascade form the next round. The deliveries of round *r* (counting from 1) of one activation's commit SHALL be emitted at cascade depth *r*, so commit rounds and the event cascades they trigger share one cascade-depth budget for that activation. A delivery whose depth would exceed the bound SHALL be deferred to a later activation exactly like an overflowing handler-emitted occurrence; its handlers, and any commands they queue, SHALL belong to that later activation. Commit SHALL therefore terminate for every program, including one whose lifecycle handlers always issue further structural commands.
 
 #### Scenario: Structural command is deferred to commit
 - **WHEN** a fixed_tick handler issues `spawn Particle`
@@ -1091,28 +1091,36 @@ Commit applies commands in rounds: a round applies every queued command, emits t
 - **WHEN** a phase handler emits Contact and a Contact handler issues commands
 - **THEN** the Contact cascade completes and its commands join the same activation commit
 
-#### Scenario: Commit emits spawn notification when consumed
-- **WHEN** the linked program declares a rule with an `on spawn` handler and some other handler issues `spawn Enemy`
-- **THEN** after the `Spawn` command is applied at commit, a `std.core.spawn` occurrence re-enters the same activation's cascade and the `on spawn` handler runs against the newly created entity
+#### Scenario: Commit delivers added trigger to the changed entity
+- **WHEN** the linked program declares `on added Dying` and some handler issues `add Dying` on one entity
+- **THEN** after that round commits, the `on added Dying` handler runs once, targeted at that entity
 
-#### Scenario: Commit emits destroy notification when consumed
-- **WHEN** the linked program declares a rule with an `on destroy` handler and some other handler issues `destroy` on an entity
-- **THEN** after the `Destroy` command is applied at commit, a `std.core.destroy` occurrence re-enters the same activation's cascade and the `on destroy` handler runs
+#### Scenario: Commit delivers removed trigger with snapshot
+- **WHEN** the linked program declares `on removed Burning as old` and some handler issues `remove Burning` on an entity
+- **THEN** after that round commits, the handler runs targeted at that entity with `old` holding the value `Burning` had before removal
 
-#### Scenario: No spawn/destroy handler means no notification codegen
-- **WHEN** the linked program declares no handler triggered by `std.core.spawn` or `std.core.destroy`
-- **THEN** `generated_commit_activation` applies commands without emitting either notification, and no dispatch overload for `std_core__spawnEvent`/`std_core__destroyEvent` is generated
+#### Scenario: Spawn delivers added triggers, not a spawn event
+- **WHEN** some handler issues `spawn Enemy`
+- **THEN** commit emits no `std.core.spawn` occurrence (the event no longer exists); instead, `on added` is delivered to the new entity for each watched trait it carries
 
-#### Scenario: Self-respawning spawn handler terminates
-- **WHEN** an `on spawn` handler issues one further `spawn` every time it runs, and one spawn commits
-- **THEN** the activation's commit delivers spawn notifications for at most the cascade-depth bound's number of rounds, the first round past the bound still applies its commands but defers its notification instead of delivering it, and the commit returns
+#### Scenario: Destroy delivers no lifecycle trigger
+- **WHEN** some handler issues `destroy` on an entity
+- **THEN** commit emits no `std.core.destroy` occurrence and delivers no lifecycle trigger for the destroyed entity
 
-#### Scenario: Deferred notification runs in a later activation
-- **WHEN** a spawn notification was deferred because its round exceeded the bound
-- **THEN** its `on spawn` handler runs in a later activation, and a `spawn` it issues is applied at that later activation's commit, not the earlier one
+#### Scenario: No lifecycle trigger means no tracking codegen
+- **WHEN** the linked program declares no `on added` or `on removed` handler
+- **THEN** `generated_commit_activation` applies commands without lifecycle tracking or delivery, and no spawn/destroy dispatch overload is generated for any program
+
+#### Scenario: Self-feeding lifecycle handlers terminate
+- **WHEN** an `on added Pulse` handler issues `remove Pulse`, and an `on removed Pulse` handler issues `add Pulse`
+- **THEN** the activation's commit delivers triggers for at most the cascade-depth bound's number of rounds, defers the rest, and returns
+
+#### Scenario: Deferred delivery runs in a later activation
+- **WHEN** a lifecycle delivery was deferred because its round exceeded the bound
+- **THEN** its handler runs in a later activation, and a command it issues is applied at that later activation's commit
 
 #### Scenario: Commit rounds share depth with event cascades
-- **WHEN** a round-*r* spawn notification's handler emits an event whose handler emits further events
+- **WHEN** a round-*r* lifecycle handler emits an event whose handler emits further events
 - **THEN** those events are emitted at depths above *r*, and a chain that would exceed the bound is deferred under the same rule as any other occurrence
 
 ### Requirement: Deferred occurrences are delivered in a later activation
@@ -1127,15 +1135,15 @@ The cpp-entt backend SHALL deliver every occurrence deferred by the cascade-dept
 - **THEN** its handlers run only for the original recipient, and not at all if that recipient is no longer valid
 
 ### Requirement: Activation and event-scheduler machinery is implemented as shared runtime helpers
-The cpp-entt backend SHALL implement its per-frame activation/event-scheduler machinery — entity reservation, structural command queuing and commit, event emission (including targeted emission), and event-cascade draining — using helpers templated on the program's `EventOccurrence` type and hosted in the backend runtime, rather than emitting an independent copy of this machinery as per-program generated text. Generated per-program output SHALL be limited to declaring the program's concrete `EventOccurrence` type and its program-specific hooks (spawn/destroy notification synthesis, event dispatch to handlers), calling through to the shared runtime helpers for the scheduler logic itself.
+The cpp-entt backend SHALL implement its per-frame activation/event-scheduler machinery — entity reservation, structural command queuing and commit, trait-presence tracking and net-change computation for lifecycle triggers, event emission (including targeted emission), and event-cascade draining — using helpers templated on the program's `EventOccurrence` type and hosted in the backend runtime, rather than emitting an independent copy of this machinery as per-program generated text. Generated per-program output SHALL be limited to declaring the program's concrete `EventOccurrence` type and its program-specific hooks (the set of watched traits, lifecycle occurrence types, event dispatch to handlers), calling through to the shared runtime helpers for the scheduler logic itself.
 
 #### Scenario: Structurally identical scheduler machinery is shared across programs
 - **WHEN** two programs with different event sets are both generated for cpp-entt
-- **THEN** the generated output for each contains only its program-specific `EventOccurrence` declaration and dispatch/notification hooks calling into the shared runtime scheduler helpers, not two independent copies of the queuing/commit/drain logic
+- **THEN** the generated output for each contains only its program-specific `EventOccurrence` declaration and dispatch/lifecycle hooks calling into the shared runtime scheduler helpers, not two independent copies of the queuing/commit/drain/tracking logic
 
-#### Scenario: Programs without spawn/destroy handlers pay no extra runtime cost
-- **WHEN** a program declares no `on spawn` or `on destroy` handler
-- **THEN** the generated activation-commit path does not emit or execute spawn/destroy notification synthesis for that program
+#### Scenario: Programs without lifecycle triggers pay no extra runtime cost
+- **WHEN** a program declares no `on added` or `on removed` handler
+- **THEN** the generated activation-commit path does not emit or execute lifecycle tracking for that program
 
 ### Requirement: Graph-driven main loop runs one-shot load/unload boundary activations
 When the cpp-entt backend generates the graph-driven main loop, and the linked program declares at least one handler triggered by `std.core.load`, the generated `main()` SHALL run one activation — inject a `std.core.load` root occurrence, execute its handler cascade, then commit — exactly once, after `generated_init_project` completes and before the first frame occurrence is injected. Symmetrically, when the linked program declares at least one handler triggered by `std.core.unload`, generated `main()` SHALL run one `std.core.unload` activation (inject, cascade, commit) exactly once, after the frame loop exits and before `CloseWindow()`. Neither activation SHALL execute when the corresponding trigger has no handler in the linked program.
@@ -1396,3 +1404,19 @@ The backend SHALL generate a typed restore entry point that reconstructs recorde
 #### Scenario: Staged failure releases staged resources
 - **WHEN** staged resource preparation fails
 - **THEN** the staged registry and its resources are discarded and the live registry is untouched
+
+### Requirement: Startup arrival activation for load-time entities
+When the linked program declares at least one `on added` trigger, the graph-driven generated `main()` SHALL run one arrival activation after `generated_init_project` completes and before the `std.core.load` boot activation (or, when there is none, before the first frame occurrence). That activation SHALL deliver `on added T` for every load-time entity and every watched trait it carries, in entity creation order then trait canonical-identity order, then drain and commit like any activation. It SHALL NOT run when the program declares no `on added` trigger, and world restore SHALL NOT run it.
+
+#### Scenario: Arrival runs before load
+- **WHEN** a program has an `entity Boss` carrying `Enemy`, an `on added Enemy` handler, and an `on load` handler
+- **THEN** generated `main()` runs the `on added Enemy` handler for `Boss` before the load activation, and both before the first frame
+
+#### Scenario: No added trigger means no arrival activation
+- **WHEN** the program declares no `on added` handler
+- **THEN** generated `main()` runs no arrival activation; `generated_init_project` is followed directly by the load activation or the frame loop
+
+#### Scenario: Arrival commands commit before load
+- **WHEN** an `on added Enemy` handler issues `add Armed` during the arrival activation
+- **THEN** `Armed` is committed before any `on load` handler runs
+

@@ -635,7 +635,11 @@ std::optional<SymbolId> ModuleArtifact::read_optional_symbol_id(std::istream& in
 }
 
 ResolvedHandlerTrigger ModuleArtifact::read_trigger(std::istream& in) {
-    return ResolvedHandlerTrigger{.kind = static_cast<HandlerTriggerKind>(read_u8(in)), .symbol = read_symbol_id(in)};
+    const auto kind = read_u8(in);
+    if (kind > static_cast<uint8_t>(HandlerTriggerKind::TraitRemoved)) {
+        in.setstate(std::ios::failbit);
+    }
+    return ResolvedHandlerTrigger{.kind = static_cast<HandlerTriggerKind>(kind), .symbol = read_symbol_id(in)};
 }
 
 HandlerIdentity ModuleArtifact::read_handler_identity(std::istream& in) {
@@ -1310,7 +1314,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     program.ast               = nullptr;  // not serialized
 
     if (!in.good()) {
-        errors_.error({}, "truncated artifact: " + path.string());
+        errors_.error({}, "malformed or truncated artifact: " + path.string());
         return std::nullopt;
     }
 

@@ -138,7 +138,6 @@ pub trait KinematicActor:
 
 pub trait Enemy:
     var speed: float = 0.6
-    var dying: bool = false
     var death_elapsed: float = 0.0
     var facing_yaw: float = 0.0
     var death_pitch: float = 0.0
@@ -148,6 +147,9 @@ pub trait Enemy:
     # -Z) can still visually face its direction of travel.
     var visual_yaw_offset: float = 0.0
     var is_vaulting: bool = false
+
+# Marks an enemy whose death animation is playing.
+pub trait Dying
 
 pub trait RobotSpawnPoint:
     var countdown: float = 0.0
@@ -680,10 +682,12 @@ rule DetectEnemySeparation:
     pairs:
         a:
             Enemy
+            Threat
             KinematicActor
             tv.WorldTransform
         b:
             Enemy
+            Threat
             KinematicActor
             tv.WorldTransform
     after:
@@ -691,8 +695,6 @@ rule DetectEnemySeparation:
         SeekPlayer
     where:
         a != b
-        not a.Enemy.dying
-        not b.Enemy.dying
         collision.spheres_overlap(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)
 
     on fixed_tick:
@@ -890,13 +892,12 @@ rule SeekPlayer:
         Threat
         KinematicActor as actor
         tv.WorldTransform as transform
+    exclude:
+        Dying
     when:
         not Game.Match.over
 
     on fixed_tick:
-        if enemy.dying:
-            return
-
         # actor.grounded reflects the end of the *previous* tick's grounding
         # resolution (this tick's own IntegrateVerticalMotion/
         # DetectGroundCandidate haven't run yet) — a deliberate one-tick lag,
@@ -1100,7 +1101,7 @@ rule DetectBulletEnemyContact:
         DetectBulletSolidContact
 
     on fixed_tick:
-        if not bullet.Bullet.consumed and not enemy.Enemy.dying:
+        if not bullet.Bullet.consumed:
             let bullet_position = bullet.tv.WorldTransform.position
             let enemy_position = enemy.tv.WorldTransform.position
             let horizontal = vec3(bullet_position.x - enemy_position.x, 0.0, bullet_position.z - enemy_position.z)
@@ -1126,13 +1127,12 @@ rule ConsumeBulletContact:
 rule BeginRobotDeath:
     filter:
         RobotEnemy
-        Enemy as enemy
+        Enemy
+    exclude:
+        Dying
 
     on EnemyHit:
-        if enemy.dying:
-            return
-        enemy.dying = true
-        enemy.death_elapsed = 0.0
+        add Dying
         for visual in query.children[EnemyVisual](of = self):
             set models.ModelAnimator on visual:
                 clip = ROBOT_DEATH_CLIP
@@ -1141,17 +1141,26 @@ rule BeginRobotDeath:
 rule BeginKnightDeath:
     filter:
         KnightEnemy
-        Enemy as enemy
+        Enemy
+    exclude:
+        Dying
 
     on EnemyHit:
-        if enemy.dying:
-            return
-        enemy.dying = true
-        enemy.death_elapsed = 0.0
+        add Dying
         for visual in query.children[EnemyVisual](of = self):
             set models.ModelAnimator on visual:
                 clip = KNIGHT_DEATH_CLIP
                 time = 0.0
+
+# A dying enemy stops being a Threat, so the pair rules that need one (enemy
+# separation, bullet hits, player contact) skip it.
+rule StartDying:
+    filter:
+        Enemy as enemy
+
+    on added Dying:
+        enemy.death_elapsed = 0.0
+        remove Threat
 
 # Enemy is the collision/logic root (grounded at torso height, see
 # EnemyBase); the rendered model lives on a child EnemyVisual entity, so the
@@ -1159,11 +1168,10 @@ rule BeginKnightDeath:
 rule AnimateEnemyDeath:
     filter:
         Enemy as enemy
+        Dying
         tv.WorldTransform as transform
 
     on tick:
-        if not enemy.dying:
-            return
         enemy.death_elapsed += tick.dt
         if enemy.death_elapsed >= DEATH_DURATION:
             # Destroying self cascades to the EnemyVisual child (Parent-based
@@ -1192,7 +1200,7 @@ rule DetectPlayerContact:
         not Game.Match.over
 
     on fixed_tick:
-        if not enemy.Enemy.dying and collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius):
+        if collision.spheres_overlap(enemy.tv.WorldTransform.position, enemy.KinematicActor.radius, player.tv.WorldTransform.position, player.KinematicActor.radius):
             emit GameOver to player
 
 rule EndGame:

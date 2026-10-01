@@ -1043,7 +1043,7 @@ TEST_CASE("Parser: pub template declaration", "[parser][dynamic-ecs]") {
     REQUIRE(tmpl.traits.size() == 2);
 }
 
-// Task 4.10: on spawn/destroy/load/unload lifecycle handlers
+// `spawn`/`destroy` still parse as event names so analysis can report the migration diagnostic.
 TEST_CASE("Parser: on spawn lifecycle handler", "[parser][dynamic-ecs]") {
     auto prog = parse(
         "rule Init:\n"
@@ -2915,6 +2915,48 @@ TEST_CASE("Parser: on user event with alias parsed", "[parser][dsl-event-handler
     CHECK(sys.handlers[0].event_name == "PlayerDamaged");
     REQUIRE(sys.handlers[0].alias.has_value());
     CHECK(*sys.handlers[0].alias == "dmg");
+}
+
+TEST_CASE("Parser: on added trigger parsed", "[parser][trait-lifecycle]") {
+    auto prog = parse(
+        "rule StartDying:\n"
+        "    on added Dying:\n"
+        "        x = 1\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].trigger_form == HandlerTriggerForm::Added);
+    CHECK(sys.handlers[0].event_name == "Dying");
+    CHECK_FALSE(sys.handlers[0].alias.has_value());
+}
+
+TEST_CASE("Parser: on removed trigger with qualified trait and alias parsed", "[parser][trait-lifecycle]") {
+    auto prog = parse(
+        "rule StopBurning:\n"
+        "    on removed fx.Burning as old:\n"
+        "        x = 1\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 1);
+    CHECK(sys.handlers[0].trigger_form == HandlerTriggerForm::Removed);
+    CHECK(sys.handlers[0].event_name == "fx.Burning");
+    REQUIRE(sys.handlers[0].alias.has_value());
+    CHECK(*sys.handlers[0].alias == "old");
+}
+
+TEST_CASE("Parser: added without a trait name is an event name", "[parser][trait-lifecycle]") {
+    auto prog = parse(
+        "rule OnAdded:\n"
+        "    on added:\n"
+        "        x = 1\n"
+        "    on removed as r:\n"
+        "        x = 2\n");
+    auto& sys = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(sys.handlers.size() == 2);
+    CHECK(sys.handlers[0].trigger_form == HandlerTriggerForm::Event);
+    CHECK(sys.handlers[0].event_name == "added");
+    CHECK(sys.handlers[1].trigger_form == HandlerTriggerForm::Event);
+    CHECK(sys.handlers[1].event_name == "removed");
+    REQUIRE(sys.handlers[1].alias.has_value());
+    CHECK(*sys.handlers[1].alias == "r");
 }
 
 TEST_CASE("Parser: marker event declaration (no colon, no body)", "[parser][dsl-event-handler-syntax]") {

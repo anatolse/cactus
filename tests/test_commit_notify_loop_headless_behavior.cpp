@@ -19,10 +19,11 @@ namespace {
 using Offspring = commit_notify_loop_runtime__Offspring;
 using Door      = commit_notify_loop_runtime__Door;
 using Knock     = commit_notify_loop_runtime__KnockEvent;
+using OffspringArrived = cactus::runtime::entt_backend::TraitAdded<Offspring>;
 using cactus::runtime::entt_backend::kMaxEventCascadeDepth;
 
-// Rounds 1..bound deliver a notification that spawns again; round bound+1
-// still applies its spawn but defers its notification.
+// Rounds 1..bound deliver an arrival that spawns again; round bound+1
+// still applies its spawn but defers its arrival.
 constexpr std::size_t kSpawnsPerActivation = kMaxEventCascadeDepth + 1;
 
 std::size_t offspring_count(entt::registry& registry) {
@@ -55,15 +56,15 @@ TEST_CASE("cascade overflow from commit rounds and targeted chains defers to the
     // Load: a bounded batch of spawns and a bounded knock chain, each
     // leaving exactly one deferred occurrence.
     CHECK(offspring_count(registry) == kSpawnsPerActivation);
-    CHECK(deferred_count<std_core__spawnEvent>() == 1);
+    CHECK(deferred_count<OffspringArrived>() == 1);
     CHECK(knocks(registry, front) == static_cast<int>(kMaxEventCascadeDepth));
     CHECK(deferred_count<Knock>() == 1);
 
     for (std::size_t frame = 1; frame <= 3; ++frame) {
         cactus_headless_test::drive_frame(registry);
-        // The deferred notification ran this frame and its spawns committed here.
+        // The deferred arrival ran this frame and its spawns committed here.
         CHECK(offspring_count(registry) == kSpawnsPerActivation * (frame + 1));
-        CHECK(deferred_count<std_core__spawnEvent>() == 1);
+        CHECK(deferred_count<OffspringArrived>() == 1);
         // The deferred knock reached only Front: the root knock plus a new chain.
         CHECK(knocks(registry, front) == static_cast<int>((frame * (kMaxEventCascadeDepth + 1)) + kMaxEventCascadeDepth));
         CHECK(knocks(registry, back) == 0);

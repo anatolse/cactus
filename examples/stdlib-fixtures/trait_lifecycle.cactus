@@ -1,0 +1,135 @@
+module trait_lifecycle
+
+use std.core
+
+# Rules react when a trait arrives on or leaves an entity. Everything below
+# happens at startup: the arrival activation, then the load activation.
+
+trait Enemy
+trait Doomed
+trait Extinguish
+trait Condemned
+trait Defect
+trait Fading
+
+trait Dying:
+    var elapsed: float = 0.0
+
+trait Burning:
+    var intensity: float = 1.0
+
+trait Log:
+    var arrived: bool = false
+    var saw_arrival: bool = false
+    var dying_count: int = 0
+    var faded: bool = false
+    var last_intensity: float = 0.0
+
+trait Tally:
+    var removed_burning: int = 0
+
+entity Grunt:
+    Enemy
+    Log
+    Doomed
+
+entity Scout:
+    Enemy
+    Log
+
+# Gains Dying and loses Enemy in the same round.
+entity Deserter:
+    Enemy
+    Log
+    Doomed
+    Defect
+
+entity Torch:
+    Log
+    Extinguish
+    Burning:
+        intensity = 3.0
+
+entity Wreck:
+    Log
+    Condemned
+    Burning
+
+entity Stats:
+    Tally
+
+# ── Placed entities get arrival setup before `on load` ────────────────────────
+
+rule Arrive:
+    filter:
+        Log as log
+
+    on added Enemy:
+        log.arrived = true
+
+rule Boot:
+    filter:
+        Enemy
+        Log as log
+
+    on load:
+        log.saw_arrival = log.arrived
+
+# ── Load-time state changes ───────────────────────────────────────────────────
+
+rule Doom:
+    filter:
+        Doomed
+
+    on load:
+        add Dying
+
+rule Desert:
+    filter:
+        Defect
+
+    on load:
+        remove Enemy
+
+rule PutOut:
+    filter:
+        Extinguish
+
+    on load:
+        remove Burning
+
+rule Scrap:
+    filter:
+        Condemned
+
+    on load:
+        destroy
+
+# ── Reactions ─────────────────────────────────────────────────────────────────
+
+# Runs only for the entity that gained Dying, then chains a second change.
+rule StartDying:
+    filter:
+        Enemy
+        Log as log
+
+    on added Dying as dying:
+        log.dying_count += 1
+        dying.elapsed = 1.5
+        add Fading
+
+rule StartFading:
+    filter:
+        Log as log
+
+    on added Fading:
+        log.faded = true
+
+# The destroyed Wreck fires nothing; only Torch's removal counts.
+rule Cooled:
+    filter:
+        Log as log
+
+    on removed Burning as old:
+        log.last_intensity = old.intensity
+        Stats.Tally.removed_burning += 1

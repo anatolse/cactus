@@ -222,6 +222,10 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     // publication step resolves it without needing the full type visible
     // this early in the file.
     out << "void generated_reset_scheduler_state();\n\n";
+    const bool tracks_lifecycle = EnttCodegenUtils::tracks_lifecycle(program);
+    if (tracks_lifecycle) {
+        out << "void generated_connect_lifecycle_trackers(entt::registry& registry);\n\n";
+    }
 
     emit_restore_enum_functions(out, program);
     emit_restore_struct_functions(out, program);
@@ -232,7 +236,7 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     out << "// every record's handle first, so forward references and cycles resolve —\n";
     out << "// then publishes it into the caller's live registry with a single in-place\n";
     out << "// assignment: no partially restored world and no staged entity are ever\n";
-    out << "// observable through `registry`. Runs no gameplay spawn/destroy handler.\n";
+    out << "// observable through `registry`. Runs no gameplay handler or lifecycle trigger.\n";
     out << "// Publication also resets every runtime holder of a replaced-world handle\n";
     out << "// (pointer hover/capture, the pending-destruction cascade guard, the editor\n";
     out << "// camera rig, and the whole scheduler's fixed-step/catch-up state) so none\n";
@@ -312,6 +316,11 @@ std::string EnttRestoreEmitter::emit_world_restore(const DecoratedProgram& progr
     // runtime state (fixed-step accumulators and catch-up counters) also
     // holds backlog that must not carry into the restored world.
     out << "    generated_reset_scheduler_state();\n";
+    // The staged registry never had storage signals connected. Restore fires
+    // no lifecycle trigger itself (recording is off outside a commit).
+    if (tracks_lifecycle) {
+        out << "    generated_connect_lifecycle_trackers(registry);\n";
+    }
     if (!EnttCodegenUtils::declared_entities(program).empty()) {
         out << "    ::generated_rebind_named_slots(registry);\n";
     }

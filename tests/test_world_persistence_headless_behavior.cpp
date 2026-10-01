@@ -704,7 +704,7 @@ TEST_CASE("a successful restore discards old deferred events and fixed-step catc
 
     auto& scheduler = cactus::runtime::entt_backend::generated_scheduler_state();
     scheduler.activation.deferred_events.push_back(
-        cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__destroyEvent{}});
+        cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__unloadEvent{}});
     scheduler.std_core__fixed_tick.accumulator = 10.0;
     REQUIRE_FALSE(scheduler.activation.deferred_events.empty());
 
@@ -725,7 +725,7 @@ TEST_CASE("a failed restore preserves old-world scheduler work untouched",
 
     auto& scheduler = cactus::runtime::entt_backend::generated_scheduler_state();
     scheduler.activation.deferred_events.push_back(
-        cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__destroyEvent{}});
+        cactus::runtime::entt_backend::QueuedEvent<cactus::runtime::entt_backend::EventOccurrence>{.occurrence = std_core__unloadEvent{}});
     scheduler.std_core__fixed_tick.accumulator = 10.0;
 
     const auto outcome = cactus::runtime::entt_backend::generated_restore_world(registry, incompatible);

@@ -1,9 +1,7 @@
 ## Purpose
 
 Define the `.cmod` binary module artifact format, including serialization/deserialization of `DecoratedProgram`, public symbol extraction, versioning, and build-directory management.
-
 ## Requirements
-
 ### Requirement: Serialize DecoratedProgram to binary .cmod file
 The module artifact system SHALL serialize a module's `DecoratedProgram` (resolved traits, structs, enums, dependency graph, string pool, and AST) to a binary `.cmod` file in the `build/` folder. The file path SHALL mirror the module's qualified name: module `enemies.walker` → `build/enemies.walker.cmod`.
 
@@ -148,3 +146,19 @@ The module artifact binary format SHALL serialize and deserialize typed event-pr
 #### Scenario: Linked program preserves producer kinds
 - **WHEN** several module artifacts carrying producer records are linked into one program
 - **THEN** the merged execution graph reports the same producer kinds as single-module analysis of equivalent sources
+
+### Requirement: Trait lifecycle trigger kinds in `.cmod` binary format
+The module artifact binary format SHALL serialize and deserialize the added-trigger and removed-trigger handler trigger kinds, preserving each handler's trigger kind and the canonical identity of its trait. When reading, a trigger kind value outside the known set SHALL be rejected as a malformed artifact rather than accepted. The `CURRENT_VERSION` constant SHALL be incremented to 20 to reflect this format change. Artifacts produced with version 19 or earlier SHALL be rejected when loaded.
+
+#### Scenario: Lifecycle triggers round-trip
+- **WHEN** a module declaring `on added Dying` and `on removed Burning as old` is written to `.cmod` and read back
+- **THEN** both handlers keep their trigger kinds, trait identities, and canonical handler identities
+
+#### Scenario: Unknown trigger kind rejected
+- **WHEN** an artifact contains a handler trigger kind byte outside the known set
+- **THEN** loading reports a malformed-artifact error instead of producing a handler
+
+#### Scenario: Version 19 artifact rejected
+- **WHEN** a version-19 `.cmod` is loaded
+- **THEN** loading reports an incompatible-version error and returns no program
+

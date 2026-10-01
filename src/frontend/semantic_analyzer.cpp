@@ -1748,7 +1748,9 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                         resolve_expr(*key.expression);
                     }
                     for (auto& handler : node.handlers) {
-                        handler.resolved_trigger = try_resolve_handler_trigger(handler.event_name);
+                        handler.resolved_trigger = handler.trigger_form == HandlerTriggerForm::Event
+                                                       ? try_resolve_handler_trigger(handler.event_name)
+                                                       : try_resolve_lifecycle_trigger(handler);
                         resolve_stmts(handler.body);
                     }
                 } else if constexpr (std::is_same_v<T, ExternRuleNode>) {
@@ -2588,6 +2590,25 @@ std::unordered_map<std::string, const ResolvedTrait*> SemanticAnalyzer::build_fi
         }
     }
     return bindings;
+}
+
+void SemanticAnalyzer::bind_lifecycle_trigger_alias(
+    const EventHandlerNode& handler,
+    std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    std::unordered_map<std::string, TypeInfo>& local_bindings) const {
+    if (!handler.alias.has_value() || !handler.has_lifecycle_trigger()) {
+        return;
+    }
+    const auto& trait_symbol = handler.resolved_trigger->symbol;
+    if (handler.resolved_trigger->kind == HandlerTriggerKind::TraitAdded) {
+        if (const auto* trait = find_resolved_trait(make_canonical_id(trait_symbol)); trait != nullptr) {
+            filter_bindings[*handler.alias] = trait;
+        }
+        return;
+    }
+    auto snapshot   = make_resolved_user_type(TypeKind::Struct, trait_symbol, trait_symbol.local_name);
+    snapshot.is_let = true;
+    local_bindings[*handler.alias] = std::move(snapshot);
 }
 
 /// The dotted source spelling of an expression that is a plain member chain
@@ -3657,7 +3678,11 @@ void SemanticAnalyzer::validate_rule_filters(ProgramNode& program) {
                         handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage) {
                         continue;
                     }
-                    check_no_field_access(handler.body, rule->name, {});
+                    std::unordered_set<std::string> trigger_aliases;
+                    if (handler.alias.has_value() && handler.has_lifecycle_trigger()) {
+                        trigger_aliases.insert(*handler.alias);
+                    }
+                    check_no_field_access(handler.body, rule->name, std::move(trigger_aliases));
                 }
             }
 
@@ -3784,7 +3809,9 @@ std::unordered_set<std::string> SemanticAnalyzer::rule_binding_names(const RuleN
         }
     }
     for (const auto& handler : rule.handlers) {
-        names.insert(handler.event_name);
+        if (handler.trigger_form == HandlerTriggerForm::Event) {
+            names.insert(handler.event_name);
+        }
         if (handler.alias.has_value()) {
             names.insert(*handler.alias);
         }
@@ -4426,8 +4453,14 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                     handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Phase;
                 const bool render_stage_trigger = handler.resolved_trigger.has_value() &&
                                                   handler.resolved_trigger->kind == HandlerTriggerKind::RenderStage;
-                if (!event_trigger && !phase_trigger && !render_stage_trigger) {
+                const bool lifecycle_trigger = handler.has_lifecycle_trigger();
+                if (handler.trigger_form != HandlerTriggerForm::Event && !lifecycle_trigger) {
+                    errors_.error(handler.trigger_location, "unknown trait '" + handler.event_name + "'");
+                } else if (!event_trigger && !phase_trigger && !render_stage_trigger && !lifecycle_trigger) {
                     diagnose_unresolved_handler_trigger("rule '" + rule->name + "'", handler.event_name, handler.location);
+                }
+                if (lifecycle_trigger && rule->pairs.has_value()) {
+                    errors_.error(handler.trigger_location, "lifecycle triggers are not allowed in pair rules");
                 }
                 // Task 3.4: Validate handler alias doesn't conflict with filter aliases in scope
                 if (handler.alias.has_value() && filter_bound.contains(*handler.alias)) {
@@ -4478,6 +4511,7 @@ void SemanticAnalyzer::validate_event_usage(  // NOLINT(readability-function-cog
                     local_bindings[*handler.alias] =
                         make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                 }
+                bind_lifecycle_trigger_alias(handler, filter_bindings, local_bindings);
 
                 validate_event_stmts(
                     handler.body, filter_bindings, local_bindings, handler_event, rule->name, pair_scope_ptr);
@@ -5610,6 +5644,13 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
     contract.trigger     = *handler.resolved_trigger;
     contract.selection   = rule.filter.resolved_trait_ids;
     contract.exclusion   = rule.exclude.resolved_trait_ids;
+    const auto& trigger  = *handler.resolved_trigger;
+    if (trigger.is_lifecycle()) {
+        auto& implied = trigger.kind == HandlerTriggerKind::TraitAdded ? contract.selection : contract.exclusion;
+        if (!std::ranges::contains(implied, trigger.symbol)) {
+            implied.push_back(trigger.symbol);
+        }
+    }
     contract.domain_kind = contract.selection.empty() && contract.exclusion.empty() ? HandlerDomainKind::Selectionless
                                                                                     : HandlerDomainKind::Unary;
 
@@ -5634,6 +5675,10 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
         }
     };
     bind_clause(rule.filter);
+    const bool added_alias = handler.alias.has_value() && trigger.kind == HandlerTriggerKind::TraitAdded;
+    if (added_alias) {
+        aliases[*handler.alias] = trigger.symbol;
+    }
 
     auto trait_for_field = [this, &aliases](const std::string& field) -> std::optional<SymbolId> {
         std::optional<SymbolId> match;
@@ -5710,14 +5755,19 @@ SemanticAnalyzer::infer_regular_handler_contract(  // NOLINT(readability-functio
             add_write(*trait, node.name);
         }
     };
-    auto add_projection = [&add_write](const SymbolId& symbol) { add_write(symbol, std::nullopt); };
+    auto add_projection = [&add_write, &contract](const SymbolId& symbol) {
+        add_write(symbol, std::nullopt);
+        contract.projects.insert(symbol);
+    };
 
     for (const auto* root : rule_clause_read_roots(rule)) {
         walk_expression_reads(*root, LocalNames{}, contract, resolve_read);
     }
     LocalNames handler_locals;
-    handler_locals.insert(handler.event_name);
-    if (handler.alias.has_value()) {
+    if (!trigger.is_lifecycle()) {
+        handler_locals.insert(handler.event_name);
+    }
+    if (handler.alias.has_value() && !added_alias) {
         handler_locals.insert(*handler.alias);
     }
     walk_handler_body(
@@ -6445,6 +6495,17 @@ std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_handler_trig
     return try_resolve_render_stage_trigger(ref);
 }
 
+std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_lifecycle_trigger(
+    const EventHandlerNode& handler) const {
+    auto trait = try_resolve_trait_ref_to_symbol(handler.event_name);
+    if (!trait.has_value()) {
+        return std::nullopt;
+    }
+    const auto kind = handler.trigger_form == HandlerTriggerForm::Added ? HandlerTriggerKind::TraitAdded
+                                                                        : HandlerTriggerKind::TraitRemoved;
+    return ResolvedHandlerTrigger{.kind = kind, .symbol = *trait};
+}
+
 // dsl-render-passes: resolves `<phase>.vertex`/`<phase>.fragment` — a dotted
 // reference whose head names a recognized render-pass phase and whose sole
 // remaining segment is a stage name — to that phase's derived trigger.
@@ -6475,6 +6536,17 @@ std::optional<ResolvedHandlerTrigger> SemanticAnalyzer::try_resolve_render_stage
 void SemanticAnalyzer::diagnose_unresolved_handler_trigger(const std::string& owner_desc,
                                                             const std::string& event_name,
                                                             const SourceLocation& loc) const {
+    if (event_name == "spawn") {
+        errors_.error(loc,
+                      "'spawn' is no longer an event; use `on added <Trait>` with a trait the new entity carries");
+        return;
+    }
+    if (event_name == "destroy") {
+        errors_.error(loc,
+                      "'destroy' is no longer an event; add a marker trait (e.g. `Dying`), react with "
+                      "`on added Dying`, then `destroy`");
+        return;
+    }
     auto resolved = resolve_name(dotted_segments(event_name));
     if (resolved.has_value() && resolved->symbol.kind == SymbolKind::Phase && resolved->member_segments.size() == 1 &&
         (resolved->member_segments.front() == "vertex" || resolved->member_segments.front() == "fragment")) {
@@ -7315,6 +7387,7 @@ void SemanticAnalyzer::validate_text_format_calls(  // NOLINT(readability-functi
                                     make_resolved_user_type(TypeKind::Struct, symbol, handler_event->name);
                             }
                         }
+                        bind_lifecycle_trigger_alias(handler, filter_bindings, local_bindings);
 
                         validate_text_format_in_stmts(handler.body, filter_bindings, local_bindings, handler_event);
                     }
@@ -9523,6 +9596,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // also performs the phase-barrier/event-flow construction that
     // build_dependency_graph used to do inline (see execution_graph_scheduler.hpp).
     (void)compute_handler_schedule(result_.execution_graph, errors_);
+    validate_lifecycle_trigger_traits(result_.execution_graph, errors_);
 }
 
 }  // namespace cactus

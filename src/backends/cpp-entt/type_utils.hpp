@@ -56,6 +56,17 @@ public:
     // resolved SymbolId. This does not resolve aliases or scan UseNode imports;
     // it only consults already-resolved declaration metadata on DecoratedProgram.
     static std::string trait_cpp_name(const std::string& source_name, const DecoratedProgram& program);
+
+    // The runtime occurrence an `on added T` / `on removed T` trigger receives;
+    // nullopt for any other trigger kind.
+    static std::optional<std::string> lifecycle_occurrence_cpp_type(const ResolvedHandlerTrigger& trigger,
+                                                                    const DecoratedProgram& program);
+    // Traits named by an `on added` / `on removed` trigger, in canonical order.
+    static std::vector<SymbolId> watched_lifecycle_traits(const DecoratedProgram& program);
+    // Whether generated code tracks trait lifecycle (graph-driven programs with a trigger only).
+    static bool tracks_lifecycle(const DecoratedProgram& program);
+    // The generated handler function's name suffix, e.g. `tick`, `combat__Hit`, `added_Dying`.
+    static std::string handler_function_suffix(const EventHandlerNode& handler, const DecoratedProgram& program);
     static std::string struct_cpp_name(const std::string& source_name, const DecoratedProgram& program);
     static std::string enum_cpp_name(const std::string& source_name, const DecoratedProgram& program);
 

@@ -524,6 +524,45 @@ std::string EnttCodegenUtils::trait_cpp_name(const std::string& source_name, con
     return resolved_or_fallback_cpp_name(std::nullopt, source_name, program.traits);
 }
 
+std::optional<std::string> EnttCodegenUtils::lifecycle_occurrence_cpp_type(const ResolvedHandlerTrigger& trigger,
+                                                                           const DecoratedProgram& program) {
+    if (!trigger.is_lifecycle()) {
+        return std::nullopt;
+    }
+    const auto* occurrence = trigger.kind == HandlerTriggerKind::TraitAdded ? "TraitAdded" : "TraitRemoved";
+    return std::string("cactus::runtime::entt_backend::") + occurrence + "<" +
+           trait_cpp_name(trigger.symbol, trigger.symbol.local_name, program) + ">";
+}
+
+std::vector<SymbolId> EnttCodegenUtils::watched_lifecycle_traits(const DecoratedProgram& program) {
+    std::vector<SymbolId> traits;
+    for (const auto& handler : program.execution_graph.handlers) {
+        const auto& trigger = handler.identity.trigger;
+        if (trigger.is_lifecycle() && !std::ranges::contains(traits, trigger.symbol)) {
+            traits.push_back(trigger.symbol);
+        }
+    }
+    std::ranges::sort(traits, {}, [](const SymbolId& trait) { return make_canonical_id(trait); });
+    return traits;
+}
+
+bool EnttCodegenUtils::tracks_lifecycle(const DecoratedProgram& program) {
+    return !program.execution_graph.phases.empty() && !watched_lifecycle_traits(program).empty();
+}
+
+std::string EnttCodegenUtils::handler_function_suffix(const EventHandlerNode& handler,
+                                                      const DecoratedProgram& program) {
+    if (!handler.resolved_trigger.has_value()) {
+        return handler.event_name;
+    }
+    const auto& trigger = *handler.resolved_trigger;
+    if (trigger.is_lifecycle()) {
+        return std::string(handler_trigger_kind_name(trigger.kind)) + "_" +
+               trait_cpp_name(trigger.symbol, trigger.symbol.local_name, program);
+    }
+    return handler.event_name.contains('.') ? canonical_to_cpp_name(trigger.symbol) : handler.event_name;
+}
+
 std::string EnttCodegenUtils::struct_cpp_name(const std::string& source_name, const DecoratedProgram& program) {
     return resolved_or_fallback_cpp_name(std::nullopt, source_name, program.structs);
 }

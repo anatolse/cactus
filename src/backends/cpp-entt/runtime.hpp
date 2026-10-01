@@ -14,13 +14,16 @@
 #include <deque>
 #include <functional>
 #include <initializer_list>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -1367,12 +1370,6 @@ struct QueuedEvent {
     std::optional<entt::entity> target;
 };
 
-// Placeholder hook type for commit_activation's optional OnSpawn/OnDestroy
-// notification parameters (see below) — never invoked, so a handler-less
-// program instantiates commit_activation with no spawn/destroy branch at
-// all, not just a dynamically-untaken one.
-struct NoNotify {};
-
 // Per-activation scheduler state: queued/deferred events, pending structural
 // commands, current cascade depth, and the deferred-entity reservation
 // cursor. `Occurrence` is the program's `EventOccurrence` variant; codegen
@@ -1489,75 +1486,235 @@ void drain_event_cascade(ActivationRuntime<Occurrence>& activation, entt::regist
     activation.current_cascade_depth = 0;
 }
 
-// Calls on_spawn/on_destroy for `command` when the corresponding hook isn't
-// NoNotify (extracted out of commit_activation's loop below purely to keep
-// that function's cognitive-complexity score under the project's clang-tidy
-// threshold; no behavior of its own beyond the two guarded calls).
-template <typename Occurrence, typename OnSpawn, typename OnDestroy>
-void notify_structural_command(ActivationRuntime<Occurrence>& activation,
-                               const StructuralCommand& command,
-                               OnSpawn& on_spawn,
-                               OnDestroy& on_destroy) {
-    if constexpr (!std::is_same_v<std::remove_cvref_t<OnSpawn>, NoNotify>) {
-        if (command.kind == StructuralCommand::Kind::Spawn) {
-            on_spawn(activation);
-        }
-    }
-    if constexpr (!std::is_same_v<std::remove_cvref_t<OnDestroy>, NoNotify>) {
-        if (command.kind == StructuralCommand::Kind::Destroy) {
-            on_destroy(activation);
-        }
-    }
-}
+// ── Trait lifecycle triggers ──────────────────────────────────────────────
+// `on added T` / `on removed T` occurrences, each delivered to the entity
+// whose trait set changed. `old` holds T's value just before removal.
+template <typename T>
+struct TraitAdded {};
 
-// Applies every queued structural command, looping while an OnSpawn/OnDestroy
-// hook keeps producing more. Each round starts one cascade level deeper, so
-// rounds and their event cascades share kMaxEventCascadeDepth; past it the
-// notification defers, queues no command, and the loop ends.
-// `drain_cascade` is called once per command batch, after the whole batch
-// has applied — not per command — so an entire wave of
-// structural commands (e.g. every entity in one spawn burst) is fully
-// materialized before any spawn/destroy handler observes the registry,
-// matching the original inline behavior exactly. It takes a callable rather
-// than embedding drain_event_cascade directly so codegen can simply pass
-// `&generated_drain_event_cascade` (already forward-declared at the point
-// generated_commit_activation is emitted) instead of constructing a Dispatch
-// lambda that would need generated_dispatch_event's per-event-type overloads
-// visible before they're actually declared later in the same generated file.
-// OnSpawn/OnDestroy default to NoNotify so a handler-less program takes the
-// single-pass branch below with no notification code instantiated at all.
-template <typename Occurrence, typename DrainCascade, typename OnSpawn = NoNotify, typename OnDestroy = NoNotify>
+template <typename T>
+struct TraitRemoved {
+    T old;
+};
+
+// Shared by one program's trackers. Recording is on only while a commit round
+// applies commands, so init, restore, and teardown never fire a trigger.
+struct LifecycleRound {
+    bool recording = false;
+    std::uint64_t next_sequence{};
+    std::uint64_t command{};  // the command being applied, in queue order
+};
+
+template <typename Occurrence>
+struct LifecycleDelivery {
+    std::uint64_t command{};
+    std::uint64_t sequence{};
+    std::size_t trait_index{};
+    Occurrence occurrence;
+    entt::entity target{entt::null};
+};
+
+// Watches one trait's storage signals and keeps, per entity, the first change
+// seen this round: a construct means T was absent before the round, a destroy
+// means it was present (EnTT fires on_destroy before removal, so the snapshot
+// is still readable there).
+template <typename T>
+class LifecycleTracker {
+public:
+    void connect(entt::registry& registry, LifecycleRound& round) {
+        round_ = &round;
+        registry.on_construct<T>().template connect<&LifecycleTracker::on_construct>(*this);
+        registry.on_destroy<T>().template connect<&LifecycleTracker::on_destroy>(*this);
+    }
+
+    // Nets this round's changes into targeted occurrences. A destroyed entity
+    // is no longer valid, so it fires nothing.
+    template <typename Occurrence>
+    void collect(entt::registry& registry, std::size_t trait_index, std::vector<LifecycleDelivery<Occurrence>>& out) {
+        for (auto& [entity, change] : changes_) {
+            const bool valid         = registry.valid(entity);
+            const bool present_after = valid && registry.all_of<T>(entity);
+            if (!change.present_before && present_after) {
+                out.push_back({.command     = change.command,
+                               .sequence    = change.sequence,
+                               .trait_index = trait_index,
+                               .occurrence  = TraitAdded<T>{},
+                               .target      = entity});
+            } else if (change.present_before && !present_after && valid) {
+                out.push_back({.command     = change.command,
+                               .sequence    = change.sequence,
+                               .trait_index = trait_index,
+                               .occurrence  = TraitRemoved<T>{.old = std::move(change.snapshot)},
+                               .target      = entity});
+            }
+        }
+        changes_.clear();
+    }
+
+private:
+    struct Change {
+        std::uint64_t command{};
+        std::uint64_t sequence{};
+        bool present_before{};
+        T snapshot{};
+    };
+
+    void on_construct([[maybe_unused]] entt::registry& registry, entt::entity entity) {
+        record(entity, false, T{});
+    }
+
+    void on_destroy(entt::registry& registry, entt::entity entity) {
+        if constexpr (std::is_empty_v<T>) {
+            record(entity, true, T{});
+        } else {
+            record(entity, true, registry.get<T>(entity));
+        }
+    }
+
+    void record(entt::entity entity, bool present_before, T snapshot) {
+        if (!round_->recording || changes_.contains(entity)) {
+            return;
+        }
+        changes_.emplace(entity,
+                         Change{.command        = round_->command,
+                                .sequence       = round_->next_sequence++,
+                                .present_before = present_before,
+                                .snapshot       = std::move(snapshot)});
+    }
+
+    LifecycleRound* round_ = nullptr;
+    std::unordered_map<entt::entity, Change> changes_;
+};
+
+// The watched-trait set of one program. Codegen instantiates it with exactly
+// the traits named by an `on added` / `on removed` trigger. Signals hold a
+// pointer to each tracker, so it never moves once connected.
+template <typename... Traits>
+class LifecycleTrackers {
+public:
+    LifecycleTrackers()                                    = default;
+    ~LifecycleTrackers()                                   = default;
+    LifecycleTrackers(const LifecycleTrackers&)            = delete;
+    LifecycleTrackers& operator=(const LifecycleTrackers&) = delete;
+    LifecycleTrackers(LifecycleTrackers&&)                 = delete;
+    LifecycleTrackers& operator=(LifecycleTrackers&&)      = delete;
+
+    void connect(entt::registry& registry) {
+        (std::get<LifecycleTracker<Traits>>(trackers_).connect(registry, round_), ...);
+    }
+
+    void set_recording(bool recording) {
+        round_.recording = recording;
+    }
+
+    void begin_command() {
+        ++round_.command;
+    }
+
+    // Emits this round's net changes at the activation's next cascade depth;
+    // past the bound they defer like any occurrence. Order: the command that
+    // first changed them, then the entity's first touch within that command,
+    // then tracker (canonical trait) order, so a spawn's traits fire canonically.
+    template <typename Occurrence>
+    void deliver(ActivationRuntime<Occurrence>& activation, entt::registry& registry) {
+        std::vector<LifecycleDelivery<Occurrence>> deliveries;
+        collect_all(registry, deliveries, std::index_sequence_for<Traits...>{});
+        std::map<std::pair<std::uint64_t, entt::entity>, std::uint64_t> entity_first_touch;
+        for (const auto& delivery : deliveries) {
+            auto [it, inserted] =
+                entity_first_touch.try_emplace({delivery.command, delivery.target}, delivery.sequence);
+            if (!inserted) {
+                it->second = std::min(it->second, delivery.sequence);
+            }
+        }
+        std::ranges::sort(deliveries, {}, [&](const LifecycleDelivery<Occurrence>& delivery) {
+            return std::tuple{delivery.command,
+                              entity_first_touch.at({delivery.command, delivery.target}),
+                              delivery.trait_index};
+        });
+        for (auto& delivery : deliveries) {
+            emit_targeted_event(activation, std::move(delivery.occurrence), delivery.target);
+        }
+    }
+
+    // Startup arrival: `on added T` for every existing entity and every
+    // watched T it carries, in creation order, then trait order.
+    template <typename Occurrence>
+    void deliver_arrivals(ActivationRuntime<Occurrence>& activation, entt::registry& registry) {
+        std::vector<std::pair<std::uint64_t, entt::entity>> entities;
+        for (const auto [entity, ordinal] : registry.view<CreationOrdinal>().each()) {
+            entities.emplace_back(ordinal.value, entity);
+        }
+        std::ranges::sort(entities);
+        for (const auto& [ordinal, entity] : entities) {
+            (emit_arrival<Traits>(activation, registry, entity), ...);
+        }
+    }
+
+private:
+    template <typename Occurrence, std::size_t... Indices>
+    void collect_all(entt::registry& registry,
+                     std::vector<LifecycleDelivery<Occurrence>>& deliveries,
+                     std::index_sequence<Indices...> /*trait_indices*/) {
+        (std::get<Indices>(trackers_).collect(registry, Indices, deliveries), ...);
+    }
+
+    template <typename T, typename Occurrence>
+    static void emit_arrival(ActivationRuntime<Occurrence>& activation, entt::registry& registry, entt::entity entity) {
+        if (registry.all_of<T>(entity)) {
+            emit_targeted_event(activation, TraitAdded<T>{}, entity);
+        }
+    }
+
+    LifecycleRound round_;
+    std::tuple<LifecycleTracker<Traits>...> trackers_;
+};
+
+// Applies every queued structural command in one pass. A program with no
+// lifecycle trigger calls this overload, so no tracking code is instantiated.
+// `drain_cascade` keeps the signature shared with the overload below.
+template <typename Occurrence, typename DrainCascade>
 void commit_activation(ActivationRuntime<Occurrence>& activation,
                        entt::registry& registry,
-                       DrainCascade drain_cascade,
-                       OnSpawn on_spawn     = {},
-                       OnDestroy on_destroy = {}) {
+                       [[maybe_unused]] DrainCascade drain_cascade) {
     static_assert(is_event_occurrence_variant_v<Occurrence>,
                   "ActivationRuntime<Occurrence>'s Occurrence must be a std::variant<...> of the program's concrete "
                   "event types (the generated EventOccurrence alias)");
+    auto commands = std::move(activation.commands);
+    activation.commands.clear();
+    for (auto& command : commands) {
+        command.apply(registry);
+    }
+}
+
+// With lifecycle trackers, commit runs in rounds: apply the batch, deliver its
+// net trait changes, drain the cascade, and repeat while that cascade queued
+// more commands. Round r delivers at cascade depth r, so rounds and their
+// event chains share kMaxEventCascadeDepth; past it deliveries defer, nothing
+// more is queued, and the loop ends. `drain_cascade` is a callable rather than
+// drain_event_cascade itself so codegen can pass the forward-declared
+// `&generated_drain_event_cascade`.
+template <typename Occurrence, typename DrainCascade, typename... Traits>
+void commit_activation(ActivationRuntime<Occurrence>& activation,
+                       entt::registry& registry,
+                       DrainCascade drain_cascade,
+                       LifecycleTrackers<Traits...>& lifecycle) {
     static_assert(std::is_invocable_v<DrainCascade&, entt::registry&>,
                   "commit_activation's DrainCascade must be callable as drain_cascade(registry)");
-    constexpr bool has_spawn_hook   = !std::is_same_v<OnSpawn, NoNotify>;
-    constexpr bool has_destroy_hook = !std::is_same_v<OnDestroy, NoNotify>;
-    if constexpr (!has_spawn_hook && !has_destroy_hook) {
+    for (std::size_t depth = 0; !activation.commands.empty(); ++depth) {
         auto commands = std::move(activation.commands);
         activation.commands.clear();
+        activation.current_cascade_depth = depth;
+        lifecycle.set_recording(true);
         for (auto& command : commands) {
+            lifecycle.begin_command();
             command.apply(registry);
         }
-    } else {
-        for (std::size_t depth = 0; !activation.commands.empty(); ++depth) {
-            auto commands = std::move(activation.commands);
-            activation.commands.clear();
-            activation.current_cascade_depth = depth;
-            for (auto& command : commands) {
-                command.apply(registry);
-                notify_structural_command(activation, command, on_spawn, on_destroy);
-            }
-            drain_cascade(registry);
-        }
-        activation.current_cascade_depth = 0;
+        lifecycle.set_recording(false);
+        lifecycle.deliver(activation, registry);
+        drain_cascade(registry);
     }
+    activation.current_cascade_depth = 0;
 }
 
 // ── Projected-trait tracking (backend-cpp-entt registry-based projected traits)

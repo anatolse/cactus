@@ -1,9 +1,7 @@
 ## Purpose
 
 This spec defines the standard lifecycle event types declared in `std.core`. These events are the authoritative source of lifecycle event field shapes; no separate hardcoded table exists in the compiler.
-
 ## Requirements
-
 ### Requirement: Standard lifecycle events declared in std.core
 The `std.core` module SHALL declare all built-in lifecycle event types as `pub event` declarations. Events with a `dt` field use a colon body with bare event-field syntax; events with no fields use the marker form (no colon, no body). The canonical declarations are:
 
@@ -17,10 +15,6 @@ pub event fixed_tick:
 pub event late_tick:
     dt: float
 
-pub event spawn
-
-pub event destroy
-
 pub event input
 
 pub event load
@@ -28,15 +22,15 @@ pub event load
 pub event unload
 ```
 
-These declarations are the authoritative source of lifecycle event field shapes; no separate hardcoded table exists in the compiler.
+These declarations are the authoritative source of lifecycle event field shapes; no separate hardcoded table exists in the compiler. `std.core` SHALL NOT declare `spawn` or `destroy` events; reacting to an entity's arrival or a trait's departure uses trait lifecycle triggers (`dsl-trait-lifecycle-triggers`).
 
 #### Scenario: tick event has dt field
 - **WHEN** `std.core` is analyzed
 - **THEN** the `tick` event type is registered with one field `dt: float`
 
-#### Scenario: spawn event has no fields
+#### Scenario: load event has no fields
 - **WHEN** `std.core` is analyzed
-- **THEN** the `spawn` event type is registered with zero fields
+- **THEN** the `load` event type is registered with zero fields
 
 #### Scenario: fixed_tick event has dt field
 - **WHEN** `std.core` is analyzed
@@ -46,8 +40,12 @@ These declarations are the authoritative source of lifecycle event field shapes;
 - **WHEN** `std.core` is analyzed
 - **THEN** the `late_tick` event type is registered with one field `dt: float`
 
+#### Scenario: spawn event has no fields
+- **WHEN** `std.core` is analyzed
+- **THEN** no event named `spawn` or `destroy` is registered at all
+
 ### Requirement: Lifecycle event types always in scope
-The compiler's module resolver SHALL pre-load `std.core` pub symbols before analyzing any user module, so lifecycle event types (`tick`, `fixed_tick`, `late_tick`, `spawn`, `destroy`, `input`, `load`, `unload`) are always resolvable without an explicit `use std.core` declaration. If a user module explicitly declares `use std.core`, that explicit import SHALL be idempotent with the preloaded `std.core` symbols and SHALL NOT produce duplicate-symbol diagnostics for symbols from the same `std.core` module instance.
+The compiler's module resolver SHALL pre-load `std.core` pub symbols before analyzing any user module, so lifecycle event types (`tick`, `fixed_tick`, `late_tick`, `input`, `load`, `unload`) are always resolvable without an explicit `use std.core` declaration. If a user module explicitly declares `use std.core`, that explicit import SHALL be idempotent with the preloaded `std.core` symbols and SHALL NOT produce duplicate-symbol diagnostics for symbols from the same `std.core` module instance.
 
 #### Scenario: on tick handler resolves without use std.core
 - **WHEN** a user module has `on tick:` with no `use std.core` import
@@ -68,3 +66,4 @@ The compiler's module resolver SHALL pre-load `std.core` pub symbols before anal
 #### Scenario: on PlayerDamaged still requires local declaration
 - **WHEN** a user module has `on PlayerDamaged:` without a local event declaration or imported public event
 - **THEN** the semantic analyzer reports an error for the undeclared event
+

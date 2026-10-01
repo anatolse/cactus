@@ -29,7 +29,8 @@ template <typename T>
     for (unsigned shift = 0; shift < sizeof(T) * 8U; shift += 8U) {
         value |= static_cast<T>(static_cast<std::uint8_t>(in.get())) << shift;
     }
-    return value;
+    // A failed stream yields 0, not EOF bytes, so later counts can't drive huge allocations.
+    return in ? value : T{0};
 }
 
 inline void write_float(std::ostream& out, float value) {

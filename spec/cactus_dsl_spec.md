@@ -616,10 +616,12 @@ rule SeekPlayer:
 Handlers are parameter-free in the current profile. Handler-local phase/event data is accessed through the trigger binding itself or through an explicit alias.
 
 ```ebnf
-event_handler   = "on" event_name [ "as" IDENTIFIER ] ":" NEWLINE INDENT
+event_handler   = "on" ( lifecycle_trigger | event_name ) [ "as" IDENTIFIER ] ":" NEWLINE INDENT
                   [ handler_after_clause ]
                   { statement }
                   DEDENT ;
+
+lifecycle_trigger = ( "added" | "removed" ) dotted_name ;
 
 event_name      = dotted_name ;
 
@@ -627,6 +629,8 @@ handler_after_clause = "after" ":" NEWLINE INDENT
                        { dotted_name NEWLINE }
                        DEDENT ;
 ```
+
+`added` and `removed` are trigger words only when a trait name follows them; `on added:` still names an event called `added`. `on added T` and `on removed T` react to a durable trait's arrival and departure (§4.4).
 
 ```cactus
 on tick:
@@ -1052,6 +1056,35 @@ The canonical documented runtime trait mutation model is:
 
 This is the preferred model for temporary gameplay states such as freeze, stun, invincibility, targeting, and similar state transitions.
 
+Rules react to these changes with lifecycle triggers:
+
+```cactus
+rule BeginDeath:
+    filter:
+        Enemy
+    on EnemyHit:
+        add Dying
+
+rule StartDying:
+    filter:
+        Enemy
+    on added Dying as dying:
+        dying.elapsed = 0.0
+
+rule StopBurning:
+    on removed Burning as old:
+        emit Extinguished:
+            heat = old.intensity
+```
+
+- `on added T` fires when `T` goes from absent to present on an entity; spawning an entity counts as the arrival of each of its traits. `on removed T` fires when `T` goes from present to absent.
+- Firing is by net change per commit round (§5.3): replacing a trait the entity already carries, adding and removing it in the same round, or `set` fires nothing.
+- A trigger is delivered only to the entity whose trait set changed, after the round that changed it. The handler runs if that entity matches the rule's `filter:`, `exclude:` and `when:` in the committed state. `on added T` implies the entity carries `T`, and `on removed T` implies it does not; neither needs `T` in `filter:` or `exclude:`.
+- `on added T as x` binds `x` to the entity's live `T`, like a filter alias. `on removed T as old` binds a read-only copy of `T`'s value just before removal. Without `as`, the trigger binds nothing.
+- Destroying an entity fires no trigger for it. To react to an entity's end, add a marker trait (for example `Dying`), react with `on added Dying`, then `destroy`.
+- `T` must be a durable trait: a trait some handler projects is rejected, and so is a trigger in a `pairs:` rule. World restore fires no trigger.
+- A program with no lifecycle trigger does no tracking; only traits named by a trigger are watched.
+
 ### 4.5 Purity and Recursion
 
 - user `func` declarations are pure
@@ -1147,16 +1180,14 @@ Subtracting `due` deliberately drops capped whole steps while preserving the fra
 
 `std.core.KeepOnLoad` is a marker trait: an entity that carries it survives the cleanup in step 1. It is unrelated to `persist` fields, which decide what a save records (§7.6). An explicit `destroy` still removes a `KeepOnLoad` entity.
 
-`std.core` declares four lifecycle events. Rules handle them like any other event (`on load:`, `on destroy:`):
+`std.core` declares two lifecycle events. Rules handle them like any other event (`on load:`, `on unload:`):
 
 | Event | Fires |
 |---|---|
 | `load` | at program start, after the entry module's entities exist, and after each scene load |
 | `unload` | before a scene transition, and once at program teardown |
-| `spawn` | once per applied `spawn` command, at the activation commit |
-| `destroy` | once per applied `destroy` command, at the activation commit, after the entity is removed |
 
-`spawn` and `destroy` are untargeted occurrences. A rule with a `filter:` runs its `on spawn` or `on destroy` handler for every entity that matches the filter when the occurrence is delivered, not only for the created or removed entity. The removed entity is already gone, so an `on destroy` handler cannot read its fields. Entities declared with `entity` are created at load and do not fire `spawn`.
+There are no `spawn` or `destroy` events; `on spawn:` and `on destroy:` are rejected with a diagnostic naming the replacement. React to an entity's arrival with `on added <Trait>` (§4.4). Entities declared with `entity` fire `on added` too: once they exist at program start, one arrival activation delivers `on added T` for every such entity and every watched trait it carries, in entity creation order then trait canonical order, before any `on load` handler runs.
 
 The cpp-entt backend does not lower the `load` statement yet, so today `load` fires only at program start and `unload` only at teardown.
 
@@ -1164,7 +1195,9 @@ The cpp-entt backend does not lower the `load` statement yet, so today `load` fi
 
 `spawn`, `destroy`, `add`, `remove`, and `set` are buffered in an activation-local deterministic command list, applied in handler execution-graph order, then entity iteration order, then statement order. Each command acts on the entity state at its position in the list: `add` then `set` patches the added trait, `remove` then `set` does nothing, and when several `set`s name the same field of the same entity the last one wins. An activation runs its phase handlers, dispatches emitted events, and drains the bounded event cascade before applying structural commands. Ordinary trait writes remain visible to later scheduled handlers; structural changes do not alter entity selection midway through an activation. A spawn committed after periodic repetition N is selectable in repetition N+1.
 
-Events emitted during an activation are delivered in deterministic queue order. Event handlers follow their own stable graph schedule and may emit further events. Feedback cycles are allowed, but cascade depth is bounded; overflow occurrences are deferred to a later activation. Commands produced by deferred delivery belong to that later activation. Commit rounds count toward the same bound: when `on spawn`/`on destroy` handlers queue further commands, each round of commit notifications is one level deeper, and notifications past the bound are deferred like any other occurrence. Effect calls happen when their handler executes and are not rolled back; matching effect domains are serialized by graph order.
+Events emitted during an activation are delivered in deterministic queue order. Event handlers follow their own stable graph schedule and may emit further events. Feedback cycles are allowed, but cascade depth is bounded; overflow occurrences are deferred to a later activation. Commands produced by deferred delivery belong to that later activation.
+
+With lifecycle triggers (§4.4), commit runs in rounds: apply every queued command, deliver that round's `on added` / `on removed` triggers, and drain their cascade; commands those handlers queue form the next round of the same activation. Within a round, triggers are delivered in the order the round's commands first changed each (entity, trait) pair, and for one spawn in trait canonical order. Round *r* delivers at cascade depth *r*, so commit rounds count toward the same bound as event chains; deliveries past it are deferred like any other occurrence, together with the commands their handlers issue. Effect calls happen when their handler executes and are not rolled back; matching effect domains are serialized by graph order.
 
 ### 5.4 Targeted Event Delivery
 

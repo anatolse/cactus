@@ -1,7 +1,6 @@
 ## Purpose
 
 Define the semantic analysis pass's validation responsibilities, including type resolution, const-string enforcement, func purity and recursion checks, `persist`/`sync` modifier validation, and rule filter/event validation.
-
 ## Requirements
 ### Requirement: Type resolution
 The semantic analyzer SHALL resolve all type references in the AST to concrete TypeInfo objects. Struct names, trait names, enum names, and parameterized types (`list[T]`) SHALL be resolved against declared types. Unresolved type references SHALL produce an error.
@@ -278,7 +277,7 @@ The semantic analyzer SHALL introduce one implicit read-only local variable in e
 - The variable is scoped to the handler body only.
 - A handler alias that conflicts with a name already bound in the enclosing rule scope (e.g., a filter alias) SHALL produce an error.
 
-This replaces the previous `event` implicit object (for user events) and the previous injected `dt` parameter (for lifecycle events).
+This replaces the previous `event` implicit object (for user events) and the previous injected `dt` parameter (for lifecycle events). Trait lifecycle triggers (`on added T`, `on removed T`) are not events and introduce no implicit variable; their optional `as` binding follows `dsl-trait-lifecycle-triggers`.
 
 #### Scenario: tick.dt access accepted
 - **WHEN** `on tick:` handler body contains `pos.x = pos.x + vel.x * tick.dt`
@@ -305,8 +304,12 @@ This replaces the previous `event` implicit object (for user events) and the pre
 - **THEN** the analyzer reports an error: "handler alias 't' conflicts with filter alias 't' already in scope"
 
 #### Scenario: Spawn handler body has no accessible event fields
-- **WHEN** `on spawn:` handler body contains `spawn.dt`
-- **THEN** the analyzer reports an error: "event 'spawn' has no field 'dt'"
+- **WHEN** a rule declares `on spawn:`
+- **THEN** the analyzer reports that `spawn` is no longer an event and names the replacement `on added <Trait>`, instead of resolving any event fields
+
+#### Scenario: Lifecycle trigger without alias has no binding
+- **WHEN** `on added Dying:` handler body references `Dying.elapsed`
+- **THEN** the analyzer does not resolve `Dying` as an implicit handler variable
 
 ### Requirement: Targeted emit validation
 The semantic analyzer SHALL verify that the expression in an `emit ... to expression` statement evaluates to type `entity_id`.
@@ -984,3 +987,4 @@ Projecting a trait with `persist` fields SHALL be rejected in v1 because that mo
 #### Scenario: Persist projected trait rejected
 - **WHEN** a trait has a `persist` field and authored code attempts to `project` that trait
 - **THEN** the semantic analyzer reports that persistent traits cannot be projected
+

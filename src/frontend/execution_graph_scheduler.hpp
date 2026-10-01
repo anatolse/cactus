@@ -20,4 +20,7 @@ namespace cactus {
 // Returns false if any error was reported to `errors` during scheduling.
 bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors);
 
+// Rejects `on added T` / `on removed T` when some handler in the graph projects T.
+void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporter& errors);
+
 }  // namespace cactus

@@ -1942,6 +1942,7 @@ TEST_CASE("Semantic: project participates in dependency writes", "[semantic][pro
     const auto& contract = result.handler_contracts[0];
     CHECK(contract.reads.contains(make_symbol_id(SymbolKind::Trait, "test", "Health")));
     CHECK(contract.writes.contains(make_symbol_id(SymbolKind::Trait, "test", "DamageFlash")));
+    CHECK(contract.projects.contains(make_symbol_id(SymbolKind::Trait, "test", "DamageFlash")));
 }
 
 // ── std.text.format semantic tests (add-stdlib-text-format) ───────────────────

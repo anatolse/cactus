@@ -2,9 +2,7 @@
 
 ## Purpose
 Define canonical handler execution-graph nodes and the deterministic dependency, event-flow, phase, conflict, and commit edges backends use to schedule handlers.
-
 ## Requirements
-
 ### Requirement: Canonical handler graph nodes
 The compiler SHALL produce one execution-graph node per handler with canonical identity composed from module, owning rule, and resolved trigger. A rule MUST NOT declare more than one handler for the same trigger.
 
@@ -44,16 +42,16 @@ The graph SHALL connect an event producer to every consumer of that event regard
 ### Requirement: Commit-synthesized and scheduler-boundary producer edges
 Every execution-graph event producer SHALL carry a typed producer kind rather than an implied handler identity. Beyond handler-to-handler production, the graph SHALL represent two further event-producer kinds so every consumer node's trigger resolves to a declared producer:
 
-- **Commit-synthesized producer**: an event produced by the activation commit step itself as a direct consequence of applying a buffered structural command (`std.core.spawn` for an applied `Spawn`; `std.core.destroy` for an applied `Destroy`). The producer is the commit step, not any `HandlerIdentity`.
-- **Scheduler-boundary producer**: an event injected exactly once by the scheduler at a fixed program boundary rather than per real-frame or per-command (`std.core.load` at the boot boundary, after initial entities exist and before the first frame occurrence; `std.core.unload` at the teardown boundary, after the last frame occurrence and before shutdown).
+- **Commit-synthesized producer**: a trigger delivered by the activation commit step itself as a direct consequence of applying buffered structural commands. This covers trait lifecycle triggers: `on added T` is produced by commits that apply a `Spawn` of a template carrying `T` or an `Add` of `T`; `on removed T` by commits that apply a `Remove` of `T`. The producer is the commit step, not any `HandlerIdentity`.
+- **Scheduler-boundary producer**: an event injected exactly once by the scheduler at a fixed program boundary rather than per real-frame or per-command (`std.core.load` at the boot boundary, after initial entities exist and before the first frame occurrence; `std.core.unload` at the teardown boundary, after the last frame occurrence and before shutdown). The startup arrival activation's `on added` deliveries for load-time entities are also a scheduler-boundary production.
 
-Producer kind SHALL be determined only from resolved canonical identities and contract metadata the graph already carries — the consumer's canonical trigger identity and the structural commands recorded on handler contracts. Rule names, import aliases, and source spelling SHALL NOT determine producer kind.
+Producer kind SHALL be determined only from resolved canonical identities and contract metadata the graph already carries — the consumer's canonical trigger identity and kind, and the structural commands recorded on handler contracts. Rule names, import aliases, and source spelling SHALL NOT determine producer kind.
 
 Host-injected external events (`pub extern event`, e.g. `frame`) originate outside the graph's own commit and scheduler machinery. They remain distinct in origin from both kinds above and are represented as their own producer kind rather than folded into either.
 
 #### Scenario: Commit-synthesized edge for spawn
-- **WHEN** a rule declares `on spawn` and no handler in the program declares `emits: spawn`
-- **THEN** the graph still records a producer edge into that handler's node, attributed to the commit step rather than to any `HandlerIdentity`
+- **WHEN** a rule declares `on added Dying` and another handler's contract records `add Dying`
+- **THEN** the graph records a producer edge into the `on added Dying` handler's node, attributed to the commit step rather than to any `HandlerIdentity`
 
 #### Scenario: Scheduler-boundary edge for load
 - **WHEN** a rule declares `on load`
@@ -177,3 +175,4 @@ For a render-pass phase, the execution graph SHALL represent one synthetic, non-
 #### Scenario: Stage handlers introduce no new structural-commit interaction
 - **WHEN** the graph is validated for a render-pass phase
 - **THEN** no structural-command producer/consumer edges are introduced by the stage handlers, since `dsl-render-passes`'s body restriction already rejects `spawn`/`destroy`/`add`/`remove`/`project` in a stage handler body
+

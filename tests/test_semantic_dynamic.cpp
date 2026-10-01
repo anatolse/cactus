@@ -5,6 +5,7 @@
 #include "frontend/parser.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 
 using namespace cactus;
@@ -17,8 +18,6 @@ static const std::string STDLIB_EVENTS =
     "    dt: float\n"
     "pub event late_tick:\n"
     "    dt: float\n"
-    "pub event spawn\n"
-    "pub event destroy\n"
     "pub event input\n"
     "pub event load\n"
     "pub event unload\n";
@@ -26,7 +25,7 @@ static const std::string STDLIB_EVENTS =
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
 static bool analyze_errors(const std::string& source) {
-    // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
+    // Prepend stdlib events so lifecycle handlers (on tick:, on load:, etc.) are declared
     const std::string FULL_SOURCE = "module test\n" + STDLIB_EVENTS + source;
     ErrorReporter errors;
     Lexer lexer(FULL_SOURCE, "test.cactus", errors);
@@ -45,7 +44,7 @@ static bool analyze_errors(const std::string& source) {
 }
 
 static std::string first_error(const std::string& source) {
-    // Prepend stdlib events so lifecycle handlers (on tick:, on spawn:, etc.) are declared
+    // Prepend stdlib events so lifecycle handlers (on tick:, on load:, etc.) are declared
     const std::string FULL_SOURCE = "module test\n" + STDLIB_EVENTS + source;
     ErrorReporter errors;
     Lexer lexer(FULL_SOURCE, "test.cactus", errors);
@@ -536,15 +535,17 @@ TEST_CASE("Semantic: remove undeclared trait — error", "[semantic][dynamic-ecs
 
 // ── Task 5.8: Lifecycle handler empty params ─────────────────────────────────
 
-TEST_CASE("Semantic: on spawn no params — valid", "[semantic][dynamic-ecs]") {
-    CHECK_FALSE(
-        analyze_errors("trait Position:\n"
-                       "    var x: float = 0.0\n"
-                       "rule Init:\n"
-                       "    filter:\n"
-                       "        Position\n"
-                       "    on spawn:\n"
-                       "        x = 0.0\n"));
+TEST_CASE("Semantic: on spawn reports the lifecycle migration diagnostic", "[semantic][trait-lifecycle]") {
+    const auto error = first_error(
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "rule Init:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on spawn:\n"
+        "        x = 0.0\n");
+    CHECK(error.find("'spawn' is no longer an event") != std::string::npos);
+    CHECK(error.find("on added <Trait>") != std::string::npos);
 }
 
 TEST_CASE("Semantic: on spawn with params — error", "[semantic][dynamic-ecs]") {
@@ -558,15 +559,17 @@ TEST_CASE("Semantic: on spawn with params — error", "[semantic][dynamic-ecs]")
                        "        x = v\n"));
 }
 
-TEST_CASE("Semantic: on destroy no params — valid", "[semantic][dynamic-ecs]") {
-    CHECK_FALSE(
-        analyze_errors("trait Position:\n"
-                       "    var x: float = 0.0\n"
-                       "rule Cleanup:\n"
-                       "    filter:\n"
-                       "        Position\n"
-                       "    on destroy:\n"
-                       "        x = 0.0\n"));
+TEST_CASE("Semantic: on destroy reports the lifecycle migration diagnostic", "[semantic][trait-lifecycle]") {
+    const auto error = first_error(
+        "trait Position:\n"
+        "    var x: float = 0.0\n"
+        "rule Cleanup:\n"
+        "    filter:\n"
+        "        Position\n"
+        "    on destroy:\n"
+        "        x = 0.0\n");
+    CHECK(error.find("'destroy' is no longer an event") != std::string::npos);
+    CHECK(error.find("on added") != std::string::npos);
 }
 
 TEST_CASE("Semantic: on load with params — error", "[semantic][dynamic-ecs]") {
@@ -682,17 +685,13 @@ TEST_CASE("Semantic: trait default value must be constant — error", "[semantic
 // ── Lifecycle events accepted in event handler validation ───────────────────
 
 TEST_CASE("Semantic: lifecycle events not treated as unknown events", "[semantic][dynamic-ecs]") {
-    // spawn, destroy, load, unload handlers should not trigger 'unknown event' error
+    // load and unload handlers should not trigger 'unknown event' error
     CHECK_FALSE(
         analyze_errors("trait Position:\n"
                        "    var x: float = 0.0\n"
                        "rule Sys:\n"
                        "    filter:\n"
                        "        Position\n"
-                       "    on spawn:\n"
-                       "        x = 0.0\n"
-                       "    on destroy:\n"
-                       "        x = 0.0\n"
                        "    on load:\n"
                        "        x = 1.0\n"
                        "    on unload:\n"
@@ -1466,6 +1465,162 @@ TEST_CASE("Semantic: set on a pair binding is accepted", "[semantic][deferred-se
                       "    on tick:\n"
                       "        set Push on a:\n"
                       "            amount = a.Push.amount + 1.0\n") == "");
+}
+
+// ── Trait lifecycle triggers ────────────────────────────────────────────────
+
+static DecoratedProgram analyze_program(const std::string& source) {
+    const std::string FULL_SOURCE = "module test\n" + STDLIB_EVENTS + source;
+    ErrorReporter errors;
+    Lexer lexer(FULL_SOURCE, "test.cactus", errors);
+    auto tokens = lexer.tokenize();
+    REQUIRE_FALSE(errors.has_errors());
+    Parser parser(std::move(tokens), errors);
+    auto program = parser.parse_program();
+    REQUIRE_FALSE(errors.has_errors());
+    SemanticAnalyzer analyzer(errors);
+    auto result = analyzer.analyze(program);
+    INFO((errors.has_errors() ? errors.diagnostics()[0].message : ""));
+    REQUIRE_FALSE(errors.has_errors());
+    return result;
+}
+
+static const InferredHandlerContract& find_contract(const DecoratedProgram& program,
+                                                    const std::string& rule,
+                                                    HandlerTriggerKind kind) {
+    const auto found = std::ranges::find_if(program.handler_contracts, [&](const auto& contract) {
+        return contract.rule.local_name == rule && contract.trigger.kind == kind;
+    });
+    REQUIRE(found != program.handler_contracts.end());
+    return *found;
+}
+
+static const std::string LIFECYCLE_TRAITS =
+    "trait Enemy\n"
+    "trait Dying:\n"
+    "    var elapsed: float = 0.0\n"
+    "trait Burning:\n"
+    "    var intensity: float = 1.0\n";
+
+TEST_CASE("Semantic: lifecycle triggers resolve to trait trigger kinds", "[semantic][trait-lifecycle]") {
+    const auto program = analyze_program(LIFECYCLE_TRAITS +
+                                         "rule StartDying:\n"
+                                         "    filter:\n"
+                                         "        Enemy\n"
+                                         "    on added Dying:\n"
+                                         "        let x = 1\n"
+                                         "    on removed Dying:\n"
+                                         "        let y = 1\n");
+    const auto& added   = find_contract(program, "StartDying", HandlerTriggerKind::TraitAdded);
+    const auto& removed = find_contract(program, "StartDying", HandlerTriggerKind::TraitRemoved);
+    CHECK(added.trigger.symbol.kind == SymbolKind::Trait);
+    CHECK(added.trigger.symbol.local_name == "Dying");
+    CHECK(removed.trigger.symbol == added.trigger.symbol);
+
+    const HandlerIdentity added_id{.rule = added.rule, .trigger = added.trigger};
+    const HandlerIdentity removed_id{.rule = removed.rule, .trigger = removed.trigger};
+    CHECK(added_id.canonical_id() == "test.StartDying/on added test.Dying");
+    CHECK(removed_id.canonical_id() == "test.StartDying/on removed test.Dying");
+}
+
+TEST_CASE("Semantic: lifecycle trigger on unknown trait is an error", "[semantic][trait-lifecycle]") {
+    const auto error = first_error(LIFECYCLE_TRAITS +
+                                   "rule R:\n"
+                                   "    on added Nope:\n"
+                                   "        let x = 1\n");
+    CHECK(error.find("unknown trait 'Nope'") != std::string::npos);
+}
+
+TEST_CASE("Semantic: user event named added still works", "[semantic][trait-lifecycle]") {
+    CHECK_FALSE(analyze_errors("event added\n"
+                               "rule R:\n"
+                               "    on added:\n"
+                               "        let x = 1\n"));
+}
+
+TEST_CASE("Semantic: lifecycle trigger on a projected trait is rejected", "[semantic][trait-lifecycle]") {
+    const auto error = first_error(LIFECYCLE_TRAITS +
+                                   "trait Hovered\n"
+                                   "rule Hover:\n"
+                                   "    filter:\n"
+                                   "        Enemy\n"
+                                   "    on tick:\n"
+                                   "        project Hovered\n"
+                                   "rule React:\n"
+                                   "    filter:\n"
+                                   "        Enemy\n"
+                                   "    on added Hovered:\n"
+                                   "        let x = 1\n");
+    CHECK(error.find("lifecycle triggers require a durable trait") != std::string::npos);
+}
+
+TEST_CASE("Semantic: lifecycle trigger in a pair rule is rejected", "[semantic][trait-lifecycle]") {
+    const auto error = first_error(LIFECYCLE_TRAITS +
+                                   "rule Contacts:\n"
+                                   "    pairs:\n"
+                                   "        a:\n"
+                                   "            Enemy\n"
+                                   "        b:\n"
+                                   "            Enemy\n"
+                                   "    on added Dying:\n"
+                                   "        let x = 1\n");
+    CHECK(error.find("lifecycle triggers are not allowed in pair rules") != std::string::npos);
+}
+
+TEST_CASE("Semantic: on added alias writes like a filter alias", "[semantic][trait-lifecycle]") {
+    const auto program = analyze_program(LIFECYCLE_TRAITS +
+                                         "rule StartDying:\n"
+                                         "    filter:\n"
+                                         "        Enemy\n"
+                                         "    on added Dying as dying:\n"
+                                         "        dying.elapsed = 0.0\n");
+    const auto& contract = find_contract(program, "StartDying", HandlerTriggerKind::TraitAdded);
+    const auto dying     = contract.trigger.symbol;
+    CHECK(contract.writes.contains(dying));
+    CHECK(std::ranges::contains(contract.selection, dying));
+}
+
+TEST_CASE("Semantic: on removed snapshot is typed and read-only", "[semantic][trait-lifecycle]") {
+    CHECK_FALSE(analyze_errors(LIFECYCLE_TRAITS +
+                               "rule StopBurning:\n"
+                               "    filter:\n"
+                               "        Enemy\n"
+                               "    on removed Burning as old:\n"
+                               "        let heat: float = old.intensity\n"));
+    CHECK(analyze_errors(LIFECYCLE_TRAITS +
+                         "rule StopBurning:\n"
+                         "    filter:\n"
+                         "        Enemy\n"
+                         "    on removed Burning as old:\n"
+                         "        let heat: bool = old.intensity\n"));
+    CHECK(first_error(LIFECYCLE_TRAITS +
+                      "rule StopBurning:\n"
+                      "    filter:\n"
+                      "        Enemy\n"
+                      "    on removed Burning as old:\n"
+                      "        old.intensity = 0.0\n")
+              .find("'old'") != std::string::npos);
+
+    const auto program = analyze_program(LIFECYCLE_TRAITS +
+                                         "rule StopBurning:\n"
+                                         "    filter:\n"
+                                         "        Enemy\n"
+                                         "    on removed Burning as old:\n"
+                                         "        let heat = old.intensity\n");
+    const auto& contract = find_contract(program, "StopBurning", HandlerTriggerKind::TraitRemoved);
+    CHECK_FALSE(contract.reads.contains(contract.trigger.symbol));
+    CHECK(std::ranges::contains(contract.exclusion, contract.trigger.symbol));
+}
+
+TEST_CASE("Semantic: lifecycle trigger without alias has no binding", "[semantic][trait-lifecycle]") {
+    // A binding would type `Dying.elapsed` as float and reject the bool local.
+    CHECK(first_error(LIFECYCLE_TRAITS +
+                      "rule StartDying:\n"
+                      "    filter:\n"
+                      "        Enemy\n"
+                      "    on added Dying:\n"
+                      "        let t: bool = Dying.elapsed\n")
+              .find("initialized with 'float'") == std::string::npos);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

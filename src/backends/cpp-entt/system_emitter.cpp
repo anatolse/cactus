@@ -377,21 +377,32 @@ std::string handler_trigger_cpp_type(const EventHandlerNode& handler, const Deco
         return "cactus::runtime::entt_backend::" + canonical_to_cpp_name(handler.resolved_trigger->symbol) +
                "PhaseRuntimeState";
     }
-    if (handler.resolved_trigger.has_value()) {
-        return event_cpp_type(handler.resolved_trigger->symbol, program);
+    if (!handler.resolved_trigger.has_value()) {
+        return event_cpp_type(handler.event_name, program);
     }
-    return event_cpp_type(handler.event_name, program);
+    if (auto lifecycle = EnttCodegenUtils::lifecycle_occurrence_cpp_type(*handler.resolved_trigger, program)) {
+        return *lifecycle;
+    }
+    return event_cpp_type(handler.resolved_trigger->symbol, program);
 }
 
-std::string handler_trigger_suffix(const EventHandlerNode& handler) {
-    if (!handler.event_name.contains('.') || !handler.resolved_trigger.has_value()) {
-        return handler.event_name;
+std::string join_strings(const std::vector<std::string>& items, std::string_view separator) {
+    std::string joined;
+    for (const auto& item : items) {
+        if (!joined.empty()) {
+            joined += separator;
+        }
+        joined += item;
     }
-    return canonical_to_cpp_name(handler.resolved_trigger->symbol);
+    return joined;
 }
 
-std::string handler_trigger_binding(const EventHandlerNode& handler) {
-    return handler.alias.value_or(snake_case(handler_trigger_suffix(handler)));
+// A lifecycle trigger's alias names the trait (or its snapshot), never the occurrence itself.
+std::string handler_trigger_binding(const EventHandlerNode& handler, const DecoratedProgram& program) {
+    if (handler.has_lifecycle_trigger()) {
+        return "cactus_trigger";
+    }
+    return handler.alias.value_or(snake_case(EnttCodegenUtils::handler_function_suffix(handler, program)));
 }
 
 // Scoped, not a parameter: rewrite_expr's recursive calls pass only partial context.
@@ -437,7 +448,7 @@ std::string expr_to_dotted_path(const ExprNode& expr) {
 // The payload parameter when `expr` spells the active handler's trigger name.
 std::optional<std::string> lowered_trigger_reference(const ExprNode& expr) {
     const auto* trigger = active_handler_trigger();
-    if (trigger == nullptr) {
+    if (trigger == nullptr || trigger->spelling.empty()) {
         return std::nullopt;
     }
     if (expr_to_dotted_path(expr) != trigger->spelling) {
@@ -571,8 +582,12 @@ LocalNumericKinds clone_or_empty(const LocalNumericKinds* kinds) {
 // handler-body emission shapes (selectionless/filtered/fallback).
 LexicalLocalBindings handler_lexical_locals(const EventHandlerNode& handler) {
     LexicalLocalBindings lexical_locals;
-    lexical_locals.insert(handler.event_name);
-    if (handler.alias.has_value()) {
+    // `on added T as x` binds x as a filter alias; only a removed snapshot is a plain local.
+    if (!handler.has_lifecycle_trigger()) {
+        lexical_locals.insert(handler.event_name);
+    }
+    const bool added = handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::TraitAdded;
+    if (handler.alias.has_value() && !added) {
         lexical_locals.insert(*handler.alias);
     }
     return lexical_locals;
@@ -3796,16 +3811,48 @@ static void emit_recipient_handler_call(std::ostringstream& out,
     }
 }
 
+// `filter` is the rule's own clause, or its effective clause for a lifecycle
+// trigger; `recipient_only` omits the broadcast pass for handlers that are only
+// ever delivered to one entity; `prelude` is spliced into the body lambda.
+struct HandlerDomainCodegen {
+    FilterClause filter;
+    std::vector<FilterBinding> filter_bindings_list;
+    std::vector<std::string> filter_traits;
+    std::vector<std::string> filter_cpp_types;
+    std::vector<std::string> exclude_cpp_types;
+    // lookup_name/simple_name → canonical cpp name, so rewrite_expr/rewrite_stmt
+    // resolve ambiguous traits (e.g. WorldTransform in both flat and volume).
+    std::unordered_map<std::string, std::string> filter_cpp_overrides;
+    bool recipient_only = false;
+    std::string prelude;
+};
+
+static HandlerDomainCodegen build_handler_domain(const FilterClause& filter,
+                                                 const FilterClause& exclude,
+                                                 const DecoratedProgram& program) {
+    HandlerDomainCodegen domain{.filter               = filter,
+                                .filter_bindings_list = filter_bindings(filter, program),
+                                .filter_traits        = filter_trait_names(filter, program),
+                                .filter_cpp_types     = filter_cpp_type_names(filter, program),
+                                .exclude_cpp_types    = filter_cpp_type_names(exclude, program)};
+    for (const auto& binding : domain.filter_bindings_list) {
+        domain.filter_cpp_overrides.emplace(binding.trait_name, binding.cpp_type_name);
+        domain.filter_cpp_overrides.emplace(binding.lookup_name, binding.cpp_type_name);
+    }
+    return domain;
+}
+
 static void emit_filtered_handler_body(std::ostringstream& out,
                                        const RuleNode& sys,
                                        const EventHandlerNode& handler,
-                                       const std::vector<FilterBinding>& filter_bindings_list,
-                                       const std::vector<std::string>& filter_traits,
-                                       const std::vector<std::string>& filter_cpp_types,
-                                       const std::vector<std::string>& exclude_cpp_types,
-                                       const DecoratedProgram& program,
-                                       const std::unordered_map<std::string, std::string>& filter_cpp_overrides) {
-    auto lexical_locals = handler_lexical_locals(handler);
+                                       const HandlerDomainCodegen& domain,
+                                       const DecoratedProgram& program) {
+    const auto& filter_bindings_list = domain.filter_bindings_list;
+    const auto& filter_traits        = domain.filter_traits;
+    const auto& filter_cpp_types     = domain.filter_cpp_types;
+    const auto& exclude_cpp_types    = domain.exclude_cpp_types;
+    const auto& filter_cpp_overrides = domain.filter_cpp_overrides;
+    auto lexical_locals              = handler_lexical_locals(handler);
     LocalNumericKinds local_kinds;
     const auto filtered_body = rewrite_stmt_block(
         handler.body, 3, filter_traits, program, {}, false, filter_cpp_overrides, nullptr, lexical_locals, local_kinds);
@@ -3825,7 +3872,8 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     }
     out << ") {\n";
     out << "        (void)entity;\n";
-    emit_filter_alias_bindings(out, sys.filter, program, 2);
+    emit_filter_alias_bindings(out, domain.filter, program, 2);
+    out << domain.prelude;
     out << filtered_body;
     out << "    };\n";
     // A limited rule keeps its `where:` unlowered (dsl-rule-limit), so the
@@ -3844,7 +3892,7 @@ static void emit_filtered_handler_body(std::ostringstream& out,
         }
         out << ") {\n";
         out << "        (void)entity;\n";
-        emit_filter_alias_bindings(out, sys.filter, program, 2);
+        emit_filter_alias_bindings(out, domain.filter, program, 2);
         emit_where_predicate_conjunction(out, sys.where_clause->predicates, [&](const ExprNode& predicate) {
             return rewrite_expr(predicate, filter_traits, program, {}, filter_cpp_overrides);
         });
@@ -3873,22 +3921,21 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     // satisfies that consumer's selection").
     out << "    if (cactus_recipient.has_value()) {\n";
     out << "        entt::entity entity = *cactus_recipient;\n";
-    out << "        if (registry.all_of<";
-    for (std::size_t i = 0; i < filter_cpp_types.size(); ++i) {
-        out << (i == 0 ? "" : ", ") << filter_cpp_types[i];
+    std::vector<std::string> recipient_checks;
+    if (!filter_cpp_types.empty()) {
+        recipient_checks.push_back("registry.all_of<" + join_strings(filter_cpp_types, ", ") + ">(entity)");
     }
-    out << ">(entity)";
     if (!exclude_cpp_types.empty()) {
-        out << " && !registry.any_of<";
-        for (std::size_t i = 0; i < exclude_cpp_types.size(); ++i) {
-            out << (i == 0 ? "" : ", ") << exclude_cpp_types[i];
-        }
-        out << ">(entity)";
+        recipient_checks.push_back("!registry.any_of<" + join_strings(exclude_cpp_types, ", ") + ">(entity)");
     }
-    out << ") {\n";
+    out << "        if (" << (recipient_checks.empty() ? "true" : join_strings(recipient_checks, " && ")) << ") {\n";
     emit_component_bindings_from_entity(out, filter_bindings_list, "entity", 3, program);
     emit_recipient_handler_call(out, handler_body_name, has_retained_where, limited, where_filter_name, limit_name, call_args);
     out << "        }\n";
+    if (domain.recipient_only) {
+        out << "    }\n";
+        return;
+    }
     out << "    } else {\n";
     const auto sort_anchor = emit_sort_call(out, sys, filter_bindings_list, filter_traits, program, filter_cpp_overrides, 2);
     emit_view_declaration(out, filter_cpp_types, exclude_cpp_types, 2, sort_anchor);
@@ -3921,6 +3968,34 @@ static void emit_filtered_handler_body(std::ostringstream& out,
     out << ");\n";
     out << "        }\n";
     out << "    }\n";
+}
+
+// A lifecycle trigger is delivered only to the entity whose trait set changed:
+// `on added T` adds T to the selection (bound under its alias), `on removed T`
+// adds it to the exclusion and binds the pre-removal snapshot.
+static void emit_lifecycle_handler_body(std::ostringstream& out,
+                                        const RuleNode& sys,
+                                        const EventHandlerNode& handler,
+                                        const std::string& trigger_binding,
+                                        const DecoratedProgram& program) {
+    const auto& trigger = *handler.resolved_trigger;
+    FilterClause filter  = sys.filter;
+    FilterClause exclude = sys.exclude;
+    const FilterEntry entry{.qualified_name    = handler.event_name,
+                            .resolved_trait_id = trigger.symbol,
+                            .alias             = trigger.kind == HandlerTriggerKind::TraitAdded ? handler.alias
+                                                                                                : std::nullopt,
+                            .location          = handler.trigger_location};
+    auto& clause = trigger.kind == HandlerTriggerKind::TraitAdded ? filter : exclude;
+    clause.entries.push_back(entry);
+    clause.resolved_trait_ids.push_back(trigger.symbol);
+
+    auto domain           = build_handler_domain(filter, exclude, program);
+    domain.recipient_only = true;
+    if (trigger.kind == HandlerTriggerKind::TraitRemoved && handler.alias.has_value()) {
+        domain.prelude = "        [[maybe_unused]] const auto& " + *handler.alias + " = " + trigger_binding + ".old;\n";
+    }
+    emit_filtered_handler_body(out, sys, handler, domain, program);
 }
 
 // Defensive fallback (should not occur for a well-formed contract lookup):
@@ -3995,19 +4070,10 @@ static void emit_when_gate(std::ostringstream& out, const RuleNode& sys, const D
 
 std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedProgram& program) {
     std::ostringstream out;
-    const auto filter_bindings_list = filter_bindings(sys.filter, program);
-    const auto filter_traits        = filter_trait_names(sys.filter, program);
-    const auto filter_cpp_types     = filter_cpp_type_names(sys.filter, program);
-    const auto exclude_cpp_types    = filter_cpp_type_names(sys.exclude, program);
-
-    // Build lookup_name/simple_name → canonical_cpp_name map so rewrite_expr and
-    // rewrite_stmt can resolve ambiguous traits (e.g. WorldTransform in both
-    // flat and volume modules) without another map scan.
-    std::unordered_map<std::string, std::string> filter_cpp_overrides;
-    for (const auto& b : filter_bindings_list) {
-        filter_cpp_overrides.emplace(b.trait_name, b.cpp_type_name);
-        filter_cpp_overrides.emplace(b.lookup_name, b.cpp_type_name);
-    }
+    const auto domain                = build_handler_domain(sys.filter, sys.exclude, program);
+    const auto& filter_bindings_list = domain.filter_bindings_list;
+    const auto& filter_traits        = domain.filter_traits;
+    const auto& filter_cpp_overrides = domain.filter_cpp_overrides;
 
     const bool is_pair_system = sys.pairs.has_value();
     std::vector<PairBindingCodegen> pair_binding_codegens;
@@ -4038,10 +4104,14 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         const auto* contract = graph_handler_contract(sys, handler, program);
         const bool is_pair = is_pair_system && contract != nullptr && contract->domain_kind == HandlerDomainKind::Pair;
         const bool selectionless   = !is_pair && contract != nullptr && contract->is_selectionless();
-        const auto trigger_binding = handler_trigger_binding(handler);
-        const HandlerTriggerSpelling trigger{.spelling = handler.event_name, .binding = trigger_binding};
+        const bool lifecycle       = handler.has_lifecycle_trigger();
+        const auto trigger_binding = handler_trigger_binding(handler, program);
+        const HandlerTriggerSpelling trigger{.spelling = lifecycle ? "" : handler.event_name,
+                                             .binding  = trigger_binding};
         const HandlerTriggerScope trigger_scope(trigger);
-        out << "void " << system_function_name(program.module_name, sys.name, handler_trigger_suffix(handler))
+        out << "void "
+            << system_function_name(
+                   program.module_name, sys.name, EnttCodegenUtils::handler_function_suffix(handler, program))
             << "(entt::registry& registry";
         out << ", const " << handler_trigger_cpp_type(handler, program) << "& " << trigger_binding;
         // Recipient is meaningful only for event-triggered handlers dispatched
@@ -4055,20 +4125,14 @@ std::string EnttSystemEmitter::emit_system(const RuleNode& sys, const DecoratedP
         emit_named_requirements(out, contract, program);
         emit_when_gate(out, sys, program);
 
-        if (is_pair) {
+        if (lifecycle) {
+            emit_lifecycle_handler_body(out, sys, handler, trigger_binding, program);
+        } else if (is_pair) {
             emit_pair_handler_body(out, sys, handler, pair_binding_codegens, pair_codegen_scope, program, contract);
         } else if (selectionless) {
             emit_selectionless_handler_body(out, handler, filter_traits, program, filter_cpp_overrides);
         } else if (!filter_traits.empty()) {
-            emit_filtered_handler_body(out,
-                                       sys,
-                                       handler,
-                                       filter_bindings_list,
-                                       filter_traits,
-                                       filter_cpp_types,
-                                       exclude_cpp_types,
-                                       program,
-                                       filter_cpp_overrides);
+            emit_filtered_handler_body(out, sys, handler, domain, program);
         } else {
             emit_fallback_handler_body(
                 out, sys, handler, filter_bindings_list, filter_traits, program, filter_cpp_overrides);

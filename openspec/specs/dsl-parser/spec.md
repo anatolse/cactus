@@ -1,7 +1,6 @@
 ## Purpose
 
 Define the parser's grammar for top-level declarations, including traits, entities with nested archetypes, templates, and rule `filter:`/`exclude:` clauses, along with rejection of legacy `unit` syntax.
-
 ## Requirements
 ### Requirement: Top-level declaration parsing
 The parser SHALL parse a sequence of top-level declarations from the token stream, producing a ProgramNode as the AST root. The first top-level declaration MUST be exactly one `module` declaration. Supported declarations after the module declaration are: `use`, `const`, `struct`, `enum`, `trait`, `entity`, `rule`, `event`, `func`, `extern func`, `template`, `asset`, and `input`.
@@ -334,19 +333,21 @@ remove_stmt = "remove" IDENTIFIER ["from" expr] NEWLINE ;
 - **THEN** the parser produces a `RemoveTraitStmt` with `trait_name = "Frozen"` and no `target_expr`
 
 ### Requirement: Lifecycle event handler grammar
-The parser SHALL accept `on` handlers using the parameter-free syntax. The `( param_list )` is removed entirely. An optional `as IDENTIFIER` alias clause is added after the event name. The event name accepts both reserved lifecycle keywords and user-defined identifiers.
+The parser SHALL accept `on` handlers using the parameter-free syntax. The `( param_list )` is removed entirely. An optional `as IDENTIFIER` alias clause is added after the event name. The event name accepts both reserved lifecycle keywords and user-defined identifiers. The parser SHALL also accept a trait lifecycle trigger: the word `added` or `removed` followed by a trait name. `added` and `removed` are recognized only when a trait name follows them; otherwise they are ordinary identifiers.
 
 ```ebnf
-event_handler = "on" event_name [ "as" IDENTIFIER ] ":" NEWLINE INDENT
+event_handler = "on" ( lifecycle_trigger | event_name ) [ "as" IDENTIFIER ] ":" NEWLINE INDENT
                 { statement }
                 DEDENT ;
+
+lifecycle_trigger = ( "added" | "removed" ) dotted_name ;
 
 event_name = "tick" | "fixed_tick" | "late_tick"
            | "spawn" | "destroy" | "load" | "unload"
            | "input" | IDENTIFIER ;
 ```
 
-The handler no longer carries a parameter list node; instead, `EventHandlerNode` has an optional `alias: string` field.
+The handler no longer carries a parameter list node; instead, `EventHandlerNode` has an optional `alias: string` field. `spawn` and `destroy` stay parseable as event names only so that semantic analysis can report a migration diagnostic; `std.core` no longer declares them.
 
 #### Scenario: on tick handler parsed without parameters
 - **WHEN** `on tick:` appears in a rule body
@@ -364,14 +365,6 @@ The handler no longer carries a parameter list node; instead, `EventHandlerNode`
 - **WHEN** `on late_tick:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "late_tick"` and `alias = nil`
 
-#### Scenario: on spawn handler parsed
-- **WHEN** `on spawn:` appears in a rule body
-- **THEN** the parser produces an `EventHandler` with `event_name = "spawn"` and `alias = nil`
-
-#### Scenario: on destroy handler parsed
-- **WHEN** `on destroy:` appears in a rule body
-- **THEN** the parser produces an `EventHandler` with `event_name = "destroy"` and `alias = nil`
-
 #### Scenario: on load handler parsed
 - **WHEN** `on load:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "load"` and `alias = nil`
@@ -387,6 +380,26 @@ The handler no longer carries a parameter list node; instead, `EventHandlerNode`
 #### Scenario: User event handler with alias parsed
 - **WHEN** `on PlayerDamaged as dmg:` appears in a rule body
 - **THEN** the parser produces an `EventHandler` with `event_name = "PlayerDamaged"` and `alias = "dmg"`
+
+#### Scenario: on added trigger parsed
+- **WHEN** `on added Dying:` appears in a rule body
+- **THEN** the parser produces an `EventHandler` marked as an added-trigger on trait name `Dying` with `alias = nil`
+
+#### Scenario: on removed trigger with alias parsed
+- **WHEN** `on removed fx.Burning as old:` appears in a rule body
+- **THEN** the parser produces an `EventHandler` marked as a removed-trigger on trait name `fx.Burning` with `alias = "old"`
+
+#### Scenario: added without a trait name is an event name
+- **WHEN** `on added:` appears in a rule body
+- **THEN** the parser produces an ordinary `EventHandler` with `event_name = "added"`
+
+#### Scenario: on spawn handler parsed
+- **WHEN** `on spawn:` appears in a rule body
+- **THEN** the parser produces an `EventHandler` with `event_name = "spawn"`, and semantic analysis rejects it with a diagnostic naming the replacement `on added <Trait>`
+
+#### Scenario: on destroy handler parsed
+- **WHEN** `on destroy:` appears in a rule body
+- **THEN** the parser produces an `EventHandler` with `event_name = "destroy"`, and semantic analysis rejects it with a diagnostic naming the replacement (add a marker trait, react with `on added`, then `destroy`)
 
 ### Requirement: Marker event declaration (body is optional)
 The parser SHALL accept `event` declarations with no colon and no body. The event body (colon + indented block) is optional. When an event has a body, each payload field SHALL use bare field syntax rather than trait-style field syntax.
@@ -919,3 +932,4 @@ The parser SHALL parse expressions using precedence climbing, supporting binary 
 #### Scenario: Match arm arrow still accepted
 - **WHEN** the source contains a `match` expression with arms `Color.Red => 0` and `_ => 1`
 - **THEN** the parser produces a MatchExpr with two arms
+

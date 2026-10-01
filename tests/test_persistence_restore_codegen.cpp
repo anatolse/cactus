@@ -54,8 +54,12 @@ bool contains(const std::string& haystack, const std::string& needle) {
 
 constexpr auto kSource = R"(module world
 
-event spawn
-event destroy
+pub extern event frame:
+    dt: float
+
+phase tick:
+    from:
+        frame
 
 trait Health:
     persist var current: int = 100
@@ -65,18 +69,18 @@ trait Alerted
 entity Boss:
     Health
 
-rule OnBossSpawn:
+rule OnBossArrive:
     filter:
         Health
 
-    on spawn:
-        current = 100
+    on added Health as health:
+        health.current = 100
 
-rule OnBossDestroy:
+rule OnBossCalm:
     filter:
         Health
 
-    on destroy:
+    on removed Alerted:
         current = 0
 )";
 
@@ -97,20 +101,27 @@ TEST_CASE("generated restore validates the document before staging or publishing
     CHECK(staged_at < publish_at);
 }
 
-TEST_CASE("generated restore never dispatches ordinary spawn or destroy handlers",
-          "[codegen-entt][persistence][restore]") {
+TEST_CASE("generated restore fires no lifecycle trigger and keeps tracking the restored world",
+          "[codegen-entt][persistence][restore][trait-lifecycle]") {
     const auto unit = generate(kSource);
     const auto body = function_body(unit->code, "generated_restore_world");
 
-    // OnBossSpawn/OnBossDestroy above would show up here by their generated
-    // handler function names, or via a call into the event dispatcher, if
-    // restore ran ordinary gameplay lifecycle handlers as a side effect of
-    // reconstructing entities. Restore only ever touches the registry
-    // directly (staged.create()/staged.emplace<T>()).
-    CHECK_FALSE(contains(body, "OnBossSpawn"));
-    CHECK_FALSE(contains(body, "OnBossDestroy"));
+    // Restore only ever touches the registry directly (staged.create()/
+    // staged.emplace<T>()): no handler, dispatch, or arrival activation runs.
+    CHECK_FALSE(contains(body, "on_boss_arrive"));
+    CHECK_FALSE(contains(body, "on_boss_calm"));
     CHECK_FALSE(contains(body, "generated_dispatch_event"));
+    CHECK_FALSE(contains(body, "emit_targeted_event"));
+    CHECK_FALSE(contains(body, "deliver_arrivals"));
+    CHECK_FALSE(contains(body, "generated_load_project"));
     CHECK_FALSE(contains(body, "dispatcher.trigger"));
+
+    // The published registry is a fresh one, so the trackers reconnect to it.
+    const auto publish_at   = body.find("registry = std::move(staged);");
+    const auto reconnect_at = body.find("generated_connect_lifecycle_trackers(registry);");
+    REQUIRE(publish_at != std::string::npos);
+    REQUIRE(reconnect_at != std::string::npos);
+    CHECK(publish_at < reconnect_at);
 }
 
 TEST_CASE("publication resets every enumerated holder of a replaced-world handle",

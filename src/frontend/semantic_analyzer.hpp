@@ -151,7 +151,7 @@ struct HandlerIdentity {
     ResolvedHandlerTrigger trigger;
 
     [[nodiscard]] std::string canonical_id() const {
-        return make_canonical_id(rule) + "/on " + make_canonical_id(trigger.symbol);
+        return make_canonical_id(rule) + "/on " + trigger.source_spelling();
     }
 
     friend bool operator==(const HandlerIdentity&, const HandlerIdentity&) = default;
@@ -895,6 +895,10 @@ private:
     /// and backward-compat trait_names into a name/alias -> ResolvedTrait map.
     [[nodiscard]] std::unordered_map<std::string, const ResolvedTrait*> build_filter_bindings(
         const FilterClause& filter) const;
+    // `on added T as x` binds x like a filter alias; `on removed T as old` binds a read-only T value.
+    void bind_lifecycle_trigger_alias(const EventHandlerNode& handler,
+                                      std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                      std::unordered_map<std::string, TypeInfo>& local_bindings) const;
     // Shared by validateOrderByClause(RuleNode)/validateOrderByClause(ExternRuleNode):
     // checks one order-by sort key's purity, resolves its expression type via
     // infer_expr_type (filter_bindings for a unary domain, pair_scope for a
@@ -1224,6 +1228,8 @@ private:
 
     /// Resolve a regular or external handler trigger and preserve its semantic kind.
     std::optional<ResolvedHandlerTrigger> try_resolve_handler_trigger(const std::string& ref) const;
+    [[nodiscard]] std::optional<ResolvedHandlerTrigger> try_resolve_lifecycle_trigger(
+        const EventHandlerNode& handler) const;
 
     /// Return whether a canonical event symbol has runtime-only external provenance.
     [[nodiscard]] bool is_external_event(const SymbolId& symbol) const;

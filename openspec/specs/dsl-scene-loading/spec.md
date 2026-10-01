@@ -1,14 +1,12 @@
 ## Purpose
 
 Define scene loading and transition semantics, including the three-phase `load` statement, module-as-scene execution model, `on load()`/`on unload()` lifecycle handlers, and the `std.core` `KeepOnLoad` trait and `SceneCleanup` rule.
-
 ## Requirements
-
 ### Requirement: `load` statement performs a three-phase scene transition
 The language SHALL support a `load` statement inside rule event handlers. `load module.name` designates the named module as the next active scene. The transition is deferred to the end of the current frame. The three phases are:
 
 1. **Unload phase**: `on unload()` fires on all active rules.
-2. **Instantiate phase**: All `entity` declarations in the target module are instantiated from `_data.bin`; `on spawn()` fires per new entity. `template` declarations become available for `spawn` and template-backed entity construction.
+2. **Instantiate phase**: All `entity` declarations in the target module are instantiated from `_data.bin`; `on added T` fires per new entity for each watched trait it carries. `template` declarations become available for `spawn` and template-backed entity construction.
 3. **Load phase**: `on load()` fires on all active rules.
 
 #### Scenario: Load transitions to target module at end of frame
@@ -36,11 +34,11 @@ The language SHALL support a `load` statement inside rule event handlers. `load 
 - **THEN** the compiler SHALL report an error: "unknown module 'some.unknown'"
 
 ### Requirement: `on load()` lifecycle handler on rules
-Rules MAY declare an `on load():` handler. This handler fires once after every `load` transition completes — after all non-persistent entities are removed, all target module entities are instantiated, and `on spawn()` handlers have fired. The handler SHALL also fire once at program start, after the root module's `entity` declarations are instantiated — program startup is the initial load phase. Like all rule handlers, an `on load()` handler body executes once per entity matching the rule's filter.
+Rules MAY declare an `on load():` handler. This handler fires once after every `load` transition completes — after all non-persistent entities are removed, all target module entities are instantiated, and their `on added` triggers have been delivered. The handler SHALL also fire once at program start, after the root module's `entity` declarations are instantiated and their `on added` triggers delivered — program startup is the initial load phase. Like all rule handlers, an `on load()` handler body executes once per entity matching the rule's filter.
 
 #### Scenario: On load fires after all spawn handlers complete
 - **WHEN** a `load` transition completes
-- **THEN** `on load()` fires after `on spawn()` has fired for all newly instantiated entities
+- **THEN** `on load()` fires after `on added` has been delivered for all newly instantiated entities
 
 #### Scenario: On load fires even when loaded module has no entities
 - **WHEN** a module with no `entity` declarations is loaded
@@ -109,3 +107,4 @@ The standard library module `std.core` SHALL export `pub trait KeepOnLoad` (a ma
 #### Scenario: Old Persistent name is rejected
 - **WHEN** a module references `Persistent` or `std.core.Persistent` without declaring its own trait of that name
 - **THEN** the compiler reports an unknown-trait error
+

@@ -365,4 +365,19 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
     return !errors.has_errors();
 }
 
+void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporter& errors) {
+    std::unordered_set<SymbolId> projected;
+    for (const auto& handler : graph.handlers) {
+        projected.insert(handler.contract.projects.begin(), handler.contract.projects.end());
+    }
+    for (const auto& handler : graph.handlers) {
+        const auto& trigger = handler.identity.trigger;
+        if (trigger.is_lifecycle() && projected.contains(trigger.symbol)) {
+            errors.error(handler.location,
+                         "lifecycle triggers require a durable trait; '" + make_canonical_id(trigger.symbol) +
+                             "' is projected");
+        }
+    }
+}
+
 }  // namespace cactus

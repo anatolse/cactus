@@ -284,6 +284,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
 
     const bool schedule_ok = compute_handler_schedule(graph, errors_);
     check_phase_lineage_cycles(graph.phases, errors_);
+    validate_lifecycle_trigger_traits(graph, errors_);
 
     return schedule_ok && !errors_.has_errors();
 }

@@ -44,10 +44,6 @@ pub phase render:
     alpha: float = fixed_tick.alpha
 
 # Ordinary lifecycle events (no fields)
-pub event spawn
-
-pub event destroy
-
 pub event load
 
 pub event unload

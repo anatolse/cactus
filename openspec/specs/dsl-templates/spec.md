@@ -1,9 +1,7 @@
 ## Purpose
 
-Define the `template` declaration and its runtime counterparts, including composition semantics, the `spawn`/`destroy` statements, `on spawn()`/`on destroy()` lifecycle handlers, and load-time instantiation of template-backed entities.
-
+Define the `template` declaration and its runtime counterparts, including composition semantics, the `spawn`/`destroy` statements, and load-time instantiation of template-backed entities.
 ## Requirements
-
 ### Requirement: Template declaration syntax
 The language SHALL support a `template` top-level declaration that defines a reusable entity blueprint using an archetype body instead of `apply:` and `config:` blocks. An archetype body contains nested trait entries and MAY contain body-level `use TemplateName` entries that compose another template at compile time. A `template` declaration has the same body structure as an inline `entity` declaration but is NOT automatically instantiated at program start. `template` declarations may be marked `pub` for cross-module access.
 
@@ -58,7 +56,7 @@ The language SHALL support a block-structured `spawn` statement inside rule even
 - **THEN** the compiler SHALL report an error: "`spawn` only allowed inside rule event handlers"
 
 ### Requirement: `destroy` statement removes current entity
-The language SHALL support a `destroy` statement inside rule event handlers. `destroy` removes the entity currently being processed by the enclosing handler. Before removal, `on destroy()` lifecycle handlers fire on all rules whose filter matches the entity.
+The language SHALL support a `destroy` statement inside rule event handlers. `destroy` removes the entity currently being processed by the enclosing handler. Removal is buffered to the activation commit; no handler fires for the destroyed entity. To react to an entity's end, a rule adds a marker trait (for example `Dying`), reacts with `on added Dying`, and destroys the entity afterwards.
 
 #### Scenario: Destroy removes entity from world
 - **WHEN** `destroy` executes inside a rule handler
@@ -72,27 +70,9 @@ The language SHALL support a `destroy` statement inside rule event handlers. `de
 - **WHEN** `destroy` is called on an entity that has the `KeepOnLoad` trait attached
 - **THEN** the entity SHALL still be destroyed — `KeepOnLoad` only protects against `load`-triggered cleanup
 
-### Requirement: `on spawn()` lifecycle handler on rules
-Rules MAY declare an `on spawn():` handler. This handler fires once for each new entity that matches the rule's `filter:` (and does not match `exclude:`), after all of the entity's fields have been initialized.
-
-#### Scenario: On spawn fires after fields are initialized
-- **WHEN** an entity is created via `spawn` or module `load`
-- **THEN** `on spawn()` handlers fire with all trait fields already set to their initial values
-
-#### Scenario: On spawn only for matching entities
-- **WHEN** a new entity is created that does NOT match a rule's `filter:`
-- **THEN** that rule's `on spawn()` SHALL NOT fire for that entity
-
-#### Scenario: Multiple rules each receive on spawn
-- **WHEN** two rules both have `on spawn()` handlers and a new entity matches both filters
-- **THEN** both handlers fire, in the order the rules are declared in source
-
-### Requirement: `on destroy()` lifecycle handler on rules
-Rules MAY declare an `on destroy():` handler. This handler fires once for each entity that matches the rule's filter and is about to be removed. The handler fires before the entity is actually removed, so trait fields are still accessible.
-
-#### Scenario: On destroy fires before entity removal
-- **WHEN** `destroy` is called or a `load` cleans up non-persistent entities
-- **THEN** `on destroy()` handlers fire while the entity's fields are still readable
+#### Scenario: Destroy fires no handler
+- **WHEN** an entity carrying `Burning` is destroyed, and a rule declares `on removed Burning`
+- **THEN** no handler runs for the destroyed entity
 
 ### Requirement: Template-backed entities instantiate composed templates at load time
 
@@ -116,3 +96,4 @@ Every field value expression in a `spawn` statement's override blocks, including
 #### Scenario: Child override is evaluated at the statement
 - **WHEN** a `spawn` statement's `children:` override sets a child field from `tv.world_position(self).x` and the handler later moves `self`
 - **THEN** the created child receives the position read when the `spawn` statement ran
+

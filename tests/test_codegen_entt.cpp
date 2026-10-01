@@ -1813,69 +1813,6 @@ TEST_CASE("Codegen EnTT: programs without an unload handler emit no teardown act
     CHECK(loop_pos < close_pos);
 }
 
-TEST_CASE("Codegen EnTT: commit emits a spawn notification only when an on spawn handler exists",
-          "[codegen-entt][graph-driven-lifecycle-events]") {
-    ProgramNode program;
-    auto decorated = full_pipeline(
-        "pub extern event frame:\n"
-        "    dt: float\n"
-        "phase tick:\n"
-        "    from:\n"
-        "        frame\n"
-        "event spawn\n"
-        "event destroy\n"
-        "trait Pos:\n"
-        "    var x: float\n"
-        "rule OnSpawn:\n"
-        "    filter:\n"
-        "        Pos\n"
-        "    on spawn:\n"
-        "        x = x + 1.0\n",
-        program);
-
-    const auto code = CppEnttCodegen::generate(decorated);
-
-    // Gating is per-event: an `on spawn` handler emits an emit_event(spawn)
-    // hook for the runtime commit_activation template's OnSpawn slot,
-    // without also emitting a destroy hook for its OnDestroy slot (the
-    // looping/notification logic itself now lives once in
-    // backends/cpp-entt/runtime.hpp — see test_runtime_activation_scheduler.cpp).
-    const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("commit_activation(") != std::string::npos);
-    CHECK(commit_fn.find("&generated_drain_event_cascade") != std::string::npos);
-    CHECK(commit_fn.find("emit_event(act, spawnEvent{});") != std::string::npos);
-    CHECK(commit_fn.find("destroyEvent") == std::string::npos);
-}
-
-TEST_CASE("Codegen EnTT: commit emits a destroy notification only when an on destroy handler exists",
-          "[codegen-entt][graph-driven-lifecycle-events]") {
-    ProgramNode program;
-    auto decorated = full_pipeline(
-        "pub extern event frame:\n"
-        "    dt: float\n"
-        "phase tick:\n"
-        "    from:\n"
-        "        frame\n"
-        "event spawn\n"
-        "event destroy\n"
-        "trait Pos:\n"
-        "    var x: float\n"
-        "rule OnDestroy:\n"
-        "    filter:\n"
-        "        Pos\n"
-        "    on destroy:\n"
-        "        x = x + 1.0\n",
-        program);
-
-    const auto code = CppEnttCodegen::generate(decorated);
-
-    const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("commit_activation(") != std::string::npos);
-    CHECK(commit_fn.find("&generated_drain_event_cascade") != std::string::npos);
-    CHECK(commit_fn.find("emit_event(act, destroyEvent{});") != std::string::npos);
-    CHECK(commit_fn.find("spawnEvent") == std::string::npos);
-}
-
 TEST_CASE("Codegen EnTT: a deferred internal event runs as its own activation with its target",
           "[codegen-entt][graph-driven-lifecycle-events]") {
     ProgramNode program;
@@ -1919,78 +1856,170 @@ TEST_CASE("Codegen EnTT: a deferred internal event runs as its own activation wi
     CHECK(code.find("void generated_process_root_event(entt::registry&, const Occurrence&) {}") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: programs without spawn/destroy handlers emit no commit notification codegen",
-          "[codegen-entt][graph-driven-lifecycle-events]") {
+static const std::string LIFECYCLE_PROGRAM_PREFIX =
+    "pub extern event frame:\n"
+    "    dt: float\n"
+    "phase tick:\n"
+    "    from:\n"
+    "        frame\n"
+    "pub event load\n"
+    "trait Enemy\n"
+    "trait Dying:\n"
+    "    var elapsed: float = 0.0\n"
+    "trait Burning:\n"
+    "    var intensity: float = 1.0\n"
+    "trait Unwatched\n";
+
+TEST_CASE("Codegen EnTT: a program without lifecycle triggers emits no tracking code",
+          "[codegen-entt][trait-lifecycle]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        "pub extern event frame:\n"
-        "    dt: float\n"
-        "phase tick:\n"
-        "    from:\n"
-        "        frame\n"
-        "event spawn\n"
-        "event destroy\n"
-        "trait Pos:\n"
-        "    var x: float = 0.0\n"
-        "rule Move:\n"
-        "    filter:\n"
-        "        Pos\n"
-        "    on tick:\n"
-        "        x = x + tick.dt\n",
-        program);
+    auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+                                       "rule Move:\n"
+                                       "    filter:\n"
+                                       "        Dying\n"
+                                       "    on tick:\n"
+                                       "        elapsed = elapsed + tick.dt\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
 
     const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    // No hook: a single call to the runtime's commit_activation with no
-    // OnSpawn/OnDestroy arguments (defaults to NoNotify, no notification
-    // branch instantiated at all — see test_runtime_activation_scheduler.cpp).
     CHECK(commit_fn.find("commit_activation(activation, registry, &generated_drain_event_cascade);") !=
           std::string::npos);
-    CHECK(commit_fn.find("spawnEvent") == std::string::npos);
-    CHECK(commit_fn.find("destroyEvent") == std::string::npos);
-    CHECK(commit_fn.find("NoNotify") == std::string::npos);
-    // The events are still declared (as they would be via a real `use
-    // std.core`) and still get struct + dispatch-overload codegen; only the
-    // commit-side notification emission is gated on handler presence.
-    CHECK(count_occurrences(code, "struct spawnEvent") == 1);
-    CHECK(count_occurrences(code, "struct destroyEvent") == 1);
+    CHECK(code.find("LifecycleTrackers") == std::string::npos);
+    CHECK(code.find("TraitAdded") == std::string::npos);
+    CHECK(code.find("TraitRemoved") == std::string::npos);
+    CHECK(code.find("deliver_arrivals") == std::string::npos);
 }
 
-TEST_CASE("Codegen EnTT: spawn notification emission reuses the existing cascade-depth cap",
-          "[codegen-entt][graph-driven-lifecycle-events]") {
+TEST_CASE("Codegen EnTT: on added tracks only the watched trait and dispatches to the target",
+          "[codegen-entt][trait-lifecycle]") {
     ProgramNode program;
-    auto decorated = full_pipeline(
-        "pub extern event frame:\n"
-        "    dt: float\n"
-        "phase tick:\n"
-        "    from:\n"
-        "        frame\n"
-        "event spawn\n"
-        "trait Pos:\n"
-        "    var x: float\n"
-        "rule OnSpawn:\n"
-        "    filter:\n"
-        "        Pos\n"
-        "    on spawn:\n"
-        "        x = x + 1.0\n",
-        program);
+    auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+                                       "rule StartDying:\n"
+                                       "    filter:\n"
+                                       "        Enemy\n"
+                                       "    on added Dying as dying:\n"
+                                       "        dying.elapsed = 0.0\n",
+                                   program);
 
     const auto code = CppEnttCodegen::generate(decorated);
 
-    // Commit routes the spawn notification through the runtime's emit_event —
-    // the same cascade-depth-bounded path (kMaxEventCascadeDepth) already
-    // used for ordinary handler-emitted events — rather than pushing directly
-    // onto the event queue via a new/uncapped path.
-    const auto commit_fn = generated_function(code, "void generated_commit_activation");
-    CHECK(commit_fn.find("emit_event(act, spawnEvent{});") != std::string::npos);
-    CHECK(commit_fn.find("activation.event_queue.push_back") == std::string::npos);
+    const auto trackers_pos = code.find("LifecycleTrackers<");
+    REQUIRE(trackers_pos != std::string::npos);
+    const auto trackers_decl = code.substr(trackers_pos, code.find('>', trackers_pos) - trackers_pos + 1);
+    CHECK(trackers_decl.find("Dying") != std::string::npos);
+    CHECK(trackers_decl.find("Burning") == std::string::npos);
+    CHECK(trackers_decl.find("Enemy") == std::string::npos);
+    CHECK(trackers_decl.find("Unwatched") == std::string::npos);
 
-    // kMaxEventCascadeDepth and the depth-capping branch now live once in the
-    // shared runtime template (backends/cpp-entt/runtime.hpp) — not
-    // re-declared or re-checked per program, so the generated program
-    // contains no reference to the symbol at all.
-    CHECK(code.find("kMaxEventCascadeDepth") == std::string::npos);
+    const auto occurrence_pos = code.find("using EventOccurrence = std::variant<");
+    REQUIRE(occurrence_pos != std::string::npos);
+    const auto occurrence_decl = code.substr(occurrence_pos, code.find(";\n", occurrence_pos) - occurrence_pos);
+    CHECK(occurrence_decl.find("TraitAdded<Dying>") != std::string::npos);
+    CHECK(occurrence_decl.find("TraitRemoved<Dying>") != std::string::npos);
+    CHECK(occurrence_decl.find("Burning") == std::string::npos);
+
+    const auto commit_fn = generated_function(code, "void generated_commit_activation");
+    CHECK(commit_fn.find("generated_lifecycle_trackers()") != std::string::npos);
+
+    const auto dispatch_fn = generated_function(
+        code, "void generated_dispatch_event(entt::registry& registry, const cactus::runtime::entt_backend::TraitAdded<Dying>& occurrence");
+    CHECK(dispatch_fn.find("(registry, occurrence, target);") != std::string::npos);
+
+    const auto root_fn = generated_function(
+        code, "void generated_process_root_event(entt::registry& registry, const cactus::runtime::entt_backend::TraitAdded<Dying>& root_event");
+    CHECK(root_fn.find("generated_dispatch_event(registry, root_event, target);") != std::string::npos);
+
+    // The handler runs only for its recipient, with the trait in its selection and the alias bound.
+    const auto handler_fn = generated_function(code, "void start_dying_added_Dying(entt::registry& registry");
+    CHECK(handler_fn.find("cactus_recipient.has_value()") != std::string::npos);
+    CHECK(handler_fn.find("registry.all_of<Enemy, Dying>(entity)") != std::string::npos);
+    CHECK(handler_fn.find("auto& dying = Dying_comp;") != std::string::npos);
+    CHECK(handler_fn.find("registry.view<") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: on removed binds the snapshot and excludes the trait", "[codegen-entt][trait-lifecycle]") {
+    ProgramNode program;
+    auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+                                       "rule StopBurning:\n"
+                                       "    on removed Burning as old:\n"
+                                       "        let heat = old.intensity\n",
+                                   program);
+
+    const auto code = CppEnttCodegen::generate(decorated);
+
+    const auto handler_fn = generated_function(code, "void stop_burning_removed_Burning(entt::registry& registry");
+    CHECK(handler_fn.find("TraitRemoved<Burning>& cactus_trigger") != std::string::npos);
+    CHECK(handler_fn.find("cactus_recipient.has_value()") != std::string::npos);
+    CHECK(handler_fn.find("!registry.any_of<Burning>(entity)") != std::string::npos);
+    CHECK(handler_fn.find("const auto& old = ") != std::string::npos);
+    CHECK(handler_fn.find(".old;") != std::string::npos);
+    CHECK(handler_fn.find("old.intensity") != std::string::npos);
+    CHECK(handler_fn.find("registry.view<") == std::string::npos);
+}
+
+TEST_CASE("Codegen EnTT: the startup arrival activation runs after init and before load",
+          "[codegen-entt][trait-lifecycle]") {
+    const auto program_with = [](const std::string& trigger) {
+        ProgramNode program;
+        auto decorated = full_pipeline(LIFECYCLE_PROGRAM_PREFIX +
+                                           "entity Boss:\n"
+                                           "    Enemy\n"
+                                           "    Dying\n"
+                                           "rule React:\n"
+                                           "    filter:\n"
+                                           "        Enemy\n"
+                                           "    on " +
+                                           trigger +
+                                           ":\n"
+                                           "        let x = 1\n"
+                                           "rule Boot:\n"
+                                           "    filter:\n"
+                                           "        Enemy\n"
+                                           "    on load:\n"
+                                           "        let y = 1\n",
+                                       program);
+        return CppEnttCodegen::generate(decorated);
+    };
+
+    SECTION("an on added trigger emits the arrival activation") {
+        const auto code    = program_with("added Dying");
+        const auto load_fn = generated_function(code, "void generated_load_project(entt::registry& registry)");
+        const auto active  = load_fn.find("activation.active = true;");
+        const auto arrive  = load_fn.find("generated_lifecycle_trackers().deliver_arrivals(");
+        const auto drain   = load_fn.find("generated_drain_event_cascade(registry);");
+        const auto commit  = load_fn.find("generated_commit_activation(registry);");
+        REQUIRE(active != std::string::npos);
+        REQUIRE(arrive != std::string::npos);
+        REQUIRE(drain != std::string::npos);
+        REQUIRE(commit != std::string::npos);
+        CHECK(active < arrive);
+        CHECK(arrive < drain);
+        CHECK(drain < commit);
+
+        const auto main_start = code.find("int main() try {");
+        REQUIRE(main_start != std::string::npos);
+        const auto main_fn   = code.substr(main_start, code.find("#endif  // CACTUS_GENERATED_NO_MAIN", main_start) - main_start);
+        const auto init_call = main_fn.find("generated_init_project(registry);");
+        const auto load_call = main_fn.find("generated_load_project(registry);");
+        const auto load_evt  = main_fn.find("generated_dispatch_event(registry, loadEvent{});");
+        REQUIRE(init_call != std::string::npos);
+        REQUIRE(load_call != std::string::npos);
+        REQUIRE(load_evt != std::string::npos);
+        CHECK(init_call < load_call);
+        CHECK(load_call < load_evt);
+
+        const auto init_fn = generated_function(code, "void generated_init_project(entt::registry& registry)");
+        CHECK(init_fn.find("generated_connect_lifecycle_trackers(registry);") != std::string::npos);
+    }
+
+    SECTION("only an on removed trigger emits no arrival activation") {
+        const auto code    = program_with("removed Dying");
+        const auto load_fn = generated_function(code, "void generated_load_project(entt::registry& registry)");
+        CHECK(load_fn.find("deliver_arrivals") == std::string::npos);
+        CHECK(code.find("LifecycleTrackers<") != std::string::npos);
+    }
 }
 
 TEST_CASE("Codegen EnTT: generated init registers declared mesh and material assets", "[codegen-entt][assets]") {
@@ -2453,24 +2482,24 @@ TEST_CASE("Codegen EnTT: aliased event handler uses alias in signature and body"
     }
 }
 
-TEST_CASE("Codegen EnTT: spawn handler uses marker event parameter", "[codegen-entt][event-handler]") {
+TEST_CASE("Codegen EnTT: marker event handler takes the marker event parameter", "[codegen-entt][event-handler]") {
     ProgramNode program;
     auto decorated = full_pipeline(
-        "event spawn\n"
+        "event ping\n"
         "trait Pos:\n"
         "    var x: float\n"
         "rule Init:\n"
         "    filter:\n"
         "        Pos\n"
-        "    on spawn:\n"
+        "    on ping:\n"
         "        x = 0.0\n",
         program);
 
     for (auto& decl : program.declarations) {
         if (auto* sys = std::get_if<RuleNode>(&decl)) {
             auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-            CHECK(code.find("void init_spawn(entt::registry& registry, const spawnEvent& spawn,") !=
-                  std::string::npos);  // spawn handlers don't get dispatcher (lifecycle event)
+            CHECK(code.find("void init_ping(entt::registry& registry, const pingEvent& ping,") !=
+                  std::string::npos);
         }
     }
 }
@@ -5866,8 +5895,8 @@ TEST_CASE("Codegen EnTT: graph structural commands commit after cascades and bet
 
     const auto commit_fn = code.find("void generated_commit_activation(entt::registry& registry)");
     REQUIRE(commit_fn != std::string::npos);
-    // No `on spawn`/`on destroy` handler here, so commit routes through the
-    // runtime's commit_activation with no notification hooks — applying
+    // No lifecycle trigger here, so commit routes through the
+    // runtime's commit_activation with no lifecycle trackers — applying
     // queued commands before draining is now a runtime-level invariant
     // (test_runtime_activation_scheduler.cpp), not per-program text.
     const auto commit_call =

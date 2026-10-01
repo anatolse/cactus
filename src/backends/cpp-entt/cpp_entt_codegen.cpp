@@ -221,6 +221,48 @@ bool is_user_external_handler(const DecoratedProgram& program, const HandlerNode
     return node.implementation == HandlerImplementationKind::External && (rule == nullptr || !rule->is_stdlib);
 }
 
+// The generated function of a Cactus rule handler, found through the AST.
+std::optional<std::string> cactus_handler_callee(const DecoratedProgram& program, const HandlerIdentity& identity) {
+    for (const auto& declaration : program.ast->declarations) {
+        const auto* rule = std::get_if<RuleNode>(&declaration);
+        if (rule == nullptr || !rule->resolved_rule_id.has_value() || *rule->resolved_rule_id != identity.rule) {
+            continue;
+        }
+        const auto handler = std::ranges::find_if(rule->handlers, [&](const auto& candidate) {
+            return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
+        });
+        if (handler != rule->handlers.end()) {
+            return system_function_name(
+                program.module_name, rule->name, EnttCodegenUtils::handler_function_suffix(*handler, program));
+        }
+    }
+    return std::nullopt;
+}
+
+bool has_added_trigger(const DecoratedProgram& program) {
+    return std::ranges::any_of(program.execution_graph.handlers, [](const auto& handler) {
+        return handler.identity.trigger.kind == HandlerTriggerKind::TraitAdded;
+    });
+}
+
+// Commit can deliver either kind for any watched trait, so both are occurrences.
+std::vector<ResolvedHandlerTrigger> lifecycle_occurrence_triggers(const DecoratedProgram& program) {
+    std::vector<ResolvedHandlerTrigger> triggers;
+    for (const auto& trait : EnttCodegenUtils::watched_lifecycle_traits(program)) {
+        triggers.push_back({.kind = HandlerTriggerKind::TraitAdded, .symbol = trait});
+        triggers.push_back({.kind = HandlerTriggerKind::TraitRemoved, .symbol = trait});
+    }
+    return triggers;
+}
+
+std::string lifecycle_trackers_cpp_type(const DecoratedProgram& program) {
+    std::string traits;
+    for (const auto& trait : EnttCodegenUtils::watched_lifecycle_traits(program)) {
+        traits += (traits.empty() ? "" : ", ") + EnttCodegenUtils::trait_cpp_name(trait, trait.local_name, program);
+    }
+    return "LifecycleTrackers<" + traits + ">";
+}
+
 bool has_compiler_owned_external_handler(const DecoratedProgram& program, const ExternRuleNode& rule) {
     if (!rule.resolved_rule_id.has_value()) {
         return false;
@@ -638,15 +680,19 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     const auto* frame_event  = find_external_frame_event(program);
     const auto* render_phase = find_render_phase(program);
 
-    // Commit-synthesized spawn/destroy notifications (proposal §"What Changes"):
-    // gated on consumer presence the same way the boot/teardown activations are,
-    // so programs with no `on spawn`/`on destroy` handler pay no extra runtime cost.
-    const auto* spawn_event   = find_std_core_event(program, "spawn");
-    const auto* destroy_event = find_std_core_event(program, "destroy");
-    const bool has_spawn_handler =
-        spawn_event != nullptr && program_has_event_handler(program, *spawn_event->symbol_id);
-    const bool has_destroy_handler =
-        destroy_event != nullptr && program_has_event_handler(program, *destroy_event->symbol_id);
+    // Programs with no lifecycle trigger get no tracking code at all.
+    const auto lifecycle_triggers = lifecycle_occurrence_triggers(program);
+    std::vector<std::string> occurrence_types;
+    occurrence_types.reserve(all_events.size() + lifecycle_triggers.size());
+    for (const auto* event : all_events) {
+        occurrence_types.push_back(event_runtime_cpp_type(program, *event->symbol_id));
+    }
+    std::vector<std::string> lifecycle_types;
+    lifecycle_types.reserve(lifecycle_triggers.size());
+    for (const auto& trigger : lifecycle_triggers) {
+        lifecycle_types.push_back(*EnttCodegenUtils::lifecycle_occurrence_cpp_type(trigger, program));
+    }
+    occurrence_types.insert(occurrence_types.end(), lifecycle_types.begin(), lifecycle_types.end());
 
     // Mirrors the same flag/name computation CppEnttCodegen::generate() uses
     // for the legacy per-viewport render loop and edit-mode HUD overlay (see
@@ -674,12 +720,12 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     // are runtime-hosted (backends/cpp-entt/runtime.hpp) — EventOccurrence
     // (the program's concrete event-type list) is the one genuinely
     // program-specific piece, so it stays generated.
-    if (all_events.empty()) {
+    if (occurrence_types.empty()) {
         out << "using EventOccurrence = std::variant<std::monostate>;\n";
     } else {
         out << "using EventOccurrence = std::variant<";
-        for (std::size_t index = 0; index < all_events.size(); ++index) {
-            out << (index == 0 ? "" : ", ") << event_runtime_cpp_type(program, *all_events[index]->symbol_id);
+        for (std::size_t index = 0; index < occurrence_types.size(); ++index) {
+            out << (index == 0 ? "" : ", ") << occurrence_types[index];
         }
         out << ">;\n";
     }
@@ -719,6 +765,20 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "void generated_reset_scheduler_state() {\n";
     out << "    generated_scheduler_state() = {};\n";
     out << "}\n\n";
+    // Kept apart from SchedulerState: storage signals point at the trackers, so
+    // resetting the scheduler state must not move or replace them.
+    if (!lifecycle_triggers.empty()) {
+        const auto trackers_type = lifecycle_trackers_cpp_type(program);
+        out << trackers_type << "& generated_lifecycle_trackers() {\n";
+        out << "    static " << trackers_type << " trackers;\n";
+        out << "    return trackers;\n";
+        out << "}\n\n";
+        // Called on every registry the world lives in: at init, and again after
+        // world restore publishes a freshly staged registry.
+        out << "void generated_connect_lifecycle_trackers(entt::registry& registry) {\n";
+        out << "    generated_lifecycle_trackers().connect(registry);\n";
+        out << "}\n\n";
+    }
 
     out << "entt::entity generated_reserve_entity(entt::registry& registry) {\n";
     out << "    return reserve_entity(registry, generated_scheduler_state().activation);\n";
@@ -729,11 +789,8 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
     out << "    queue_structural_command(generated_scheduler_state().activation, kind, std::move(apply));\n";
     out << "}\n\n";
 
-    // generated_emit_event and the generated_drain_event_cascade forward
-    // declaration are emitted ahead of generated_commit_activation (moved up
-    // from their historical position below the external-event injectors)
-    // because commit-synthesized spawn/destroy notifications call both from
-    // within generated_commit_activation's body.
+    // The generated_drain_event_cascade forward declaration precedes
+    // generated_commit_activation, which passes it to the runtime commit.
     out << "template <typename Occurrence>\n";
     out << "void generated_emit_event(Occurrence occurrence) {\n";
     out << "    emit_event(generated_scheduler_state().activation, std::move(occurrence));\n";
@@ -754,26 +811,11 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
 
     out << "void generated_commit_activation(entt::registry& registry) {\n";
     out << "    auto& activation = generated_scheduler_state().activation;\n";
-    if (!has_spawn_handler && !has_destroy_handler) {
+    if (lifecycle_triggers.empty()) {
         out << "    commit_activation(activation, registry, &generated_drain_event_cascade);\n";
     } else {
-        const auto spawn_type   = has_spawn_handler ? event_runtime_cpp_type(program, *spawn_event->symbol_id) : "";
-        const auto destroy_type = has_destroy_handler ? event_runtime_cpp_type(program, *destroy_event->symbol_id) : "";
-        // commit_activation loops so spawn/destroy commands issued by an `on
-        // spawn`/`on destroy` handler apply in the same activation; its
-        // commit rounds consume cascade depth, so the loop always ends.
-        out << "    commit_activation(\n";
-        out << "        activation, registry, &generated_drain_event_cascade,\n";
-        if (has_spawn_handler) {
-            out << "        [](auto& act) { emit_event(act, " << spawn_type << "{}); },\n";
-        } else {
-            out << "        NoNotify{},\n";
-        }
-        if (has_destroy_handler) {
-            out << "        [](auto& act) { emit_event(act, " << destroy_type << "{}); });\n";
-        } else {
-            out << "        NoNotify{});\n";
-        }
+        out << "    commit_activation(activation, registry, &generated_drain_event_cascade, "
+               "generated_lifecycle_trackers());\n";
     }
     out << "}\n\n";
 
@@ -938,11 +980,26 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
 
     // The per-event generated_dispatch_event overloads are defined later in
     // the file but called by the root-event processors below.
-    for (const auto* event : all_events) {
-        out << "void generated_dispatch_event(entt::registry&, const "
-            << event_runtime_cpp_type(program, *event->symbol_id) << "&, std::optional<entt::entity> = std::nullopt);\n";
+    for (const auto& type : occurrence_types) {
+        out << "void generated_dispatch_event(entt::registry&, const " << type
+            << "&, std::optional<entt::entity> = std::nullopt);\n";
     }
     out << "\n";
+
+    // An occurrence no phase claims as its root (e.g. std.persistence's save
+    // outcomes, a deferred internal event, or a deferred lifecycle delivery)
+    // is still its own activation: dispatch its handlers, drain whatever
+    // cascade they queue, then commit, exactly like a phase batch does.
+    const auto emit_own_activation = [&out] {
+        out << "    if (target.has_value() && !registry.valid(*target)) {\n";
+        out << "        return;\n";
+        out << "    }\n";
+        out << "    generated_scheduler_state().activation.active = true;\n";
+        out << "    generated_dispatch_event(registry, root_event, target);\n";
+        out << "    generated_drain_event_cascade(registry);\n";
+        out << "    generated_commit_activation(registry);\n";
+        out << "    generated_scheduler_state().activation.active = false;\n";
+    };
 
     // Every event gets a processor, not only external ones: a cascade-deferred
     // occurrence of any event is re-queued as a root event.
@@ -973,20 +1030,14 @@ std::string emit_graph_scheduler_state(const DecoratedProgram& program) {
         if (routed_to_phase) {
             out << "    (void)target;\n";
         } else {
-            // No phase claims this event as its root (e.g. std.persistence's
-            // save outcomes, or a deferred internal event): it is still its
-            // own activation — dispatch its `on <Event>:` handlers, drain
-            // whatever cascade they queue, then commit, exactly like a phase
-            // batch does for its root event.
-            out << "    if (target.has_value() && !registry.valid(*target)) {\n";
-            out << "        return;\n";
-            out << "    }\n";
-            out << "    generated_scheduler_state().activation.active = true;\n";
-            out << "    generated_dispatch_event(registry, root_event, target);\n";
-            out << "    generated_drain_event_cascade(registry);\n";
-            out << "    generated_commit_activation(registry);\n";
-            out << "    generated_scheduler_state().activation.active = false;\n";
+            emit_own_activation();
         }
+        out << "}\n\n";
+    }
+    for (const auto& type : lifecycle_types) {
+        out << "void generated_process_root_event(entt::registry& registry, const " << type
+            << "& root_event, std::optional<entt::entity> target = std::nullopt) {\n";
+        emit_own_activation();
         out << "}\n\n";
     }
 
@@ -1111,28 +1162,11 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
             if (graph_node->implementation != HandlerImplementationKind::Cactus) {
                 continue;
             }
-            for (const auto& declaration : program.ast->declarations) {
-                const auto* rule = std::get_if<RuleNode>(&declaration);
-                if (rule == nullptr || !rule->resolved_rule_id.has_value() ||
-                    *rule->resolved_rule_id != identity.rule) {
-                    continue;
-                }
-                const auto handler = std::ranges::find_if(rule->handlers, [&](const auto& candidate) {
-                    return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
-                });
-                if (handler == rule->handlers.end()) {
-                    continue;
-                }
-                const auto callee = system_function_name(program.module_name,
-                                                         rule->name,
-                                                         !handler->event_name.contains('.')
-                                                             ? handler->event_name
-                                                             : canonical_to_cpp_name(identity.trigger.symbol));
+            if (const auto callee = cactus_handler_callee(program, identity)) {
                 emitted = true;
-                if (emitted_callees.insert(callee).second) {
-                    out << "    ::" << callee << "(registry, phase);\n";
+                if (emitted_callees.insert(*callee).second) {
+                    out << "    ::" << *callee << "(registry, phase);\n";
                 }
-                break;
             }
         }
         if (!emitted) {
@@ -1211,32 +1245,37 @@ std::string emit_graph_handler_dispatch(const DecoratedProgram& program) {
             if (graph_node->implementation != HandlerImplementationKind::Cactus) {
                 continue;
             }
-            for (const auto& declaration : program.ast->declarations) {
-                const auto* rule = std::get_if<RuleNode>(&declaration);
-                if (rule == nullptr || !rule->resolved_rule_id.has_value() ||
-                    *rule->resolved_rule_id != identity.rule) {
-                    continue;
-                }
-                const auto handler = std::ranges::find_if(rule->handlers, [&](const auto& candidate) {
-                    return candidate.resolved_trigger.has_value() && *candidate.resolved_trigger == identity.trigger;
-                });
-                if (handler == rule->handlers.end()) {
-                    continue;
-                }
-                out << "    ::"
-                    << system_function_name(program.module_name,
-                                            rule->name,
-                                            !handler->event_name.contains('.')
-                                                ? handler->event_name
-                                                : canonical_to_cpp_name(identity.trigger.symbol))
-                    << "(registry, occurrence, target);\n";
+            if (const auto callee = cactus_handler_callee(program, identity)) {
+                out << "    ::" << *callee << "(registry, occurrence, target);\n";
                 emitted = true;
-                break;
             }
         }
         if (!emitted) {
             out << "    (void)registry;\n";
             out << "    (void)occurrence;\n";
+        }
+        out << "}\n\n";
+    }
+
+    // Lifecycle triggers are only ever declared on Cactus rules.
+    for (const auto& trigger : lifecycle_occurrence_triggers(program)) {
+        out << "void generated_dispatch_event(entt::registry& registry, const "
+            << *EnttCodegenUtils::lifecycle_occurrence_cpp_type(trigger, program)
+            << "& occurrence, std::optional<entt::entity> target) {\n";
+        bool emitted = false;
+        for (const auto& identity : program.execution_graph.stable_topological_order) {
+            if (identity.trigger != trigger) {
+                continue;
+            }
+            if (const auto callee = cactus_handler_callee(program, identity)) {
+                out << "    ::" << *callee << "(registry, occurrence, target);\n";
+                emitted = true;
+            }
+        }
+        if (!emitted) {
+            out << "    (void)registry;\n";
+            out << "    (void)occurrence;\n";
+            out << "    (void)target;\n";
         }
         out << "}\n\n";
     }
@@ -2784,8 +2823,7 @@ std::string emit_persistence_boundary_processor(const DecoratedProgram& program)
 // triggered by this event — the same per-event handler-presence check
 // generated_dispatch_event's body construction already performs (see the
 // HandlerTriggerKind::Event match below), reused here to gate emission of
-// the boot/teardown activations and commit-synthesized notifications on
-// actual consumer presence.
+// the boot/teardown activations on actual consumer presence.
 bool program_has_event_handler(const DecoratedProgram& program, const SymbolId& event_symbol) {
     return std::ranges::any_of(program.execution_graph.stable_topological_order, [&](const auto& identity) {
         return identity.trigger.kind == HandlerTriggerKind::Event && identity.trigger.symbol == event_symbol;
@@ -3380,8 +3418,12 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         << ", .window_title = " << win_title << ", .target_fps = " << win_fps << "};\n";
     out << "}\n\n";
 
+    const bool tracks_lifecycle = EnttCodegenUtils::tracks_lifecycle(program);
     out << "void generated_init_project(entt::registry& registry) {\n";
     out << "    (void)registry;\n";
+    if (tracks_lifecycle) {
+        out << "    generated_connect_lifecycle_trackers(registry);\n";
+    }
     if (program.ast != nullptr) {
         for (auto& decl : program.ast->declarations) {
             if (auto* asset = std::get_if<AssetDeclNode>(&decl)) {
@@ -3840,10 +3882,20 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     }
     out << "}\n\n";
 
-    // Retained as an empty compatibility hook for hosts built against runtime.hpp.
-    // Runtime activation is driven exclusively by typed external-event injection.
+    // Runs after generated_init_project and before the load activation, in
+    // generated main() and in hosts alike. With an `on added` trigger it is
+    // the startup arrival activation: placed entities get the same `on added`
+    // setup as spawned ones. World restore never calls it.
     out << "void generated_load_project(entt::registry& registry) {\n";
     out << "    (void)registry;\n";
+    if (tracks_lifecycle && has_added_trigger(program)) {
+        out << "    auto& activation = generated_scheduler_state().activation;\n";
+        out << "    activation.active = true;\n";
+        out << "    generated_lifecycle_trackers().deliver_arrivals(activation, registry);\n";
+        out << "    generated_drain_event_cascade(registry);\n";
+        out << "    generated_commit_activation(registry);\n";
+        out << "    activation.active = false;\n";
+    }
     out << "}\n\n";
 
     out << "void generated_update_project(entt::registry& registry, entt::dispatcher& dispatcher, float dt) {\n";

@@ -518,8 +518,9 @@ struct HandlerReferenceNode {
 // `<phase>.fragment` trigger (dsl-render-passes) — distinct from Phase so the
 // ordinary per-phase handler-dispatch and effect-conflict machinery, which is
 // keyed on trigger kind, never mistakes a stage handler for one of the
-// phase's own ordinary handlers.
-enum class HandlerTriggerKind : std::uint8_t { Event, Phase, RenderStage };
+// phase's own ordinary handlers. TraitAdded/TraitRemoved are `on added T` /
+// `on removed T`, whose symbol is the trait's.
+enum class HandlerTriggerKind : std::uint8_t { Event, Phase, RenderStage, TraitAdded, TraitRemoved };
 
 [[nodiscard]] inline const char* handler_trigger_kind_name(HandlerTriggerKind kind) {
     switch (kind) {
@@ -529,6 +530,10 @@ enum class HandlerTriggerKind : std::uint8_t { Event, Phase, RenderStage };
             return "phase";
         case HandlerTriggerKind::RenderStage:
             return "render stage";
+        case HandlerTriggerKind::TraitAdded:
+            return "added";
+        case HandlerTriggerKind::TraitRemoved:
+            return "removed";
     }
     return "unknown";
 }
@@ -545,6 +550,15 @@ struct ResolvedHandlerTrigger {
         return std::string(handler_trigger_kind_name(kind)) + " " + make_canonical_id(symbol);
     }
 
+    [[nodiscard]] bool is_lifecycle() const {
+        return kind == HandlerTriggerKind::TraitAdded || kind == HandlerTriggerKind::TraitRemoved;
+    }
+
+    // As a handler's source spells it: `added game.Dying` for a lifecycle trigger, else the symbol.
+    [[nodiscard]] std::string source_spelling() const {
+        return is_lifecycle() ? debug_string() : make_canonical_id(symbol);
+    }
+
     friend bool operator==(const ResolvedHandlerTrigger&, const ResolvedHandlerTrigger&) = default;
 
     friend std::ostream& operator<<(std::ostream& out, const ResolvedHandlerTrigger& trigger) {
@@ -552,14 +566,21 @@ struct ResolvedHandlerTrigger {
     }
 };
 
+enum class HandlerTriggerForm : std::uint8_t { Event, Added, Removed };
+
 struct EventHandlerNode {
-    std::string event_name;
+    HandlerTriggerForm trigger_form = HandlerTriggerForm::Event;
+    std::string event_name;  // the trait spelling for Added/Removed
     SourceLocation trigger_location;
     std::optional<ResolvedHandlerTrigger> resolved_trigger;
     std::optional<std::string> alias;                  // optional 'as alias' clause
     std::vector<HandlerReferenceNode> after_handlers;  // exact handler references from a leading after: block
     std::vector<std::unique_ptr<StmtNode>> body;
     SourceLocation location;
+
+    [[nodiscard]] bool has_lifecycle_trigger() const {
+        return resolved_trigger.has_value() && resolved_trigger->is_lifecycle();
+    }
 };
 
 enum class HandlerCommandKind : std::uint8_t { Spawn, Destroy, Add, Remove, Set };

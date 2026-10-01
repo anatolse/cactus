@@ -439,13 +439,12 @@ TEST_CASE("first-person arena headless: bullets follow aim, serialize contacts, 
     CHECK(count<main__Bullet>(registry) == 0);
     const auto dying = registry.view<main__Enemy>();
     const auto dying_count =
-        std::ranges::count_if(dying, [&](const auto enemy) { return registry.get<main__Enemy>(enemy).dying; });
+        std::ranges::count_if(dying, [&](const auto enemy) { return registry.all_of<main__Dying>(enemy); });
     CHECK(dying_count == 1);
 
     entt::entity dying_enemy = entt::null;
     for (const auto enemy : dying) {
-        auto& state = registry.get<main__Enemy>(enemy);
-        if (state.dying) {
+        if (registry.all_of<main__Dying>(enemy)) {
             dying_enemy = enemy;
         } else {
             registry.get<std_transform_volume__WorldTransform>(enemy).position =
@@ -769,7 +768,9 @@ TEST_CASE("first-person arena headless: a dying enemy does not participate in se
             registry.destroy(enemy);
         }
     }
-    registry.get<main__Enemy>(dying_enemy).dying = true;
+    // Set outside a commit, so do what StartDying would.
+    registry.emplace<main__Dying>(dying_enemy);
+    registry.remove<main__Threat>(dying_enemy);
 
     auto& live_transform      = registry.get<std_transform_volume__WorldTransform>(live);
     auto& dying_transform     = registry.get<std_transform_volume__WorldTransform>(dying_enemy);

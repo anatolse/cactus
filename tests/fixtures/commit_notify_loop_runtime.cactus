@@ -2,9 +2,9 @@ module commit_notify_loop_runtime
 
 use std.core
 
-# An `on spawn` handler that always spawns one more entity. Commit rounds
-# share the cascade-depth bound, so each activation commits a bounded number
-# of spawns and defers the rest instead of looping forever.
+# Every new Minion reacts to its own arrival by spawning one more. Commit
+# rounds share the cascade-depth bound, so each activation commits a bounded
+# number of spawns and defers the rest instead of looping forever.
 
 trait Offspring
 
@@ -24,13 +24,10 @@ rule Seed:
         spawn Minion()
 
 rule Respawn:
-    filter:
-        Spawner as spawner
-
-    on spawn:
-        if spawner.budget <= 0:
+    on added Offspring:
+        if Nursery.Spawner.budget <= 0:
             return
-        spawner.budget = spawner.budget - 1
+        Nursery.Spawner.budget -= 1
         spawn Minion()
 
 # A targeted event that re-emits itself to its recipient overflows the

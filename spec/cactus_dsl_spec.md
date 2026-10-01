@@ -630,7 +630,7 @@ handler_after_clause = "after" ":" NEWLINE INDENT
                        DEDENT ;
 ```
 
-`added` and `removed` are trigger words only when a trait name follows them; `on added:` still names an event called `added`. `on added T` and `on removed T` react to a durable trait's arrival and departure (§4.4).
+`added` and `removed` are trigger words only when a trait name follows them; `on added:` still names an event called `added`. `on added T` and `on removed T` react to a durable trait's arrival and departure (§4.4). `<phase>.vertex` and `<phase>.fragment` are derived triggers of render-pass phases (§3.11.1).
 
 ```cactus
 on tick:
@@ -749,6 +749,59 @@ pub phase render:
 Ordinary events may be emitted by handlers. External events are injected only by the host/runtime and cannot be authored with `emit`. A phase is a typed activation barrier, not an event. `from:` declares a runtime source lineage; `after:` declares completed upstream phases. A phase must resolve to one unambiguous external-event root lineage.
 
 Non-periodic phase fields are initialized from the current root occurrence or completed upstream phase results. A periodic phase synthesizes `dt` equal to its interval. It also produces `alpha` after its repetition barrier; `alpha` is available to downstream phases, not to the periodic phase's own handlers.
+
+#### 3.11.1 Render-Pass Phases
+
+A render pass is a phase that draws instanced quads with its own vertex and fragment stages, written in Cactus and compiled to GLSL. Detailed rules live in the `dsl-render-passes` capability spec; this section summarizes them.
+
+**Recognition.** A phase is a render-pass phase when one of its fields has the type `std.render.passes.Pass`. The field name does not matter, and an aliased import is recognized the same way. A render-pass phase must also declare exactly one `std.render.passes.Target` field. Both field values must be compile-time constants. `Pass.Quads` and `Target.Screen` are the only values today. No new keyword or grammar is involved.
+
+**Stage triggers.** A render-pass phase exposes two derived triggers, `<phase>.vertex` and `<phase>.fragment`, used with the ordinary `on ... as alias:` handler syntax. The alias is required, since the stage's built-in fields are reached through it. They don't exist on other phases; `on tick.vertex:` is an error. Each render-pass phase needs exactly one vertex handler and exactly one fragment handler.
+
+**Domains.** The vertex handler is unary: it needs a `filter:` (and may use `exclude:`, `where:`, and `order by:`; `pairs:` is rejected). Each matching entity is drawn as one quad. The fragment handler is selectionless: no `filter:`, `exclude:`, `pairs:`, or `where:`, and it reads no durable trait.
+
+**Built-in stage fields** (the `Quads` pass kind), reached through the trigger alias:
+
+| Stage | Read | Write |
+|---|---|---|
+| vertex | `corner: vec2`, `uv: vec2`, `vertex_index: int` | `screen_position: vec2`, `uv_out: vec2`, `tint_out: color` |
+| fragment | `uv: vec2`, `tint: color`, `frag_coord: vec2` | `frag_color: color` |
+
+The fragment stage's `uv` and `tint` are the vertex stage's `uv_out` and `tint_out`, interpolated across the quad.
+
+**Statement subset.** A stage handler body is translated to GLSL, so it accepts only: `let`/`var` locals; assignment and compound assignment to locals and to the stage's writable built-in fields; `if`/`else`; and calls to `func` or to an `extern func` that has a GLSL translation. `spawn`, `destroy`, `add`, `remove`, `set`, `project`, `emit`, `load`, `return`, trait `match`, world queries, and `for` are rejected. A vertex handler may read the traits its `filter:` selects but not write them. Operators and operand types are the same as in any other handler (§3.15).
+
+**Independent instances.** Each matching entity is drawn with its own trait values. One instance's values never leak into another instance's quad in the same draw.
+
+```cactus
+use std.transform.flat as tf
+use std.render.passes as passes
+
+pub phase gradient_pass:
+    after:
+        render
+    pipeline: passes.Pass = passes.Pass.Quads
+    output: passes.Target = passes.Target.Screen
+
+rule SquareVertex:
+    filter:
+        tf.WorldTransform as xf
+
+    on gradient_pass.vertex as v:
+        let half = 100.0
+        v.screen_position = xf.position + v.corner * half
+        v.uv_out = v.uv
+        if v.corner.x < 0.0:
+            v.tint_out = #FF0000FF
+        else:
+            v.tint_out = #0000FFFF
+
+rule SquareFragment:
+    on gradient_pass.fragment as f:
+        f.frag_color = f.tint
+```
+
+`examples/gradient-square` and `examples/particle-burst` are the maintained examples; the second shades a round particle in the fragment stage with `passes.with_alpha`.
 
 ### 3.12 Functions
 
@@ -945,6 +998,8 @@ load levels.level2
 ```
 
 `let` declares an immutable local and `var` declares a mutable one, in handler and `func` bodies alike. Reassigning a `let` local, including a compound assignment or a member write such as `v.x = 1.0`, is an error. A trait write through an `entity_id` local (`e.Health.hp = 3`) targets the entity, not the binding, so the immutability rule does not apply to it. Assignment never declares a local: assigning to an undeclared name is an error, and declaring the same name twice in one block is an error. An optional type annotation must match the initializer's type.
+
+Render-pass stage handler bodies accept only a fixed subset of these statements, because they compile to GLSL (§3.11.1).
 
 `emit` (like `add` and `project`) may omit the `:` payload block entirely when the event has no fields to set (e.g. a zero-field `pub event StartBump`) or when every field should take its default; `to expression` is still allowed without a block for a targeted zero-field emit.
 

@@ -1,16 +1,16 @@
 ## Purpose
 
 Define how the language specs themselves are curated and organized, including scoping the normative surface to active gameplay features, separating deferred features, and keeping core language guidance distinct from stdlib and backend detail.
-
 ## Requirements
-
 ### Requirement: Normative DSL surface is curated to active gameplay features
-The project SHALL maintain a single normative gameplay-core language surface for Cactus. A feature SHALL appear in the main language grammar, main language guide, and maintained teaching examples only if it is part of the active supported surface.
+The project SHALL maintain a single normative gameplay-core language surface for Cactus. A feature SHALL appear in the main language grammar, main language guide, and maintained teaching examples only if it is part of the active supported surface. Conversely, a feature that is part of the active supported surface SHALL appear in the main language grammar or main language guide; it SHALL NOT be documented only in a capability spec.
 
 The active supported surface SHALL be determined by an accepted capability story and at least one of the following:
 - implemented compiler support,
 - maintained example usage,
 - an accepted stdlib/backend contract that is explicitly treated as current rather than deferred.
+
+When the main language guide documents a feature whose detailed behavior is owned by a capability spec, it SHALL name that capability spec as the detailed source, and it SHALL NOT state a rule that contradicts it.
 
 #### Scenario: Active feature appears in the main language guide
 - **WHEN** a feature is documented as part of the normative DSL grammar
@@ -19,6 +19,14 @@ The active supported surface SHALL be determined by an accepted capability story
 #### Scenario: Deferred feature is not presented as active grammar
 - **WHEN** a feature lacks an active support story
 - **THEN** it is moved out of normative grammar and examples into deferred or future-work documentation
+
+#### Scenario: Active feature missing from the main language guide is a curation gap
+- **WHEN** a feature has an accepted capability story, implemented compiler support, and maintained example usage
+- **THEN** the main language guide documents it, and its absence is treated as a defect to fix rather than an acceptable omission
+
+#### Scenario: Restricted context is stated where the general rule appears
+- **WHEN** a capability spec restricts a general grammar rule in some context (for example, render-pass stage handler bodies accept only a fixed statement subset)
+- **THEN** the main language guide states that restriction next to the general rule, so a reader of the general rule learns the exception exists
 
 ### Requirement: Deferred features are clearly separated from current language commitments
 Features that are deferred, experimental, or unsupported SHALL NOT appear as normative grammar productions in the human-facing DSL spec. They SHALL be documented separately with an explicit reason for deferral and a migration or revisit path when relevant.
@@ -54,3 +62,4 @@ The main language guide SHALL prioritize core authoring constructs first and SHA
 #### Scenario: Backend responsibility is not mistaken for language complexity
 - **WHEN** rendering, physics, audio, or UI behavior depends on stdlib/backend support
 - **THEN** the documentation distinguishes that concern from the minimal core language surface
+

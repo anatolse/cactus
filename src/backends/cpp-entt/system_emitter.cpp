@@ -34,19 +34,6 @@ bool symbol_is(const std::optional<SymbolId>& symbol,
     return symbol.has_value() && symbol_is(*symbol, kind, module_name, local_name);
 }
 
-const ResolvedFunc* find_resolved_func(const DecoratedProgram& program, const SymbolId& symbol) {
-    const auto canonical = make_canonical_id(symbol);
-    if (const auto found = program.funcs.find(canonical); found != program.funcs.end()) {
-        return &found->second;
-    }
-    for (const auto& [_, func] : program.funcs) {
-        if ((func.symbol_id.has_value() && *func.symbol_id == symbol) || func.canonical_id == canonical) {
-            return &func;
-        }
-    }
-    return nullptr;
-}
-
 std::string stdlib_runtime_prefix(const SymbolId& func_id) {
     if (func_id.kind != SymbolKind::Func) {
         return {};
@@ -1158,26 +1145,15 @@ static std::string find_comp_for_field(const std::string& field_name,
     return "";
 }
 
-// A module-level `const:` block declaration's own value expression, or
-// nullptr if no const with this name exists. Mirrors find_comp_for_field's
-// shape for resolving a bare identifier's meaning outside local/trait-field
-// scope.
-static const ExprNode* find_const_value_expr(const std::string& name, const DecoratedProgram& program) {
-    if (program.ast == nullptr) {
-        return nullptr;
+static NumericKind const_numeric_kind(const SymbolId& symbol, const DecoratedProgram& program) {
+    const auto* constant = EnttCodegenUtils::find_const(program, symbol);
+    if (constant == nullptr) {
+        return NumericKind::Unknown;
     }
-    for (const auto& decl : program.ast->declarations) {
-        const auto* const_block = std::get_if<ConstBlockNode>(&decl);
-        if (const_block == nullptr) {
-            continue;
-        }
-        for (const auto& assignment : const_block->assignments) {
-            if (assignment.name == name) {
-                return assignment.value.get();
-            }
-        }
+    if (constant->type.kind == TypeKind::Int) {
+        return NumericKind::Int;
     }
-    return nullptr;
+    return constant->type.kind == TypeKind::Float ? NumericKind::Float : NumericKind::Unknown;
 }
 
 // ── Helper: collect all field names from filter traits ───────────────────────
@@ -1231,16 +1207,11 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
                 // precedence (a known trait field is qualified as `comp.field`; anything
                 // else, including a const, is emitted as a bare name) — checking fields
                 // first here keeps this resolution order consistent with that one.
+                if (e.resolved_const_id.has_value()) {
+                    return const_numeric_kind(*e.resolved_const_id, program);
+                }
                 const auto comp = find_comp_for_field(e.name, trait_names, program);
                 if (comp.empty()) {
-                    // Module-level `const:` block declarations (e.g. `PARTICLE_COUNT`) aren't
-                    // trait fields or lexical locals; resolve their kind from their own
-                    // declared value expression so mixed int/float arithmetic involving a
-                    // const (e.g. a range loop variable times a const-derived angle step)
-                    // still gets the right static_cast.
-                    if (const auto* const_value = find_const_value_expr(e.name, program)) {
-                        return infer_numeric_kind(*const_value, trait_names, program, local_kinds);
-                    }
                     return NumericKind::Unknown;
                 }
                 const auto* trait = EnttCodegenUtils::find_trait(program, comp);
@@ -1267,6 +1238,9 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
                 if (e.member == "x" || e.member == "y" || e.member == "z") {
                     return NumericKind::Float;
                 }
+                if (e.resolved_const_id.has_value()) {
+                    return const_numeric_kind(*e.resolved_const_id, program);
+                }
                 return NumericKind::Unknown;
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
                 return infer_numeric_kind(*e.operand, trait_names, program, local_kinds);
@@ -1285,7 +1259,7 @@ static NumericKind infer_numeric_kind(const ExprNode& expr,
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 const ResolvedFunc* func = nullptr;
                 if (e.resolved_callee_id.has_value()) {
-                    func = find_resolved_func(program, *e.resolved_callee_id);
+                    func = EnttCodegenUtils::find_func(program, *e.resolved_callee_id);
                 } else if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
                     if (const auto found = program.funcs.find(ident->name); found != program.funcs.end()) {
                         func = &found->second;
@@ -2325,6 +2299,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 if (e.resolved_entity_id.has_value()) {
                     return EnttCodegenUtils::named_slot_name(*e.resolved_entity_id);
                 }
+                if (e.resolved_const_id.has_value()) {
+                    return EnttCodegenUtils::symbol_cpp_name(*e.resolved_const_id);
+                }
                 if (auto lowered = lowered_trigger_reference(expr)) {
                     return *std::move(lowered);
                 }
@@ -2380,6 +2357,12 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                        rewrite_expr(
                            *e.operand, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
+                if (e.resolved_struct_id.has_value()) {
+                    return EnttCodegenUtils::emit_struct_construction(e, program, [&](const ExprNode& argument) {
+                        return rewrite_expr(
+                            argument, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds);
+                    });
+                }
                 if (auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                     ident != nullptr && ident->name == "exists" && e.args.size() == 1) {
                     return "registry.valid(" +
@@ -2402,7 +2385,7 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                     if (!lowered.empty()) {
                         return lowered;
                     }
-                    if (const auto* func = find_resolved_func(program, *e.resolved_callee_id);
+                    if (const auto* func = EnttCodegenUtils::find_func(program, *e.resolved_callee_id);
                         func != nullptr && !func->is_extern) {
                         return canonical_to_cpp_name(*e.resolved_callee_id) + "(" +
                                join_rewritten_args(e.args,
@@ -2549,6 +2532,9 @@ static std::string rewrite_expr(  // NOLINT(readability-function-cognitive-compl
                 }
                 if (auto named = EnttCodegenUtils::named_member_cpp(e, program)) {
                     return *std::move(named);
+                }
+                if (e.resolved_const_id.has_value()) {
+                    return EnttCodegenUtils::symbol_cpp_name(*e.resolved_const_id);
                 }
                 // Pair-bound member chain (e.g. `body.tf.WorldTransform.position`):
                 // consume leading segments against the binding's resolved trait
@@ -3423,12 +3409,19 @@ static std::string rewrite_stmt(const StmtNode& stmt,
                     }
                 }
                 const auto temp = foreach_temp_name(s);
+                const bool constant_iterable =
+                    std::visit([](const auto& node) {
+                        if constexpr (requires { node.resolved_const_id; }) {
+                            return node.resolved_const_id.has_value();
+                        }
+                        return false;
+                    }, s.iterable->expr);
                 std::string result =
-                    ind + "auto " + temp + " = " +
+                    ind + (constant_iterable ? "const auto& " : "auto ") + temp + " = " +
                     rewrite_expr(
                         *s.iterable, trait_names, program, pointer_aliases, cpp_overrides, pair_scope, local_kinds) +
                     ";\n";
-                result += ind + "for (const auto& " + s.var_name + " : " + temp + ") {\n";
+                result += ind + "for ([[maybe_unused]] const auto& " + s.var_name + " : " + temp + ") {\n";
                 auto loop_locals = clone_or_empty(lexical_locals);
                 auto loop_kinds  = clone_or_empty(local_kinds);
                 loop_locals.insert(s.var_name);
@@ -3477,26 +3470,38 @@ static std::string rewrite_stmt_block(const std::vector<std::unique_ptr<StmtNode
     return result;
 }
 
+static std::string func_signature(const FuncNode& func, const ResolvedFunc& resolved) {
+    std::string signature =
+        (resolved.return_type.has_value() ? EnttCodegenUtils::type_to_cpp(*resolved.return_type) : "void") + " " +
+        canonical_to_cpp_name(*func.resolved_func_id) + "(";
+    for (std::size_t index = 0; index < resolved.params.size(); ++index) {
+        signature += index != 0U ? ", " : "";
+        signature += EnttCodegenUtils::type_to_cpp(resolved.params[index].type) + " " + resolved.params[index].name;
+    }
+    return signature + ")";
+}
+
+// Lets constants and other code before the definitions call authored funcs.
+std::string EnttSystemEmitter::emit_func_declaration(const FuncNode& func, const DecoratedProgram& program) {
+    if (func.is_extern || !func.resolved_func_id.has_value()) {
+        return {};
+    }
+    const auto* resolved = EnttCodegenUtils::find_func(program, *func.resolved_func_id);
+    return resolved == nullptr ? std::string{} : func_signature(func, *resolved) + ";\n";
+}
+
 std::string EnttSystemEmitter::emit_func(const FuncNode& func, const DecoratedProgram& program) {
     if (func.is_extern || !func.resolved_func_id.has_value()) {
         return {};
     }
-    const auto* resolved = find_resolved_func(program, *func.resolved_func_id);
+    const auto* resolved = EnttCodegenUtils::find_func(program, *func.resolved_func_id);
     if (resolved == nullptr) {
         throw std::runtime_error("cpp-entt backend: missing resolved authored func '" +
                                  make_canonical_id(*func.resolved_func_id) + "'");
     }
 
     std::ostringstream out;
-    out << (resolved->return_type.has_value() ? EnttCodegenUtils::type_to_cpp(*resolved->return_type) : "void") << " "
-        << canonical_to_cpp_name(*func.resolved_func_id) << "(";
-    for (std::size_t index = 0; index < resolved->params.size(); ++index) {
-        if (index != 0U) {
-            out << ", ";
-        }
-        out << EnttCodegenUtils::type_to_cpp(resolved->params[index].type) << " " << resolved->params[index].name;
-    }
-    out << ") {\n";
+    out << func_signature(func, *resolved) << " {\n";
     LexicalLocalBindings locals;
     LocalNumericKinds param_kinds;
     for (const auto& param : resolved->params) {

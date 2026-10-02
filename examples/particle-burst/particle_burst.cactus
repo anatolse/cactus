@@ -12,7 +12,6 @@ const:
     PARTICLE_SPEED = 150.0
     PARTICLE_RADIUS = 5.0
     PARTICLE_COLOR = #FF6B6BFF
-    TAU = 6.283185307
 
 input EmitParticles: button
     mouse = inp.MouseButton.Left
@@ -40,7 +39,7 @@ rule EmitParticleBurst:
         let mouse_pos = input.mouse_position()
 
         for k in range(0, PARTICLE_COUNT):
-            let angle = k * (TAU / PARTICLE_COUNT)
+            let angle = k * (math.PI * 2.0 / PARTICLE_COUNT)
             spawn ParticleTemplate:
                 tf.WorldTransform:
                     position = mouse_pos

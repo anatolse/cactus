@@ -145,6 +145,7 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
     for (const auto& name : prog.pub_templates) {
         syms.templates[name] = cactus::exported_template(prog, module_name, name);
     }
+    syms.consts = prog.consts;
     for (const auto& dep : prog.dependency_graph) {
         const auto symbol = cactus::make_symbol_id(cactus::SymbolKind::Rule, module_name, dep.rule_name);
         cactus::ImportedRule rule;

@@ -515,6 +515,101 @@ TEST_CASE("Parser: expression — list literal", "[parser]") {
     CHECK(list->elements.size() == 3);
 }
 
+TEST_CASE("Parser: const value is an expression", "[parser][const]") {
+    auto prog = parse(
+        "const:\n"
+        "    HALF_PI = math.PI * 0.5\n");
+    auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
+    REQUIRE(decl.assignments.size() == 1);
+    CHECK_FALSE(decl.assignments[0].type.has_value());
+    CHECK(std::holds_alternative<BinaryExpr>(decl.assignments[0].value->expr));
+}
+
+TEST_CASE("Parser: typed constant", "[parser][const]") {
+    auto prog = parse(
+        "const:\n"
+        "    WAVES: list[UnitDef] = []\n"
+        "    SPEED: float = 2.0\n");
+    auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
+    REQUIRE(decl.assignments.size() == 2);
+    REQUIRE(decl.assignments[0].type.has_value());
+    CHECK(decl.assignments[0].type->name == "list");
+    REQUIRE(decl.assignments[0].type->param.has_value());
+    CHECK((*decl.assignments[0].type->param)->name == "UnitDef");
+    auto* list = std::get_if<ListExpr>(&decl.assignments[0].value->expr);
+    REQUIRE(list != nullptr);
+    CHECK(list->elements.empty());
+    REQUIRE(decl.assignments[1].type.has_value());
+    CHECK(decl.assignments[1].type->name == "float");
+}
+
+TEST_CASE("Parser: multi-line constant value", "[parser][const]") {
+    auto prog = parse(
+        "const:\n"
+        "    ROBOT = UnitDef(\n"
+        "        speed = 4.0,\n"
+        "        health = 3,\n"
+        "    )\n"
+        "    WAVES = [\n"
+        "        ROBOT,\n"
+        "        UnitDef(speed = 2.5, health = 6),\n"
+        "    ]\n"
+        "    AFTER = 1\n");
+    auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
+    REQUIRE(decl.assignments.size() == 3);
+    auto* call = std::get_if<CallExpr>(&decl.assignments[0].value->expr);
+    REQUIRE(call != nullptr);
+    REQUIRE(call->args.size() == 2);
+    REQUIRE(call->arg_names.size() == 2);
+    CHECK(call->arg_names[0] == "speed");
+    CHECK(call->arg_names[1] == "health");
+    auto* list = std::get_if<ListExpr>(&decl.assignments[1].value->expr);
+    REQUIRE(list != nullptr);
+    CHECK(list->elements.size() == 2);
+    CHECK(decl.assignments[2].name == "AFTER");
+}
+
+TEST_CASE("Parser: named call arguments", "[parser][const]") {
+    auto prog = parse(
+        "func test():\n"
+        "    let s = Squad(lead = other, size = 3,)\n"
+        "    let c = math.clamp(x, 0.0, 1.0)\n");
+    auto& decl = std::get<FuncNode>(prog.declarations[0]);
+    REQUIRE(decl.body.size() == 2);
+    auto* named = std::get_if<LetStmt>(&decl.body[0]->stmt);
+    REQUIRE(named != nullptr);
+    auto* call = std::get_if<CallExpr>(&named->value->expr);
+    REQUIRE(call != nullptr);
+    REQUIRE(call->args.size() == 2);
+    REQUIRE(call->arg_names.size() == 2);
+    CHECK(call->arg_names[0] == "lead");
+    CHECK(call->arg_names[1] == "size");
+    CHECK(call->has_named_args());
+
+    auto* positional_let = std::get_if<LetStmt>(&decl.body[1]->stmt);
+    REQUIRE(positional_let != nullptr);
+    auto* positional = std::get_if<CallExpr>(&positional_let->value->expr);
+    REQUIRE(positional != nullptr);
+    CHECK(positional->args.size() == 3);
+    CHECK_FALSE(positional->has_named_args());
+}
+
+TEST_CASE("Parser: named arguments on a qualified callee span lines", "[parser][const]") {
+    auto prog = parse(
+        "const:\n"
+        "    ROBOT = units.UnitDef(\n"
+        "        speed = 4.0,\n"
+        "        health = 3,\n"
+        "    )\n");
+    auto& decl = std::get<ConstBlockNode>(prog.declarations[0]);
+    REQUIRE(decl.assignments.size() == 1);
+    auto* call = std::get_if<QueryCallExpr>(&decl.assignments[0].value->expr);
+    REQUIRE(call != nullptr);
+    REQUIRE(call->named_args.size() == 2);
+    CHECK(call->named_args[0].name == "speed");
+    CHECK(call->named_args[1].name == "health");
+}
+
 TEST_CASE("Parser: if statement", "[parser]") {
     auto prog = parse(
         "func test():\n"

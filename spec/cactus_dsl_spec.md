@@ -141,9 +141,30 @@ use gameplay.player as player
 const_block     = "const" ":" NEWLINE INDENT
                   { const_assign }
                   DEDENT ;
-const_assign    = IDENTIFIER "=" const_value NEWLINE ;
-const_value     = STRING_LITERAL | INT_LITERAL | FLOAT_LITERAL | HEX_COLOR ;
+const_assign    = IDENTIFIER [ ":" type ] "=" expression NEWLINE ;
 ```
+
+A constant's value is a *const expression*: literals, enum variants, other constants, unary and binary operators, the `vec2`/`vec3`/`color`/`quat` constructors, struct construction (§3.4), list literals, and calls to functions proven pure (user `func`s and pure stdlib functions such as `std.math`). A trait or field read, an entity name, `self`, a world query, `spawn`, or a call whose effects are not known to be empty is a compile error at the offending sub-expression. A string literal may be a whole constant value or a struct field value; string operators are not const expressions. A value may span several lines inside parentheses or brackets.
+
+```cactus
+use std.math as math
+
+const:
+    HALF_PI = math.PI * 0.5
+    STEER = math.radians(40.0)
+    ROBOT = UnitDef(speed = 4.0, health = 3)
+    WAVES: list[UnitDef] = [
+        ROBOT,
+        UnitDef(speed = 2.5, health = 6),
+    ]
+    NONE: list[UnitDef] = []
+```
+
+- **Order.** A constant may read any constant of its own module, in any declaration order; the compiler evaluates constants in dependency order. A reference cycle is a compile error naming every constant in the cycle.
+- **Types.** `NAME: type = expression` declares the constant's type, and the value must match it. Without a type, the constant has its value's type. A value whose type cannot be inferred, such as an empty list, needs a type.
+- **Module scope.** A constant belongs to the module that declares it. That module reads it by its bare name; other modules read it through their import alias (`math.PI`, `units.ROBOT`). Every constant is visible to importers, two modules may use the same name, and a bare name never reaches another module's constant.
+- **Tables.** A constant may hold a struct or a `list[T]`. Handlers read struct fields with `.field` and iterate a list constant with bounded `for`. Constants are immutable; reading one into a local copies it.
+- **Render passes.** A render-pass stage handler (§3.11.1) may read a constant only when its type is `int`, `float`, `bool`, `vec2`, `vec3`, or `color` and its value, including every constant it reads, uses only GLSL-translatable operations. Any other constant is a compile error naming it.
 
 ### 3.4 Structs
 
@@ -153,7 +174,21 @@ struct_decl     = "struct" IDENTIFIER ":" NEWLINE INDENT
                   DEDENT ;
 ```
 
-Structs are value objects used for grouped data.
+Structs are value objects used for grouped data. A struct value is built by naming every field once, in any order:
+
+```cactus
+struct Squad:
+    lead: entity_id
+    size: int
+
+r.squad = Squad(size = 3, lead = other)
+```
+
+```ebnf
+struct_construction = dotted_name "(" [ named_argument { "," named_argument } [ "," ] ] ")" ;
+```
+
+The struct may be local or reached through an import alias (`units.UnitDef(...)`). A missing, unknown, or repeated field, or a positional argument, is a compile error naming the struct and the field, and each value must match its field's type. Construction works anywhere an expression does: handler and `func` bodies, `add`/`set`/`spawn` field blocks, template and entity bodies, trait field defaults, and constants (where every field value must itself be a const expression). Arguments are evaluated in source order. Struct values are copied on assignment, on passing, on storing into a trait field, and on reading from a constant.
 
 ### 3.5 Enums
 
@@ -867,10 +902,14 @@ comparison_expr = additive_expr { ( "<" | ">" | "<=" | ">=" ) additive_expr } ;
 additive_expr   = multiplicative_expr { ( "+" | "-" ) multiplicative_expr } ;
 multiplicative_expr = unary_expr { ( "*" | "/" | "%" ) unary_expr } ;
 unary_expr      = ( "not" | "-" ) unary_expr | postfix_expr ;
-postfix_expr    = primary_expr { "." IDENTIFIER [ "(" [ arg_list ] ")" ] } ;
+postfix_expr    = primary_expr { "." IDENTIFIER | call_args } ;
+call_args       = "(" [ call_argument { "," call_argument } [ "," ] ] ")" ;
+call_argument   = [ IDENTIFIER "=" ] expression ;
 primary_expr    = literal | IDENTIFIER | "self" | "(" expression ")"
                 | match_expr | if_expr | list_literal | spawn_expr ;
 ```
+
+A call's argument list may span lines and end with a comma. Arguments are positional for function calls and named for struct construction (§3.4); using the other form is a compile error.
 
 `spawn` is both an expression and a statement surface:
 
@@ -1630,6 +1669,7 @@ The following older forms are not normative in the current profile:
 - `enable` / `disable` as the documented runtime trait mutation model
 - parenthesized `emit Event(...)` as the main documented event form
 - flat `spawn Foo(...)` override syntax as the main documented spawn form
+- positional struct construction such as `Squad(other, 3)` (now a compile error; name each field)
 - parameterized handler forms such as `on tick(dt: float):`
 - handlerless extern rules or extern filters treated as implicit reads
 - relying on lifecycle names or renderer names to select a runtime hook

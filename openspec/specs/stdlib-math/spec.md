@@ -226,3 +226,18 @@ The `std.input` module SHALL provide concrete backend/runtime implementations fo
 #### Scenario: Input extern coverage is behaviorally verified
 - **WHEN** the backend/runtime test suite runs
 - **THEN** it includes tests covering button state queries and axis composition behavior for the declared input extern functions
+
+### Requirement: std.math provides angle conversion
+`std.math` SHALL provide `radians(degrees: float) float`, which converts an angle in degrees to radians, and `degrees(radians: float) float`, which converts radians to degrees. The names and meaning match the GLSL built-ins. Both SHALL be pure, so they are usable in const expressions, and both SHALL be GLSL-translatable, so they are usable in render-pass stage handlers.
+
+#### Scenario: Degrees to radians
+- **WHEN** `math.radians(180.0)` is evaluated
+- **THEN** it returns approximately `3.14159265`
+
+#### Scenario: Radians to degrees
+- **WHEN** `math.degrees(math.PI * 0.5)` is evaluated
+- **THEN** it returns approximately `90.0`
+
+#### Scenario: Usable in a constant
+- **WHEN** a module declares `const:` with `STEER = math.radians(40.0)`
+- **THEN** compilation succeeds and `STEER` is approximately `0.6981317`

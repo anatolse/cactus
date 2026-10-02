@@ -473,12 +473,29 @@ TEST_CASE("Codegen EnTT: same-named traits in different modules resolve independ
 // overload of emit_expr, not the bare-AST one.
 TEST_CASE("Codegen EnTT: field default calling a module-aliased stdlib func resolves to the runtime namespace",
           "[codegen-entt][defaults][stdlib]") {
+    ResolvedFunc seeded;
+    seeded.name         = "seeded";
+    seeded.module_name  = "std.random";
+    seeded.symbol_id    = make_symbol_id(SymbolKind::Func, "std.random", "seeded");
+    seeded.canonical_id = make_canonical_id(*seeded.symbol_id);
+    seeded.is_pub       = true;
+    seeded.is_extern    = true;
+    seeded.effect_summary = std::unordered_set<std::string>{};
+    seeded.params.push_back(ResolvedParam{.name = "s", .type = {.kind = TypeKind::Int, .name = "int"}});
+    seeded.return_type = TypeInfo{.kind = TypeKind::Int, .name = "int"};
+    ImportedSymbols random;
+    random.module_name = "std.random";
+    random.funcs.emplace(seeded.name, std::move(seeded));
+    ModuleImports imports;
+    imports.add("rand", std::move(random));
+
     ProgramNode ast;
     auto decorated = full_pipeline(
         "use std.random as rand\n"
         "trait TreeRng:\n"
         "    var rng: int = rand.seeded(0)\n",
-        ast);
+        ast,
+        imports);
 
     ResolvedTrait tree_rng;
     tree_rng.name        = "TreeRng";
@@ -3135,7 +3152,7 @@ TEST_CASE("Codegen EnTT: bounded foreach evaluates iterable once", "[codegen-ent
     auto code = CppEnttCodegen::generate(decorated);
     CHECK(code.find("auto foreach_snapshot_") != std::string::npos);
     CHECK(code.find("= Detector_comp.hits;") != std::string::npos);
-    CHECK(code.find("for (const auto& hit : foreach_snapshot_") != std::string::npos);
+    CHECK(code.find("for ([[maybe_unused]] const auto& hit : foreach_snapshot_") != std::string::npos);
     CHECK(code.find("if (registry.valid(hit.victim))") != std::string::npos);
 }
 
@@ -7040,7 +7057,7 @@ TEST_CASE("Codegen EnTT: binary arithmetic mixing a range loop variable with a c
             continue;
         }
         auto code = EnttSystemEmitter::emit_system(*sys, decorated);
-        CHECK(code.find("static_cast<float>(k) * (TAU / static_cast<float>(PARTICLE_COUNT))") != std::string::npos);
+        CHECK(code.find("static_cast<float>(k) * (test__TAU / static_cast<float>(test__PARTICLE_COUNT))") != std::string::npos);
     }
 }
 

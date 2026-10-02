@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <functional>
 #include <limits>
 #include <ranges>
@@ -373,6 +374,30 @@ TypeInfo make_resolved_user_type(TypeKind kind, const SymbolId& symbol, std::str
     return ti;
 }
 
+std::string type_display_name(const TypeInfo& type) {
+    if (type.kind == TypeKind::List && type.element != nullptr) {
+        return "list[" + type_display_name(*type.element) + "]";
+    }
+    if (type.symbol_id.has_value()) {
+        return type.symbol_id->local_name;
+    }
+    return type.name;
+}
+
+// A struct value fits only a place of the same struct; unknown types are not judged.
+bool struct_types_mismatch(const TypeInfo& place, const TypeInfo& value) {
+    if (place.kind == TypeKind::Unknown || value.kind == TypeKind::Unknown) {
+        return false;
+    }
+    if (place.kind != TypeKind::Struct && value.kind != TypeKind::Struct) {
+        return false;
+    }
+    if (place.kind != value.kind) {
+        return true;
+    }
+    return place.symbol_id.has_value() && value.symbol_id.has_value() && *place.symbol_id != *value.symbol_id;
+}
+
 template <typename ResolvedDecl>
 SymbolId resolved_decl_symbol(const ResolvedDecl& decl,
                               SymbolKind kind,
@@ -486,8 +511,11 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 CallExpr copy;
-                copy.callee   = clone_expr(*e.callee);
-                copy.location = e.location;
+                copy.callee             = clone_expr(*e.callee);
+                copy.resolved_callee_id = e.resolved_callee_id;
+                copy.resolved_struct_id = e.resolved_struct_id;
+                copy.arg_names          = e.arg_names;
+                copy.location           = e.location;
                 copy.args.reserve(e.args.size());
                 for (const auto& arg : e.args) {
                     copy.args.push_back(clone_expr(*arg));
@@ -499,7 +527,8 @@ std::unique_ptr<ExprNode> clone_expr(const ExprNode& expr) {
                                 .resolved_enum_member = e.resolved_enum_member,
                                 .location             = e.location,
                                 .resolved_entity_id   = e.resolved_entity_id,
-                                .resolved_named_trait = e.resolved_named_trait};
+                                .resolved_named_trait = e.resolved_named_trait,
+                                .resolved_const_id    = e.resolved_const_id};
                 return std::make_unique<ExprNode>(ExprNode::Variant{std::move(copy)}, expr.location);
             } else if constexpr (std::is_same_v<E, MatchExpr>) {
                 MatchExpr copy;
@@ -1050,6 +1079,8 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     // Phase 2: Resolve types in fields
     resolve_all_types(program);
     resolve_trait_references(program);
+    resolve_declaration_const_refs(program);
+    order_and_type_constants(program);
     collect_template_parameters(program);
 
     // Phase 3: Semantic checks
@@ -1191,6 +1222,7 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                 } else if constexpr (std::is_same_v<T, ConstBlockNode>) {
                     for (auto& a : node.assignments) {
                         declare_module_scope_symbol(SymbolKind::Const, a.name, a.location);
+                        a.resolved_const_id         = make_symbol_id(SymbolKind::Const, current_module_id_, a.name);
                         const_initializers_[a.name] = a.value.get();
                         result_.string_pool.intern(a.name);
                     }
@@ -1479,6 +1511,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
     };
 
     resolve_expr = [&](ExprNode& expr) {
+        lower_struct_query_call(expr);
         if (auto* ident = std::get_if<IdentExpr>(&expr.expr)) {
             if (const auto found = template_scope.find(ident->name); found != template_scope.end()) {
                 ident->template_slot = found->second.first;
@@ -1495,6 +1528,7 @@ void SemanticAnalyzer::resolve_trait_references(ProgramNode& program) {
                     resolve_expr(*e.right);
                 } else if constexpr (std::is_same_v<E, CallExpr>) {
                     e.resolved_callee_id = resolve_callee_symbol(*e.callee);
+                    e.resolved_struct_id = resolve_struct_callee(*e.callee);
                     if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr);
                         ident != nullptr && template_names_.contains(ident->name)) {
                         errors_.error(e.location, "template applications are only valid at creation sites");
@@ -2330,83 +2364,434 @@ void SemanticAnalyzer::build_persistence_metadata(const ProgramNode& program) {
         });
 }
 
-// Validates every trait field's default-value expression: type-compatible
-// with the field, plus a recursive check that it's constant-expression-shaped
-// (literals, allowed stdlib constructor calls, lists thereof) — two
-// independent per-field checks, the second an exhaustive ExprNode dispatch.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// A trait field default must match the field type and be a const expression.
 void SemanticAnalyzer::validate_trait_default_values(ProgramNode& program) {
     for (auto& decl : program.declarations) {
         if (auto* trait = std::get_if<TraitNode>(&decl)) {
-            std::unordered_map<std::string, TypeInfo> empty_locals;
             for (auto& field : trait->fields) {
                 if (!field.default_value.has_value()) {
                     continue;
                 }
-
                 auto expected = resolve_type_ref(field.type);
-                auto actual   = infer_expr_type(**field.default_value, {}, empty_locals, nullptr);
+                auto actual   = infer_expr_type(**field.default_value, {}, {}, nullptr);
                 if (actual.kind != TypeKind::Unknown && expected.kind != TypeKind::Unknown &&
                     actual.kind != expected.kind) {
                     errors_.error(
                         field.location,
                         "default value type '" + actual.name + "' does not match field type '" + expected.name + "'");
                 }
-
-                bool constant_ok                                 = true;
-                std::function<void(const ExprNode&)> check_const = [&](const ExprNode& expr) {
-                    std::visit(
-                        [&](const auto& e) {
-                            using E = std::decay_t<decltype(e)>;
-                            if constexpr (std::is_same_v<E, LiteralExpr>) {
-                            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                                check_const(*e.operand);
-                            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                                check_const(*e.left);
-                                check_const(*e.right);
-                            } else if constexpr (std::is_same_v<E, CallExpr>) {
-                                bool allowed_ctor = false;
-                                if (const auto* ident = std::get_if<IdentExpr>(&e.callee->expr)) {
-                                    allowed_ctor =
-                                        ident->name == "vec2" || ident->name == "vec3" || ident->name == "quat";
-                                }
-                                // Allow qualified stdlib constructor calls (e.g. rand.seeded, rand.uniform).
-                                if (const auto* member = std::get_if<MemberExpr>(&e.callee->expr)) {
-                                    allowed_ctor = member->member == "seeded" || member->member == "uniform" ||
-                                                   member->member == "uniform_int" || member->member == "normal" ||
-                                                   member->member == "identity";
-                                }
-                                if (allowed_ctor) {
-                                    for (const auto& arg : e.args) {
-                                        check_const(*arg);
-                                    }
-                                } else {
-                                    constant_ok = false;
-                                }
-                            } else if constexpr (std::is_same_v<E, ListExpr>) {
-                                for (const auto& el : e.elements) {
-                                    check_const(*el);
-                                }
-                            } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                                // A resolved enum-qualified literal (e.g. `GizmoMode.Select`) is
-                                // constant; resolve_enum_member_expr already validated it names a
-                                // real variant. Any other member access is not.
-                                if (!e.resolved_enum_member.has_value()) {
-                                    constant_ok = false;
-                                }
-                            } else {
-                                constant_ok = false;
-                            }
-                        },
-                        expr.expr);
-                };
-                check_const(**field.default_value);
-                if (!constant_ok) {
-                    errors_.error(field.location, "trait field default value must be a constant expression");
-                }
+                validate_const_expression(
+                    **field.default_value, "trait field default value must be a const expression", true);
+            }
+        } else if (auto* block = std::get_if<ConstBlockNode>(&decl)) {
+            for (const auto& assignment : block->assignments) {
+                validate_const_expression(*assignment.value, "constant '" + assignment.name + "'", true);
             }
         }
     }
+}
+
+// ── Module constants (dsl-const-expressions) ────────────────────────────────
+
+bool SemanticAnalyzer::resolve_const_ident(IdentExpr& ident) const {
+    if (ident.template_slot.has_value() || !const_initializers_.contains(ident.name)) {
+        return false;
+    }
+    ident.resolved_const_id = make_symbol_id(SymbolKind::Const, current_module_id_, ident.name);
+    return true;
+}
+
+bool SemanticAnalyzer::resolve_const_member(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const {
+    const auto chain = member_chain_segments(member);
+    if (!chain.has_value() || shadowed.contains(chain->front()) || const_initializers_.contains(chain->front())) {
+        return false;
+    }
+    const auto resolved = resolve_name(*chain);
+    if (!resolved.has_value() || !resolved->member_segments.empty() || resolved->symbol.kind != SymbolKind::Const) {
+        return false;
+    }
+    member.resolved_const_id = resolved->symbol;
+    return true;
+}
+
+// Declaration-level expressions have no locals, so every name that matches a
+// constant is one. Handler and func bodies resolve through the named-access walk,
+// which knows their lexical scopes.
+void SemanticAnalyzer::resolve_declaration_const_refs(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        if (auto* block = std::get_if<ConstBlockNode>(&decl)) {
+            for (auto& assignment : block->assignments) {
+                resolve_const_refs(*assignment.value);
+            }
+        } else if (auto* trait = std::get_if<TraitNode>(&decl)) {
+            for (auto& field : trait->fields) {
+                if (field.default_value.has_value()) {
+                    resolve_const_refs(**field.default_value);
+                }
+            }
+        } else if (auto* tmpl = std::get_if<TemplateNode>(&decl)) {
+            for (auto& parameter : tmpl->parameters) {
+                if (parameter.default_value.has_value()) {
+                    resolve_const_refs(**parameter.default_value);
+                }
+            }
+            resolve_const_refs(tmpl->traits);
+            resolve_const_refs(tmpl->template_uses);
+            resolve_const_refs(tmpl->children);
+        } else if (auto* entity = std::get_if<EntityNode>(&decl)) {
+            resolve_const_refs(entity->arguments.values);
+            resolve_const_refs(entity->traits);
+            resolve_const_refs(entity->template_uses);
+            resolve_const_refs(entity->children);
+            resolve_const_refs(entity->child_overrides);
+        }
+    }
+}
+
+void SemanticAnalyzer::resolve_const_refs(ExprNode& expr) const {
+    const std::unordered_set<std::string> no_locals;
+    visit_expression(expr, [&](ExprNode& node) {
+        if (auto* ident = std::get_if<IdentExpr>(&node.expr)) {
+            resolve_const_ident(*ident);
+        } else if (auto* member = std::get_if<MemberExpr>(&node.expr)) {
+            resolve_const_member(*member, no_locals);
+        }
+    });
+}
+
+void SemanticAnalyzer::resolve_const_refs(std::vector<FieldAssignment>& fields) const {
+    for (auto& field : fields) {
+        resolve_const_refs(*field.value);
+    }
+}
+
+void SemanticAnalyzer::resolve_const_refs(std::vector<ArchetypeTraitEntry>& traits) const {
+    for (auto& trait : traits) {
+        resolve_const_refs(trait.assignments);
+    }
+}
+
+void SemanticAnalyzer::resolve_const_refs(std::vector<ArchetypeTemplateUseEntry>& uses) const {
+    for (auto& use : uses) {
+        resolve_const_refs(use.arguments.values);
+    }
+}
+
+void SemanticAnalyzer::resolve_const_refs(std::vector<ChildOverrideNode>& overrides) const {
+    for (auto& child : overrides) {
+        resolve_const_refs(child.traits);
+        resolve_const_refs(child.children);
+    }
+}
+
+void SemanticAnalyzer::resolve_const_refs(std::vector<ChildArchetypeNode>& children) const {
+    for (auto& child : children) {
+        resolve_const_refs(child.arguments.values);
+        resolve_const_refs(child.template_uses);
+        resolve_const_refs(child.traits);
+        resolve_const_refs(child.children);
+        resolve_const_refs(child.child_overrides);
+    }
+}
+
+TypeInfo SemanticAnalyzer::find_const_type(const SymbolId& symbol) const {
+    const auto* constant = find_resolved_const(symbol);
+    return constant == nullptr ? make_unknown_type() : constant->type;
+}
+
+const ResolvedConst* SemanticAnalyzer::find_resolved_const(const SymbolId& symbol) const {
+    if (symbol.module == current_module_id_) {
+        const auto found = result_.consts.find(symbol.local_name);
+        return found == result_.consts.end() ? nullptr : &found->second;
+    }
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != symbol.module.name) {
+            continue;
+        }
+        if (const auto found = imported.consts.find(symbol.local_name); found != imported.consts.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
+// A GLSL-portable constant has a scalar, vector, or color type and a value
+// built only from operations the render-pass emitter can translate.
+bool SemanticAnalyzer::const_is_glsl_portable(const ExprNode& value, const TypeInfo& type) const {
+    static const std::unordered_set<TypeKind> kPortableKinds{
+        TypeKind::Int, TypeKind::Float, TypeKind::Bool, TypeKind::Vec2, TypeKind::Vec3, TypeKind::Color};
+    if (!kPortableKinds.contains(type.kind)) {
+        return false;
+    }
+    bool portable = true;
+    visit_expression(value, [&](const ExprNode& node) {
+        std::visit(
+            [&](const auto& e) {
+                using E = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<E, LiteralExpr>) {
+                    portable = portable && e.kind != LiteralExpr::Kind::String;
+                } else if constexpr (std::is_same_v<E, IdentExpr> || std::is_same_v<E, MemberExpr>) {
+                    const auto* constant = e.resolved_const_id.has_value() ? find_resolved_const(*e.resolved_const_id)
+                                                                          : nullptr;
+                    portable = portable && (constant == nullptr || constant->glsl_portable);
+                } else if constexpr (std::is_same_v<E, CallExpr>) {
+                    portable = portable && call_is_glsl_translatable(e);
+                } else if constexpr (!std::is_same_v<E, UnaryExpr> && !std::is_same_v<E, BinaryExpr>) {
+                    portable = false;
+                }
+            },
+            node.expr);
+    });
+    return portable;
+}
+
+bool SemanticAnalyzer::call_is_glsl_translatable(const CallExpr& call) const {
+    const auto* ident = std::get_if<IdentExpr>(&call.callee->expr);
+    if (ident != nullptr && (ident->name == "vec2" || ident->name == "vec3" || ident->name == "color")) {
+        return true;
+    }
+    const auto* func = call.resolved_callee_id.has_value() ? find_resolved_func(*call.resolved_callee_id) : nullptr;
+    return func != nullptr && (!func->is_extern || is_render_pass_portable_glsl_intrinsic(*call.resolved_callee_id));
+}
+
+void SemanticAnalyzer::check_stage_constant(const SymbolId& symbol,
+                                            const SourceLocation& location,
+                                            const char* stage_desc) const {
+    const auto* constant = find_resolved_const(symbol);
+    if (constant == nullptr || constant->glsl_portable) {
+        return;
+    }
+    const auto name = symbol.module == current_module_id_ ? symbol.local_name : make_canonical_id(symbol);
+    errors_.error(location,
+                  std::format("render-pass {}-stage handler cannot read constant '{}': a stage handler may only read "
+                              "int, float, bool, vec2, vec3, or color constants built from GLSL-translatable "
+                              "operations",
+                              stage_desc,
+                              name));
+}
+
+// Names of this module's constants that `assignment`'s value reads, in first-read order.
+std::vector<std::string> SemanticAnalyzer::const_dependencies(const ConstAssignment& assignment) const {
+    std::vector<std::string> names;
+    visit_expression(*assignment.value, [&](const ExprNode& node) {
+        std::optional<SymbolId> symbol;
+        if (const auto* ident = std::get_if<IdentExpr>(&node.expr)) {
+            symbol = ident->resolved_const_id;
+        } else if (const auto* member = std::get_if<MemberExpr>(&node.expr)) {
+            symbol = member->resolved_const_id;
+        }
+        if (symbol.has_value() && symbol->module == current_module_id_ &&
+            !std::ranges::contains(names, symbol->local_name)) {
+            names.push_back(symbol->local_name);
+        }
+    });
+    return names;
+}
+
+// Depth-first order in which every constant follows the constants it reads;
+// a back edge is a cycle, reported with every constant on it.
+std::vector<ConstAssignment*> SemanticAnalyzer::order_constants(ProgramNode& program) {
+    std::vector<ConstAssignment*> declared;
+    std::unordered_map<std::string, ConstAssignment*> by_name;
+    for (auto& decl : program.declarations) {
+        if (auto* block = std::get_if<ConstBlockNode>(&decl)) {
+            for (auto& assignment : block->assignments) {
+                declared.push_back(&assignment);
+                by_name.emplace(assignment.name, &assignment);
+            }
+        }
+    }
+
+    enum class Mark : std::uint8_t { Visiting, Done };
+    std::unordered_map<std::string, Mark> marks;
+    std::vector<std::string> stack;
+    std::vector<ConstAssignment*> order;
+    std::function<void(ConstAssignment&)> visit = [&](ConstAssignment& assignment) {
+        marks[assignment.name] = Mark::Visiting;
+        stack.push_back(assignment.name);
+        for (const auto& name : const_dependencies(assignment)) {
+            const auto mark  = marks.find(name);
+            const auto found = by_name.find(name);
+            if (mark == marks.end() && found != by_name.end()) {
+                visit(*found->second);
+            } else if (mark != marks.end() && mark->second == Mark::Visiting) {
+                std::string cycle = "constant cycle: ";
+                for (auto it = std::ranges::find(stack, name); it != stack.end(); ++it) {
+                    cycle += *it;
+                    cycle += " -> ";
+                }
+                cycle += name;
+                errors_.error(found->second->location, cycle);
+            }
+        }
+        stack.pop_back();
+        marks[assignment.name] = Mark::Done;
+        order.push_back(&assignment);
+    };
+    for (auto* assignment : declared) {
+        if (!marks.contains(assignment->name)) {
+            visit(*assignment);
+        }
+    }
+    return order;
+}
+
+// Types each constant after the constants it reads, checking any declared type.
+void SemanticAnalyzer::order_and_type_constants(ProgramNode& program) {
+    for (auto* assignment : order_constants(program)) {
+        ResolvedConst resolved;
+        resolved.name          = assignment->name;
+        resolved.type          = constant_type(*assignment);
+        resolved.glsl_portable = const_is_glsl_portable(*assignment->value, resolved.type);
+        assign_canonical_identity(resolved, *assignment->resolved_const_id);
+        result_.consts[assignment->name] = std::move(resolved);
+        result_.const_order.push_back(*assignment->resolved_const_id);
+    }
+}
+
+TypeInfo SemanticAnalyzer::constant_type(const ConstAssignment& assignment) {
+    auto type               = infer_expr_type(*assignment.value, {}, {}, nullptr);
+    const bool open_element = type.kind == TypeKind::List &&
+                              (type.element == nullptr || type.element->kind == TypeKind::Unknown);
+    if (!assignment.type.has_value()) {
+        if (open_element) {
+            errors_.error(assignment.location, "constant '" + assignment.name +
+                                                   "' needs a type annotation, for example `" + assignment.name +
+                                                   ": list[T] = []`");
+        }
+        return type;
+    }
+    auto declared = resolve_type_ref(*assignment.type);
+    const bool fits = (open_element && declared.kind == TypeKind::List) || type.kind == TypeKind::Unknown ||
+                      declared.kind == TypeKind::Unknown || same_type(declared, type);
+    if (!fits) {
+        errors_.error(assignment.location, "constant '" + assignment.name + "': value type '" +
+                                               type_display_name(type) + "' does not match the declared type '" +
+                                               type_display_name(declared) + "'");
+    }
+    return declared;
+}
+
+// Accepts exactly the const-expression forms; reports the first offending
+// sub-expression as "<context>: <reason>".
+bool SemanticAnalyzer::validate_const_expression(const ExprNode& expr, const std::string& context, bool whole_value) {
+    return std::visit(
+        [&](const auto& e) -> bool {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, LiteralExpr>) {
+                return e.kind != LiteralExpr::Kind::String || whole_value ||
+                       reject_const(expr.location, context, "string operators are not const expressions");
+            } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                return validate_const_ident(e, expr.location, context);
+            } else if constexpr (std::is_same_v<E, SelfExpr>) {
+                return reject_const(expr.location, context, "a constant cannot use `self`");
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return validate_const_expression(*e.operand, context, false);
+            } else if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return validate_const_expression(*e.left, context, false) &&
+                       validate_const_expression(*e.right, context, false);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                return validate_const_expressions(e.elements, context, false);
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                return validate_const_call(e, expr.location, context);
+            } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                return validate_const_member(e, expr.location, context);
+            } else if constexpr (std::is_same_v<E, SpawnExpr>) {
+                return reject_const(expr.location, context, "a constant cannot spawn an entity");
+            } else if constexpr (std::is_same_v<E, QueryCallExpr>) {
+                return reject_const(expr.location, context, "a constant cannot query the world");
+            } else {
+                return reject_const(expr.location, context, "this expression is not a const expression");
+            }
+        },
+        expr.expr);
+}
+
+bool SemanticAnalyzer::reject_const(const SourceLocation& location,
+                                    const std::string& context,
+                                    const std::string& reason) {
+    errors_.error(location, context + ": " + reason);
+    return false;
+}
+
+bool SemanticAnalyzer::validate_const_expressions(const std::vector<std::unique_ptr<ExprNode>>& values,
+                                                  const std::string& context,
+                                                  bool whole_values) {
+    return std::ranges::all_of(
+        values, [&](const auto& value) { return validate_const_expression(*value, context, whole_values); });
+}
+
+bool SemanticAnalyzer::validate_const_ident(const IdentExpr& ident,
+                                            const SourceLocation& location,
+                                            const std::string& context) {
+    if (ident.resolved_const_id.has_value()) {
+        return true;
+    }
+    if (ident.resolved_entity_id.has_value() || entity_names_.contains(ident.name)) {
+        return reject_const(location, context, "a constant cannot name an entity ('" + ident.name + "')");
+    }
+    return reject_const(location, context, "'" + ident.name + "' is not a constant");
+}
+
+bool SemanticAnalyzer::validate_const_call(const CallExpr& call,
+                                           const SourceLocation& location,
+                                           const std::string& context) {
+    if (call.resolved_struct_id.has_value()) {
+        return validate_const_expressions(call.args, context, true);
+    }
+    if (is_builtin_value_constructor(call)) {
+        return validate_const_expressions(call.args, context, false);
+    }
+    const auto* function = call.resolved_callee_id.has_value() ? find_resolved_func(*call.resolved_callee_id) : nullptr;
+    if (function != nullptr && function->effect_summary.has_value() && function->effect_summary->empty()) {
+        return validate_const_expressions(call.args, context, false);
+    }
+    const auto segments = callee_chain_segments(*call.callee);
+    const auto spelled  = segments.has_value() ? join_segments(*segments, 0, segments->size()) : "call";
+    return reject_const(location, context, "call to '" + spelled + "' is not pure; constants must be pure");
+}
+
+// A member read is constant when it names a constant or enum value, or reads a
+// field of something constant (`ROBOT.speed`, `ORIGIN.x`, `UnitDef(...).health`).
+bool SemanticAnalyzer::validate_const_member(const MemberExpr& member,
+                                             const SourceLocation& location,
+                                             const std::string& context) {
+    if (member.resolved_const_id.has_value() || member.resolved_enum_member.has_value()) {
+        return true;
+    }
+    const auto* owner = std::get_if<IdentExpr>(&member.object->expr);
+    if (owner == nullptr) {
+        const auto* inner = std::get_if<MemberExpr>(&member.object->expr);
+        return (inner != nullptr && inner->resolved_const_id.has_value()) ||
+               validate_const_expression(*member.object, context, false);
+    }
+    if (owner->resolved_const_id.has_value()) {
+        return true;
+    }
+    const auto segments = member_chain_segments(member);
+    const auto spelled  = segments.has_value() ? join_segments(*segments, 0, segments->size()) : member.member;
+    const auto resolved = segments.has_value() ? resolve_name(*segments) : std::nullopt;
+    if (resolved.has_value() && resolved->symbol.kind == SymbolKind::Trait) {
+        return reject_const(location, context, "a constant cannot read a trait field ('" + spelled + "')");
+    }
+    if (member.resolved_entity_id.has_value() || member.resolved_named_trait.has_value()) {
+        return reject_const(location, context, "a constant cannot name an entity ('" + spelled + "')");
+    }
+    return reject_const(location, context, "'" + spelled + "' is not a constant");
+}
+
+TypeInfo SemanticAnalyzer::infer_value_member_type(
+    const MemberExpr& member,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    const auto object = infer_expr_type(*member.object, filter_bindings, local_bindings, handler_event, pair_scope);
+    if (object.kind == TypeKind::Struct && object.symbol_id.has_value()) {
+        const auto* structure = find_resolved_struct(*object.symbol_id);
+        return structure == nullptr ? make_unknown_type() : find_field_type_in(structure->fields, member.member);
+    }
+    return descend_vector_color_members(object, {member.member}, 0);
 }
 
 // ── Phase 3e: Rule Filter Validation (tasks 4.2, 4.4, 4.5, 4.6) ────────────
@@ -3440,7 +3825,15 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
                         visit_expr(*arg);
                     }
                 } else if constexpr (std::is_same_v<E, MemberExpr>) {
-                    visit_expr(*node.object);
+                    if (node.resolved_const_id.has_value()) {
+                        check_stage_constant(*node.resolved_const_id, expr.location, stage_desc);
+                    } else {
+                        visit_expr(*node.object);
+                    }
+                } else if constexpr (std::is_same_v<E, IdentExpr>) {
+                    if (node.resolved_const_id.has_value()) {
+                        check_stage_constant(*node.resolved_const_id, expr.location, stage_desc);
+                    }
                 } else if constexpr (std::is_same_v<E, MatchExpr>) {
                     visit_expr(*node.subject);
                     for (const auto& arm : node.arms) {
@@ -3456,7 +3849,7 @@ void SemanticAnalyzer::validate_render_pass_stage_handler_body(
                         visit_expr(*element);
                     }
                 }
-                // LiteralExpr, IdentExpr, SelfExpr: no sub-expressions to visit.
+                // LiteralExpr, SelfExpr: no sub-expressions to visit.
             },
             expr.expr);
     };
@@ -4037,12 +4430,18 @@ void SemanticAnalyzer::resolve_named_access_expr(ExprNode& expr,
                 if (e.template_slot.has_value() || shadowed.contains(e.name)) {
                     return;
                 }
+                if (resolve_const_ident(e)) {
+                    return;
+                }
                 if (entity_names_.contains(e.name) && context != NamedAccessContext::Elsewhere) {
                     e.resolved_entity_id = make_symbol_id(SymbolKind::Entity, current_module_id_, e.name);
                 } else if (template_names_.contains(e.name) && context == NamedAccessContext::Rule) {
                     errors_.error(e.location, "template '" + e.name + "' is not an entity_id value; spawn it instead");
                 }
             } else if constexpr (std::is_same_v<E, MemberExpr>) {
+                if (resolve_const_member(e, shadowed)) {
+                    return;
+                }
                 if (!resolve_named_access_chain(e, shadowed, context)) {
                     walk(*e.object);
                 }
@@ -4872,6 +5271,11 @@ void SemanticAnalyzer::validate_event_stmts(  // NOLINT(readability-function-cog
             }
 
             auto value_type = infer_expr_type(*assign_stmt->value, filter_bindings, locals, handler_event, pair_scope);
+            if (!target_rejected && assign_stmt->op == "=" && struct_types_mismatch(target_type, value_type)) {
+                errors_.error(assign_stmt->location,
+                              "type mismatch: cannot assign '" + type_display_name(value_type) + "' to '" +
+                                  type_display_name(target_type) + "'");
+            }
 
             // Compound-assignment operator/type validation for vec2/vec3-typed targets,
             // reusing the same closed matrix BinaryExpr inference consults (dsl-vector-
@@ -4996,6 +5400,11 @@ bool SemanticAnalyzer::reject_local_assignment(
     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
     const std::unordered_map<std::string, TypeInfo>& locals) {
     const auto local_it = locals.find(stmt.name);
+    if (local_it == locals.end() && const_initializers_.contains(stmt.name) &&
+        std::ranges::none_of(filter_bindings, [&stmt](const auto& binding) { return binding.first == stmt.name; })) {
+        errors_.error(stmt.location, "constant '" + stmt.name + "' is immutable");
+        return true;
+    }
     if (local_it != locals.end()) {
         if (!local_it->second.is_let) {
             return false;
@@ -6421,6 +6830,107 @@ const ResolvedFunc* SemanticAnalyzer::find_resolved_func(const SymbolId& symbol)
     return nullptr;
 }
 
+const ResolvedStruct* SemanticAnalyzer::find_resolved_struct(const SymbolId& symbol) const {
+    if (symbol.kind != SymbolKind::Struct) {
+        return nullptr;
+    }
+    if (symbol.module == current_module_id_) {
+        const auto found = result_.structs.find(symbol.local_name);
+        return found == result_.structs.end() ? nullptr : &found->second;
+    }
+    for (const auto& [_, imported] : imports_.modules) {
+        if (imported.module_name != symbol.module.name) {
+            continue;
+        }
+        if (const auto found = imported.structs.find(symbol.local_name); found != imported.structs.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::resolve_struct_callee(const ExprNode& callee) const {
+    auto segments = callee_chain_segments(callee);
+    if (!segments.has_value()) {
+        return std::nullopt;
+    }
+    auto resolved = resolve_name(*segments);
+    if (!resolved.has_value() || !resolved->member_segments.empty() || resolved->symbol.kind != SymbolKind::Struct) {
+        return std::nullopt;
+    }
+    return resolved->symbol;
+}
+
+// `alias.Struct(field = ...)` parses as a named-argument query call; once the
+// callee is known to be a struct it becomes an ordinary construction call.
+void SemanticAnalyzer::lower_struct_query_call(ExprNode& expr) const {
+    auto* query = std::get_if<QueryCallExpr>(&expr.expr);
+    if (query == nullptr || !query->filters.empty()) {
+        return;
+    }
+    auto symbol = resolve_struct_callee(*query->callee);
+    if (!symbol.has_value()) {
+        return;
+    }
+    CallExpr call;
+    call.callee             = std::move(query->callee);
+    call.resolved_struct_id = std::move(symbol);
+    call.location           = query->location;
+    for (auto& argument : query->named_args) {
+        call.args.push_back(std::move(argument.value));
+        call.arg_names.push_back(std::move(argument.name));
+    }
+    expr.expr = std::move(call);
+}
+
+TypeInfo SemanticAnalyzer::infer_struct_construction_type(
+    const CallExpr& call,
+    const SourceLocation& location,
+    const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+    const std::unordered_map<std::string, TypeInfo>& local_bindings,
+    const ResolvedStruct* handler_event,
+    const PairScope* pair_scope) const {
+    const auto& symbol    = *call.resolved_struct_id;
+    const auto& name      = symbol.local_name;
+    const auto* structure = find_resolved_struct(symbol);
+    const auto type       = make_resolved_user_type(TypeKind::Struct, symbol, name);
+    if (structure == nullptr) {
+        return type;
+    }
+    std::unordered_set<std::string> given;
+    for (std::size_t index = 0; index < call.args.size(); ++index) {
+        const auto& value      = *call.args[index];
+        const auto& field_name = index < call.arg_names.size() ? call.arg_names[index] : std::string{};
+        const auto actual      = infer_expr_type(value, filter_bindings, local_bindings, handler_event, pair_scope);
+        if (field_name.empty()) {
+            errors_.error(value.location, "struct '" + name + "' fields must be named: write `field = value`");
+            continue;
+        }
+        if (!given.insert(field_name).second) {
+            errors_.error(value.location, std::format("struct '{}' field '{}' is given more than once", name, field_name));
+            continue;
+        }
+        const auto* field = find_field_in(structure->fields, field_name);
+        if (field == nullptr) {
+            errors_.error(value.location, std::format("struct '{}' has no field '{}'", name, field_name));
+            continue;
+        }
+        const bool kinds_differ = actual.kind != TypeKind::Unknown && field->type.kind != TypeKind::Unknown &&
+                                  actual.kind != field->type.kind;
+        if (kinds_differ || struct_types_mismatch(field->type, actual)) {
+            errors_.error(value.location,
+                          std::format("'{}' does not match field '{}' of type '{}' in struct '{}'",
+                                      type_display_name(actual), field_name, type_display_name(field->type), name));
+        }
+    }
+    for (const auto& field : structure->fields) {
+        if (!given.contains(field.name)) {
+            errors_.error(location, "struct '" + name + "' is missing field '" + field.name + "'");
+        }
+    }
+    return type;
+}
+
 const ResolvedStruct* SemanticAnalyzer::find_resolved_event(const std::string& name) const {
     auto it = event_structs_.find(name);
     if (it != event_structs_.end()) {
@@ -6746,6 +7256,9 @@ std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedS
     }
     if (auto fs_it = syms.func_symbols.find(name); fs_it != syms.func_symbols.end()) {
         return fs_it->second.symbol_id.value_or(make_symbol_id(SymbolKind::Func, syms.module_name, name));
+    }
+    if (auto const_it = syms.consts.find(name); const_it != syms.consts.end()) {
+        return resolved_decl_symbol(const_it->second, SymbolKind::Const, syms.module_name, name);
     }
     return std::nullopt;
 }
@@ -7436,6 +7949,9 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     if (matching_filter_field != nullptr) {
         return matching_filter_field->type;
     }
+    if (ident.resolved_const_id.has_value()) {
+        return find_const_type(*ident.resolved_const_id);
+    }
     if (auto asset_it = asset_decl_types_.find(ident.name); asset_it != asset_decl_types_.end()) {
         switch (asset_it->second) {
             case TypeKind::MeshId:
@@ -7466,6 +7982,14 @@ TypeInfo SemanticAnalyzer::infer_ident_expr_type(
     }
     if (ident.name == "break" || ident.name == "continue") {
         errors_.error(location, "`break`/`continue` are not supported");
+    }
+    for (const auto& [qualifier, module] : imports_.modules) {
+        if (module.consts.contains(ident.name) && !const_initializers_.contains(ident.name)) {
+            errors_.error(location, "unknown identifier '" + ident.name +
+                                        "'; an imported constant must be qualified: use '" + qualifier + "." +
+                                        ident.name + "'");
+            break;
+        }
     }
     return make_unknown_type();
 }
@@ -7514,6 +8038,9 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
     if (member.resolved_entity_id.has_value()) {
         return make_entity_id_type();
     }
+    if (member.resolved_const_id.has_value()) {
+        return find_const_type(*member.resolved_const_id);
+    }
     if (const auto named = named_field_path(member); named.has_value()) {
         return named_field_type(*named->first, named->second);
     }
@@ -7556,8 +8083,8 @@ TypeInfo SemanticAnalyzer::infer_member_expr_type(
         }
     }
     const auto* owner = std::get_if<IdentExpr>(&member.object->expr);
-    if (owner == nullptr) {
-        return make_unknown_type();
+    if (owner == nullptr || owner->resolved_const_id.has_value()) {
+        return infer_value_member_type(member, filter_bindings, local_bindings, handler_event, pair_scope);
     }
     if (handler_event != nullptr && owner->name == handler_event->name) {
         const auto* field = find_field_in(handler_event->fields, member.member);
@@ -7830,6 +8357,13 @@ TypeInfo SemanticAnalyzer::infer_expr_type(const ExprNode& expr,
         return make_unknown_type();
     }
     if (const auto* call = std::get_if<CallExpr>(&expr.expr)) {
+        if (call->resolved_struct_id.has_value()) {
+            return infer_struct_construction_type(
+                *call, expr.location, filter_bindings, local_bindings, handler_event, pair_scope);
+        }
+        if (call->has_named_args()) {
+            errors_.error(expr.location, "named arguments are only allowed when constructing a struct");
+        }
         if (const auto* ident = std::get_if<IdentExpr>(&call->callee->expr); ident != nullptr && ident->name == "range") {
             errors_.error(expr.location, "`range()` is only valid as the iterable of a `for` statement");
             return make_unknown_type();
@@ -8431,25 +8965,12 @@ void SemanticAnalyzer::validate_template_argument_purity(const ExprNode& expr) c
         [this](const QueryCallExpr& query) { errors_.error(query.location, "template arguments and defaults must be pure"); });
 }
 
-// Template arguments and defaults may read module constants, which are not
-// otherwise typed by identifier inference. Resolving them repeatedly lets one
-// constant be defined in terms of another regardless of declaration order.
+// Template arguments and defaults may read module constants by bare name.
 std::unordered_map<std::string, TypeInfo> SemanticAnalyzer::template_value_scope(
     const std::unordered_map<std::string, TypeInfo>& locals) const {
     std::unordered_map<std::string, TypeInfo> scope;
-    for (bool resolved_any = true; resolved_any;) {
-        resolved_any = false;
-        for (const auto& [name, initializer] : const_initializers_) {
-            if (initializer == nullptr || scope.contains(name)) {
-                continue;
-            }
-            auto type = infer_expr_type(*initializer, {}, scope, nullptr);
-            if (type.kind == TypeKind::Unknown) {
-                continue;
-            }
-            scope.emplace(name, std::move(type));
-            resolved_any = true;
-        }
+    for (const auto& [name, constant] : result_.consts) {
+        scope.emplace(name, constant.type);
     }
     for (const auto& [name, type] : locals) {
         scope[name] = type;

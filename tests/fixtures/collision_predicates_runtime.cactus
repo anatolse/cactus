@@ -3,6 +3,7 @@ module collision_predicates_runtime
 use std.core
 use std.collision.flat as flat
 use std.collision.volume as vol
+use std.math.quat as quat
 
 # ── stdlib-collision: direct overlapping/touching/separated coverage ───────
 # circles_overlap/spheres_overlap are ordinary pure Cactus functions (not

@@ -1420,3 +1420,28 @@ When the linked program declares at least one `on added` trigger, the graph-driv
 - **WHEN** an `on added Enemy` handler issues `add Armed` during the arrival activation
 - **THEN** `Armed` is committed before any `on load` handler runs
 
+### Requirement: Module constants are emitted module-qualified in dependency order
+The backend SHALL emit every module constant under a C++ name derived from its resolved symbol identity, so constants with the same name in different modules produce distinct C++ names. It SHALL emit constants in dependency order, so each constant's initializer refers only to constants emitted before it. Constant initializers SHALL be lowered through the same resolved expression lowering as handler expressions, including qualified constants, calls, vector constructors, struct construction, and list literals. Each constant SHALL be emitted as an immutable value that is initialized before any handler runs.
+
+#### Scenario: Same-name constants compile
+- **WHEN** modules `other` and `main` each declare `SPEED`
+- **THEN** the generated C++ declares two differently named constants and compiles
+
+#### Scenario: Forward-referencing constants compile
+- **WHEN** a module declares `HALF = LATER * 0.5` before `LATER = 2.0`
+- **THEN** the generated C++ declares `LATER` before `HALF` and compiles
+
+#### Scenario: Call and vector constants compile
+- **WHEN** a module declares `ROOT_TWO = math.sqrt(2.0)` and `ORIGIN = vec2(1.0, 2.0)`
+- **THEN** the generated C++ compiles and a handler reading them sees `1.41421…` and `(1.0, 2.0)`
+
+#### Scenario: Window configuration constants still apply
+- **WHEN** the main module declares `WINDOW_WIDTH = 640 * 2`
+- **THEN** the generated project configuration uses a window width of `1280`
+
+### Requirement: Struct construction lowers to the generated struct type
+The backend SHALL lower a struct construction expression to a value of the C++ struct generated for that struct's resolved symbol, with every field initialized from its named argument. The lowering SHALL be the same in every expression position, including handler bodies, deferred command field blocks, template and entity bodies, trait field defaults, and constants.
+
+#### Scenario: Construction in an add block compiles
+- **WHEN** a handler writes `add Roster to self:` with `squad = Squad(lead = other, size = 3)`
+- **THEN** the generated C++ constructs the generated `Squad` struct type with `lead` and `size` set, and compiles

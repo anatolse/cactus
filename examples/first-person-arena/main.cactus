@@ -46,8 +46,8 @@ const:
     # heading, and the fixed deflection angles it tries (in order) when the
     # direct-to-player heading is blocked.
     ENEMY_STEER_PROBE_DISTANCE = 1.0
-    ENEMY_STEER_ANGLE_SMALL = 0.6981317
-    ENEMY_STEER_ANGLE_LARGE = 1.3962634
+    ENEMY_STEER_ANGLE_SMALL = math.radians(40.0)
+    ENEMY_STEER_ANGLE_LARGE = math.radians(80.0)
     SPAWN_INTERVAL = 10.0
     CHARACTER_HEIGHT = 1.8
     BULLET_SPEED = 20.0
@@ -55,7 +55,7 @@ const:
     BULLET_LIFETIME = 2.0
     FIRE_COOLDOWN = 0.2
     DEATH_DURATION = 1.0
-    HALF_PI = 1.57079633
+    HALF_PI = math.PI * 0.5
     # Clip indices from the GLB's own animation list (models.animation_name),
     # not renumbered by this compiler: robot.glb loads Robot_Dance(0),
     # Robot_Death(1), Robot_Idle(2), ..., Robot_Running(6), ...; the knight's
@@ -835,7 +835,7 @@ rule SpawnRobots:
                 position = transform.position
             Enemy:
                 speed = ROBOT_SPEED
-                visual_yaw_offset = HALF_PI * 2.0
+                visual_yaw_offset = math.PI
             children:
                 EnemyVisual:
                     tv.WorldTransform:

@@ -3,6 +3,7 @@
 #include "common/source_location.hpp"
 #include "common/types.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -179,6 +180,7 @@ struct IdentExpr {
     std::optional<std::size_t> template_slot;
     TypeInfo template_type;
     std::optional<SymbolId> resolved_entity_id;  // set by semantic analysis when the name is a declared entity
+    std::optional<SymbolId> resolved_const_id;   // set by semantic analysis when the name is a module constant
 };
 
 struct SelfExpr {
@@ -201,8 +203,15 @@ struct UnaryExpr {
 struct CallExpr {
     std::unique_ptr<ExprNode> callee;
     std::optional<SymbolId> resolved_callee_id;  // set by semantic analysis for module-scope func calls
+    std::optional<SymbolId> resolved_struct_id;  // set by semantic analysis when the call constructs a struct
     std::vector<std::unique_ptr<ExprNode>> args;
+    // Parallel to `args` when any argument is named (`name = expr`); empty entries are positional.
+    std::vector<std::string> arg_names;
     SourceLocation location;
+
+    [[nodiscard]] bool has_named_args() const {
+        return std::ranges::any_of(arg_names, [](const std::string& name) { return !name.empty(); });
+    }
 };
 
 // Resolved enum-member identity for member chains like `inp.Key.A` whose head
@@ -224,6 +233,8 @@ struct MemberExpr {
     // Set by semantic analysis on the node whose chain ends at the trait of a
     // named field access (`Game.Match` in `Game.Match.over`).
     std::optional<NamedTraitRef> resolved_named_trait;
+    // Set by semantic analysis on a module-qualified constant (`math.PI`).
+    std::optional<SymbolId> resolved_const_id;
 };
 
 struct MatchArm {
@@ -291,6 +302,13 @@ struct VarAssign {
     // `trait_segments` path segments spell the trait.
     std::optional<NamedTraitRef> named_target;
 };
+
+// `vec2(...)`, `vec3(...)`, `color(...)`, or `quat(...)`.
+[[nodiscard]] inline bool is_builtin_value_constructor(const CallExpr& call) {
+    const auto* ident = std::get_if<IdentExpr>(&call.callee->expr);
+    return ident != nullptr &&
+           (ident->name == "vec2" || ident->name == "vec3" || ident->name == "color" || ident->name == "quat");
+}
 
 // For a named field read such as `Game.Match.pos.x`: the ref on its
 // `Game.Match` node and the field path after it (["pos", "x"]).
@@ -663,6 +681,7 @@ struct UseNode {
 struct ConstAssignment {
     std::string name;
     std::optional<SymbolId> resolved_const_id;  // set by semantic analysis; source spelling is preserved
+    std::optional<TypeRef> type;
     std::unique_ptr<ExprNode> value;
     SourceLocation location;
 };

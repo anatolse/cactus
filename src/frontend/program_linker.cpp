@@ -68,6 +68,15 @@ void check_phase_lineage_cycles(const std::vector<PhasePlan>& phases, ErrorRepor
     }
 }
 
+// Constants keep their module identity, so same-named constants of two modules coexist.
+void merge_consts(DecoratedProgram& target, const DecoratedProgram& src) {
+    for (const auto& symbol : src.const_order) {
+        const auto& constant                 = src.consts.at(symbol.local_name);
+        target.consts[constant.canonical_id] = constant;
+        target.const_order.push_back(symbol);
+    }
+}
+
 }  // namespace
 
 ProgramLinker::ProgramLinker(ErrorReporter& errors)
@@ -180,6 +189,8 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
                                          src.persistence.archetypes.end());
     sort_archetype_descriptors(target.persistence.archetypes);
     target.persistence.attaches_persistent_trait |= src.persistence.attaches_persistent_trait;
+
+    merge_consts(target, src);
 
     // ── 5.4 + 5.2: Merge dependency graph (append) ──────────────────────────
     for (const auto& dep : src.dependency_graph) {

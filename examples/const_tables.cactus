@@ -1,0 +1,136 @@
+module const_tables
+
+# Constants are const expressions: arithmetic, other constants in any order,
+# pure calls, vectors, struct values, and lists of structs used as data tables.
+
+use std.core
+use std.math as math
+use const_tables_units as units
+
+struct UnitDef:
+    speed: float
+    health: int
+    run_clip: int
+
+func twice(v: float) float:
+    return v * 2.0
+
+const:
+    HALF = LATER * 0.5
+    LATER = 2.0
+    TWO_PI = math.PI * 2.0
+    ROOT_TWO = math.sqrt(2.0)
+    STEER = math.radians(180.0)
+    SIX = twice(3.0)
+    ORIGIN = vec2(1.0, 2.0)
+    MOVE_SPEED = 6.0
+    SPEED = 5.0
+    WINDOW_WIDTH = 640 * 2
+    ROBOT = UnitDef(speed = 4.0, health = 3, run_clip = 6)
+    WAVES: list[UnitDef] = [
+        ROBOT,
+        UnitDef(
+            speed = 2.5,
+            health = 6,
+            run_clip = 4,
+        ),
+    ]
+    NONE: list[UnitDef] = []
+
+trait Mover:
+    var speed: float = MOVE_SPEED * 0.5
+
+trait Readings:
+    var half: float = 0.0
+    var two_pi: float = 0.0
+    var root_two: float = 0.0
+    var steer: float = 0.0
+    var six: float = 0.0
+    var origin_y: float = 0.0
+    var robot_speed: float = 0.0
+    var wave_count: int = 0
+    var wave_health: int = 0
+    var first_clip: int = 0
+    var none_count: int = 0
+    var copy_speed: float = 0.0
+    var robot_after_copy: float = 0.0
+    var built_health: int = 0
+    var local_speed: float = 0.0
+    var imported_speed: float = 0.0
+    var rifle_range: float = 0.0
+
+trait Roster:
+    var unit: UnitDef = UnitDef(speed = 0.5, health = 1, run_clip = 0)
+    var tag: int = 0
+
+trait Blank
+
+template Squad:
+    Roster
+
+template Empty:
+    Blank
+
+entity Probe:
+    Readings
+    Mover
+
+entity Default:
+    Roster:
+        tag = 9
+
+rule Setup:
+    on load:
+        let added = spawn Empty()
+        add Roster to added:
+            unit = UnitDef(speed = 1.0, health = 10, run_clip = 1)
+            tag = 1
+        let patched = spawn Squad()
+        set Roster on patched:
+            unit = UnitDef(run_clip = 2, health = 20, speed = 2.0)
+            tag = 2
+        spawn Squad:
+            Roster:
+                unit = UnitDef(speed = 3.0, health = 30, run_clip = 3)
+                tag = 3
+
+rule Measure:
+    filter:
+        Readings as r
+
+    on tick:
+        r.half = HALF
+        r.two_pi = TWO_PI
+        r.root_two = ROOT_TWO
+        r.steer = STEER
+        r.six = SIX
+        r.origin_y = ORIGIN.y
+        r.robot_speed = ROBOT.speed
+
+        var count = 0
+        var health = 0
+        var first = 0
+        for unit in WAVES:
+            if count == 0:
+                first = unit.run_clip
+            count += 1
+            health += unit.health
+        r.wave_count = count
+        r.wave_health = health
+        r.first_clip = first
+
+        var none = 0
+        for unit in NONE:
+            none += 1
+        r.none_count = none
+
+        var copy = ROBOT
+        copy.speed = 1.0
+        r.copy_speed = copy.speed
+        r.robot_after_copy = ROBOT.speed
+
+        r.built_health = UnitDef(speed = 0.5, health = 7, run_clip = 1).health
+
+        r.local_speed = SPEED
+        r.imported_speed = units.SPEED
+        r.rifle_range = units.RIFLE.range

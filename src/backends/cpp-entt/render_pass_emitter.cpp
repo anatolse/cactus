@@ -160,29 +160,16 @@ std::string hex_color_literal_to_glsl(const std::string& raw_hex) {
     return "vec4(" + channel(0) + ", " + channel(2) + ", " + channel(4) + ", " + channel(6) + ")";
 }
 
-const ConstBlockNode* find_const_block_with(const ProgramNode& ast, const std::string& name) {
+const ExprNode* find_const_initializer(const ProgramNode& ast, const SymbolId& symbol) {
     for (const auto& decl : ast.declarations) {
         const auto* block = std::get_if<ConstBlockNode>(&decl);
         if (block == nullptr) {
             continue;
         }
         for (const auto& assignment : block->assignments) {
-            if (assignment.name == name) {
-                return block;
+            if (assignment.resolved_const_id == symbol) {
+                return assignment.value.get();
             }
-        }
-    }
-    return nullptr;
-}
-
-const ExprNode* find_const_initializer(const ProgramNode& ast, const std::string& name) {
-    const auto* block = find_const_block_with(ast, name);
-    if (block == nullptr) {
-        return nullptr;
-    }
-    for (const auto& assignment : block->assignments) {
-        if (assignment.name == name) {
-            return assignment.value.get();
         }
     }
     return nullptr;
@@ -305,8 +292,13 @@ TranslatedExpr translate_filter_trait_access(const SymbolId& trait_symbol,
 }
 
 TranslatedExpr translate_member(const MemberExpr& member, GlslCtx& ctx) {
+    if (member.resolved_const_id.has_value()) {
+        if (const auto* initializer = find_const_initializer(*ctx.ast, *member.resolved_const_id)) {
+            return translate_expr(*initializer, ctx);
+        }
+    }
     const auto* owner = std::get_if<IdentExpr>(&member.object->expr);
-    if (owner == nullptr) {
+    if (owner == nullptr || owner->resolved_const_id.has_value()) {
         // Component access on a nested expression (e.g. a color channel of a
         // computed value): translate the object, then append the accessor.
         const auto object = translate_expr(*member.object, ctx);
@@ -360,7 +352,7 @@ TranslatedExpr translate_call(const CallExpr& call, GlslCtx& ctx) {
     }
     const auto& callee = *call.resolved_callee_id;
     if (is_render_pass_portable_glsl_intrinsic(callee)) {
-        // std.math.sqrt/clamp share both name and signature with GLSL's own
+        // std.math.sqrt/clamp/radians/degrees share both name and signature with GLSL's own
         // built-ins — the registration is "portable to GLSL," not "renamed."
         return {.text = callee.local_name + "(" + translate_call_args(call.args, ctx) + ")", .type = GlslType::Float};
     }
@@ -395,8 +387,10 @@ TranslatedExpr translate_ident(const IdentExpr& ident, GlslCtx& ctx) {
     if (const auto local_it = ctx.locals.find(ident.name); local_it != ctx.locals.end()) {
         return {.text = local_reference(ident.name, ctx), .type = local_it->second};
     }
-    if (const auto* initializer = find_const_initializer(*ctx.ast, ident.name)) {
-        return translate_expr(*initializer, ctx);
+    if (ident.resolved_const_id.has_value()) {
+        if (const auto* initializer = find_const_initializer(*ctx.ast, *ident.resolved_const_id)) {
+            return translate_expr(*initializer, ctx);
+        }
     }
     throw std::runtime_error("render-pass GLSL codegen: unresolved identifier '" + ident.name + "'");
 }

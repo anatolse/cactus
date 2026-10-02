@@ -585,11 +585,23 @@ The semantic analyzer SHALL validate `remove` statements as follows: the trait n
 - **THEN** the semantic analyzer SHALL report: "undeclared trait 'Phantom'"
 
 ### Requirement: Trait field default value validation
-The semantic analyzer SHALL validate field default value expressions in trait declarations. The default expression MUST type-check against the field's declared type. Default expressions MUST be constant-foldable.
+The semantic analyzer SHALL validate field default value expressions in trait declarations. The default expression MUST type-check against the field's declared type. The default expression MUST be a const expression, as defined by `dsl-const-expressions`; it MAY read module constants and construct struct values.
 
 #### Scenario: Default value type mismatch
 - **WHEN** `var count: int = 3.14` appears in a trait
 - **THEN** the semantic analyzer SHALL report a type error: "default value type 'float' does not match field type 'int'"
+
+#### Scenario: Default reads a constant
+- **WHEN** a module declares `const:` with `MOVE_SPEED = 6.0` and a trait field `var speed: float = MOVE_SPEED * 0.5`
+- **THEN** the analyzer accepts the default, and a new component's `speed` is `3.0`
+
+#### Scenario: Default constructs a struct
+- **WHEN** a trait field is declared `var stats: UnitDef = UnitDef(speed = 4.0, health = 3, run_clip = 6)`
+- **THEN** the analyzer accepts the default
+
+#### Scenario: Default with a trait read is rejected
+- **WHEN** a trait field default reads another trait's field
+- **THEN** the analyzer reports that a default value must be a const expression
 
 ### Requirement: Asset declaration registration
 The semantic analyzer SHALL register `asset` declarations in the module symbol table, mapping the declared identifier name to its corresponding opaque ID TypeKind.

@@ -383,6 +383,10 @@ ConstBlockNode Parser::parse_const_block() {
         auto error_count_before = errors_.error_count();
         auto assign_loc         = peek().location;
         auto name               = consume(TokenType::IDENTIFIER, "expected constant name").value;
+        std::optional<TypeRef> type;
+        if (match(TokenType::COLON)) {
+            type = parse_type_ref();
+        }
         consume(TokenType::ASSIGN, "expected '='");
         auto value = parse_expression();
         expect_newline();
@@ -392,6 +396,7 @@ ConstBlockNode Parser::parse_const_block() {
         }
         ConstAssignment assign;
         assign.name     = name;
+        assign.type     = std::move(type);
         assign.value    = std::move(value);
         assign.location = assign_loc;
         node.assignments.push_back(std::move(assign));
@@ -996,6 +1001,38 @@ TemplateArguments Parser::parse_template_arguments() {
     }
     consume(TokenType::RPAREN, "expected ')' after template arguments");
     return arguments;
+}
+
+bool Parser::at_named_argument(std::size_t index) const {
+    while (index < tokens_.size() &&
+           (tokens_[index].type == TokenType::NEWLINE || tokens_[index].type == TokenType::INDENT ||
+            tokens_[index].type == TokenType::DEDENT)) {
+        ++index;
+    }
+    return index + 1 < tokens_.size() && tokens_[index].type == TokenType::IDENTIFIER &&
+           tokens_[index + 1].type == TokenType::ASSIGN;
+}
+
+void Parser::parse_call_arguments(CallExpr& call) {
+    skip_template_list_spacing();
+    while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
+        std::string name;
+        if (at_named_argument(current_)) {
+            name = advance().value;
+            advance();
+        }
+        call.args.push_back(parse_expression());
+        call.arg_names.push_back(std::move(name));
+        skip_template_list_spacing();
+        if (!match(TokenType::COMMA)) {
+            break;
+        }
+        skip_template_list_spacing();
+    }
+    consume(TokenType::RPAREN, "expected ')'");
+    if (!call.has_named_args()) {
+        call.arg_names.clear();
+    }
 }
 
 std::vector<FieldNode> Parser::parse_template_parameters() {
@@ -2667,11 +2704,10 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                 expr             = std::make_unique<ExprNode>(ExprNode::Variant{std::move(qcall)}, loc);
             }
             // Check for named-arg query call: .member(name = expr, ...) — no filter bracket
-            else if (check(TokenType::LPAREN) && current_ + 1 < tokens_.size() &&
-                     tokens_[current_ + 1].type == TokenType::IDENTIFIER && current_ + 2 < tokens_.size() &&
-                     tokens_[current_ + 2].type == TokenType::ASSIGN) {
+            else if (check(TokenType::LPAREN) && at_named_argument(current_ + 1)) {
                 advance();  // consume '('
                 std::vector<FieldAssignment> named_args;
+                skip_template_list_spacing();
                 while (!check(TokenType::RPAREN) && !check(TokenType::EOF_TOKEN)) {
                     auto arg_loc  = peek().location;
                     auto arg_name = parse_named_arg_name();
@@ -2679,8 +2715,10 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
                     auto arg_value = parse_expression();
                     named_args.push_back(
                         FieldAssignment{.name = arg_name, .value = std::move(arg_value), .location = arg_loc});
+                    skip_template_list_spacing();
                     if (!check(TokenType::RPAREN)) {
                         consume(TokenType::COMMA, "expected ',' or ')'");
+                        skip_template_list_spacing();
                     }
                 }
                 consume(TokenType::RPAREN, "expected ')'");
@@ -2697,21 +2735,13 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
             // Check for method call: .member(args)
             else if (check(TokenType::LPAREN)) {
                 advance();
-                std::vector<std::unique_ptr<ExprNode>> args;
-                if (!check(TokenType::RPAREN)) {
-                    args.push_back(parse_expression());
-                    while (match(TokenType::COMMA)) {
-                        args.push_back(parse_expression());
-                    }
-                }
-                consume(TokenType::RPAREN, "expected ')'");
                 CallExpr call;
+                parse_call_arguments(call);
                 MemberExpr mem;
                 mem.object    = std::move(expr);
                 mem.member    = member;
                 mem.location  = loc;
                 call.callee   = std::make_unique<ExprNode>(ExprNode::Variant{std::move(mem)}, loc);
-                call.args     = std::move(args);
                 call.location = loc;
                 expr          = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
             } else {
@@ -2724,17 +2754,9 @@ std::unique_ptr<ExprNode> Parser::parse_postfix_expr() {
         } else if (check(TokenType::LPAREN)) {
             auto loc = peek().location;
             advance();
-            std::vector<std::unique_ptr<ExprNode>> args;
-            if (!check(TokenType::RPAREN)) {
-                args.push_back(parse_expression());
-                while (match(TokenType::COMMA)) {
-                    args.push_back(parse_expression());
-                }
-            }
-            consume(TokenType::RPAREN, "expected ')'");
             CallExpr call;
+            parse_call_arguments(call);
             call.callee   = std::move(expr);
-            call.args     = std::move(args);
             call.location = loc;
             expr          = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, loc);
         } else {
@@ -2842,11 +2864,14 @@ std::unique_ptr<ExprNode> Parser::parse_primary_expr() {
         advance();
         ListExpr list;
         list.location = loc;
-        if (!check(TokenType::RBRACKET)) {
+        skip_template_list_spacing();
+        while (!check(TokenType::RBRACKET) && !check(TokenType::EOF_TOKEN)) {
             list.elements.push_back(parse_expression());
-            while (match(TokenType::COMMA)) {
-                list.elements.push_back(parse_expression());
+            skip_template_list_spacing();
+            if (!match(TokenType::COMMA)) {
+                break;
             }
+            skip_template_list_spacing();
         }
         consume(TokenType::RBRACKET, "expected ']'");
         return std::make_unique<ExprNode>(ExprNode::Variant{std::move(list)}, loc);

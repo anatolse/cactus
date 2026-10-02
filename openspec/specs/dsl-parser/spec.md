@@ -512,11 +512,23 @@ extern_func_decl = [ "pub" ] "extern" "func" IDENTIFIER
 - **THEN** both are parsed as separate FuncNode declarations with no body-collision error
 
 ### Requirement: Const block parsing
-The parser SHALL parse `const:` blocks containing name-value assignments where values are string literals, number literals, or hex color literals.
+The parser SHALL parse `const:` blocks containing assignments of the form `NAME = expression` or `NAME: type = expression`. The value SHALL be parsed as a general expression; which expressions are valid constants is decided by semantic analysis. A value MAY span several lines inside parentheses or brackets.
 
 #### Scenario: Const block with strings
 - **WHEN** the source contains `const:` with `SHOP_TITLE = "Cactus Shop"` and `MAX_ITEMS = 50`
 - **THEN** the parser produces a ConstBlockNode with two ConstAssignment entries
+
+#### Scenario: Const value is an expression
+- **WHEN** the source contains `const:` with `HALF_PI = math.PI * 0.5`
+- **THEN** the parser produces a ConstAssignment whose value is a binary expression
+
+#### Scenario: Typed constant
+- **WHEN** the source contains `const:` with `WAVES: list[UnitDef] = []`
+- **THEN** the parser produces a ConstAssignment with the declared type `list[UnitDef]` and an empty list value
+
+#### Scenario: Multi-line constant value
+- **WHEN** a constant's value is `UnitDef(` followed by one `field = value,` per line and a closing `)`
+- **THEN** the parser produces one ConstAssignment whose value is a single call expression
 
 ### Requirement: Match expression parsing
 The parser SHALL parse `match expr:` blocks with pattern arms.
@@ -933,3 +945,13 @@ The parser SHALL parse expressions using precedence climbing, supporting binary 
 - **WHEN** the source contains a `match` expression with arms `Color.Red => 0` and `_ => 1`
 - **THEN** the parser produces a MatchExpr with two arms
 
+### Requirement: Named call arguments
+The parser SHALL accept named arguments, `IDENTIFIER = expression`, in a call's argument list, as well as positional arguments. A trailing comma and line breaks inside the parentheses SHALL be allowed. Whether a call accepts named or positional arguments is decided by semantic analysis.
+
+#### Scenario: Struct construction with named arguments
+- **WHEN** the source contains `Squad(lead = other, size = 3)`
+- **THEN** the parser produces a call expression with two named arguments, `lead` and `size`, in source order
+
+#### Scenario: Positional arguments still parse
+- **WHEN** the source contains `math.clamp(x, 0.0, 1.0)`
+- **THEN** the parser produces a call expression with three positional arguments

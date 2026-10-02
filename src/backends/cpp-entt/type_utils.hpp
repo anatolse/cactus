@@ -3,6 +3,7 @@
 #include "frontend/ast.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -79,6 +80,16 @@ public:
     static bool                  has_trait(const DecoratedProgram& program, const std::string& name);
     static const ResolvedEnum*   find_enum(const DecoratedProgram& program, const std::string& simple_name);
     static const ResolvedStruct* find_struct(const DecoratedProgram& program, const std::string& simple_name);
+    static const ResolvedStruct* find_struct(const DecoratedProgram& program, const SymbolId& symbol);
+    static const ResolvedFunc*   find_func(const DecoratedProgram& program, const SymbolId& symbol);
+    static const ResolvedConst*  find_const(const DecoratedProgram& program, const SymbolId& symbol);
+    // Whether evaluating `expr` may have effects: a call not proven pure, a query, or a spawn.
+    static bool has_effects(const ExprNode& expr, const DecoratedProgram& program);
+    // `Struct{.field = ...}` in the struct's field order; arguments written in another
+    // order are evaluated into temporaries first when one of them has effects.
+    static std::string emit_struct_construction(const CallExpr& call,
+                                                const DecoratedProgram& program,
+                                                const std::function<std::string(const ExprNode&)>& emit_argument);
 
     // Editor/rig dimensionality (D2): derived from the root module's resolved
     // WorldTransform references, never from merged-map presence — std.editor

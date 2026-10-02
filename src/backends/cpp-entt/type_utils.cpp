@@ -247,6 +247,16 @@ std::string EnttCodegenUtils::emit_enum(const ResolvedEnum& e) {
     return out.str();
 }
 
+static std::string cpp_operator(const std::string& op) {
+    if (op == "and") {
+        return "&&";
+    }
+    if (op == "or") {
+        return "||";
+    }
+    return op == "not" ? "!" : op;
+}
+
 // Exhaustive per-ExprNode-kind C++ text emission; self-recursive by
 // construction (an expr tree emits its own subexpressions).
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
@@ -283,24 +293,17 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 if (e.resolved_entity_id.has_value()) {
                     return named_slot_name(*e.resolved_entity_id);
                 }
+                if (e.resolved_const_id.has_value()) {
+                    return symbol_cpp_name(*e.resolved_const_id);
+                }
                 if (is_input_action_name(ast, e.name)) {
                     return input_action_constant_name(e.name);
                 }
                 return e.name;
             } else if constexpr (std::is_same_v<E, BinaryExpr>) {
-                std::string op = e.op;
-                if (op == "and") {
-                    op = "&&";
-                } else if (op == "or") {
-                    op = "||";
-                }
-                return "(" + emit_expr(*e.left, ast) + " " + op + " " + emit_expr(*e.right, ast) + ")";
+                return "(" + emit_expr(*e.left, ast) + " " + cpp_operator(e.op) + " " + emit_expr(*e.right, ast) + ")";
             } else if constexpr (std::is_same_v<E, UnaryExpr>) {
-                std::string op = e.op;
-                if (op == "not") {
-                    op = "!";
-                }
-                return op + emit_expr(*e.operand, ast);
+                return cpp_operator(e.op) + emit_expr(*e.operand, ast);
             } else if constexpr (std::is_same_v<E, CallExpr>) {
                 // color(...) constructor (dsl-vector-expressions "Color
                 // constructor"): route through the shared runtime
@@ -322,7 +325,10 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const ProgramNode*
                 if (e.resolved_entity_id.has_value()) {
                     return named_slot_name(*e.resolved_entity_id);
                 }
-                if (auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
+                if (e.resolved_const_id.has_value()) {
+                    return symbol_cpp_name(*e.resolved_const_id);
+                }
+                if (auto* ident = std::get_if<IdentExpr>(&e.object->expr); ident != nullptr && !ident->resolved_const_id) {
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
                         return ident->name + "::" + e.member;
                     }
@@ -369,7 +375,17 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
         // NOLINTNEXTLINE(readability-function-cognitive-complexity) -- per-ExprNode-kind emission
         [&](auto& e) -> std::string {
             using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, CallExpr>) {
+            const auto emit = [&](const ExprNode& child) { return EnttCodegenUtils::emit_expr(child, program); };
+            if constexpr (std::is_same_v<E, BinaryExpr>) {
+                return "(" + emit(*e.left) + " " + cpp_operator(e.op) + " " + emit(*e.right) + ")";
+            } else if constexpr (std::is_same_v<E, UnaryExpr>) {
+                return cpp_operator(e.op) + emit(*e.operand);
+            } else if constexpr (std::is_same_v<E, ListExpr>) {
+                return "{" + join_emitted_args(e.elements, program) + "}";
+            } else if constexpr (std::is_same_v<E, CallExpr>) {
+                if (e.resolved_struct_id.has_value()) {
+                    return emit_struct_construction(e, program, emit);
+                }
                 // color(...) constructor: see the ProgramNode overload above
                 // for why this routes through color_from_components instead
                 // of a raw `color(...)` call.
@@ -401,6 +417,10 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                         return prefix + "::" + e.resolved_callee_id->local_name + "(" +
                                EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
                     }
+                    if (const auto* func = find_func(program, *e.resolved_callee_id); func != nullptr && !func->is_extern) {
+                        return symbol_cpp_name(*e.resolved_callee_id) + "(" +
+                               EnttCodegenUtils::join_emitted_args(e.args, program) + ")";
+                    }
                 }
                 // Fallback: scan UseNode aliases when resolved_callee_id is not set
                 if (program.ast != nullptr) {
@@ -429,6 +449,9 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                 if (auto named = named_member_cpp(e, program)) {
                     return *std::move(named);
                 }
+                if (e.resolved_const_id.has_value()) {
+                    return symbol_cpp_name(*e.resolved_const_id);
+                }
                 // Three-level: alias.EnumType.Variant → canonical_EnumType::Variant
                 if (const auto* inner_member = std::get_if<MemberExpr>(&e.object->expr)) {
                     if (EnttCodegenUtils::find_enum(program, inner_member->member) != nullptr) {
@@ -436,7 +459,8 @@ std::string EnttCodegenUtils::emit_expr(const ExprNode& expr, const DecoratedPro
                     }
                 }
                 // Two-level: EnumType.Variant → canonical_EnumType::Variant
-                if (const auto* ident = std::get_if<IdentExpr>(&e.object->expr)) {
+                if (const auto* ident = std::get_if<IdentExpr>(&e.object->expr);
+                    ident != nullptr && !ident->resolved_const_id.has_value()) {
                     if (!ident->name.empty() && std::isupper(static_cast<unsigned char>(ident->name[0])) != 0) {
                         return EnttCodegenUtils::enum_cpp_name(ident->name, program) + "::" + e.member;
                     }
@@ -635,6 +659,97 @@ const ResolvedStruct* EnttCodegenUtils::find_struct(const DecoratedProgram& prog
         }
     }
     return nullptr;
+}
+
+const ResolvedStruct* EnttCodegenUtils::find_struct(const DecoratedProgram& program, const SymbolId& symbol) {
+    if (const auto found = program.structs.find(make_canonical_id(symbol)); found != program.structs.end()) {
+        return &found->second;
+    }
+    for (const auto& [_, structure] : program.structs) {
+        if (structure.symbol_id == symbol ||
+            (!structure.symbol_id.has_value() && structure.name == symbol.local_name)) {
+            return &structure;
+        }
+    }
+    return nullptr;
+}
+
+const ResolvedFunc* EnttCodegenUtils::find_func(const DecoratedProgram& program, const SymbolId& symbol) {
+    const auto canonical = make_canonical_id(symbol);
+    if (const auto found = program.funcs.find(canonical); found != program.funcs.end()) {
+        return &found->second;
+    }
+    for (const auto& [_, func] : program.funcs) {
+        if ((func.symbol_id.has_value() && *func.symbol_id == symbol) || func.canonical_id == canonical) {
+            return &func;
+        }
+    }
+    return nullptr;
+}
+
+const ResolvedConst* EnttCodegenUtils::find_const(const DecoratedProgram& program, const SymbolId& symbol) {
+    for (const auto& [_, constant] : program.consts) {
+        if (constant.symbol_id == symbol) {
+            return &constant;
+        }
+    }
+    return nullptr;
+}
+
+bool EnttCodegenUtils::has_effects(const ExprNode& expr, const DecoratedProgram& program) {
+    bool effects = false;
+    visit_expression(expr, [&](const ExprNode& node) {
+        if (std::holds_alternative<QueryCallExpr>(node.expr) || std::holds_alternative<SpawnExpr>(node.expr)) {
+            effects = true;
+            return;
+        }
+        const auto* call = std::get_if<CallExpr>(&node.expr);
+        if (call == nullptr || call->resolved_struct_id.has_value()) {
+            return;
+        }
+        if (is_builtin_value_constructor(*call)) {
+            return;
+        }
+        const auto* func = call->resolved_callee_id.has_value() ? find_func(program, *call->resolved_callee_id) : nullptr;
+        effects = effects || func == nullptr || !func->effect_summary.has_value() || !func->effect_summary->empty();
+    });
+    return effects;
+}
+
+std::string EnttCodegenUtils::emit_struct_construction(
+    const CallExpr& call,
+    const DecoratedProgram& program,
+    const std::function<std::string(const ExprNode&)>& emit_argument) {
+    const auto& symbol    = *call.resolved_struct_id;
+    const auto* structure = find_struct(program, symbol);
+    if (structure == nullptr) {
+        throw std::runtime_error("cpp-entt backend: missing struct '" + make_canonical_id(symbol) + "'");
+    }
+    std::vector<std::size_t> argument_of_field;
+    for (const auto& field : structure->fields) {
+        const auto named = std::ranges::find(call.arg_names, field.name);
+        argument_of_field.push_back(static_cast<std::size_t>(named - call.arg_names.begin()));
+    }
+    const bool source_order = std::ranges::is_sorted(argument_of_field);
+    const bool temporaries  = !source_order && std::ranges::any_of(call.args, [&](const auto& argument) {
+        return has_effects(*argument, program);
+    });
+
+    std::string prefix;
+    std::string initializer = struct_cpp_name(symbol) + "{";
+    for (std::size_t index = 0; index < structure->fields.size(); ++index) {
+        const auto argument = argument_of_field[index];
+        initializer += (index > 0 ? ", ." : ".") + structure->fields[index].name + " = ";
+        initializer += temporaries ? "cactus_gen_field_" + std::to_string(argument) : emit_argument(*call.args[argument]);
+    }
+    initializer += "}";
+    if (!temporaries) {
+        return initializer;
+    }
+    for (std::size_t index = 0; index < call.args.size(); ++index) {
+        prefix += "auto cactus_gen_field_" + std::to_string(index) + " = " + emit_argument(*call.args[index]) + "; ";
+    }
+    return "[&] { " + prefix + "return " + initializer + "; }()";
 }
 
 // ── WorldTransform usage scan (D2) ──────────────────────────────────────────

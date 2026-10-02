@@ -89,6 +89,8 @@ TEST_CASE("Runtime stdlib: scalar and vector math helpers behave correctly", "[r
     CHECK(stdlib::math::ceil(3.2F) == 4);
     CHECK(stdlib::math::round(3.6F) == 4);
     CHECK(stdlib::math::pow(2.0F, 3.0F) == Catch::Approx(8.0F));
+    CHECK(stdlib::math::radians(180.0F) == Catch::Approx(3.14159265F));
+    CHECK(stdlib::math::degrees(std::numbers::pi_v<float> * 0.5F) == Catch::Approx(90.0F));
 
     CHECK(stdlib::math::vec2::length(Vector2{3.0F, 4.0F}) == Catch::Approx(5.0F));
     const auto norm2 = stdlib::math::vec2::normalize(Vector2{.x = 3.0F, .y = 4.0F});
@@ -169,6 +171,15 @@ TEST_CASE("Runtime stdlib: global-namespace vec2/vec3 component constructors",
     CHECK(v3.x == Catch::Approx(1.0F));
     CHECK(v3.y == Catch::Approx(2.0F));
     CHECK(v3.z == Catch::Approx(3.0F));
+}
+
+TEST_CASE("Runtime stdlib: angle conversion matches the stdlib declarations", "[runtime][stdlib][math]") {
+    static_assert(stdlib::math::radians(0.0F) == 0.0F);
+    CHECK(stdlib::math::radians(40.0F) == Catch::Approx(0.6981317F));
+    CHECK(stdlib::math::degrees(stdlib::math::radians(123.0F)) == Catch::Approx(123.0F));
+    const auto math_source = read_text_file(repo_root() / "stdlib" / "std" / "math.cactus");
+    CHECK(math_source.contains("pub extern func radians(degrees: float) float"));
+    CHECK(math_source.contains("pub extern func degrees(radians: float) float"));
 }
 
 TEST_CASE("Runtime stdlib: vec2/vec3 scalar multiply is commutative via reachable raymath + global operators",

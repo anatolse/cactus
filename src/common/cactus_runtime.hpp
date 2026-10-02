@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -217,6 +218,12 @@ namespace stdlib::math {
     return (a > b) ? a : b;
 }
 [[nodiscard]] float sqrt(float v) noexcept;
+[[nodiscard]] constexpr float radians(float degrees) noexcept {
+    return degrees * (std::numbers::pi_v<float> / 180.0F);
+}
+[[nodiscard]] constexpr float degrees(float radians) noexcept {
+    return radians * (180.0F / std::numbers::pi_v<float>);
+}
 [[nodiscard]] float sin(float a) noexcept;
 [[nodiscard]] float cos(float a) noexcept;
 [[nodiscard]] float atan2(float y, float x) noexcept;

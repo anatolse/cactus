@@ -1,0 +1,12 @@
+module const_tables_units
+
+# Imported by const_tables.cactus: a second module that declares a constant
+# with the same name as one in the importer.
+
+pub struct Loadout:
+    damage: int
+    range: float
+
+const:
+    SPEED = 2.0
+    RIFLE = Loadout(damage = 3, range = SPEED * 10.0)

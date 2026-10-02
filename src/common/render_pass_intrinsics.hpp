@@ -18,7 +18,9 @@ namespace cactus {
 // intrinsic.
 [[nodiscard]] inline bool is_render_pass_portable_glsl_intrinsic(const SymbolId& symbol) {
     return symbol == make_symbol_id(SymbolKind::Func, "std.math", "sqrt") ||
-           symbol == make_symbol_id(SymbolKind::Func, "std.math", "clamp");
+           symbol == make_symbol_id(SymbolKind::Func, "std.math", "clamp") ||
+           symbol == make_symbol_id(SymbolKind::Func, "std.math", "radians") ||
+           symbol == make_symbol_id(SymbolKind::Func, "std.math", "degrees");
 }
 
 }  // namespace cactus

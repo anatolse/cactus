@@ -18,8 +18,10 @@
 #include <iomanip>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace cactus {
@@ -1339,6 +1341,51 @@ std::string emit_projected_trait_registry_helpers(const DecoratedProgram& progra
     out << "}\n\n";
     out << "}  // namespace\n\n";
     return out.str();
+}
+
+// Authored funcs are declared first so a constant may call one; constants then
+// follow in dependency order, so each initializer reads only constants above it.
+std::string emit_module_constants(const DecoratedProgram& program) {
+    if (program.ast == nullptr) {
+        return {};
+    }
+    std::ostringstream out;
+    std::unordered_map<SymbolId, const ExprNode*> values;
+    for (const auto& decl : program.ast->declarations) {
+        if (const auto* func = std::get_if<FuncNode>(&decl)) {
+            out << EnttSystemEmitter::emit_func_declaration(*func, program);
+        } else if (const auto* block = std::get_if<ConstBlockNode>(&decl)) {
+            for (const auto& assignment : block->assignments) {
+                if (assignment.resolved_const_id.has_value()) {
+                    values.emplace(*assignment.resolved_const_id, assignment.value.get());
+                }
+            }
+        }
+    }
+    for (const auto& symbol : program.const_order) {
+        const auto value     = values.find(symbol);
+        const auto* constant = EnttCodegenUtils::find_const(program, symbol);
+        if (value == values.end() || constant == nullptr) {
+            continue;
+        }
+        out << "inline const " << EnttCodegenUtils::type_to_cpp(constant->type) << " "
+            << EnttCodegenUtils::symbol_cpp_name(symbol) << " = " << EnttCodegenUtils::emit_expr(*value->second, program)
+            << ";\n";
+    }
+    out << "\n";
+    return out.str();
+}
+
+// The root module is linked last, so its window constant wins over an imported one.
+std::optional<std::string> window_constant(const DecoratedProgram& program,
+                                           const std::string& name,
+                                           const std::string& suffix = {}) {
+    const auto found = std::ranges::find_if(program.const_order | std::views::reverse,
+                                            [&](const SymbolId& symbol) { return symbol.local_name == name; });
+    if (found == (program.const_order | std::views::reverse).end()) {
+        return std::nullopt;
+    }
+    return EnttCodegenUtils::symbol_cpp_name(*found) + suffix;
 }
 
 std::string upper_copy(std::string value) {
@@ -3050,22 +3097,6 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << emit_input_constants(program);
 
     if (program.ast != nullptr) {
-        for (const auto& decl : program.ast->declarations) {
-            if (const auto* cb = std::get_if<ConstBlockNode>(&decl)) {
-                for (const auto& ca : cb->assignments) {
-                    if (ca.name == "WINDOW_WIDTH" || ca.name == "WINDOW_HEIGHT" || ca.name == "WINDOW_TITLE" ||
-                        ca.name == "TARGET_FPS") {
-                        continue;
-                    }
-                    out << "[[maybe_unused]] constexpr auto " << upper_copy(ca.name) << " = "
-                        << EnttCodegenUtils::emit_expr(*ca.value, program.ast) << ";\n";
-                }
-            }
-        }
-        out << "\n";
-    }
-
-    if (program.ast != nullptr) {
         std::uint32_t next_asset_handle = 1U;
         bool emitted_asset_constants    = false;
         for (const auto& decl : program.ast->declarations) {
@@ -3111,6 +3142,8 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
         }
         out << EnttComponentEmitter::emit_pod_struct(s) << "\n";
     }
+
+    out << emit_module_constants(program);
 
     // Component structs (from traits)
     // stdlib::random trait types are exposed via 'using' aliases above — suppress their generated structs.
@@ -3390,27 +3423,10 @@ std::string CppEnttCodegen::generate(const DecoratedProgram& program) {
     out << "}\n\n";
 
     // Main game loop — extract window constants from const block if available
-    std::string win_width  = "800";
-    std::string win_height = "600";
-    std::string win_title  = "\"Cactus Game\"";
-    std::string win_fps    = "60";
-    if (program.ast != nullptr) {
-        for (auto& decl : program.ast->declarations) {
-            if (auto* cb = std::get_if<ConstBlockNode>(&decl)) {
-                for (auto& ca : cb->assignments) {
-                    if (ca.name == "WINDOW_WIDTH") {
-                        win_width = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
-                    } else if (ca.name == "WINDOW_HEIGHT") {
-                        win_height = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
-                    } else if (ca.name == "WINDOW_TITLE") {
-                        win_title = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
-                    } else if (ca.name == "TARGET_FPS") {
-                        win_fps = EnttCodegenUtils::emit_expr(*ca.value, program.ast);
-                    }
-                }
-            }
-        }
-    }
+    const auto win_width  = window_constant(program, "WINDOW_WIDTH").value_or("800");
+    const auto win_height = window_constant(program, "WINDOW_HEIGHT").value_or("600");
+    const auto win_title  = window_constant(program, "WINDOW_TITLE", ".c_str()").value_or("\"Cactus Game\"");
+    const auto win_fps    = window_constant(program, "TARGET_FPS").value_or("60");
 
     out << "// ── Runtime Glue ────────────────────────────────────────────────────\n\n";
     out << "ProjectConfig generated_project_config() noexcept {\n";

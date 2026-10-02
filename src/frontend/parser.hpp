@@ -110,6 +110,8 @@ private:
     std::vector<FieldNode> parse_template_parameters();
     TemplateArguments parse_template_arguments();
     void skip_template_list_spacing();
+    [[nodiscard]] bool at_named_argument(std::size_t index) const;
+    void parse_call_arguments(CallExpr& call);
     FieldAssignment parse_field_assignment();
     std::vector<FieldAssignment> parse_field_assignment_block();
     ArchetypeTemplateUseEntry parse_archetype_template_use_entry();

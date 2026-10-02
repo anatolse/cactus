@@ -70,6 +70,66 @@ TEST_CASE("program_linker: merge two programs with distinct traits", "[linker][5
     CHECK(merged.traits.count("EnemyAI") == 1);
 }
 
+static DecoratedProgram make_const_program(const std::string& module, const std::string& name, TypeInfo type) {
+    DecoratedProgram prog;
+    const auto symbol = make_symbol_id(SymbolKind::Const, module, name);
+    ResolvedConst constant;
+    constant.name         = name;
+    constant.type         = std::move(type);
+    constant.module_name  = module;
+    constant.canonical_id = make_canonical_id(symbol);
+    constant.symbol_id    = symbol;
+    prog.consts[name]     = constant;
+    prog.const_order.push_back(symbol);
+    return prog;
+}
+
+TEST_CASE("program_linker: constants of different modules are merged", "[linker][const]") {
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, make_const_program("player", "MOVE_SPEED", make_float_type()), "player"));
+    REQUIRE(linker.merge_into(merged, make_const_program("level", "TILE_SIZE", make_int_type()), "level"));
+    CHECK_FALSE(errors.has_errors());
+    CHECK(merged.consts.contains("player.MOVE_SPEED"));
+    CHECK(merged.consts.contains("level.TILE_SIZE"));
+    REQUIRE(merged.const_order.size() == 2);
+    CHECK(merged.const_order[0].local_name == "MOVE_SPEED");
+}
+
+TEST_CASE("program_linker: the same constant name in two modules does not conflict", "[linker][const]") {
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, make_const_program("A", "MAX_HEALTH", make_int_type()), "A"));
+    REQUIRE(linker.merge_into(merged, make_const_program("B", "MAX_HEALTH", make_int_type()), "B"));
+    CHECK_FALSE(errors.has_errors());
+    CHECK(merged.consts.contains("A.MAX_HEALTH"));
+    CHECK(merged.consts.contains("B.MAX_HEALTH"));
+}
+
+TEST_CASE("program_linker: constants survive an artifact round trip", "[linker][const]") {
+    auto build_dir = linker_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    auto prog = make_const_program("tables", "WAVES", make_list_type(make_int_type()));
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(prog, "tables", build_dir));
+    ProgramLinker linker(errors);
+    auto merged = linker.link({build_dir / "tables.cmod"});
+    REQUIRE(merged.has_value());
+    CHECK_FALSE(errors.has_errors());
+    REQUIRE(merged->consts.contains("tables.WAVES"));
+    const auto& type = merged->consts.at("tables.WAVES").type;
+    CHECK(type.kind == TypeKind::List);
+    REQUIRE(type.element != nullptr);
+    CHECK(type.element->kind == TypeKind::Int);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("program_linker: merge includes enums from all modules", "[linker][5.2]") {
     auto prog_a = make_program("Position", true, "Direction");
     auto prog_b = make_program("Velocity", true, "State");

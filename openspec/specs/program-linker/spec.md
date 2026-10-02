@@ -68,12 +68,17 @@ The program linker SHALL provide code generation with a merged resolved semantic
 - **THEN** linking preserves the pair domain and canonical accesses used to construct and lower the merged execution graph
 
 ### Requirement: Const block merging
-The program linker SHALL merge all const blocks from all modules. Duplicate const names across modules SHALL produce an error.
+The program linker SHALL merge all const blocks from all modules into the linked program. Each constant SHALL keep the identity of the module that declares it, so constants with the same name in different modules SHALL NOT conflict. Two constants with the same name in the same module SHALL produce an error.
 
 #### Scenario: Distinct constants merged
 - **WHEN** module `player` has `MOVE_SPEED = 6.0` and module `level` has `TILE_SIZE = 32`
 - **THEN** the merged program's const pool contains both constants
 
-#### Scenario: Duplicate constant name
+#### Scenario: Same constant name in two modules
 - **WHEN** module `A` has `MAX_HEALTH = 100` and module `B` also has `MAX_HEALTH = 200`
-- **THEN** the linker reports an error "duplicate constant 'MAX_HEALTH' defined in module A and module B"
+- **THEN** linking succeeds and the merged const pool contains `A.MAX_HEALTH` and `B.MAX_HEALTH` as distinct constants
+
+#### Scenario: Duplicate constant name
+- **WHEN** module `A` declares `MAX_HEALTH` twice
+- **THEN** compilation reports a duplicate-declaration error naming `MAX_HEALTH`
+

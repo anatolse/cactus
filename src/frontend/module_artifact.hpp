@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 20;
+    static constexpr uint8_t CURRENT_VERSION = 21;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -66,6 +66,8 @@ private:
     void write_type_info(std::ostream& out, const TypeInfo& t);
     void write_field(std::ostream& out, const ResolvedField& field);
     void write_expression(std::ostream& out, const ExprNode& expression);
+    void write_consts(std::ostream& out, const DecoratedProgram& program);
+    void read_consts(std::istream& in, DecoratedProgram& program);
     static void write_enum_member(std::ostream& out, const std::optional<ResolvedEnumMember>& member);
     std::unique_ptr<ExprNode> read_expression(std::istream& in);
     void write_template_metadata(std::ostream& out, const DecoratedProgram& program);

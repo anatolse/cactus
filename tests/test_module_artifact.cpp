@@ -940,7 +940,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1283,7 +1283,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1434,6 +1434,51 @@ TEST_CASE("ModuleArtifact: named field references in expressions round-trip", "[
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: named call arguments and struct construction round-trip", "[artifact][const]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto squad = make_symbol_id(SymbolKind::Struct, "library", "Squad");
+    auto literal     = [](const char* value) {
+        return std::make_unique<ExprNode>(
+            ExprNode::Variant{LiteralExpr{.kind = LiteralExpr::Kind::Int, .value = value}}, SourceLocation{});
+    };
+    CallExpr call;
+    call.callee = std::make_unique<ExprNode>(ExprNode::Variant{IdentExpr{.name = "Squad"}}, SourceLocation{});
+    call.resolved_struct_id = squad;
+    call.args.push_back(literal("3"));
+    call.args.push_back(literal("1"));
+    call.arg_names = {"size", "lead"};
+
+    auto blueprint  = std::make_shared<TemplateNode>();
+    blueprint->name = "Probe";
+    ArchetypeTraitEntry entry{.trait_name = "Roster"};
+    entry.assignments.push_back(FieldAssignment{
+        .name = "squad", .value = std::make_unique<ExprNode>(ExprNode::Variant{std::move(call)}, SourceLocation{})});
+    blueprint->traits.push_back(std::move(entry));
+
+    DecoratedProgram program;
+    program.pub_templates.insert("Probe");
+    program.template_parameters["Probe"] = {};
+    program.template_blueprints["Probe"] = blueprint;
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "library", build_dir));
+    auto symbols = artifact.extract_pub_symbols(build_dir / "library.cmod");
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(symbols.has_value());
+    const auto& loaded = symbols->templates.at("Probe").blueprint;
+    REQUIRE(loaded != nullptr);
+    const auto& loaded_call = std::get<CallExpr>(loaded->traits.at(0).assignments.at(0).value->expr);
+    CHECK(loaded_call.resolved_struct_id == squad);
+    CHECK(loaded_call.arg_names == std::vector<std::string>{"size", "lead"});
+    CHECK(loaded_call.args.size() == 2);
+
+    fs::remove_all(build_dir, ec);
+}
+
 static DecoratedProgram make_lifecycle_program(HandlerTriggerKind kind) {
     const auto rule = test_symbol(SymbolKind::Rule, "StartDying");
     const ResolvedHandlerTrigger trigger{.kind = kind, .symbol = test_symbol(SymbolKind::Trait, "Dying")};
@@ -1512,7 +1557,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1537,7 +1582,7 @@ TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected",
 }
 
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 20);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

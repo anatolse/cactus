@@ -33,6 +33,12 @@ pub extern func sin(a: float) float
 # Cosine of angle in radians
 pub extern func cos(a: float) float
 
+# Angle in degrees converted to radians
+pub extern func radians(degrees: float) float
+
+# Angle in radians converted to degrees
+pub extern func degrees(radians: float) float
+
 # Arc-tangent of y/x, returning angle in radians
 pub extern func atan2(y: float, x: float) float
 

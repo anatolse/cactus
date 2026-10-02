@@ -2,6 +2,7 @@ module main
 
 use std.transform.flat as tf
 use std.render.shapes as shapes
+use std.math as math
 use std.math.vec2 as v2m
 use std.collision.flat as collision
 
@@ -194,17 +195,17 @@ entity TopWall from WallTemplate:
 entity BottomWall from WallTemplate:
     tf.WorldTransform:
         position = vec2(400.0, 560.0)
-        rotation = 3.14159265  # 180 degrees
+        rotation = math.radians(180.0)
 
 entity LeftWall from WallTemplate:
     tf.WorldTransform:
         position = vec2(140.0, 300.0)
-        rotation = 4.71238898  # 270 degrees
+        rotation = math.radians(270.0)
 
 entity RightWall from WallTemplate:
     tf.WorldTransform:
         position = vec2(660.0, 300.0)
-        rotation = 1.62315620  # 93 degrees: 90 + a 3-degree tilt
+        rotation = math.radians(93.0)  # 90 + a 3-degree tilt
 
 # ── Entities: bubbles ────────────────────────────────────────────────────────
 # 6 bubbles with distinct CircleCollider radii, spread on a 3x2 grid well

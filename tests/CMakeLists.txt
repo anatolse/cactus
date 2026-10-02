@@ -140,6 +140,13 @@ add_executable(test_semantic test_semantic.cpp)
 target_link_libraries(test_semantic PRIVATE cactus_frontend Catch2::Catch2WithMain)
 add_test(NAME SemanticTests COMMAND test_semantic)
 
+add_executable(test_semantic_const test_semantic_const.cpp)
+target_link_libraries(test_semantic_const PRIVATE cactus_frontend Catch2::Catch2WithMain)
+target_compile_definitions(test_semantic_const PRIVATE
+    CACTUS_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+)
+add_test(NAME SemanticConstTests COMMAND test_semantic_const)
+
 # Unified name resolution tests (unified-name-resolution change)
 add_executable(test_name_resolution test_name_resolution.cpp)
 target_link_libraries(test_name_resolution PRIVATE cactus_frontend Catch2::Catch2WithMain)
@@ -149,6 +156,10 @@ add_test(NAME NameResolutionTests COMMAND test_name_resolution)
 add_executable(test_codegen_entt test_codegen_entt.cpp)
 target_link_libraries(test_codegen_entt PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
 add_test(NAME CodegenEnttTests COMMAND test_codegen_entt)
+
+add_executable(test_codegen_const test_codegen_const.cpp)
+target_link_libraries(test_codegen_const PRIVATE cactus_backend_cpp_entt Catch2::Catch2WithMain)
+add_test(NAME CodegenConstTests COMMAND test_codegen_const)
 
 # Module resolver tests
 add_executable(test_module_resolver test_module_resolver.cpp)
@@ -349,6 +360,12 @@ cactus_add_headless_behavior_test(test_deferred_set_headless_behavior
     CACTUS_SOURCE examples/deferred_set.cactus
     BACKEND cpp-entt
     TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_deferred_set_headless_behavior.cpp
+)
+
+cactus_add_headless_behavior_test(test_const_tables_headless_behavior
+    CACTUS_SOURCE examples/const_tables.cactus
+    BACKEND cpp-entt
+    TEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/test_const_tables_headless_behavior.cpp
 )
 
 cactus_add_headless_behavior_test(test_named_entity_access_headless_behavior

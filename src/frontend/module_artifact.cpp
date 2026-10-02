@@ -166,6 +166,33 @@ void ModuleArtifact::write_traits(std::ostream& out,
     }
 }
 
+// Constants go out in dependency order, so the order needs no separate section.
+void ModuleArtifact::write_consts(std::ostream& out, const DecoratedProgram& program) {
+    write_u32(out, static_cast<uint32_t>(program.const_order.size()));
+    for (const auto& symbol : program.const_order) {
+        const auto& constant = program.consts.at(symbol.local_name);
+        write_symbol_id(out, symbol);
+        write_type_info(out, constant.type);
+        write_bool(out, constant.glsl_portable);
+    }
+}
+
+void ModuleArtifact::read_consts(std::istream& in, DecoratedProgram& program) {
+    const auto count = read_u32(in);
+    for (uint32_t i = 0; i < count && in.good(); ++i) {
+        ResolvedConst constant;
+        const auto symbol     = read_symbol_id(in);
+        constant.name         = symbol.local_name;
+        constant.module_name  = symbol.module.name;
+        constant.canonical_id = make_canonical_id(symbol);
+        constant.symbol_id    = symbol;
+        constant.type         = read_type_info(in);
+        constant.glsl_portable = read_bool(in);
+        program.consts[symbol.local_name] = std::move(constant);
+        program.const_order.push_back(symbol);
+    }
+}
+
 void ModuleArtifact::write_structs(std::ostream& out,
                                    const std::unordered_map<std::string, ResolvedStruct>& structs,
                                    const std::string& module_name) {
@@ -1262,6 +1289,7 @@ bool ModuleArtifact::save(const DecoratedProgram& program,
     write_string_pool(out, program.string_pool);
     write_template_metadata(out, program);
     write_persistence_metadata(out, program.persistence);
+    write_consts(out, program);
 
     return out.good();
 }
@@ -1311,6 +1339,7 @@ std::optional<DecoratedProgram> ModuleArtifact::load(const fs::path& path, std::
     program.string_pool       = read_string_pool(in);
     read_template_metadata(in, program);
     program.persistence       = read_persistence_metadata(in);
+    read_consts(in, program);
     program.ast               = nullptr;  // not serialized
 
     if (!in.good()) {
@@ -1332,6 +1361,7 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
 
     ImportedSymbols symbols;
     symbols.module_name = module_name;
+    symbols.consts      = program->consts;
 
     for (auto& [name, trait] : program->traits) {
         if (trait.is_pub) {
@@ -1522,6 +1552,7 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_u64(out, node.template_slot.value_or(0));
             write_type_info(out, node.template_type);
             write_optional_symbol_id(out, node.resolved_entity_id);
+            write_optional_symbol_id(out, node.resolved_const_id);
         } else if constexpr (std::is_same_v<Node, BinaryExpr>) {
             write_str(out, node.op);
             write_expression(out, *node.left);
@@ -1531,14 +1562,20 @@ void ModuleArtifact::write_expression(std::ostream& out, const ExprNode& express
             write_expression(out, *node.operand);
         } else if constexpr (std::is_same_v<Node, CallExpr>) {
             write_optional_symbol_id(out, node.resolved_callee_id);
+            write_optional_symbol_id(out, node.resolved_struct_id);
             write_expression(out, *node.callee);
             expressions(node.args);
+            write_u32(out, static_cast<uint32_t>(node.arg_names.size()));
+            for (const auto& name : node.arg_names) {
+                write_str(out, name);
+            }
         } else if constexpr (std::is_same_v<Node, MemberExpr>) {
             write_expression(out, *node.object);
             write_str(out, node.member);
             write_enum_member(out, node.resolved_enum_member);
             write_optional_symbol_id(out, node.resolved_entity_id);
             write_optional_named_trait(out, node.resolved_named_trait);
+            write_optional_symbol_id(out, node.resolved_const_id);
         } else if constexpr (std::is_same_v<Node, IfExpr>) {
             write_expression(out, *node.condition);
             write_expression(out, *node.then_expr);
@@ -1590,6 +1627,7 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             }
             node.template_type = read_type_info(in);
             node.resolved_entity_id = read_optional_symbol_id(in);
+            node.resolved_const_id = read_optional_symbol_id(in);
             return wrap(std::move(node));
         }
         case 3: {
@@ -1608,8 +1646,13 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
         case 5: {
             CallExpr node;
             node.resolved_callee_id = read_optional_symbol_id(in);
+            node.resolved_struct_id = read_optional_symbol_id(in);
             node.callee = read_expression(in);
             node.args = expressions();
+            const auto names = read_u32(in);
+            for (uint32_t i = 0; i < names && in.good(); ++i) {
+                node.arg_names.push_back(read_str(in));
+            }
             return wrap(std::move(node));
         }
         case 6: {
@@ -1625,6 +1668,7 @@ std::unique_ptr<ExprNode> ModuleArtifact::read_expression(std::istream& in) {
             }
             node.resolved_entity_id = read_optional_symbol_id(in);
             node.resolved_named_trait = read_optional_named_trait(in);
+            node.resolved_const_id = read_optional_symbol_id(in);
             return wrap(std::move(node));
         }
         case 7: {

@@ -79,6 +79,12 @@ struct ResolvedStruct : CanonicalIdentity {
     std::vector<ResolvedField> fields;
 };
 
+struct ResolvedConst : CanonicalIdentity {
+    std::string name;
+    TypeInfo type;
+    bool glsl_portable = false;  // a render-pass stage handler may inline it
+};
+
 struct ResolvedEnum : CanonicalIdentity {
     std::string name;
     std::vector<std::string> variants;
@@ -476,6 +482,8 @@ struct DecoratedProgram {
     ModulePersistenceMetadata persistence;
     std::vector<ResolvedSourceModule> source_modules;
     StringPool string_pool;
+    std::unordered_map<std::string, ResolvedConst> consts;
+    std::vector<SymbolId> const_order;  // every constant after the constants its value reads
     ProgramNode* ast = nullptr;  // non-owning pointer to original AST
 };
 
@@ -549,6 +557,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ImportedFunc> func_symbols;          // pub funcs with canonical identity
     std::unordered_map<std::string, ImportedTemplate> template_symbols;  // pub templates with canonical identity
     std::unordered_map<std::string, ImportedEntity> entities;            // pub entities with their traits
+    std::unordered_map<std::string, ResolvedConst> consts;               // every constant of the module
 };
 
 // ── Module Imports (aggregate for one compilation unit) ────────────────────
@@ -888,6 +897,15 @@ private:
     const ResolvedTrait* find_resolved_trait(const std::optional<SymbolId>& symbol,
                                              const std::string& fallback_name) const;
     const ResolvedFunc* find_resolved_func(const SymbolId& symbol) const;
+    const ResolvedStruct* find_resolved_struct(const SymbolId& symbol) const;
+    std::optional<SymbolId> resolve_struct_callee(const ExprNode& callee) const;
+    void lower_struct_query_call(ExprNode& expr) const;
+    TypeInfo infer_struct_construction_type(const CallExpr& call,
+                                            const SourceLocation& location,
+                                            const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                            const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                            const ResolvedStruct* handler_event,
+                                            const PairScope* pair_scope) const;
     const ResolvedStruct* find_resolved_event(const std::string& name) const;
 
     /// Shared by validateOrderByClause, validate_event_usage, and
@@ -1119,6 +1137,37 @@ private:
                                 const std::string& context_name,
                                 bool in_rule_handler);
     void validate_trait_default_values(ProgramNode& program);
+    bool resolve_const_ident(IdentExpr& ident) const;
+    bool resolve_const_member(MemberExpr& member, const std::unordered_set<std::string>& shadowed) const;
+    void resolve_declaration_const_refs(ProgramNode& program);
+    void resolve_const_refs(ExprNode& expr) const;
+    void resolve_const_refs(std::vector<FieldAssignment>& fields) const;
+    void resolve_const_refs(std::vector<ArchetypeTraitEntry>& traits) const;
+    void resolve_const_refs(std::vector<ArchetypeTemplateUseEntry>& uses) const;
+    void resolve_const_refs(std::vector<ChildOverrideNode>& overrides) const;
+    void resolve_const_refs(std::vector<ChildArchetypeNode>& children) const;
+    std::vector<std::string> const_dependencies(const ConstAssignment& assignment) const;
+    std::vector<ConstAssignment*> order_constants(ProgramNode& program);
+    void order_and_type_constants(ProgramNode& program);
+    TypeInfo constant_type(const ConstAssignment& assignment);
+    bool validate_const_expression(const ExprNode& expr, const std::string& context, bool whole_value);
+    bool reject_const(const SourceLocation& location, const std::string& context, const std::string& reason);
+    bool validate_const_expressions(const std::vector<std::unique_ptr<ExprNode>>& values,
+                                    const std::string& context,
+                                    bool whole_values);
+    bool validate_const_ident(const IdentExpr& ident, const SourceLocation& location, const std::string& context);
+    bool validate_const_call(const CallExpr& call, const SourceLocation& location, const std::string& context);
+    bool validate_const_member(const MemberExpr& member, const SourceLocation& location, const std::string& context);
+    TypeInfo find_const_type(const SymbolId& symbol) const;
+    const ResolvedConst* find_resolved_const(const SymbolId& symbol) const;
+    bool const_is_glsl_portable(const ExprNode& value, const TypeInfo& type) const;
+    bool call_is_glsl_translatable(const CallExpr& call) const;
+    void check_stage_constant(const SymbolId& symbol, const SourceLocation& location, const char* stage_desc) const;
+    TypeInfo infer_value_member_type(const MemberExpr& member,
+                                     const std::unordered_map<std::string, const ResolvedTrait*>& filter_bindings,
+                                     const std::unordered_map<std::string, TypeInfo>& local_bindings,
+                                     const ResolvedStruct* handler_event,
+                                     const PairScope* pair_scope) const;
 
     // Phase 4: Build dependency graph
     void build_dependency_graph(ProgramNode& program);

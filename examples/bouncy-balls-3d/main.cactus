@@ -11,13 +11,6 @@ use std.input as inp
 use std.random as rand
 use std.collision.volume as collision
 
-# std.math.PI is a stdlib module constant, not an extern func — imported
-# module constants don't currently lower through codegen (only extern funcs
-# do), so it's redeclared locally here rather than referenced as `math.PI`,
-# matching particle-burst's own local TAU constant for the same reason.
-const:
-    TWO_PI = 6.283185307
-
 # ── Assets ────────────────────────────────────────────────────────────────────
 # Placeholder mesh geometry only (dsl-model-assets' `mesh`/material system,
 # not real files): SphereMesh's path contains "sphere" so the backend
@@ -235,22 +228,22 @@ entity TopWall from WallTemplate:
 entity BottomWall from WallTemplate:
     tv.WorldTransform:
         position = vec3(0.0, -3.0, 0.0)
-        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), 3.14159265)  # 180 degrees
+        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), math.radians(180.0))
 
 entity LeftWall from WallTemplate:
     tv.WorldTransform:
         position = vec3(-3.0, 0.0, 0.0)
-        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), 1.57079633)  # 90 degrees
+        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), math.radians(90.0))
 
 entity RightWall from WallTemplate:
     tv.WorldTransform:
         position = vec3(3.0, 0.0, 0.0)
-        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), -1.51843645)  # -87 degrees: -90 + a 3-degree tilt
+        rotation = quat.from_axis_angle(vec3(0.0, 0.0, 1.0), math.radians(-87.0))  # -90 + a 3-degree tilt
 
 entity BackWall from WallTemplate:
     tv.WorldTransform:
         position = vec3(0.0, 0.0, -3.0)
-        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), -1.57079633)  # -90 degrees
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), math.radians(-90.0))
 
 # FrontWall is from the collider-only base template: no meshes.Renderer, so
 # this is the camera-facing open side of the box. Its Wall + BoxCollider
@@ -258,7 +251,7 @@ entity BackWall from WallTemplate:
 entity FrontWall from WallColliderTemplate:
     tv.WorldTransform:
         position = vec3(0.0, 0.0, 3.0)
-        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), 1.57079633)  # 90 degrees
+        rotation = quat.from_axis_angle(vec3(1.0, 0.0, 0.0), math.radians(90.0))
 
 # ── Entities: ball spawner ───────────────────────────────────────────────────
 # Singleton holding the one shared Rng both ball-spawning rules below
@@ -294,7 +287,7 @@ rule SpawnInitialBalls:
             rng = rand.advance(rng)
             let z = rand.sample(rng, rand.uniform(-1.0, 1.0))
             rng = rand.advance(rng)
-            let theta = rand.sample(rng, rand.uniform(0.0, TWO_PI))
+            let theta = rand.sample(rng, rand.uniform(0.0, math.PI * 2.0))
             let planar = math.sqrt(1.0 - z * z)
             let dir = vec3(planar * math.cos(theta), planar * math.sin(theta), z)
 
@@ -340,7 +333,7 @@ rule SpawnBallOnClick:
         rng = rand.advance(rng)
         let z = rand.sample(rng, rand.uniform(-1.0, 1.0))
         rng = rand.advance(rng)
-        let theta = rand.sample(rng, rand.uniform(0.0, TWO_PI))
+        let theta = rand.sample(rng, rand.uniform(0.0, math.PI * 2.0))
         let planar = math.sqrt(1.0 - z * z)
         let dir = vec3(planar * math.cos(theta), planar * math.sin(theta), z)
 

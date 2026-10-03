@@ -350,6 +350,7 @@ struct HandlerNode {
     HandlerImplementationKind implementation = HandlerImplementationKind::Cactus;
     HandlerContract contract;
     std::vector<HandlerIdentity> explicit_after;
+    std::optional<SymbolId> group;  // set when this handler is its rule group's member handler
     DeclarationOrder declaration_order;
     SourceLocation location;
 };
@@ -378,7 +379,14 @@ struct PhasePlan {
     DeclarationOrder declaration_order;
 };
 
-enum class ScheduleEdgeKind : std::uint8_t { ExplicitHandler, ExplicitRule, DataConflict, EffectConflict };
+// Serialized by numeric value: append new kinds, never reorder.
+enum class ScheduleEdgeKind : std::uint8_t {
+    ExplicitHandler,
+    ExplicitRule,
+    DataConflict,
+    EffectConflict,
+    ExplicitGroup
+};
 enum class ScheduleEdgeOrientation : std::uint8_t { Explicit, WriterBeforeReader, DeclarationOrder };
 
 // The fields of one trait that made a data conflict.
@@ -431,6 +439,25 @@ struct RenderPassPlan {
     HandlerIdentity fragment_handler;
 };
 
+// A `group` declaration: a named ordering anchor inside one phase.
+struct GroupDeclaration {
+    SymbolId group;
+    SymbolId phase;
+    bool is_pub = false;
+    SourceLocation location;
+};
+
+enum class GroupOrderingDirection : std::uint8_t { Before, After };
+
+// `handler` runs before/after every member handler of `group`; expanded into
+// ExplicitGroup edges once all members are known.
+struct GroupOrdering {
+    HandlerIdentity handler;
+    SymbolId group;
+    GroupOrderingDirection direction = GroupOrderingDirection::After;
+    SourceLocation location;
+};
+
 struct ExecutionGraph {
     std::vector<PhasePlan> phases;
     std::vector<HandlerNode> handlers;
@@ -440,6 +467,8 @@ struct ExecutionGraph {
     std::vector<EventFlowEdge> event_flows;
     std::vector<HandlerIdentity> stable_topological_order;
     std::vector<DependencyLevel> dependency_levels;
+    std::vector<GroupDeclaration> group_declarations;
+    std::vector<GroupOrdering> group_orderings;
 };
 
 struct ResolvedTemplateParameter {
@@ -558,6 +587,7 @@ struct ImportedSymbols {
     std::unordered_map<std::string, ImportedTemplate> template_symbols;  // pub templates with canonical identity
     std::unordered_map<std::string, ImportedEntity> entities;            // pub entities with their traits
     std::unordered_map<std::string, ResolvedConst> consts;               // every constant of the module
+    std::unordered_map<std::string, GroupDeclaration> groups;            // every group; lookup honors is_pub
 };
 
 // ── Module Imports (aggregate for one compilation unit) ────────────────────
@@ -1249,6 +1279,39 @@ private:
 
     // Phase 5: after: validation
     void validate_after_clauses(ProgramNode& program);
+    void validate_group_declarations(ProgramNode& program);
+    void push_explicit_edge(const HandlerIdentity& before, const HandlerIdentity& after, ScheduleEdgeKind kind);
+    void add_rule_level_edges(const SymbolId& rule,
+                              const std::vector<SymbolId>& after_rules,
+                              const std::vector<SymbolId>& before_rules,
+                              const std::unordered_set<SymbolId>& local_rule_ids);
+    void record_rule_group_facts(const SymbolId& rule,
+                                 const ResolvedRuleOrdering& ordering,
+                                 const SourceLocation& location);
+    // Resolves and validates one rule's group:/after:/before: clauses into rule.resolved_ordering.
+    template <typename Rule>
+    void resolve_rule_ordering(Rule& rule);
+    struct RuleOrderingSubject {
+        std::string name;
+        SymbolId rule;
+        SourceLocation location;
+        std::optional<SymbolId> group;
+        std::vector<SymbolId> handled_phases;
+    };
+    std::optional<SymbolId> resolve_rule_group_membership(const RuleOrderingSubject& subject, const std::string& ref);
+    void resolve_ordering_clause(const RuleOrderingSubject& subject,
+                                 const std::vector<std::string>& refs,
+                                 const char* clause,
+                                 std::vector<SymbolId>& rules,
+                                 std::vector<SymbolId>& groups);
+    bool report_missing_group_phase_handler(const RuleOrderingSubject& subject,
+                                            const SymbolId& group,
+                                            const std::string& spelling,
+                                            const char* verb);
+    std::optional<SymbolId> resolve_ordering_ref(const std::string& ref, const SourceLocation& loc, const char* clause);
+    std::optional<SymbolId> resolve_group_membership_ref(const std::string& ref, const SourceLocation& loc);
+    bool report_private_group(const std::string& ref, const SourceLocation& loc);
+    [[nodiscard]] const GroupDeclaration* find_group_declaration(const SymbolId& group) const;
 
     // Helpers
     bool is_known_type(const std::string& name) const;
@@ -1297,9 +1360,7 @@ private:
         const std::string& ref,
         const SourceLocation& loc,
         const std::unordered_set<std::string>& local_rule_names) const;
-    std::string resolve_rule_after_ref(const std::string& ref,
-                                       const SourceLocation& loc,
-                                       const std::unordered_set<std::string>& local_rule_names);
+    std::string resolve_rule_after_ref(const std::string& ref, const SourceLocation& loc, const char* clause);
 
     /// Resolve a template/entity reference to its canonical SymbolId.
     std::optional<SymbolId> try_resolve_template_ref_to_symbol(const std::string& ref) const;

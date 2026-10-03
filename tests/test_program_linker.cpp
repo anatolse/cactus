@@ -1,13 +1,17 @@
 // NOLINTBEGIN(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)
 // -- Catch2 assertion macros intentionally expand through do-while and expression decomposition.
 #include "common/error_reporter.hpp"
+#include "frontend/lexer.hpp"
 #include "frontend/module_artifact.hpp"
+#include "frontend/parser.hpp"
 #include "frontend/program_linker.hpp"
 #include "frontend/semantic_analyzer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
+#include <memory>
 
 using namespace cactus;
 namespace fs = std::filesystem;
@@ -839,5 +843,146 @@ TEST_CASE("program_linker: linked handler cycles are rejected canonically", "[li
     CHECK(errors.diagnostics().back().message.find("handler cycle:") != std::string::npos);
     CHECK(errors.diagnostics().back().message.find(first.identity.canonical_id()) != std::string::npos);
     CHECK(errors.diagnostics().back().message.find(second.identity.canonical_id()) != std::string::npos);
+}
+
+// ── add-rule-groups: group ordering across separately compiled modules ──────
+
+TEST_CASE("program_linker: separately compiled modules keep rule group order", "[linker][rule-groups][artifact]") {
+    auto build_dir = linker_build_dir() / "rule_groups";
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    std::vector<std::unique_ptr<ProgramNode>> asts;
+    ModuleImports imports;
+    const auto compile = [&](const std::string& module, const std::string& source) {
+        ErrorReporter errors;
+        Lexer lexer(source, module + ".cactus", errors);
+        Parser parser(lexer.tokenize(), errors);
+        asts.push_back(std::make_unique<ProgramNode>(parser.parse_program()));
+        SemanticAnalyzer analyzer(errors);
+        const auto program = analyzer.analyze(*asts.back(), imports);
+        INFO((errors.diagnostics().empty() ? "" : errors.diagnostics().front().message));
+        REQUIRE_FALSE(errors.has_errors());
+        ModuleArtifact artifact(errors);
+        REQUIRE(artifact.save(program, module, build_dir));
+        return build_dir / (module + ".cmod");
+    };
+    const auto import_artifact = [&](const std::string& qualifier, const fs::path& path) {
+        ErrorReporter errors;
+        ModuleArtifact artifact(errors);
+        auto symbols = artifact.extract_pub_symbols(path);
+        REQUIRE(symbols.has_value());
+        imports.add(qualifier, std::move(*symbols));
+    };
+
+    const auto core = compile("std.core",
+                              "module std.core\n"
+                              "extern event frame:\n"
+                              "    dt: float\n"
+                              "pub phase fixed_tick:\n"
+                              "    from:\n"
+                              "        frame\n");
+    import_artifact("std.core", core);
+    const auto physics = compile("std.physics.volume",
+                                 "module std.physics.volume\n"
+                                 "pub group solve:\n"
+                                 "    phase: fixed_tick\n"
+                                 "rule MoveAndSlide:\n"
+                                 "    group: solve\n"
+                                 "    on fixed_tick:\n"
+                                 "        let value = 1\n");
+    import_artifact("phys", physics);
+    const auto game = compile("game",
+                              "module game\n"
+                              "rule ReactToGround:\n"
+                              "    after:\n"
+                              "        phys.solve\n"
+                              "    on fixed_tick:\n"
+                              "        let value = 2\n"
+                              "rule MovePlayer:\n"
+                              "    before:\n"
+                              "        phys.solve\n"
+                              "    on fixed_tick:\n"
+                              "        let value = 3\n"
+                              "rule Early:\n"
+                              "    before:\n"
+                              "        phys.MoveAndSlide\n"
+                              "    on fixed_tick:\n"
+                              "        let value = 4\n");
+
+    ErrorReporter link_errors;
+    ProgramLinker linker(link_errors);
+    auto linked = linker.link({core, physics, game});
+    INFO((link_errors.diagnostics().empty() ? "" : link_errors.diagnostics().front().message));
+    REQUIRE_FALSE(link_errors.has_errors());
+    REQUIRE(linked.has_value());
+    const auto& graph = linked->execution_graph;
+
+    const ResolvedHandlerTrigger fixed_tick{.kind   = HandlerTriggerKind::Phase,
+                                            .symbol = linked_symbol(SymbolKind::Phase, "std.core", "fixed_tick")};
+    const auto handler = [&](const std::string& module, const std::string& rule) {
+        return HandlerIdentity{.rule = linked_symbol(SymbolKind::Rule, module, rule), .trigger = fixed_tick};
+    };
+    const auto member      = handler("std.physics.volume", "MoveAndSlide");
+    const auto move_player = handler("game", "MovePlayer");
+    const auto react       = handler("game", "ReactToGround");
+    const auto early       = handler("game", "Early");
+    const auto has_edge    = [&](const HandlerIdentity& before, const HandlerIdentity& after, ScheduleEdgeKind kind) {
+        return std::ranges::any_of(graph.schedule_edges, [&](const auto& edge) {
+            return edge.before == before && edge.after == after && edge.kind == kind;
+        });
+    };
+    CHECK(has_edge(move_player, member, ScheduleEdgeKind::ExplicitGroup));
+    CHECK(has_edge(member, react, ScheduleEdgeKind::ExplicitGroup));
+    CHECK(has_edge(early, member, ScheduleEdgeKind::ExplicitRule));
+    CHECK(std::ranges::count_if(graph.schedule_edges,
+                                [](const auto& edge) { return edge.kind == ScheduleEdgeKind::ExplicitGroup; }) == 2);
+
+    const auto position = [&](const HandlerIdentity& identity) {
+        const auto found = std::ranges::find(graph.stable_topological_order, identity);
+        REQUIRE(found != graph.stable_topological_order.end());
+        return found - graph.stable_topological_order.begin();
+    };
+    CHECK(position(move_player) < position(member));
+    CHECK(position(early) < position(member));
+    CHECK(position(member) < position(react));
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("program_linker: group edges from artifacts are regenerated, not duplicated", "[linker][rule-groups]") {
+    const auto tick = linked_symbol(SymbolKind::Phase, "runtime", "tick");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    const auto solve = linked_symbol(SymbolKind::Group, "lib", "solve");
+    auto member      = linked_handler(linked_symbol(SymbolKind::Rule, "lib", "Member"), trigger, 0);
+    member.group     = solve;
+    auto early       = linked_handler(linked_symbol(SymbolKind::Rule, "app", "Early"), trigger, 0);
+
+    DecoratedProgram lib;
+    lib.execution_graph.handlers.push_back(member);
+    lib.execution_graph.group_declarations.push_back(
+        GroupDeclaration{.group = solve, .phase = tick, .is_pub = true, .location = {}});
+    DecoratedProgram app;
+    app.execution_graph.handlers.push_back(early);
+    app.execution_graph.group_orderings.push_back(GroupOrdering{
+        .handler = early.identity, .group = solve, .direction = GroupOrderingDirection::Before, .location = {}});
+    // The module's own expansion; the linker must not keep it next to its regenerated copy.
+    app.execution_graph.schedule_edges.push_back(ScheduleEdge{.before      = early.identity,
+                                                              .after       = member.identity,
+                                                              .kind        = ScheduleEdgeKind::ExplicitGroup,
+                                                              .orientation = ScheduleEdgeOrientation::Explicit});
+
+    ErrorReporter errors;
+    ProgramLinker linker(errors);
+    DecoratedProgram merged;
+    REQUIRE(linker.merge_into(merged, lib, "lib"));
+    REQUIRE(linker.merge_into(merged, app, "app"));
+    REQUIRE_FALSE(errors.has_errors());
+    CHECK(merged.execution_graph.group_declarations.size() == 1);
+    CHECK(merged.execution_graph.group_orderings.size() == 1);
+    REQUIRE(std::ranges::count_if(merged.execution_graph.schedule_edges,
+                                  [](const auto& edge) { return edge.kind == ScheduleEdgeKind::ExplicitGroup; }) == 1);
+    CHECK(merged.execution_graph.stable_topological_order ==
+          std::vector<HandlerIdentity>{early.identity, member.identity});
 }
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

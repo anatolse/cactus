@@ -26,7 +26,7 @@ namespace cactus {
 /// deserialization. Callers that need the AST must re-parse from source.
 class ModuleArtifact {
 public:
-    static constexpr uint8_t CURRENT_VERSION = 21;
+    static constexpr uint8_t CURRENT_VERSION = 22;
     static constexpr const char* MAGIC       = "CMOD";
 
     explicit ModuleArtifact(ErrorReporter& errors);
@@ -110,6 +110,7 @@ private:
     static void write_contract(std::ostream& out, const HandlerContract& contract);
     static void write_handler_contracts(std::ostream& out, const std::vector<InferredHandlerContract>& contracts);
     void write_execution_graph(std::ostream& out, const ExecutionGraph& graph);
+    static void write_group_facts(std::ostream& out, const ExecutionGraph& graph);
     static void write_string_pool(std::ostream& out, const StringPool& pool);
 
     // ── Read helpers ────────────────────────────────────────────────────────
@@ -148,6 +149,7 @@ private:
     static HandlerContract read_contract(std::istream& in);
     static std::vector<InferredHandlerContract> read_handler_contracts(std::istream& in);
     ExecutionGraph read_execution_graph(std::istream& in);
+    static void read_group_facts(std::istream& in, ExecutionGraph& graph);
     static StringPool read_string_pool(std::istream& in);
 
     ErrorReporter& errors_;

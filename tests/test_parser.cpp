@@ -3714,6 +3714,132 @@ TEST_CASE("Parser: qualified after clause with multiple rules", "[parser][module
     CHECK(sys.after_rules[1] == "volume.TransformPropagation");
 }
 
+static bool has_diagnostic_containing(const ErrorReporter& errors, const std::string& needle) {
+    return std::ranges::any_of(errors.diagnostics(), [&](const auto& diagnostic) {
+        return diagnostic.message.find(needle) != std::string::npos;
+    });
+}
+
+TEST_CASE("Parser: pub group declaration with phase entry", "[parser][rule-groups]") {
+    auto prog = parse(
+        "pub group solve:\n"
+        "    phase: fixed_tick\n"
+        "group private_anchor:\n"
+        "    phase: tick\n");
+    REQUIRE(prog.declarations.size() == 2);
+    const auto& solve = std::get<GroupNode>(prog.declarations[0]);
+    CHECK(solve.name == "solve");
+    CHECK(solve.is_pub);
+    REQUIRE(solve.phase.has_value());
+    CHECK(solve.phase->spelling == "fixed_tick");
+    const auto& anchor = std::get<GroupNode>(prog.declarations[1]);
+    CHECK(anchor.name == "private_anchor");
+    CHECK_FALSE(anchor.is_pub);
+    REQUIRE(anchor.phase.has_value());
+    CHECK(anchor.phase->spelling == "tick");
+}
+
+TEST_CASE("Parser: group declaration without phase entry is rejected", "[parser][rule-groups]") {
+    auto errors = parse_expect_errors(
+        "group solve:\n"
+        "rule A:\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    CHECK(has_diagnostic_containing(errors, "group 'solve' is missing a 'phase:' entry"));
+}
+
+TEST_CASE("Parser: group declaration with duplicate phase entry is rejected", "[parser][rule-groups]") {
+    auto errors = parse_expect_errors(
+        "group solve:\n"
+        "    phase: tick\n"
+        "    phase: fixed_tick\n");
+    CHECK(has_diagnostic_containing(errors, "duplicate phase: entry in group 'solve'"));
+}
+
+TEST_CASE("Parser: group declaration with unknown entry is rejected", "[parser][rule-groups]") {
+    auto errors = parse_expect_errors(
+        "group solve:\n"
+        "    phase: tick\n"
+        "    every: 1.0\n");
+    CHECK(has_diagnostic_containing(errors, "group body only accepts a 'phase:' entry"));
+}
+
+TEST_CASE("Parser: rule group: and before: clauses", "[parser][rule-groups]") {
+    auto prog = parse(
+        "rule MovePlayer:\n"
+        "    group: solve\n"
+        "    after:\n"
+        "        Input\n"
+        "    before:\n"
+        "        Render\n"
+        "        phys.solve\n"
+        "    on fixed_tick:\n"
+        "        let x = 1\n");
+    const auto& rule = std::get<RuleNode>(prog.declarations[0]);
+    REQUIRE(rule.group_ref.has_value());
+    CHECK(*rule.group_ref == "solve");
+    CHECK(rule.after_rules == std::vector<std::string>{"Input"});
+    CHECK(rule.before_rules == std::vector<std::string>{"Render", "phys.solve"});
+    CHECK(rule.handlers.size() == 1);
+}
+
+TEST_CASE("Parser: extern rule group: and before: clauses", "[parser][rule-groups]") {
+    auto prog = parse(
+        "extern rule MoveAndSlide:\n"
+        "    group: phys.solve\n"
+        "    before:\n"
+        "        Render\n"
+        "    on fixed_tick:\n"
+        "        writes:\n"
+        "            Position\n");
+    const auto& rule = std::get<ExternRuleNode>(prog.declarations[0]);
+    REQUIRE(rule.group_ref.has_value());
+    CHECK(*rule.group_ref == "phys.solve");
+    CHECK(rule.before_rules == std::vector<std::string>{"Render"});
+}
+
+TEST_CASE("Parser: rule without group: or before: leaves them empty", "[parser][rule-groups]") {
+    auto prog = parse(
+        "rule A:\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    const auto& rule = std::get<RuleNode>(prog.declarations[0]);
+    CHECK_FALSE(rule.group_ref.has_value());
+    CHECK(rule.before_rules.empty());
+}
+
+TEST_CASE("Parser: group remains an ordinary identifier", "[parser][rule-groups]") {
+    auto prog = parse(
+        "trait Team:\n"
+        "    var group: int = 0\n"
+        "rule A:\n"
+        "    on tick:\n"
+        "        let group = 1\n"
+        "        let before = group\n");
+    REQUIRE(prog.declarations.size() == 2);
+    const auto& team = std::get<TraitNode>(prog.declarations[0]);
+    REQUIRE(team.fields.size() == 1);
+    CHECK(team.fields[0].name == "group");
+}
+
+TEST_CASE("Parser: empty before: block is rejected", "[parser][rule-groups]") {
+    auto errors = parse_expect_errors(
+        "rule A:\n"
+        "    before:\n"
+        "    on tick:\n"
+        "        let x = 1\n");
+    CHECK(has_diagnostic_containing(errors, "before: block must contain at least one rule or group name"));
+}
+
+TEST_CASE("Parser: group: naming more than one group is rejected", "[parser][rule-groups]") {
+    auto errors = parse_expect_errors(
+        "rule A:\n"
+        "    group: solve, render\n"
+        "    on fixed_tick:\n"
+        "        let x = 1\n");
+    CHECK(has_diagnostic_containing(errors, "a rule joins at most one group"));
+}
+
 TEST_CASE("Parser: std.persistence save request is ordinary, outcomes are external",
           "[parser][persistence]") {
     auto prog = parse(

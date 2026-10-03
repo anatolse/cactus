@@ -10,7 +10,8 @@ Status as of 2026-10-01. Arena: 41 → 32 rules, 1374 → 1267 lines since this 
 | A7, C3 | done — add-trait-lifecycle-triggers |
 | C1 | done — add-deferred-set-command |
 | C2 | done — add-named-entity-access |
-| C4–C8, S1–S3, R1–R6, B1–B3 | open |
+| C6 | partially done — add-rule-groups (rule-level groups; stages/handler-level deferred) |
+| C4, C5, C7, C8, S1–S3, R1–R6, B1–B3 | open |
 
 Original review text follows unchanged except for per-item status markers.
 

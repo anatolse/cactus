@@ -1,0 +1,52 @@
+module rule_groups
+
+use std.core
+
+# CopyVelocity is the group's member. WriteThrust and CopyVelocity read what the
+# other writes, so without an explicit order declaration order would run the
+# member first. WriteThrust is declared later but orders itself before the group,
+# so the member copies the value written in the same step. Observe reads the
+# result after the group.
+
+trait Body:
+    var thrust: float = 0.0
+    var velocity: float = 0.0
+    var steps: int = 0
+
+trait Observed:
+    var seen: float = 0.0
+
+pub group solve:
+    phase: fixed_tick
+
+rule CopyVelocity:
+    filter:
+        Body as body
+    group: solve
+
+    on fixed_tick:
+        body.velocity = body.thrust
+
+rule WriteThrust:
+    filter:
+        Body as body
+    before:
+        solve
+
+    on fixed_tick:
+        body.steps = body.steps + 1
+        body.thrust = body.velocity + 1.0
+
+rule Observe:
+    filter:
+        Body as body
+        Observed as observed
+    after:
+        solve
+
+    on fixed_tick:
+        observed.seen = body.velocity
+
+entity Ball:
+    Body
+    Observed

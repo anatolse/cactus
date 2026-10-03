@@ -20,6 +20,10 @@ namespace cactus {
 // Returns false if any error was reported to `errors` during scheduling.
 bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors);
 
+// Adds one ExplicitGroup edge per member handler for each of graph.group_orderings.
+// Run before compute_handler_schedule, on a module graph or on the linked program.
+void expand_group_orderings(ExecutionGraph& graph);
+
 // Rejects `on added T` / `on removed T` when some handler in the graph projects T.
 void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporter& errors);
 

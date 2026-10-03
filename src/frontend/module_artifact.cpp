@@ -551,6 +551,7 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
         for (const auto& identity : handler.explicit_after) {
             write_handler_identity(out, identity);
         }
+        write_optional_symbol_id(out, handler.group);
         write_declaration_order(out, handler.declaration_order);
         write_location(out, handler.location);
     }
@@ -606,6 +607,25 @@ void ModuleArtifact::write_execution_graph(std::ostream& out, const ExecutionGra
         for (const auto& identity : level.handlers) {
             write_handler_identity(out, identity);
         }
+    }
+    write_group_facts(out, graph);
+}
+
+void ModuleArtifact::write_group_facts(std::ostream& out, const ExecutionGraph& graph) {
+    write_u32(out, static_cast<uint32_t>(graph.group_declarations.size()));
+    for (const auto& group : graph.group_declarations) {
+        write_symbol_id(out, group.group);
+        write_symbol_id(out, group.phase);
+        write_bool(out, group.is_pub);
+        write_location(out, group.location);
+    }
+
+    write_u32(out, static_cast<uint32_t>(graph.group_orderings.size()));
+    for (const auto& ordering : graph.group_orderings) {
+        write_handler_identity(out, ordering.handler);
+        write_symbol_id(out, ordering.group);
+        write_u8(out, static_cast<uint8_t>(ordering.direction));
+        write_location(out, ordering.location);
     }
 }
 
@@ -1159,6 +1179,7 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
         for (uint32_t j = 0; j < after_count; ++j) {
             handler.explicit_after.push_back(read_handler_identity(in));
         }
+        handler.group             = read_optional_symbol_id(in);
         handler.declaration_order = read_declaration_order(in);
         handler.location          = read_location(in);
         graph.handlers.push_back(std::move(handler));
@@ -1231,7 +1252,36 @@ ExecutionGraph ModuleArtifact::read_execution_graph(std::istream& in) {
         }
         graph.dependency_levels.push_back(std::move(level));
     }
+    read_group_facts(in, graph);
     return graph;
+}
+
+void ModuleArtifact::read_group_facts(std::istream& in, ExecutionGraph& graph) {
+    const auto group_count = read_u32(in);
+    graph.group_declarations.reserve(group_count);
+    for (uint32_t i = 0; i < group_count; ++i) {
+        GroupDeclaration group;
+        group.group    = read_symbol_id(in);
+        group.phase    = read_symbol_id(in);
+        group.is_pub   = read_bool(in);
+        group.location = read_location(in);
+        graph.group_declarations.push_back(std::move(group));
+    }
+
+    const auto ordering_count = read_u32(in);
+    graph.group_orderings.reserve(ordering_count);
+    for (uint32_t i = 0; i < ordering_count; ++i) {
+        GroupOrdering ordering;
+        ordering.handler     = read_handler_identity(in);
+        ordering.group       = read_symbol_id(in);
+        const auto direction = read_u8(in);
+        if (direction > static_cast<uint8_t>(GroupOrderingDirection::After)) {
+            in.setstate(std::ios::failbit);
+        }
+        ordering.direction = static_cast<GroupOrderingDirection>(direction);
+        ordering.location  = read_location(in);
+        graph.group_orderings.push_back(std::move(ordering));
+    }
 }
 
 StringPool ModuleArtifact::read_string_pool(std::istream& in) {
@@ -1462,6 +1512,10 @@ std::optional<ImportedSymbols> ModuleArtifact::extract_pub_symbols(const fs::pat
                                                     .runtime_root    = phase.runtime_root,
                                                     .every_seconds   = phase.every_seconds,
                                                     .max_repetitions = phase.max_repetitions};
+    }
+
+    for (const auto& group : program->execution_graph.group_declarations) {
+        symbols.groups[group.group.local_name] = group;
     }
 
     return symbols;

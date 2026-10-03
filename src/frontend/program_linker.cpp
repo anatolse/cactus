@@ -212,6 +212,14 @@ bool ProgramLinker::merge_into(DecoratedProgram& target,
     target.execution_graph.render_passes.insert(target.execution_graph.render_passes.end(),
                                                  src.execution_graph.render_passes.begin(),
                                                  src.execution_graph.render_passes.end());
+    target.execution_graph.group_declarations.insert(target.execution_graph.group_declarations.end(),
+                                                     src.execution_graph.group_declarations.begin(),
+                                                     src.execution_graph.group_declarations.end());
+    target.execution_graph.group_orderings.insert(target.execution_graph.group_orderings.end(),
+                                                  src.execution_graph.group_orderings.begin(),
+                                                  src.execution_graph.group_orderings.end());
+    // ExplicitGroup edges are not kept: rebuild_execution_graph regenerates them
+    // from group_orderings once every member handler is linked.
     for (const auto& edge : src.execution_graph.schedule_edges) {
         if (edge.kind != ScheduleEdgeKind::ExplicitHandler && edge.kind != ScheduleEdgeKind::ExplicitRule) {
             continue;
@@ -293,6 +301,7 @@ bool ProgramLinker::rebuild_execution_graph(DecoratedProgram& program, bool vali
         }
     }
 
+    expand_group_orderings(graph);
     const bool schedule_ok = compute_handler_schedule(graph, errors_);
     check_phase_lineage_cycles(graph.phases, errors_);
     validate_lifecycle_trigger_traits(graph, errors_);

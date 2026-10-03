@@ -22,6 +22,7 @@ enum class SymbolKind : std::uint8_t {
     Asset,
     Input,
     Const,
+    Group,
 };
 
 struct ModuleId {
@@ -98,6 +99,8 @@ struct SymbolIdHash {
             return "input";
         case SymbolKind::Const:
             return "const";
+        case SymbolKind::Group:
+            return "group";
     }
     return "unknown";
 }

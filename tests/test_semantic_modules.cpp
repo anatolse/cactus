@@ -3452,4 +3452,468 @@ TEST_CASE("semantic_modules: named access through an import-qualified trait", "[
     INFO((diagnostics.empty() ? "" : diagnostics.front().message));
     CHECK(diagnostics.empty());
 }
+
+// ── Rule groups ──────────────────────────────────────────────────────────────
+
+static std::string rule_group_source(const std::string& body) {
+    return "module game.groups\n"
+           "extern event frame:\n"
+           "    dt: float\n"
+           "event Damaged\n"
+           "phase fixed_tick:\n"
+           "    from:\n"
+           "        frame\n"
+           "phase tick:\n"
+           "    after:\n"
+           "        fixed_tick\n"
+           "trait Position:\n"
+           "    var x: float = 0.0\n" +
+           body;
+}
+
+static ImportedSymbols make_core_with_phases() {
+    ImportedSymbols core;
+    core.module_name = "std.core";
+    for (const std::string name : {"fixed_tick", "tick"}) {
+        const auto symbol        = make_symbol_id(SymbolKind::Phase, "std.core", name);
+        core.phase_symbols[name] = ImportedPhase{.name            = name,
+                                                 .module_name     = "std.core",
+                                                 .canonical_id    = make_canonical_id(symbol),
+                                                 .symbol_id       = symbol,
+                                                 .fields          = {},
+                                                 .upstream_phases = {},
+                                                 .runtime_root    = {},
+                                                 .every_seconds   = {},
+                                                 .max_repetitions = {}};
+    }
+    return core;
+}
+
+static ModuleImports imports_with_physics_group(bool is_pub) {
+    ImportedSymbols physics;
+    physics.module_name = "std.physics.volume";
+    physics.groups["solve"] =
+        GroupDeclaration{.group    = make_symbol_id(SymbolKind::Group, "std.physics.volume", "solve"),
+                         .phase    = make_symbol_id(SymbolKind::Phase, "std.core", "fixed_tick"),
+                         .is_pub   = is_pub,
+                         .location = {}};
+    ModuleImports imports;
+    imports.add("std.core", make_core_with_phases());
+    imports.add("phys", std::move(physics));
+    return imports;
+}
+
+TEST_CASE("rule groups: a group declaration records its phase", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("pub group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule MoveAndSlide:\n"
+                                         "    group: solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"
+                                         "rule MovePlayer:\n"
+                                         "    before:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 2\n"
+                                         "rule ReactToGround:\n"
+                                         "    after:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 3\n"
+                                         "    on tick:\n"
+                                         "        let value = 4\n"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    REQUIRE(decorated.execution_graph.group_declarations.size() == 1);
+    const auto& group = decorated.execution_graph.group_declarations.front();
+    CHECK(group.group == make_symbol_id(SymbolKind::Group, "game.groups", "solve"));
+    CHECK(group.phase == make_symbol_id(SymbolKind::Phase, "game.groups", "fixed_tick"));
+    CHECK(group.is_pub);
+}
+
+TEST_CASE("rule groups: group and rule share the declaration namespace", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group Move:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Move:\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"));
+    CHECK(has_diagnostic(diagnostics, "duplicate module-scope declaration 'Move'"));
+}
+
+TEST_CASE("rule groups: group phase entry must name a phase", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: Damaged\n"
+                                         "group other:\n"
+                                         "    phase: nowhere\n"));
+    CHECK(has_diagnostic(diagnostics, "'Damaged' is not a phase"));
+    CHECK(has_diagnostic(diagnostics, "unknown phase 'nowhere' in group 'other'"));
+}
+
+TEST_CASE("rule groups: unknown group in group: is rejected", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("rule A:\n"
+                                         "    group: missing\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"
+                                         "rule B:\n"
+                                         "    group: Position\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"));
+    CHECK(has_diagnostic(diagnostics, "unknown group 'missing'"));
+    CHECK(has_diagnostic(diagnostics, "'Position' is not a group"));
+}
+
+TEST_CASE("rule groups: member and referrer need a handler for the group's phase", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Member:\n"
+                                         "    group: solve\n"
+                                         "    on tick:\n"
+                                         "        let value = 1\n"
+                                         "rule Referrer:\n"
+                                         "    after:\n"
+                                         "        solve\n"
+                                         "    on tick:\n"
+                                         "        let value = 2\n"
+                                         "rule BeforeReferrer:\n"
+                                         "    before:\n"
+                                         "        solve\n"
+                                         "    on Damaged:\n"
+                                         "        let value = 3\n"));
+    CHECK(has_diagnostic(diagnostics, "rule 'Member' joins group 'solve' but has no handler for phase 'fixed_tick'"));
+    CHECK(has_diagnostic(diagnostics,
+                         "rule 'Referrer' orders against group 'solve' but has no handler for phase 'fixed_tick'"));
+    CHECK(has_diagnostic(
+        diagnostics, "rule 'BeforeReferrer' orders against group 'solve' but has no handler for phase 'fixed_tick'"));
+}
+
+TEST_CASE("rule groups: a member cannot order against its own group", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Member:\n"
+                                         "    group: solve\n"
+                                         "    after:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"));
+    CHECK(has_diagnostic(diagnostics, "rule 'Member' cannot order against its own group 'solve'"));
+}
+
+TEST_CASE("rule groups: before: validation mirrors after:", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("rule A:\n"
+                                         "    before:\n"
+                                         "        A\n"
+                                         "        NonExistentRule\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"
+                                         "rule B:\n"
+                                         "    after:\n"
+                                         "        Position\n"
+                                         "    before:\n"
+                                         "        Position\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"));
+    CHECK(has_diagnostic(diagnostics, "rule 'A' cannot list itself in before:"));
+    CHECK(has_diagnostic(diagnostics, "unknown rule 'NonExistentRule' in before clause"));
+    CHECK(std::ranges::count_if(diagnostics, [](const auto& diagnostic) {
+              return diagnostic.message.find("'Position' is not a rule or group") != std::string::npos;
+          }) == 2);
+}
+
+TEST_CASE("rule groups: unknown name in after: keeps its diagnostic", "[semantic][rule-groups]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("rule A:\n"
+                                         "    after:\n"
+                                         "        NonExistentRule\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"));
+    CHECK(has_diagnostic(diagnostics, "unknown rule 'NonExistentRule' in after clause"));
+}
+
+TEST_CASE("rule groups: ordering against an imported pub group is accepted", "[semantic][rule-groups][modules]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.player\n"
+        "rule MovePlayer:\n"
+        "    before:\n"
+        "        phys.solve\n"
+        "    on fixed_tick:\n"
+        "        let value = 1\n"
+        "rule ReactToGround:\n"
+        "    after:\n"
+        "        std.physics.volume.solve\n"
+        "    on fixed_tick:\n"
+        "        let value = 2\n",
+        imports_with_physics_group(true));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    CHECK(diagnostics.empty());
+}
+
+TEST_CASE("rule groups: only the declaring module may join a group", "[semantic][rule-groups][modules]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.player\n"
+        "rule MovePlayer:\n"
+        "    group: phys.solve\n"
+        "    on fixed_tick:\n"
+        "        let value = 1\n",
+        imports_with_physics_group(true));
+    CHECK(has_diagnostic(diagnostics, "only rules in module 'std.physics.volume' may join group 'phys.solve'"));
+}
+
+TEST_CASE("rule groups: a private group is not visible to other modules", "[semantic][rule-groups][modules]") {
+    const auto [decorated, diagnostics] = analyze_source(
+        "module game.player\n"
+        "rule MovePlayer:\n"
+        "    before:\n"
+        "        phys.solve\n"
+        "    on fixed_tick:\n"
+        "        let value = 1\n",
+        imports_with_physics_group(false));
+    CHECK(has_diagnostic(diagnostics, "group 'solve' is not public in module 'phys'"));
+}
+
+static HandlerIdentity group_test_handler(const std::string& rule, const std::string& trigger) {
+    const bool is_phase = trigger == "fixed_tick" || trigger == "tick";
+    return HandlerIdentity{
+        .rule    = make_symbol_id(SymbolKind::Rule, "game.groups", rule),
+        .trigger = ResolvedHandlerTrigger{
+            .kind   = is_phase ? HandlerTriggerKind::Phase : HandlerTriggerKind::Event,
+            .symbol = make_symbol_id(is_phase ? SymbolKind::Phase : SymbolKind::Event, "game.groups", trigger)}};
+}
+
+static std::vector<const ScheduleEdge*> edges_of_kind(const ExecutionGraph& graph, ScheduleEdgeKind kind) {
+    std::vector<const ScheduleEdge*> edges;
+    for (const auto& edge : graph.schedule_edges) {
+        if (edge.kind == kind) {
+            edges.push_back(&edge);
+        }
+    }
+    return edges;
+}
+
+static bool has_schedule_edge(const ExecutionGraph& graph,
+                              const HandlerIdentity& before,
+                              const HandlerIdentity& after,
+                              ScheduleEdgeKind kind) {
+    return std::ranges::any_of(graph.schedule_edges, [&](const auto& edge) {
+        return edge.before == before && edge.after == after && edge.kind == kind;
+    });
+}
+
+TEST_CASE("rule groups: before: mirrors after: within one trigger", "[semantic][rule-groups][handler-graph]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("rule A:\n"
+                                         "    before:\n"
+                                         "        B\n"
+                                         "        C\n"
+                                         "    on tick:\n"
+                                         "        let value = 1\n"
+                                         "rule B:\n"
+                                         "    on tick:\n"
+                                         "        let value = 2\n"
+                                         "    on Damaged:\n"
+                                         "        let value = 3\n"
+                                         "rule C:\n"
+                                         "    on Damaged:\n"
+                                         "        let value = 4\n"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    const auto& graph = decorated.execution_graph;
+    REQUIRE(edges_of_kind(graph, ScheduleEdgeKind::ExplicitRule).size() == 1);
+    CHECK(has_schedule_edge(
+        graph, group_test_handler("A", "tick"), group_test_handler("B", "tick"), ScheduleEdgeKind::ExplicitRule));
+    CHECK(graph.stable_topological_order.front() == group_test_handler("A", "tick"));
+}
+
+TEST_CASE("rule groups: after: and before: a group order against every member handler",
+          "[semantic][rule-groups][handler-graph]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Late:\n"
+                                         "    after:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"
+                                         "rule MemberOne:\n"
+                                         "    group: solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 2\n"
+                                         "    on tick:\n"
+                                         "        let value = 3\n"
+                                         "rule MemberTwo:\n"
+                                         "    group: solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 4\n"
+                                         "rule Early:\n"
+                                         "    before:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 5\n"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    const auto& graph = decorated.execution_graph;
+    const auto solve  = make_symbol_id(SymbolKind::Group, "game.groups", "solve");
+
+    const auto node_for = [&](const HandlerIdentity& identity) -> const HandlerNode& {
+        const auto found =
+            std::ranges::find_if(graph.handlers, [&](const auto& node) { return node.identity == identity; });
+        REQUIRE(found != graph.handlers.end());
+        return *found;
+    };
+    CHECK(node_for(group_test_handler("MemberOne", "fixed_tick")).group == solve);
+    CHECK(node_for(group_test_handler("MemberTwo", "fixed_tick")).group == solve);
+    CHECK_FALSE(node_for(group_test_handler("MemberOne", "tick")).group.has_value());
+    CHECK_FALSE(node_for(group_test_handler("Early", "fixed_tick")).group.has_value());
+
+    REQUIRE(graph.group_orderings.size() == 2);
+    CHECK(std::ranges::any_of(graph.group_orderings, [&](const auto& ordering) {
+        return ordering.handler == group_test_handler("Early", "fixed_tick") && ordering.group == solve &&
+               ordering.direction == GroupOrderingDirection::Before;
+    }));
+    CHECK(std::ranges::any_of(graph.group_orderings, [&](const auto& ordering) {
+        return ordering.handler == group_test_handler("Late", "fixed_tick") && ordering.group == solve &&
+               ordering.direction == GroupOrderingDirection::After;
+    }));
+
+    REQUIRE(edges_of_kind(graph, ScheduleEdgeKind::ExplicitGroup).size() == 4);
+    for (const std::string member : {"MemberOne", "MemberTwo"}) {
+        CHECK(has_schedule_edge(graph,
+                                group_test_handler("Early", "fixed_tick"),
+                                group_test_handler(member, "fixed_tick"),
+                                ScheduleEdgeKind::ExplicitGroup));
+        CHECK(has_schedule_edge(graph,
+                                group_test_handler(member, "fixed_tick"),
+                                group_test_handler("Late", "fixed_tick"),
+                                ScheduleEdgeKind::ExplicitGroup));
+    }
+    const auto position = [&](const HandlerIdentity& identity) {
+        return std::ranges::find(graph.stable_topological_order, identity) - graph.stable_topological_order.begin();
+    };
+    CHECK(position(group_test_handler("Early", "fixed_tick")) <
+          position(group_test_handler("MemberOne", "fixed_tick")));
+    CHECK(position(group_test_handler("MemberTwo", "fixed_tick")) < position(group_test_handler("Late", "fixed_tick")));
+}
+
+TEST_CASE("rule groups: an empty group creates no edges", "[semantic][rule-groups][handler-graph]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Early:\n"
+                                         "    before:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    CHECK(decorated.execution_graph.group_orderings.size() == 1);
+    CHECK(edges_of_kind(decorated.execution_graph, ScheduleEdgeKind::ExplicitGroup).empty());
+}
+
+TEST_CASE("rule groups: a group edge decides a two-way data conflict", "[semantic][rule-groups][handler-graph]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("trait Velocity:\n"
+                                         "    var v: float = 0.0\n"
+                                         "trait Grounded:\n"
+                                         "    var g: float = 0.0\n"
+                                         "group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Member:\n"
+                                         "    filter:\n"
+                                         "        Velocity as vel\n"
+                                         "        Grounded as gr\n"
+                                         "    group: solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        gr.g = vel.v\n"
+                                         "rule Writer:\n"
+                                         "    filter:\n"
+                                         "        Velocity as vel\n"
+                                         "        Grounded as gr\n"
+                                         "    before:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        vel.v = gr.g + 1.0\n"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    const auto& graph = decorated.execution_graph;
+    const auto writer = group_test_handler("Writer", "fixed_tick");
+    const auto member = group_test_handler("Member", "fixed_tick");
+    const auto data   = edges_of_kind(graph, ScheduleEdgeKind::DataConflict);
+    REQUIRE(data.size() == 1);
+    CHECK(data.front()->before == writer);
+    CHECK(data.front()->after == member);
+    CHECK(data.front()->orientation == ScheduleEdgeOrientation::Explicit);
+    const auto writer_at = std::ranges::find(graph.stable_topological_order, writer);
+    const auto member_at = std::ranges::find(graph.stable_topological_order, member);
+    CHECK(writer_at < member_at);
+}
+
+TEST_CASE("rule groups: a cycle through a group reports the handler path", "[semantic][rule-groups][handler-graph]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("group solve:\n"
+                                         "    phase: fixed_tick\n"
+                                         "rule Member:\n"
+                                         "    group: solve\n"
+                                         "    after:\n"
+                                         "        A\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 1\n"
+                                         "rule A:\n"
+                                         "    after:\n"
+                                         "        solve\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 2\n"));
+    REQUIRE(has_diagnostic(diagnostics, "handler cycle:"));
+    CHECK(has_diagnostic(diagnostics,
+                         "game.groups.Member/on game.groups.fixed_tick -> game.groups.A/on game.groups.fixed_tick"));
+}
+
+TEST_CASE("rule groups: programs without groups or before: keep their schedule",
+          "[semantic][rule-groups][handler-graph][regression]") {
+    const auto [decorated, diagnostics] =
+        analyze_source(rule_group_source("trait Velocity:\n"
+                                         "    var v: float = 0.0\n"
+                                         "rule Reader:\n"
+                                         "    filter:\n"
+                                         "        Velocity as vel\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = vel.v\n"
+                                         "rule Writer:\n"
+                                         "    filter:\n"
+                                         "        Velocity as vel\n"
+                                         "    on fixed_tick:\n"
+                                         "        vel.v = 1.0\n"
+                                         "rule Ordered:\n"
+                                         "    after:\n"
+                                         "        Reader\n"
+                                         "    on fixed_tick:\n"
+                                         "        let value = 2\n"
+                                         "    on tick:\n"
+                                         "        let value = 3\n"));
+    INFO((diagnostics.empty() ? "" : diagnostics.front().message));
+    REQUIRE(diagnostics.empty());
+    const auto& graph = decorated.execution_graph;
+    CHECK(graph.group_declarations.empty());
+    CHECK(graph.group_orderings.empty());
+    CHECK(std::ranges::none_of(graph.handlers, [](const auto& node) { return node.group.has_value(); }));
+    CHECK(edges_of_kind(graph, ScheduleEdgeKind::ExplicitGroup).empty());
+    REQUIRE(graph.schedule_edges.size() == 2);
+    CHECK(has_schedule_edge(graph,
+                            group_test_handler("Reader", "fixed_tick"),
+                            group_test_handler("Ordered", "fixed_tick"),
+                            ScheduleEdgeKind::ExplicitRule));
+    CHECK(has_schedule_edge(graph,
+                            group_test_handler("Writer", "fixed_tick"),
+                            group_test_handler("Reader", "fixed_tick"),
+                            ScheduleEdgeKind::DataConflict));
+    CHECK(graph.stable_topological_order == std::vector<HandlerIdentity>{group_test_handler("Writer", "fixed_tick"),
+                                                                         group_test_handler("Reader", "fixed_tick"),
+                                                                         group_test_handler("Ordered", "fixed_tick"),
+                                                                         group_test_handler("Ordered", "tick")});
+}
 // NOLINTEND(cppcoreguidelines-avoid-do-while,bugprone-chained-comparison,readability-function-cognitive-complexity,bugprone-unchecked-optional-access)

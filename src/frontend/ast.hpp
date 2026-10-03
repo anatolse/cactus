@@ -827,6 +827,14 @@ struct LimitClause {
     SourceLocation location;
 };
 
+// Set by semantic analysis from a rule's group:/after:/before: clauses.
+struct ResolvedRuleOrdering {
+    std::optional<SymbolId> group;
+    std::vector<SymbolId> after_groups;
+    std::vector<SymbolId> before_rules;
+    std::vector<SymbolId> before_groups;
+};
+
 struct RuleNode {
     std::string name;
     bool is_stdlib = false;
@@ -839,7 +847,10 @@ struct RuleNode {
     std::optional<LimitClause> limit;                // set when this rule declares a limit: clause
     std::optional<WhenClause> when_clause;           // set when this rule declares a when: clause
     std::vector<SortKey> order_by;
-    std::vector<std::string> after_rules;  // explicit ordering: this rule runs after these
+    std::optional<std::string> group_ref;   // group this rule joins
+    std::vector<std::string> after_rules;   // explicit ordering: this rule runs after these rules or groups
+    std::vector<std::string> before_rules;  // explicit ordering: this rule runs before these rules or groups
+    ResolvedRuleOrdering resolved_ordering;
     std::vector<EventHandlerNode> handlers;
     SourceLocation location;
 };
@@ -852,7 +863,10 @@ struct ExternRuleNode {
     FilterClause filter;
     FilterClause exclude;
     std::vector<SortKey> order_by;
+    std::optional<std::string> group_ref;
     std::vector<std::string> after_rules;
+    std::vector<std::string> before_rules;
+    ResolvedRuleOrdering resolved_ordering;
     std::vector<ExternHandlerNode> handlers;
     SourceLocation location;
 };
@@ -899,6 +913,15 @@ struct PhaseNode {
     std::optional<std::unique_ptr<ExprNode>> every;
     std::optional<std::unique_ptr<ExprNode>> max;
     std::vector<PhaseFieldNode> fields;
+    SourceLocation location;
+};
+
+// `[pub] group Name:` — a named ordering anchor inside one phase; no runtime behavior.
+struct GroupNode {
+    std::string name;
+    bool is_pub = false;
+    std::optional<LocatedName> phase;  // empty only after a reported parse error
+    std::optional<SymbolId> resolved_group_id;
     SourceLocation location;
 };
 
@@ -973,6 +996,7 @@ using Declaration = std::variant<ModuleNode,
                                  ViewNode,
                                  EventNode,
                                  PhaseNode,
+                                 GroupNode,
                                  FuncNode,
                                  AssetDeclNode,
                                  InputDeclNode>;

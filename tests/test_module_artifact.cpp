@@ -940,7 +940,7 @@ TEST_CASE("ModuleArtifact: set command capabilities round-trip", "[artifact][def
     CHECK(loaded->handler_contracts.front().commands == commands);
     REQUIRE(loaded->execution_graph.handlers.size() == 1);
     CHECK(loaded->execution_graph.handlers.front().contract.commands == commands);
-    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
 
     fs::remove_all(build_dir, ec);
 }
@@ -1283,7 +1283,7 @@ TEST_CASE("ModuleArtifact: field-level access serializes deterministically", "[a
 }
 
 TEST_CASE("ModuleArtifact: artifact from before field-level contracts is rejected", "[artifact][handler-contracts]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1557,7 +1557,7 @@ TEST_CASE("ModuleArtifact: unknown trigger kind is rejected", "[artifact][trait-
 }
 
 TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected", "[artifact][trait-lifecycle]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);
@@ -1581,8 +1581,128 @@ TEST_CASE("ModuleArtifact: artifact from before lifecycle triggers is rejected",
     fs::remove_all(build_dir, ec);
 }
 
+TEST_CASE("ModuleArtifact: rule group facts and group edges round-trip", "[artifact][rule-groups]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const auto solve = test_symbol(SymbolKind::Group, "solve");
+    const auto tick  = test_symbol(SymbolKind::Phase, "tick");
+    const ResolvedHandlerTrigger trigger{.kind = HandlerTriggerKind::Phase, .symbol = tick};
+    const HandlerIdentity member{.rule = test_symbol(SymbolKind::Rule, "MoveAndSlide"), .trigger = trigger};
+    const HandlerIdentity referrer{.rule = test_symbol(SymbolKind::Rule, "MovePlayer"), .trigger = trigger};
+    const HandlerIdentity imported{.rule = make_symbol_id(SymbolKind::Rule, "other.lib", "Render"), .trigger = trigger};
+
+    DecoratedProgram program;
+    program.execution_graph.group_declarations.push_back(GroupDeclaration{
+        .group = solve, .phase = tick, .is_pub = true, .location = SourceLocation{"lib.cactus", 3, 1}});
+    program.execution_graph.group_declarations.push_back(
+        GroupDeclaration{.group = test_symbol(SymbolKind::Group, "hidden"), .phase = tick, .is_pub = false});
+    program.execution_graph.handlers.push_back(HandlerNode{.identity = member, .group = solve});
+    program.execution_graph.handlers.push_back(HandlerNode{.identity = referrer});
+    program.execution_graph.group_orderings.push_back(GroupOrdering{.handler   = referrer,
+                                                                    .group     = solve,
+                                                                    .direction = GroupOrderingDirection::Before,
+                                                                    .location  = SourceLocation{"lib.cactus", 7, 1}});
+    program.execution_graph.schedule_edges.push_back(ScheduleEdge{.before      = referrer,
+                                                                  .after       = member,
+                                                                  .kind        = ScheduleEdgeKind::ExplicitGroup,
+                                                                  .orientation = ScheduleEdgeOrientation::Explicit});
+    program.execution_graph.schedule_edges.push_back(ScheduleEdge{.before      = referrer,
+                                                                  .after       = imported,
+                                                                  .kind        = ScheduleEdgeKind::ExplicitRule,
+                                                                  .orientation = ScheduleEdgeOrientation::Explicit});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    const auto loaded = artifact.load(build_dir / "runtime.lib.cmod", module_name);
+    REQUIRE_FALSE(errors.has_errors());
+    REQUIRE(loaded.has_value());
+    const auto& graph = loaded->execution_graph;
+
+    REQUIRE(graph.group_declarations.size() == 2);
+    CHECK(graph.group_declarations[0].group == solve);
+    CHECK(graph.group_declarations[0].phase == tick);
+    CHECK(graph.group_declarations[0].is_pub);
+    CHECK(graph.group_declarations[0].location.line == 3);
+    CHECK_FALSE(graph.group_declarations[1].is_pub);
+    REQUIRE(graph.handlers.size() == 2);
+    CHECK(graph.handlers[0].group == solve);
+    CHECK_FALSE(graph.handlers[1].group.has_value());
+    REQUIRE(graph.group_orderings.size() == 1);
+    CHECK(graph.group_orderings[0].handler == referrer);
+    CHECK(graph.group_orderings[0].group == solve);
+    CHECK(graph.group_orderings[0].direction == GroupOrderingDirection::Before);
+    CHECK(graph.group_orderings[0].location.line == 7);
+    REQUIRE(graph.schedule_edges.size() == 2);
+    CHECK(graph.schedule_edges[0].kind == ScheduleEdgeKind::ExplicitGroup);
+    CHECK(graph.schedule_edges[1].kind == ScheduleEdgeKind::ExplicitRule);
+    CHECK(graph.schedule_edges[1].before == referrer);
+    CHECK(graph.schedule_edges[1].after == imported);
+
+    const auto symbols = artifact.extract_pub_symbols(build_dir / "runtime.lib.cmod");
+    REQUIRE(symbols.has_value());
+    REQUIRE(symbols->groups.size() == 2);
+    CHECK(symbols->groups.at("solve").is_pub);
+    CHECK_FALSE(symbols->groups.at("hidden").is_pub);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: unknown group ordering direction is malformed", "[artifact][rule-groups]") {
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+
+    const ResolvedHandlerTrigger trigger{.kind   = HandlerTriggerKind::Phase,
+                                         .symbol = test_symbol(SymbolKind::Phase, "tick")};
+    DecoratedProgram program;
+    program.execution_graph.group_orderings.push_back(
+        GroupOrdering{.handler   = {.rule = test_symbol(SymbolKind::Rule, "MovePlayer"), .trigger = trigger},
+                      .group     = test_symbol(SymbolKind::Group, "solve"),
+                      .direction = static_cast<GroupOrderingDirection>(0x7F),
+                      .location  = {}});
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    REQUIRE(artifact.save(program, "runtime.lib", build_dir));
+    std::string module_name;
+    CHECK_FALSE(artifact.load(build_dir / "runtime.lib.cmod", module_name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics().back().message.find("malformed") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
+TEST_CASE("ModuleArtifact: artifact from before rule groups is rejected", "[artifact][rule-groups]") {
+    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
+    auto build_dir = test_build_dir();
+    std::error_code ec;
+    fs::remove_all(build_dir, ec);
+    fs::create_directories(build_dir);
+
+    auto path = build_dir / "old.cmod";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("CMOD", 4);
+        const char previous_version = 21;
+        out.write(&previous_version, 1);
+    }
+
+    ErrorReporter errors;
+    ModuleArtifact artifact(errors);
+    std::string name;
+    CHECK_FALSE(artifact.load(path, name).has_value());
+    REQUIRE(errors.has_errors());
+    CHECK(errors.diagnostics()[0].message.find("incompatible module artifact version") != std::string::npos);
+
+    fs::remove_all(build_dir, ec);
+}
+
 TEST_CASE("ModuleArtifact: artifact from before named-entity access is rejected", "[artifact][named-entity]") {
-    CHECK(ModuleArtifact::CURRENT_VERSION == 21);
+    CHECK(ModuleArtifact::CURRENT_VERSION == 22);
     auto build_dir = test_build_dir();
     std::error_code ec;
     fs::remove_all(build_dir, ec);

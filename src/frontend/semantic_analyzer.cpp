@@ -1101,6 +1101,7 @@ DecoratedProgram SemanticAnalyzer::analyze(ProgramNode& program, const ModuleImp
     validate_where_clauses(program);
     validate_when_clauses(program);
     validate_phase_declarations(program);
+    validate_group_declarations(program);
     // dsl-render-passes: descriptor-field *value* validation needs
     // resolved_enum_member, populated by resolve_all_types above, so it runs
     // as a separate step after validate_phase_declarations rather than
@@ -1211,6 +1212,10 @@ void SemanticAnalyzer::collect_types(ProgramNode& program) {
                 } else if constexpr (std::is_same_v<T, PhaseNode>) {
                     declare_module_scope_symbol(SymbolKind::Phase, node.name, node.location);
                     phase_names_.insert(node.name);
+                } else if constexpr (std::is_same_v<T, GroupNode>) {
+                    if (declare_module_scope_symbol(SymbolKind::Group, node.name, node.location)) {
+                        node.resolved_group_id = make_symbol_id(SymbolKind::Group, current_module_id_, node.name);
+                    }
                 } else if constexpr (std::is_same_v<T, FuncNode>) {
                     node.is_stdlib = current_module_is_stdlib_;
                     declare_module_scope_symbol(SymbolKind::Func, node.name, node.location);
@@ -7260,6 +7265,9 @@ std::optional<SymbolId> SemanticAnalyzer::lookup_imported_symbol(const ImportedS
     if (auto const_it = syms.consts.find(name); const_it != syms.consts.end()) {
         return resolved_decl_symbol(const_it->second, SymbolKind::Const, syms.module_name, name);
     }
+    if (auto group_it = syms.groups.find(name); group_it != syms.groups.end() && group_it->second.is_pub) {
+        return group_it->second.group;
+    }
     return std::nullopt;
 }
 
@@ -7516,7 +7524,7 @@ void SemanticAnalyzer::validate_input_decl_props(const InputDeclNode& node) {
 
 std::string SemanticAnalyzer::resolve_rule_after_ref(const std::string& ref,
                                                      const SourceLocation& loc,
-                                                     const std::unordered_set<std::string>& /*local_rule_names*/) {
+                                                     const char* clause) {
     // Unified lookup: alias- and canonical-qualified, current-module-qualified,
     // bare local, and std.core prelude spellings all resolve identically.
     if (auto resolved = try_resolve_ref_of_kind(ref, {SymbolKind::Rule})) {
@@ -7528,10 +7536,11 @@ std::string SemanticAnalyzer::resolve_rule_after_ref(const std::string& ref,
         auto qualifier  = ref.substr(0, dot);
         auto local_name = ref.substr(dot + 1);
         if (qualifier != current_module_name_ && find_imported_module(qualifier) == nullptr) {
-            errors_.error(loc, "unknown module qualifier '" + qualifier + "' in 'after:' clause");
+            errors_.error(loc, "unknown module qualifier '" + qualifier + "' in '" + clause + ":' clause");
             return "";
         }
-        errors_.error(loc, "unknown rule '" + local_name + "' in module '" + qualifier + "' in 'after:' clause");
+        errors_.error(loc,
+                      "unknown rule '" + local_name + "' in module '" + qualifier + "' in '" + clause + ":' clause");
         return "";
     }
 
@@ -9940,6 +9949,269 @@ void SemanticAnalyzer::validate_exclude_clause(const auto& node) {
 
 // ── Phase 5a: after: clause validation and cycle detection ─────────────────
 
+void SemanticAnalyzer::validate_group_declarations(ProgramNode& program) {
+    for (auto& decl : program.declarations) {
+        auto* group = std::get_if<GroupNode>(&decl);
+        if (group == nullptr || !group->phase.has_value() || !group->resolved_group_id.has_value()) {
+            continue;
+        }
+        const auto& spelling = group->phase->spelling;
+        const auto phase     = try_resolve_phase_ref_to_symbol(spelling);
+        if (!phase.has_value()) {
+            errors_.error(group->phase->location,
+                          resolve_name(dotted_segments(spelling)).has_value()
+                              ? "'" + spelling + "' is not a phase"
+                              : "unknown phase '" + spelling + "' in group '" + group->name + "'");
+            continue;
+        }
+        result_.execution_graph.group_declarations.push_back(GroupDeclaration{
+            .group = *group->resolved_group_id, .phase = *phase, .is_pub = group->is_pub, .location = group->location});
+    }
+}
+
+const GroupDeclaration* SemanticAnalyzer::find_group_declaration(const SymbolId& group) const {
+    if (group.module == current_module_id_) {
+        const auto& local = result_.execution_graph.group_declarations;
+        const auto found =
+            std::ranges::find_if(local, [&](const auto& declaration) { return declaration.group == group; });
+        return found == local.end() ? nullptr : &*found;
+    }
+    for (const auto& [_, syms] : imports_.modules) {
+        if (syms.module_name != group.module.name) {
+            continue;
+        }
+        if (const auto found = syms.groups.find(group.local_name); found != syms.groups.end()) {
+            return &found->second;
+        }
+    }
+    return nullptr;
+}
+
+bool SemanticAnalyzer::report_private_group(const std::string& ref, const SourceLocation& loc) {
+    const auto dot = ref.rfind('.');
+    if (dot == std::string::npos) {
+        return false;
+    }
+    const auto qualifier = ref.substr(0, dot);
+    const auto local     = ref.substr(dot + 1);
+    const auto* module   = find_imported_module(qualifier);
+    if (module == nullptr) {
+        return false;
+    }
+    const auto group = module->groups.find(local);
+    if (group == module->groups.end() || group->second.is_pub) {
+        return false;
+    }
+    errors_.error(loc, "group '" + local + "' is not public in module '" + qualifier + "'");
+    return true;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::resolve_ordering_ref(const std::string& ref,
+                                                               const SourceLocation& loc,
+                                                               const char* clause) {
+    if (auto target = try_resolve_ref_of_kind(ref, {SymbolKind::Rule, SymbolKind::Group})) {
+        return target;
+    }
+    if (auto other = resolve_name(dotted_segments(ref)); other.has_value() && other->member_segments.empty()) {
+        errors_.error(loc, "'" + ref + "' is not a rule or group");
+        return std::nullopt;
+    }
+    if (report_private_group(ref, loc)) {
+        return std::nullopt;
+    }
+    const auto previous_errors = errors_.error_count();
+    (void)resolve_rule_after_ref(ref, loc, clause);
+    if (errors_.error_count() == previous_errors) {
+        errors_.error(loc, "unknown rule '" + ref + "' in " + clause + " clause");
+    }
+    return std::nullopt;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::resolve_group_membership_ref(const std::string& ref,
+                                                                       const SourceLocation& loc) {
+    if (auto group = try_resolve_ref_of_kind(ref, {SymbolKind::Group})) {
+        return group;
+    }
+    if (resolve_name(dotted_segments(ref)).has_value()) {
+        errors_.error(loc, "'" + ref + "' is not a group");
+    } else if (!report_private_group(ref, loc)) {
+        errors_.error(loc, "unknown group '" + ref + "'");
+    }
+    return std::nullopt;
+}
+
+bool SemanticAnalyzer::report_missing_group_phase_handler(const RuleOrderingSubject& subject,
+                                                          const SymbolId& group,
+                                                          const std::string& spelling,
+                                                          const char* verb) {
+    const auto* declaration = find_group_declaration(group);
+    if (declaration == nullptr ||
+        std::ranges::find(subject.handled_phases, declaration->phase) != subject.handled_phases.end()) {
+        return false;
+    }
+    errors_.error(subject.location,
+                  "rule '" + subject.name + "' " + verb + " group '" + spelling + "' but has no handler for phase '" +
+                      declaration->phase.local_name + "'");
+    return true;
+}
+
+std::optional<SymbolId> SemanticAnalyzer::resolve_rule_group_membership(const RuleOrderingSubject& subject,
+                                                                        const std::string& ref) {
+    auto group = resolve_group_membership_ref(ref, subject.location);
+    if (!group.has_value()) {
+        return std::nullopt;
+    }
+    if (group->module != current_module_id_) {
+        errors_.error(subject.location,
+                      "only rules in module '" + group->module.name + "' may join group '" + ref + "'");
+        return std::nullopt;
+    }
+    if (report_missing_group_phase_handler(subject, *group, ref, "joins")) {
+        return std::nullopt;
+    }
+    return group;
+}
+
+void SemanticAnalyzer::resolve_ordering_clause(const RuleOrderingSubject& subject,
+                                               const std::vector<std::string>& refs,
+                                               const char* clause,
+                                               std::vector<SymbolId>& rules,
+                                               std::vector<SymbolId>& groups) {
+    for (const auto& ref : refs) {
+        const auto target = resolve_ordering_ref(ref, subject.location, clause);
+        if (!target.has_value()) {
+            continue;
+        }
+        const bool is_rule = target->kind == SymbolKind::Rule;
+        if (is_rule && *target == subject.rule) {
+            errors_.error(subject.location, "rule '" + subject.name + "' cannot list itself in " + clause + ":");
+            continue;
+        }
+        if (!is_rule && subject.group == target) {
+            errors_.error(subject.location,
+                          "rule '" + subject.name + "' cannot order against its own group '" + ref + "'");
+            continue;
+        }
+        if (!is_rule && report_missing_group_phase_handler(subject, *target, ref, "orders against")) {
+            continue;
+        }
+        auto& resolved = is_rule ? rules : groups;
+        if (std::ranges::find(resolved, *target) == resolved.end()) {
+            resolved.push_back(*target);
+        }
+    }
+}
+
+template <typename Rule>
+void SemanticAnalyzer::resolve_rule_ordering(Rule& rule) {
+    rule.resolved_after_rule_ids.clear();
+    rule.resolved_ordering = {};
+    if (!rule.resolved_rule_id.has_value()) {
+        return;
+    }
+    RuleOrderingSubject subject{.name           = rule.name,
+                                .rule           = *rule.resolved_rule_id,
+                                .location       = rule.location,
+                                .group          = {},
+                                .handled_phases = {}};
+    for (const auto& handler : rule.handlers) {
+        if (handler.resolved_trigger.has_value() && handler.resolved_trigger->kind == HandlerTriggerKind::Phase) {
+            subject.handled_phases.push_back(handler.resolved_trigger->symbol);
+        }
+    }
+    if (rule.group_ref.has_value()) {
+        subject.group                = resolve_rule_group_membership(subject, *rule.group_ref);
+        rule.resolved_ordering.group = subject.group;
+    }
+    resolve_ordering_clause(
+        subject, rule.after_rules, "after", rule.resolved_after_rule_ids, rule.resolved_ordering.after_groups);
+    resolve_ordering_clause(subject,
+                            rule.before_rules,
+                            "before",
+                            rule.resolved_ordering.before_rules,
+                            rule.resolved_ordering.before_groups);
+}
+
+void SemanticAnalyzer::push_explicit_edge(const HandlerIdentity& before,
+                                          const HandlerIdentity& after,
+                                          ScheduleEdgeKind kind) {
+    auto& edges = result_.execution_graph.schedule_edges;
+    if (std::ranges::none_of(edges, [&](const auto& edge) {
+            return edge.before == before && edge.after == after && edge.kind == kind;
+        })) {
+        edges.push_back(ScheduleEdge{
+            .before = before, .after = after, .kind = kind, .orientation = ScheduleEdgeOrientation::Explicit});
+    }
+}
+
+// Expands rule-level after:/before: into same-trigger handler edges. The local
+// handler may be either endpoint; an imported counterpart is kept for the
+// linker, while a local rule without a matching handler gives no edge.
+void SemanticAnalyzer::add_rule_level_edges(const SymbolId& rule,
+                                            const std::vector<SymbolId>& after_rules,
+                                            const std::vector<SymbolId>& before_rules,
+                                            const std::unordered_set<SymbolId>& local_rule_ids) {
+    auto& handlers             = result_.execution_graph.handlers;
+    const auto has_counterpart = [&](const HandlerIdentity& counterpart) {
+        return !local_rule_ids.contains(counterpart.rule) ||
+               std::ranges::any_of(handlers, [&](const auto& node) { return node.identity == counterpart; });
+    };
+    for (auto& local : handlers) {
+        if (local.identity.rule != rule) {
+            continue;
+        }
+        for (const auto& predecessor_rule : after_rules) {
+            const HandlerIdentity predecessor{.rule = predecessor_rule, .trigger = local.identity.trigger};
+            if (!has_counterpart(predecessor)) {
+                continue;
+            }
+            if (std::ranges::find(local.explicit_after, predecessor) == local.explicit_after.end()) {
+                local.explicit_after.push_back(predecessor);
+            }
+            push_explicit_edge(predecessor, local.identity, ScheduleEdgeKind::ExplicitRule);
+        }
+        for (const auto& successor_rule : before_rules) {
+            const HandlerIdentity successor{.rule = successor_rule, .trigger = local.identity.trigger};
+            if (has_counterpart(successor)) {
+                push_explicit_edge(local.identity, successor, ScheduleEdgeKind::ExplicitRule);
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::record_rule_group_facts(const SymbolId& rule,
+                                               const ResolvedRuleOrdering& ordering,
+                                               const SourceLocation& location) {
+    auto& graph                    = result_.execution_graph;
+    const auto handler_in_phase_of = [&](const SymbolId& group) -> HandlerNode* {
+        const auto* declaration = find_group_declaration(group);
+        if (declaration == nullptr) {
+            return nullptr;
+        }
+        const HandlerIdentity identity{
+            .rule    = rule,
+            .trigger = ResolvedHandlerTrigger{.kind = HandlerTriggerKind::Phase, .symbol = declaration->phase}};
+        const auto found =
+            std::ranges::find_if(graph.handlers, [&](const auto& node) { return node.identity == identity; });
+        return found == graph.handlers.end() ? nullptr : &*found;
+    };
+    if (ordering.group.has_value()) {
+        if (auto* member = handler_in_phase_of(*ordering.group); member != nullptr) {
+            member->group = ordering.group;
+        }
+    }
+    const auto record = [&](const std::vector<SymbolId>& groups, GroupOrderingDirection direction) {
+        for (const auto& group : groups) {
+            if (const auto* handler = handler_in_phase_of(group); handler != nullptr) {
+                graph.group_orderings.push_back(GroupOrdering{
+                    .handler = handler->identity, .group = group, .direction = direction, .location = location});
+            }
+        }
+    };
+    record(ordering.after_groups, GroupOrderingDirection::After);
+    record(ordering.before_groups, GroupOrderingDirection::Before);
+}
+
 void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     std::unordered_set<std::string> local_rule_names;
     std::unordered_set<SymbolId> local_rule_ids;
@@ -9960,38 +10232,16 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
 
     std::unordered_map<std::string, std::vector<std::string>> after_resolved;
     for (auto& decl : program.declarations) {
-        auto resolve_after = [&](auto& rule) {
-            rule.resolved_after_rule_ids.clear();
-            if (!rule.resolved_rule_id.has_value()) {
-                return;
-            }
-            std::unordered_set<SymbolId> seen;
-            for (const auto& after_ref : rule.after_rules) {
-                auto predecessor = resolve_rule_after_ref_to_symbol(after_ref, rule.location, local_rule_names);
-                if (!predecessor.has_value()) {
-                    const auto previous_errors = errors_.error_count();
-                    (void)resolve_rule_after_ref(after_ref, rule.location, local_rule_names);
-                    if (errors_.error_count() == previous_errors) {
-                        errors_.error(rule.location, "unknown rule '" + after_ref + "' in after clause");
-                    }
-                    continue;
-                }
-                if (*predecessor == *rule.resolved_rule_id) {
-                    errors_.error(rule.location, "rule '" + rule.name + "' cannot list itself in after:");
-                    continue;
-                }
-                if (!seen.insert(*predecessor).second) {
-                    continue;
-                }
-                rule.resolved_after_rule_ids.push_back(*predecessor);
-                after_resolved[rule.name].push_back(make_canonical_id(*predecessor));
+        const auto resolve = [&](auto& rule) {
+            resolve_rule_ordering(rule);
+            for (const auto& predecessor : rule.resolved_after_rule_ids) {
+                after_resolved[rule.name].push_back(make_canonical_id(predecessor));
             }
         };
         if (auto* rule = std::get_if<RuleNode>(&decl)) {
-            resolve_after(*rule);
-        }
-        if (auto* rule = std::get_if<ExternRuleNode>(&decl)) {
-            resolve_after(*rule);
+            resolve(*rule);
+        } else if (auto* extern_rule = std::get_if<ExternRuleNode>(&decl)) {
+            resolve(*extern_rule);
         }
     }
 
@@ -10008,32 +10258,19 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
         nodes.emplace(node.identity, &node);
     }
 
-    auto add_edge = [&](HandlerNode& dependent,
-                        const HandlerIdentity& predecessor,
-                        ScheduleEdgeKind kind,
-                        const SourceLocation& location,
-                        bool require_local_node) {
+    auto add_edge = [&](HandlerNode& dependent, const HandlerIdentity& predecessor, const SourceLocation& location) {
         if (predecessor == dependent.identity) {
             errors_.error(location, "handler '" + dependent.identity.canonical_id() + "' cannot list itself in after:");
             return;
         }
-        if (require_local_node && local_rule_ids.contains(predecessor.rule) && !nodes.contains(predecessor)) {
+        if (local_rule_ids.contains(predecessor.rule) && !nodes.contains(predecessor)) {
             errors_.error(location, "unknown handler '" + predecessor.canonical_id() + "' in after: clause");
             return;
         }
         if (std::ranges::find(dependent.explicit_after, predecessor) == dependent.explicit_after.end()) {
             dependent.explicit_after.push_back(predecessor);
         }
-        const auto duplicate = std::ranges::find_if(result_.execution_graph.schedule_edges, [&](const auto& edge) {
-            return edge.before == predecessor && edge.after == dependent.identity && edge.kind == kind;
-        });
-        if (duplicate == result_.execution_graph.schedule_edges.end()) {
-            result_.execution_graph.schedule_edges.push_back(
-                ScheduleEdge{.before      = predecessor,
-                             .after       = dependent.identity,
-                             .kind        = kind,
-                             .orientation = ScheduleEdgeOrientation::Explicit});
-        }
+        push_explicit_edge(predecessor, dependent.identity, ScheduleEdgeKind::ExplicitHandler);
     };
 
     for (auto& decl : program.declarations) {
@@ -10042,21 +10279,11 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
                 return;
             }
 
-            for (auto& dependent : result_.execution_graph.handlers) {
-                if (dependent.identity.rule != *rule.resolved_rule_id) {
-                    continue;
-                }
-                for (const auto& predecessor_rule : rule.resolved_after_rule_ids) {
-                    const HandlerIdentity predecessor{.rule = predecessor_rule, .trigger = dependent.identity.trigger};
-                    // A local predecessor with no matching trigger is not an
-                    // edge. Imported candidates are retained for linker
-                    // validation once their handler metadata is available.
-                    if (local_rule_ids.contains(predecessor_rule) && !nodes.contains(predecessor)) {
-                        continue;
-                    }
-                    add_edge(dependent, predecessor, ScheduleEdgeKind::ExplicitRule, rule.location, false);
-                }
-            }
+            add_rule_level_edges(*rule.resolved_rule_id,
+                                 rule.resolved_after_rule_ids,
+                                 rule.resolved_ordering.before_rules,
+                                 local_rule_ids);
+            record_rule_group_facts(*rule.resolved_rule_id, rule.resolved_ordering, rule.location);
 
             for (std::size_t handler_index = 0; handler_index < rule.handlers.size(); ++handler_index) {
                 const auto& handler = rule.handlers[handler_index];
@@ -10076,8 +10303,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
                         reference.rule.spelling, reference.rule.location, local_rule_names);
                     if (!predecessor_rule.has_value()) {
                         const auto previous_errors = errors_.error_count();
-                        (void)resolve_rule_after_ref(
-                            reference.rule.spelling, reference.rule.location, local_rule_names);
+                        (void)resolve_rule_after_ref(reference.rule.spelling, reference.rule.location, "after");
                         if (errors_.error_count() == previous_errors) {
                             errors_.error(reference.rule.location,
                                           "unknown rule '" + reference.rule.spelling + "' in handler after: clause");
@@ -10099,9 +10325,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
                     }
                     add_edge(dependent,
                              HandlerIdentity{.rule = *predecessor_rule, .trigger = *predecessor_trigger},
-                             ScheduleEdgeKind::ExplicitHandler,
-                             reference.location,
-                             true);
+                             reference.location);
                 }
             }
         };
@@ -10116,6 +10340,7 @@ void SemanticAnalyzer::validate_after_clauses(ProgramNode& program) {
     // topological leveling are computed by the shared scheduling core, which
     // also performs the phase-barrier/event-flow construction that
     // build_dependency_graph used to do inline (see execution_graph_scheduler.hpp).
+    expand_group_orderings(result_.execution_graph);
     (void)compute_handler_schedule(result_.execution_graph, errors_);
     validate_lifecycle_trigger_traits(result_.execution_graph, errors_);
 }

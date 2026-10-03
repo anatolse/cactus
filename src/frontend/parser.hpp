@@ -56,19 +56,25 @@ private:
         FilterClause filter;
         FilterClause exclude;
         std::vector<SortKey> order_by;
+        std::optional<std::string> group_ref;
         std::vector<std::string> after_rules;
+        std::vector<std::string> before_rules;
     };
-    // Parses the filter:/exclude:/order by:/after: clauses shared by
+    // Parses the filter:/exclude:/order by:/group:/after:/before: clauses shared by
     // `rule` and `extern rule` declarations, in that order. on_clause_parsed,
     // when set, is invoked with each of filter:/exclude:/order by:'s start
     // location and name right after that clause is parsed (before its own
-    // synchronize check) — never for after:, which is compatible
+    // synchronize check) — never for the ordering clauses, which are compatible
     // with `pairs:`. parse_rule uses this to reject a clause combined with
     // `pairs:` at the
     // same point in the sequence the un-extracted code did, rather than
     // batching all such diagnostics after every clause has been parsed.
     CommonRuleClauses parse_common_rule_clauses(
         const std::function<void(const SourceLocation&, const char*)>& on_clause_parsed = nullptr);
+    std::vector<std::string> parse_rule_order_block(const char* empty_block_message);
+    [[nodiscard]] bool at_contextual_clause(const char* clause_name) const;
+    [[nodiscard]] bool at_group_declaration() const;
+    GroupNode parse_group(bool is_pub);
     ViewNode parse_view();
     EventNode parse_event(bool is_pub = false, bool is_external = false);
     PhaseNode parse_phase(bool is_pub = false);

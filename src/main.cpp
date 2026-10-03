@@ -188,6 +188,9 @@ static cactus::ImportedSymbols extract_pub_symbols(const std::string& module_nam
                                                          .every_seconds   = phase.every_seconds,
                                                          .max_repetitions = phase.max_repetitions};
     }
+    for (const auto& group : prog.execution_graph.group_declarations) {
+        syms.groups[group.group.local_name] = group;
+    }
     return syms;
 }
 

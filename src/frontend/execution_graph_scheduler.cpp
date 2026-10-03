@@ -129,8 +129,10 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
     // cross-module linking) and decide orientation below.
     std::unordered_map<HandlerIdentity, std::vector<HandlerIdentity>, HandlerIdentityHash> explicit_adjacency;
     for (const auto& edge : graph.schedule_edges) {
-        if ((edge.kind == ScheduleEdgeKind::ExplicitHandler || edge.kind == ScheduleEdgeKind::ExplicitRule) &&
-            nodes.contains(edge.before) && nodes.contains(edge.after)) {
+        const bool is_explicit = edge.kind == ScheduleEdgeKind::ExplicitHandler ||
+                                 edge.kind == ScheduleEdgeKind::ExplicitRule ||
+                                 edge.kind == ScheduleEdgeKind::ExplicitGroup;
+        if (is_explicit && nodes.contains(edge.before) && nodes.contains(edge.after)) {
             explicit_adjacency[edge.before].push_back(edge.after);
         }
     }
@@ -363,6 +365,29 @@ bool compute_handler_schedule(ExecutionGraph& graph, ErrorReporter& errors) {
     }
 
     return !errors.has_errors();
+}
+
+void expand_group_orderings(ExecutionGraph& graph) {
+    std::vector<ScheduleEdge> expanded;
+    for (const auto& ordering : graph.group_orderings) {
+        for (const auto& member : graph.handlers) {
+            if (member.group != ordering.group || member.identity == ordering.handler) {
+                continue;
+            }
+            const bool before = ordering.direction == GroupOrderingDirection::Before;
+            ScheduleEdge edge{.before      = before ? ordering.handler : member.identity,
+                              .after       = before ? member.identity : ordering.handler,
+                              .kind        = ScheduleEdgeKind::ExplicitGroup,
+                              .orientation = ScheduleEdgeOrientation::Explicit};
+            const auto duplicate = std::ranges::any_of(expanded, [&](const ScheduleEdge& existing) {
+                return existing.before == edge.before && existing.after == edge.after;
+            });
+            if (!duplicate) {
+                expanded.push_back(std::move(edge));
+            }
+        }
+    }
+    graph.schedule_edges.insert(graph.schedule_edges.end(), expanded.begin(), expanded.end());
 }
 
 void validate_lifecycle_trigger_traits(const ExecutionGraph& graph, ErrorReporter& errors) {

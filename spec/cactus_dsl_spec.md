@@ -117,7 +117,8 @@ program         = { declaration } EOF ;
 declaration     = module_decl | use_decl | const_block | struct_decl
                 | enum_decl | trait_decl | entity_decl | template_decl
                 | rule_decl | extern_rule_decl | event_decl | phase_decl
-                | func_decl | extern_func_decl | asset_decl | input_decl ;
+                | group_decl | func_decl | extern_func_decl | asset_decl
+                | input_decl ;
 ```
 
 ### 3.2 Module and Imports
@@ -423,7 +424,9 @@ Rules contain gameplay logic over filtered entities. A regular rule has exactly 
 rule_decl       = "rule" IDENTIFIER ":" NEWLINE INDENT
                   ( unary_domain | pairs_clause )
                   [ order_by_clause ]
+                  [ group_clause ]
                   [ after_clause ]
+                  [ before_clause ]
                   [ where_clause ]
                   [ limit_clause ]
                   [ when_clause ]
@@ -448,8 +451,18 @@ order_by_clause = "order" "by" ":" NEWLINE INDENT
 
 sort_key        = expression [ "asc" | "desc" ] ;
 
+group_clause    = "group" ":" dotted_name NEWLINE ;
+
 after_clause    = "after" ":" NEWLINE INDENT
-                  { IDENTIFIER NEWLINE }
+                  { dotted_name NEWLINE }
+                  DEDENT ;
+
+before_clause   = "before" ":" NEWLINE INDENT
+                  { dotted_name NEWLINE }
+                  DEDENT ;
+
+group_decl      = [ "pub" ] "group" IDENTIFIER ":" NEWLINE INDENT
+                  "phase" ":" dotted_name NEWLINE
                   DEDENT ;
 
 limit_clause    = "limit" ":" expression [ "per" IDENTIFIER ] NEWLINE ;
@@ -469,6 +482,26 @@ rule Patrol:
 
     on tick:
         pos.pos = pos.pos + vec2(ai.patrol_speed * ai.direction * tick.dt, 0.0)
+```
+
+A rule group names an ordering point inside one phase. `group` and `before` are contextual words: they start a group declaration or a rule clause only in those positions and stay ordinary identifiers elsewhere. `after:` and `before:` list rule names and group names; `group:` names the one group the rule joins. Their meaning is in §4.7.
+
+```cactus
+# std.physics.volume
+pub group solve:
+    phase: fixed_tick
+
+rule MoveAndSlide:
+    group: solve
+    on fixed_tick: ...
+
+# game
+use std.physics.volume as phys
+
+rule MovePlayer:
+    before:
+        phys.solve
+    on fixed_tick: ...
 ```
 
 #### 3.8.1 Pair Relations
@@ -690,6 +723,9 @@ extern_rule_decl   = "extern" "rule" IDENTIFIER ":" NEWLINE INDENT
                      [ filter_clause ]
                      [ exclude_clause ]
                      [ order_by_clause ]
+                     [ group_clause ]
+                     [ after_clause ]
+                     [ before_clause ]
                      { extern_handler }
                      DEDENT ;
 
@@ -1198,11 +1234,14 @@ String literals are only allowed in:
 - `exclude:` removes entities from consideration
 - a leading handler `after:` names canonical handler identities and constrains order for that trigger
 - rule-level `after:` is shorthand for ordering the rule's handlers after the named rule's handlers with the same canonical trigger; it never creates cross-trigger edges
+- rule-level `before:` is the mirror of `after:`: the rule's handlers run before the named rule's handlers with the same canonical trigger
+- a `group` declaration names an ordering point inside exactly one phase and has no runtime behavior. A rule joins it with `group:`; the rule's handler for the group's phase becomes a member, and its other handlers are unaffected. Only rules in the group's own module may join it, and a rule joins at most one group
+- a group name in `after:` or `before:` orders the rule's handler for the group's phase after or before every member handler of the group. The rule must have a handler for that phase, and a member cannot list its own group. A group with no members gives no edges. Group names resolve like other declarations, by local name or through a module qualifier, and obey `pub`
 - `order by:` constrains iteration order for a rule pass
 - `filter:` and `exclude:` select entities but do not imply component reads
 - regular handler contracts are inferred from their bodies; extern handler contracts are declared explicitly
 
-Every handler has a canonical identity composed from its module, owning rule, and resolved phase/event trigger. Co-eligible handlers are serialized for write/read, read/write, write/write, and matching observable-effect conflicts. Read/read and filter overlap do not conflict. Edge direction uses explicit `after:` first, then one-way writer-before-reader dependencies, then stable linked declaration order for remaining conflicts. The combined handler schedule must be acyclic.
+Every handler has a canonical identity composed from its module, owning rule, and resolved phase/event trigger. Co-eligible handlers are serialized for write/read, read/write, write/write, and matching observable-effect conflicts. Read/read and filter overlap do not conflict. Edge direction uses explicit ordering first (`after:`, `before:`, and group edges), then one-way writer-before-reader dependencies, then stable linked declaration order for remaining conflicts. The combined handler schedule must be acyclic.
 
 ## 5. Execution Model
 
@@ -1681,7 +1720,8 @@ Prefer:
 - explicit `extern event` roots and `phase` declarations
 - `on tick:` / `tick.dt` where `tick` resolves to a declared phase
 - explicit extern handler contracts
-- rule-level `after:` for same-trigger ordering between rules, and handler-level `after:` for exact handler dependencies
+- rule-level `after:` / `before:` for same-trigger ordering between rules, and handler-level `after:` for exact handler dependencies
+- a `pub group` and `after:` / `before:` on the group name, rather than another module's rule names, for ordering against a module's internals
 - `add` / `remove`
 
 ### 8.3 Example Hygiene

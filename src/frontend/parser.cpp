@@ -194,6 +194,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     if (tok.type == TokenType::PHASE) {
         return parse_phase();
     }
+    if (at_group_declaration()) {
+        return parse_group(false);
+    }
     if (tok.type == TokenType::TEMPLATE) {
         return parse_template(false);
     }
@@ -244,6 +247,9 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         if (check(TokenType::PHASE)) {
             return parse_phase(true);
         }
+        if (at_group_declaration()) {
+            return parse_group(true);
+        }
         // pub enum / pub struct — visibility currently not tracked, parsed as module-private
         if (check(TokenType::ENUM)) {
             return parse_enum();
@@ -253,7 +259,8 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
         }
         errors_.error(
             peek().location,
-            "expected trait, entity, template, func, extern func, asset, input, event, enum, or struct after 'pub'");
+            "expected trait, entity, template, func, extern func, asset, input, event, phase, group, enum, or struct "
+            "after 'pub'");
     }
 
     if (tok.type == TokenType::ENTITY) {
@@ -274,8 +281,8 @@ Declaration Parser::parse_declaration() {  // NOLINT(readability-function-cognit
     }
 
     errors_.error(tok.location,
-                  "expected declaration (module, use, const, struct, enum, trait, entity, rule, view, event, func, "
-                  "extern, interface, asset, input)");
+                  "expected declaration (module, use, const, struct, enum, trait, entity, rule, view, event, phase, "
+                  "group, func, extern, interface, asset, input)");
     advance();  // skip bad token
     return ModuleNode{.name = "<error>", .location = tok.location};
 }
@@ -1370,7 +1377,9 @@ RuleNode Parser::parse_rule() {
     node.filter      = std::move(common.filter);
     node.exclude     = std::move(common.exclude);
     node.order_by    = std::move(common.order_by);
-    node.after_rules = std::move(common.after_rules);
+    node.group_ref    = std::move(common.group_ref);
+    node.after_rules  = std::move(common.after_rules);
+    node.before_rules = std::move(common.before_rules);
 
     skip_newlines();
     if (at_where_clause()) {
@@ -1462,42 +1471,66 @@ Parser::parse_common_rule_clauses(  // NOLINT(readability-function-cognitive-com
         }
     }
 
-    // Parse optional after: clause (block format: AFTER COLON NEWLINE INDENT { IDENT NEWLINE } DEDENT)
     skip_newlines();
-    if (check(TokenType::AFTER)) {
-        auto after_loc          = peek().location;
-        auto error_count_before = errors_.error_count();
-        advance();  // consume 'after'
+    if (at_contextual_clause("group")) {
+        const auto group_loc = advance().location;
         consume(TokenType::COLON, "expected ':'");
-        expect_newline();
-        expect_indent();
-        bool any = false;
-        while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
-            skip_newlines();
-            if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
-                break;
-            }
-            result.after_rules.push_back(parse_dotted_name());
-            expect_newline();
-            any = true;
-            if (errors_.error_count() > error_count_before) {
-                synchronize();
-                break;
-            }
-        }
-        expect_dedent();
-        if (!any) {
-            errors_.error(after_loc, "after: block must contain at least one rule name");
-        }
-        // Unlike filter:/exclude:/order by:, after: is compatible with pairs:
-        // (explicit handler ordering, not entity selection), so it never
-        // triggers on_clause_parsed's pairs-conflict check.
-        if (errors_.error_count() > error_count_before) {
+        result.group_ref = parse_dotted_name();
+        if (check(TokenType::COMMA)) {
+            errors_.error(group_loc, "a rule joins at most one group");
             synchronize();
+        } else {
+            expect_newline();
         }
     }
 
+    skip_newlines();
+    if (check(TokenType::AFTER)) {
+        result.after_rules = parse_rule_order_block("after: block must contain at least one rule name");
+    }
+
+    skip_newlines();
+    if (at_contextual_clause("before")) {
+        result.before_rules = parse_rule_order_block("before: block must contain at least one rule or group name");
+    }
+
     return result;
+}
+
+// Block format: KEYWORD COLON NEWLINE INDENT { dotted_name NEWLINE } DEDENT. Unlike
+// filter:/exclude:/order by:, ordering clauses are compatible with pairs:.
+std::vector<std::string> Parser::parse_rule_order_block(const char* empty_block_message) {
+    const auto clause_loc         = peek().location;
+    const auto error_count_before = errors_.error_count();
+    advance();  // consume 'after' / 'before'
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    skip_newlines();
+    if (!match(TokenType::INDENT)) {
+        errors_.error(clause_loc, empty_block_message);
+        return {};
+    }
+    std::vector<std::string> names;
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        names.push_back(parse_dotted_name());
+        expect_newline();
+        if (errors_.error_count() > error_count_before) {
+            synchronize();
+            break;
+        }
+    }
+    expect_dedent();
+    if (names.empty()) {
+        errors_.error(clause_loc, empty_block_message);
+    }
+    if (errors_.error_count() > error_count_before) {
+        synchronize();
+    }
+    return names;
 }
 
 FilterClause Parser::parse_filter_clause() {
@@ -1535,8 +1568,12 @@ FilterClause Parser::parse_filter_clause() {
     return clause;
 }
 
+bool Parser::at_contextual_clause(const char* clause_name) const {
+    return check(TokenType::IDENTIFIER) && peek().value == clause_name && peek_next().type == TokenType::COLON;
+}
+
 bool Parser::at_pairs_clause() const {
-    return check(TokenType::IDENTIFIER) && peek().value == "pairs" && peek_next().type == TokenType::COLON;
+    return at_contextual_clause("pairs");
 }
 
 PairClause Parser::parse_pairs_clause() {
@@ -1608,7 +1645,7 @@ PairClause Parser::parse_pairs_clause() {
 }
 
 bool Parser::at_where_clause() const {
-    return check(TokenType::IDENTIFIER) && peek().value == "where" && peek_next().type == TokenType::COLON;
+    return at_contextual_clause("where");
 }
 
 WhereClause Parser::parse_where_clause() {
@@ -1620,7 +1657,7 @@ WhereClause Parser::parse_where_clause() {
 }
 
 bool Parser::at_when_clause() const {
-    return check(TokenType::IDENTIFIER) && peek().value == "when" && peek_next().type == TokenType::COLON;
+    return at_contextual_clause("when");
 }
 
 WhenClause Parser::parse_when_clause() {
@@ -1664,7 +1701,7 @@ std::vector<std::unique_ptr<ExprNode>> Parser::parse_predicate_block(const Sourc
 }
 
 bool Parser::at_limit_clause() const {
-    return check(TokenType::IDENTIFIER) && peek().value == "limit" && peek_next().type == TokenType::COLON;
+    return at_contextual_clause("limit");
 }
 
 // `limit: <expression> [per <binding>]` — a single inline count expression
@@ -1969,6 +2006,53 @@ PhaseNode Parser::parse_phase(bool is_pub) {
                                .location    = field_loc});
     }
     expect_dedent();
+    return node;
+}
+
+// ── Group ───────────────────────────────────────────────────────────────────
+
+bool Parser::at_group_declaration() const {
+    return check(TokenType::IDENTIFIER) && peek().value == "group" && peek_next().type == TokenType::IDENTIFIER;
+}
+
+GroupNode Parser::parse_group(bool is_pub) {
+    GroupNode node;
+    node.is_pub   = is_pub;
+    node.location = advance().location;  // consume 'group'
+    node.name     = consume(TokenType::IDENTIFIER, "expected group name").value;
+    consume(TokenType::COLON, "expected ':'");
+    expect_newline();
+    skip_newlines();
+    const auto report_missing_phase = [&] {
+        if (!node.phase.has_value()) {
+            errors_.error(node.location, "group '" + node.name + "' is missing a 'phase:' entry");
+        }
+    };
+    if (!match(TokenType::INDENT)) {
+        report_missing_phase();
+        return node;
+    }
+    while (!check(TokenType::DEDENT) && !check(TokenType::EOF_TOKEN)) {
+        skip_newlines();
+        if (check(TokenType::DEDENT) || check(TokenType::EOF_TOKEN)) {
+            break;
+        }
+        if (!check(TokenType::PHASE)) {
+            errors_.error(peek().location, "group body only accepts a 'phase:' entry");
+            advance();
+            synchronize();
+            continue;
+        }
+        const auto entry_loc = advance().location;
+        consume(TokenType::COLON, "expected ':'");
+        if (node.phase.has_value()) {
+            errors_.error(entry_loc, "duplicate phase: entry in group '" + node.name + "'");
+        }
+        node.phase = parse_located_name();
+        expect_newline();
+    }
+    expect_dedent();
+    report_missing_phase();
     return node;
 }
 
@@ -3043,7 +3127,9 @@ ExternRuleNode Parser::parse_extern_rule() {
     node.filter      = std::move(common.filter);
     node.exclude     = std::move(common.exclude);
     node.order_by    = std::move(common.order_by);
-    node.after_rules = std::move(common.after_rules);
+    node.group_ref    = std::move(common.group_ref);
+    node.after_rules  = std::move(common.after_rules);
+    node.before_rules = std::move(common.before_rules);
 
     skip_newlines();
     if (at_where_clause()) {

@@ -1,17 +1,18 @@
 # Language review drafts (first-person-arena driven)
 
-Status as of 2026-10-01. Arena: 41 → 32 rules, 1374 → 1267 lines since this review.
+Status as of 2026-10-03. Arena: 41 → 29 rules, 1374 → 1229 lines since this review.
 
 | Item | Status |
 |---|---|
 | A1, A2, A5, A6 | done — simplify-dsl-surface |
 | A3 | declined — both entity forms stay |
-| A4 | deferred — waits on C6 |
+| A4 | closed — superseded by add-rule-groups (modules order against public groups, not rule names; rule-level `after: Rule` stays for ordering inside one module) |
 | A7, C3 | done — add-trait-lifecycle-triggers |
 | C1 | done — add-deferred-set-command |
 | C2 | done — add-named-entity-access |
-| C6 | partially done — add-rule-groups (rule-level groups; stages/handler-level deferred) |
-| C4, C5, C7, C8, S1–S3, R1–R6, B1–B3 | open |
+| C5 | done — add-const-expressions-and-tables |
+| C6 | done — add-rule-groups (`group` + `before:`; handler-level group references not planned) |
+| C4, C7, C8, S1–S3, R1–R6, B1–B3 | open |
 
 Original review text follows unchanged except for per-item status markers.
 
@@ -70,7 +71,7 @@ Original review text follows unchanged except for per-item status markers.
   for instances, since it also supports children: overrides by role. Allow body-level use only inside templates, where
   it works as a mixin. You lose nothing, and you remove one decision a beginner has to make.
 
-  A4. [DEFERRED — waits on C6 named stages; rule-level after: is no longer called legacy] Keep one ordering mechanism. Right now there are three: rule-level after: (the spec calls it legacy),
+  A4. [CLOSED — add-rule-groups: cross-module ordering goes through public groups; rule-level after: Rule stays for same-module order] Keep one ordering mechanism. Right now there are three: rule-level after: (the spec calls it legacy),
   handler-level after:, and implicit writer-before-reader ordering. The arena uses rule-level after: 6 times to name
   other rules. Naming rules couples modules to each other's internals. Remove rule-level after:. See also C6 below,
   which would replace most remaining after: uses.
@@ -172,7 +173,7 @@ Original review text follows unchanged except for per-item status markers.
     it only works in spawn, and arguments are type-checked against a shared parameter signature. That keeps static
     analysis intact.
 
-  C5. Const expressions and const tables
+  C5. Const expressions and const tables — DONE (add-const-expressions-and-tables: const expressions, typed constants, struct values, const lists)
   Today const_value must be a literal, so the arena writes ENEMY_STEER_ANGLE_SMALL = 0.6981317 instead of deg(40.0),
   and HALF_PI = 1.57079633. Two steps:
   1. Pure compile-time expressions in const:.
@@ -183,7 +184,7 @@ Original review text follows unchanged except for per-item status markers.
   - Sandbox: block properties, crafting recipes, loot tables.
   - This is where game balancing happens. It also pairs with C4.
 
-  C6. Named stages inside a phase
+  C6. Named stages inside a phase — DONE (add-rule-groups: `pub group Name: phase: ...`, `group:`, `before:`, groups in `after:`)
   cactus
   pub phase fixed_tick:
       ...

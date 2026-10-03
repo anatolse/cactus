@@ -15,6 +15,19 @@ use std.render.text as text
 use std.camera.volume as camera
 use std.camera.viewport as viewport
 
+# Per-kind enemy data. Clip indices are positions in the GLB's own animation
+# list (models.animation_name). The animator plays at speed /
+# run_reference_speed, the speed the run clip's stride was authored for, so
+# retuning speed can't reintroduce foot-sliding. visual_yaw_offset turns a
+# model authored facing +Z (the robot) toward its direction of travel.
+struct EnemyKind:
+    speed: float
+    run_reference_speed: float
+    visual_yaw_offset: float
+    run_clip: int
+    jump_clip: int
+    death_clip: int
+
 const:
     WINDOW_WIDTH = 960
     WINDOW_HEIGHT = 540
@@ -34,14 +47,6 @@ const:
     GROUND_CONTACT_TOLERANCE = 0.05
     ENEMY_RADIUS = 0.35
     ENEMY_HALF_HEIGHT = 0.9
-    # Reference speed each running clip's stride was authored for (tuned by
-    # eye against playback); ModelAnimator.speed is set to
-    # <kind>_SPEED / <kind>_RUN_REFERENCE_SPEED at spawn, so retuning the
-    # movement speed alone can't silently reintroduce foot-sliding.
-    ROBOT_RUN_REFERENCE_SPEED = 3.5
-    KNIGHT_RUN_REFERENCE_SPEED = 3.5
-    ROBOT_SPEED = 3.0
-    KNIGHT_SPEED = 3.3
     # How far ahead an enemy probes for a blocking wall before committing to a
     # heading, and the fixed deflection angles it tries (in order) when the
     # direct-to-player heading is blocked.
@@ -56,22 +61,22 @@ const:
     FIRE_COOLDOWN = 0.2
     DEATH_DURATION = 1.0
     HALF_PI = math.PI * 0.5
-    # Clip indices from the GLB's own animation list (models.animation_name),
-    # not renumbered by this compiler: robot.glb loads Robot_Dance(0),
-    # Robot_Death(1), Robot_Idle(2), ..., Robot_Running(6), ...; the knight's
-    # GLB loads _TPose(0), ..., Run1_Loop(4), ..., ShieldBlockHigh(6), ... The
-    # knight pack has no dedicated death clip, so ShieldBlockHigh doubles as
-    # the knight's death reaction.
-    ROBOT_RUN_CLIP = 6
-    ROBOT_DEATH_CLIP = 1
-    # Both packs happen to load their jump clip at index 3 (Robot_Jump,
-    # Jump) — coincidence, not an assumption; kept as separate named
-    # constants per kind rather than one shared literal in case that ever
-    # changes with a model swap.
-    ROBOT_JUMP_CLIP = 3
-    KNIGHT_JUMP_CLIP = 3
-    KNIGHT_RUN_CLIP = 4
-    KNIGHT_DEATH_CLIP = 6
+    ROBOT = EnemyKind(
+        speed = 3.0,
+        run_reference_speed = 3.5,
+        visual_yaw_offset = math.PI,
+        run_clip = 6,     # Robot_Running
+        jump_clip = 3,    # Robot_Jump
+        death_clip = 1,   # Robot_Death
+    )
+    KNIGHT = EnemyKind(
+        speed = 3.3,
+        run_reference_speed = 3.5,
+        visual_yaw_offset = 0.0,
+        run_clip = 4,     # Run1_Loop
+        jump_clip = 3,    # Jump
+        death_clip = 6,   # ShieldBlockHigh; the knight pack has no death clip
+    )
     # How far above the enemy's torso the "would clearing this obstacle by
     # jumping actually work" probe checks — an obstacle that still blocks at
     # this height is treated as too tall to vault (route around it instead).
@@ -137,15 +142,10 @@ pub trait KinematicActor:
     var grounded: bool = true
 
 pub trait Enemy:
-    var speed: float = 0.6
+    var kind: EnemyKind = ROBOT
     var death_elapsed: float = 0.0
     var facing_yaw: float = 0.0
     var death_pitch: float = 0.0
-    # Extra yaw added on top of facing_yaw only for the rendered visual (see
-    # ComposeEnemyVisualPose), so a model authored facing the opposite way in
-    # its own local space (the robot's front is +Z, not the engine's usual
-    # -Z) can still visually face its direction of travel.
-    var visual_yaw_offset: float = 0.0
     var is_vaulting: bool = false
 
 # Marks an enemy whose death animation is playing.
@@ -177,7 +177,6 @@ event BulletContact:
 
 event EnemyHit
 event GameOver
-event RestartCleanup
 
 template BoxVisual:
     tv.WorldTransform:
@@ -610,10 +609,15 @@ rule CursorCaptureToggle:
             inp.set_cursor_captured(true)
             input.consume(Fire)
 
+# Horizontal movement for this tick. Vertical motion and collision run after it.
+group locomotion:
+    phase: fixed_tick
+
 rule MovePlayer:
     filter:
         Player
         tv.WorldTransform as transform
+    group: locomotion
 
     when:
         not Game.Match.over
@@ -670,8 +674,7 @@ rule IntegrateVerticalMotion:
         KinematicActor as actor
         tv.WorldTransform as transform
     after:
-        MovePlayer
-        SeekPlayer
+        locomotion
 
     on fixed_tick:
         actor.vertical_velocity = math.max(actor.vertical_velocity - GRAVITY * fixed_tick.dt, MAX_FALL_SPEED * -1.0)
@@ -691,8 +694,7 @@ rule DetectEnemySeparation:
             KinematicActor
             tv.WorldTransform
     after:
-        MovePlayer
-        SeekPlayer
+        locomotion
     where:
         a != b
         collision.spheres_overlap(a.tv.WorldTransform.position, a.KinematicActor.radius, b.tv.WorldTransform.position, b.KinematicActor.radius)
@@ -712,8 +714,7 @@ rule DetectActorSolidContact:
             physics.BoxCollider
             tv.WorldTransform
     after:
-        MovePlayer
-        SeekPlayer
+        locomotion
         DetectEnemySeparation
 
     on fixed_tick:
@@ -740,8 +741,6 @@ rule DetectGroundCandidate:
             physics.BoxCollider
             tv.WorldTransform
     after:
-        MovePlayer
-        SeekPlayer
         IntegrateVerticalMotion
 
     on fixed_tick:
@@ -812,7 +811,7 @@ rule ComposeEnemyVisualPose:
             # is built in SeekPlayer/AnimateEnemyDeath.
             set tv.WorldTransform on visual:
                 position = transform.position - vec3(0.0, ENEMY_HALF_HEIGHT, 0.0)
-                rotation = quat.from_euler(enemy.death_pitch, enemy.facing_yaw + enemy.visual_yaw_offset, 0.0)
+                rotation = quat.from_euler(enemy.death_pitch, enemy.facing_yaw + enemy.kind.visual_yaw_offset, 0.0)
 
 rule SpawnRobots:
     filter:
@@ -834,8 +833,7 @@ rule SpawnRobots:
             tv.WorldTransform:
                 position = transform.position
             Enemy:
-                speed = ROBOT_SPEED
-                visual_yaw_offset = math.PI
+                kind = ROBOT
             children:
                 EnemyVisual:
                     tv.WorldTransform:
@@ -843,8 +841,8 @@ rule SpawnRobots:
                     models.ModelRenderer:
                         model = Robot
                     models.ModelAnimator:
-                        clip = ROBOT_RUN_CLIP
-                        speed = ROBOT_SPEED / ROBOT_RUN_REFERENCE_SPEED
+                        clip = ROBOT.run_clip
+                        speed = ROBOT.speed / ROBOT.run_reference_speed
         spawn_point.countdown = SPAWN_INTERVAL
 
 rule SpawnKnights:
@@ -867,7 +865,7 @@ rule SpawnKnights:
             tv.WorldTransform:
                 position = transform.position
             Enemy:
-                speed = KNIGHT_SPEED
+                kind = KNIGHT
             children:
                 EnemyVisual:
                     tv.WorldTransform:
@@ -875,8 +873,8 @@ rule SpawnKnights:
                     models.ModelRenderer:
                         model = Knight
                     models.ModelAnimator:
-                        clip = KNIGHT_RUN_CLIP
-                        speed = KNIGHT_SPEED / KNIGHT_RUN_REFERENCE_SPEED
+                        clip = KNIGHT.run_clip
+                        speed = KNIGHT.speed / KNIGHT.run_reference_speed
         spawn_point.countdown = SPAWN_INTERVAL
 
 # Whether a sphere of ENEMY_RADIUS centered at probe overlaps this wall's
@@ -894,6 +892,7 @@ rule SeekPlayer:
         tv.WorldTransform as transform
     exclude:
         Dying
+    group: locomotion
     when:
         not Game.Match.over
 
@@ -906,13 +905,9 @@ rule SeekPlayer:
         # GroundCandidate-event cascade within the same tick.
         if enemy.is_vaulting and actor.grounded:
             enemy.is_vaulting = false
-            var run_clip = ROBOT_RUN_CLIP
-            match self:
-                KnightEnemy =>
-                    run_clip = KNIGHT_RUN_CLIP
             for visual in query.children[EnemyVisual](of = self):
                 set models.ModelAnimator on visual:
-                    clip = run_clip
+                    clip = enemy.kind.run_clip
                     time = 0.0
 
         let target_position = tv.world_position(PlayerBody)
@@ -997,13 +992,9 @@ rule SeekPlayer:
                 actor.vertical_velocity = JUMP_VELOCITY
                 actor.grounded = false
                 enemy.is_vaulting = true
-                var jump_clip = ROBOT_JUMP_CLIP
-                match self:
-                    KnightEnemy =>
-                        jump_clip = KNIGHT_JUMP_CLIP
                 for visual in query.children[EnemyVisual](of = self):
                     set models.ModelAnimator on visual:
-                        clip = jump_clip
+                        clip = enemy.kind.jump_clip
                         time = 0.0
 
             # Priority order (small deflection, then large deflection,
@@ -1024,7 +1015,7 @@ rule SeekPlayer:
 
         enemy.facing_yaw = math.atan2(direction.x * -1.0, direction.z * -1.0)
         transform.rotation = quat.from_euler(0.0, enemy.facing_yaw, 0.0)
-        transform.position += direction * enemy.speed * fixed_tick.dt
+        transform.position += direction * enemy.kind.speed * fixed_tick.dt
 
 rule CooldownShooter:
     filter:
@@ -1124,10 +1115,9 @@ rule ConsumeBulletContact:
             emit EnemyHit to contact.other
         destroy
 
-rule BeginRobotDeath:
+rule BeginDeath:
     filter:
-        RobotEnemy
-        Enemy
+        Enemy as enemy
     exclude:
         Dying
 
@@ -1135,21 +1125,7 @@ rule BeginRobotDeath:
         add Dying
         for visual in query.children[EnemyVisual](of = self):
             set models.ModelAnimator on visual:
-                clip = ROBOT_DEATH_CLIP
-                time = 0.0
-
-rule BeginKnightDeath:
-    filter:
-        KnightEnemy
-        Enemy
-    exclude:
-        Dying
-
-    on EnemyHit:
-        add Dying
-        for visual in query.children[EnemyVisual](of = self):
-            set models.ModelAnimator on visual:
-                clip = KNIGHT_DEATH_CLIP
+                clip = enemy.kind.death_clip
                 time = 0.0
 
 # A dying enemy stops being a Threat, so the pair rules that need one (enemy
@@ -1238,9 +1214,9 @@ rule RestartOnGameOver:
         cursor_captured = true
         inp.set_cursor_captured(true)
         for enemy in query.all[Enemy]():
-            emit RestartCleanup to enemy
+            destroy enemy
         for bullet in query.all[Bullet]():
-            emit RestartCleanup to bullet
+            destroy bullet
         for spawn_point in query.all[RobotSpawnPoint]():
             set RobotSpawnPoint on spawn_point:
                 countdown = 0.0
@@ -1251,17 +1227,3 @@ rule RestartOnGameOver:
             visible = true
         set text.ScreenLabel on GameOverHud:
             visible = false
-
-rule RestartClearsEnemy:
-    filter:
-        Enemy
-
-    on RestartCleanup:
-        destroy
-
-rule RestartClearsBullet:
-    filter:
-        Bullet
-
-    on RestartCleanup:
-        destroy

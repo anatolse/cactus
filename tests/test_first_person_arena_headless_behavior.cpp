@@ -169,9 +169,9 @@ TEST_CASE("first-person arena headless: enemy visuals are grounded at floor leve
 
         const auto& animator = registry.get<std_render_models__ModelAnimator>(visual);
         CHECK(animator.playing);
-        // Animator speed is derived from movement speed (ROBOT_SPEED /
-        // ROBOT_RUN_REFERENCE_SPEED, KNIGHT_SPEED / KNIGHT_RUN_REFERENCE_SPEED
-        // in main.cactus) rather than a fixed 1.0, so a future change to
+        // Animator speed is derived from movement speed (kind.speed /
+        // kind.run_reference_speed in main.cactus) rather than a fixed 1.0,
+        // so a future change to
         // either enemy's movement speed can't silently desync its clip's
         // stride from its translation again.
         if (registry.all_of<main__RobotEnemy>(enemy)) {

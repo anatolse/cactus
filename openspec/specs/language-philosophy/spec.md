@@ -7,11 +7,21 @@ Define the design philosophy and guiding principles behind the Cactus language, 
 ### Requirement: Cactus language identity
 Cactus SHALL be defined as a declarative, data-oriented gameplay description language that compiles to an engine backend. This identity statement SHALL be the authoritative reference for evaluating proposed language features.
 
+Cactus has two goals, and they divide the work:
+1. **The language** makes game definitions short and simple, and rules out common gameplay coding errors by construction.
+2. **The backend** turns those definitions into the most efficient code it can derive from the whole program.
+
+When the two pull against each other, the language stays simple and the backend does the extra work.
+
 The primary authoring audience is a game designer or gameplay programmer who wants to describe what exists, what reacts to what, how state changes, and how gameplay unfolds without writing engine plumbing, lifetime management, or null-guard boilerplate.
 
 #### Scenario: Language identity governs feature evaluation
 - **WHEN** a new language feature is proposed
 - **THEN** the proposal MUST address whether the feature strengthens gameplay authoring or whether it belongs in the generated backend or stdlib instead
+
+#### Scenario: Efficiency work goes to the backend, not the author
+- **WHEN** a feature could be made faster either by asking authors for extra declarations or by deeper backend analysis
+- **THEN** the proposal chooses backend analysis
 
 ### Requirement: Simplicity is defined against a gameplay-core profile
 The project's simplicity claims SHALL apply to a curated gameplay-core profile rather than to the union of every current, experimental, or deferred language idea.
@@ -80,6 +90,27 @@ All operations in Cactus that take an `entity_id` argument SHALL be total: they 
 #### Scenario: Total operations require no author-side null checks
 - **WHEN** an author writes `add Frozen to f.target` and `f.target` may be stale
 - **THEN** no compile error occurs and the backend generates any required validity guard automatically
+
+### Requirement: Common gameplay errors are prevented by construction
+The language SHALL prefer forms in which common gameplay bugs cannot be written, or are compile errors, over forms that rely on author discipline. Facts the compiler can derive from declarations SHALL NOT be restated by authors, because each restatement can drift from the truth. Total semantics for `entity_id` is one instance of this rule; it applies to every construct.
+
+#### Scenario: Collision code does not depend on shape kinds
+- **WHEN** an author asks whether, or where, two entities collide
+- **THEN** the authored code names the entities' roles, not their collider shapes
+- **AND** adding, removing, or changing a shape kind on an entity needs no change to rules that query it
+
+#### Scenario: Acceleration bounds are derived, not written
+- **WHEN** a rule uses a stdlib geometric query between two bindings
+- **THEN** the author writes no separate "loose bound" predicate for acceleration
+- **AND** the compiler derives any broad-phase bound from the query itself
+
+#### Scenario: Nothing found is a typed value, not a sentinel
+- **WHEN** a query or aggregation can find nothing
+- **THEN** the language provides a typed neutral result, such as `Empty` or a reducer identity, so authors do not invent magic values like `-1000.0`
+
+#### Scenario: Meaningless declarations are compile errors
+- **WHEN** a combination of declarations has no defined runtime meaning
+- **THEN** the compiler reports a source-located error instead of accepting it and doing nothing at runtime
 
 ### Requirement: The declarative/restricted-imperative boundary
 The Cactus authoring surface SHALL be divided into two tiers:
@@ -162,6 +193,8 @@ introduce a real choice does not introduce such a marker to express it.
 ### Requirement: Performance is a backend obligation
 The generated backend SHALL produce the most performant code derivable from the author's declarations. Authors SHALL NOT be required to hand-tune or annotate gameplay-core declarations for performance.
 
+Because every rule domain, predicate, and write is declared, the backend sees the whole program: every query, every archetype, and which data is ever written. The choice of acceleration structures, specializations, and data layout SHALL belong to the backend, derived from that whole-program knowledge. The language SHALL NOT expose author-facing controls for these choices. When the backend cannot accelerate a declared query, the compiler SHALL say so with a diagnostic rather than degrade silently.
+
 #### Scenario: Filter generates typed view, not dynamic query
 - **WHEN** a rule declares `filter: Position as p, Velocity as v`
 - **THEN** the EnTT backend SHALL generate a statically typed view rather than a runtime-reflective lookup
@@ -170,14 +203,29 @@ The generated backend SHALL produce the most performant code derivable from the 
 - **WHEN** an author writes `filter: Health as h` in a rule with many entities
 - **THEN** no special performance annotation is required from the author
 
+#### Scenario: Authors do not choose acceleration structures
+- **WHEN** a pair rule asks which entities collide
+- **THEN** no clause names a broad phase, tree, grid, or other structure
+- **AND** the backend picks the strategy from the program's declarations
+
+#### Scenario: Write analysis informs strategy without markers
+- **WHEN** no handler in the program writes the transforms or shapes of some set of queried entities
+- **THEN** the backend is free to treat that set as static, for example by building its acceleration structure once
+- **AND** the author writes no `static`-style marker to allow this
+
+#### Scenario: Unaccelerated queries are diagnosed
+- **WHEN** a declared query has no acceleration the backend can apply
+- **THEN** the compiler emits a warning naming the query, instead of silently falling back to a full scan
+
 ### Requirement: Feature evaluation criteria
 All proposed changes to the language SHALL be evaluated against the following criteria, in order:
 1. Is this an author concern or a backend concern?
 2. Does it strengthen gameplay authoring or force engine plumbing into authored code?
-3. Is its timing and behavior predictable without hidden backend knowledge?
-4. Are its operations total and are failure semantics defined?
-5. Does it preserve the declarative/restricted-imperative boundary?
-6. Does it preserve a small, teachable gameplay-core profile?
+3. Does it remove a class of common gameplay errors, or introduce one?
+4. Is its timing and behavior predictable without hidden backend knowledge?
+5. Are its operations total and are failure semantics defined?
+6. Does it preserve the declarative/restricted-imperative boundary?
+7. Does it preserve a small, teachable gameplay-core profile?
 
 #### Scenario: Proposed feature is a backend concern
 - **WHEN** a feature would require authors to write rendering, serialization, or lifetime-management code
@@ -186,5 +234,9 @@ All proposed changes to the language SHALL be evaluated against the following cr
 #### Scenario: Proposed feature expands imperative power
 - **WHEN** a proposal adds new imperative constructs such as loops or mutable globals
 - **THEN** it MUST provide strong justification for why the existing gameplay model, bounded foreach, events, and projected facts are insufficient
+
+#### Scenario: Proposed feature adds an error-prone obligation
+- **WHEN** a proposal requires authors to restate something the compiler could derive, such as a shape kind or an acceleration bound
+- **THEN** it is revised so that the compiler derives it, or the proposal justifies why that is impossible
 
 Projected traits and bounded foreach SHALL be evaluated as restricted gameplay constructs: `project` states current-frame facts for ECS filtering, while bounded foreach consumes finite query/list snapshots. Neither construct SHALL be treated as permission to add open-ended imperative scripting features by default.

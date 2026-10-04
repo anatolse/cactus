@@ -8,6 +8,10 @@ every task in the repo; the named subsections below scope further guidance to th
 own area. Cactus DSL authoring rules live in `.claude/rules/cactus-dsl.md` (loaded
 for `stdlib/` and `examples/`); rendering diagnosis is the `debug-rendering` skill.
 
+Two goals decide most design questions: the language keeps game definitions simple and
+rules out common gameplay errors by construction; the backend derives the most efficient
+code from whole-program knowledge. See `openspec/specs/language-philosophy/spec.md`.
+
 ## Change lifecycle (mandatory for substantive changes)
 
 Applies to any change touching `src/common`, `src/frontend`, `src/backends`,
